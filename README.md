@@ -42,7 +42,7 @@ values. When unused, there is no additional cost.
 firewood is licensed by the Ecosystem License. For more information, see the
 [LICENSE file](./LICENSE.md).
 
-## Vendored Packages
+## Vendored Crates
 The following crates are vendored in this repository to allow for making
 modifications without requiring upstream approval:
 * [`growth-ring`](https://github.com/Determinant/growth-ring)
