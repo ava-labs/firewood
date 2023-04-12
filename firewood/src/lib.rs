@@ -95,7 +95,7 @@
 //! The three layers are depicted as follows:
 //!
 //! <p align="center">
-//!     <img src="https://drive.google.com/uc?export=view&id=1KnlpqnxkmFd_aKZHwcferIdX137GVZJr" width="80%">
+//!     <img src="/assets/three-layers.svg" width="80%">
 //! </p>
 //!
 //! Given the abstraction, one can easily realize the fact that the actual data that affect the
@@ -166,7 +166,7 @@
 //! we "push down" these changes to the base and clear up the staging space.
 //!
 //! <p align="center">
-//!     <img src="https://drive.google.com/uc?export=view&id=1l2CUbq85nX_g0GfQj44ClrKXd253sBFv" width="100%">
+//!     <img src="/assets/architecture.svg" width="100%">
 //! </p>
 //!
 //! Thanks to the shadow pages, we can both revive some historical versions of the store and
