@@ -36,7 +36,7 @@ bytemuck = { version = "1.13.1", features = ["derive"] }
 
 [dev-dependencies]
 criterion = "0.4.0"
-keccak-hasher = "0.15.3"
+keccak-hasher = "0.16.0"
 rand = "0.8.5"
 triehash = "0.8.4"
 assert_cmd = "2.0.7"
