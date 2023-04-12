@@ -7,7 +7,7 @@
 Firewood is an embedded key-value store, optimized to store blockchain state.
 It prioritizes access to latest state, by providing extremely fast reads, but
 also provides a limited view into past state. It does not copy-on-write the
-state trie to generate an ever growing forest of tries like other database,
+state trie to generate an ever growing forest of tries like other databases,
 but instead keeps one latest version of the trie index on disk and apply
 in-place updates to it. This ensures that the database size is small and stable
 during the course of running firewood. Firewood was first conceived to provide
@@ -30,7 +30,7 @@ store back in memory. While running the store, new changes will also contribute
 to the configured window of changes (at batch granularity) to access any past
 versions with no additional cost at all.
 
-Firewood provides two isolated storage space which can be both or selectively
+Firewood provides two isolated storage spaces which can be both or selectively
 used the user. The account model portion of the storage offers something very similar
 to StateDB in geth, which captures the address-“state key” style of two-level access for
 an account’s (smart contract’s) state. Therefore, it takes minimal effort to
