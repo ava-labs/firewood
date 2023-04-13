@@ -61,30 +61,28 @@ use nix::unistd::{close, ftruncate, mkdir, unlinkat, UnlinkatFlags};
 use std::os::unix::io::RawFd;
 use std::sync::Arc;
 use wal::{WALBytes, WALFile, WALPos, WALStore};
+use tokio::fs::File;
 
 pub struct WALFileAIO {
-    fd: RawFd,
+    f: File,
     aiomgr: Arc<AIOManager>,
 }
 
-#[allow(clippy::result_unit_err)]
-// TODO: Refactor to return a meaningful error.
 impl WALFileAIO {
-    pub fn new(rootfd: RawFd, filename: &str, aiomgr: Arc<AIOManager>) -> Result<Self, ()> {
-        openat(
-            rootfd,
-            filename,
-            OFlag::O_CREAT | OFlag::O_RDWR,
-            Mode::S_IRUSR | Mode::S_IWUSR,
-        )
-        .map(|fd| WALFileAIO { fd, aiomgr })
-        .map_err(|_| ())
+    pub async fn new(filename: &str, aiomgr: Arc<AIOManager>) -> std::io::Result<Self> {
+        let f = tokio::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(filename).await?;
+        Ok(WALFileAIO { f, aiomgr })
     }
 }
 
 impl Drop for WALFileAIO {
     fn drop(&mut self) {
-        close(self.fd).unwrap();
+        self.f.sync_all();
+        drop(self.f);
     }
 }
 
@@ -206,7 +204,7 @@ impl WALStore for WALStoreAIO {
     type FileNameIter = std::vec::IntoIter<String>;
 
     async fn open_file(&self, filename: &str, _touch: bool) -> Result<Box<dyn WALFile>, ()> {
-        let filename = filename.to_string();
+        let f = tokio::fs::File::open(filename).await?;
         WALFileAIO::new(self.rootfd, &filename, self.aiomgr.clone())
             .map(|f| Box::new(f) as Box<dyn WALFile>)
     }

@@ -21,6 +21,7 @@ futures = "0.3.24"
 nix = "0.26.2"
 libc = "0.2.133"
 bytemuck = "1.13.1"
+tokio = { version = "1.27.0", features = ["fs"] }
 
 [dev-dependencies]
 hex = "0.4.3"
