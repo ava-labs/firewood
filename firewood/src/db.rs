@@ -1059,28 +1059,33 @@ impl WriteBatch {
     /// either retained on disk or lost together during a crash.
     pub fn commit(mut self) {
         use crate::storage::BufferWrite;
-        let mut inner = self.m.write();
+        let mut rev_inner = self.m.write();
         if self.root_hash_recalc {
-            inner.latest.root_hash().ok();
-            inner.latest.kv_root_hash().ok();
+            rev_inner.latest.root_hash().ok();
+            rev_inner.latest.kv_root_hash().ok();
         }
         // clear the staging layer and apply changes to the CachedSpace
-        inner.latest.flush_dirty().unwrap();
+        rev_inner.latest.flush_dirty().unwrap();
         let (merkle_payload_pages, merkle_payload_plain) =
-            inner.staging.merkle.payload.take_delta();
-        let (merkle_meta_pages, merkle_meta_plain) = inner.staging.merkle.meta.take_delta();
-        let (blob_payload_pages, blob_payload_plain) = inner.staging.blob.payload.take_delta();
-        let (blob_meta_pages, blob_meta_plain) = inner.staging.blob.meta.take_delta();
+            rev_inner.staging.merkle.payload.take_delta();
+        let (merkle_meta_pages, merkle_meta_plain) = rev_inner.staging.merkle.meta.take_delta();
+        let (blob_payload_pages, blob_payload_plain) = rev_inner.staging.blob.payload.take_delta();
+        let (blob_meta_pages, blob_meta_plain) = rev_inner.staging.blob.meta.take_delta();
 
-        let old_merkle_meta_delta = inner.cached.merkle.meta.update(&merkle_meta_pages).unwrap();
-        let old_merkle_payload_delta = inner
+        let old_merkle_meta_delta = rev_inner
+            .cached
+            .merkle
+            .meta
+            .update(&merkle_meta_pages)
+            .unwrap();
+        let old_merkle_payload_delta = rev_inner
             .cached
             .merkle
             .payload
             .update(&merkle_payload_pages)
             .unwrap();
-        let old_blob_meta_delta = inner.cached.blob.meta.update(&blob_meta_pages).unwrap();
-        let old_blob_payload_delta = inner
+        let old_blob_meta_delta = rev_inner.cached.blob.meta.update(&blob_meta_pages).unwrap();
+        let old_blob_payload_delta = rev_inner
             .cached
             .blob
             .payload
@@ -1090,16 +1095,19 @@ impl WriteBatch {
         // update the rolling window of past revisions
         let new_base = Universe {
             merkle: SubUniverse::new(
-                StoreRevShared::from_delta(inner.cached.merkle.meta.clone(), old_merkle_meta_delta),
                 StoreRevShared::from_delta(
-                    inner.cached.merkle.payload.clone(),
+                    rev_inner.cached.merkle.meta.clone(),
+                    old_merkle_meta_delta,
+                ),
+                StoreRevShared::from_delta(
+                    rev_inner.cached.merkle.payload.clone(),
                     old_merkle_payload_delta,
                 ),
             ),
             blob: SubUniverse::new(
-                StoreRevShared::from_delta(inner.cached.blob.meta.clone(), old_blob_meta_delta),
+                StoreRevShared::from_delta(rev_inner.cached.blob.meta.clone(), old_blob_meta_delta),
                 StoreRevShared::from_delta(
-                    inner.cached.blob.payload.clone(),
+                    rev_inner.cached.blob.payload.clone(),
                     old_blob_payload_delta,
                 ),
             ),
@@ -1126,22 +1134,22 @@ impl WriteBatch {
         self.committed = true;
 
         // schedule writes to the disk
-        inner.disk_requester.write(
+        rev_inner.disk_requester.write(
             vec![
                 BufferWrite {
-                    space_id: inner.staging.merkle.payload.id(),
+                    space_id: rev_inner.staging.merkle.payload.id(),
                     delta: merkle_payload_pages,
                 },
                 BufferWrite {
-                    space_id: inner.staging.merkle.meta.id(),
+                    space_id: rev_inner.staging.merkle.meta.id(),
                     delta: merkle_meta_pages,
                 },
                 BufferWrite {
-                    space_id: inner.staging.blob.payload.id(),
+                    space_id: rev_inner.staging.blob.payload.id(),
                     delta: blob_payload_pages,
                 },
                 BufferWrite {
-                    space_id: inner.staging.blob.meta.id(),
+                    space_id: rev_inner.staging.blob.meta.id(),
                     delta: blob_meta_pages,
                 },
             ],

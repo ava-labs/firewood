@@ -26,10 +26,7 @@ fn main() {
             "{}",
             hex::encode(*db.get_revision(2, None).unwrap().kv_root_hash().unwrap())
         );
-        let write = db
-            .new_writebatch()
-            .kv_insert("k", "v".as_bytes().to_vec())
-            .unwrap();
+        let write = db.new_writebatch().kv_insert("k", vec![b'v']).unwrap();
 
         // Get a revision while a batch is active.
         println!(
