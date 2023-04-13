@@ -9,7 +9,7 @@ description = "Simple and modular write-ahead-logging implementation."
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-libaio-futures = { version = "0.2.3", path = "../libaio-futures" }
+firewood-libaio-futures = { version = "0.0.1", path = "../firewood-libaio-futures" }
 crc = "3.0.0"
 lru = "0.10.0"
 scan_fmt = "0.2.6"
