@@ -1,7 +1,7 @@
 [workspace]
 members = [
   "firewood-growth-ring",
-  "firewood-libaio-futures",
+  "firewood-libaio",
   "firewood-shale",
   "firewood",
   "fwdctl",

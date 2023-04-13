@@ -15,7 +15,7 @@ license-file = "../LICENSE.md"
 homepage = "https://avalabs.org"
 [dependencies]
 firewood-growth-ring = { version = "0.0.1", path = "../firewood-growth-ring" }
-firewood-libaio-futures = { version = "0.0.1", path = "../firewood-libaio-futures" }
+firewood-libaio = { version = "0.0.1", path = "../firewood-libaio" }
 firewood-shale = { version = "0.0.1", path = "../firewood-shale" }
 enum-as-inner = "0.5.1"
 parking_lot = "0.12.1"
