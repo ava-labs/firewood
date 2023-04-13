@@ -274,13 +274,7 @@ impl DBRev {
         self.blob.flush_dirty()
     }
 
-    fn borrow_split(
-        &mut self,
-    ) -> (
-        &mut shale::Obj<DBHeader>,
-        &mut Merkle,
-        &mut BlobStash,
-    ) {
+    fn borrow_split(&mut self) -> (&mut shale::Obj<DBHeader>, &mut Merkle, &mut BlobStash) {
         (&mut self.header, &mut self.merkle, &mut self.blob)
     }
 
@@ -843,9 +837,7 @@ impl DB {
             Rc::new(space.merkle.meta.clone()),
             Rc::new(space.merkle.payload.clone()),
             merkle_payload_header_ref,
-            shale::ObjCache::new(
-                cfg.as_ref().unwrap_or(&self.rev_cfg).merkle_ncached_objs,
-            ),
+            shale::ObjCache::new(cfg.as_ref().unwrap_or(&self.rev_cfg).merkle_ncached_objs),
             0,
             self.payload_regn_nbit,
         )

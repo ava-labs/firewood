@@ -80,8 +80,8 @@ impl Ash {
 #[derive(Debug)]
 pub struct AshRecord(pub HashMap<SpaceID, Ash>);
 
-impl firewood_growth_ring::wal::Record for AshRecord {
-    fn serialize(&self) -> firewood_growth_ring::wal::WALBytes {
+impl growth_ring::wal::Record for AshRecord {
+    fn serialize(&self) -> growth_ring::wal::WALBytes {
         let mut bytes = Vec::new();
         bytes.extend((self.0.len() as u64).to_le_bytes());
         for (space_id, w) in self.0.iter() {
@@ -100,7 +100,7 @@ impl firewood_growth_ring::wal::Record for AshRecord {
 
 impl AshRecord {
     #[allow(clippy::boxed_local)]
-    fn deserialize(raw: firewood_growth_ring::wal::WALBytes) -> Self {
+    fn deserialize(raw: growth_ring::wal::WALBytes) -> Self {
         let mut r = &raw[..];
         let len = u64::from_le_bytes(r[..8].try_into().unwrap());
         r = &r[8..];
