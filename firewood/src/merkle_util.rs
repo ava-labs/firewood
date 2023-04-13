@@ -4,7 +4,7 @@
 use crate::merkle::*;
 use crate::proof::Proof;
 use crate::{dynamic_mem::DynamicMem, proof::ProofError};
-use shale::{compact::CompactSpaceHeader, MemStore, MummyObj, ObjPtr};
+use firewood_shale::{compact::CompactSpaceHeader, MemStore, MummyObj, ObjPtr};
 use std::rc::Rc;
 
 use thiserror::Error;
@@ -121,17 +121,29 @@ pub fn new_merkle(meta_size: u64, compact_size: u64) -> MerkleSetup {
     let compact_header: ObjPtr<CompactSpaceHeader> = ObjPtr::new_from_addr(0x0);
     dm.write(
         compact_header.addr(),
-        &shale::to_dehydrated(&shale::compact::CompactSpaceHeader::new(RESERVED, RESERVED)),
+        &firewood_shale::to_dehydrated(&firewood_shale::compact::CompactSpaceHeader::new(
+            RESERVED, RESERVED,
+        )),
     );
-    let compact_header =
-        MummyObj::ptr_to_obj(&dm, compact_header, shale::compact::CompactHeader::MSIZE).unwrap();
+    let compact_header = MummyObj::ptr_to_obj(
+        &dm,
+        compact_header,
+        firewood_shale::compact::CompactHeader::MSIZE,
+    )
+    .unwrap();
     let mem_meta = Rc::new(dm);
     let mem_payload = Rc::new(DynamicMem::new(compact_size, 0x1));
 
-    let cache = shale::ObjCache::new(1);
-    let space =
-        shale::compact::CompactSpace::new(mem_meta, mem_payload, compact_header, cache, 10, 16)
-            .expect("CompactSpace init fail");
+    let cache = firewood_shale::ObjCache::new(1);
+    let space = firewood_shale::compact::CompactSpace::new(
+        mem_meta,
+        mem_payload,
+        compact_header,
+        cache,
+        10,
+        16,
+    )
+    .expect("CompactSpace init fail");
     let mut root = ObjPtr::null();
     Merkle::init_root(&mut root, &space).unwrap();
     MerkleSetup {

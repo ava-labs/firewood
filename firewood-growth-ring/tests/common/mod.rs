@@ -1,5 +1,4 @@
 #[cfg(test)]
-#[allow(dead_code)]
 use async_trait::async_trait;
 use futures::executor::block_on;
 use growthring::wal::{WALBytes, WALError, WALFile, WALLoader, WALPos, WALRingId, WALStore};

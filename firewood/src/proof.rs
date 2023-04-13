@@ -6,10 +6,10 @@ use crate::db::DBError;
 use crate::merkle::*;
 use crate::merkle_util::*;
 
+use firewood_shale::ObjPtr;
 use nix::errno::Errno;
 use serde::{Deserialize, Serialize};
 use sha3::Digest;
-use shale::ObjPtr;
 
 use std::cmp::Ordering;
 use std::collections::HashMap;

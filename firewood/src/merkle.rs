@@ -4,9 +4,9 @@
 use crate::proof::Proof;
 
 use enum_as_inner::EnumAsInner;
+use firewood_shale::{MemStore, MummyItem, ObjPtr, ObjRef, ShaleError, ShaleStore};
 use once_cell::unsync::OnceCell;
 use sha3::Digest;
-use shale::{MemStore, MummyItem, ObjPtr, ObjRef, ShaleError, ShaleStore};
 
 use std::cell::Cell;
 use std::cmp;
@@ -773,7 +773,7 @@ fn test_merkle_node_encoding() {
         bytes.resize(node.dehydrated_len() as usize, 0);
         node.dehydrate(&mut bytes);
 
-        let mut mem = shale::PlainMem::new(bytes.len() as u64, 0x0);
+        let mut mem = firewood_shale::PlainMem::new(bytes.len() as u64, 0x0);
         mem.write(0, &bytes);
         println!("{bytes:?}");
         let node_ = Node::hydrate(0, &mem).unwrap();

@@ -1,6 +1,6 @@
 [package]
-name = "libaio-futures"
-version = "0.2.3"
+name = "firewood-libaio"
+version = "0.2.4"
 authors = ["Determinant <tederminant@gmail.com>"]
 edition = "2018"
 homepage = "https://github.com/Determinant/libaio-futures"

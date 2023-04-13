@@ -1,6 +1,6 @@
 [package]
-name = "growth-ring"
-version = "0.3.0"
+name = "firewood-growth-ring"
+version = "0.3.1"
 authors = ["Determinant <tederminant@gmail.com>"]
 edition = "2018"
 homepage = "https://github.com/Determinant/growth-ring"
@@ -11,7 +11,7 @@ description = "Simple and modular write-ahead-logging implementation."
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-libaio-futures = { version = "0.2.3", path = "../libaio-futures" }
+firewood-libaio= { version = "0.2.4", path = "../firewood-libaio", package = "firewood-libaio" }
 crc = "3.0.0"
 lru = "0.10.0"
 scan_fmt = "0.2.6"
