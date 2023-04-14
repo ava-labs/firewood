@@ -11,11 +11,9 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use bytemuck::{cast_slice, AnyBitPattern};
-
-use shale::{compact::CompactSpaceHeader, MemStore, MummyItem, MummyObj, ObjPtr, SpaceID};
-
 use parking_lot::{Mutex, RwLock};
 use primitive_types::U256;
+use shale::{compact::CompactSpaceHeader, MemStore, MummyItem, MummyObj, ObjPtr, SpaceID};
 use typed_builder::TypedBuilder;
 
 use crate::account::{Account, AccountRLP, Blob, BlobStash};
