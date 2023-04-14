@@ -4,7 +4,6 @@
 use crate::merkle::*;
 use crate::proof::Proof;
 use crate::{dynamic_mem::DynamicMem, proof::ProofError};
-extern crate firewood_shale as shale;
 use shale::{compact::CompactSpaceHeader, MemStore, MummyObj, ObjPtr};
 use std::rc::Rc;
 

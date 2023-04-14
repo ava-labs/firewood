@@ -19,7 +19,6 @@ use growth_ring::{
     WALStoreAIO,
 };
 
-extern crate firewood_shale as shale;
 use shale::{MemStore, MemView, SpaceID};
 
 use nix::fcntl::{flock, FlockArg};

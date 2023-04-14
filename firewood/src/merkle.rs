@@ -4,7 +4,6 @@
 use crate::proof::Proof;
 
 use enum_as_inner::EnumAsInner;
-extern crate firewood_shale as shale;
 use once_cell::unsync::OnceCell;
 use sha3::Digest;
 use shale::{MemStore, MummyItem, ObjPtr, ObjRef, ShaleError, ShaleStore};

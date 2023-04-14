@@ -5,8 +5,8 @@ use std::fmt;
 use std::io::{Cursor, Write};
 
 use crate::merkle::{Hash, Node, ValueTransformer};
-use firewood_shale::{MemStore, MummyItem, ObjPtr, ObjRef, ShaleError, ShaleStore};
 use primitive_types::U256;
+use shale::{MemStore, MummyItem, ObjPtr, ObjRef, ShaleError, ShaleStore};
 
 pub struct Account {
     pub nonce: u64,

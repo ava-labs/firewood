@@ -5,7 +5,7 @@ use std::cell::UnsafeCell;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
-use firewood_shale::*;
+use shale::*;
 
 pub type SpaceID = u8;
 

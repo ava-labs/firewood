@@ -12,7 +12,6 @@ use std::thread::JoinHandle;
 
 use bytemuck::{cast_slice, AnyBitPattern};
 
-extern crate firewood_shale as shale;
 use shale::{compact::CompactSpaceHeader, MemStore, MummyItem, MummyObj, ObjPtr, SpaceID};
 
 use parking_lot::{Mutex, RwLock};
