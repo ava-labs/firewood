@@ -25,7 +25,7 @@ jobs:
         continue-on-error: true
         run: |
           cargo login ${{ secrets.CARGO_TOKEN }}
-          cargo publish -p firewood-libaio-futures
+          cargo publish -p firewood-libaio
       - name: publish growth-ring crate
         continue-on-error: true
         run: |

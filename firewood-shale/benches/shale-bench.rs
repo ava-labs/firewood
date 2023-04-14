@@ -1,7 +1,8 @@
 use bencher::{benchmark_group, benchmark_main, Bencher};
 
-use firewood_shale::{compact::CompactSpaceHeader, MemStore, MummyObj, ObjPtr, PlainMem};
+extern crate firewood_shale as shale;
 use rand::Rng;
+use shale::{compact::CompactSpaceHeader, MemStore, MummyObj, ObjPtr, PlainMem};
 
 fn get_view(b: &mut Bencher) {
     const SIZE: u64 = 2_000_000;
@@ -27,12 +28,9 @@ fn serialize(b: &mut Bencher) {
 
     b.iter(|| {
         let compact_header_obj: ObjPtr<CompactSpaceHeader> = ObjPtr::new_from_addr(0x0);
-        let _compact_header = MummyObj::ptr_to_obj(
-            &m,
-            compact_header_obj,
-            firewood_shale::compact::CompactHeader::MSIZE,
-        )
-        .unwrap();
+        let _compact_header =
+            MummyObj::ptr_to_obj(&m, compact_header_obj, shale::compact::CompactHeader::MSIZE)
+                .unwrap();
     });
 }
 benchmark_group!(benches, get_view, serialize);
