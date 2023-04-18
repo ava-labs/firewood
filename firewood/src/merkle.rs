@@ -6,7 +6,7 @@ use crate::proof::Proof;
 use enum_as_inner::EnumAsInner;
 use once_cell::unsync::OnceCell;
 use sha3::Digest;
-use shale::{MemStore, MummyItem, ObjPtr, ObjRef, ShaleError, ShaleStore};
+use shale::{CachedStore, ObjPtr, ObjRef, ShaleError, ShaleStore, Storable};
 
 use std::cell::Cell;
 use std::cmp;
@@ -57,11 +57,11 @@ impl std::ops::Deref for Hash {
     }
 }
 
-impl MummyItem for Hash {
-    fn hydrate<T: MemStore>(addr: u64, mem: &T) -> Result<Self, ShaleError> {
+impl Storable for Hash {
+    fn hydrate<T: CachedStore>(addr: u64, mem: &T) -> Result<Self, ShaleError> {
         let raw = mem
             .get_view(addr, Self::MSIZE)
-            .ok_or(ShaleError::LinearMemStoreError)?;
+            .ok_or(ShaleError::LinearCachedStoreError)?;
         Ok(Self(
             raw.as_deref()[..Self::MSIZE as usize].try_into().unwrap(),
         ))
@@ -133,26 +133,6 @@ impl PartialPath {
             (len + 1) >> 1
         } else {
             (len >> 1) + 1
-        }
-    }
-}
-
-#[test]
-fn test_partial_path_encoding() {
-    let check = |steps: &[u8], term| {
-        let (d, t) = PartialPath::decode(PartialPath(steps.to_vec()).encode(term));
-        assert_eq!(d.0, steps);
-        assert_eq!(t, term);
-    };
-    for steps in [
-        vec![0x1, 0x2, 0x3, 0x4],
-        vec![0x1, 0x2, 0x3],
-        vec![0x0, 0x1, 0x2],
-        vec![0x1, 0x2],
-        vec![0x1],
-    ] {
-        for term in [true, false] {
-            check(&steps, term)
         }
     }
 }
@@ -497,13 +477,13 @@ impl Node {
     const ETH_RLP_LONG_BIT: u8 = 1 << 2;
 }
 
-impl MummyItem for Node {
-    fn hydrate<T: MemStore>(addr: u64, mem: &T) -> Result<Self, ShaleError> {
+impl Storable for Node {
+    fn hydrate<T: CachedStore>(addr: u64, mem: &T) -> Result<Self, ShaleError> {
         let dec_err = |_| ShaleError::DecodeError;
         const META_SIZE: u64 = 32 + 1 + 1;
         let meta_raw = mem
             .get_view(addr, META_SIZE)
-            .ok_or(ShaleError::LinearMemStoreError)?;
+            .ok_or(ShaleError::LinearCachedStoreError)?;
         let attrs = meta_raw.as_deref()[32];
         let root_hash = if attrs & Node::ROOT_HASH_VALID_BIT == 0 {
             None
@@ -522,7 +502,7 @@ impl MummyItem for Node {
                 let branch_header_size = NBRANCH as u64 * 8 + 4;
                 let node_raw = mem
                     .get_view(addr + META_SIZE, branch_header_size)
-                    .ok_or(ShaleError::LinearMemStoreError)?;
+                    .ok_or(ShaleError::LinearCachedStoreError)?;
                 let mut cur = Cursor::new(node_raw.as_deref());
                 let mut chd = [None; NBRANCH];
                 let mut buff = [0; 8];
@@ -542,7 +522,7 @@ impl MummyItem for Node {
                 } else {
                     Some(Data(
                         mem.get_view(addr + META_SIZE + branch_header_size, raw_len)
-                            .ok_or(ShaleError::LinearMemStoreError)?
+                            .ok_or(ShaleError::LinearCachedStoreError)?
                             .as_deref(),
                     ))
                 };
@@ -557,7 +537,7 @@ impl MummyItem for Node {
                     let mut buff = [0_u8; 1];
                     let rlp_len_raw = mem
                         .get_view(offset + cur_rlp_len, 1)
-                        .ok_or(ShaleError::LinearMemStoreError)?;
+                        .ok_or(ShaleError::LinearCachedStoreError)?;
                     cur = Cursor::new(rlp_len_raw.as_deref());
                     cur.read_exact(&mut buff)
                         .map_err(|_| ShaleError::DecodeError)?;
@@ -566,7 +546,7 @@ impl MummyItem for Node {
                     if rlp_len != 0 {
                         let rlp_raw = mem
                             .get_view(offset + cur_rlp_len, rlp_len)
-                            .ok_or(ShaleError::LinearMemStoreError)?;
+                            .ok_or(ShaleError::LinearCachedStoreError)?;
                         let rlp: Vec<u8> = rlp_raw.as_deref()[0..].to_vec();
                         *chd_rlp = Some(rlp);
                         cur_rlp_len += rlp_len
@@ -587,7 +567,7 @@ impl MummyItem for Node {
                 let ext_header_size = 1 + 8;
                 let node_raw = mem
                     .get_view(addr + META_SIZE, ext_header_size)
-                    .ok_or(ShaleError::LinearMemStoreError)?;
+                    .ok_or(ShaleError::LinearCachedStoreError)?;
                 let mut cur = Cursor::new(node_raw.as_deref());
                 let mut buff = [0; 8];
                 cur.read_exact(&mut buff[..1])
@@ -598,7 +578,7 @@ impl MummyItem for Node {
                 let ptr = u64::from_le_bytes(buff);
                 let nibbles: Vec<_> = to_nibbles(
                     &mem.get_view(addr + META_SIZE + ext_header_size, path_len)
-                        .ok_or(ShaleError::LinearMemStoreError)?
+                        .ok_or(ShaleError::LinearCachedStoreError)?
                         .as_deref(),
                 )
                 .collect();
@@ -607,7 +587,7 @@ impl MummyItem for Node {
                 let mut buff = [0_u8; 1];
                 let rlp_len_raw = mem
                     .get_view(addr + META_SIZE + ext_header_size + path_len, 1)
-                    .ok_or(ShaleError::LinearMemStoreError)?;
+                    .ok_or(ShaleError::LinearCachedStoreError)?;
                 cur = Cursor::new(rlp_len_raw.as_deref());
                 cur.read_exact(&mut buff)
                     .map_err(|_| ShaleError::DecodeError)?;
@@ -615,7 +595,7 @@ impl MummyItem for Node {
                 let rlp: Option<Vec<u8>> = if rlp_len != 0 {
                     let rlp_raw = mem
                         .get_view(addr + META_SIZE + ext_header_size + path_len + 1, rlp_len)
-                        .ok_or(ShaleError::LinearMemStoreError)?;
+                        .ok_or(ShaleError::LinearCachedStoreError)?;
                     Some(rlp_raw.as_deref()[0..].to_vec())
                 } else {
                     None
@@ -631,7 +611,7 @@ impl MummyItem for Node {
                 let leaf_header_size = 1 + 4;
                 let node_raw = mem
                     .get_view(addr + META_SIZE, leaf_header_size)
-                    .ok_or(ShaleError::LinearMemStoreError)?;
+                    .ok_or(ShaleError::LinearCachedStoreError)?;
                 let mut cur = Cursor::new(node_raw.as_deref());
                 let mut buff = [0; 4];
                 cur.read_exact(&mut buff[..1])
@@ -642,7 +622,7 @@ impl MummyItem for Node {
                 let data_len = u32::from_le_bytes(buff) as u64;
                 let remainder = mem
                     .get_view(addr + META_SIZE + leaf_header_size, path_len + data_len)
-                    .ok_or(ShaleError::LinearMemStoreError)?;
+                    .ok_or(ShaleError::LinearCachedStoreError)?;
                 let nibbles: Vec<_> =
                     to_nibbles(&remainder.as_deref()[..path_len as usize]).collect();
                 let (path, _) = PartialPath::decode(nibbles);
@@ -763,78 +743,6 @@ impl MummyItem for Node {
                 cur.write_all(&n.1).unwrap();
             }
         }
-    }
-}
-
-#[test]
-fn test_merkle_node_encoding() {
-    let check = |node: Node| {
-        let mut bytes = Vec::new();
-        bytes.resize(node.dehydrated_len() as usize, 0);
-        node.dehydrate(&mut bytes);
-
-        let mut mem = shale::PlainMem::new(bytes.len() as u64, 0x0);
-        mem.write(0, &bytes);
-        println!("{bytes:?}");
-        let node_ = Node::hydrate(0, &mem).unwrap();
-        assert!(node == node_);
-    };
-    let chd0 = [None; NBRANCH];
-    let mut chd1 = chd0;
-    for node in chd1.iter_mut().take(NBRANCH / 2) {
-        *node = Some(ObjPtr::new_from_addr(0xa));
-    }
-    let mut chd_eth_rlp: [Option<Vec<u8>>; NBRANCH] = Default::default();
-    for rlp in chd_eth_rlp.iter_mut().take(NBRANCH / 2) {
-        *rlp = Some(vec![0x1, 0x2, 0x3]);
-    }
-    for node in [
-        Node::new_from_hash(
-            None,
-            None,
-            NodeType::Leaf(LeafNode(
-                PartialPath(vec![0x1, 0x2, 0x3]),
-                Data(vec![0x4, 0x5]),
-            )),
-        ),
-        Node::new_from_hash(
-            None,
-            None,
-            NodeType::Extension(ExtNode(
-                PartialPath(vec![0x1, 0x2, 0x3]),
-                ObjPtr::new_from_addr(0x42),
-                None,
-            )),
-        ),
-        Node::new_from_hash(
-            None,
-            None,
-            NodeType::Extension(ExtNode(
-                PartialPath(vec![0x1, 0x2, 0x3]),
-                ObjPtr::null(),
-                Some(vec![0x1, 0x2, 0x3]),
-            )),
-        ),
-        Node::new_from_hash(
-            None,
-            None,
-            NodeType::Branch(BranchNode {
-                chd: chd0,
-                value: Some(Data("hello, world!".as_bytes().to_vec())),
-                chd_eth_rlp: Default::default(),
-            }),
-        ),
-        Node::new_from_hash(
-            None,
-            None,
-            NodeType::Branch(BranchNode {
-                chd: chd1,
-                value: None,
-                chd_eth_rlp,
-            }),
-        ),
-    ] {
-        check(node);
     }
 }
 
@@ -1158,34 +1066,55 @@ impl Merkle {
         val: Vec<u8>,
         root: ObjPtr<Node>,
     ) -> Result<(), MerkleError> {
+        // as we split a node, we need to track deleted nodes and parents
         let mut deleted = Vec::new();
-        let mut chunks = vec![0];
-        chunks.extend(to_nibbles(key.as_ref()));
         let mut parents = Vec::new();
-        let mut u_ref = Some(self.get_node(root)?);
+
+        // TODO: Explain why this always starts with a 0 chunk
+        // I think this may have to do with avoiding moving the root
+        let mut chunked_key = vec![0];
+        chunked_key.extend(to_nibbles(key.as_ref()));
+
+        let mut next_node = Some(self.get_node(root)?);
         let mut nskip = 0;
+
+        // wrap the current value into an Option to indicate whether it has been
+        // inserted yet. If we haven't inserted it after we traverse the tree, we
+        // have to do some splitting
         let mut val = Some(val);
-        for (i, nib) in chunks.iter().enumerate() {
+
+        // walk down the merkle tree starting from next_node, currently the root
+        for (key_nib_offset, key_nib) in chunked_key.iter().enumerate() {
+            // special handling for extension nodes
             if nskip > 0 {
                 nskip -= 1;
                 continue;
             }
-            let mut u = u_ref.take().unwrap();
-            let u_ptr = u.as_ptr();
-            let next_ptr = match &u.inner {
-                NodeType::Branch(n) => match n.chd[*nib as usize] {
+            // move the current node into node; next_node becomes None
+            // unwrap() is okay here since we are certain we have something
+            // in next_node at this point
+            let mut node = next_node.take().unwrap();
+            let node_ptr = node.as_ptr();
+
+            let next_node_ptr = match &node.inner {
+                // For a Branch node, we look at the child pointer. If it points
+                // to another node, we walk down that. Otherwise, we can store our
+                // value as a leaf and we're done
+                NodeType::Branch(n) => match n.chd[*key_nib as usize] {
                     Some(c) => c,
                     None => {
                         // insert the leaf to the empty slot
+                        // create a new leaf
                         let leaf_ptr = self
                             .new_node(Node::new(NodeType::Leaf(LeafNode(
-                                PartialPath(chunks[i + 1..].to_vec()),
+                                PartialPath(chunked_key[key_nib_offset + 1..].to_vec()),
                                 Data(val.take().unwrap()),
                             ))))?
                             .as_ptr();
-                        u.write(|u| {
+                        // set the current child to point to this leaf
+                        node.write(|u| {
                             let uu = u.inner.as_branch_mut().unwrap();
-                            uu.chd[*nib as usize] = Some(leaf_ptr);
+                            uu.chd[*key_nib as usize] = Some(leaf_ptr);
                             u.rehash();
                         })
                         .unwrap();
@@ -1193,12 +1122,14 @@ impl Merkle {
                     }
                 },
                 NodeType::Leaf(n) => {
+                    // we collided with another key; make a copy
+                    // of the stored key to pass into split
                     let n_path = n.0.to_vec();
                     let n_value = Some(n.1.clone());
                     self.split(
-                        u,
+                        node,
                         &mut parents,
-                        &chunks[i..],
+                        &chunked_key[key_nib_offset..],
                         n_path,
                         n_value,
                         val.take().unwrap(),
@@ -1211,30 +1142,36 @@ impl Merkle {
                     let n_ptr = n.1;
                     nskip = n_path.len() - 1;
                     if let Some(v) = self.split(
-                        u,
+                        node,
                         &mut parents,
-                        &chunks[i..],
+                        &chunked_key[key_nib_offset..],
                         n_path,
                         None,
                         val.take().unwrap(),
                         &mut deleted,
                     )? {
+                        // we couldn't split this, so we
+                        // skip n_path items and follow the
+                        // extension node's next pointer
                         val = Some(v);
-                        u = self.get_node(u_ptr)?;
+                        node = self.get_node(node_ptr)?;
                         n_ptr
                     } else {
+                        // successfully inserted
                         break;
                     }
                 }
             };
-
-            parents.push((u, *nib));
-            u_ref = Some(self.get_node(next_ptr)?);
+            // push another parent, and follow the next pointer
+            parents.push((node, *key_nib));
+            next_node = Some(self.get_node(next_node_ptr)?);
         }
         if val.is_some() {
+            // we walked down the tree and reached the end of the key,
+            // but haven't inserted the value yet
             let mut info = None;
             let u_ptr = {
-                let mut u = u_ref.take().unwrap();
+                let mut u = next_node.take().unwrap();
                 write_node!(
                     self,
                     u,
@@ -1294,7 +1231,7 @@ impl Merkle {
             }
         }
 
-        drop(u_ref);
+        drop(next_node);
 
         for (mut r, _) in parents.into_iter().rev() {
             r.write(|u| u.rehash()).unwrap();
@@ -2015,19 +1952,24 @@ impl ValueTransformer for IdTrans {
     }
 }
 
+// given a set of bytes, return a new iterator that returns a set of
+// nibbles, high bits first, then low bits
 pub fn to_nibbles(bytes: &[u8]) -> impl Iterator<Item = u8> + '_ {
-    bytes
-        .iter()
-        .flat_map(|b| [(b >> 4) & 0xf, b & 0xf].into_iter())
+    bytes.iter().flat_map(|b| [b >> 4, b & 0xf])
 }
 
+// given a set of nibbles, take each pair and convert this back into bytes
+// if an odd number of nibbles, in debug mode it panics. In release mode,
+// the final nibble is dropped
 pub fn from_nibbles(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
-    assert!(nibbles.len() & 1 == 0);
+    debug_assert_eq!(nibbles.len() & 1, 0);
     nibbles.chunks_exact(2).map(|p| (p[0] << 4) | p[1])
 }
 
+// compare two slices by comparing the bytes. A longer slice is greater
+// than a shorter slice (assuming the leading bytes are equal)
 pub fn compare(a: &[u8], b: &[u8]) -> cmp::Ordering {
-    for (ai, bi) in a.iter().zip(b.iter()) {
+    for (ai, bi) in a.iter().zip(b) {
         match ai.cmp(bi) {
             cmp::Ordering::Equal => continue,
             ord => return ord,
@@ -2038,40 +1980,161 @@ pub fn compare(a: &[u8], b: &[u8]) -> cmp::Ordering {
     a.len().cmp(&b.len())
 }
 
-#[test]
-fn test_to_nibbles() {
-    for (bytes, nibbles) in [
-        (vec![0x12, 0x34, 0x56], vec![0x1, 0x2, 0x3, 0x4, 0x5, 0x6]),
-        (vec![0xc0, 0xff], vec![0xc, 0x0, 0xf, 0xf]),
-    ] {
-        let n: Vec<_> = to_nibbles(&bytes).collect();
-        assert_eq!(n, nibbles);
-    }
-}
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::ops::Deref;
 
-#[test]
-fn test_cmp() {
-    for (bytes_a, bytes_b) in [
-        (vec![0x12, 0x34, 0x56], vec![0x12, 0x34, 0x56]),
-        (vec![0xc0, 0xff], vec![0xc0, 0xff]),
-    ] {
-        let n = compare(&bytes_a, &bytes_b);
-        assert!(n.is_eq());
+    #[test]
+    fn test_to_nibbles() {
+        for (bytes, nibbles) in [
+            (vec![0x12, 0x34, 0x56], vec![0x1, 0x2, 0x3, 0x4, 0x5, 0x6]),
+            (vec![0xc0, 0xff], vec![0xc, 0x0, 0xf, 0xf]),
+        ] {
+            let n: Vec<_> = to_nibbles(&bytes).collect();
+            assert_eq!(n, nibbles);
+        }
     }
 
-    for (bytes_a, bytes_b) in [
-        (vec![0x12, 0x34, 0x56], vec![0x12, 0x34, 0x58]),
-        (vec![0xc0, 0xee], vec![0xc0, 0xff]),
-    ] {
-        let n = compare(&bytes_a, &bytes_b);
-        assert!(n.is_lt());
+    #[test]
+    fn test_cmp() {
+        for (bytes_a, bytes_b) in [
+            (vec![0x12, 0x34, 0x56], vec![0x12, 0x34, 0x56]),
+            (vec![0xc0, 0xff], vec![0xc0, 0xff]),
+        ] {
+            let n = compare(&bytes_a, &bytes_b);
+            assert!(n.is_eq());
+        }
+
+        for (bytes_a, bytes_b) in [
+            (vec![0x12, 0x34, 0x56], vec![0x12, 0x34, 0x58]),
+            (vec![0xc0, 0xee], vec![0xc0, 0xff]),
+        ] {
+            let n = compare(&bytes_a, &bytes_b);
+            assert!(n.is_lt());
+        }
+
+        for (bytes_a, bytes_b) in [
+            (vec![0x12, 0x35, 0x56], vec![0x12, 0x34, 0x58]),
+            (vec![0xc0, 0xff, 0x33], vec![0xc0, 0xff]),
+        ] {
+            let n = compare(&bytes_a, &bytes_b);
+            assert!(n.is_gt());
+        }
     }
 
-    for (bytes_a, bytes_b) in [
-        (vec![0x12, 0x35, 0x56], vec![0x12, 0x34, 0x58]),
-        (vec![0xc0, 0xff, 0x33], vec![0xc0, 0xff]),
-    ] {
-        let n = compare(&bytes_a, &bytes_b);
-        assert!(n.is_gt());
+    const ZERO_HASH: Hash = Hash([0u8; HASH_SIZE]);
+
+    #[test]
+    fn test_hash_len() {
+        assert_eq!(HASH_SIZE, ZERO_HASH.dehydrated_len() as usize);
+    }
+    #[test]
+    fn test_dehydrate() {
+        let mut to = [1u8; HASH_SIZE];
+        assert_eq!(
+            {
+                ZERO_HASH.dehydrate(&mut to);
+                &to
+            },
+            ZERO_HASH.deref()
+        );
+    }
+
+    #[test]
+    fn test_hydrate() {
+        let mut store = shale::PlainMem::new(HASH_SIZE as u64, 0u8);
+        store.write(0, ZERO_HASH.deref());
+        assert_eq!(Hash::hydrate(0, &store).unwrap(), ZERO_HASH);
+    }
+    #[test]
+    fn test_partial_path_encoding() {
+        let check = |steps: &[u8], term| {
+            let (d, t) = PartialPath::decode(PartialPath(steps.to_vec()).encode(term));
+            assert_eq!(d.0, steps);
+            assert_eq!(t, term);
+        };
+        for steps in [
+            vec![0x1, 0x2, 0x3, 0x4],
+            vec![0x1, 0x2, 0x3],
+            vec![0x0, 0x1, 0x2],
+            vec![0x1, 0x2],
+            vec![0x1],
+        ] {
+            for term in [true, false] {
+                check(&steps, term)
+            }
+        }
+    }
+    #[test]
+    fn test_merkle_node_encoding() {
+        let check = |node: Node| {
+            let mut bytes = Vec::new();
+            bytes.resize(node.dehydrated_len() as usize, 0);
+            node.dehydrate(&mut bytes);
+
+            let mut mem = shale::PlainMem::new(bytes.len() as u64, 0x0);
+            mem.write(0, &bytes);
+            println!("{bytes:?}");
+            let node_ = Node::hydrate(0, &mem).unwrap();
+            assert!(node == node_);
+        };
+        let chd0 = [None; NBRANCH];
+        let mut chd1 = chd0;
+        for node in chd1.iter_mut().take(NBRANCH / 2) {
+            *node = Some(ObjPtr::new_from_addr(0xa));
+        }
+        let mut chd_eth_rlp: [Option<Vec<u8>>; NBRANCH] = Default::default();
+        for rlp in chd_eth_rlp.iter_mut().take(NBRANCH / 2) {
+            *rlp = Some(vec![0x1, 0x2, 0x3]);
+        }
+        for node in [
+            Node::new_from_hash(
+                None,
+                None,
+                NodeType::Leaf(LeafNode(
+                    PartialPath(vec![0x1, 0x2, 0x3]),
+                    Data(vec![0x4, 0x5]),
+                )),
+            ),
+            Node::new_from_hash(
+                None,
+                None,
+                NodeType::Extension(ExtNode(
+                    PartialPath(vec![0x1, 0x2, 0x3]),
+                    ObjPtr::new_from_addr(0x42),
+                    None,
+                )),
+            ),
+            Node::new_from_hash(
+                None,
+                None,
+                NodeType::Extension(ExtNode(
+                    PartialPath(vec![0x1, 0x2, 0x3]),
+                    ObjPtr::null(),
+                    Some(vec![0x1, 0x2, 0x3]),
+                )),
+            ),
+            Node::new_from_hash(
+                None,
+                None,
+                NodeType::Branch(BranchNode {
+                    chd: chd0,
+                    value: Some(Data("hello, world!".as_bytes().to_vec())),
+                    chd_eth_rlp: Default::default(),
+                }),
+            ),
+            Node::new_from_hash(
+                None,
+                None,
+                NodeType::Branch(BranchNode {
+                    chd: chd1,
+                    value: None,
+                    chd_eth_rlp,
+                }),
+            ),
+        ] {
+            check(node);
+        }
     }
 }
