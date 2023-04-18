@@ -556,6 +556,8 @@ mod tests {
             // page is not yet persisted to disk.
             assert!(d1.get_page(STATE_SPACE, 0).is_none());
             d1.write(page_batch, write_batch);
+            // This is not ACID compliant write should not return before wal log is written to disk.
+            // If the sleep is removed the test will fail.
             // TODO why is this so slow?
             std::thread::sleep(std::time::Duration::from_millis(5));
             assert_eq!(d1.collect_ash(1).unwrap().len(), 1);
