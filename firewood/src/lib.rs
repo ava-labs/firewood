@@ -194,6 +194,7 @@
 //! No change is required for other historical ghost space instances. Finally, we can phase out
 //! some very old ghost space to keep the size of the rolling window invariant.
 //!
+
 pub(crate) mod account;
 pub mod db;
 pub mod dynamic_mem;
@@ -201,7 +202,7 @@ pub(crate) mod file;
 pub mod merkle;
 pub mod merkle_util;
 pub mod proof;
-pub(crate) mod storage;
+pub mod storage;
 
 pub mod api;
 pub mod service;
