@@ -11,7 +11,7 @@ use super::{
     PAGE_SIZE_NBIT,
 };
 
-use aiofut::{AIOBuilder, AIOManager};
+use aiofut::{AIOBuilder, AIOError, AIOManager};
 use growthring::{
     wal::{RecoverPolicy, WALLoader, WALWriter},
     walerror::WALError,
@@ -104,16 +104,13 @@ impl DiskBuffer {
         inbound: mpsc::Receiver<BufferCmd>,
         cfg: &DiskBufferConfig,
         wal: &WALConfig,
-    ) -> Result<Self, ()> {
-        let aiomgr = match AIOBuilder::default()
+    ) -> Result<Self, AIOError> {
+        let aiomgr = AIOBuilder::default()
             .max_events(cfg.max_aio_requests)
             .max_nwait(cfg.max_aio_response)
             .max_nbatched(cfg.max_aio_submit)
             .build()
-        {
-            Ok(a) => a,
-            _ => return Err(()),
-        };
+            .map_err(|_| AIOError::OtherError)?;
 
         Ok(Self {
             pending: HashMap::new(),
