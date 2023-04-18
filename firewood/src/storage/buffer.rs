@@ -488,10 +488,10 @@ mod tests {
         storage::{DeltaPage, StoreConfig, StoreRevMut, StoreRevMutDelta},
     };
     use shale::MemStore;
+
+    const STATE_SPACE: SpaceID = 0x0;
     #[test]
     fn test_buffer() {
-        const STATE_SPACE: SpaceID = 0x0;
-
         let buf_cfg = DiskBufferConfig::builder().max_buffered(1).build();
         let wal_cfg = WALConfig::builder().build();
         let disk_requester = init_buffer(buf_cfg, wal_cfg);
@@ -509,10 +509,10 @@ mod tests {
         let state_cache = Rc::new(
             CachedSpace::new(
                 &StoreConfig::builder()
-                    .ncached_pages(2)
-                    .ncached_files(2)
+                    .ncached_pages(1)
+                    .ncached_files(1)
                     .space_id(STATE_SPACE)
-                    .file_nbit(2)
+                    .file_nbit(1)
                     .rootfd(state_fd)
                     .build(),
             )
@@ -535,7 +535,7 @@ mod tests {
         // mutate the in memory buffer.
         let change = b"this is another test";
 
-        // write to the in memory buffer(ash) not yet to disk
+        // write to the in memory buffer (ash) not yet to disk
         mut_store.write(0, change);
         assert_eq!(mut_store.id(), STATE_SPACE);
 
@@ -546,38 +546,25 @@ mod tests {
         let view = mut_store.get_view(0, change.len() as u64).unwrap();
         assert_eq!(view.as_deref(), change);
 
-        let deltas = std::mem::replace(
-            &mut *mut_store.deltas.borrow_mut(),
-            StoreRevMutDelta {
-                pages: HashMap::new(),
-                plain: Ash::new(),
-            },
-        );
-
-        // create a list of delta pages from existing in memory data.
-        let mut pages = Vec::new();
-        for (pid, page) in deltas.pages.into_iter() {
-            // get the page from the disk buffer will fail since the page is not yet persisted to disk?
-            let resp = disk_requester.get_page(STATE_SPACE, pid);
-            assert!(resp.is_none());
-
-            pages.push(DeltaPage(pid, page));
-        }
-        pages.sort_by_key(|p| p.0);
-
-        let page_batch = vec![BufferWrite {
-            space_id: STATE_SPACE,
-            delta: StoreDelta(pages),
-        }];
-
-        let write_batch = AshRecord([(STATE_SPACE, deltas.plain)].into());
+        let (page_batch, write_batch) = create_batches(&mut_store);
 
         // create a mutation request to the disk buffer by passing the page and write batch.
-        disk_requester.write(page_batch, write_batch);
-        // wait for processing to complete.
-        // TODO why is this so slow?
-        std::thread::sleep(std::time::Duration::from_millis(1));
-        // state has been written to disk wal should have 1 record.
+        let d1 = disk_requester.clone();
+        std::thread::spawn(move || {
+            // wal is empty
+            assert!(d1.collect_ash(1).unwrap().is_empty());
+            // page is not yet persisted to disk.
+            assert!(d1.get_page(STATE_SPACE, 0).is_none());
+            d1.write(page_batch, write_batch);
+            // TODO why is this so slow?
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            assert_eq!(d1.collect_ash(1).unwrap().len(), 1);
+            assert!(d1.get_page(STATE_SPACE, 0).is_some());
+        });
+
+        // wait for thread to finish
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        // state has been written to disk in the above thread wal should have 1 record.
         assert_eq!(disk_requester.collect_ash(1).unwrap().len(), 1);
     }
 
@@ -589,5 +576,30 @@ mod tests {
             disk_buffer.run()
         });
         disk_requester
+    }
+
+    fn create_batches(rev_mut: &StoreRevMut) -> (Vec<BufferWrite>, AshRecord) {
+        let deltas = std::mem::replace(
+            &mut *rev_mut.deltas.borrow_mut(),
+            StoreRevMutDelta {
+                pages: HashMap::new(),
+                plain: Ash::new(),
+            },
+        );
+
+        // create a list of delta pages from existing in memory data.
+        let mut pages = Vec::new();
+        for (pid, page) in deltas.pages.into_iter() {
+            pages.push(DeltaPage(pid, page));
+        }
+        pages.sort_by_key(|p| p.0);
+
+        let page_batch = vec![BufferWrite {
+            space_id: STATE_SPACE,
+            delta: StoreDelta(pages),
+        }];
+
+        let write_batch = AshRecord([(STATE_SPACE, deltas.plain)].into());
+        (page_batch, write_batch)
     }
 }
