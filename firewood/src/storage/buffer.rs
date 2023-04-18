@@ -491,7 +491,7 @@ mod tests {
     #[test]
     fn test_buffer() {
         const STATE_SPACE: SpaceID = 0x0;
-        
+
         let buf_cfg = DiskBufferConfig::builder().max_buffered(1).build();
         let wal_cfg = WALConfig::builder().build();
         let disk_requester = init_buffer(buf_cfg, wal_cfg);
