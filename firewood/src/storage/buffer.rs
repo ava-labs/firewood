@@ -73,6 +73,7 @@ pub struct BufferWrite {
     pub delta: StoreDelta,
 }
 
+#[derive(Debug)]
 struct PendingPage {
     staging_data: Arc<Page>,
     file_nbit: u64,
@@ -103,22 +104,24 @@ impl DiskBuffer {
         inbound: mpsc::Receiver<BufferCmd>,
         cfg: &DiskBufferConfig,
         wal: &WALConfig,
-    ) -> Option<Self> {
-        const INIT: Option<Arc<FilePool>> = None;
-        let aiomgr = AIOBuilder::default()
+    ) -> Result<Self, ()> {
+        let aiomgr = match AIOBuilder::default()
             .max_events(cfg.max_aio_requests)
             .max_nwait(cfg.max_aio_response)
             .max_nbatched(cfg.max_aio_submit)
             .build()
-            .ok()?;
+        {
+            Ok(a) => a,
+            _ => return Err(()),
+        };
 
-        Some(Self {
+        Ok(Self {
             pending: HashMap::new(),
             cfg: cfg.clone(),
             inbound,
             fc_notifier: None,
             fc_blocker: None,
-            file_pools: [INIT; 255],
+            file_pools: std::array::from_fn(|_| None),
             aiomgr,
             local_pool: Rc::new(tokio::task::LocalSet::new()),
             task_id: 0,
