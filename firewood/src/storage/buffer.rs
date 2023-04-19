@@ -184,12 +184,12 @@ impl DiskBuffer {
     }
 
     /// Initialize the WAL subsystem if it does not exists and attempts to replay the WAL if exists.
-    async fn init_wal(&mut self, rootfd: Fd, waldir: String) -> Result<(), WALError> {
+    // TODO: Remove rootfd argument
+    async fn init_wal(&mut self, _rootfd: Fd, waldir: String) -> Result<(), WALError> {
         let mut aiobuilder = AIOBuilder::default();
         aiobuilder.max_events(self.cfg.wal_max_aio_requests as u32);
         let aiomgr = aiobuilder.build().map_err(|_| WALError::Other)?;
-        let store = WALStoreAIO::new(&waldir, false, Some(rootfd), Some(aiomgr))
-            .map_err(|_| WALError::Other)?;
+        let store = WALStoreAIO::new(&waldir, false, Some(aiomgr)).map_err(|_| WALError::Other)?;
         let mut loader = WALLoader::new();
         loader
             .file_nbit(self.wal_cfg.file_nbit)
