@@ -42,7 +42,7 @@ impl std::fmt::Debug for DiskWrite {
 }
 
 /// A handle that pins and provides a readable access to a portion of the linear memory image.
-pub trait CachedView {
+pub trait CachedView: Debug {
     type DerefReturn: Deref<Target = [u8]>;
     fn as_deref(&self) -> Self::DerefReturn;
 }
@@ -523,6 +523,7 @@ impl CachedStore for PlainMem {
     }
 }
 
+#[derive(Debug)]
 struct PlainMemView {
     offset: usize,
     length: usize,

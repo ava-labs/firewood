@@ -6,12 +6,12 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use shale::{CachedStore, CachedView, PlainMem};
+use shale::{CachedStore, CachedView};
 
 pub type SpaceID = u8;
 
 /// Purely volatile, dynamically allocated vector-based implementation for [CachedStore]. This is similar to
-/// [PlainMem]. The only difference is, when [write] dynamically allocate more space if original space is
+/// PlainMem. The only difference is, when [write] dynamically allocate more space if original space is
 /// not enough.
 #[derive(Debug)]
 pub struct DynamicBytes {
@@ -67,6 +67,7 @@ impl CachedStore for DynamicBytes {
     }
 }
 
+#[derive(Debug)]
 struct DynamicBytesView {
     mem: Bytes,
 }
@@ -98,5 +99,25 @@ impl CachedView for DynamicBytesView {
 
     fn as_deref(&self) -> Self::DerefReturn {
         self.mem.as_ref().to_vec()
+    }
+}
+#[cfg(test)]
+mod test {
+    use super::*;
+    #[test]
+    fn test_dynamic_bytes() {
+        let mut db = DynamicBytes::new(4, 0);
+        db.write(0, &[1, 2, 3, 4]);
+        assert_eq!(db.get_view(0, 4).unwrap().as_deref(), vec![1, 2, 3, 4]);
+        assert_eq!(db.space.borrow().len(), 4);
+
+        // grow it
+        db.write(4, &[5, 6, 7, 8]);
+        assert_eq!(db.get_view(4, 4).unwrap().as_deref(), vec![5, 6, 7, 8]);
+        assert_eq!(db.space.borrow().len(), 8);
+
+        // zero fill grow
+        db.write(9, &[10]);
+        assert_eq!(db.get_view(8, 2).unwrap().as_deref(), vec![0, 10]);
     }
 }
