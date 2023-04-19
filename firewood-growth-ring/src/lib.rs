@@ -54,12 +54,14 @@ use async_trait::async_trait;
 use firewood_libaio::{AIOBuilder, AIOManager};
 use libc::off_t;
 #[cfg(target_os = "linux")]
-use nix::fcntl::{fallocate, open, openat, FallocateFlags, OFlag};
+use nix::fcntl::{fallocate, FallocateFlags, OFlag};
 #[cfg(not(target_os = "linux"))]
 use nix::fcntl::{open, openat, OFlag};
-use nix::sys::stat::Mode;
-use nix::unistd::{close, ftruncate, mkdir, unlinkat, UnlinkatFlags};
+use nix::unistd::{close, ftruncate};
+use std::fs;
+use std::os::fd::IntoRawFd;
 use std::os::unix::io::RawFd;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use wal::{WALBytes, WALFile, WALPos, WALStore};
 use walerror::WALError;
@@ -72,15 +74,18 @@ pub struct WALFileAIO {
 #[allow(clippy::result_unit_err)]
 // TODO: Refactor to return a meaningful error.
 impl WALFileAIO {
-    pub fn new(rootfd: RawFd, filename: &str, aiomgr: Arc<AIOManager>) -> Result<Self, WALError> {
-        openat(
-            rootfd,
-            filename,
-            OFlag::O_CREAT | OFlag::O_RDWR,
-            Mode::S_IRUSR | Mode::S_IWUSR,
-        )
-        .map(|fd| WALFileAIO { fd, aiomgr })
-        .map_err(From::from)
+    pub fn new(root_dir: &Path, filename: &str, aiomgr: Arc<AIOManager>) -> Result<Self, WALError> {
+        fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .create_new(true)
+            .open(root_dir.join(filename))
+            .map(|f| {
+                let fd = f.into_raw_fd();
+                WALFileAIO { fd, aiomgr }
+            })
+            .map_err(|_| WALError::Other)
     }
 }
 
@@ -133,62 +138,38 @@ impl WALFile for WALFileAIO {
 }
 
 pub struct WALStoreAIO {
-    rootfd: RawFd,
+    root_dir: PathBuf,
     aiomgr: Arc<AIOManager>,
 }
 
 unsafe impl Send for WALStoreAIO {}
 
 impl WALStoreAIO {
-    #[allow(clippy::result_unit_err)]
-    pub fn new(
-        wal_dir: &str,
+    pub fn new<P: AsRef<Path>>(
+        wal_dir: P,
         truncate: bool,
-        rootfd: Option<RawFd>,
         aiomgr: Option<AIOManager>,
-    ) -> Result<Self, ()> {
-        let aiomgr = Arc::new(
-            aiomgr
-                .ok_or(Err(()))
-                .or_else(|_: Result<AIOManager, ()>| AIOBuilder::default().build().or(Err(())))?,
-        );
+    ) -> Result<Self, WALError> {
+        let aio = match aiomgr {
+            Some(aiomgr) => Arc::new(aiomgr),
+            None => Arc::new(AIOBuilder::default().build()?),
+        };
 
         if truncate {
-            let _ = std::fs::remove_dir_all(wal_dir);
+            if let Err(e) = fs::remove_dir_all(&wal_dir) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    return Err(From::from(e));
+                }
+            }
+            fs::create_dir_all(&wal_dir).map_err::<WALError, _>(From::from)?;
+        } else if !wal_dir.as_ref().exists() {
+            // happy path
+            fs::create_dir_all(&wal_dir).map_err::<WALError, _>(From::from)?;
         }
-        let walfd = match rootfd {
-            None => {
-                if let Err(e) = mkdir(wal_dir, Mode::S_IRUSR | Mode::S_IWUSR | Mode::S_IXUSR) {
-                    if truncate {
-                        panic!("error while creating directory: {}", e)
-                    }
-                }
-                match open(wal_dir, oflags(), Mode::empty()) {
-                    Ok(fd) => fd,
-                    Err(_) => panic!("error while opening the WAL directory"),
-                }
-            }
-            Some(fd) => {
-                let dirstr = std::ffi::CString::new(wal_dir).unwrap();
-                let ret = unsafe {
-                    libc::mkdirat(
-                        fd,
-                        dirstr.as_ptr(),
-                        libc::S_IRUSR | libc::S_IWUSR | libc::S_IXUSR,
-                    )
-                };
-                if ret != 0 && truncate {
-                    panic!("error while creating directory")
-                }
-                match nix::fcntl::openat(fd, wal_dir, oflags(), Mode::empty()) {
-                    Ok(fd) => fd,
-                    Err(_) => panic!("error while opening the WAL directory"),
-                }
-            }
-        };
+
         Ok(WALStoreAIO {
-            rootfd: walfd,
-            aiomgr,
+            root_dir: wal_dir.as_ref().to_path_buf(),
+            aiomgr: aio,
         })
     }
 }
@@ -208,34 +189,19 @@ impl WALStore for WALStoreAIO {
     type FileNameIter = std::vec::IntoIter<String>;
 
     async fn open_file(&self, filename: &str, _touch: bool) -> Result<Box<dyn WALFile>, WALError> {
-        let filename = filename.to_string();
-        WALFileAIO::new(self.rootfd, &filename, self.aiomgr.clone())
+        WALFileAIO::new(&self.root_dir, filename, self.aiomgr.clone())
             .map(|f| Box::new(f) as Box<dyn WALFile>)
     }
 
     async fn remove_file(&self, filename: String) -> Result<(), WALError> {
-        unlinkat(
-            Some(self.rootfd),
-            filename.as_str(),
-            UnlinkatFlags::NoRemoveDir,
-        )
-        .map_err(From::from)
+        fs::remove_file(filename).map_err(From::from)
     }
 
     fn enumerate_files(&self) -> Result<Self::FileNameIter, WALError> {
-        let mut logfiles = Vec::new();
-        for ent in nix::dir::Dir::openat(self.rootfd, "./", OFlag::empty(), Mode::empty())
-            .unwrap()
-            .iter()
-        {
-            logfiles.push(ent.unwrap().file_name().to_str().unwrap().to_string())
+        let mut filenames = Vec::new();
+        for path in fs::read_dir(&self.root_dir)?.filter_map(|entry| entry.ok()) {
+            filenames.push(path.file_name().into_string().unwrap());
         }
-        Ok(logfiles.into_iter())
-    }
-}
-
-impl Drop for WALStoreAIO {
-    fn drop(&mut self) {
-        nix::unistd::close(self.rootfd).ok();
+        Ok(filenames.into_iter())
     }
 }
