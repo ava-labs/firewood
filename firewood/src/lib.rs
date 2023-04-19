@@ -206,6 +206,7 @@ pub mod storage;
 pub mod api;
 pub mod service;
 
-pub mod v2;
+pub mod api2;
+pub mod db2;
 
 extern crate firewood_shale as shale;
