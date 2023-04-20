@@ -483,9 +483,7 @@ impl DiskBufferRequester {
 #[cfg(test)]
 mod tests {
     use std::{
-        path::{Path, PathBuf},
-        thread,
-        time::Duration,
+        path::{PathBuf},
     };
 
     use super::*;

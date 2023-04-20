@@ -132,8 +132,7 @@ pub fn new_merkle(meta_size: u64, compact_size: u64) -> MerkleSetup {
     let space =
         shale::compact::CompactSpace::new(mem_meta, mem_payload, compact_header, cache, 10, 16)
             .expect("CompactSpace init fail");
-    let mut root = ObjPtr::null();
-    Merkle::init_root(&mut root, &space).unwrap();
+    let root = Merkle::init_root(&space).unwrap();
     MerkleSetup {
         root,
         merkle: Merkle::new(Box::new(space)),

@@ -47,8 +47,7 @@ fn bench_insert(b: &mut Bencher) {
     )
     .unwrap();
     let mut merkle = Merkle::new(Box::new(store));
-    let mut root = ObjPtr::null();
-    Merkle::init_root(&mut root, merkle.get_store()).unwrap();
+    let root = Merkle::init_root(merkle.get_store()).unwrap();
     let mut rng = rand::rngs::StdRng::seed_from_u64(1234);
     const KEY_LEN: usize = 4;
     b.iter(|| {

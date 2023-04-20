@@ -180,6 +180,7 @@ impl SubUniverse<Rc<CachedSpace>> {
 
 /// DB-wide metadata, it keeps track of the roots of the top-level tries.
 struct DBHeader {
+    #[cfg(feature = "eth")]
     /// The root node of the account model storage. (Where the values are [Account] objects, which
     /// may contain the root for the secondary trie.)
     acc_root: ObjPtr<Node>,
@@ -188,10 +189,14 @@ struct DBHeader {
 }
 
 impl DBHeader {
+    #[cfg(feature = "eth")]
     pub const MSIZE: u64 = 16;
+    #[cfg(not(feature = "eth"))]
+    pub const MSIZE: u64 = 8;
 
     pub fn new_empty() -> Self {
         Self {
+            #[cfg(feature = "eth")]
             acc_root: ObjPtr::null(),
             kv_root: ObjPtr::null(),
         }
@@ -203,9 +208,14 @@ impl Storable for DBHeader {
         let raw = mem
             .get_view(addr, Self::MSIZE)
             .ok_or(shale::ShaleError::LinearCachedStoreError)?;
+        #[cfg(feature = "eth")]
         let acc_root = u64::from_le_bytes(raw.as_deref()[..8].try_into().unwrap());
+        #[cfg(feature = "eth")]
         let kv_root = u64::from_le_bytes(raw.as_deref()[8..].try_into().unwrap());
+        #[cfg(not(feature = "eth"))]
+        let kv_root = u64::from_le_bytes(raw.as_deref()[..8].try_into().unwrap());
         Ok(Self {
+            #[cfg(feature = "eth")]
             acc_root: ObjPtr::new_from_addr(acc_root),
             kv_root: ObjPtr::new_from_addr(kv_root),
         })
@@ -217,6 +227,7 @@ impl Storable for DBHeader {
 
     fn dehydrate(&self, to: &mut [u8]) {
         let mut cur = Cursor::new(to);
+        #[cfg(feature = "eth")]
         cur.write_all(&self.acc_root.addr().to_le_bytes()).unwrap();
         cur.write_all(&self.kv_root.addr().to_le_bytes()).unwrap();
     }
@@ -331,14 +342,6 @@ impl DBRev {
         let valid = proof.verify_range_proof(hash, first_key, last_key, keys, values)?;
         Ok(valid)
     }
-
-    /// Check if the account exists.
-    pub fn exist<K: AsRef<[u8]>>(&self, key: K) -> Result<bool, DBError> {
-        Ok(match self.merkle.get(key, self.header.acc_root) {
-            Ok(r) => r.is_some(),
-            Err(e) => return Err(DBError::Merkle(e)),
-        })
-    }
 }
 
 #[cfg(feature = "eth")]
@@ -411,6 +414,14 @@ impl DBRev {
         let b = self.blob.get_blob(code).map_err(DBError::Blob)?;
         Ok(match &**b {
             Blob::Code(code) => code.clone(),
+        })
+    }
+
+    /// Check if the account exists.
+    pub fn exist<K: AsRef<[u8]>>(&self, key: K) -> Result<bool, DBError> {
+        Ok(match self.merkle.get(key, self.header.acc_root) {
+            Ok(r) => r.is_some(),
+            Err(e) => return Err(DBError::Merkle(e)),
         })
     }
 }
@@ -665,18 +676,17 @@ impl DB {
         )
         .unwrap();
 
-        if db_header_ref.acc_root.is_null() {
-            let mut err = Ok(());
+        if db_header_ref.kv_root.is_null() {
+            #[cfg(feature = "eth")]
+            let modify = |r: &mut DBHeader| {
+                r.acc_root = Merkle::init_root(&merkle_space).unwrap();
+                r.kv_root = Merkle::init_root(&merkle_space).unwrap();
+            };
+            #[cfg(not(feature = "eth"))]
+            let modify = |r: &mut DBHeader| r.kv_root = Merkle::init_root(&merkle_space).unwrap();
+
             // create the sentinel node
-            db_header_ref
-                .write(|r| {
-                    err = (|| {
-                        Merkle::init_root(&mut r.acc_root, &merkle_space)?;
-                        Merkle::init_root(&mut r.kv_root, &merkle_space)
-                    })();
-                })
-                .unwrap();
-            err.map_err(DBError::Merkle)?
+            db_header_ref.write(modify).ok_or(DBError::CreateError)?;
         }
 
         let mut latest = DBRev {

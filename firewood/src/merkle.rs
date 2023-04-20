@@ -780,11 +780,8 @@ impl Merkle {
         Self { store }
     }
 
-    pub fn init_root(
-        root: &mut ObjPtr<Node>,
-        store: &dyn ShaleStore<Node>,
-    ) -> Result<(), MerkleError> {
-        *root = store
+    pub fn init_root(store: &dyn ShaleStore<Node>) -> Result<ObjPtr<Node>, MerkleError> {
+        Ok(store
             .put_item(
                 Node::new(NodeType::Branch(BranchNode {
                     chd: [None; NBRANCH],
@@ -794,8 +791,7 @@ impl Merkle {
                 Node::max_branch_node_size(),
             )
             .map_err(MerkleError::Shale)?
-            .as_ptr();
-        Ok(())
+            .as_ptr())
     }
 
     pub fn get_store(&self) -> &dyn ShaleStore<Node> {
