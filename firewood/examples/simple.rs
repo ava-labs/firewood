@@ -29,7 +29,9 @@ fn print_states(db: &DB) {
 
 #[cfg(not(feature = "eth"))]
 fn main() {
-    println!("eth feature not enabled");
+    println!("To run this example, you must enable to eth feature.");
+    println!("For more information on features, see:");
+    println!("https://doc.rust-lang.org/cargo/reference/features.html");
 }
 
 /// cargo run --example simple
