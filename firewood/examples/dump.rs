@@ -1,10 +1,18 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#[cfg(not(feature = "eth"))]
+fn main() {
+    println!("eth feature not enabled");
+}
+
+#[cfg(feature = "eth")]
 use clap::{command, Arg, ArgMatches};
+#[cfg(feature = "eth")]
 use firewood::db::{DBConfig, DBError, WALConfig, DB};
 
 /// cargo run --example dump benchmark_db/
+#[cfg(feature = "eth")]
 fn main() {
     let matches = command!()
         .arg(
@@ -21,14 +29,17 @@ fn main() {
     )
     .unwrap();
     let mut stdout = std::io::stdout();
+
     println!("== Account Model ==");
     db.dump(&mut stdout).unwrap();
+
     println!("== Generic KV ==");
     db.kv_dump(&mut stdout).unwrap();
 }
 
 /// Returns the provided INPUT db path if one is provided.
 /// Otherwise, instantiate a DB called simple_db and return the path.
+#[cfg(feature = "eth")]
 fn get_db_path(matches: ArgMatches) -> Result<String, DBError> {
     if let Some(m) = matches.get_one::<String>("INPUT") {
         return Ok(m.to_string());
