@@ -9,7 +9,7 @@ pub trait KeyType: AsRef<[u8]> + Send + Sync + Debug + 'static {}
 
 /// A ValueType is the same as a KeyType. However, these could
 /// be a different type from the KeyType on a given API call.
-/// For example, you might insert {key: "key", value: vec![0u8]}
+/// For example, you might insert {key: "key", value: vec!\[0u8\]}
 /// This also means that the type of all the keys for a single
 /// API call must be the same, as well as the type of all values
 /// must be the same.
@@ -18,17 +18,17 @@ pub trait ValueType: AsRef<[u8]> + Send + Sync + Debug + 'static {}
 /// The type and size of a single HashKey
 pub type HashKey = [u8; 32];
 
-/// A key/value pair operation. Only upsert and delete are
+/// A key/value pair operation. Only put (upsert) and delete are
 /// supported
 #[derive(Debug)]
-pub enum DBOp<K: KeyType, V: ValueType> {
+pub enum BatchOp<K: KeyType, V: ValueType> {
     Put { key: K, value: V },
     Delete { key: K },
 }
 
 /// A list of operations to consist of a batch that
 /// can be proposed
-pub type Batch<K, V> = Vec<DBOp<K, V>>;
+pub type Batch<K, V> = Vec<BatchOp<K, V>>;
 
 /// Errors returned through the API
 #[derive(Debug)]
@@ -62,11 +62,11 @@ pub struct RangeProof<K: KeyType, V: ValueType> {
 pub struct Proof<V>(pub HashMap<HashKey, V>);
 
 /// The database interface, which includes a type for a static view of
-/// the database (the DBView). The most common implementation of the DBView
-/// is the api::DBView trait defined next.
+/// the database (the DbView). The most common implementation of the DbView
+/// is the api::DbView trait defined next.
 #[async_trait]
-pub trait DB {
-    type View: DBView;
+pub trait Db {
+    type View: DbView;
 
     /// Get a reference to a specific view based on a hash
     async fn revision(&self, hash: HashKey) -> Result<Weak<Self::View>, Error>;
@@ -90,8 +90,8 @@ pub trait DB {
 /// A view of the database at a specific time. These are typically wrapped with
 /// a Weak reference, as these can disappear when idle.
 #[async_trait]
-pub trait DBView {
-    /// Get the hash for the current DBView
+pub trait DbView {
+    /// Get the hash for the current DbView
     async fn hash(&self) -> Result<HashKey, Error>;
 
     /// Get the value of a specific key
