@@ -19,7 +19,7 @@ fn main() {
         db.kv_dump(&mut std::io::stdout()).unwrap();
         println!(
             "{}",
-            hex::encode(*db.get_revision(1, None).unwrap().kv_root_hash().unwrap())
+            hex::encode(*db.get_revision(5, None).unwrap().kv_root_hash().unwrap())
         );
         let root_hash = *db.get_revision(1, None).unwrap().kv_root_hash().unwrap();
         println!(

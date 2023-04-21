@@ -14,8 +14,6 @@ struct Args {
     batch_size: usize,
     #[arg(short, long, default_value_t = 0)]
     seed: u64,
-    #[arg(short, long, default_value_t = false)]
-    no_root_hash: bool,
 }
 
 /// cargo run --example benchmark -- --nbatch 100 --batch-size 1000
@@ -31,7 +29,6 @@ fn main() {
         let nbatch = args.nbatch;
         let batch_size = args.batch_size;
         let total = nbatch * batch_size;
-        let root_hash = !args.no_root_hash;
         let mut workload = Vec::new();
         for _ in 0..nbatch {
             let mut batch: Vec<(Vec<_>, Vec<_>)> = Vec::new();
@@ -55,9 +52,6 @@ fn main() {
                         let mut wb = db.new_writebatch();
                         for (k, v) in batch {
                             wb = wb.kv_insert(k, v.clone()).unwrap();
-                        }
-                        if !root_hash {
-                            wb = wb.no_root_hash();
                         }
                         wb.commit();
                     }

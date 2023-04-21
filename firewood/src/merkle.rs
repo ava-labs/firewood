@@ -9,7 +9,7 @@ use sha3::Digest;
 use shale::{CachedStore, ObjPtr, ObjRef, ShaleError, ShaleStore, Storable};
 
 use std::cell::Cell;
-use std::cmp;
+use std::cmp::{self, Ordering};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{self, Debug};
@@ -43,7 +43,7 @@ impl fmt::Display for MerkleError {
 
 impl Error for MerkleError {}
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub struct Hash(pub [u8; HASH_SIZE]);
 
 impl Hash {
@@ -73,6 +73,18 @@ impl Storable for Hash {
 
     fn dehydrate(&self, to: &mut [u8]) {
         Cursor::new(to).write_all(&self.0).unwrap()
+    }
+}
+
+impl Ord for Hash {
+    fn cmp(&self, other: &Self) -> Ordering {
+        compare(&self.0, &other.0)
+    }
+}
+
+impl PartialOrd for Hash {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 

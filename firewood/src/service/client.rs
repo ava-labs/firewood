@@ -16,7 +16,7 @@ use crate::db::DBRevConfig;
 use crate::{
     api,
     db::{DBConfig, DBError},
-    merkle,
+    merkle::Hash,
 };
 use async_trait::async_trait;
 
@@ -225,19 +225,6 @@ impl api::WriteBatch for BatchHandle {
         todo!()
     }
 
-    async fn no_root_hash(self) -> Self {
-        let (send, recv) = oneshot::channel();
-        let _ = self
-            .sender
-            .send(Request::BatchRequest(BatchRequest::NoRootHash {
-                handle: self.id,
-                respond_to: send,
-            }))
-            .await;
-        let _ = recv.await;
-        self
-    }
-
     async fn commit(self) {
         let (send, recv) = oneshot::channel();
         let _ = self
@@ -265,7 +252,7 @@ impl super::RevisionHandle {
 
 #[async_trait]
 impl Revision for super::RevisionHandle {
-    async fn kv_root_hash(&self) -> Result<merkle::Hash, DBError> {
+    async fn kv_root_hash(&self) -> Result<Hash, DBError> {
         let (send, recv) = oneshot::channel();
         let msg = Request::RevRequest(RevRequest::RootHash {
             handle: self.id,
@@ -311,7 +298,7 @@ impl Revision for super::RevisionHandle {
     ) {
         todo!()
     }
-    async fn root_hash(&self) -> Result<merkle::Hash, DBError> {
+    async fn root_hash(&self) -> Result<Hash, DBError> {
         let (send, recv) = oneshot::channel();
         let msg = Request::RevRequest(RevRequest::RootHash {
             handle: self.id,
@@ -391,10 +378,14 @@ where
         }
     }
 
-    async fn get_revision(&self, nback: usize, cfg: Option<DBRevConfig>) -> Option<RevisionHandle> {
+    async fn get_revision(
+        &self,
+        root_hash: Hash,
+        cfg: Option<DBRevConfig>,
+    ) -> Option<RevisionHandle> {
         let (send, recv) = oneshot::channel();
         let msg = Request::NewRevision {
-            nback,
+            root_hash,
             cfg,
             respond_to: send,
         };
@@ -437,7 +428,6 @@ mod test {
             let batch = batch.set_nonce(key, 42).await.unwrap();
             let batch = batch.set_state(key, b"subkey", b"state").await.unwrap();
             let batch = batch.create_account(key).await.unwrap();
-            let batch = batch.no_root_hash().await;
         }
         let (batch, oldvalue) = batch.kv_remove(key).await.unwrap();
         assert_eq!(oldvalue, Some(b"val".to_vec()));
@@ -453,7 +443,7 @@ mod test {
                 .root_hash()
                 .await
                 .unwrap(),
-            merkle::Hash([0; 32])
+            Hash([0; 32])
         );
     }
 

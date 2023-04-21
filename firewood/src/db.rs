@@ -23,8 +23,7 @@ use crate::proof::{Proof, ProofError};
 use crate::storage::buffer::{BufferWrite, DiskBuffer, DiskBufferRequester};
 pub use crate::storage::{buffer::DiskBufferConfig, WALConfig};
 use crate::storage::{
-    AshRecord, CachedSpace, MemStoreR, SpaceWrite, StoreConfig, StoreRevMut, StoreRevShared,
-    PAGE_SIZE_NBIT,
+    AshRecord, CachedSpace, MemStoreR, StoreConfig, StoreRevMut, StoreRevShared, PAGE_SIZE_NBIT,
 };
 
 const MERKLE_META_SPACE: SpaceID = 0x0;
@@ -143,37 +142,6 @@ impl<T> SubUniverse<T> {
     }
 }
 
-impl SubUniverse<StoreRevShared> {
-    fn to_mem_store_r(&self) -> SubUniverse<Rc<dyn MemStoreR>> {
-        SubUniverse {
-            meta: self.meta.inner().clone(),
-            payload: self.payload.inner().clone(),
-        }
-    }
-}
-
-impl SubUniverse<Rc<dyn MemStoreR>> {
-    fn rewind(
-        &self,
-        meta_writes: &[SpaceWrite],
-        payload_writes: &[SpaceWrite],
-    ) -> SubUniverse<StoreRevShared> {
-        SubUniverse::new(
-            StoreRevShared::from_ash(self.meta.clone(), meta_writes),
-            StoreRevShared::from_ash(self.payload.clone(), payload_writes),
-        )
-    }
-}
-
-impl SubUniverse<Rc<CachedSpace>> {
-    fn to_mem_store_r(&self) -> SubUniverse<Rc<dyn MemStoreR>> {
-        SubUniverse {
-            meta: self.meta.clone(),
-            payload: self.payload.clone(),
-        }
-    }
-}
-
 /// DB-wide metadata, it keeps track of the roots of the top-level tries.
 struct DBHeader {
     /// The root node of the account model storage. (Where the values are [Account] objects, which
@@ -222,41 +190,6 @@ impl Storable for DBHeader {
 struct Universe<T> {
     merkle: SubUniverse<T>,
     blob: SubUniverse<T>,
-}
-
-impl Universe<StoreRevShared> {
-    fn to_mem_store_r(&self) -> Universe<Rc<dyn MemStoreR>> {
-        Universe {
-            merkle: self.merkle.to_mem_store_r(),
-            blob: self.blob.to_mem_store_r(),
-        }
-    }
-}
-
-impl Universe<Rc<CachedSpace>> {
-    fn to_mem_store_r(&self) -> Universe<Rc<dyn MemStoreR>> {
-        Universe {
-            merkle: self.merkle.to_mem_store_r(),
-            blob: self.blob.to_mem_store_r(),
-        }
-    }
-}
-
-impl Universe<Rc<dyn MemStoreR>> {
-    fn rewind(
-        &self,
-        merkle_meta_writes: &[SpaceWrite],
-        merkle_payload_writes: &[SpaceWrite],
-        blob_meta_writes: &[SpaceWrite],
-        blob_payload_writes: &[SpaceWrite],
-    ) -> Universe<StoreRevShared> {
-        Universe {
-            merkle: self
-                .merkle
-                .rewind(merkle_meta_writes, merkle_payload_writes),
-            blob: self.blob.rewind(blob_meta_writes, blob_payload_writes),
-        }
-    }
 }
 
 /// Some readable version of the DB.
@@ -425,6 +358,7 @@ pub struct DB {
 
 pub struct DBRevInner {
     inner: VecDeque<Universe<StoreRevShared>>,
+    root_hashes: VecDeque<Option<Hash>>,
     max_revisions: usize,
 }
 
@@ -680,6 +614,7 @@ impl DB {
             })),
             revisions: Arc::new(Mutex::new(DBRevInner {
                 inner: VecDeque::new(),
+                root_hashes: VecDeque::new(),
                 max_revisions: cfg.wal.max_revisions as usize,
             })),
             payload_regn_nbit: header.payload_regn_nbit,
@@ -692,7 +627,6 @@ impl DB {
         WriteBatch {
             m: Arc::clone(&self.inner),
             r: Arc::clone(&self.revisions),
-            root_hash_recalc: true,
             committed: false,
         }
     }
@@ -764,38 +698,11 @@ impl DB {
     /// The latest revision (nback) starts from 1, which is one behind the current state.
     /// If nback equals 0, or is above the configured maximum number of revisions, this function returns None.
     /// It also returns None in the case where the nback is larger than the number of revisions available.
-    pub fn get_revision(&self, nback: usize, cfg: Option<DBRevConfig>) -> Option<Revision> {
-        let mut revisions = self.revisions.lock();
+    pub fn get_revision(&self, root_hash: Hash, cfg: Option<DBRevConfig>) -> Option<Revision> {
+        let revisions = self.revisions.lock();
         let inner = self.inner.read();
 
-        let rlen = revisions.inner.len();
-        if nback == 0 || nback > revisions.max_revisions {
-            return None;
-        }
-        if rlen < nback {
-            // TODO: Remove unwrap
-            let ashes = inner.disk_requester.collect_ash(nback).ok().unwrap();
-            for mut ash in ashes.into_iter().skip(rlen) {
-                for (_, a) in ash.0.iter_mut() {
-                    a.old.reverse()
-                }
-
-                let u = match revisions.inner.back() {
-                    Some(u) => u.to_mem_store_r(),
-                    None => inner.cached.to_mem_store_r(),
-                };
-                revisions.inner.push_back(u.rewind(
-                    &ash.0[&MERKLE_META_SPACE].old,
-                    &ash.0[&MERKLE_PAYLOAD_SPACE].old,
-                    &ash.0[&BLOB_META_SPACE].old,
-                    &ash.0[&BLOB_PAYLOAD_SPACE].old,
-                ));
-            }
-        }
-        if revisions.inner.len() < nback {
-            return None;
-        }
-        drop(inner);
+        // TODO: we may want to load more revisions from WAL.
         // set up the storage layout
 
         let mut offset = std::mem::size_of::<DBParams>() as u64;
@@ -809,7 +716,15 @@ impl DB {
         // Blob CompactSpaceHeader starts right in blob meta space
         let blob_payload_header: ObjPtr<CompactSpaceHeader> = ObjPtr::new_from_addr(0);
 
-        let space = &revisions.inner[nback - 1];
+        let index = &revisions
+            .root_hashes
+            .iter()
+            .position(|e| e.as_ref() == Some(&root_hash));
+        if index.is_none() {
+            return None;
+        }
+        let space = &revisions.inner[index.unwrap() - 1];
+        drop(inner);
 
         let (db_header_ref, merkle_payload_header_ref, blob_payload_header_ref) = {
             let merkle_meta_ref = &space.merkle.meta;
@@ -879,7 +794,6 @@ impl std::ops::Deref for Revision {
 pub struct WriteBatch {
     m: Arc<RwLock<DBInner>>,
     r: Arc<Mutex<DBRevInner>>,
-    root_hash_recalc: bool,
     committed: bool,
 }
 
@@ -1050,21 +964,14 @@ impl WriteBatch {
         Ok(self)
     }
 
-    /// Do not rehash merkle roots upon commit. This will leave the recalculation of the dirty root
-    /// hashes to future invocation of `root_hash`, `kv_root_hash` or batch commits.
-    pub fn no_root_hash(mut self) -> Self {
-        self.root_hash_recalc = false;
-        self
-    }
-
     /// Persist all changes to the DB. The atomicity of the [WriteBatch] guarantees all changes are
     /// either retained on disk or lost together during a crash.
     pub fn commit(mut self) {
         let mut rev_inner = self.m.write();
-        if self.root_hash_recalc {
-            rev_inner.latest.root_hash().ok();
-            rev_inner.latest.kv_root_hash().ok();
-        }
+
+        rev_inner.latest.root_hash().ok();
+        let kv_root_hash = rev_inner.latest.kv_root_hash().ok();
+
         // clear the staging layer and apply changes to the CachedSpace
         rev_inner.latest.flush_dirty().unwrap();
         let (merkle_payload_pages, merkle_payload_plain) =
@@ -1128,8 +1035,10 @@ impl WriteBatch {
                 .set_prev(new_base.blob.payload.inner().clone());
         }
         revisions.inner.push_front(new_base);
+        revisions.root_hashes.push_front(kv_root_hash);
         while revisions.inner.len() > revisions.max_revisions {
             revisions.inner.pop_back();
+            revisions.root_hashes.pop_back();
         }
 
         self.committed = true;

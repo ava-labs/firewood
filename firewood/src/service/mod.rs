@@ -5,7 +5,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::{
     db::{DBError, DBRevConfig},
-    merkle,
+    merkle::Hash,
 };
 
 mod client;
@@ -33,7 +33,7 @@ pub enum Request {
         respond_to: oneshot::Sender<BatchId>,
     },
     NewRevision {
-        nback: usize,
+        root_hash: Hash,
         cfg: Option<DBRevConfig>,
         respond_to: oneshot::Sender<Option<RevId>>,
     },
@@ -98,10 +98,6 @@ pub enum BatchRequest {
         key: OwnedKey,
         respond_to: oneshot::Sender<Result<(), DBError>>,
     },
-    NoRootHash {
-        handle: BatchId,
-        respond_to: oneshot::Sender<()>,
-    },
 }
 
 #[derive(Debug)]
@@ -119,7 +115,7 @@ pub enum RevRequest {
     },
     RootHash {
         handle: RevId,
-        respond_to: oneshot::Sender<Result<merkle::Hash, DBError>>,
+        respond_to: oneshot::Sender<Result<Hash, DBError>>,
     },
     Drop {
         handle: RevId,
