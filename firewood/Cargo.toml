@@ -21,8 +21,8 @@ async-trait = "0.1.57"
 bytemuck = { version = "1.13.1", features = ["derive"] }
 enum-as-inner = "0.5.1"
 firewood-growth-ring = { version = "0.0.1", path = "../firewood-growth-ring", package = "firewood-growth-ring" }
-firewood-libaio = {version = "0.0.1", path = "../firewood-libaio", package = "firewood-libaio" }
-firewood-shale = { version = "0.0.1", path = "../firewood-shale", package = "firewood-shale" }
+firewood-libaio = {version = "0.0.2", path = "../firewood-libaio", package = "firewood-libaio" }
+firewood-shale = { version = "0.0.2", path = "../firewood-shale", package = "firewood-shale" }
 futures = "0.3.24"
 hex = "0.4.3"
 lru = "0.10.0"
