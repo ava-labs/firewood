@@ -1,14 +1,15 @@
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::fmt::Debug;
-use std::{collections::HashMap, sync::Weak};
+use std::sync::Weak;
 
 /// A KeyType is something that can be cast to a u8 reference,
 /// and can be sent and shared across threads. References with
 /// lifetimes are not allowed (hence 'static)
 pub trait KeyType: AsRef<[u8]> + Send + Sync + Debug + 'static {}
 
-/// A ValueType is the same as a KeyType. However, these could
-/// be a different type from the KeyType on a given API call.
+/// A ValueType is the same as a [KeyType]. However, these could
+/// be a different type from the [KeyType] on a given API call.
 /// For example, you might insert {key: "key", value: vec!\[0u8\]}
 /// This also means that the type of all the keys for a single
 /// API call must be the same, as well as the type of all values
@@ -87,8 +88,14 @@ pub trait Db {
     async fn commit(&mut self, hash: HashKey) -> Result<(), Error>;
 }
 
-/// A view of the database at a specific time. These are typically wrapped with
-/// a Weak reference, as these can disappear when idle.
+/// A view of the database at a specific time. These are wrapped with
+/// a Weak reference when fetching via a call to [Db::revision], as these
+/// can disappear either because they became too old, or are no longer a
+/// valid revision due to a [Db::commit].
+/// 
+/// You only need a DbView if you need to read from a snapshot at a given
+/// root. Don't hold a strong reference to the DbView as it prevents older
+/// views from being cleaned up.
 #[async_trait]
 pub trait DbView {
     /// Get the hash for the current DbView
