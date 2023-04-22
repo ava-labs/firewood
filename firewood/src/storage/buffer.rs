@@ -482,9 +482,7 @@ impl DiskBufferRequester {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        path::{PathBuf},
-    };
+    use std::path::PathBuf;
 
     use super::*;
     use crate::{

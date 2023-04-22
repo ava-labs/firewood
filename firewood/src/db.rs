@@ -35,7 +35,7 @@ const BLOB_META_SPACE: SpaceID = 0x2;
 const BLOB_PAYLOAD_SPACE: SpaceID = 0x3;
 const SPACE_RESERVED: u64 = 0x1000;
 
-const MAGIC_STR: &[u8; 13] = b"firewood v0.1";
+const MAGIC_STR: &[u8; 16] = b"firewood v0.1\0\0\0";
 
 #[derive(Debug)]
 pub enum DBError {
@@ -484,10 +484,8 @@ impl DB {
             }
             nix::unistd::ftruncate(fd0, 0).map_err(DBError::System)?;
             nix::unistd::ftruncate(fd0, 1 << cfg.meta_file_nbit).map_err(DBError::System)?;
-            let mut magic = [0; 16];
-            magic[..MAGIC_STR.len()].copy_from_slice(MAGIC_STR);
             let header = DBParams {
-                magic,
+                magic: *MAGIC_STR,
                 meta_file_nbit: cfg.meta_file_nbit,
                 payload_file_nbit: cfg.payload_file_nbit,
                 payload_regn_nbit: cfg.payload_regn_nbit,
@@ -634,26 +632,25 @@ impl DB {
             );
         }
 
-        let (mut db_header_ref, merkle_payload_header_ref, _blob_payload_header_ref) = {
-            let merkle_meta_ref = staging.merkle.meta.as_ref();
-            let blob_meta_ref = staging.blob.meta.as_ref();
+        let merkle_meta_ref = staging.merkle.meta.as_ref();
+        #[cfg(feature = "eth")]
+        let blob_meta_ref = staging.blob.meta.as_ref();
 
-            (
-                StoredView::ptr_to_obj(merkle_meta_ref, db_header, DBHeader::MSIZE).unwrap(),
-                StoredView::ptr_to_obj(
-                    merkle_meta_ref,
-                    merkle_payload_header,
-                    shale::compact::CompactHeader::MSIZE,
-                )
-                .unwrap(),
-                StoredView::ptr_to_obj(
-                    blob_meta_ref,
-                    blob_payload_header,
-                    shale::compact::CompactHeader::MSIZE,
-                )
-                .unwrap(),
-            )
-        };
+        let mut db_header_ref =
+            StoredView::ptr_to_obj(merkle_meta_ref, db_header, DBHeader::MSIZE).unwrap();
+        let merkle_payload_header_ref = StoredView::ptr_to_obj(
+            merkle_meta_ref,
+            merkle_payload_header,
+            shale::compact::CompactHeader::MSIZE,
+        )
+        .unwrap();
+        #[cfg(feature = "eth")]
+        let blob_payload_header_ref = StoredView::ptr_to_obj(
+            blob_meta_ref,
+            blob_payload_header,
+            shale::compact::CompactHeader::MSIZE,
+        )
+        .unwrap();
 
         let merkle_space = shale::compact::CompactSpace::new(
             staging.merkle.meta.clone(),
@@ -792,30 +789,28 @@ impl DB {
         offset += CompactSpaceHeader::MSIZE;
         assert!(offset <= SPACE_RESERVED);
         // Blob CompactSpaceHeader starts right in blob meta space
+        #[cfg(feature = "eth")]
         let blob_payload_header: ObjPtr<CompactSpaceHeader> = ObjPtr::new_from_addr(0);
 
         let space = &revisions.inner[nback - 1];
-
-        let (db_header_ref, merkle_payload_header_ref, _blob_payload_header_ref) = {
-            let merkle_meta_ref = &space.merkle.meta;
-            let blob_meta_ref = &space.blob.meta;
-
-            (
-                StoredView::ptr_to_obj(merkle_meta_ref, db_header, DBHeader::MSIZE).unwrap(),
-                StoredView::ptr_to_obj(
-                    merkle_meta_ref,
-                    merkle_payload_header,
-                    shale::compact::CompactHeader::MSIZE,
-                )
-                .unwrap(),
-                StoredView::ptr_to_obj(
-                    blob_meta_ref,
-                    blob_payload_header,
-                    shale::compact::CompactHeader::MSIZE,
-                )
-                .unwrap(),
-            )
-        };
+        let merkle_meta_ref = &space.merkle.meta;
+        #[cfg(feature = "eth")]
+        let blob_meta_ref = &space.blob.meta;
+        let db_header_ref =
+            StoredView::ptr_to_obj(merkle_meta_ref, db_header, DBHeader::MSIZE).unwrap();
+        let merkle_payload_header_ref = StoredView::ptr_to_obj(
+            merkle_meta_ref,
+            merkle_payload_header,
+            shale::compact::CompactHeader::MSIZE,
+        )
+        .unwrap();
+        #[cfg(feature = "eth")]
+        let blob_payload_header_ref = StoredView::ptr_to_obj(
+            blob_meta_ref,
+            blob_payload_header,
+            shale::compact::CompactHeader::MSIZE,
+        )
+        .unwrap();
 
         let merkle_space = shale::compact::CompactSpace::new(
             Rc::new(space.merkle.meta.clone()),
@@ -1142,7 +1137,7 @@ impl WriteBatch {
             Err(e) => return Err(DBError::Merkle(e)),
         };
         if acc.root.is_null() {
-            Merkle::init_root(&mut acc.root, merkle.get_store()).map_err(DBError::Merkle)?;
+            acc.root = Merkle::init_root(merkle.get_store()).map_err(DBError::Merkle)?;
         }
         merkle
             .insert(sub_key, val, acc.root)

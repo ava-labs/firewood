@@ -432,13 +432,13 @@ mod test {
         let batch = conn.new_writebatch().await;
         let batch = batch.kv_insert(key, b"val").await.unwrap();
         #[cfg(feature = "eth")]
-        {
+        let batch = {
             let batch = batch.set_code(key, b"code").await.unwrap();
             let batch = batch.set_nonce(key, 42).await.unwrap();
             let batch = batch.set_state(key, b"subkey", b"state").await.unwrap();
             let batch = batch.create_account(key).await.unwrap();
-            let batch = batch.no_root_hash().await;
-        }
+            batch.no_root_hash().await
+        };
         let (batch, oldvalue) = batch.kv_remove(key).await.unwrap();
         assert_eq!(oldvalue, Some(b"val".to_vec()));
         batch.commit().await;
