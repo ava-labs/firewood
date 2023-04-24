@@ -188,8 +188,11 @@ impl DiskBuffer {
     async fn init_wal(&mut self, _rootfd: Fd, waldir: String) -> Result<(), WALError> {
         let mut aiobuilder = AIOBuilder::default();
         aiobuilder.max_events(self.cfg.wal_max_aio_requests as u32);
-        let aiomgr = aiobuilder.build().map_err(|_| WALError::Other)?;
-        let store = WALStoreAIO::new(&waldir, false, Some(aiomgr)).map_err(|_| WALError::Other)?;
+        let aiomgr = aiobuilder
+            .build()
+            .map_err(|_| WALError::Other("error building aiomgr".to_string()))?;
+        let store = WALStoreAIO::new(&waldir, false, Some(aiomgr))
+            .map_err(|_| WALError::Other("error building WAL store".to_string()))?;
         let mut loader = WALLoader::new();
         loader
             .file_nbit(self.wal_cfg.file_nbit)
@@ -214,12 +217,14 @@ impl DiskBuffer {
                             nix::sys::uio::pwrite(
                                 file_pool
                                     .get_file(fid)
-                                    .map_err(|_| WALError::Other)?
+                                    .map_err(|_| {
+                                        WALError::Other("error with file pool".to_string())
+                                    })?
                                     .get_fd(),
                                 &data,
                                 (offset & file_mask) as nix::libc::off_t,
                             )
-                            .map_err(|_| WALError::Other)?;
+                            .map_err(|_| WALError::Other("error loading WALStore".to_string()))?;
                         }
                     }
                     Ok(())
@@ -312,11 +317,10 @@ impl DiskBuffer {
     ) -> bool {
         match req {
             BufferCmd::Shutdown => return false,
-            BufferCmd::InitWAL(rootfd, waldir) => {
-                if (self.init_wal(rootfd, waldir).await).is_err() {
-                    panic!("cannot initialize from WAL")
-                }
-            }
+            BufferCmd::InitWAL(rootfd, waldir) => self
+                .init_wal(rootfd, waldir)
+                .await
+                .expect("cannot initialize from WAL"),
             BufferCmd::GetPage(page_key, tx) => tx
                 .send(self.pending.get(&page_key).map(|e| e.staging_data.clone()))
                 .unwrap(),

@@ -85,7 +85,7 @@ impl WALFileAIO {
                 let fd = f.into_raw_fd();
                 WALFileAIO { fd, aiomgr }
             })
-            .map_err(|_| WALError::Other)
+            .map_err(|e| WALError::IOError(Arc::new(e)))
     }
 }
 
@@ -125,7 +125,7 @@ impl WALFile for WALFileAIO {
             if nwrote == data.len() {
                 Ok(())
             } else {
-                Err(WALError::Other)
+                Err(WALError::Other("Partial write".to_string()))
             }
         })
     }

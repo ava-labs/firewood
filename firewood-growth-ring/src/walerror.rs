@@ -6,8 +6,8 @@ use thiserror::Error;
 
 #[derive(Clone, Debug, Error)]
 pub enum WALError {
-    #[error("an unclassified error has occurred")]
-    Other,
+    #[error("an unclassified error has occurred: {0}")]
+    Other(String),
     #[error("an OS error {0} has occurred")]
     UnixError(#[from] Errno),
     #[error("a checksum check has failed")]
