@@ -482,11 +482,7 @@ impl DiskBufferRequester {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        path::{Path, PathBuf},
-        thread,
-        time::Duration,
-    };
+    use std::path::PathBuf;
 
     use super::*;
     use crate::{
@@ -497,19 +493,19 @@ mod tests {
 
     const STATE_SPACE: SpaceID = 0x0;
     #[test]
-    #[ignore = "ref: https://github.com/ava-labs/firewood/issues/45"]
     fn test_buffer() {
         let tmpdb = [
             &std::env::var("CARGO_TARGET_DIR").unwrap_or("/tmp".to_string()),
             "sender_api_test_db",
-        ];
+        ]
+        .iter()
+        .collect::<PathBuf>();
 
         let buf_cfg = DiskBufferConfig::builder().max_buffered(1).build();
         let wal_cfg = WALConfig::builder().build();
         let disk_requester = init_buffer(buf_cfg, wal_cfg);
 
-        let (root_db_fd, reset) =
-            crate::file::open_dir(&tmpdb.into_iter().collect::<PathBuf>(), true).unwrap();
+        let (root_db_fd, reset) = crate::file::open_dir(&tmpdb, true).unwrap();
 
         // file descriptor of the state directory
         let state_fd = file::touch_dir("state", root_db_fd).unwrap();
@@ -567,20 +563,24 @@ mod tests {
             assert!(d1.collect_ash(1).unwrap().is_empty());
             // page is not yet persisted to disk.
             assert!(d1.get_page(STATE_SPACE, 0).is_none());
+            // we write perform 3 ops:
+            // 1st write: send request
+            // 2nd get: this will BLOCK until the thread has received the
+            // 1st request
+            // 3rd get: this will BLOCK until the thread has received the
+            // 2nd request, which guarantees that it processed the first one.
             d1.write(page_batch, write_batch);
+            d1.get_page(STATE_SPACE, 0);
+            d1.get_page(STATE_SPACE, 0);
         });
         // wait for the write to complete.
         write_thread_handle.join().unwrap();
         // This is not ACID compliant, write should not return before WAL log
         // is written to disk.
-        assert!([
-            &tmpdb.into_iter().collect::<String>(),
-            "wal",
-            "00000000.log"
-        ]
-        .iter()
-        .collect::<PathBuf>()
-        .exists());
+        assert!([&tmpdb.as_path().to_string_lossy(), "wal", "00000000.log"]
+            .iter()
+            .collect::<PathBuf>()
+            .exists());
 
         // verify
         assert_eq!(disk_requester.collect_ash(1).unwrap().len(), 1);
