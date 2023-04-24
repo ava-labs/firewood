@@ -1,5 +1,8 @@
 //! Disk buffer for staging in memory pages and flushing them to disk.
 use std::fmt::Debug;
+use std::fs;
+use std::io::Error;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::{cell::RefCell, collections::HashMap};
@@ -317,10 +320,12 @@ impl DiskBuffer {
     ) -> bool {
         match req {
             BufferCmd::Shutdown => return false,
-            BufferCmd::InitWAL(rootfd, waldir) => self
-                .init_wal(rootfd, waldir)
-                .await
-                .expect("cannot initialize from WAL"),
+            BufferCmd::InitWAL(rootfd, waldir) => {
+                self.init_wal(rootfd, waldir.clone()).await.expect(&format!(
+                    "cannot initialize WAL: dir: {} rootfd: {}",
+                    waldir, rootfd
+                ))
+            }
             BufferCmd::GetPage(page_key, tx) => tx
                 .send(self.pending.get(&page_key).map(|e| e.staging_data.clone()))
                 .unwrap(),

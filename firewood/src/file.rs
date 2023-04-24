@@ -3,6 +3,7 @@
 
 // Copied from CedrusDB
 
+use std::fs;
 pub(crate) use std::os::unix::io::RawFd as Fd;
 use std::path::Path;
 
@@ -70,48 +71,34 @@ impl Drop for File {
     }
 }
 
-pub fn touch_dir(dirname: &str, rootfd: Fd) -> Result<Fd, Errno> {
-    use nix::sys::stat::mkdirat;
-    if mkdirat(
-        rootfd,
-        dirname,
-        Mode::S_IRUSR | Mode::S_IWUSR | Mode::S_IXUSR,
-    )
-    .is_err()
-    {
-        let errno = nix::errno::from_i32(nix::errno::errno());
-        if errno != nix::errno::Errno::EEXIST {
-            return Err(errno);
-        }
+pub fn touch_dir<P: AsRef<Path>>(
+    dir_name: &str,
+    path: P,
+) -> Result<std::path::PathBuf, std::io::Error> {
+    let file_path = path.as_ref().join(dir_name);
+    if !file_path.exists() {
+        fs::create_dir_all(file_path);
     }
-    openat(rootfd, dirname, oflags(), Mode::empty())
+    Ok(file_path)
 }
 
-pub fn open_dir<P: AsRef<Path>>(path: P, truncate: bool) -> Result<(Fd, bool), nix::Error> {
+pub fn open_dir<P: AsRef<Path>>(path: P, truncate: bool) -> Result<(P, bool), std::io::Error> {
     let mut reset_header = truncate;
     if truncate {
-        let _ = std::fs::remove_dir_all(path.as_ref());
+        std::fs::remove_dir_all(&path)?;
     }
-    match mkdir(path.as_ref(), Mode::S_IRUSR | Mode::S_IWUSR | Mode::S_IXUSR) {
-        Err(e) => {
-            if truncate {
-                return Err(e);
-            }
-        }
-        Ok(_) => {
-            // the DB did not exist
-            reset_header = true
-        }
-    }
-    Ok((
-        match open(path.as_ref(), oflags(), Mode::empty()) {
-            Ok(fd) => fd,
-            Err(e) => return Err(e),
-        },
-        reset_header,
-    ))
-}
 
+    if !path.as_ref().exists() {
+        fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(path)?;
+        reset_header = true;
+    }
+
+    Ok((path, reset_header))
+}
 #[test]
 /// This test simulates a filesystem error: for example the specified path
 /// does not exist when creating a file.
