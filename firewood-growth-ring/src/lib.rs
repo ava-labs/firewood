@@ -78,8 +78,6 @@ impl WALFileAIO {
         fs::OpenOptions::new()
             .read(true)
             .write(true)
-            .truncate(false)
-            .create_new(true)
             .open(root_dir.join(filename))
             .map(|f| {
                 let fd = f.into_raw_fd();
