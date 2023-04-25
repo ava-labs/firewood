@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -17,7 +18,7 @@ use tokio::sync::mpsc::error::SendError;
 use tokio::sync::oneshot::error::RecvError;
 use typed_builder::TypedBuilder;
 
-use crate::file::{Fd, File};
+use crate::file::File;
 
 use self::buffer::DiskBufferRequester;
 
@@ -29,6 +30,8 @@ pub(crate) const PAGE_MASK: u64 = PAGE_SIZE - 1;
 pub enum StoreError<T> {
     #[error("system error: `{0}`")]
     System(#[from] nix::Error),
+    #[error("io error: `{0}`")]
+    Io(Box<std::io::Error>),
     #[error("init error: `{0}`")]
     Init(String),
     // TODO: more error report from the DiskBuffer
@@ -37,6 +40,12 @@ pub enum StoreError<T> {
     Send(#[from] SendError<T>),
     #[error("error receiving data: `{0}")]
     Receive(#[from] RecvError),
+}
+
+impl<T> From<std::io::Error> for StoreError<T> {
+    fn from(e: std::io::Error) -> Self {
+        StoreError::Io(Box::new(e))
+    }
 }
 
 pub trait MemStoreR: Debug {
@@ -569,7 +578,7 @@ fn test_from_ash() {
     let mut rng = StdRng::seed_from_u64(42);
     let min = rng.gen_range(0..2 * PAGE_SIZE);
     let max = rng.gen_range(min + PAGE_SIZE..min + 100 * PAGE_SIZE);
-    for _ in 0..20 {
+    for _ in 0..2000 {
         let n = 20;
         let mut canvas = Vec::new();
         canvas.resize((max - min) as usize, 0);
@@ -609,7 +618,7 @@ pub struct StoreConfig {
     #[builder(default = 22)] // 4MB file by default
     file_nbit: u64,
     space_id: SpaceID,
-    rootfd: Fd,
+    rootdir: PathBuf,
 }
 
 #[derive(Debug)]
@@ -627,7 +636,7 @@ pub struct CachedSpace {
 }
 
 impl CachedSpace {
-    pub fn new(cfg: &StoreConfig) -> Result<Self, StoreError<nix::Error>> {
+    pub fn new(cfg: &StoreConfig) -> Result<Self, StoreError<std::io::Error>> {
         let space_id = cfg.space_id;
         let files = Arc::new(FilePool::new(cfg)?);
         Ok(Self {
@@ -662,7 +671,7 @@ impl CachedSpaceInner {
         &mut self,
         space_id: SpaceID,
         pid: u64,
-    ) -> Result<Box<Page>, StoreError<nix::Error>> {
+    ) -> Result<Box<Page>, StoreError<std::io::Error>> {
         if let Some(p) = self.disk_buffer.get_page(space_id, pid) {
             return Ok(Box::new(*p));
         }
@@ -684,7 +693,7 @@ impl CachedSpaceInner {
         &mut self,
         space_id: SpaceID,
         pid: u64,
-    ) -> Result<&'static mut [u8], StoreError<nix::Error>> {
+    ) -> Result<&'static mut [u8], StoreError<std::io::Error>> {
         let base = match self.pinned_pages.get_mut(&pid) {
             Some(mut e) => {
                 e.0 += 1;
@@ -794,19 +803,19 @@ impl MemStoreR for CachedSpace {
 pub struct FilePool {
     files: parking_lot::Mutex<lru::LruCache<u64, Arc<File>>>,
     file_nbit: u64,
-    rootfd: Fd,
+    rootdir: PathBuf,
 }
 
 impl FilePool {
-    fn new(cfg: &StoreConfig) -> Result<Self, StoreError<nix::Error>> {
-        let rootfd = cfg.rootfd;
+    fn new(cfg: &StoreConfig) -> Result<Self, StoreError<std::io::Error>> {
+        let rootdir = &cfg.rootdir;
         let file_nbit = cfg.file_nbit;
         let s = Self {
             files: parking_lot::Mutex::new(lru::LruCache::new(
                 NonZeroUsize::new(cfg.ncached_files).expect("non-zero file num"),
             )),
             file_nbit,
-            rootfd,
+            rootdir: rootdir.to_path_buf(),
         };
         let f0 = s.get_file(0)?;
         if flock(f0.get_fd(), FlockArg::LockExclusiveNonblock).is_err() {
@@ -815,7 +824,7 @@ impl FilePool {
         Ok(s)
     }
 
-    fn get_file(&self, fid: u64) -> Result<Arc<File>, StoreError<nix::Error>> {
+    fn get_file(&self, fid: u64) -> Result<Arc<File>, StoreError<std::io::Error>> {
         let mut files = self.files.lock();
         let file_size = 1 << self.file_nbit;
         Ok(match files.get(&fid) {
@@ -823,7 +832,7 @@ impl FilePool {
             None => {
                 files.put(
                     fid,
-                    Arc::new(File::new(fid, file_size, self.rootfd).map_err(StoreError::System)?),
+                    Arc::new(File::new(fid, file_size, self.rootdir.clone())?),
                 );
                 files.peek(&fid).unwrap().clone()
             }
@@ -839,7 +848,6 @@ impl Drop for FilePool {
     fn drop(&mut self) {
         let f0 = self.get_file(0).unwrap();
         flock(f0.get_fd(), FlockArg::UnlockNonblock).ok();
-        nix::unistd::close(self.rootfd).ok();
     }
 }
 
