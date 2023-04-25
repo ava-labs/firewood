@@ -183,10 +183,8 @@ impl DiskBuffer {
     }
 
     /// Initialize the WAL subsystem if it does not exists and attempts to replay the WAL if exists.
-    // TODO: Remove rootfd argument
     async fn init_wal(&mut self, rootpath: PathBuf, waldir: String) -> Result<(), WALError> {
-        let mut final_path = rootpath.clone();
-        final_path.push(waldir.clone());
+        let final_path = rootpath.clone().join(waldir.clone());
         let mut aiobuilder = AIOBuilder::default();
         aiobuilder.max_events(self.cfg.wal_max_aio_requests as u32);
         let aiomgr = aiobuilder.build()?;
@@ -315,10 +313,15 @@ impl DiskBuffer {
     ) -> bool {
         match req {
             BufferCmd::Shutdown => return false,
-            BufferCmd::InitWAL(rootfd, waldir) => {
-                self.init_wal(rootfd.clone(), waldir.clone())
+            BufferCmd::InitWAL(root_path, waldir) => {
+                self.init_wal(root_path.clone(), waldir.clone())
                     .await
-                    .unwrap_or_else(|e| panic!("Initialize WAL in dir {:?} failed: {e:?}", rootfd));
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "Initialize WAL in dir {:?} failed creating {:?}: {e:?}",
+                            root_path, waldir
+                        )
+                    });
             }
             BufferCmd::GetPage(page_key, tx) => tx
                 .send(self.pending.get(&page_key).map(|e| e.staging_data.clone()))

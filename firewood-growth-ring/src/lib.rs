@@ -161,7 +161,7 @@ impl WALStoreAIO {
             }
             fs::create_dir_all(&wal_dir).map_err::<WALError, _>(From::from)?;
         } else if !wal_dir.as_ref().exists() {
-            // happy path
+            // create WAL dir
             fs::create_dir_all(&wal_dir).map_err::<WALError, _>(From::from)?;
         }
 
