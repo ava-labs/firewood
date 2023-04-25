@@ -142,8 +142,6 @@ pub struct WALStoreAIO {
     aiomgr: Arc<AIOManager>,
 }
 
-unsafe impl Send for WALStoreAIO {}
-
 impl WALStoreAIO {
     pub fn new<P: AsRef<Path>>(
         wal_dir: P,

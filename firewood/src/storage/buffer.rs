@@ -190,8 +190,8 @@ impl DiskBuffer {
         let mut aiobuilder = AIOBuilder::default();
         aiobuilder.max_events(self.cfg.wal_max_aio_requests as u32);
         let aiomgr = aiobuilder.build().map_err(|_| WALError::Other)?;
-        let store =
-            WALStoreAIO::new(&final_path, false, Some(aiomgr)).map_err(|_| WALError::Other)?;
+        let store = WALStoreAIO::new(final_path.clone(), false, Some(aiomgr))
+            .map_err(|_| WALError::Other)?;
         let mut loader = WALLoader::new();
         loader
             .file_nbit(self.wal_cfg.file_nbit)
@@ -315,8 +315,8 @@ impl DiskBuffer {
         match req {
             BufferCmd::Shutdown => return false,
             BufferCmd::InitWAL(rootfd, waldir) => {
-                if (self.init_wal(rootfd, waldir).await).is_err() {
-                    panic!("cannot initialize from WAL")
+                if (self.init_wal(rootfd.clone(), waldir.clone()).await).is_err() {
+                    panic!("cannot initialize from WAL: {rootfd:?}/{waldir:?}")
                 }
             }
             BufferCmd::GetPage(page_key, tx) => tx

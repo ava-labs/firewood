@@ -16,7 +16,7 @@ pub struct File {
 
 impl File {
     pub fn open_file(rootfd: PathBuf, fname: &str, truncate: bool) -> Result<Fd, std::io::Error> {
-        let mut filepath = rootfd.clone();
+        let mut filepath = rootfd;
         filepath.push(fname);
         Ok(std::fs::File::options()
             .truncate(truncate)
@@ -28,7 +28,7 @@ impl File {
     }
 
     pub fn create_file(rootpath: PathBuf, fname: &str) -> Result<Fd, std::io::Error> {
-        let mut filepath = rootpath.clone();
+        let mut filepath = rootpath;
         filepath.push(fname);
         Ok(std::fs::File::options()
             .create(true)
@@ -71,7 +71,7 @@ impl Drop for File {
 }
 
 pub fn touch_dir(dirname: &str, rootdir: PathBuf) -> Result<PathBuf, std::io::Error> {
-    let mut path = rootdir.clone();
+    let mut path = rootdir;
     path.push(dirname);
     if let Err(e) = std::fs::create_dir(&path) {
         // ignore already-exists error
