@@ -216,17 +216,13 @@ impl DiskBuffer {
                                 file_pool
                                     .get_file(fid)
                                     .map_err(|e| {
-                                        WALError::Other(
-                                            format!("file pool error: {:?}", e),
-                                        )
+                                        WALError::Other(format!("file pool error: {:?}", e))
                                     })?
                                     .get_fd(),
                                 &data,
                                 (offset & file_mask) as nix::libc::off_t,
                             )
-                            .map_err(|e| {
-                                WALError::Other(format!("wal loader error: {:?}", e))
-                            })?;
+                            .map_err(|e| WALError::Other(format!("wal loader error: {:?}", e)))?;
                         }
                     }
                     Ok(())
@@ -489,9 +485,7 @@ impl DiskBufferRequester {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        path::{PathBuf},
-    };
+    use std::path::PathBuf;
 
     use super::*;
     use crate::{

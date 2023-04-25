@@ -462,16 +462,12 @@ impl DB {
         let (db_path, reset) = file::open_dir(db_path, cfg.truncate).map_err(DBError::IO)?;
 
         let merkle_path = file::touch_dir("merkle", db_path.clone()).map_err(DBError::IO)?;
-        let merkle_meta_path =
-            file::touch_dir("meta", merkle_path.clone()).map_err(DBError::IO)?;
-        let merkle_payload_path =
-            file::touch_dir("compact", merkle_path).map_err(DBError::IO)?;
+        let merkle_meta_path = file::touch_dir("meta", merkle_path.clone()).map_err(DBError::IO)?;
+        let merkle_payload_path = file::touch_dir("compact", merkle_path).map_err(DBError::IO)?;
 
         let blob_path = file::touch_dir("blob", db_path.clone()).map_err(DBError::IO)?;
-        let blob_meta_path =
-            file::touch_dir("meta", blob_path.clone()).map_err(DBError::IO)?;
-        let blob_payload_path =
-            file::touch_dir("compact", blob_path).map_err(DBError::IO)?;
+        let blob_meta_path = file::touch_dir("meta", blob_path.clone()).map_err(DBError::IO)?;
+        let blob_payload_path = file::touch_dir("compact", blob_path).map_err(DBError::IO)?;
 
         let file0 = crate::file::File::new(0, SPACE_RESERVED, merkle_meta_path.clone())?;
         let fd0 = file0.get_fd();
