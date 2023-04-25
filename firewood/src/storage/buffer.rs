@@ -217,7 +217,7 @@ impl DiskBuffer {
                                     .get_file(fid)
                                     .map_err(|e| {
                                         WALError::Other(
-                                            format!("file pool error: {:?}", e).to_string(),
+                                            format!("file pool error: {:?}", e),
                                         )
                                     })?
                                     .get_fd(),
@@ -225,7 +225,7 @@ impl DiskBuffer {
                                 (offset & file_mask) as nix::libc::off_t,
                             )
                             .map_err(|e| {
-                                WALError::Other(format!("wal loader error: {:?}", e).to_string())
+                                WALError::Other(format!("wal loader error: {:?}", e))
                             })?;
                         }
                     }
@@ -490,9 +490,7 @@ impl DiskBufferRequester {
 #[cfg(test)]
 mod tests {
     use std::{
-        path::{Path, PathBuf},
-        thread,
-        time::Duration,
+        path::{PathBuf},
     };
 
     use super::*;
@@ -543,7 +541,7 @@ mod tests {
         disk_requester.reg_cached_space(state_cache.as_ref());
 
         // memory mapped store
-        let mut mut_store = StoreRevMut::new(state_cache.clone() as Rc<dyn MemStoreR>);
+        let mut mut_store = StoreRevMut::new(state_cache as Rc<dyn MemStoreR>);
 
         let change = b"this is a test";
 

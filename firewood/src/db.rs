@@ -459,19 +459,19 @@ impl DB {
         if cfg.truncate {
             let _ = std::fs::remove_dir_all(db_path.as_ref());
         }
-        let (db_path, reset) = file::open_dir(db_path, cfg.truncate).map_err(|e| DBError::IO(e))?;
+        let (db_path, reset) = file::open_dir(db_path, cfg.truncate).map_err(DBError::IO)?;
 
-        let merkle_path = file::touch_dir("merkle", db_path.clone()).map_err(|e| DBError::IO(e))?;
+        let merkle_path = file::touch_dir("merkle", db_path.clone()).map_err(DBError::IO)?;
         let merkle_meta_path =
-            file::touch_dir("meta", merkle_path.clone()).map_err(|e| DBError::IO(e))?;
+            file::touch_dir("meta", merkle_path.clone()).map_err(DBError::IO)?;
         let merkle_payload_path =
-            file::touch_dir("compact", merkle_path).map_err(|e| DBError::IO(e))?;
+            file::touch_dir("compact", merkle_path).map_err(DBError::IO)?;
 
-        let blob_path = file::touch_dir("blob", db_path.clone()).map_err(|e| DBError::IO(e))?;
+        let blob_path = file::touch_dir("blob", db_path.clone()).map_err(DBError::IO)?;
         let blob_meta_path =
-            file::touch_dir("meta", blob_path.clone()).map_err(|e| DBError::IO(e))?;
+            file::touch_dir("meta", blob_path.clone()).map_err(DBError::IO)?;
         let blob_payload_path =
-            file::touch_dir("compact", blob_path).map_err(|e| DBError::IO(e))?;
+            file::touch_dir("compact", blob_path).map_err(DBError::IO)?;
 
         let file0 = crate::file::File::new(0, SPACE_RESERVED, merkle_meta_path.clone())?;
         let fd0 = file0.get_fd();
@@ -600,7 +600,7 @@ impl DB {
         };
 
         // recover from WAL
-        disk_requester.init_wal("wal", db_path.clone());
+        disk_requester.init_wal("wal", db_path);
 
         // set up the storage layout
 
