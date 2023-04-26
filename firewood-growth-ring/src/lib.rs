@@ -79,7 +79,7 @@ impl WALFileAIO {
             .read(true)
             .write(true)
             .truncate(false)
-            .create_new(true)
+            .create(true)
             .open(root_dir.join(filename))
             .map(|f| {
                 let fd = f.into_raw_fd();
