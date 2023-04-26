@@ -52,8 +52,9 @@ impl api::DbView for DbView {
 
     async fn range_proof<K: KeyType, V: ValueType>(
         &self,
-        _first_key: K,
-        _last_key: K,
+        _first_key: Option<K>,
+        _last_key: Option<K>,
+        _limit: usize,
     ) -> Result<api::RangeProof<K, V>, api::Error> {
         todo!()
     }
