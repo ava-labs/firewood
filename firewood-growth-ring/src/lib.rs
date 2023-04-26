@@ -61,6 +61,7 @@ use nix::unistd::{close, ftruncate};
 use std::fs;
 use std::os::fd::IntoRawFd;
 use std::os::unix::io::RawFd;
+use std::os::unix::prelude::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use wal::{WALBytes, WALFile, WALPos, WALStore};
@@ -71,8 +72,6 @@ pub struct WALFileAIO {
     aiomgr: Arc<AIOManager>,
 }
 
-#[allow(clippy::result_unit_err)]
-// TODO: Refactor to return a meaningful error.
 impl WALFileAIO {
     pub fn new(root_dir: &Path, filename: &str, aiomgr: Arc<AIOManager>) -> Result<Self, WALError> {
         fs::OpenOptions::new()
@@ -80,6 +79,7 @@ impl WALFileAIO {
             .write(true)
             .truncate(false)
             .create(true)
+            .mode(0o600)
             .open(root_dir.join(filename))
             .map(|f| {
                 let fd = f.into_raw_fd();
@@ -125,7 +125,11 @@ impl WALFile for WALFileAIO {
             if nwrote == data.len() {
                 Ok(())
             } else {
-                Err(WALError::Other("Partial write".to_string()))
+                Err(WALError::Other(format!(
+                    "partial write; wrote {nwrote} expected {} for fd {}",
+                    data.len(),
+                    self.fd
+                )))
             }
         })
     }
@@ -161,10 +165,10 @@ impl WALStoreAIO {
                     return Err(From::from(e));
                 }
             }
-            fs::create_dir_all(&wal_dir).map_err::<WALError, _>(From::from)?;
+            fs::create_dir(&wal_dir)?;
         } else if !wal_dir.as_ref().exists() {
             // create WAL dir
-            fs::create_dir_all(&wal_dir).map_err::<WALError, _>(From::from)?;
+            fs::create_dir(&wal_dir)?;
         }
 
         Ok(WALStoreAIO {

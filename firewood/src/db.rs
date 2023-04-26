@@ -459,17 +459,17 @@ impl DB {
         if cfg.truncate {
             let _ = std::fs::remove_dir_all(db_path.as_ref());
         }
-        let (db_path, reset) = file::open_dir(db_path, cfg.truncate).map_err(DBError::IO)?;
+        let (db_path, reset) = file::open_dir(db_path, cfg.truncate)?;
 
-        let merkle_path = file::touch_dir("merkle", db_path.clone()).map_err(DBError::IO)?;
-        let merkle_meta_path = file::touch_dir("meta", merkle_path.clone()).map_err(DBError::IO)?;
-        let merkle_payload_path = file::touch_dir("compact", merkle_path).map_err(DBError::IO)?;
+        let merkle_path = file::touch_dir("merkle", &db_path)?;
+        let merkle_meta_path = file::touch_dir("meta", &merkle_path)?;
+        let merkle_payload_path = file::touch_dir("compact", &merkle_path)?;
 
-        let blob_path = file::touch_dir("blob", db_path.clone()).map_err(DBError::IO)?;
-        let blob_meta_path = file::touch_dir("meta", blob_path.clone()).map_err(DBError::IO)?;
-        let blob_payload_path = file::touch_dir("compact", blob_path).map_err(DBError::IO)?;
+        let blob_path = file::touch_dir("blob", &db_path)?;
+        let blob_meta_path = file::touch_dir("meta", &blob_path)?;
+        let blob_payload_path = file::touch_dir("compact", &blob_path)?;
 
-        let file0 = crate::file::File::new(0, SPACE_RESERVED, merkle_meta_path.clone())?;
+        let file0 = crate::file::File::new(0, SPACE_RESERVED, &merkle_meta_path)?;
         let fd0 = file0.get_fd();
 
         if reset {

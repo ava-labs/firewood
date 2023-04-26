@@ -746,7 +746,9 @@ impl<F: WALStore> WALWriter<F> {
                     Ok(WALRingType::Null) => break,
                     Err(_) => match recover_policy {
                         RecoverPolicy::Strict => {
-                            return Err(WALError::Other("invalid ring type".to_string()))
+                            return Err(WALError::Other(
+                                "invalid ring type - strict recovery requested".to_string(),
+                            ))
                         }
                         RecoverPolicy::BestEffort => break 'outer,
                     },

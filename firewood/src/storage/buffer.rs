@@ -214,13 +214,21 @@ impl DiskBuffer {
                                 file_pool
                                     .get_file(fid)
                                     .map_err(|e| {
-                                        WALError::Other(format!("file pool error: {:?}", e))
+                                        WALError::Other(format!(
+                                            "file pool error: {:?} - final path {:?}",
+                                            e, final_path
+                                        ))
                                     })?
                                     .get_fd(),
                                 &data,
                                 (offset & file_mask) as nix::libc::off_t,
                             )
-                            .map_err(|e| WALError::Other(format!("wal loader error: {:?}", e)))?;
+                            .map_err(|e| {
+                                WALError::Other(format!(
+                                    "wal loader error: {:?} - final path {:?}",
+                                    e, final_path
+                                ))
+                            })?;
                         }
                     }
                     Ok(())
@@ -510,11 +518,12 @@ mod tests {
         let wal_cfg = WALConfig::builder().build();
         let disk_requester = init_buffer(buf_cfg, wal_cfg);
 
+        // TODO: Run the test in a separate standalone directory for concurrency reasons
         let path = std::path::PathBuf::from(r"/tmp/firewood");
         let (root_db_path, reset) = crate::file::open_dir(path, true).unwrap();
 
         // file descriptor of the state directory
-        let state_fd = file::touch_dir("state", root_db_path.clone()).unwrap();
+        let state_path = file::touch_dir("state", &root_db_path).unwrap();
         assert!(reset);
         // create a new wal directory on top of root_db_fd
         disk_requester.init_wal("wal", root_db_path);
@@ -527,7 +536,7 @@ mod tests {
                     .ncached_files(1)
                     .space_id(STATE_SPACE)
                     .file_nbit(1)
-                    .rootdir(state_fd)
+                    .rootdir(state_path)
                     .build(),
             )
             .unwrap(),

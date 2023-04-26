@@ -3,10 +3,10 @@
 
 // Copied from CedrusDB
 
-use std::io::ErrorKind;
 use std::os::fd::IntoRawFd;
 pub(crate) use std::os::unix::io::RawFd as Fd;
 use std::path::{Path, PathBuf};
+use std::{io::ErrorKind, os::unix::prelude::OpenOptionsExt};
 
 use nix::unistd::close;
 
@@ -22,9 +22,9 @@ impl File {
             .truncate(truncate)
             .read(true)
             .write(true)
+            .mode(0o600)
             .open(filepath)?
             .into_raw_fd())
-        // TODO: file permissions?
     }
 
     pub fn create_file(rootpath: PathBuf, fname: &str) -> Result<Fd, std::io::Error> {
@@ -34,23 +34,22 @@ impl File {
             .create(true)
             .read(true)
             .write(true)
+            .mode(0o600)
             .open(filepath)?
             .into_raw_fd())
-        // TODO: file permissions?
     }
 
     fn _get_fname(fid: u64) -> String {
         format!("{fid:08x}.fw")
     }
 
-    pub fn new<P: AsRef<Path>>(fid: u64, flen: u64, rootdir: P) -> Result<Self, std::io::Error> {
+    pub fn new<P: AsRef<Path>>(fid: u64, _flen: u64, rootdir: P) -> Result<Self, std::io::Error> {
         let fname = Self::_get_fname(fid);
         let fd = match Self::open_file(rootdir.as_ref().to_path_buf(), &fname, false) {
             Ok(fd) => fd,
             Err(e) => match e.kind() {
                 ErrorKind::NotFound => {
                     let fd = Self::create_file(rootdir.as_ref().to_path_buf(), &fname)?;
-                    nix::unistd::ftruncate(fd, flen as nix::libc::off_t)?;
                     fd
                 }
                 _ => return Err(e),
@@ -70,9 +69,8 @@ impl Drop for File {
     }
 }
 
-pub fn touch_dir(dirname: &str, rootdir: PathBuf) -> Result<PathBuf, std::io::Error> {
-    let mut path = rootdir;
-    path.push(dirname);
+pub fn touch_dir(dirname: &str, rootdir: &PathBuf) -> Result<PathBuf, std::io::Error> {
+    let path = rootdir.join(dirname);
     if let Err(e) = std::fs::create_dir(&path) {
         // ignore already-exists error
         if e.kind() != ErrorKind::AlreadyExists {
