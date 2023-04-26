@@ -194,7 +194,8 @@ impl WALStore for WALStoreAIO {
     }
 
     async fn remove_file(&self, filename: String) -> Result<(), WALError> {
-        fs::remove_file(filename).map_err(From::from)
+        let file_to_remove = self.root_dir.join(filename);
+        fs::remove_file(file_to_remove).map_err(From::from)
     }
 
     fn enumerate_files(&self) -> Result<Self::FileNameIter, WALError> {
