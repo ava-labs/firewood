@@ -70,8 +70,7 @@ impl Storable for CompactFooter {
 
     fn dehydrate(&self, to: &mut [u8]) {
         let mut cur = to;
-            cur.write_all(&self.payload_size.to_le_bytes())
-            .unwrap();
+        cur.write_all(&self.payload_size.to_le_bytes()).unwrap();
     }
 }
 
@@ -204,8 +203,7 @@ impl<T> Storable for ObjPtrField<T> {
 
     fn dehydrate(&self, to: &mut [u8]) {
         let mut cur = to;
-            cur.write_all(&self.0.addr().to_le_bytes())
-            .unwrap()
+        cur.write_all(&self.0.addr().to_le_bytes()).unwrap()
     }
 
     fn dehydrated_len(&self) -> u64 {

@@ -2,6 +2,7 @@ use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::Debug;
+use std::io::Write;
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut};
@@ -446,10 +447,8 @@ impl<T> Storable for ObjPtr<T> {
     }
 
     fn dehydrate(&self, to: &mut [u8]) {
-        use std::io::{Cursor, Write};
-        Cursor::new(to)
-            .write_all(&self.addr().to_le_bytes())
-            .unwrap();
+        let mut cur = to;
+        cur.write_all(&self.addr().to_le_bytes()).unwrap();
     }
 
     fn hydrate<U: CachedStore>(addr: u64, mem: &U) -> Result<Self, ShaleError> {
