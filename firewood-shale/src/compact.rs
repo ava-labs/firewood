@@ -1,6 +1,6 @@
 use super::{CachedStore, Obj, ObjPtr, ObjRef, ShaleError, ShaleStore, Storable, StoredView};
 use std::cell::UnsafeCell;
-use std::io::{Cursor, Write};
+use std::io::Write;
 use std::rc::Rc;
 
 pub struct CompactHeader {
@@ -40,7 +40,7 @@ impl Storable for CompactHeader {
     }
 
     fn dehydrate(&self, to: &mut [u8]) {
-        let mut cur = Cursor::new(to);
+        let mut cur = to;
         cur.write_all(&self.payload_size.to_le_bytes()).unwrap();
         cur.write_all(&[if self.is_freed { 1 } else { 0 }]).unwrap();
         cur.write_all(&self.desc_addr.addr().to_le_bytes()).unwrap();
@@ -69,8 +69,8 @@ impl Storable for CompactFooter {
     }
 
     fn dehydrate(&self, to: &mut [u8]) {
-        Cursor::new(to)
-            .write_all(&self.payload_size.to_le_bytes())
+        let mut cur = to;
+            cur.write_all(&self.payload_size.to_le_bytes())
             .unwrap();
     }
 }
@@ -103,7 +103,7 @@ impl Storable for CompactDescriptor {
     }
 
     fn dehydrate(&self, to: &mut [u8]) {
-        let mut cur = Cursor::new(to);
+        let mut cur = to;
         cur.write_all(&self.payload_size.to_le_bytes()).unwrap();
         cur.write_all(&self.haddr.to_le_bytes()).unwrap();
     }
@@ -176,7 +176,7 @@ impl Storable for CompactSpaceHeader {
     }
 
     fn dehydrate(&self, to: &mut [u8]) {
-        let mut cur = Cursor::new(to);
+        let mut cur = to;
         cur.write_all(&self.meta_space_tail.to_le_bytes()).unwrap();
         cur.write_all(&self.compact_space_tail.to_le_bytes())
             .unwrap();
@@ -203,8 +203,8 @@ impl<T> Storable for ObjPtrField<T> {
     }
 
     fn dehydrate(&self, to: &mut [u8]) {
-        Cursor::new(to)
-            .write_all(&self.0.addr().to_le_bytes())
+        let mut cur = to;
+            cur.write_all(&self.0.addr().to_le_bytes())
             .unwrap()
     }
 
@@ -245,7 +245,8 @@ impl Storable for U64Field {
     }
 
     fn dehydrate(&self, to: &mut [u8]) {
-        Cursor::new(to).write_all(&self.0.to_le_bytes()).unwrap()
+        let mut cur = to;
+        cur.write_all(&self.0.to_le_bytes()).unwrap()
     }
 }
 
