@@ -48,10 +48,7 @@ impl File {
         let fd = match Self::open_file(rootdir.as_ref().to_path_buf(), &fname, false) {
             Ok(fd) => fd,
             Err(e) => match e.kind() {
-                ErrorKind::NotFound => {
-                    let fd = Self::create_file(rootdir.as_ref().to_path_buf(), &fname)?;
-                    fd
-                }
+                ErrorKind::NotFound => Self::create_file(rootdir.as_ref().to_path_buf(), &fname)?,
                 _ => return Err(e),
             },
         };
@@ -69,7 +66,7 @@ impl Drop for File {
     }
 }
 
-pub fn touch_dir(dirname: &str, rootdir: &PathBuf) -> Result<PathBuf, std::io::Error> {
+pub fn touch_dir(dirname: &str, rootdir: &Path) -> Result<PathBuf, std::io::Error> {
     let path = rootdir.join(dirname);
     if let Err(e) = std::fs::create_dir(&path) {
         // ignore already-exists error
