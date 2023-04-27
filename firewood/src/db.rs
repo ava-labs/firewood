@@ -216,7 +216,7 @@ impl Storable for DBHeader {
     }
 
     fn dehydrate(&self, to: &mut [u8]) {
-        let mut cur = Cursor::new(to);
+        let mut cur = to;
         cur.write_all(&self.acc_root.addr().to_le_bytes()).unwrap();
         cur.write_all(&self.kv_root.addr().to_le_bytes()).unwrap();
     }

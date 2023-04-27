@@ -2,7 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::fmt;
-use std::io::{Cursor, Write};
+use std::io::Write;
 
 use crate::merkle::{Hash, Node, ValueTransformer};
 use primitive_types::U256;
@@ -120,7 +120,7 @@ impl Storable for Blob {
     fn dehydrate(&self, to: &mut [u8]) {
         match self {
             Self::Code(code) => {
-                let mut cur = Cursor::new(to);
+                let mut cur = to;
                 cur.write_all(&(code.len() as u32).to_le_bytes()).unwrap();
                 cur.write_all(code).unwrap();
             }

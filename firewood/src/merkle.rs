@@ -72,7 +72,8 @@ impl Storable for Hash {
     }
 
     fn dehydrate(&self, to: &mut [u8]) {
-        Cursor::new(to).write_all(&self.0).unwrap()
+        let mut cur = to;
+        cur.write_all(&self.0).unwrap()
     }
 }
 
@@ -670,7 +671,7 @@ impl Storable for Node {
     }
 
     fn dehydrate(&self, to: &mut [u8]) {
-        let mut cur = Cursor::new(to);
+        let mut cur = to;
 
         let mut attrs = 0;
         attrs |= match self.root_hash.get() {
