@@ -604,7 +604,7 @@ impl Db<CompactSpace<Node, StoreRevMut>> {
         });
 
         // recover from Wal
-        disk_requester.init_wal("wal", db_path);
+        disk_requester.init_wal("wal", &db_path);
 
         let root_hash_staging = StoreRevMut::new(root_hash_cache);
         let (data_staging, mut latest) = Db::new_store(&data_cache, reset, offset, cfg, &params)?;
