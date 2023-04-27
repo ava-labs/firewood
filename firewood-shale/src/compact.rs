@@ -593,7 +593,8 @@ mod tests {
 
     use super::*;
 
-    pub const HASH_SIZE: usize = 32;
+    const HASH_SIZE: usize = 32;
+    const ZERO_HASH: Hash = Hash([0u8; HASH_SIZE]);
 
     #[derive(PartialEq, Eq, Debug, Clone)]
     pub struct Hash(pub [u8; HASH_SIZE]);
@@ -656,10 +657,11 @@ mod tests {
         let data = b"hello world";
         let hash: [u8; HASH_SIZE] = sha3::Keccak256::digest(&data).into();
         let obj_ref = space.put_item(Hash(hash), 0).unwrap();
-        let hash_ref = space.get_item(ObjPtr::new_from_addr(4113)).unwrap();
-        // read before drop results in ref to empty array.
-        assert_eq!(hash_ref.as_ref(), [0; 32]);
         assert_eq!(obj_ref.as_ptr().addr(), 4113);
+        // create hash ptr from address and attempt to read dirty write.
+        let hash_ref = space.get_item(ObjPtr::new_from_addr(4113)).unwrap();
+        // read before flush results in zeroed hash
+        assert_eq!(hash_ref.as_ref(), ZERO_HASH.as_ref());
         // not cached
         assert!(obj_ref
             .cache
