@@ -123,6 +123,7 @@ impl CachedStore for DynamicMem {
         offset: u64,
         length: u64,
     ) -> Option<Box<dyn CachedView<DerefReturn = Vec<u8>>>> {
+        log::trace!("get_view: offset: {}, length: {}", offset, length);
         let offset = offset as usize;
         let length = length as usize;
         let size = offset + length;
@@ -141,13 +142,16 @@ impl CachedStore for DynamicMem {
     }
 
     fn get_shared(&self) -> Option<Box<dyn DerefMut<Target = dyn CachedStore>>> {
+        let id = self.id;
+        log::trace!("get_shared: id: {}", id);
         Some(Box::new(DynamicMemShared(Self {
             space: self.space.clone(),
-            id: self.id,
+            id,
         })))
     }
 
     fn write(&mut self, offset: u64, change: &[u8]) {
+        log::trace!("write: offset: {}, change: {:?}", offset, change);
         let offset = offset as usize;
         let length = change.len();
         let size = offset + length;
@@ -235,6 +239,11 @@ mod tests {
 
     #[test]
     fn test_dynamic_mem() {
+        let _ = env_logger::builder()
+            .filter_level(log::LevelFilter::Trace)
+            .is_test(true)
+            .try_init();
+
         let mut view = DynamicMemShared(DynamicMem::new(2, 0));
         let mem = view.deref_mut();
         mem.write(0, &[1, 2]);

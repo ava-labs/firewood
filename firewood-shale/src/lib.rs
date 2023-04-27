@@ -1,3 +1,4 @@
+use std::any::type_name;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -51,7 +52,7 @@ pub trait CachedView {
 /// backed by a cached/memory-mapped pool of the accessed intervals from the underlying linear
 /// persistent store. Reads could trigger disk reads to bring data into memory, but writes will
 /// *only* be visible in memory (it does not write back to the disk).
-pub trait CachedStore: Debug {
+pub trait CachedStore {
     /// Returns a handle that pins the `length` of bytes starting from `offset` and makes them
     /// directly accessible.
     fn get_view(
@@ -70,6 +71,7 @@ pub trait CachedStore: Debug {
 
 /// Opaque typed pointer in the 64-bit virtual addressable space.
 #[repr(C)]
+#[derive(Debug)]
 pub struct ObjPtr<T: ?Sized> {
     pub(crate) addr: u64,
     phantom: PhantomData<T>,
@@ -170,6 +172,11 @@ impl<T: ?Sized> Obj<T> {
     /// Write to the underlying object. Returns `Some(())` on success.
     #[inline]
     pub fn write(&mut self, modify: impl FnOnce(&mut T)) -> Option<()> {
+        log::trace!(
+            "writing object offset: {:?}, type: {}",
+            self.value.get_offset(),
+            type_name::<T>()
+        );
         modify(self.value.write());
         // if `estimate_mem_image` gives overflow, the object will not be written
         self.dirty = Some(self.value.estimate_mem_image()?);
@@ -188,6 +195,7 @@ impl<T: ?Sized> Obj<T> {
 
     pub fn flush_dirty(&mut self) {
         if !self.value.is_mem_mapped() {
+            log::trace!("flushing dirty object: {:?}", self.value.get_offset());
             if let Some(new_value_len) = self.dirty.take() {
                 let mut new_value = vec![0; new_value_len as usize];
                 self.value.write_mem_image(&mut new_value);
@@ -201,6 +209,7 @@ impl<T: ?Sized> Obj<T> {
 
 impl<T: ?Sized> Drop for Obj<T> {
     fn drop(&mut self) {
+        log::trace!("dropping object: {:?}", self.value.get_offset());
         self.flush_dirty()
     }
 }
@@ -229,6 +238,7 @@ impl<'a, T> ObjRef<'a, T> {
     }
 
     #[inline]
+    /// Write to the underlying object and also marks it as dirty.
     pub fn write(&mut self, modify: impl FnOnce(&mut T)) -> Option<()> {
         let inner = self.inner.as_mut().unwrap();
         inner.write(modify)?;
@@ -289,6 +299,7 @@ pub trait Storable {
 
 pub fn to_dehydrated(item: &dyn Storable) -> Vec<u8> {
     let mut buff = vec![0; item.dehydrated_len() as usize];
+    log::trace!("dehydrated_len {}", buff.len());
     item.dehydrate(&mut buff);
     buff
 }
@@ -474,6 +485,7 @@ struct ObjCacheInner<T: ?Sized> {
 }
 
 /// [ObjRef] pool that is used by [ShaleStore] implementation to construct [ObjRef]s.
+#[derive(Debug)]
 pub struct ObjCache<T: ?Sized>(Rc<UnsafeCell<ObjCacheInner<T>>>);
 
 impl<T> ObjCache<T> {

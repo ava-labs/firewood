@@ -1,3 +1,5 @@
+use crate::ObjCache;
+
 use super::{CachedStore, Obj, ObjPtr, ObjRef, ShaleError, ShaleStore, Storable, StoredView};
 use std::cell::UnsafeCell;
 use std::io::{Cursor, Write};
@@ -75,7 +77,7 @@ impl Storable for CompactFooter {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct CompactDescriptor {
     payload_size: u64,
     haddr: u64, // pointer to the payload of freed space
@@ -109,6 +111,7 @@ impl Storable for CompactDescriptor {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct CompactSpaceHeader {
     meta_space_tail: u64,
     compact_space_tail: u64,
@@ -155,7 +158,7 @@ impl CompactSpaceHeader {
 }
 
 impl Storable for CompactSpaceHeader {
-    fn hydrate<T: CachedStore + std::fmt::Debug>(addr: u64, mem: &T) -> Result<Self, ShaleError> {
+    fn hydrate<T: CachedStore>(addr: u64, mem: &T) -> Result<Self, ShaleError> {
         let raw = mem
             .get_view(addr, Self::MSIZE)
             .ok_or(ShaleError::LinearCachedStoreError)?;
@@ -226,6 +229,7 @@ impl<T> std::ops::DerefMut for ObjPtrField<T> {
     }
 }
 
+#[derive(Debug)]
 struct U64Field(u64);
 
 impl U64Field {
@@ -266,7 +270,7 @@ struct CompactSpaceInner<T: Storable, M: CachedStore> {
     meta_space: Rc<M>,
     compact_space: Rc<M>,
     header: CompactSpaceHeaderSliced,
-    obj_cache: super::ObjCache<T>,
+    obj_cache: ObjCache<T>,
     alloc_max_walk: u64,
     regn_nbit: u64,
 }
@@ -319,6 +323,7 @@ impl<T: Storable, M: CachedStore> CompactSpaceInner<T, M> {
     }
 
     fn free(&mut self, addr: u64) -> Result<(), ShaleError> {
+        log::trace!("freeing {}", addr);
         let hsize = CompactHeader::MSIZE;
         let fsize = CompactFooter::MSIZE;
         let regn_size = 1 << self.regn_nbit;
@@ -392,6 +397,7 @@ impl<T: Storable, M: CachedStore> CompactSpaceInner<T, M> {
     }
 
     fn alloc_from_freed(&mut self, length: u64) -> Result<Option<u64>, ShaleError> {
+        log::trace!("alloc_from_freed: length={}", length);
         let tail = **self.header.meta_space_tail;
         if tail == self.header.base_addr.addr {
             return Ok(None);
@@ -487,6 +493,7 @@ impl<T: Storable, M: CachedStore> CompactSpaceInner<T, M> {
     }
 
     fn alloc_new(&mut self, length: u64) -> Result<u64, ShaleError> {
+        log::trace!("alloc_new: length={}", length);
         let regn_size = 1 << self.regn_nbit;
         let total_length = CompactHeader::MSIZE + length + CompactFooter::MSIZE;
         let mut offset = **self.header.compact_space_tail;
@@ -511,6 +518,7 @@ impl<T: Storable, M: CachedStore> CompactSpaceInner<T, M> {
     }
 }
 
+#[derive(Debug)]
 pub struct CompactSpace<T: Storable, M: CachedStore> {
     inner: UnsafeCell<CompactSpaceInner<T, M>>,
 }
@@ -520,7 +528,7 @@ impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
         meta_space: Rc<M>,
         compact_space: Rc<M>,
         header: Obj<CompactSpaceHeader>,
-        obj_cache: super::ObjCache<T>,
+        obj_cache: ObjCache<T>,
         alloc_max_walk: u64,
         regn_nbit: u64,
     ) -> Result<Self, ShaleError> {
@@ -540,6 +548,7 @@ impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
 
 impl<T: Storable + 'static, M: CachedStore> ShaleStore<T> for CompactSpace<T, M> {
     fn put_item(&'_ self, item: T, extra: u64) -> Result<ObjRef<'_, T>, ShaleError> {
+        log::trace!("put_item: extra={}", extra);
         let size = item.dehydrated_len() + extra;
         let inner = unsafe { &mut *self.inner.get() };
         let ptr: ObjPtr<T> =
@@ -632,27 +641,12 @@ mod tests {
 
     #[test]
     fn test_space_item() {
-        const META_SIZE: u64 = 0x10000;
-        const COMPACT_SIZE: u64 = 0x10000;
-        const RESERVED: u64 = 0x1000;
+        let _ = env_logger::builder()
+            .filter_level(log::LevelFilter::Trace)
+            .is_test(true)
+            .try_init();
 
-        let mut dm = DynamicMem::new(META_SIZE, 0x0);
-
-        // initialize compact space
-        let compact_header: ObjPtr<CompactSpaceHeader> = ObjPtr::new_from_addr(0x1);
-        dm.write(
-            compact_header.addr(),
-            &crate::to_dehydrated(&CompactSpaceHeader::new(RESERVED, RESERVED)),
-        );
-        let compact_header =
-            StoredView::ptr_to_obj(&dm, compact_header, CompactHeader::MSIZE).unwrap();
-        let mem_meta = Rc::new(dm);
-        let mem_payload = Rc::new(DynamicMem::new(COMPACT_SIZE, 0x1));
-
-        let cache: ObjCache<Hash> = ObjCache::new(1);
-        let space =
-            CompactSpace::new(mem_meta, mem_payload, compact_header, cache, 10, 16).unwrap();
-
+        let mut space = new_hash_space();
         // initial write
         let data = b"hello world";
         let hash: [u8; HASH_SIZE] = sha3::Keccak256::digest(&data).into();
@@ -692,5 +686,40 @@ mod tests {
                 .as_ref(),
             hash
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "!header.is_freed")]
+    fn test_header_freed() {
+        let _ = env_logger::builder()
+            .filter_level(log::LevelFilter::Trace)
+            .is_test(true)
+            .try_init();
+
+        let mut space = new_hash_space();
+        space.free_item(ObjPtr::new_from_addr(4113)).unwrap();
+        space.free_item(ObjPtr::new_from_addr(4113)).unwrap();
+    }
+
+    fn new_hash_space() -> CompactSpace<Hash, DynamicMem> {
+        const META_SIZE: u64 = 0x10000;
+        const COMPACT_SIZE: u64 = 0x10000;
+        const RESERVED: u64 = 0x1000;
+
+        let mut dm = DynamicMem::new(META_SIZE, 0x0);
+
+        // initialize compact space
+        let compact_header: ObjPtr<CompactSpaceHeader> = ObjPtr::new_from_addr(0x1);
+        dm.write(
+            compact_header.addr(),
+            &crate::to_dehydrated(&CompactSpaceHeader::new(RESERVED, RESERVED)),
+        );
+        let compact_header =
+            StoredView::ptr_to_obj(&dm, compact_header, CompactHeader::MSIZE).unwrap();
+        let mem_meta = Rc::new(dm);
+        let mem_payload = Rc::new(DynamicMem::new(COMPACT_SIZE, 0x1));
+
+        let cache: ObjCache<Hash> = ObjCache::new(1);
+        CompactSpace::new(mem_meta, mem_payload, compact_header, cache, 10, 16).unwrap()
     }
 }
