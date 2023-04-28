@@ -28,9 +28,17 @@ impl Storable for CompactHeader {
                 offset: addr,
                 size: Self::MSIZE,
             })?;
-        let payload_size = u64::from_le_bytes(raw.as_deref()[..8].try_into().unwrap());
+        let payload_size = u64::from_le_bytes(
+            raw.as_deref()[..8]
+                .try_into()
+                .map_err(ShaleError::InvalidSlice)?,
+        );
         let is_freed = raw.as_deref()[8] != 0;
-        let desc_addr = u64::from_le_bytes(raw.as_deref()[9..17].try_into().unwrap());
+        let desc_addr = u64::from_le_bytes(
+            raw.as_deref()[9..17]
+                .try_into()
+                .map_err(ShaleError::InvalidSlice)?,
+        );
         Ok(Self {
             payload_size,
             is_freed,
@@ -675,7 +683,9 @@ mod tests {
                     size: Self::MSIZE,
                 })?;
             Ok(Self(
-                raw.as_deref()[..Self::MSIZE as usize].try_into().unwrap(),
+                raw.as_deref()[..Self::MSIZE as usize]
+                    .try_into()
+                    .map_err(ShaleError::InvalidSlice)?,
             ))
         }
 
