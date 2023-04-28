@@ -238,7 +238,8 @@ impl Storable for DBHeader {
 
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {
         let mut cur = Cursor::new(to);
-        cur.write_all(&self.acc_root.addr().to_le_bytes()).unwrap();
+        cur.write_all(&self.acc_root.addr().to_le_bytes())
+            .map_err(ShaleError::Io)?;
         cur.write_all(&self.kv_root.addr().to_le_bytes())
             .map_err(ShaleError::Io)
     }

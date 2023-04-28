@@ -18,17 +18,17 @@ pub mod util;
 
 #[derive(Debug, Error)]
 pub enum ShaleError {
-    #[error("address already in use: {addr:?} obj: {obj_type:?}")]
+    #[error("obj invalid: {addr:?} obj: {obj_type:?} error: {error:?}")]
     InvalidObj {
         addr: u64,
         obj_type: &'static str,
         error: &'static str,
     },
-    #[error("invalid address (expected {expected:?}, found {found:?})")]
+    #[error("invalid address length expected: {expected:?} found: {found:?})")]
     InvalidAddressLength { expected: u64, found: u64 },
     #[error("invalid node type")]
     InvalidNodeType,
-    #[error("create view failed: offset: {offset:?} size: {size:?}")]
+    #[error("failed to create view: offset: {offset:?} size: {size:?}")]
     InvalidCacheView { offset: u64, size: u64 },
     #[error("io error: `{0}`")]
     Io(std::io::Error),

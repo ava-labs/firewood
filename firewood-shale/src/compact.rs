@@ -288,10 +288,7 @@ impl Storable for U64Field {
                 offset: addr,
                 size: Self::MSIZE,
             })?;
-        let u64_field = u64::from_le_bytes(
-            <[u8; 8]>::try_from(&raw.as_deref()[0..8]).map_err(ShaleError::InvalidSlice)?,
-        );
-        Ok(Self(u64_field))
+        Ok(Self(u64::from_le_bytes(raw.as_deref().try_into().unwrap())))
     }
 
     fn dehydrated_len(&self) -> u64 {
@@ -627,8 +624,8 @@ impl<T: Storable + 'static, M: CachedStore> ShaleStore<T> for CompactSpace<T, M>
         }
         if ptr.addr() < CompactSpaceHeader::MSIZE {
             return Err(ShaleError::InvalidAddressLength {
-                expected: ptr.addr(),
-                found: CompactSpaceHeader::MSIZE,
+                expected: CompactSpaceHeader::MSIZE,
+                found: ptr.addr(),
             });
         }
         let h = inner.get_header(ObjPtr::new(ptr.addr() - CompactHeader::MSIZE))?;

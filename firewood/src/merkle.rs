@@ -506,11 +506,10 @@ impl Storable for Node {
         };
         match meta_raw.as_deref()[33] {
             Self::BRANCH_NODE => {
-                let offset = addr + META_SIZE;
                 let branch_header_size = NBRANCH as u64 * 8 + 4;
-                let node_raw = mem.get_view(offset, branch_header_size).ok_or(
+                let node_raw = mem.get_view(addr + META_SIZE, branch_header_size).ok_or(
                     ShaleError::InvalidCacheView {
-                        offset,
+                        offset: addr + META_SIZE,
                         size: branch_header_size,
                     },
                 )?;
@@ -532,9 +531,9 @@ impl Storable for Node {
                     None
                 } else {
                     Some(Data(
-                        mem.get_view(offset + branch_header_size, raw_len)
+                        mem.get_view(addr + META_SIZE + branch_header_size, raw_len)
                             .ok_or(ShaleError::InvalidCacheView {
-                                offset: offset + branch_header_size,
+                                offset: addr + META_SIZE + branch_header_size,
                                 size: raw_len,
                             })?
                             .as_deref(),
@@ -584,13 +583,12 @@ impl Storable for Node {
             }
             Self::EXT_NODE => {
                 let ext_header_size = 1 + 8;
-                let offset = addr + META_SIZE;
-                let node_raw =
-                    mem.get_view(offset, ext_header_size)
-                        .ok_or(ShaleError::InvalidCacheView {
-                            offset,
-                            size: ext_header_size,
-                        })?;
+                let node_raw = mem.get_view(addr + META_SIZE, ext_header_size).ok_or(
+                    ShaleError::InvalidCacheView {
+                        offset: addr + META_SIZE,
+                        size: ext_header_size,
+                    },
+                )?;
                 let mut cur = Cursor::new(node_raw.as_deref());
                 let mut buff = [0; 8];
                 cur.read_exact(&mut buff[..1]).map_err(ShaleError::Io)?;
@@ -598,9 +596,9 @@ impl Storable for Node {
                 cur.read_exact(&mut buff).map_err(ShaleError::Io)?;
                 let ptr = u64::from_le_bytes(buff);
                 let nibbles: Vec<_> = to_nibbles(
-                    &mem.get_view(offset + ext_header_size, path_len)
+                    &mem.get_view(addr + META_SIZE + ext_header_size, path_len)
                         .ok_or(ShaleError::InvalidCacheView {
-                            offset: offset + ext_header_size,
+                            offset: addr + META_SIZE + ext_header_size,
                             size: path_len,
                         })?
                         .as_deref(),
@@ -619,13 +617,12 @@ impl Storable for Node {
                 cur.read_exact(&mut buff).map_err(ShaleError::Io)?;
                 let rlp_len = buff[0] as u64;
                 let rlp: Option<Vec<u8>> = if rlp_len != 0 {
-                    let offset = addr + META_SIZE + ext_header_size + path_len + 1;
-                    let rlp_raw =
-                        mem.get_view(offset, rlp_len)
-                            .ok_or(ShaleError::InvalidCacheView {
-                                offset,
-                                size: rlp_len,
-                            })?;
+                    let rlp_raw = mem
+                        .get_view(addr + META_SIZE + ext_header_size + path_len + 1, rlp_len)
+                        .ok_or(ShaleError::InvalidCacheView {
+                            offset: addr + META_SIZE + ext_header_size + path_len + 1,
+                            size: rlp_len,
+                        })?;
 
                     Some(rlp_raw.as_deref()[0..].to_vec())
                 } else {
@@ -640,13 +637,12 @@ impl Storable for Node {
             }
             Self::LEAF_NODE => {
                 let leaf_header_size = 1 + 4;
-                let offset = addr + META_SIZE;
-                let node_raw =
-                    mem.get_view(offset, leaf_header_size)
-                        .ok_or(ShaleError::InvalidCacheView {
-                            offset,
-                            size: leaf_header_size,
-                        })?;
+                let node_raw = mem.get_view(addr + META_SIZE, leaf_header_size).ok_or(
+                    ShaleError::InvalidCacheView {
+                        offset: addr + META_SIZE,
+                        size: leaf_header_size,
+                    },
+                )?;
                 let mut cur = Cursor::new(node_raw.as_deref());
                 let mut buff = [0; 4];
                 cur.read_exact(&mut buff[..1]).map_err(ShaleError::Io)?;
@@ -654,9 +650,9 @@ impl Storable for Node {
                 cur.read_exact(&mut buff).map_err(ShaleError::Io)?;
                 let data_len = u32::from_le_bytes(buff) as u64;
                 let remainder = mem
-                    .get_view(offset + leaf_header_size, path_len + data_len)
+                    .get_view(addr + META_SIZE + leaf_header_size, path_len + data_len)
                     .ok_or(ShaleError::InvalidCacheView {
-                        offset: offset + leaf_header_size,
+                        offset: addr + META_SIZE + leaf_header_size,
                         size: path_len + data_len,
                     })?;
                 let nibbles: Vec<_> =
@@ -711,11 +707,11 @@ impl Storable for Node {
         let mut attrs = 0;
         attrs |= match self.root_hash.get() {
             Some(h) => {
-                cur.write_all(&h.0).unwrap();
+                cur.write_all(&h.0).map_err(ShaleError::Io)?;
                 Node::ROOT_HASH_VALID_BIT
             }
             None => {
-                cur.write_all(&[0; 32]).unwrap();
+                cur.write_all(&[0; 32]).map_err(ShaleError::Io)?;
                 0
             }
         };
@@ -733,15 +729,17 @@ impl Storable for Node {
                         Some(p) => p.addr().to_le_bytes(),
                         None => 0u64.to_le_bytes(),
                     })
-                    .unwrap();
+                    .map_err(ShaleError::Io)?;
                 }
                 match &n.value {
                     Some(val) => {
-                        cur.write_all(&(val.len() as u32).to_le_bytes()).unwrap();
-                        cur.write_all(val).unwrap();
+                        cur.write_all(&(val.len() as u32).to_le_bytes())
+                            .map_err(ShaleError::Io)?;
+                        cur.write_all(val).map_err(ShaleError::Io)?
                     }
                     None => {
-                        cur.write_all(&u32::MAX.to_le_bytes()).unwrap();
+                        cur.write_all(&u32::MAX.to_le_bytes())
+                            .map_err(ShaleError::Io)?;
                     }
                 }
                 // Since child eth rlp will only be unset after initialization (only used for range proof),
@@ -750,9 +748,9 @@ impl Storable for Node {
                     match rlp {
                         Some(v) => {
                             cur.write_all(&[v.len() as u8]).map_err(ShaleError::Io)?;
-                            return cur.write_all(v).map_err(ShaleError::Io);
+                            cur.write_all(v).map_err(ShaleError::Io)?
                         }
-                        None => return cur.write_all(&0u8.to_le_bytes()).map_err(ShaleError::Io),
+                        None => cur.write_all(&0u8.to_le_bytes()).map_err(ShaleError::Io)?,
                     }
                 }
                 Ok(())
