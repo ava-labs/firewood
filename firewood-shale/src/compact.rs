@@ -28,17 +28,11 @@ impl Storable for CompactHeader {
                 offset: addr,
                 size: Self::MSIZE,
             })?;
-        let payload_size = u64::from_le_bytes(
-            raw.as_deref()[..8]
-                .try_into()
-                .map_err(ShaleError::InvalidSlice)?,
-        );
+        let payload_size =
+            u64::from_le_bytes(raw.as_deref()[..8].try_into().expect("invalid slice"));
         let is_freed = raw.as_deref()[8] != 0;
-        let desc_addr = u64::from_le_bytes(
-            raw.as_deref()[9..17]
-                .try_into()
-                .map_err(ShaleError::InvalidSlice)?,
-        );
+        let desc_addr =
+            u64::from_le_bytes(raw.as_deref()[9..17].try_into().expect("invalid slice"));
         Ok(Self {
             payload_size,
             is_freed,
@@ -110,16 +104,9 @@ impl Storable for CompactDescriptor {
                 offset: addr,
                 size: Self::MSIZE,
             })?;
-        let payload_size = u64::from_le_bytes(
-            raw.as_deref()[..8]
-                .try_into()
-                .map_err(ShaleError::InvalidSlice)?,
-        );
-        let haddr = u64::from_le_bytes(
-            raw.as_deref()[8..]
-                .try_into()
-                .map_err(ShaleError::InvalidSlice)?,
-        );
+        let payload_size =
+            u64::from_le_bytes(raw.as_deref()[..8].try_into().expect("invalid slice"));
+        let haddr = u64::from_le_bytes(raw.as_deref()[8..].try_into().expect("invalid slice"));
         Ok(Self {
             payload_size,
             haddr,
@@ -192,26 +179,14 @@ impl Storable for CompactSpaceHeader {
                 offset: addr,
                 size: Self::MSIZE,
             })?;
-        let meta_space_tail = u64::from_le_bytes(
-            raw.as_deref()[..8]
-                .try_into()
-                .map_err(ShaleError::InvalidSlice)?,
-        );
-        let compact_space_tail = u64::from_le_bytes(
-            raw.as_deref()[8..16]
-                .try_into()
-                .map_err(ShaleError::InvalidSlice)?,
-        );
-        let base_addr = u64::from_le_bytes(
-            raw.as_deref()[16..24]
-                .try_into()
-                .map_err(ShaleError::InvalidSlice)?,
-        );
-        let alloc_addr = u64::from_le_bytes(
-            raw.as_deref()[24..]
-                .try_into()
-                .map_err(ShaleError::InvalidSlice)?,
-        );
+        let meta_space_tail =
+            u64::from_le_bytes(raw.as_deref()[..8].try_into().expect("invalid slice"));
+        let compact_space_tail =
+            u64::from_le_bytes(raw.as_deref()[8..16].try_into().expect("invalid slice"));
+        let base_addr =
+            u64::from_le_bytes(raw.as_deref()[16..24].try_into().expect("invalid slice"));
+        let alloc_addr =
+            u64::from_le_bytes(raw.as_deref()[24..].try_into().expect("invalid slice"));
         Ok(Self {
             meta_space_tail,
             compact_space_tail,
@@ -253,7 +228,7 @@ impl<T> Storable for ObjPtrField<T> {
                 size: Self::MSIZE,
             })?;
         let obj_ptr = ObjPtr::new_from_addr(u64::from_le_bytes(
-            <[u8; 8]>::try_from(&raw.as_deref()[0..8]).map_err(ShaleError::InvalidSlice)?,
+            <[u8; 8]>::try_from(&raw.as_deref()[0..8]).expect("invalid slice"),
         ));
         Ok(Self(obj_ptr))
     }
@@ -685,7 +660,7 @@ mod tests {
             Ok(Self(
                 raw.as_deref()[..Self::MSIZE as usize]
                     .try_into()
-                    .map_err(ShaleError::InvalidSlice)?,
+                    .expect("invalid slice"),
             ))
         }
 

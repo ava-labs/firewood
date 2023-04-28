@@ -216,16 +216,8 @@ impl Storable for DBHeader {
                 offset: addr,
                 size: Self::MSIZE,
             })?;
-        let acc_root = u64::from_le_bytes(
-            raw.as_deref()[..8]
-                .try_into()
-                .map_err(ShaleError::InvalidSlice)?,
-        );
-        let kv_root = u64::from_le_bytes(
-            raw.as_deref()[8..]
-                .try_into()
-                .map_err(ShaleError::InvalidSlice)?,
-        );
+        let acc_root = u64::from_le_bytes(raw.as_deref()[..8].try_into().expect("invalid slice"));
+        let kv_root = u64::from_le_bytes(raw.as_deref()[8..].try_into().expect("invalid slice"));
         Ok(Self {
             acc_root: ObjPtr::new_from_addr(acc_root),
             kv_root: ObjPtr::new_from_addr(kv_root),

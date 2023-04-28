@@ -496,7 +496,7 @@ impl Storable for Node {
             Some(Hash(
                 meta_raw.as_deref()[0..32]
                     .try_into()
-                    .map_err(ShaleError::InvalidSlice)?,
+                    .expect("invalid slice"),
             ))
         };
         let eth_rlp_long = if attrs & Node::ETH_RLP_LONG_VALID_BIT == 0 {
@@ -525,8 +525,7 @@ impl Storable for Node {
                 }
                 cur.read_exact(&mut buff[..4]).map_err(ShaleError::Io)?;
                 let raw_len =
-                    u32::from_le_bytes(buff[..4].try_into().map_err(ShaleError::InvalidSlice)?)
-                        as u64;
+                    u32::from_le_bytes(buff[..4].try_into().expect("invalid slice")) as u64;
                 let value = if raw_len == u32::MAX as u64 {
                     None
                 } else {

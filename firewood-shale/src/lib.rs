@@ -32,9 +32,7 @@ pub enum ShaleError {
     #[error("failed to create view: offset: {offset:?} size: {size:?}")]
     InvalidCacheView { offset: u64, size: u64 },
     #[error("io error: `{0}`")]
-    Io(std::io::Error),
-    #[error("failed to convert to array: {0}")]
-    InvalidSlice(#[from] TryFromSliceError),
+    Io(#[from] std::io::Error),
 }
 
 pub type SpaceID = u8;
