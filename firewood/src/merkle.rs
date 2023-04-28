@@ -77,7 +77,7 @@ impl Storable for Hash {
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {
         Cursor::new(to)
             .write_all(&self.0)
-            .map_err(|e| ShaleError::Io(e))
+            .map_err(ShaleError::Io)
     }
 }
 
@@ -772,8 +772,7 @@ impl Storable for Node {
                 cur.write_all(&[path.len() as u8])?;
                 cur.write_all(&(n.1.len() as u32).to_le_bytes())?;
                 cur.write_all(&path)?;
-                cur.write_all(&n.1)?;
-                Ok(())
+                cur.write_all(&n.1).map_err(ShaleError::Io)
             }
         }
     }

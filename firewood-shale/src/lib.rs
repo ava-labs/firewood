@@ -30,14 +30,8 @@ pub enum ShaleError {
     InvalidNodeType,
     #[error("failed to create view: offset: {offset:?} size: {size:?}")]
     InvalidCacheView { offset: u64, size: u64 },
-    #[error("io error: `{0}`")]
-    Io(std::io::Error),
-}
-
-impl From<std::io::Error> for ShaleError {
-    fn from(e: std::io::Error) -> Self {
-        ShaleError::Io(e)
-    }
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 pub type SpaceID = u8;
