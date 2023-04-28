@@ -46,12 +46,10 @@ impl Storable for CompactHeader {
 
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {
         let mut cur = Cursor::new(to);
-        cur.write_all(&self.payload_size.to_le_bytes())
-            .map_err(ShaleError::Io)?;
-        cur.write_all(&[if self.is_freed { 1 } else { 0 }])
-            .map_err(ShaleError::Io)?;
-        cur.write_all(&self.desc_addr.addr().to_le_bytes())
-            .map_err(ShaleError::Io)
+        cur.write_all(&self.payload_size.to_le_bytes())?;
+        cur.write_all(&[if self.is_freed { 1 } else { 0 }])?;
+        cur.write_all(&self.desc_addr.addr().to_le_bytes())?;
+        Ok(())
     }
 }
 
@@ -80,9 +78,8 @@ impl Storable for CompactFooter {
     }
 
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {
-        Cursor::new(to)
-            .write_all(&self.payload_size.to_le_bytes())
-            .map_err(ShaleError::Io)
+        Cursor::new(to).write_all(&self.payload_size.to_le_bytes())?;
+        Ok(())
     }
 }
 
@@ -119,10 +116,9 @@ impl Storable for CompactDescriptor {
 
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {
         let mut cur = Cursor::new(to);
-        cur.write_all(&self.payload_size.to_le_bytes())
-            .map_err(ShaleError::Io)?;
-        cur.write_all(&self.haddr.to_le_bytes())
-            .map_err(ShaleError::Io)
+        cur.write_all(&self.payload_size.to_le_bytes())?;
+        cur.write_all(&self.haddr.to_le_bytes())?;
+        Ok(())
     }
 }
 
@@ -201,14 +197,10 @@ impl Storable for CompactSpaceHeader {
 
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {
         let mut cur = Cursor::new(to);
-        cur.write_all(&self.meta_space_tail.to_le_bytes())
-            .map_err(ShaleError::Io)?;
-        cur.write_all(&self.compact_space_tail.to_le_bytes())
-            .map_err(ShaleError::Io)?;
-        cur.write_all(&self.base_addr.addr().to_le_bytes())
-            .map_err(ShaleError::Io)?;
-        cur.write_all(&self.alloc_addr.addr().to_le_bytes())
-            .map_err(ShaleError::Io)?;
+        cur.write_all(&self.meta_space_tail.to_le_bytes())?;
+        cur.write_all(&self.compact_space_tail.to_le_bytes())?;
+        cur.write_all(&self.base_addr.addr().to_le_bytes())?;
+        cur.write_all(&self.alloc_addr.addr().to_le_bytes())?;
         Ok(())
     }
 }
@@ -234,9 +226,8 @@ impl<T> Storable for ObjPtrField<T> {
     }
 
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {
-        Cursor::new(to)
-            .write_all(&self.0.addr().to_le_bytes())
-            .map_err(ShaleError::Io)
+        Cursor::new(to).write_all(&self.0.addr().to_le_bytes())?;
+        Ok(())
     }
 
     fn dehydrated_len(&self) -> u64 {
@@ -279,9 +270,8 @@ impl Storable for U64Field {
     }
 
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {
-        Cursor::new(to)
-            .write_all(&self.0.to_le_bytes())
-            .map_err(ShaleError::Io)
+        Cursor::new(to).write_all(&self.0.to_le_bytes())?;
+        Ok(())
     }
 }
 
@@ -670,7 +660,8 @@ mod tests {
 
         fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {
             let mut cur = to;
-            cur.write_all(&self.0).map_err(ShaleError::Io)
+            cur.write_all(&self.0)?;
+            Ok(())
         }
     }
 

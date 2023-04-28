@@ -1,5 +1,4 @@
 use std::any::type_name;
-use std::array::TryFromSliceError;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
@@ -32,7 +31,13 @@ pub enum ShaleError {
     #[error("failed to create view: offset: {offset:?} size: {size:?}")]
     InvalidCacheView { offset: u64, size: u64 },
     #[error("io error: `{0}`")]
-    Io(#[from] std::io::Error),
+    Io(std::io::Error),
+}
+
+impl From<std::io::Error> for ShaleError {
+    fn from(e: std::io::Error) -> Self {
+        ShaleError::Io(e)
+    }
 }
 
 pub type SpaceID = u8;
@@ -465,9 +470,8 @@ impl<T> Storable for ObjPtr<T> {
 
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {
         use std::io::{Cursor, Write};
-        Cursor::new(to)
-            .write_all(&self.addr().to_le_bytes())
-            .map_err(ShaleError::Io)
+        Cursor::new(to).write_all(&self.addr().to_le_bytes())?;
+        Ok(())
     }
 
     fn hydrate<U: CachedStore>(addr: u64, mem: &U) -> Result<Self, ShaleError> {

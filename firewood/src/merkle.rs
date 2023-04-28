@@ -75,7 +75,9 @@ impl Storable for Hash {
     }
 
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {
-        Cursor::new(to).write_all(&self.0).map_err(ShaleError::Io)
+        Cursor::new(to)
+            .write_all(&self.0)
+            .map_err(|e| ShaleError::Io(e))
     }
 }
 
@@ -517,13 +519,13 @@ impl Storable for Node {
                 let mut chd = [None; NBRANCH];
                 let mut buff = [0; 8];
                 for chd in chd.iter_mut() {
-                    cur.read_exact(&mut buff).map_err(ShaleError::Io)?;
+                    cur.read_exact(&mut buff)?;
                     let addr = u64::from_le_bytes(buff);
                     if addr != 0 {
                         *chd = Some(ObjPtr::new_from_addr(addr))
                     }
                 }
-                cur.read_exact(&mut buff[..4]).map_err(ShaleError::Io)?;
+                cur.read_exact(&mut buff[..4])?;
                 let raw_len =
                     u32::from_le_bytes(buff[..4].try_into().expect("invalid slice")) as u64;
                 let value = if raw_len == u32::MAX as u64 {
@@ -554,7 +556,7 @@ impl Storable for Node {
                         },
                     )?;
                     cur = Cursor::new(rlp_len_raw.as_deref());
-                    cur.read_exact(&mut buff).map_err(ShaleError::Io)?;
+                    cur.read_exact(&mut buff)?;
                     let rlp_len = buff[0] as u64;
                     cur_rlp_len += 1;
                     if rlp_len != 0 {
@@ -590,9 +592,9 @@ impl Storable for Node {
                 )?;
                 let mut cur = Cursor::new(node_raw.as_deref());
                 let mut buff = [0; 8];
-                cur.read_exact(&mut buff[..1]).map_err(ShaleError::Io)?;
+                cur.read_exact(&mut buff[..1])?;
                 let path_len = buff[0] as u64;
-                cur.read_exact(&mut buff).map_err(ShaleError::Io)?;
+                cur.read_exact(&mut buff)?;
                 let ptr = u64::from_le_bytes(buff);
                 let nibbles: Vec<_> = to_nibbles(
                     &mem.get_view(addr + META_SIZE + ext_header_size, path_len)
@@ -613,7 +615,7 @@ impl Storable for Node {
                         size: 1,
                     })?;
                 cur = Cursor::new(rlp_len_raw.as_deref());
-                cur.read_exact(&mut buff).map_err(ShaleError::Io)?;
+                cur.read_exact(&mut buff)?;
                 let rlp_len = buff[0] as u64;
                 let rlp: Option<Vec<u8>> = if rlp_len != 0 {
                     let rlp_raw = mem
@@ -644,9 +646,9 @@ impl Storable for Node {
                 )?;
                 let mut cur = Cursor::new(node_raw.as_deref());
                 let mut buff = [0; 4];
-                cur.read_exact(&mut buff[..1]).map_err(ShaleError::Io)?;
+                cur.read_exact(&mut buff[..1])?;
                 let path_len = buff[0] as u64;
-                cur.read_exact(&mut buff).map_err(ShaleError::Io)?;
+                cur.read_exact(&mut buff)?;
                 let data_len = u32::from_le_bytes(buff) as u64;
                 let remainder = mem
                     .get_view(addr + META_SIZE + leaf_header_size, path_len + data_len)
@@ -706,11 +708,11 @@ impl Storable for Node {
         let mut attrs = 0;
         attrs |= match self.root_hash.get() {
             Some(h) => {
-                cur.write_all(&h.0).map_err(ShaleError::Io)?;
+                cur.write_all(&h.0)?;
                 Node::ROOT_HASH_VALID_BIT
             }
             None => {
-                cur.write_all(&[0; 32]).map_err(ShaleError::Io)?;
+                cur.write_all(&[0; 32])?;
                 0
             }
         };
@@ -727,18 +729,15 @@ impl Storable for Node {
                     cur.write_all(&match c {
                         Some(p) => p.addr().to_le_bytes(),
                         None => 0u64.to_le_bytes(),
-                    })
-                    .map_err(ShaleError::Io)?;
+                    })?;
                 }
                 match &n.value {
                     Some(val) => {
-                        cur.write_all(&(val.len() as u32).to_le_bytes())
-                            .map_err(ShaleError::Io)?;
-                        cur.write_all(val).map_err(ShaleError::Io)?
+                        cur.write_all(&(val.len() as u32).to_le_bytes())?;
+                        cur.write_all(val)?
                     }
                     None => {
-                        cur.write_all(&u32::MAX.to_le_bytes())
-                            .map_err(ShaleError::Io)?;
+                        cur.write_all(&u32::MAX.to_le_bytes())?;
                     }
                 }
                 // Since child eth rlp will only be unset after initialization (only used for range proof),
@@ -746,36 +745,34 @@ impl Storable for Node {
                 for rlp in n.chd_eth_rlp.iter() {
                     match rlp {
                         Some(v) => {
-                            cur.write_all(&[v.len() as u8]).map_err(ShaleError::Io)?;
-                            cur.write_all(v).map_err(ShaleError::Io)?
+                            cur.write_all(&[v.len() as u8])?;
+                            cur.write_all(v)?
                         }
-                        None => cur.write_all(&0u8.to_le_bytes()).map_err(ShaleError::Io)?,
+                        None => cur.write_all(&0u8.to_le_bytes())?,
                     }
                 }
                 Ok(())
             }
             NodeType::Extension(n) => {
-                cur.write_all(&[Self::EXT_NODE]).map_err(ShaleError::Io)?;
+                cur.write_all(&[Self::EXT_NODE])?;
                 let path: Vec<u8> = from_nibbles(&n.0.encode(false)).collect();
-                cur.write_all(&[path.len() as u8]).map_err(ShaleError::Io)?;
-                cur.write_all(&n.1.addr().to_le_bytes())
-                    .map_err(ShaleError::Io)?;
-                cur.write_all(&path).map_err(ShaleError::Io)?;
+                cur.write_all(&[path.len() as u8])?;
+                cur.write_all(&n.1.addr().to_le_bytes())?;
+                cur.write_all(&path)?;
                 if n.2.is_some() {
                     let rlp = n.2.as_ref().unwrap();
-                    cur.write_all(&[rlp.len() as u8]).map_err(ShaleError::Io)?;
-                    return cur.write_all(rlp).map_err(ShaleError::Io);
+                    cur.write_all(&[rlp.len() as u8])?;
+                    cur.write_all(rlp)?;
                 }
                 Ok(())
             }
             NodeType::Leaf(n) => {
-                cur.write_all(&[Self::LEAF_NODE]).map_err(ShaleError::Io)?;
+                cur.write_all(&[Self::LEAF_NODE])?;
                 let path: Vec<u8> = from_nibbles(&n.0.encode(true)).collect();
-                cur.write_all(&[path.len() as u8]).map_err(ShaleError::Io)?;
-                cur.write_all(&(n.1.len() as u32).to_le_bytes())
-                    .map_err(ShaleError::Io)?;
-                cur.write_all(&path).map_err(ShaleError::Io)?;
-                cur.write_all(&n.1).map_err(ShaleError::Io)?;
+                cur.write_all(&[path.len() as u8])?;
+                cur.write_all(&(n.1.len() as u32).to_le_bytes())?;
+                cur.write_all(&path)?;
+                cur.write_all(&n.1)?;
                 Ok(())
             }
         }
