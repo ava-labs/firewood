@@ -14,6 +14,7 @@ use bytemuck::{cast_slice, AnyBitPattern};
 use parking_lot::{Mutex, RwLock};
 #[cfg(feature = "eth")]
 use primitive_types::U256;
+use shale::ShaleError;
 use shale::{compact::CompactSpaceHeader, CachedStore, ObjPtr, SpaceID, Storable, StoredView};
 use typed_builder::TypedBuilder;
 
@@ -211,9 +212,20 @@ impl Storable for DBHeader {
     fn hydrate<T: CachedStore>(addr: u64, mem: &T) -> Result<Self, shale::ShaleError> {
         let raw = mem
             .get_view(addr, Self::MSIZE)
-            .ok_or(shale::ShaleError::LinearCachedStoreError)?;
-        let acc_root = u64::from_le_bytes(raw.as_deref()[..8].try_into().unwrap());
-        let kv_root = u64::from_le_bytes(raw.as_deref()[8..].try_into().unwrap());
+            .ok_or(ShaleError::InvalidCacheView {
+                offset: addr,
+                size: Self::MSIZE,
+            })?;
+        let acc_root = u64::from_le_bytes(
+            raw.as_deref()[..8]
+                .try_into()
+                .map_err(ShaleError::InvalidSlice)?,
+        );
+        let kv_root = u64::from_le_bytes(
+            raw.as_deref()[8..]
+                .try_into()
+                .map_err(ShaleError::InvalidSlice)?,
+        );
         Ok(Self {
             acc_root: ObjPtr::new_from_addr(acc_root),
             kv_root: ObjPtr::new_from_addr(kv_root),
@@ -224,10 +236,11 @@ impl Storable for DBHeader {
         Self::MSIZE
     }
 
-    fn dehydrate(&self, to: &mut [u8]) {
+    fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {
         let mut cur = Cursor::new(to);
         cur.write_all(&self.acc_root.addr().to_le_bytes()).unwrap();
-        cur.write_all(&self.kv_root.addr().to_le_bytes()).unwrap();
+        cur.write_all(&self.kv_root.addr().to_le_bytes())
+            .map_err(ShaleError::Io)
     }
 }
 
