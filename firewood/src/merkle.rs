@@ -75,9 +75,7 @@ impl Storable for Hash {
     }
 
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {
-        Cursor::new(to)
-            .write_all(&self.0)
-            .map_err(ShaleError::Io)
+        Cursor::new(to).write_all(&self.0).map_err(ShaleError::Io)
     }
 }
 
