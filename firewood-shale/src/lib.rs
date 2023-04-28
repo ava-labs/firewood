@@ -17,6 +17,7 @@ pub mod compact;
 pub mod util;
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ShaleError {
     #[error("obj invalid: {addr:?} obj: {obj_type:?} error: {error:?}")]
     InvalidObj {
