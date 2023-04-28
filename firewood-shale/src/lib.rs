@@ -302,11 +302,10 @@ pub trait Storable {
     }
 }
 
-pub fn to_dehydrated(item: &dyn Storable) -> Vec<u8> {
+pub fn to_dehydrated(item: &dyn Storable) -> Result<Vec<u8>, ShaleError> {
     let mut buff = vec![0; item.dehydrated_len() as usize];
-    // TODO: log error
-    item.dehydrate(&mut buff).unwrap();
-    buff
+    item.dehydrate(&mut buff)?;
+    Ok(buff)
 }
 
 /// Reference implementation of [TypedView]. It takes any type that implements [Storable]

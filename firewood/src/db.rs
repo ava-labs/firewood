@@ -48,6 +48,7 @@ pub enum DBError {
     System(nix::Error),
     KeyNotFound,
     CreateError,
+    Shale(ShaleError),
     IO(std::io::Error),
 }
 
@@ -62,6 +63,7 @@ impl fmt::Display for DBError {
             DBError::KeyNotFound => write!(f, "not found"),
             DBError::CreateError => write!(f, "database create error"),
             DBError::IO(e) => write!(f, "I/O error: {e:?}"),
+            DBError::Shale(e) => write!(f, "shale error: {e:?}"),
         }
     }
 }
@@ -69,6 +71,12 @@ impl fmt::Display for DBError {
 impl From<std::io::Error> for DBError {
     fn from(e: std::io::Error) -> Self {
         DBError::IO(e)
+    }
+}
+
+impl From<ShaleError> for DBError {
+    fn from(e: ShaleError) -> Self {
+        DBError::Shale(e)
     }
 }
 
@@ -621,11 +629,11 @@ impl DB {
                 &shale::to_dehydrated(&shale::compact::CompactSpaceHeader::new(
                     SPACE_RESERVED,
                     SPACE_RESERVED,
-                )),
+                ))?,
             );
             initializer.write(
                 db_header.addr(),
-                &shale::to_dehydrated(&DBHeader::new_empty()),
+                &shale::to_dehydrated(&DBHeader::new_empty())?,
             );
             let initializer = Rc::<StoreRevMut>::make_mut(&mut staging.blob.meta);
             initializer.write(
@@ -633,7 +641,7 @@ impl DB {
                 &shale::to_dehydrated(&shale::compact::CompactSpaceHeader::new(
                     SPACE_RESERVED,
                     SPACE_RESERVED,
-                )),
+                ))?,
             );
         }
 

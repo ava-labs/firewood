@@ -677,7 +677,7 @@ mod tests {
         let compact_header: ObjPtr<CompactSpaceHeader> = ObjPtr::new_from_addr(0x1);
         dm.write(
             compact_header.addr(),
-            &crate::to_dehydrated(&CompactSpaceHeader::new(RESERVED, RESERVED)),
+            &crate::to_dehydrated(&CompactSpaceHeader::new(RESERVED, RESERVED)).unwrap(),
         );
         let compact_header =
             StoredView::ptr_to_obj(&dm, compact_header, CompactHeader::MSIZE).unwrap();
