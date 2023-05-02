@@ -210,10 +210,7 @@ fn get_sub_universe_from_deltas(
 fn get_sub_universe_from_empty_delta(
     sub_universe: &SubUniverse<Rc<CachedSpace>>,
 ) -> SubUniverse<StoreRevShared> {
-    SubUniverse::new(
-        StoreRevShared::from_delta(sub_universe.meta.clone(), StoreDelta::default()),
-        StoreRevShared::from_delta(sub_universe.payload.clone(), StoreDelta::default()),
-    )
+    get_sub_universe_from_deltas(sub_universe, StoreDelta::default(), StoreDelta::default())
 }
 
 /// DB-wide metadata, it keeps track of the roots of the top-level tries.

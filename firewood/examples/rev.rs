@@ -1,7 +1,10 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood::db::{DBConfig, WALConfig, DB};
+use firewood::{
+    db::{DBConfig, Revision, WALConfig, DB},
+    proof::Proof,
+};
 
 /// cargo run --example rev
 fn main() {
@@ -95,10 +98,7 @@ fn main() {
             items_rev.sort();
             let (keys, vals) = items_rev.clone().into_iter().unzip();
 
-            let mut proof = revision.prove(items_rev[0].0).unwrap();
-            let end_proof = revision.prove(items_rev[items_rev.len() - 1].0).unwrap();
-            proof.concat_proofs(end_proof);
-
+            let proof = build_proof(&revision, &items_rev);
             revision
                 .verify_range_proof(
                     proof,
@@ -121,10 +121,7 @@ fn main() {
             items_rev.sort();
             let (keys, vals) = items_rev.clone().into_iter().unzip();
 
-            let mut proof = revision.prove(items_rev[0].0).unwrap();
-            let end_proof = revision.prove(items_rev[items_rev.len() - 1].0).unwrap();
-            proof.concat_proofs(end_proof);
-
+            let proof = build_proof(&revision, &items_rev);
             revision
                 .verify_range_proof(
                     proof,
@@ -136,4 +133,11 @@ fn main() {
                 .unwrap();
         }
     }
+}
+
+fn build_proof(revision: &Revision, items: &[(&str, &str)]) -> Proof {
+    let mut proof = revision.prove(items[0].0).unwrap();
+    let end = revision.prove(items.last().unwrap().0).unwrap();
+    proof.concat_proofs(end);
+    proof
 }
