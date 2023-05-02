@@ -1,16 +1,17 @@
-/// Release tool to update all versions of everything
-/// inside the crate at the same time to the same version
-///
+#![warn(clippy::all)]
+#![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
+//! Release tool to update all versions of everything
+//! inside the crate at the same time to the same version
 use std::{collections::HashSet, fs, path::PathBuf};
 
 use anyhow::{anyhow, bail, Context, Error};
+use clap::Parser;
 use toml_edit::{Document, Formatted, InlineTable, Item, KeyMut, Value};
 
-use clap::Parser;
-
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 struct Args {
-    /// how cargo invoked this
+    /// how cargo invoked this; cargo chews up the first argument
+    /// so this should be completely ignored
     #[clap(hide(true))]
     _cargo_invoked_as: String,
     /// Don't generate log entries
@@ -59,15 +60,10 @@ fn main() -> Result<(), Error> {
     // work on each subdirectory (each member of the workspace)
     for member in members {
         // calculate the path of the inner member
-        let inner_path: PathBuf = [
-            member.as_str().ok_or(anyhow!("member not a string?"))?,
-            "Cargo.toml",
-        ]
-        .iter()
-        .collect();
+        let inner_path: PathBuf = [member.as_str().unwrap(), "Cargo.toml"].iter().collect();
         // and load into a parsed yaml document
         let inner = std::fs::read_to_string(&inner_path)
-            .context(format!("Can't find {}", inner_path.display()))?;
+            .context(format!("Can't read {}", inner_path.display()))?;
         let mut inner = inner.parse::<Document>()?;
 
         // now find the [package] section
@@ -115,7 +111,7 @@ fn main() -> Result<(), Error> {
                     // call fixup_version for this dependency, which
                     // might make a change if the version was wrong
                     if let Some(inline_table) = dep.1.as_inline_table_mut() {
-                        changed |= fixup_version(&dep.0, inline_table, &cli);
+                        changed |= update_dep_ver(&dep.0, inline_table, &cli);
                     }
                 }
             };
@@ -140,11 +136,34 @@ fn main() -> Result<(), Error> {
     }
 }
 
-fn fixup_version(key: &KeyMut, dep: &mut InlineTable, opts: &Args) -> bool {
+/// Verify and/or update the version of a dependency
+///
+/// Given a dependency and the table of attributes, check the
+/// "version" attribute and make sure it matches what we expect
+/// from the command line arguments
+///
+/// * `key` - the name of this dependency
+/// * `dep` - the table of K/V pairs describing the dependency
+/// * `opts` - the command line arguments passed in
+///
+/// Returns true if any changes were made
+fn update_dep_ver(key: &KeyMut<'_>, dep: &mut InlineTable, opts: &Args) -> bool {
     let v = dep.get_mut("version").unwrap();
     check_version(v, format!("dependency for {}", key.get()), opts)
 }
 
+/// Check and/or set the version
+///
+/// Check the version value provided and optionally
+/// log and/or update it, based on the command line args
+///
+/// Arguments:
+///
+/// * `v` - the version to verify/change
+/// * `source` - the text of where this version came from
+/// * `opts` - the command line arguments
+///
+/// Returns `true` if a change was made, `false` otherwise
 fn check_version<S: AsRef<str>>(v: &mut Value, source: S, opts: &Args) -> bool {
     if let Some(old) = v.as_str() {
         if old != opts.newver {
