@@ -1,32 +1,54 @@
-use prometheus_client::encoding::text::encode;
 use prometheus_client::metrics::counter::Counter;
 use prometheus_client::registry::Registry;
 
-use super::{Metric, MetricRecorder, MetricSet};
+use std::collections::HashMap;
+use strum::IntoEnumIterator;
 
-pub struct PrometheusMetricRecorder<T> {
+use super::{Metric, MetricRecorder};
+
+pub struct PrometheusMetricRecorder {
     registry: Registry,
-    metric_set: MetricSet<T>,
+    hm: HashMap<Metric, PrometheusStat>,
 }
 
-impl<T> PrometheusMetricRecorder<T> {
+struct PrometheusStat {
+    name: String,
+    help: String,
+}
+
+impl PrometheusStat {
+    fn new(name: String, help: String) -> Self {
+        Self { name, help }
+    }
+}
+
+impl PrometheusMetricRecorder {
     /// Create a new prometheus metrics instance.
     pub fn new(registry: Option<Registry>) -> Result<Self, std::fmt::Error> {
-        Ok(Self{
-            registry: registry.unwrap_or_default(),
-            metric_set: MetricSet::new(),
-        })
-    }
+        let hm = Metric::iter()
+            .map(|metric| {
+                (
+                    metric.clone(),
+                    PrometheusStat::new(
+                        metric.to_string().to_lowercase(),
+                        metric.help().to_string(),
+                    ),
+                )
+            })
+            .collect();
 
-    /// Gather the metrics from the registry and encode them.
-    pub fn gather(&self) -> Result<String, std::fmt::Error> {
-        let mut buffer = String::new();
-        encode(&mut buffer, &self.registry)?;
-        Ok(buffer)
+        let registry = registry.unwrap_or_default();
+
+        for (metric, stat) in hm {
+            let counter = Counter::default();
+            registry.register(stat.name, stat.help, counter.clone());
+        }
+
+        Ok(Self { registry, hm })
     }
 }
 
-impl<T> MetricRecorder for PrometheusMetricRecorder<T> {
+impl MetricRecorder for PrometheusMetricRecorder {
     fn increment(&mut self, _metric: Metric, _count: u64) {
         todo!()
     }

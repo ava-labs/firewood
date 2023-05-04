@@ -5,11 +5,11 @@ pub struct NoopMetricRecorder;
 
 impl NoopMetricRecorder {
     pub fn new() -> Self {
-        Self{}
+        Self {}
     }
 }
 
 impl MetricRecorder for NoopMetricRecorder {
-    /// Intentional no-op that drops the metric 
+    /// Intentional no-op that drops the metric
     fn increment(&mut self, _metric: Metric, _count: u64) {}
 }

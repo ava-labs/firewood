@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use strum_macros::{Display, EnumIter};
 
 pub mod noop;
 pub mod prometheus;
@@ -11,13 +11,20 @@ pub trait MetricRecorder {
     fn increment(&mut self, metric: Metric, count: u64);
 }
 
-#[non_exhaustive]
-#[derive(Clone, Debug)]
-/// The set of metrics for firewood to track.
+#[derive(Display, Debug, PartialEq, Eq, Hash, EnumIter, Clone)]
+#[strum(serialize_all = "snake_case")]
 pub enum Metric {
     IOKeyRead,
     IOKeyWrite,
     HashCalculated,
 }
 
-pub type MetricSet<T> = HashMap<Metric, T>;
+impl Metric {
+    fn help(&self) -> &'static str {
+        match self {
+            Metric::IOKeyRead => "Number of keys read from the input file",
+            Metric::IOKeyWrite => "Number of keys written to the output file",
+            Metric::HashCalculated => "Number of hashes calculated",
+        }
+    }
+}
