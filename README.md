@@ -56,6 +56,29 @@ These crates will either be heavily modified or removed prior to the production
 launch of firewood. If they are retained, all changes made will be shared
 upstream.
 
+## Termimology
+
+* `Revision` - A point-in-time state/version of the trie
+* `Root Hash` - The hash of the root node for a specific revision
+* `Key Proof` - A proof that a key exists within a specific revision of a trie.
+  This includes the hash for the node containing the key as well as all parents.
+* `Range Proof` - A proof that consists of two `Key Proof`s, one for the start of
+  the range, and one for the end of the range, as well as a list of all key/value
+  pairs in between the two. A `Range Proof` can be validated independently of an
+  actual database by constructing a trie from the keys/values provided.
+* `Change Proof` - A proof that consists of a set of all changes between two
+  revisions.
+* `Put` - An upsert operation for a key/value pair. A put operation is how you add
+  a value into a trie.
+* `Delete` - A key that should be removed from the trie.
+* `Batch Operation` - This consists of either a `Put` or a `Delete`
+* `Batch` - An ordered set of `Batch Operation`s
+* `Commit` - The operation of applying a `Batch` to the most recent `Revision`
+* `Proposal` - A proposal consists of a base `Root Hash` and a `Batch`, but is not
+  yet committed to the trie. In firewood's most recent API, a `Proposal` is required
+  to `Commit`.
+
+
 ## Roadmap
 ### Green Milestone
 This milestone will focus on additional code cleanup, including supporting
