@@ -81,41 +81,42 @@ pub struct Proof<V>(pub HashMap<HashKey, V>);
 /// is the api::DbView trait defined next.
 #[async_trait]
 pub trait Db {
-    type View: DbView;
+    type DbView: DbView;
+    type Proposal: DbView;
 
     /// Get a reference to a specific view based on a hash
     ///
     /// # Arguments
     ///
     /// - `hash` - Identifies the revision for the view
-    async fn revision(&self, hash: HashKey) -> Result<Weak<Self::View>, Error>;
+    async fn revision(&self, hash: HashKey) -> Result<Weak<Self::DbView>, Error>;
 
     /// Get the hash of the most recently committed version
     async fn root_hash(&self) -> Result<HashKey, Error>;
 
     /// Propose a change to the database via a batch
     ///
+    /// This proposal assumes it is based off the most recently
+    /// committed transaction
+    ///
     /// # Arguments
     ///
-    /// * `hash` - the HashKey that identifies the revision
-    ///            you want to propose this batch against
     /// * `data` - A batch consisting of [BatchOp::Put] and
     ///            [BatchOp::Delete] operations to apply
     ///
     async fn propose<K: KeyType, V: ValueType>(
         &mut self,
-        hash: HashKey,
         data: Batch<K, V>,
-    ) -> Result<HashKey, Error>;
+    ) -> Result<Self::Proposal, Error>;
 
     /// Commit a specific hash
     ///
     /// # Arguments
     ///
-    /// * `hash` - The root this commit must apply against.
+    /// * `view` - The root this commit must apply against.
     ///            If this is not the latest commit, this
     ///            will return [Error::IncorrectRootHash]
-    async fn commit(&mut self, hash: HashKey) -> Result<(), Error>;
+    async fn commit(&mut self, view: Self::Proposal) -> Result<Weak<Self::DbView>, Error>;
 }
 
 /// A view of the database at a specific time. These are wrapped with
@@ -151,4 +152,9 @@ pub trait DbView {
         last_key: Option<K>,
         limit: usize,
     ) -> Result<RangeProof<K, V>, Error>;
+
+    async fn propose<K: KeyType, V: ValueType>(
+        &self,
+        data: Batch<K, V>,
+    ) -> Result<Weak<Self>, Error>;
 }
