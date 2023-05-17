@@ -76,7 +76,7 @@ pub struct WalFileAio {
 }
 
 impl WalFileAio {
-    pub fn new<P: AsRef<Path>>(path: P, aiomgr: Arc<AioManager>) -> Result<Self, WalError> {
+    fn new<P: AsRef<Path>>(path: P, aiomgr: Arc<AioManager>) -> Result<Self, WalError> {
         fs::OpenOptions::new()
             .read(true)
             .write(true)
