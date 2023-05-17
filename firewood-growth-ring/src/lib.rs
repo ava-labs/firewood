@@ -76,14 +76,14 @@ pub struct WalFileAio {
 }
 
 impl WalFileAio {
-    pub fn new(root_dir: &Path, filename: &str, aiomgr: Arc<AioManager>) -> Result<Self, WalError> {
+    pub fn new<P: AsRef<Path>>(path: P, aiomgr: Arc<AioManager>) -> Result<Self, WalError> {
         fs::OpenOptions::new()
             .read(true)
             .write(true)
             .truncate(false)
             .create(true)
             .mode(0o600)
-            .open(root_dir.join(filename))
+            .open(path)
             .map(|f| {
                 let fd = f.into_raw_fd();
                 WalFileAio { fd, aiomgr }
@@ -204,8 +204,8 @@ impl WalStore for WalStoreAio {
     type FileNameIter = std::vec::IntoIter<String>;
 
     async fn open_file(&self, filename: &str, _touch: bool) -> Result<Box<dyn WalFile>, WalError> {
-        WalFileAio::new(&self.root_dir, filename, self.aiomgr.clone())
-            .map(|f| Box::new(f) as Box<dyn WalFile>)
+        let path = self.root_dir.join(filename);
+        WalFileAio::new(path, self.aiomgr.clone()).map(|f| Box::new(f) as Box<dyn WalFile>)
     }
 
     async fn remove_file(&self, filename: String) -> Result<(), WalError> {
@@ -219,5 +219,67 @@ impl WalStore for WalStoreAio {
             filenames.push(path.file_name().into_string().unwrap());
         }
         Ok(filenames.into_iter())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn truncation_makes_a_file_smaller() {
+        const HALF_LENGTH: usize = 512;
+
+        let walfile_path = get_walfile_path(file!(), line!());
+
+        tokio::fs::remove_file(&walfile_path).await.ok();
+
+        let aio_manager = AioBuilder::default().build().unwrap();
+
+        let walfile_aio = WalFileAio::new(walfile_path, Arc::new(aio_manager)).unwrap();
+
+        let first_half = vec![1u8; HALF_LENGTH];
+        let second_half = vec![2u8; HALF_LENGTH];
+
+        let data = first_half
+            .iter()
+            .copied()
+            .chain(second_half.iter().copied())
+            .collect();
+
+        walfile_aio.write(0, data).await.unwrap();
+        walfile_aio.truncate(HALF_LENGTH).await.unwrap();
+
+        let result = walfile_aio.read(0, HALF_LENGTH).await.unwrap();
+
+        assert_eq!(result, Some(first_half.into()))
+    }
+
+    #[tokio::test]
+    async fn truncation_extends_a_file_with_zeros() {
+        const LENGTH: usize = 512;
+
+        let walfile_path = get_walfile_path(file!(), line!());
+
+        tokio::fs::remove_file(&walfile_path).await.ok();
+
+        let aio_manager = AioBuilder::default().build().unwrap();
+
+        let walfile_aio = WalFileAio::new(walfile_path, Arc::new(aio_manager)).unwrap();
+
+        walfile_aio
+            .write(0, vec![1u8; LENGTH].into())
+            .await
+            .unwrap();
+
+        walfile_aio.truncate(2 * LENGTH).await.unwrap();
+
+        let result = walfile_aio.read(LENGTH as u64, LENGTH).await.unwrap();
+
+        assert_eq!(result, Some(vec![0u8; LENGTH].into()))
+    }
+
+    fn get_walfile_path(file: &str, line: u32) -> PathBuf {
+        Path::new("/tmp").join(format!("{}_{}", file.replace('/', "-"), line))
     }
 }
