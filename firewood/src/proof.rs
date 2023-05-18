@@ -384,7 +384,6 @@ impl Proof {
         let proofs_map = &self.0;
         let mut key_index = 0;
         let mut branch_index: u8 = 0;
-        let mut iter = 0;
         loop {
             let cur_proof = proofs_map
                 .get(&cur_hash)
@@ -398,14 +397,14 @@ impl Proof {
                     match n.chd()[branch_index as usize] {
                         // If the child already resolved, then use the existing node.
                         Some(node) => {
-                            chd_ptr = Some(node);
+                            chd_ptr = node;
                         }
                         None => {
                             // insert the leaf to the empty slot
                             u_ref
                                 .write(|u| {
                                     let uu = u.inner_mut().as_branch_mut().unwrap();
-                                    uu.chd_mut()[branch_index as usize] = chd_ptr;
+                                    uu.chd_mut()[branch_index as usize] = Some(chd_ptr);
                                 })
                                 .unwrap();
                         }
@@ -418,36 +417,24 @@ impl Proof {
                         u_ref
                             .write(|u| {
                                 let uu = u.inner_mut().as_extension_mut().unwrap();
-                                *uu.chd_mut() = if let Some(chd_p) = chd_ptr {
-                                    chd_p
-                                } else {
-                                    ObjPtr::null()
-                                }
+                                *uu.chd_mut() = chd_ptr;
                             })
                             .unwrap();
                     } else {
-                        chd_ptr = Some(node);
+                        chd_ptr = node;
                     }
                 }
                 // We should not hit a leaf node as a parent.
                 _ => return Err(ProofError::InvalidNode(MerkleError::ParentLeafBranch)),
             };
 
-            if chd_ptr.is_some() {
-                u_ref = merkle
-                    .get_node(chd_ptr.unwrap())
-                    .map_err(|_| ProofError::DecodeError)?;
-                // If the new parent is a branch node, record the index to correctly link the next child to it.
-                if u_ref.inner().as_branch().is_some() {
-                    branch_index = chunks[key_index];
-                }
-            } else {
-                // Root node must be included in the proof.
-                if iter == 0 {
-                    return Err(ProofError::ProofNodeMissing);
-                }
+            u_ref = merkle
+                .get_node(chd_ptr)
+                .map_err(|_| ProofError::DecodeError)?;
+            // If the new parent is a branch node, record the index to correctly link the next child to it.
+            if u_ref.inner().as_branch().is_some() {
+                branch_index = chunks[key_index];
             }
-            iter += 1;
 
             key_index += size;
             match sub_proof {
@@ -474,7 +461,8 @@ impl Proof {
                                             u_ref
                                                 .write(|u| {
                                                     let uu = u.inner_mut().as_branch_mut().unwrap();
-                                                    uu.chd_mut()[branch_index as usize] = chd_ptr;
+                                                    uu.chd_mut()[branch_index as usize] =
+                                                        Some(chd_ptr);
                                                 })
                                                 .unwrap();
                                         }
@@ -487,11 +475,7 @@ impl Proof {
                                         u_ref
                                             .write(|u| {
                                                 let uu = u.inner_mut().as_extension_mut().unwrap();
-                                                *uu.chd_mut() = if let Some(chd_p) = chd_ptr {
-                                                    chd_p
-                                                } else {
-                                                    ObjPtr::null()
-                                                }
+                                                *uu.chd_mut() = chd_ptr;
                                             })
                                             .unwrap();
                                     }
@@ -505,27 +489,25 @@ impl Proof {
                             };
                         }
                         drop(u_ref);
-                        if chd_ptr.is_some() {
-                            let c_ref = merkle
-                                .get_node(chd_ptr.unwrap())
-                                .map_err(|_| ProofError::DecodeError)?;
-                            match &c_ref.inner() {
-                                NodeType::Branch(n) => {
-                                    if let Some(v) = n.value() {
-                                        data = Some(v.deref().to_vec());
-                                    }
+                        let c_ref = merkle
+                            .get_node(chd_ptr)
+                            .map_err(|_| ProofError::DecodeError)?;
+                        match &c_ref.inner() {
+                            NodeType::Branch(n) => {
+                                if let Some(v) = n.value() {
+                                    data = Some(v.deref().to_vec());
                                 }
-                                NodeType::Leaf(n) => {
-                                    // Return the value on the node only when the key matches exactly
-                                    // (e.g. the length path of subproof node is 0).
-                                    if p.hash.is_none() || (p.hash.is_some() && n.path().len() == 0)
-                                    {
-                                        data = Some(n.data().deref().to_vec());
-                                    }
-                                }
-                                _ => (),
                             }
+                            NodeType::Leaf(n) => {
+                                // Return the value on the node only when the key matches exactly
+                                // (e.g. the length path of subproof node is 0).
+                                if p.hash.is_none() || (p.hash.is_some() && n.path().len() == 0) {
+                                    data = Some(n.data().deref().to_vec());
+                                }
+                            }
+                            _ => (),
                         }
+
                         return Ok(data);
                     }
 
@@ -565,7 +547,7 @@ impl Proof {
         key: &[u8],
         buf: &[u8],
         end_node: bool,
-    ) -> Result<(Option<ObjPtr<Node>>, Option<SubProof>, usize), ProofError> {
+    ) -> Result<(ObjPtr<Node>, Option<SubProof>, usize), ProofError> {
         let rlp = rlp::Rlp::new(buf);
         let size = rlp.item_count().unwrap();
         match size {
@@ -582,33 +564,29 @@ impl Proof {
                     rlp.as_raw().to_vec()
                 };
 
-                let ext_ptr: Option<ObjPtr<Node>>;
+                let ext_ptr: ObjPtr<Node>;
                 let subproof: Option<SubProof>;
                 if term {
-                    ext_ptr = Some(
-                        merkle
-                            .new_node(Node::new(NodeType::Leaf(LeafNode::new(
-                                cur_key.clone(),
-                                data.clone(),
-                            ))))
-                            .map_err(|_| ProofError::DecodeError)?
-                            .as_ptr(),
-                    );
+                    ext_ptr = merkle
+                        .new_node(Node::new(NodeType::Leaf(LeafNode::new(
+                            cur_key.clone(),
+                            data.clone(),
+                        ))))
+                        .map_err(|_| ProofError::DecodeError)?
+                        .as_ptr();
                     subproof = Some(SubProof {
                         rlp: data,
                         hash: None,
                     });
                 } else {
-                    ext_ptr = Some(
-                        merkle
-                            .new_node(Node::new(NodeType::Extension(ExtNode::new(
-                                cur_key.clone(),
-                                ObjPtr::null(),
-                                Some(data.clone()),
-                            ))))
-                            .map_err(|_| ProofError::DecodeError)?
-                            .as_ptr(),
-                    );
+                    ext_ptr = merkle
+                        .new_node(Node::new(NodeType::Extension(ExtNode::new(
+                            cur_key.clone(),
+                            ObjPtr::null(),
+                            Some(data.clone()),
+                        ))))
+                        .map_err(|_| ProofError::DecodeError)?
+                        .as_ptr();
                     subproof = self.generate_subproof(data)?;
                 }
 
@@ -654,7 +632,7 @@ impl Proof {
                     .map_err(|_| ProofError::ProofNodeMissing)?;
                 // If the node is the last one to be decoded, then no subproof to be extracted.
                 if end_node {
-                    return Ok((Some(branch_ptr.as_ptr()), None, 1));
+                    return Ok((branch_ptr.as_ptr(), None, 1));
                 } else if key.is_empty() {
                     return Err(ProofError::NoSuchNode);
                 }
@@ -662,12 +640,12 @@ impl Proof {
                 // Check if the subproof with the given key exist.
                 let index = key[0] as usize;
                 let data: Vec<u8> = if chd_eth_rlp[index].is_none() {
-                    return Ok((Some(branch_ptr.as_ptr()), None, 1));
+                    return Ok((branch_ptr.as_ptr(), None, 1));
                 } else {
                     chd_eth_rlp[index].clone().unwrap()
                 };
                 let subproof = self.generate_subproof(data)?;
-                Ok((Some(branch_ptr.as_ptr()), subproof, 1))
+                Ok((branch_ptr.as_ptr(), subproof, 1))
             }
             // RLP length can only be the two cases above.
             _ => Err(ProofError::DecodeError),
