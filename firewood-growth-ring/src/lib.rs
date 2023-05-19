@@ -2,7 +2,7 @@
 //!
 //! # Examples
 //!
-//! ```
+//! ```no_run
 //! use growthring::{WalStoreAio, wal::WalLoader};
 //! use futures::executor::block_on;
 //! let mut loader = WalLoader::new();
@@ -52,86 +52,53 @@ pub mod walerror;
 
 use async_trait::async_trait;
 use firewood_libaio::{AioBuilder, AioManager};
-use libc::off_t;
-#[cfg(not(target_os = "linux"))]
 use nix::fcntl::OFlag;
-use nix::unistd::{close, ftruncate};
-#[cfg(target_os = "linux")]
-use nix::{
-    errno::Errno,
-    fcntl::{fallocate, posix_fallocate, FallocateFlags, OFlag},
-};
 use std::fs;
-use std::os::fd::IntoRawFd;
-use std::os::unix::io::RawFd;
-use std::os::unix::prelude::OpenOptionsExt;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::fs::{File, OpenOptions};
 use wal::{WalBytes, WalFile, WalPos, WalStore};
 use walerror::WalError;
 
 pub struct WalFileAio {
-    fd: RawFd,
-    aiomgr: Arc<AioManager>,
+    file: File,
+    aio_manager: Arc<AioManager>,
 }
 
 impl WalFileAio {
-    fn new<P: AsRef<Path>>(path: P, aiomgr: Arc<AioManager>) -> Result<Self, WalError> {
-        fs::OpenOptions::new()
+    async fn open_file<P: AsRef<Path>>(path: P) -> Result<File, std::io::Error> {
+        OpenOptions::new()
             .read(true)
             .write(true)
             .truncate(false)
             .create(true)
             .mode(0o600)
             .open(path)
-            .map(|f| {
-                let fd = f.into_raw_fd();
-                WalFileAio { fd, aiomgr }
-            })
-            .map_err(|e| WalError::IOError(Arc::new(e)))
+            .await
     }
-}
 
-impl Drop for WalFileAio {
-    fn drop(&mut self) {
-        close(self.fd).unwrap();
+    fn new(file: File, aio_manager: Arc<AioManager>) -> Self {
+        Self { file, aio_manager }
     }
 }
 
 #[async_trait(?Send)]
 impl WalFile for WalFileAio {
-    #[cfg(target_os = "linux")]
     async fn allocate(&self, offset: WalPos, length: usize) -> Result<(), WalError> {
-        let (offset, length) = (offset as off_t, length as off_t);
-        // TODO: is there any async version of fallocate?
-        fallocate(
-            self.fd,
-            FallocateFlags::FALLOC_FL_ZERO_RANGE,
-            offset,
-            length,
-        )
-        .or_else(|err| match err {
-            Errno::EOPNOTSUPP => posix_fallocate(self.fd, offset, length),
-            _ => {
-                eprintln!("fallocate failed with error: {err:?}");
-                Err(err)
-            }
-        })
-        .map_err(Into::into)
+        self.file
+            .set_len(offset + length as u64)
+            .await
+            .map_err(Into::into)
     }
 
-    #[cfg(not(target_os = "linux"))]
-    // TODO: macos support is possible here, but possibly unnecessary
-    async fn allocate(&self, _offset: WalPos, _length: usize) -> Result<(), WalError> {
-        Ok(())
-    }
-
-    async fn truncate(&self, length: usize) -> Result<(), WalError> {
-        ftruncate(self.fd, length as off_t).map_err(From::from)
+    async fn truncate(&self, len: usize) -> Result<(), WalError> {
+        self.file.set_len(len as u64).await.map_err(Into::into)
     }
 
     async fn write(&self, offset: WalPos, data: WalBytes) -> Result<(), WalError> {
-        let (res, data) = self.aiomgr.write(self.fd, offset, data, None).await;
+        let fd = self.file.as_raw_fd();
+        let (res, data) = self.aio_manager.write(fd, offset, data, None).await;
         res.map_err(Into::into).and_then(|nwrote| {
             if nwrote == data.len() {
                 Ok(())
@@ -139,14 +106,15 @@ impl WalFile for WalFileAio {
                 Err(WalError::Other(format!(
                     "partial write; wrote {nwrote} expected {} for fd {}",
                     data.len(),
-                    self.fd
+                    fd
                 )))
             }
         })
     }
 
     async fn read(&self, offset: WalPos, length: usize) -> Result<Option<WalBytes>, WalError> {
-        let (res, data) = self.aiomgr.read(self.fd, offset, length, None).await;
+        let fd = self.file.as_raw_fd();
+        let (res, data) = self.aio_manager.read(fd, offset, length, None).await;
         res.map_err(From::from)
             .map(|nread| if nread == length { Some(data) } else { None })
     }
@@ -205,7 +173,10 @@ impl WalStore for WalStoreAio {
 
     async fn open_file(&self, filename: &str, _touch: bool) -> Result<Box<dyn WalFile>, WalError> {
         let path = self.root_dir.join(filename);
-        WalFileAio::new(path, self.aiomgr.clone()).map(|f| Box::new(f) as Box<dyn WalFile>)
+
+        let file = WalFileAio::open_file(path).await?;
+
+        Ok(Box::new(WalFileAio::new(file, self.aiomgr.clone())))
     }
 
     async fn remove_file(&self, filename: String) -> Result<(), WalError> {
@@ -236,7 +207,9 @@ mod tests {
 
         let aio_manager = AioBuilder::default().build().unwrap();
 
-        let walfile_aio = WalFileAio::new(walfile_path, Arc::new(aio_manager)).unwrap();
+        let walfile = WalFileAio::open_file(walfile_path).await.unwrap();
+
+        let walfile_aio = WalFileAio::new(walfile, Arc::new(aio_manager));
 
         let first_half = vec![1u8; HALF_LENGTH];
         let second_half = vec![2u8; HALF_LENGTH];
@@ -265,7 +238,9 @@ mod tests {
 
         let aio_manager = AioBuilder::default().build().unwrap();
 
-        let walfile_aio = WalFileAio::new(walfile_path, Arc::new(aio_manager)).unwrap();
+        let walfile = WalFileAio::open_file(walfile_path).await.unwrap();
+
+        let walfile_aio = WalFileAio::new(walfile, Arc::new(aio_manager));
 
         walfile_aio
             .write(0, vec![1u8; LENGTH].into())
