@@ -507,7 +507,6 @@ impl Proof {
                             }
                             _ => (),
                         }
-
                         return Ok(data);
                     }
 

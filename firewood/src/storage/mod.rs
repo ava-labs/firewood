@@ -551,6 +551,123 @@ impl CachedStore for StoreRevMut {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct StorePlainRevMut {
+    id: SpaceID,
+    deltas: Rc<RefCell<StoreRevMutDelta>>,
+}
+
+impl StorePlainRevMut {
+    pub fn new(id: SpaceID) -> Self {
+        Self {
+            id,
+            deltas: Rc::new(RefCell::new(StoreRevMutDelta {
+                pages: HashMap::new(),
+                plain: Ash::new(),
+            })),
+        }
+    }
+
+    fn get_page_mut(&self, pid: u64) -> RefMut<[u8]> {
+        let mut deltas = self.deltas.borrow_mut();
+        if deltas.pages.get(&pid).is_none() {
+            let page = Box::new([0; PAGE_SIZE as usize]);
+            deltas.pages.insert(pid, page);
+        }
+        RefMut::map(deltas, |e| &mut e.pages.get_mut(&pid).unwrap()[..])
+    }
+}
+
+impl CachedStore for StorePlainRevMut {
+    fn get_view(
+        &self,
+        offset: u64,
+        length: u64,
+    ) -> Option<Box<dyn CachedView<DerefReturn = Vec<u8>>>> {
+        let data = if length == 0 {
+            Vec::new()
+        } else {
+            let end = offset + length - 1;
+            let s_pid = offset >> PAGE_SIZE_NBIT;
+            let s_off = (offset & PAGE_MASK) as usize;
+            let e_pid = end >> PAGE_SIZE_NBIT;
+            let e_off = (end & PAGE_MASK) as usize;
+            let deltas = &self.deltas.borrow().pages;
+            if s_pid == e_pid {
+                match deltas.get(&s_pid) {
+                    Some(p) => p[s_off..e_off + 1].to_vec(),
+                    None => vec![0; length as usize],
+                }
+            } else {
+                let mut data = match deltas.get(&s_pid) {
+                    Some(p) => p[s_off..].to_vec(),
+                    None => vec![0; PAGE_SIZE as usize - s_off],
+                };
+                for p in s_pid + 1..e_pid {
+                    match deltas.get(&p) {
+                        Some(p) => data.extend(**p),
+                        None => data.extend(vec![0; PAGE_SIZE as usize]),
+                    };
+                }
+                match deltas.get(&e_pid) {
+                    Some(p) => data.extend(&p[..e_off + 1]),
+                    None => data.extend(vec![0; e_off + 1]),
+                }
+                data
+            }
+        };
+        Some(Box::new(StoreRef { data }))
+    }
+
+    fn get_shared(&self) -> Box<dyn DerefMut<Target = dyn CachedStore>> {
+        Box::new(StoreShared(self.clone()))
+    }
+
+    fn write(&mut self, offset: u64, mut change: &[u8]) {
+        let length = change.len() as u64;
+        let end = offset + length - 1;
+        let s_pid = offset >> PAGE_SIZE_NBIT;
+        let s_off = (offset & PAGE_MASK) as usize;
+        let e_pid = end >> PAGE_SIZE_NBIT;
+        let e_off = (end & PAGE_MASK) as usize;
+        let mut old: Vec<u8> = Vec::new();
+        let new: Box<[u8]> = change.into();
+        if s_pid == e_pid {
+            let slice = &mut self.get_page_mut(s_pid)[s_off..e_off + 1];
+            old.extend(&*slice);
+            slice.copy_from_slice(change)
+        } else {
+            let len = PAGE_SIZE as usize - s_off;
+            {
+                let slice = &mut self.get_page_mut(s_pid)[s_off..];
+                old.extend(&*slice);
+                slice.copy_from_slice(&change[..len]);
+            }
+            change = &change[len..];
+            for p in s_pid + 1..e_pid {
+                let mut slice = self.get_page_mut(p);
+                old.extend(&*slice);
+                slice.copy_from_slice(&change[..PAGE_SIZE as usize]);
+                change = &change[PAGE_SIZE as usize..];
+            }
+            let slice = &mut self.get_page_mut(e_pid)[..e_off + 1];
+            old.extend(&*slice);
+            slice.copy_from_slice(change);
+        }
+        let plain = &mut self.deltas.borrow_mut().plain;
+        assert!(old.len() == new.len());
+        plain.old.push(SpaceWrite {
+            offset,
+            data: old.into(),
+        });
+        plain.new.push(new);
+    }
+
+    fn id(&self) -> SpaceID {
+        self.id
+    }
+}
+
 #[cfg(test)]
 #[derive(Clone, Debug)]
 pub struct ZeroStore(Rc<()>);
@@ -654,7 +771,7 @@ impl CachedSpace {
     }
 
     /// Apply `delta` to the store and return the StoreDelta that can undo this change.
-    pub fn update(&self, delta: &StoreDelta) -> Option<StoreDelta> {
+    pub fn apply(&self, delta: &StoreDelta) -> Option<StoreDelta> {
         let mut pages = Vec::new();
         for DeltaPage(pid, page) in &delta.0 {
             let data = self.inner.borrow_mut().pin_page(self.space_id, *pid).ok()?;

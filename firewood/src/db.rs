@@ -26,7 +26,7 @@ use crate::proof::{Proof, ProofError};
 use crate::storage::buffer::{BufferWrite, DiskBuffer, DiskBufferRequester};
 pub use crate::storage::{buffer::DiskBufferConfig, WalConfig};
 use crate::storage::{
-    AshRecord, CachedSpace, MemStoreR, SpaceWrite, StoreConfig, StoreDelta, StoreRevMut,
+    Ash, AshRecord, CachedSpace, MemStoreR, SpaceWrite, StoreConfig, StoreDelta, StoreRevMut,
     StoreRevShared, PAGE_SIZE_NBIT,
 };
 
@@ -211,6 +211,24 @@ fn get_sub_universe_from_empty_delta(
     sub_universe: &SubUniverse<Rc<CachedSpace>>,
 ) -> SubUniverse<StoreRevShared> {
     get_sub_universe_from_deltas(sub_universe, StoreDelta::default(), StoreDelta::default())
+}
+
+fn apply_sub_universe_with_deltas(
+    sub_universe: &SubUniverse<Rc<CachedSpace>>,
+    meta_delta: &StoreDelta,
+    payload_delta: &StoreDelta,
+) -> (StoreDelta, StoreDelta) {
+    let meta_delta = sub_universe.meta.apply(meta_delta).unwrap();
+    let payload_delta = sub_universe.payload.apply(payload_delta).unwrap();
+    return (meta_delta, payload_delta);
+}
+
+fn take_deltas_from_sub_universe(
+    sub_universe: &SubUniverse<Rc<StoreRevMut>>,
+) -> ((StoreDelta, Ash), (StoreDelta, Ash)) {
+    let (meta_pages, meta_plain) = sub_universe.meta.take_delta();
+    let (payload_pages, payload_plain) = sub_universe.payload.take_delta();
+    return ((meta_pages, meta_plain), (payload_pages, payload_plain));
 }
 
 /// DB-wide metadata, it keeps track of the roots of the top-level tries.
@@ -993,45 +1011,37 @@ impl WriteBatch {
             rev_inner.latest.root_hash().ok();
             rev_inner.latest.kv_root_hash().ok();
         }
-        // clear the staging layer and apply changes to the CachedSpace
+        // Clear the staging layer and write to the cached store.
         rev_inner.latest.flush_dirty().unwrap();
-        let (merkle_payload_pages, merkle_payload_plain) =
-            rev_inner.staging.merkle.payload.take_delta();
-        let (merkle_meta_pages, merkle_meta_plain) = rev_inner.staging.merkle.meta.take_delta();
-        let (blob_payload_pages, blob_payload_plain) = rev_inner.staging.blob.payload.take_delta();
-        let (blob_meta_pages, blob_meta_plain) = rev_inner.staging.blob.meta.take_delta();
 
-        let old_merkle_meta_delta = rev_inner
-            .cached
-            .merkle
-            .meta
-            .update(&merkle_meta_pages)
-            .unwrap();
-        let old_merkle_payload_delta = rev_inner
-            .cached
-            .merkle
-            .payload
-            .update(&merkle_payload_pages)
-            .unwrap();
-        let old_blob_meta_delta = rev_inner.cached.blob.meta.update(&blob_meta_pages).unwrap();
-        let old_blob_payload_delta = rev_inner
-            .cached
-            .blob
-            .payload
-            .update(&blob_payload_pages)
-            .unwrap();
+        // And take the delta from cached store, then apply changes to the CachedSpace.
+        let ((redo_merkle_meta_delta, merkle_meta_wal), (merkle_payload_pages, merkle_payload_plain)) =
+            take_deltas_from_sub_universe(&rev_inner.staging.merkle);
+        let ((redo_blob_meta_delta, blob_meta_wal), (blob_payload_pages, blob_payload_plain)) =
+            take_deltas_from_sub_universe(&rev_inner.staging.blob);
 
-        // update the rolling window of past revisions
+        let (undo_merkle_meta_delta, undo_merkle_payload_delta) = apply_sub_universe_with_deltas(
+            &rev_inner.cached.merkle,
+            &redo_merkle_meta_delta,
+            &merkle_payload_pages,
+        );
+        let (undo_blob_meta_delta, undo_blob_payload_delta) = apply_sub_universe_with_deltas(
+            &rev_inner.cached.blob,
+            &redo_blob_meta_delta,
+            &blob_payload_pages,
+        );
+
+        // Update the rolling window of past revisions with undo deltas.
         let new_base = Universe {
             merkle: get_sub_universe_from_deltas(
                 &rev_inner.cached.merkle,
-                old_merkle_meta_delta,
-                old_merkle_payload_delta,
+                undo_merkle_meta_delta,
+                undo_merkle_payload_delta,
             ),
             blob: get_sub_universe_from_deltas(
                 &rev_inner.cached.blob,
-                old_blob_meta_delta,
-                old_blob_payload_delta,
+                undo_blob_meta_delta,
+                undo_blob_payload_delta,
             ),
         };
 
@@ -1070,7 +1080,7 @@ impl WriteBatch {
                 },
                 BufferWrite {
                     space_id: rev_inner.staging.merkle.meta.id(),
-                    delta: merkle_meta_pages,
+                    delta: redo_merkle_meta_delta,
                 },
                 BufferWrite {
                     space_id: rev_inner.staging.blob.payload.id(),
@@ -1078,14 +1088,14 @@ impl WriteBatch {
                 },
                 BufferWrite {
                     space_id: rev_inner.staging.blob.meta.id(),
-                    delta: blob_meta_pages,
+                    delta: redo_blob_meta_delta,
                 },
             ],
             AshRecord(
                 [
-                    (MERKLE_META_SPACE, merkle_meta_plain),
+                    (MERKLE_META_SPACE, merkle_meta_wal),
                     (MERKLE_PAYLOAD_SPACE, merkle_payload_plain),
-                    (BLOB_META_SPACE, blob_meta_plain),
+                    (BLOB_META_SPACE, blob_meta_wal),
                     (BLOB_PAYLOAD_SPACE, blob_payload_plain),
                 ]
                 .into(),

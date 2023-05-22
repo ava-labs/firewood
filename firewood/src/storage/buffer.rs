@@ -501,7 +501,9 @@ mod tests {
     use super::*;
     use crate::{
         file,
-        storage::{DeltaPage, StoreConfig, StoreRevMut, StoreRevMutDelta},
+        storage::{
+            DeltaPage, StoreConfig, StorePlainRevMut, StoreRevMut, StoreRevMutDelta, StoreRevShared,
+        },
     };
     use shale::CachedStore;
 
@@ -547,7 +549,7 @@ mod tests {
         disk_requester.reg_cached_space(state_cache.as_ref());
 
         // memory mapped store
-        let mut mut_store = StoreRevMut::new(state_cache as Rc<dyn MemStoreR>);
+        let mut mut_store = StoreRevMut::new(state_cache.clone() as Rc<dyn MemStoreR>);
 
         let change = b"this is a test";
 
@@ -569,7 +571,14 @@ mod tests {
         let view = mut_store.get_view(0, change.len() as u64).unwrap();
         assert_eq!(view.as_deref(), change);
 
-        let (page_batch, write_batch) = create_batches(&mut_store);
+        // Commit the change. Take the delta from cached store,
+        // then apply changes to the CachedSpace.
+        let (redo_delta, wal) = mut_store.take_delta();
+        state_cache.apply(&redo_delta).unwrap();
+
+        // let shared_store = StoreRevShared::from_ash(state_cache.clone(), &wal.old);
+        // let view = shared_store.get_view(0, change.len() as u64).unwrap();
+        // assert_eq!(view.as_deref(), [0; 20]);
 
         // create a mutation request to the disk buffer by passing the page and write batch.
         let d1 = disk_requester.clone();
@@ -578,7 +587,13 @@ mod tests {
             assert!(d1.collect_ash(1).unwrap().is_empty());
             // page is not yet persisted to disk.
             assert!(d1.get_page(STATE_SPACE, 0).is_none());
-            d1.write(page_batch, write_batch);
+            d1.write(
+                            vec![BufferWrite {
+                                space_id: STATE_SPACE,
+                                delta: redo_delta,
+                            }],
+                            AshRecord([(STATE_SPACE, wal)].into()),
+                        );
         });
         // wait for the write to complete.
         write_thread_handle.join().unwrap();
@@ -595,6 +610,10 @@ mod tests {
 
         // verify
         assert_eq!(disk_requester.collect_ash(1).unwrap().len(), 1);
+
+        // let shared_store = StoreRevShared::from_ash(state_cache.clone(), &wal.old);
+        // let view = shared_store.get_view(0, change.len() as u64).unwrap();
+        // assert_eq!(view.as_deref(), [0; 20]);
     }
 
     fn init_buffer(buf_cfg: DiskBufferConfig, wal_cfg: WalConfig) -> DiskBufferRequester {
@@ -605,30 +624,5 @@ mod tests {
             disk_buffer.run()
         });
         disk_requester
-    }
-
-    fn create_batches(rev_mut: &StoreRevMut) -> (Vec<BufferWrite>, AshRecord) {
-        let deltas = std::mem::replace(
-            &mut *rev_mut.deltas.borrow_mut(),
-            StoreRevMutDelta {
-                pages: HashMap::new(),
-                plain: Ash::new(),
-            },
-        );
-
-        // create a list of delta pages from existing in memory data.
-        let mut pages = Vec::new();
-        for (pid, page) in deltas.pages.into_iter() {
-            pages.push(DeltaPage(pid, page));
-        }
-        pages.sort_by_key(|p| p.0);
-
-        let page_batch = vec![BufferWrite {
-            space_id: STATE_SPACE,
-            delta: StoreDelta(pages),
-        }];
-
-        let write_batch = AshRecord([(STATE_SPACE, deltas.plain)].into());
-        (page_batch, write_batch)
     }
 }
