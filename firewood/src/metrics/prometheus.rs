@@ -1,58 +1,34 @@
 use prometheus_client::metrics::counter::Counter;
 use prometheus_client::registry::Registry;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::atomic::AtomicU64};
 use strum::IntoEnumIterator;
 
 use super::{Metric, MetricRecorder};
 
-pub struct PrometheusMetricRecorder {
-    registry: Registry,
-    hm: HashMap<Metric, PrometheusStat>,
-}
-
-struct PrometheusStat {
-    name: String,
-    help: String,
-}
-
-impl PrometheusStat {
-    fn new(name: String, help: String) -> Self {
-        Self { name, help }
-    }
-}
+#[derive(Debug)]
+pub struct PrometheusMetricRecorder(HashMap<Metric, Counter>);
 
 impl PrometheusMetricRecorder {
     /// Create a new prometheus metrics instance.
-    pub fn new(registry: Option<Registry>) -> Result<Self, std::fmt::Error> {
-        let hm = Metric::iter()
+    pub fn new(mut registry: Registry) -> Result<Self, std::fmt::Error> {
+        let hm: HashMap<Metric, Counter> = Metric::iter()
             .map(|metric| {
-                (
-                    metric.clone(),
-                    PrometheusStat::new(
-                        metric.to_string().to_lowercase(),
-                        metric.help().to_string(),
-                    ),
-                )
+                let counter = Counter::<u64, AtomicU64>::default();
+                let name = metric.to_string().to_lowercase();
+                let help = metric.help().to_string();
+                registry.register(name, help, counter.clone());
+                (metric, counter)
             })
             .collect();
 
-        let registry = registry.unwrap_or_default();
-
-        for (metric, stat) in hm {
-            let counter = Counter::default();
-            registry.register(stat.name, stat.help, counter.clone());
-        }
-
-        Ok(Self { registry, hm })
+        Ok(Self(hm))
     }
 }
 
 impl MetricRecorder for PrometheusMetricRecorder {
-    fn increment(&mut self, _metric: Metric, _count: u64) {
-        todo!()
+    fn increment(&mut self, metric: Metric, count: u64) {
+        let counter = self.0.get(&metric).expect("missing metric?");
+        counter.inc_by(count);
     }
 }
-
-#[cfg(test)]
-mod test {}
