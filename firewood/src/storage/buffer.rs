@@ -496,6 +496,7 @@ impl DiskBufferRequester {
 
 #[cfg(test)]
 mod tests {
+    use sha3::Digest;
     use std::path::PathBuf;
 
     use super::*;
@@ -505,6 +506,7 @@ mod tests {
     };
     use shale::CachedStore;
 
+    const HASH_SIZE: usize = 32;
     const STATE_SPACE: SpaceID = 0x0;
     #[test]
     #[ignore = "ref: https://github.com/ava-labs/firewood/issues/45"]
@@ -644,18 +646,19 @@ mod tests {
         let mut mut_store = StorePlainRevMut::new(state_cache.id());
 
         // mutate the in memory buffer.
-        let change = b"this is another test";
+        let data = b"this is another test";
+        let hash: [u8; HASH_SIZE] = sha3::Keccak256::digest(&data).into();
 
         // write to the in memory buffer (ash) not yet to disk
-        mut_store.write(0, change);
+        mut_store.write(0, &hash);
         assert_eq!(mut_store.id(), STATE_SPACE);
 
         // wal should have no records.
         assert!(disk_requester.collect_ash(1).unwrap().is_empty());
 
         // get RO view of the buffer from the beginning.
-        let view = mut_store.get_view(0, change.len() as u64).unwrap();
-        assert_eq!(view.as_deref(), change);
+        let view = mut_store.get_view(0, hash.len() as u64).unwrap();
+        assert_eq!(view.as_deref(), hash);
 
         // Commit the change. Take the delta from cached store,
         // then apply changes to the CachedSpace.
@@ -687,8 +690,8 @@ mod tests {
         // Replay the redo from the wal
         let z = Rc::new(ZeroStore::new());
         let shared_store = StoreRevShared::from_ash(z, &ashes[0].0[&STATE_SPACE].redo);
-        let view = shared_store.get_view(0, change.len() as u64).unwrap();
-        assert_eq!(view.as_deref(), change);
+        let view = shared_store.get_view(0, hash.len() as u64).unwrap();
+        assert_eq!(view.as_deref(), hash);
     }
 
     fn init_buffer(buf_cfg: DiskBufferConfig, wal_cfg: WalConfig) -> DiskBufferRequester {
