@@ -812,7 +812,7 @@ impl Db {
             let ashes = inner.disk_requester.collect_ash(nback).ok().unwrap();
             for mut ash in ashes.into_iter().skip(rlen) {
                 for (_, a) in ash.0.iter_mut() {
-                    a.old.reverse()
+                    a.undo.reverse()
                 }
 
                 let u = match revisions.inner.back() {
@@ -820,10 +820,10 @@ impl Db {
                     None => inner.cached.to_mem_store_r(),
                 };
                 revisions.inner.push_back(u.rewind(
-                    &ash.0[&MERKLE_META_SPACE].old,
-                    &ash.0[&MERKLE_PAYLOAD_SPACE].old,
-                    &ash.0[&BLOB_META_SPACE].old,
-                    &ash.0[&BLOB_PAYLOAD_SPACE].old,
+                    &ash.0[&MERKLE_META_SPACE].undo,
+                    &ash.0[&MERKLE_PAYLOAD_SPACE].undo,
+                    &ash.0[&BLOB_META_SPACE].undo,
+                    &ash.0[&BLOB_PAYLOAD_SPACE].undo,
                 ));
             }
         }
@@ -1015,8 +1015,10 @@ impl WriteBatch {
         rev_inner.latest.flush_dirty().unwrap();
 
         // And take the delta from cached store, then apply changes to the CachedSpace.
-        let ((redo_merkle_meta_delta, merkle_meta_wal), (merkle_payload_pages, merkle_payload_plain)) =
-            take_deltas_from_sub_universe(&rev_inner.staging.merkle);
+        let (
+            (redo_merkle_meta_delta, merkle_meta_wal),
+            (merkle_payload_pages, merkle_payload_plain),
+        ) = take_deltas_from_sub_universe(&rev_inner.staging.merkle);
         let ((redo_blob_meta_delta, blob_meta_wal), (blob_payload_pages, blob_payload_plain)) =
             take_deltas_from_sub_universe(&rev_inner.staging.blob);
 
