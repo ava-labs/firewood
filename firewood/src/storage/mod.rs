@@ -547,10 +547,7 @@ impl CachedStore for StoreRevMut {
             offset,
             data: undo.into(),
         });
-        plain.redo.push(SpaceWrite {
-            offset,
-            data,
-        });
+        plain.redo.push(SpaceWrite { offset, data });
     }
 
     fn id(&self) -> SpaceID {

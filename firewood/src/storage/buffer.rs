@@ -203,7 +203,14 @@ impl DiskBuffer {
                 store,
                 |raw, _| {
                     let batch = AshRecord::deserialize(raw);
-                    for (space_id, Ash { undo: old, redo: new }) in batch.0 {
+                    for (
+                        space_id,
+                        Ash {
+                            undo: old,
+                            redo: new,
+                        },
+                    ) in batch.0
+                    {
                         for (undo, redo) in old.into_iter().zip(new.into_iter()) {
                             let offset = undo.offset;
                             let file_pool = self.file_pools[space_id as usize].as_ref().unwrap();
