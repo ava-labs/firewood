@@ -1,6 +1,6 @@
 use crate::v2::api::{self, Batch, KeyType, ValueType};
-use std::sync::Weak;
 use async_trait::async_trait;
+use std::sync::Weak;
 
 struct Db;
 
@@ -9,10 +9,7 @@ impl api::Db for Db {
     type DbView = DbView;
     type Proposal = Proposal;
 
-    async fn revision(
-        &self,
-        _hash: api::HashKey,
-    ) -> Result<Weak<Self::DbView>, api::Error> {
+    async fn revision(&self, _hash: api::HashKey) -> Result<Weak<Self::DbView>, api::Error> {
         todo!()
     }
 
@@ -70,8 +67,7 @@ impl api::DbView for DbView {
     }
 }
 
-struct Proposal {
-}
+struct Proposal;
 
 #[async_trait]
 impl api::DbView for Proposal {

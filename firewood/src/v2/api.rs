@@ -126,7 +126,7 @@ pub trait Db {
 ///
 /// You only need a DbView if you need to read from a snapshot at a given
 /// root. Don't hold a strong reference to the DbView as it prevents older
-/// views from being cleaned up.
+/// or invalid views from being cleaned up.
 #[async_trait]
 pub trait DbView {
     /// Get the hash for the current DbView
@@ -153,6 +153,16 @@ pub trait DbView {
         limit: usize,
     ) -> Result<RangeProof<K, V>, Error>;
 
+    /// Propose a new revision from an existing one
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - the batch changes to apply
+    ///
+    /// # Return value
+    ///
+    /// A weak reference to the proposal
+    ///
     async fn propose<K: KeyType, V: ValueType>(
         &self,
         data: Batch<K, V>,
