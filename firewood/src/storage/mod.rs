@@ -64,8 +64,11 @@ pub struct SpaceWrite {
 }
 
 #[derive(Debug)]
+/// In memory representation of Write-ahead log with `undo` and `redo`.
 pub struct Ash {
+    /// Deltas to undo the changes.
     pub undo: Vec<SpaceWrite>,
+    /// Deltas to replay the changes.
     pub redo: Vec<SpaceWrite>,
 }
 
@@ -75,6 +78,10 @@ impl Ash {
             undo: Vec::new(),
             redo: Vec::new(),
         }
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (&SpaceWrite, &SpaceWrite)> {
+        self.undo.iter().zip(self.redo.iter())
     }
 }
 
@@ -87,10 +94,17 @@ impl growthring::wal::Record for AshRecord {
         bytes.extend((self.0.len() as u64).to_le_bytes());
         for (space_id, w) in self.0.iter() {
             bytes.extend((*space_id).to_le_bytes());
-            bytes.extend((w.undo.len() as u32).to_le_bytes());
-            for (sw_undo, sw_redo) in w.undo.iter().zip(w.redo.iter()) {
+            bytes.extend(
+                (u32::try_from(w.undo.len()).expect("size of undo shoud be a `u32`")).to_le_bytes(),
+            );
+
+            for (sw_undo, sw_redo) in w.iter() {
                 bytes.extend(sw_undo.offset.to_le_bytes());
-                bytes.extend((sw_undo.data.len() as u64).to_le_bytes());
+                bytes.extend(
+                    (u64::try_from(sw_undo.data.len())
+                        .expect("length of undo data shoud be a `u64`"))
+                    .to_le_bytes(),
+                );
                 bytes.extend(&*sw_undo.data);
                 bytes.extend(&*sw_redo.data);
             }
@@ -111,7 +125,7 @@ impl AshRecord {
                 let wlen = u32::from_le_bytes(r[1..5].try_into().unwrap());
                 r = &r[5..];
                 let mut undo = Vec::new();
-                let mut redo: Vec<SpaceWrite> = Vec::new();
+                let mut redo = Vec::new();
                 for _ in 0..wlen {
                     let offset = u64::from_le_bytes(r[..8].try_into().unwrap());
                     let data_len = u64::from_le_bytes(r[8..16].try_into().unwrap());
