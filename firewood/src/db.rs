@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use bytemuck::{cast_slice, AnyBitPattern};
+use metered::{metered, HitCount, Throughput};
 use parking_lot::{Mutex, RwLock};
 #[cfg(feature = "eth")]
 use primitive_types::U256;
@@ -470,11 +471,17 @@ impl Drop for DbInner {
 }
 
 /// Firewood database handle.
+#[derive(serde::Serialize)]
 pub struct Db {
+    #[serde(skip_serializing)]
     inner: Arc<RwLock<DbInner>>,
+    #[serde(skip_serializing)]
     revisions: Arc<Mutex<DbRevInner>>,
+    #[serde(skip_serializing)]
     payload_regn_nbit: u64,
+    #[serde(skip_serializing)]
     rev_cfg: DbRevConfig,
+    metrics: DbMetrics,
 }
 
 pub struct DbRevInner {
@@ -483,6 +490,7 @@ pub struct DbRevInner {
     base: Universe<StoreRevShared>,
 }
 
+#[metered(registry = DbMetrics)]
 impl Db {
     /// Open a database.
     pub fn new<P: AsRef<Path>>(db_path: P, cfg: &DbConfig) -> Result<Self, DbError> {
@@ -746,6 +754,7 @@ impl Db {
             })),
             payload_regn_nbit: header.payload_regn_nbit,
             rev_cfg: cfg.rev.clone(),
+            metrics: DbMetrics::default(),
         })
     }
 
@@ -769,6 +778,7 @@ impl Db {
     }
 
     /// Get a value in the kv store associated with a particular key.
+    #[measure([HitCount, Throughput])]
     pub fn kv_get<K: AsRef<[u8]>>(&self, key: K) -> Result<Vec<u8>, DbError> {
         self.inner
             .read()
@@ -781,6 +791,7 @@ impl Db {
     /// The latest revision (nback) starts from 0, which is the current state.
     /// If nback equals is above the configured maximum number of revisions, this function returns None.
     /// Returns `None` if `nback` is greater than the configured maximum amount of revisions.
+    #[measure([HitCount])]
     pub fn get_revision(&self, nback: usize, cfg: Option<DbRevConfig>) -> Option<Revision> {
         let mut revisions = self.revisions.lock();
         let inner = self.inner.read();

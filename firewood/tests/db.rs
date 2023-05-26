@@ -10,6 +10,32 @@ macro_rules! kv_dump {
 }
 
 #[test]
+fn test_serialize_db() {
+    let cfg = DbConfig::builder()
+        .meta_ncached_pages(1024)
+        .meta_ncached_files(128)
+        .payload_ncached_pages(1024)
+        .payload_ncached_files(128)
+        .payload_file_nbit(16)
+        .payload_regn_nbit(16)
+        .wal(
+            WalConfig::builder()
+                .file_nbit(15)
+                .block_nbit(8)
+                .max_revisions(10)
+                .build(),
+        );
+    let db = Db::new("test_revisions_db2", &cfg.clone().truncate(true).build()).unwrap();
+    let serialized = serde_json::to_string(&db).unwrap();
+    assert!(serialized.contains("\"kv_get\""));
+    assert!(serialized.contains("\"hit_count\":0"), "{}", serialized);
+    assert!(!serialized.contains("\"hit_count\":1"), "{}", serialized);
+    db.kv_get("a").ok();
+    let serialized = serde_json::to_string(&db).unwrap();
+    assert!(serialized.contains("\"hit_count\":1"), "{}", serialized);
+}
+
+#[test]
 fn test_revisions() {
     use rand::{rngs::StdRng, Rng, SeedableRng};
     let cfg = DbConfig::builder()
