@@ -74,6 +74,10 @@ fn main() {
         assert_eq!("v".as_bytes().to_vec(), val);
 
         // When reading a specific revision, after new commits the revision remains consistent.
+        let val = revision.kv_get("k");
+        assert_eq!(None, val);
+        let val = revision.kv_get("dof").unwrap();
+        assert_eq!("verb".as_bytes().to_vec(), val);
         let actual_revision_root_hash = revision
             .kv_root_hash()
             .expect("root-hash for revision-2 should exist");
