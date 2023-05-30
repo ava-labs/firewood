@@ -365,7 +365,7 @@ fn test_range_proof() -> Result<(), ProofError> {
 
         let mut keys = Vec::new();
         let mut vals = Vec::new();
-        for item in items.iter().take(end).skip(start) {
+        for item in items[start..end].iter() {
             keys.push(&item.0);
             vals.push(&item.1);
         }
@@ -400,7 +400,7 @@ fn test_bad_range_proof() -> Result<(), ProofError> {
 
         let mut keys: Vec<[u8; 32]> = Vec::new();
         let mut vals: Vec<[u8; 20]> = Vec::new();
-        for item in items.iter().take(end).skip(start) {
+        for item in items[start..end].iter() {
             keys.push(*item.0);
             vals.push(*item.1);
         }
@@ -496,7 +496,7 @@ fn test_range_proof_with_non_existent_proof() -> Result<(), ProofError> {
 
         let mut keys: Vec<[u8; 32]> = Vec::new();
         let mut vals: Vec<[u8; 20]> = Vec::new();
-        for item in items.iter().take(end).skip(start) {
+        for item in items[start..end].iter() {
             keys.push(*item.0);
             vals.push(*item.1);
         }
@@ -544,7 +544,7 @@ fn test_range_proof_with_invalid_non_existent_proof() -> Result<(), ProofError> 
     let mut keys: Vec<[u8; 32]> = Vec::new();
     let mut vals: Vec<[u8; 20]> = Vec::new();
     // Create gap
-    for item in items.iter().take(end).skip(start) {
+    for item in items[start..end].iter() {
         keys.push(*item.0);
         vals.push(*item.1);
     }
@@ -567,7 +567,7 @@ fn test_range_proof_with_invalid_non_existent_proof() -> Result<(), ProofError> 
     let mut keys: Vec<[u8; 32]> = Vec::new();
     let mut vals: Vec<[u8; 20]> = Vec::new();
     // Create gap
-    for item in items.iter().take(end).skip(start) {
+    for item in items[start..end].iter() {
         keys.push(*item.0);
         vals.push(*item.1);
     }
@@ -777,13 +777,15 @@ fn test_gapped_range_proof() -> Result<(), ProofError> {
 
     let mut keys = Vec::new();
     let mut vals = Vec::new();
-    for (i, item) in items.iter().enumerate().take(last).skip(first) {
-        if i == (first + last) / 2 {
-            continue;
-        }
-        keys.push(&item.0);
-        vals.push(&item.1);
-    }
+    let middle = (first + last) / 2 - first;
+    items[first..last]
+        .iter()
+        .enumerate()
+        .filter(|(pos, _)| *pos != middle)
+        .for_each(|(_, item)| {
+            keys.push(&item.0);
+            vals.push(&item.1);
+        });
 
     assert!(merkle
         .verify_range_proof(&proof, &items[0].0, &items[items.len() - 1].0, keys, vals)
