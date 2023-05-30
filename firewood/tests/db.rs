@@ -10,7 +10,7 @@ macro_rules! kv_dump {
 }
 
 #[test]
-fn test_serialize_db() {
+fn test_basic_metrics() {
     let cfg = DbConfig::builder()
         .meta_ncached_pages(1024)
         .meta_ncached_files(128)
@@ -26,13 +26,10 @@ fn test_serialize_db() {
                 .build(),
         );
     let db = Db::new("test_revisions_db2", &cfg.clone().truncate(true).build()).unwrap();
-    let serialized = serde_json::to_string(&db).unwrap();
-    assert!(serialized.contains("\"kv_get\""));
-    assert!(serialized.contains("\"hit_count\":0"), "{}", serialized);
-    assert!(!serialized.contains("\"hit_count\":1"), "{}", serialized);
+    let metrics = db.metrics();
+    assert_eq!(metrics.kv_get.hit_count.get(), 0);
     db.kv_get("a").ok();
-    let serialized = serde_json::to_string(&db).unwrap();
-    assert!(serialized.contains("\"hit_count\":1"), "{}", serialized);
+    assert_eq!(metrics.kv_get.hit_count.get(), 1);
 }
 
 #[test]

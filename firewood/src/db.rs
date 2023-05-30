@@ -471,17 +471,12 @@ impl Drop for DbInner {
 }
 
 /// Firewood database handle.
-#[derive(serde::Serialize)]
 pub struct Db {
-    #[serde(skip_serializing)]
     inner: Arc<RwLock<DbInner>>,
-    #[serde(skip_serializing)]
     revisions: Arc<Mutex<DbRevInner>>,
-    #[serde(skip_serializing)]
     payload_regn_nbit: u64,
-    #[serde(skip_serializing)]
     rev_cfg: DbRevConfig,
-    metrics: DbMetrics,
+    metrics: Arc<DbMetrics>,
 }
 
 pub struct DbRevInner {
@@ -490,7 +485,7 @@ pub struct DbRevInner {
     base: Universe<StoreRevShared>,
 }
 
-#[metered(registry = DbMetrics)]
+#[metered(registry = DbMetrics, visibility = pub)]
 impl Db {
     /// Open a database.
     pub fn new<P: AsRef<Path>>(db_path: P, cfg: &DbConfig) -> Result<Self, DbError> {
@@ -754,7 +749,7 @@ impl Db {
             })),
             payload_regn_nbit: header.payload_regn_nbit,
             rev_cfg: cfg.rev.clone(),
-            metrics: DbMetrics::default(),
+            metrics: Arc::new(DbMetrics::default()),
         })
     }
 
@@ -892,6 +887,9 @@ impl Db {
                 blob: BlobStash::new(Box::new(blob_space)),
             },
         })
+    }
+    pub fn metrics(&self) -> Arc<DbMetrics> {
+        self.metrics.clone()
     }
 }
 #[cfg(feature = "eth")]
