@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use bytemuck::{cast_slice, AnyBitPattern};
-use metered::{metered, HitCount, Throughput};
+use metered::{metered, HitCount};
 use parking_lot::{Mutex, RwLock};
 #[cfg(feature = "eth")]
 use primitive_types::U256;
@@ -773,7 +773,7 @@ impl Db {
     }
 
     /// Get a value in the kv store associated with a particular key.
-    #[measure([HitCount, Throughput])]
+    #[measure([HitCount])]
     pub fn kv_get<K: AsRef<[u8]>>(&self, key: K) -> Result<Vec<u8>, DbError> {
         self.inner
             .read()
