@@ -37,6 +37,7 @@ sha3 = "0.10.2"
 thiserror = "1.0.38"
 tokio = { version = "1.21.1", features = ["rt", "sync", "macros"] }
 typed-builder = "0.14.0"
+tempdir = "0.3.7"
 
 [dev-dependencies]
 criterion = "0.5.1"
