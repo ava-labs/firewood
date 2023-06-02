@@ -105,8 +105,14 @@ pub struct WalRingId {
     counter: u32,
 }
 
+impl Default for WalRingId {
+    fn default() -> Self {
+        Self::empty_id()
+    }
+}
+
 impl WalRingId {
-    pub fn empty_id() -> Self {
+    pub const fn empty_id() -> Self {
         WalRingId {
             start: 0,
             end: 0,
@@ -182,7 +188,6 @@ pub trait WalFile {
     /// Read data with offset. Return `Ok(None)` when it reaches EOF.
     async fn read(&self, offset: WalPos, length: usize) -> Result<Option<WalBytes>, WalError>;
     /// Truncate a file to a specified length.
-    #[allow(clippy::result_unit_err)]
     async fn truncate(&self, length: usize) -> Result<(), WalError>;
 }
 
