@@ -168,15 +168,15 @@ pub fn oflags() -> OFlag {
 }
 
 #[async_trait(?Send)]
-impl WalStore for WalStoreAio {
+impl WalStore<WalFileAio> for WalStoreAio {
     type FileNameIter = std::vec::IntoIter<String>;
 
-    async fn open_file(&self, filename: &str, _touch: bool) -> Result<Box<dyn WalFile>, WalError> {
+    async fn open_file(&self, filename: &str, _touch: bool) -> Result<WalFileAio, WalError> {
         let path = self.root_dir.join(filename);
 
         let file = WalFileAio::open_file(path).await?;
 
-        Ok(Box::new(WalFileAio::new(file, self.aiomgr.clone())))
+        Ok(WalFileAio::new(file, self.aiomgr.clone()))
     }
 
     async fn remove_file(&self, filename: String) -> Result<(), WalError> {
