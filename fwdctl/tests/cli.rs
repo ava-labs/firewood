@@ -241,12 +241,11 @@ mod tmpdb {
         }
     }
     pub fn path() -> DbPath {
-        let path = [
+        let path = Path::new(
             TARGET_TMP_DIR.unwrap_or(&std::env::var("TMPDIR").unwrap_or("/tmp".to_string())),
-            FIREWOOD_TEST_DB_NAME,
-        ]
-        .iter()
-        .collect::<PathBuf>();
+        )
+        .join(FIREWOOD_TEST_DB_NAME);
+
         DbPath { path }
     }
 }
