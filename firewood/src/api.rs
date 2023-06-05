@@ -20,7 +20,7 @@ pub type Nonce = u64;
 #[async_trait]
 pub trait Db<B: WriteBatch, R: Revision> {
     async fn new_writebatch(&self) -> B;
-    async fn get_revision(&self, nback: usize, cfg: Option<DbRevConfig>) -> Option<R>;
+    async fn get_revision(&self, root_hash: Hash, cfg: Option<DbRevConfig>) -> Option<R>;
 }
 
 #[async_trait]
@@ -83,9 +83,6 @@ where
         key: K,
         acc: &mut Option<Account>,
     ) -> Result<Self, DbError>;
-    /// Do not rehash merkle roots upon commit. This will leave the recalculation of the dirty root
-    /// hashes to future invocation of `root_hash`, `kv_root_hash` or batch commits.
-    async fn no_root_hash(self) -> Self;
 
     /// Persist all changes to the DB. The atomicity of the [WriteBatch] guarantees all changes are
     /// either retained on disk or lost together during a crash.

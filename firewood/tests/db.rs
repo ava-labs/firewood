@@ -1,4 +1,5 @@
 use firewood::db::{Db, DbConfig, WalConfig};
+use firewood::merkle::Hash;
 use std::{collections::VecDeque, fs::remove_dir_all, path::Path};
 
 macro_rules! kv_dump {
@@ -70,6 +71,7 @@ fn test_revisions() {
     for i in 0..10 {
         let db = Db::new("test_revisions_db", &cfg.clone().truncate(true).build()).unwrap();
         let mut dumped = VecDeque::new();
+        let mut hashes: VecDeque<Hash> = VecDeque::new();
         for _ in 0..10 {
             {
                 let mut wb = db.new_writebatch();
@@ -83,10 +85,13 @@ fn test_revisions() {
             }
             while dumped.len() > 10 {
                 dumped.pop_back();
+                hashes.pop_back();
             }
+            let root_hash = db.kv_root_hash().unwrap();
+            hashes.push_front(root_hash);
             dumped.push_front(kv_dump!(db));
-            for (i, _) in dumped.iter().enumerate().skip(1) {
-                let rev = db.get_revision(i, None).unwrap();
+            for (i, _) in dumped.iter().enumerate() {
+                let rev = db.get_revision(hashes[i].clone(), None).unwrap();
                 let a = &kv_dump!(rev);
                 let b = &dumped[i];
                 if a != b {
@@ -97,8 +102,8 @@ fn test_revisions() {
         }
         drop(db);
         let db = Db::new("test_revisions_db", &cfg.clone().truncate(false).build()).unwrap();
-        for (j, _) in dumped.iter().enumerate().skip(1) {
-            let rev = db.get_revision(j, None).unwrap();
+        for (j, hash) in hashes.into_iter().enumerate() {
+            let rev = db.get_revision(hash, None).unwrap();
             let a = &kv_dump!(rev);
             let b = &dumped[j];
             if a != b {
@@ -142,6 +147,7 @@ fn create_db_issue_proof() {
         wb = wb.kv_insert(k.as_bytes(), v.as_bytes().to_vec()).unwrap();
     }
     wb.commit();
+    let root_hash = db.kv_root_hash().unwrap();
 
     // Add second commit due to API restrictions
     let mut wb = db.new_writebatch();
@@ -152,7 +158,7 @@ fn create_db_issue_proof() {
     }
     wb.commit();
 
-    let rev = db.get_revision(1, None).unwrap();
+    let rev = db.get_revision(root_hash, None).unwrap();
     let key = "doe".as_bytes();
     let root_hash = rev.kv_root_hash();
 
