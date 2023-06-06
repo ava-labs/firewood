@@ -497,7 +497,7 @@ impl DiskBufferRequester {
 #[cfg(test)]
 mod tests {
     use sha3::Digest;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use tempdir::TempDir;
 
     use super::*;
@@ -610,7 +610,7 @@ mod tests {
 
         // TODO: Run the test in a separate standalone directory for concurrency reasons
         let tmp_dir = TempDir::new("firewood").unwrap();
-        let path = tmp_dir.path();
+        let path = get_file_path(tmp_dir.path(), file!(), line!());
         let (root_db_path, reset) = crate::file::open_dir(path, true).unwrap();
 
         // file descriptor of the state directory
@@ -661,22 +661,17 @@ mod tests {
         state_cache.update(&redo_delta).unwrap();
 
         // create a mutation request to the disk buffer by passing the page and write batch.
-        let d1 = disk_requester.clone();
-        let write_thread_handle = std::thread::spawn(move || {
-            // wal is empty
-            assert!(d1.collect_ash(1).unwrap().is_empty());
-            // page is not yet persisted to disk.
-            assert!(d1.get_page(STATE_SPACE, 0).is_none());
-            d1.write(
-                vec![BufferWrite {
-                    space_id: STATE_SPACE,
-                    delta: redo_delta,
-                }],
-                AshRecord([(STATE_SPACE, wal)].into()),
-            );
-        });
-        // wait for the write to complete.
-        write_thread_handle.join().unwrap();
+        // wal is empty
+        assert!(disk_requester.collect_ash(1).unwrap().is_empty());
+        // page is not yet persisted to disk.
+        assert!(disk_requester.get_page(STATE_SPACE, 0).is_none());
+        disk_requester.write(
+            vec![BufferWrite {
+                space_id: STATE_SPACE,
+                delta: redo_delta,
+            }],
+            AshRecord([(STATE_SPACE, wal)].into()),
+        );
 
         // verify
         assert_eq!(disk_requester.collect_ash(1).unwrap().len(), 1);
@@ -689,6 +684,10 @@ mod tests {
         );
         let view = shared_store.get_view(0, hash.len() as u64).unwrap();
         assert_eq!(view.as_deref(), hash);
+    }
+
+    fn get_file_path(path: &Path, file: &str, line: u32) -> PathBuf {
+        path.join(format!("{}_{}", file.replace('/', "-"), line))
     }
 
     fn init_buffer(buf_cfg: DiskBufferConfig, wal_cfg: WalConfig) -> DiskBufferRequester {
