@@ -11,15 +11,17 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-
+    outputs:
+      cache-key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
     steps:
       - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
-      - name: Cache Cargo intermediate products
-        uses: actions/cache@v3
+      - name: Restore Cargo Cache
+        id: cargo-cache
+        uses: actions/cache/restore@v3
         with:
           path: |
             ~/.cargo/bin/
@@ -34,11 +36,41 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-deps-${{ hashFiles('**/Cargo.toml') }}-
             ${{ runner.os }}-deps-
-      # TODO: do a `cargo fetch` here first
       - name: Check
         run: cargo check --workspace --tests --examples --benches
       - name: Build
         run: cargo build --workspace --tests --examples --benches
+        # Always update the cache 
+      - name: Cleanup
+        run: |
+          gh extension install actions/gh-actions-cache
+
+          REPO=${{ github.repository }}
+          BRANCH="refs/pull/${{ github.event.pull_request.number }}/merge"
+
+          echo "Fetching list of cache key"
+          cacheKeysForPR=$(gh actions-cache list -R $REPO -B $BRANCH | cut -f 1 )
+
+          ## Setting this to not fail the workflow while deleting cache keys.
+          set +e
+          echo "Deleting caches..."
+          for cacheKey in $cacheKeysForPR
+          do
+              gh actions-cache delete $cacheKey -R $REPO -B $BRANCH --confirm
+          done
+          echo "Done"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Save Cargo Cache
+        uses: actions/cache/save@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   lint:
     needs: build
@@ -61,7 +93,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-deps-${{ hashFiles('**/Cargo.toml') }}-${{ hashFiles('**/*.rs') }}
+          key: ${{ needs.build.outputs.cache-key }}
       - name: Format
         run: cargo fmt -- --check
       - name: Clippy
@@ -87,7 +119,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-deps-${{ hashFiles('**/Cargo.toml') }}-${{ hashFiles('**/*.rs') }}
+          key: ${{ needs.build.outputs.cache-key }}
       - name: Run tests
         run: cargo test --verbose
 
@@ -110,7 +142,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-deps-${{ hashFiles('**/Cargo.toml') }}-${{ hashFiles('**/*.rs') }}
+          key: ${{ needs.build.outputs.cache-key }}
       - name: Run simple example
         run: RUST_BACKTRACE=1 cargo run --example simple
       - name: Run dump example
@@ -140,7 +172,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-deps-${{ hashFiles('**/Cargo.toml') }}-${{ hashFiles('**/*.rs') }}
+          key: ${{ needs.build.outputs.cache-key }}
       - name: Lint intra docs links
         run: cargo rustdoc -p firewood --lib -- -D rustdoc::broken-intra-doc-links
       - name: Lint missing crate-level docs
