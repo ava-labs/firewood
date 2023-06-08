@@ -17,7 +17,7 @@ use growthring::{
     walerror::WalError,
     WalStoreImpl,
 };
-use shale::SpaceID;
+use shale::SpaceId;
 use tokio::sync::oneshot::error::RecvError;
 use tokio::sync::{mpsc, oneshot, Mutex, Semaphore};
 use typed_builder::TypedBuilder;
@@ -29,10 +29,10 @@ pub enum BufferCmd {
     /// Process a write batch against the underlying store.
     WriteBatch(Vec<BufferWrite>, AshRecord),
     /// Get a page from the disk buffer.
-    GetPage((SpaceID, u64), oneshot::Sender<Option<Arc<Page>>>),
+    GetPage((SpaceId, u64), oneshot::Sender<Option<Page>>),
     CollectAsh(usize, oneshot::Sender<Vec<AshRecord>>),
     /// Register a new space and add the files to a memory mapped pool.
-    RegCachedSpace(SpaceID, Arc<FilePool>),
+    RegCachedSpace(SpaceId, Arc<FilePool>),
     /// Returns false if the
     Shutdown,
 }
@@ -69,7 +69,7 @@ pub struct DiskBufferConfig {
 /// List of pages to write to disk.
 #[derive(Debug)]
 pub struct BufferWrite {
-    pub space_id: SpaceID,
+    pub space_id: SpaceId,
     pub delta: StoreDelta,
 }
 
@@ -84,7 +84,7 @@ struct PendingPage {
 /// Responsible for processing [`BufferCmd`]s from the [`DiskBufferRequester`]
 /// and managing the persistance of pages.
 pub struct DiskBuffer {
-    pending: HashMap<(SpaceID, u64), PendingPage>,
+    pending: HashMap<(SpaceId, u64), PendingPage>,
     inbound: mpsc::Receiver<BufferCmd>,
     fc_notifier: Option<oneshot::Sender<()>>,
     fc_blocker: Option<oneshot::Receiver<()>>,
@@ -133,7 +133,7 @@ impl DiskBuffer {
     }
 
     /// Add an pending pages to aio manager for processing by the local pool.
-    fn schedule_write(&mut self, page_key: (SpaceID, u64)) {
+    fn schedule_write(&mut self, page_key: (SpaceId, u64)) {
         let p = self.pending.get(&page_key).unwrap();
         let offset = page_key.1 << PAGE_SIZE_NBIT;
         let fid = offset >> p.file_nbit;
@@ -157,7 +157,7 @@ impl DiskBuffer {
         });
     }
 
-    fn finish_write(&mut self, page_key: (SpaceID, u64)) {
+    fn finish_write(&mut self, page_key: (SpaceId, u64)) {
         use std::collections::hash_map::Entry::*;
         match self.pending.entry(page_key) {
             Occupied(mut e) => {
@@ -444,7 +444,7 @@ impl DiskBufferRequester {
     }
 
     /// Get a page from the buffer.
-    pub fn get_page(&self, space_id: SpaceID, pid: u64) -> Option<Arc<Page>> {
+    pub fn get_page(&self, space_id: SpaceId, pid: u64) -> Option<Page> {
         let (resp_tx, resp_rx) = oneshot::channel();
         self.sender
             .blocking_send(BufferCmd::GetPage((space_id, pid), resp_tx))
@@ -509,7 +509,7 @@ mod tests {
     };
     use shale::CachedStore;
 
-    const STATE_SPACE: SpaceID = 0x0;
+    const STATE_SPACE: SpaceId = 0x0;
     const HASH_SIZE: usize = 32;
     #[test]
     #[ignore = "ref: https://github.com/ava-labs/firewood/issues/45"]
