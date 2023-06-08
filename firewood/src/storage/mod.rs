@@ -55,7 +55,8 @@ pub trait MemStoreR: Debug {
     fn id(&self) -> SpaceId;
 }
 
-type Page = [u8; PAGE_SIZE as usize];
+// Page should be boxed as to not take up so much stack-space
+type Page = Box<[u8; PAGE_SIZE as usize]>;
 
 #[derive(Debug)]
 pub struct SpaceWrite {
@@ -152,7 +153,7 @@ impl AshRecord {
 }
 
 /// Basic copy-on-write item in the linear storage space for multi-versioning.
-pub struct DeltaPage(u64, Box<Page>);
+pub struct DeltaPage(u64, Page);
 
 impl DeltaPage {
     #[inline(always)]
@@ -423,7 +424,7 @@ impl<S: Clone + CachedStore + 'static> DerefMut for StoreShared<S> {
 
 #[derive(Debug, Default)]
 struct StoreRevMutDelta {
-    pages: HashMap<u64, Box<Page>>,
+    pages: HashMap<u64, Page>,
     plain: Ash,
 }
 
@@ -646,14 +647,14 @@ pub struct StoreConfig {
     ncached_files: usize,
     #[builder(default = 22)] // 4MB file by default
     file_nbit: u64,
-    space_id: SpaceID,
+    space_id: SpaceId,
     rootdir: PathBuf,
 }
 
 #[derive(Debug)]
 struct CachedSpaceInner {
-    cached_pages: lru::LruCache<u64, Box<Page>>,
-    pinned_pages: HashMap<u64, (usize, Box<Page>)>,
+    cached_pages: lru::LruCache<u64, Page>,
+    pinned_pages: HashMap<u64, (usize, Page)>,
     files: Arc<FilePool>,
     disk_buffer: DiskBufferRequester,
 }
@@ -704,14 +705,15 @@ impl CachedSpaceInner {
         let file_size = 1 << file_nbit;
         let poff = pid << PAGE_SIZE_NBIT;
         let file = self.files.get_file(poff >> file_nbit)?;
-        let mut page: Page = [0; PAGE_SIZE as usize];
+        let mut page = Page::new([0; PAGE_SIZE as usize]);
         nix::sys::uio::pread(
             file.get_fd(),
-            &mut page,
+            page.deref_mut(),
             (poff & (file_size - 1)) as nix::libc::off_t,
         )
         .map_err(StoreError::System)?;
-        Ok(Box::new(page))
+
+        Ok(page)
     }
 
     fn pin_page(

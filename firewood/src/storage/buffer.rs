@@ -75,7 +75,7 @@ pub struct BufferWrite {
 
 #[derive(Debug)]
 struct PendingPage {
-    staging_data: Arc<Page>,
+    staging_data: Page,
     file_nbit: u64,
     staging_notifiers: Vec<Rc<Semaphore>>,
     writing_notifiers: Vec<Rc<Semaphore>>,
@@ -143,12 +143,9 @@ impl DiskBuffer {
             .unwrap()
             .get_file(fid)
             .unwrap();
-        let fut = self.aiomgr.write(
-            file.get_fd(),
-            offset & fmask,
-            Box::new(*p.staging_data),
-            None,
-        );
+        let fut = self
+            .aiomgr
+            .write(file.get_fd(), offset & fmask, p.staging_data.clone(), None);
         let s = unsafe { self.get_longlive_self() };
         self.start_task(async move {
             let (res, _) = fut.await;
@@ -274,7 +271,7 @@ impl DiskBuffer {
                     match self.pending.entry(page_key) {
                         Occupied(mut e) => {
                             let e = e.get_mut();
-                            e.staging_data = w.1.into();
+                            e.staging_data = w.1;
                             e.staging_notifiers.push(sem.clone());
                             npermit += 1;
                         }
@@ -284,7 +281,7 @@ impl DiskBuffer {
                                 .unwrap()
                                 .file_nbit;
                             e.insert(PendingPage {
-                                staging_data: w.1.into(),
+                                staging_data: w.1,
                                 file_nbit,
                                 staging_notifiers: Vec::new(),
                                 writing_notifiers: vec![sem.clone()],
