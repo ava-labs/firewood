@@ -1,5 +1,5 @@
 use firewood::db::{Db, DbConfig, WalConfig};
-use firewood::merkle::Hash;
+use firewood::merkle::TrieHash;
 use std::{collections::VecDeque, fs::remove_dir_all, path::Path};
 
 macro_rules! kv_dump {
@@ -71,7 +71,7 @@ fn test_revisions() {
     for i in 0..10 {
         let db = Db::new("test_revisions_db", &cfg.clone().truncate(true).build()).unwrap();
         let mut dumped = VecDeque::new();
-        let mut hashes: VecDeque<Hash> = VecDeque::new();
+        let mut hashes: VecDeque<TrieHash> = VecDeque::new();
         for _ in 0..10 {
             {
                 let mut wb = db.new_writebatch();
@@ -90,27 +90,31 @@ fn test_revisions() {
             let root_hash = db.kv_root_hash().unwrap();
             hashes.push_front(root_hash);
             dumped.push_front(kv_dump!(db));
-            for (i, _) in dumped.iter().enumerate() {
-                let rev = db.get_revision(hashes[i].clone(), None).unwrap();
-                let a = &kv_dump!(rev);
-                let b = &dumped[i];
-                if a != b {
-                    print!("{a}\n{b}");
-                    panic!("not the same");
-                }
-            }
+            dumped
+                .iter()
+                .zip(hashes.iter().cloned())
+                .map(|(data, hash)| (data, db.get_revision(hash, None).unwrap()))
+                .map(|(data, rev)| (data, kv_dump!(rev)))
+                .for_each(|(b, a)| {
+                    if &a != b {
+                        print!("{a}\n{b}");
+                        panic!("not the same");
+                    }
+                });
         }
         drop(db);
         let db = Db::new("test_revisions_db", &cfg.clone().truncate(false).build()).unwrap();
-        for (j, hash) in hashes.into_iter().enumerate() {
-            let rev = db.get_revision(hash, None).unwrap();
-            let a = &kv_dump!(rev);
-            let b = &dumped[j];
-            if a != b {
-                print!("{a}\n{b}");
-                panic!("not the same");
-            }
-        }
+        dumped
+            .iter()
+            .zip(hashes.iter().cloned())
+            .map(|(data, hash)| (data, db.get_revision(hash, None).unwrap()))
+            .map(|(data, rev)| (data, kv_dump!(rev)))
+            .for_each(|(b, a)| {
+                if &a != b {
+                    print!("{a}\n{b}");
+                    panic!("not the same");
+                }
+            });
         println!("i = {i}");
     }
 }

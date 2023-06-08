@@ -22,7 +22,7 @@ use typed_builder::TypedBuilder;
 #[cfg(feature = "eth")]
 use crate::account::{Account, AccountRlp, Blob, BlobStash};
 use crate::file;
-use crate::merkle::{Hash, IdTrans, Merkle, MerkleError, Node, HASH_SIZE};
+use crate::merkle::{IdTrans, Merkle, MerkleError, Node, TrieHash, TRIE_HASH_LEN};
 use crate::proof::{Proof, ProofError};
 use crate::storage::buffer::{BufferWrite, DiskBuffer, DiskBufferRequester};
 pub use crate::storage::{buffer::DiskBufferConfig, WalConfig};
@@ -342,7 +342,7 @@ impl DbRev {
     }
 
     /// Get root hash of the generic key-value storage.
-    pub fn kv_root_hash(&self) -> Result<Hash, DbError> {
+    pub fn kv_root_hash(&self) -> Result<TrieHash, DbError> {
         self.merkle
             .root_hash::<IdTrans>(self.header.kv_root)
             .map_err(DbError::Merkle)
@@ -414,7 +414,7 @@ impl DbRev {
     }
 
     /// Get root hash of the world state of all accounts.
-    pub fn root_hash(&self) -> Result<Hash, DbError> {
+    pub fn root_hash(&self) -> Result<TrieHash, DbError> {
         self.merkle
             .root_hash::<AccountRlp>(self.header.acc_root)
             .map_err(DbError::Merkle)
@@ -494,7 +494,7 @@ pub struct Db {
 
 pub struct DbRevInner {
     inner: VecDeque<Universe<StoreRevShared>>,
-    root_hashes: VecDeque<Hash>,
+    root_hashes: VecDeque<TrieHash>,
     max_revisions: usize,
     base: Universe<StoreRevShared>,
 }
@@ -801,7 +801,7 @@ impl Db {
         self.inner.read().latest.kv_dump(w)
     }
     /// Get root hash of the latest generic key-value storage.
-    pub fn kv_root_hash(&self) -> Result<Hash, DbError> {
+    pub fn kv_root_hash(&self) -> Result<TrieHash, DbError> {
         self.inner.read().latest.kv_root_hash()
     }
 
@@ -820,7 +820,7 @@ impl Db {
     ///
     /// If no revision with matching root hash found, returns None.
     #[measure([HitCount])]
-    pub fn get_revision(&self, root_hash: Hash, cfg: Option<DbRevConfig>) -> Option<Revision> {
+    pub fn get_revision(&self, root_hash: TrieHash, cfg: Option<DbRevConfig>) -> Option<Revision> {
         let mut revisions = self.revisions.lock();
         let inner_lock = self.inner.read();
 
@@ -853,10 +853,10 @@ impl Db {
                         );
                         // No need the usage of `ShaleStore`, as this is just simple Hash value.
                         let r = root_hash_store
-                            .get_view(0, HASH_SIZE as u64)
+                            .get_view(0, TRIE_HASH_LEN as u64)
                             .unwrap()
                             .as_deref();
-                        let r = Hash(r[..HASH_SIZE].try_into().unwrap());
+                        let r = TrieHash(r[..TRIE_HASH_LEN].try_into().unwrap());
                         if r == root_hash {
                             nback = i;
                             found = true;
@@ -981,7 +981,7 @@ impl Db {
     }
 
     /// Get root hash of the latest world state of all accounts.
-    pub fn root_hash(&self) -> Result<Hash, DbError> {
+    pub fn root_hash(&self) -> Result<TrieHash, DbError> {
         self.inner.read().latest.root_hash()
     }
 
@@ -1069,6 +1069,7 @@ impl WriteBatch {
 
         #[cfg(feature = "eth")]
         rev_inner.latest.root_hash().ok();
+
         let kv_root_hash = rev_inner.latest.kv_root_hash().ok();
         let kv_root_hash = kv_root_hash.expect("kv_root_hash should not be none");
 
@@ -1121,6 +1122,7 @@ impl WriteBatch {
         };
 
         let mut revisions = self.r.lock();
+        let max_revisions = revisions.max_revisions;
         if let Some(rev) = revisions.inner.front_mut() {
             rev.merkle
                 .meta
@@ -1136,7 +1138,7 @@ impl WriteBatch {
                 .set_base_space(latest_past.blob.payload.inner().clone());
         }
         revisions.inner.push_front(latest_past);
-        while revisions.inner.len() > revisions.max_revisions {
+        while revisions.inner.len() > max_revisions {
             revisions.inner.pop_back();
         }
 
@@ -1148,8 +1150,10 @@ impl WriteBatch {
 
         // update the rolling window of root hashes
         revisions.root_hashes.push_front(kv_root_hash.clone());
-        while revisions.root_hashes.len() > revisions.max_revisions {
-            revisions.root_hashes.pop_back();
+        if revisions.root_hashes.len() > max_revisions {
+            revisions
+                .root_hashes
+                .resize(max_revisions, TrieHash([0; TRIE_HASH_LEN]));
         }
 
         rev_inner.root_hash_staging.write(0, &kv_root_hash.0);
@@ -1249,7 +1253,7 @@ impl WriteBatch {
                 blob_stash.free_blob(acc.code).map_err(DbError::Blob)?;
             }
             acc.set_code(
-                Hash(sha3::Keccak256::digest(code).into()),
+                TrieHash(sha3::Keccak256::digest(code).into()),
                 blob_stash
                     .new_blob(Blob::Code(code.to_vec()))
                     .map_err(DbError::Blob)?

@@ -9,7 +9,7 @@ use crate::account::Account;
 use primitive_types::U256;
 
 use crate::db::{DbError, DbRevConfig};
-use crate::merkle::Hash;
+use crate::merkle::TrieHash;
 #[cfg(feature = "proof")]
 use crate::{merkle::MerkleError, proof::Proof};
 
@@ -20,7 +20,7 @@ pub type Nonce = u64;
 #[async_trait]
 pub trait Db<B: WriteBatch, R: Revision> {
     async fn new_writebatch(&self) -> B;
-    async fn get_revision(&self, root_hash: Hash, cfg: Option<DbRevConfig>) -> Option<R>;
+    async fn get_revision(&self, root_hash: TrieHash, cfg: Option<DbRevConfig>) -> Option<R>;
 }
 
 #[async_trait]
@@ -94,11 +94,11 @@ pub trait Revision
 where
     Self: Sized,
 {
-    async fn kv_root_hash(&self) -> Result<Hash, DbError>;
+    async fn kv_root_hash(&self) -> Result<TrieHash, DbError>;
     async fn kv_get<K: AsRef<[u8]> + Send + Sync>(&self, key: K) -> Result<Vec<u8>, DbError>;
 
     async fn kv_dump<W: Write + Send + Sync>(&self, writer: W) -> Result<(), DbError>;
-    async fn root_hash(&self) -> Result<Hash, DbError>;
+    async fn root_hash(&self) -> Result<TrieHash, DbError>;
     async fn dump<W: Write + Send + Sync>(&self, writer: W) -> Result<(), DbError>;
 
     #[cfg(feature = "proof")]

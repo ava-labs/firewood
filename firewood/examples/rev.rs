@@ -5,14 +5,14 @@ use std::collections::VecDeque;
 
 use firewood::{
     db::{Db, DbConfig, Revision, WalConfig},
-    merkle::Hash,
+    merkle::TrieHash,
     proof::Proof,
 };
 
 /// cargo run --example rev
 fn main() {
     let cfg = DbConfig::builder().wal(WalConfig::builder().max_revisions(10).build());
-    let mut hashes: VecDeque<Hash> = VecDeque::new();
+    let mut hashes: VecDeque<TrieHash> = VecDeque::new();
     {
         let db = Db::new("rev_db", &cfg.clone().truncate(true).build())
             .expect("db initiation should succeed");

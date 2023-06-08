@@ -16,7 +16,7 @@ use crate::db::DbRevConfig;
 use crate::{
     api,
     db::{DbConfig, DbError},
-    merkle::Hash,
+    merkle::TrieHash,
 };
 use async_trait::async_trait;
 
@@ -252,7 +252,7 @@ impl super::RevisionHandle {
 
 #[async_trait]
 impl Revision for super::RevisionHandle {
-    async fn kv_root_hash(&self) -> Result<Hash, DbError> {
+    async fn kv_root_hash(&self) -> Result<TrieHash, DbError> {
         let (send, recv) = oneshot::channel();
         let msg = Request::RevRequest(RevRequest::RootHash {
             handle: self.id,
@@ -298,7 +298,7 @@ impl Revision for super::RevisionHandle {
     ) {
         todo!()
     }
-    async fn root_hash(&self) -> Result<Hash, DbError> {
+    async fn root_hash(&self) -> Result<TrieHash, DbError> {
         let (send, recv) = oneshot::channel();
         let msg = Request::RevRequest(RevRequest::RootHash {
             handle: self.id,
@@ -380,7 +380,7 @@ where
 
     async fn get_revision(
         &self,
-        root_hash: Hash,
+        root_hash: TrieHash,
         cfg: Option<DbRevConfig>,
     ) -> Option<RevisionHandle> {
         let (send, recv) = oneshot::channel();
