@@ -81,15 +81,15 @@ pub struct Proof<V>(pub HashMap<HashKey, V>);
 /// is the api::DbView trait defined next.
 #[async_trait]
 pub trait Db {
-    type DbView: DbView;
-    type Proposal: DbView;
+    type Historical: DbView;
+    type Proposal: DbView + Proposal<Self::Historical>;
 
     /// Get a reference to a specific view based on a hash
     ///
     /// # Arguments
     ///
     /// - `hash` - Identifies the revision for the view
-    async fn revision(&self, hash: HashKey) -> Result<Weak<Self::DbView>, Error>;
+    async fn revision(&self, hash: HashKey) -> Result<Weak<Self::Historical>, Error>;
 
     /// Get the hash of the most recently committed version
     async fn root_hash(&self) -> Result<HashKey, Error>;
@@ -108,25 +108,17 @@ pub trait Db {
         &mut self,
         data: Batch<K, V>,
     ) -> Result<Self::Proposal, Error>;
-
-    /// Commit a specific hash
-    ///
-    /// # Arguments
-    ///
-    /// * `view` - The root this commit must apply against.
-    ///            If this is not the latest commit, this
-    ///            will return [Error::IncorrectRootHash]
-    async fn commit(&mut self, view: Self::Proposal) -> Result<Weak<Self::DbView>, Error>;
 }
 
 /// A view of the database at a specific time. These are wrapped with
 /// a Weak reference when fetching via a call to [Db::revision], as these
-/// can disappear either because they became too old, or are no longer a
-/// valid revision due to a [Db::commit].
+/// can disappear because they became too old.
 ///
 /// You only need a DbView if you need to read from a snapshot at a given
 /// root. Don't hold a strong reference to the DbView as it prevents older
-/// or invalid views from being cleaned up.
+/// views from being cleaned up.
+///
+/// A [Proposal] requires implementing DbView
 #[async_trait]
 pub trait DbView {
     /// Get the hash for the current DbView
@@ -152,8 +144,28 @@ pub trait DbView {
         last_key: Option<K>,
         limit: usize,
     ) -> Result<RangeProof<K, V>, Error>;
+}
 
-    /// Propose a new revision from an existing one
+/// A proposal for a new revision of the database.
+///
+/// A proposal may be committed, which consumes the
+/// [Proposal] and return the generic type T, which
+/// is the same thing you get if you call [Db::root_hash]
+/// immediately after committing, and then call
+/// [Db::revision] with the returned revision.
+///
+/// A proposal type must also implement everything in a
+/// [DbView], which means you can fetch values from it or
+/// obtain proofs.
+#[async_trait]
+pub trait Proposal<T: DbView>: DbView {
+    /// Commit this revision
+    ///
+    /// # Return value
+    ///
+    /// * A weak reference to a new historical view
+    async fn commit(self) -> Result<Weak<T>, Error>;
+    /// Propose a new revision on top of an existing proposal
     ///
     /// # Arguments
     ///
@@ -161,7 +173,7 @@ pub trait DbView {
     ///
     /// # Return value
     ///
-    /// A weak reference to the proposal
+    /// A weak reference to a new proposal
     ///
     async fn propose<K: KeyType, V: ValueType>(
         &self,

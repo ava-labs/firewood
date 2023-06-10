@@ -6,10 +6,10 @@ struct Db;
 
 #[async_trait]
 impl api::Db for Db {
-    type DbView = DbView;
+    type Historical = DbView;
     type Proposal = Proposal;
 
-    async fn revision(&self, _hash: api::HashKey) -> Result<Weak<Self::DbView>, api::Error> {
+    async fn revision(&self, _hash: api::HashKey) -> Result<Weak<Self::Historical>, api::Error> {
         todo!()
     }
 
@@ -21,13 +21,6 @@ impl api::Db for Db {
         &mut self,
         _data: Batch<K, V>,
     ) -> Result<Proposal, api::Error> {
-        todo!()
-    }
-
-    async fn commit(
-        &mut self,
-        _proposal: Self::Proposal,
-    ) -> Result<Weak<Self::DbView>, api::Error> {
         todo!()
     }
 }
@@ -59,12 +52,6 @@ impl api::DbView for DbView {
     ) -> Result<api::RangeProof<K, V>, api::Error> {
         todo!()
     }
-    async fn propose<K: KeyType, V: ValueType>(
-        &self,
-        _data: Batch<K, V>,
-    ) -> Result<Weak<Self>, api::Error> {
-        todo!()
-    }
 }
 
 struct Proposal;
@@ -94,10 +81,17 @@ impl api::DbView for Proposal {
     ) -> Result<api::RangeProof<K, V>, api::Error> {
         todo!()
     }
+}
+
+#[async_trait]
+impl api::Proposal<DbView> for Proposal {
     async fn propose<K: KeyType, V: ValueType>(
         &self,
         _data: Batch<K, V>,
     ) -> Result<Weak<Self>, api::Error> {
+        todo!()
+    }
+    async fn commit(self) -> Result<Weak<DbView>, api::Error> {
         todo!()
     }
 }
