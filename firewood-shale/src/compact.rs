@@ -589,7 +589,7 @@ impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
     }
 }
 
-impl<T: Storable + std::fmt::Debug + 'static, M: CachedStore> ShaleStore<T>
+impl<T: Storable + Send + Sync + std::fmt::Debug + 'static, M: CachedStore> ShaleStore<T>
     for CompactSpace<T, M>
 {
     fn put_item(&'_ self, item: T, extra: u64) -> Result<ObjRef<'_, T>, ShaleError> {

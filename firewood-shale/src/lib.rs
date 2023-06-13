@@ -294,7 +294,7 @@ impl<'a, T> Drop for ObjRef<'a, T> {
 
 /// A persistent item storage backed by linear logical space. New items can be created and old
 /// items could be retrieved or dropped.
-pub trait ShaleStore<T>: Debug {
+pub trait ShaleStore<T: Send + Sync>: Debug {
     /// Dereference [ObjPtr] to a unique handle that allows direct access to the item in memory.
     fn get_item(&'_ self, ptr: ObjPtr<T>) -> Result<ObjRef<'_, T>, ShaleError>;
     /// Allocate a new item.
