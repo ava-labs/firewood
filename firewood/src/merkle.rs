@@ -370,7 +370,7 @@ impl ExtNode {
     }
 }
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub struct Node {
     root_hash: OnceCell<TrieHash>,
     eth_rlp_long: OnceCell<bool>,
@@ -807,6 +807,7 @@ macro_rules! write_node {
     };
 }
 
+#[derive(Debug)]
 pub struct Merkle {
     store: Box<dyn ShaleStore<Node>>,
 }
