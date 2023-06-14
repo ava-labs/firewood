@@ -212,6 +212,7 @@ impl BranchNode {
                     let mut c_ref = store.get_item(*c).unwrap();
                     if c_ref.get_eth_rlp_long::<T>(store) {
                         stream.append(&&(*c_ref.get_root_hash::<T>(store))[..]);
+                        // See struct docs for ordering requirements
                         if c_ref.lazy_dirty.load(Ordering::Relaxed) {
                             c_ref.write(|_| {}).unwrap();
                             c_ref.lazy_dirty.store(false, Ordering::Relaxed)
@@ -376,6 +377,8 @@ pub struct Node {
     eth_rlp_long: OnceLock<bool>,
     eth_rlp: OnceLock<Vec<u8>>,
     // lazy_dirty is an atomicbool, but only writers ever set it
+    // Therefore, we can always use Relaxed ordering. It's atomic
+    // just to ensure Sync + Send.
     lazy_dirty: AtomicBool,
     inner: NodeType,
 }
