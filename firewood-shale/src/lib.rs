@@ -339,7 +339,7 @@ impl<T: Storable + Debug> Debug for StoredView<T> {
             decoded,
             offset,
             len_limit,
-            mem: _
+            mem: _,
         } = self;
         f.debug_struct("StoredView")
             .field("decoded", decoded)

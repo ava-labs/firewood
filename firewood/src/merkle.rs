@@ -391,7 +391,7 @@ impl PartialEq for Node {
             eth_rlp_long,
             eth_rlp,
             lazy_dirty,
-            inner
+            inner,
         } = self;
         *root_hash == other.root_hash
             && *eth_rlp_long == other.eth_rlp_long

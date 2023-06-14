@@ -1,8 +1,8 @@
 use super::{CachedStore, Obj, ObjPtr, ObjRef, ShaleError, ShaleStore, Storable, StoredView};
 use std::cell::UnsafeCell;
+use std::fmt::Debug;
 use std::io::{Cursor, Write};
 use std::rc::Rc;
-use std::fmt::Debug;
 
 #[derive(Debug)]
 pub struct CompactHeader {
