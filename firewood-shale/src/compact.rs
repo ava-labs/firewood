@@ -2,6 +2,7 @@ use super::{CachedStore, Obj, ObjPtr, ObjRef, ShaleError, ShaleStore, Storable, 
 use std::cell::UnsafeCell;
 use std::io::{Cursor, Write};
 use std::rc::Rc;
+use std::fmt::Debug;
 
 #[derive(Debug)]
 pub struct CompactHeader {
@@ -171,7 +172,7 @@ impl CompactSpaceHeader {
 }
 
 impl Storable for CompactSpaceHeader {
-    fn hydrate<T: CachedStore + std::fmt::Debug>(addr: u64, mem: &T) -> Result<Self, ShaleError> {
+    fn hydrate<T: CachedStore + Debug>(addr: u64, mem: &T) -> Result<Self, ShaleError> {
         let raw = mem
             .get_view(addr, Self::MSIZE)
             .ok_or(ShaleError::InvalidCacheView {
@@ -309,7 +310,7 @@ impl<T: Storable, M: CachedStore> CompactSpaceInner<T, M> {
         StoredView::ptr_to_obj(self.meta_space.as_ref(), ptr, CompactDescriptor::MSIZE)
     }
 
-    fn get_data_ref<U: Storable + std::fmt::Debug + 'static>(
+    fn get_data_ref<U: Storable + Debug + 'static>(
         &self,
         ptr: ObjPtr<U>,
         len_limit: u64,
@@ -589,7 +590,7 @@ impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
     }
 }
 
-impl<T: Storable + Send + Sync + std::fmt::Debug + 'static, M: CachedStore> ShaleStore<T>
+impl<T: Storable + Send + Sync + Debug + 'static, M: CachedStore> ShaleStore<T>
     for CompactSpace<T, M>
 {
     fn put_item(&'_ self, item: T, extra: u64) -> Result<ObjRef<'_, T>, ShaleError> {

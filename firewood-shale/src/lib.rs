@@ -335,10 +335,16 @@ pub struct StoredView<T: Storable> {
 
 impl<T: Storable + Debug> Debug for StoredView<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let StoredView {
+            decoded,
+            offset,
+            len_limit,
+            mem: _
+        } = self;
         f.debug_struct("StoredView")
-            .field("decoded", &self.decoded)
-            .field("offset", &self.offset)
-            .field("len_limit", &self.len_limit)
+            .field("decoded", decoded)
+            .field("offset", offset)
+            .field("len_limit", len_limit)
             .finish()
     }
 }

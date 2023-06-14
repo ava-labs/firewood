@@ -383,11 +383,18 @@ pub struct Node {
 impl Eq for Node {}
 impl PartialEq for Node {
     fn eq(&self, other: &Self) -> bool {
-        self.root_hash == other.root_hash
-            && self.eth_rlp_long == other.eth_rlp_long
-            && self.eth_rlp == other.eth_rlp
-            && self.lazy_dirty.load(Ordering::Relaxed) == other.lazy_dirty.load(Ordering::Relaxed)
-            && self.inner == other.inner
+        let Node {
+            root_hash,
+            eth_rlp_long,
+            eth_rlp,
+            lazy_dirty,
+            inner
+        } = self;
+        *root_hash == other.root_hash
+            && *eth_rlp_long == other.eth_rlp_long
+            && *eth_rlp == other.eth_rlp
+            && (*lazy_dirty).load(Ordering::Relaxed) == other.lazy_dirty.load(Ordering::Relaxed)
+            && *inner == other.inner
     }
 }
 impl Clone for Node {
