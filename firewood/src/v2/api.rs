@@ -1,7 +1,6 @@
+use std::{collections::HashMap, fmt::Debug, sync::Weak};
+
 use async_trait::async_trait;
-use std::collections::HashMap;
-use std::fmt::Debug;
-use std::sync::Weak;
 
 /// A KeyType is something that can be cast to a u8 reference,
 /// and can be sent and shared across threads. References with

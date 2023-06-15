@@ -1,6 +1,8 @@
-use crate::v2::api::{self, Batch, KeyType, ValueType};
-use async_trait::async_trait;
 use std::sync::Weak;
+
+use async_trait::async_trait;
+
+use crate::v2::api::{self, Batch, KeyType, ValueType};
 
 struct Db;
 
