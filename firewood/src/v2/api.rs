@@ -26,7 +26,10 @@ pub type HashKey = [u8; 32];
 /// A key/value pair operation. Only put (upsert) and delete are
 /// supported
 #[derive(Debug)]
-pub enum BatchOp<K: KeyType, V: ValueType> {
+pub enum BatchOp<
+    K: AsRef<[u8]> + Send + Sync + Debug + 'static,
+    V: AsRef<[u8]> + Send + Sync + Debug + 'static,
+> {
     Put { key: K, value: V },
     Delete { key: K },
 }
@@ -37,7 +40,12 @@ pub type Batch<K, V> = Vec<BatchOp<K, V>>;
 
 /// A convenience implementation to convert a vector of key/value
 /// pairs into a batch of insert operations
-pub fn vec_into_batch<K: KeyType, V: ValueType>(value: Vec<(K, V)>) -> Batch<K, V> {
+pub fn vec_into_batch<
+    K: AsRef<[u8]> + Send + Sync + Debug + 'static,
+    V: AsRef<[u8]> + Send + Sync + Debug + 'static,
+>(
+    value: Vec<(K, V)>,
+) -> Batch<K, V> {
     value
         .into_iter()
         .map(|(key, value)| BatchOp::Put { key, value })
@@ -60,12 +68,16 @@ pub enum Error {
     /// Key not found
     KeyNotFound,
     IO(std::io::Error),
+    InvalidProposal,
 }
 
 /// A range proof, consisting of a proof of the first key and the last key,
 /// and a vector of all key/value pairs
 #[derive(Debug)]
-pub struct RangeProof<K: KeyType, V: ValueType> {
+pub struct RangeProof<
+    K: AsRef<[u8]> + Send + Sync + Debug + 'static,
+    V: AsRef<[u8]> + Send + Sync + Debug + 'static,
+> {
     pub first_key: Proof<V>,
     pub last_key: Proof<V>,
     pub middle: Vec<(K, V)>,
@@ -103,10 +115,13 @@ pub trait Db {
     /// * `data` - A batch consisting of [BatchOp::Put] and
     ///            [BatchOp::Delete] operations to apply
     ///
-    async fn propose<K: KeyType, V: ValueType>(
+    async fn propose<
+        K: AsRef<[u8]> + Send + Sync + Debug + 'static,
+        V: AsRef<[u8]> + Send + Sync + Debug + 'static,
+    >(
         &mut self,
         data: Batch<K, V>,
-    ) -> Result<Self::Proposal, Error>;
+    ) -> Result<Weak<Self::Proposal>, Error>;
 }
 
 /// A view of the database at a specific time. These are wrapped with
@@ -124,10 +139,19 @@ pub trait DbView {
     async fn hash(&self) -> Result<HashKey, Error>;
 
     /// Get the value of a specific key
-    async fn val<K: KeyType, V: ValueType>(&self, key: K) -> Result<V, Error>;
+    async fn val<K: AsRef<[u8]> + Send + Sync + Debug + 'static>(
+        &self,
+        key: K,
+    ) -> Result<Vec<u8>, Error>;
 
     /// Obtain a proof for a single key
-    async fn single_key_proof<K: KeyType, V: ValueType>(&self, key: K) -> Result<Proof<V>, Error>;
+    async fn single_key_proof<
+        K: AsRef<[u8]> + Send + Sync + Debug + 'static,
+        V: AsRef<[u8]> + Send + Sync + Debug + 'static,
+    >(
+        &self,
+        key: K,
+    ) -> Result<Proof<V>, Error>;
 
     /// Obtain a range proof over a set of keys
     ///
@@ -137,7 +161,10 @@ pub trait DbView {
     /// * `last_key` - If None, continue to the end of the database
     /// * `limit` - The maximum number of keys in the range proof
     ///
-    async fn range_proof<K: KeyType, V: ValueType>(
+    async fn range_proof<
+        K: AsRef<[u8]> + Send + Sync + Debug + 'static,
+        V: AsRef<[u8]> + Send + Sync + Debug + 'static,
+    >(
         &self,
         first_key: Option<K>,
         last_key: Option<K>,
@@ -174,7 +201,10 @@ pub trait Proposal<T: DbView>: DbView {
     ///
     /// A weak reference to a new proposal
     ///
-    async fn propose<K: KeyType, V: ValueType>(
+    async fn propose<
+        K: AsRef<[u8]> + Send + Sync + Debug + 'static,
+        V: AsRef<[u8]> + Send + Sync + Debug + 'static,
+    >(
         &self,
         data: Batch<K, V>,
     ) -> Result<Weak<Self>, Error>;
