@@ -2,12 +2,12 @@ use std::{
     borrow::Borrow,
     collections::BTreeMap,
     fmt::Debug,
-    sync::{Arc, Mutex, Weak},
+    sync::{Arc, Mutex, RwLock, Weak},
 };
 
 use async_trait::async_trait;
 
-use crate::v2::api::{self, Batch};
+use crate::v2::api::{self, Batch, KeyType, ValueType};
 
 #[derive(Debug, Default)]
 pub struct Db {
@@ -27,10 +27,7 @@ impl api::Db for Db {
         todo!()
     }
 
-    async fn propose<
-        K: AsRef<[u8]> + Send + Sync + Debug + 'static,
-        V: AsRef<[u8]> + Send + Sync + Debug + 'static,
-    >(
+    async fn propose<K: KeyType, V: ValueType>(
         &mut self,
         data: Batch<K, V>,
     ) -> Result<Weak<Proposal>, api::Error> {
@@ -38,14 +35,14 @@ impl api::Db for Db {
         if dbview_cache_guard.is_none() {
             // TODO: actually get the latest dbview
             *dbview_cache_guard = Some(Arc::new(DbView {
-                proposals: Mutex::new(vec![]),
+                proposals: RwLock::new(vec![]),
             }));
         };
         let mut proposal_guard = dbview_cache_guard
             .as_ref()
             .unwrap()
             .proposals
-            .lock()
+            .write()
             .unwrap();
         let proposal = Arc::new(Proposal::new(
             ProposalBase::View(dbview_cache_guard.clone().unwrap()),
@@ -58,7 +55,7 @@ impl api::Db for Db {
 
 #[derive(Debug)]
 pub struct DbView {
-    proposals: Mutex<Vec<Arc<Proposal>>>,
+    proposals: RwLock<Vec<Arc<Proposal>>>,
 }
 
 #[async_trait]
@@ -67,27 +64,18 @@ impl api::DbView for DbView {
         todo!()
     }
 
-    async fn val<K: AsRef<[u8]> + Send + Sync + Debug + 'static>(
-        &self,
-        _key: K,
-    ) -> Result<Vec<u8>, api::Error> {
+    async fn val<K: KeyType>(&self, _key: K) -> Result<Vec<u8>, api::Error> {
         todo!()
     }
 
-    async fn single_key_proof<
-        K: AsRef<[u8]> + Send + Sync + Debug + 'static,
-        V: AsRef<[u8]> + Send + Sync + Debug + 'static,
-    >(
+    async fn single_key_proof<K: KeyType, V: ValueType>(
         &self,
         _key: K,
     ) -> Result<api::Proof<V>, api::Error> {
         todo!()
     }
 
-    async fn range_proof<
-        K: AsRef<[u8]> + Send + Sync + Debug + 'static,
-        V: AsRef<[u8]> + Send + Sync + Debug + 'static,
-    >(
+    async fn range_proof<K: KeyType, V: ValueType>(
         &self,
         _first_key: Option<K>,
         _last_key: Option<K>,
@@ -97,7 +85,7 @@ impl api::DbView for DbView {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum ProposalBase {
     Proposal(Arc<Proposal>),
     View(Arc<DbView>),
@@ -107,16 +95,19 @@ enum ProposalBase {
 pub struct Proposal {
     base: ProposalBase,
     delta: BTreeMap<Vec<u8>, Option<Vec<u8>>>,
-    children: Mutex<Vec<Arc<Proposal>>>,
+    children: RwLock<Vec<Arc<Proposal>>>,
+}
+impl Clone for Proposal {
+    fn clone(&self) -> Self {
+        Self {
+            base: self.base.clone(),
+            delta: self.delta.clone(),
+            children: RwLock::new(vec![]),
+        }
+    }
 }
 impl Proposal {
-    fn new(
-        base: ProposalBase,
-        batch: Batch<
-            impl AsRef<[u8]> + Send + Sync + Debug + 'static,
-            impl AsRef<[u8]> + Send + Sync + Debug + 'static,
-        >,
-    ) -> Self {
+    fn new(base: ProposalBase, batch: Batch<impl KeyType, impl ValueType>) -> Self {
         let delta: BTreeMap<Vec<u8>, Option<Vec<u8>>> = batch
             .iter()
             .map(|op| match op {
@@ -129,7 +120,7 @@ impl Proposal {
         Self {
             base,
             delta,
-            children: Mutex::new(vec![]),
+            children: RwLock::new(vec![]),
         }
     }
 }
@@ -140,10 +131,7 @@ impl api::DbView for Proposal {
         todo!()
     }
 
-    async fn val<K: AsRef<[u8]> + Send + Sync + Debug + 'static>(
-        &self,
-        key: K,
-    ) -> Result<Vec<u8>, api::Error> {
+    async fn val<K: KeyType>(&self, key: K) -> Result<Vec<u8>, api::Error> {
         // see if this key is in this proposal
         match self.delta.get(key.as_ref()) {
             Some(change) => match change {
@@ -159,20 +147,14 @@ impl api::DbView for Proposal {
         }
     }
 
-    async fn single_key_proof<
-        K: AsRef<[u8]> + Send + Sync + Debug + 'static,
-        V: AsRef<[u8]> + Send + Sync + Debug + 'static,
-    >(
+    async fn single_key_proof<K: KeyType, V: ValueType>(
         &self,
         _key: K,
     ) -> Result<api::Proof<V>, api::Error> {
         todo!()
     }
 
-    async fn range_proof<
-        KT: AsRef<[u8]> + Send + Sync + Debug + 'static,
-        VT: AsRef<[u8]> + Send + Sync + Debug + 'static,
-    >(
+    async fn range_proof<KT: KeyType, VT: ValueType>(
         &self,
         _first_key: Option<KT>,
         _last_key: Option<KT>,
@@ -184,17 +166,14 @@ impl api::DbView for Proposal {
 
 #[async_trait]
 impl api::Proposal<DbView> for Proposal {
-    async fn propose<
-        K: AsRef<[u8]> + Send + Sync + Debug + 'static,
-        V: AsRef<[u8]> + Send + Sync + Debug + 'static,
-    >(
+    async fn propose<K: KeyType, V: ValueType>(
         &self,
         data: Batch<K, V>,
     ) -> Result<Weak<Self>, api::Error> {
         // find the Arc for this base proposal from the parent
         let guard = match &self.base {
-            ProposalBase::Proposal(p) => p.children.lock().unwrap(),
-            ProposalBase::View(v) => v.proposals.lock().unwrap(),
+            ProposalBase::Proposal(p) => p.children.read().unwrap(),
+            ProposalBase::View(v) => v.proposals.read().unwrap(),
         };
         let arc = guard
             .iter()
@@ -207,13 +186,43 @@ impl api::Proposal<DbView> for Proposal {
             ProposalBase::Proposal(arc.unwrap().clone()),
             data,
         ));
-        self.children.lock().unwrap().push(proposal.clone());
+        self.children.write().unwrap().push(proposal.clone());
         Ok(Arc::downgrade(&proposal))
     }
     async fn commit(self) -> Result<Weak<DbView>, api::Error> {
         todo!()
     }
 }
+
+impl std::ops::Add for Proposal {
+    type Output = Arc<Proposal>;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        let mut delta = self.delta.clone();
+        delta.extend(rhs.delta);
+        let proposal = Proposal {
+            base: self.base,
+            delta,
+            children: RwLock::new(Vec::new()),
+        };
+        Arc::new(proposal)
+    }
+}
+impl std::ops::Add for &Proposal {
+    type Output = Arc<Proposal>;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        let mut delta = self.delta.clone();
+        delta.extend(rhs.delta.clone());
+        let proposal = Proposal {
+            base: self.base.clone(),
+            delta,
+            children: RwLock::new(Vec::new()),
+        };
+        Arc::new(proposal)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -242,6 +251,8 @@ mod test {
     #[tokio::test]
     async fn test_nested_proposal() -> Result<(), crate::v2::api::Error> {
         let mut db = Db::default();
+
+        // create proposal1 which adds key "k" with value "v" and deletes "z"
         let batch = vec![
             BatchOp::Put {
                 key: b"k",
@@ -250,6 +261,7 @@ mod test {
             BatchOp::Delete { key: b"z" },
         ];
         let proposal1 = db.propose(batch).await?.upgrade().unwrap();
+        // create proposal2 which adds key "z" with value "undo"
         let proposal2 = proposal1
             .propose(vec![BatchOp::Put {
                 key: b"z",
@@ -258,13 +270,24 @@ mod test {
             .await?
             .upgrade()
             .unwrap();
+        // both proposals still have (k,v)
         assert_eq!(proposal1.val(b"k").await.unwrap(), b"v");
         assert_eq!(proposal2.val(b"k").await.unwrap(), b"v");
+        // only proposal1 doesn't have z
         assert!(matches!(
             proposal1.val(b"z").await.unwrap_err(),
             crate::v2::api::Error::KeyNotFound
         ));
+        // proposal2 has z with value "undo"
         assert_eq!(proposal2.val(b"z").await.unwrap(), b"undo");
+
+        // create a proposal3 by adding the two proposals together, keeping the originals
+        let proposal3: Arc<crate::v2::db::Proposal> = proposal1.as_ref() + proposal2.as_ref();
+        assert_eq!(proposal3.val(b"k").await.unwrap(), b"v");
+        assert_eq!(proposal3.val(b"z").await.unwrap(), b"undo");
+
+        // now consume proposal1 and proposal2
+
         Ok(())
     }
 }
