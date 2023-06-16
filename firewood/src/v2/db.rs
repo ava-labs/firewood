@@ -31,21 +31,21 @@ impl api::Db for Db {
         &mut self,
         data: Batch<K, V>,
     ) -> Result<Weak<Proposal>, api::Error> {
-        let mut dbview_cache_guard = self.latest_cache.lock().unwrap();
-        if dbview_cache_guard.is_none() {
+        let mut dbview_latest_cache_guard = self.latest_cache.lock().unwrap();
+        if dbview_latest_cache_guard.is_none() {
             // TODO: actually get the latest dbview
-            *dbview_cache_guard = Some(Arc::new(DbView {
+            *dbview_latest_cache_guard = Some(Arc::new(DbView {
                 proposals: RwLock::new(vec![]),
             }));
         };
-        let mut proposal_guard = dbview_cache_guard
+        let mut proposal_guard = dbview_latest_cache_guard
             .as_ref()
             .unwrap()
             .proposals
             .write()
             .unwrap();
         let proposal = Arc::new(Proposal::new(
-            ProposalBase::View(dbview_cache_guard.clone().unwrap()),
+            ProposalBase::View(dbview_latest_cache_guard.clone().unwrap()),
             data,
         ));
         proposal_guard.push(proposal.clone());
@@ -91,10 +91,16 @@ enum ProposalBase {
     View(Arc<DbView>),
 }
 
+#[derive(Clone, Debug)]
+enum KeyOp<V: ValueType> {
+    Put(V),
+    Delete,
+}
+
 #[derive(Debug)]
 pub struct Proposal {
     base: ProposalBase,
-    delta: BTreeMap<Vec<u8>, Option<Vec<u8>>>,
+    delta: BTreeMap<Vec<u8>, KeyOp<Vec<u8>>>,
     children: RwLock<Vec<Arc<Proposal>>>,
 }
 impl Clone for Proposal {
@@ -107,14 +113,14 @@ impl Clone for Proposal {
     }
 }
 impl Proposal {
-    fn new(base: ProposalBase, batch: Batch<impl KeyType, impl ValueType>) -> Self {
-        let delta: BTreeMap<Vec<u8>, Option<Vec<u8>>> = batch
+    fn new<K: KeyType, V: ValueType>(base: ProposalBase, batch: Batch<K, V>) -> Self {
+        let delta = batch
             .iter()
             .map(|op| match op {
                 api::BatchOp::Put { key, value } => {
-                    (key.as_ref().to_vec(), Some(value.as_ref().to_vec()))
+                    (key.as_ref().to_vec(), KeyOp::Put(value.as_ref().to_vec()))
                 }
-                api::BatchOp::Delete { key } => (key.as_ref().to_vec(), None),
+                api::BatchOp::Delete { key } => (key.as_ref().to_vec(), KeyOp::Delete),
             })
             .collect();
         Self {
@@ -136,8 +142,8 @@ impl api::DbView for Proposal {
         match self.delta.get(key.as_ref()) {
             Some(change) => match change {
                 // key in proposal, check for Put or Delete
-                Some(val) => Ok(val.clone()),
-                None => Err(api::Error::KeyNotFound), // key was deleted in this proposal
+                KeyOp::Put(val) => Ok(val.clone()),
+                KeyOp::Delete => Err(api::Error::KeyNotFound), // key was deleted in this proposal
             },
             None => match &self.base {
                 // key not in this proposal, so delegate to base
@@ -171,11 +177,11 @@ impl api::Proposal<DbView> for Proposal {
         data: Batch<K, V>,
     ) -> Result<Weak<Self>, api::Error> {
         // find the Arc for this base proposal from the parent
-        let guard = match &self.base {
+        let children_guard = match &self.base {
             ProposalBase::Proposal(p) => p.children.read().unwrap(),
             ProposalBase::View(v) => v.proposals.read().unwrap(),
         };
-        let arc = guard
+        let arc = children_guard
             .iter()
             .find(|&c| std::ptr::eq(c.borrow() as *const _, self as *const _));
 
