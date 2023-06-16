@@ -123,7 +123,7 @@ impl Clone for Proposal {
 impl Proposal {
     fn new<K: KeyType, V: ValueType>(base: ProposalBase, batch: Batch<K, V>) -> Self {
         let delta = batch
-            .iter()
+            .into_iter()
             .map(|op| match op {
                 api::BatchOp::Put { key, value } => {
                     (key.as_ref().to_vec(), KeyOp::Put(value.as_ref().to_vec()))
