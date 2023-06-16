@@ -6,6 +6,7 @@ use async_trait::async_trait;
 /// and can be sent and shared across threads. References with
 /// lifetimes are not allowed (hence 'static)
 pub trait KeyType: AsRef<[u8]> + Send + Sync + Debug + 'static {}
+
 impl<T> KeyType for T where T: AsRef<[u8]> + Send + Sync + Debug + 'static {}
 
 /// A ValueType is the same as a [KeyType]. However, these could
@@ -15,6 +16,7 @@ impl<T> KeyType for T where T: AsRef<[u8]> + Send + Sync + Debug + 'static {}
 /// API call must be the same, as well as the type of all values
 /// must be the same.
 pub trait ValueType: AsRef<[u8]> + Send + Sync + Debug + 'static {}
+
 impl<T> ValueType for T where T: AsRef<[u8]> + Send + Sync + Debug + 'static {}
 
 /// The type and size of a single HashKey
@@ -84,6 +86,7 @@ pub struct Proof<V>(pub HashMap<HashKey, V>);
 #[async_trait]
 pub trait Db {
     type Historical: DbView;
+
     type Proposal: DbView + Proposal<Self::Historical>;
 
     /// Get a reference to a specific view based on a hash
@@ -167,6 +170,7 @@ pub trait Proposal<T: DbView>: DbView {
     ///
     /// * A weak reference to a new historical view
     async fn commit(self) -> Result<Weak<T>, Error>;
+
     /// Propose a new revision on top of an existing proposal
     ///
     /// # Arguments

@@ -17,6 +17,7 @@ pub struct Db {
 #[async_trait]
 impl api::Db for Db {
     type Historical = DbView;
+
     type Proposal = Proposal;
 
     async fn revision(&self, _hash: api::HashKey) -> Result<Weak<Self::Historical>, api::Error> {
@@ -32,23 +33,29 @@ impl api::Db for Db {
         data: Batch<K, V>,
     ) -> Result<Weak<Proposal>, api::Error> {
         let mut dbview_latest_cache_guard = self.latest_cache.lock().unwrap();
+
         if dbview_latest_cache_guard.is_none() {
+
             // TODO: actually get the latest dbview
             *dbview_latest_cache_guard = Some(Arc::new(DbView {
                 proposals: RwLock::new(vec![]),
             }));
         };
+
         let mut proposal_guard = dbview_latest_cache_guard
             .as_ref()
             .unwrap()
             .proposals
             .write()
             .unwrap();
+
         let proposal = Arc::new(Proposal::new(
             ProposalBase::View(dbview_latest_cache_guard.clone().unwrap()),
             data,
         ));
+
         proposal_guard.push(proposal.clone());
+
         Ok(Arc::downgrade(&proposal))
     }
 }
@@ -103,6 +110,7 @@ pub struct Proposal {
     delta: BTreeMap<Vec<u8>, KeyOp<Vec<u8>>>,
     children: RwLock<Vec<Arc<Proposal>>>,
 }
+
 impl Clone for Proposal {
     fn clone(&self) -> Self {
         Self {
@@ -112,6 +120,7 @@ impl Clone for Proposal {
         }
     }
 }
+
 impl Proposal {
     fn new<K: KeyType, V: ValueType>(base: ProposalBase, batch: Batch<K, V>) -> Self {
         let delta = batch
@@ -123,6 +132,7 @@ impl Proposal {
                 api::BatchOp::Delete { key } => (key.as_ref().to_vec(), KeyOp::Delete),
             })
             .collect();
+
         Self {
             base,
             delta,
@@ -181,6 +191,7 @@ impl api::Proposal<DbView> for Proposal {
             ProposalBase::Proposal(p) => p.children.read().unwrap(),
             ProposalBase::View(v) => v.proposals.read().unwrap(),
         };
+
         let arc = children_guard
             .iter()
             .find(|&c| std::ptr::eq(c.borrow() as *const _, self as *const _));
@@ -188,13 +199,17 @@ impl api::Proposal<DbView> for Proposal {
         if arc.is_none() {
             return Err(api::Error::InvalidProposal);
         }
+
         let proposal = Arc::new(Proposal::new(
             ProposalBase::Proposal(arc.unwrap().clone()),
             data,
         ));
+
         self.children.write().unwrap().push(proposal.clone());
+
         Ok(Arc::downgrade(&proposal))
     }
+
     async fn commit(self) -> Result<Weak<DbView>, api::Error> {
         todo!()
     }
@@ -205,26 +220,33 @@ impl std::ops::Add for Proposal {
 
     fn add(self, rhs: Self) -> Self::Output {
         let mut delta = self.delta.clone();
+
         delta.extend(rhs.delta);
+
         let proposal = Proposal {
             base: self.base,
             delta,
             children: RwLock::new(Vec::new()),
         };
+
         Arc::new(proposal)
     }
 }
+
 impl std::ops::Add for &Proposal {
     type Output = Arc<Proposal>;
 
     fn add(self, rhs: Self) -> Self::Output {
         let mut delta = self.delta.clone();
+
         delta.extend(rhs.delta.clone());
+
         let proposal = Proposal {
             base: self.base.clone(),
             delta,
             children: RwLock::new(Vec::new()),
         };
+
         Arc::new(proposal)
     }
 }
@@ -236,9 +258,11 @@ mod test {
     use crate::v2::api::DbView as _;
     use crate::v2::api::Proposal;
     use api::BatchOp;
+
     #[tokio::test]
     async fn test_basic_proposal() -> Result<(), crate::v2::api::Error> {
         let mut db = Db::default();
+
         let batch = vec![
             BatchOp::Put {
                 key: b"k",
@@ -246,14 +270,19 @@ mod test {
             },
             BatchOp::Delete { key: b"z" },
         ];
+
         let proposal = db.propose(batch).await?.upgrade().unwrap();
+
         assert_eq!(proposal.val(b"k").await.unwrap(), b"v");
+
         assert!(matches!(
             proposal.val(b"z").await.unwrap_err(),
             crate::v2::api::Error::KeyNotFound
         ));
+
         Ok(())
     }
+
     #[tokio::test]
     async fn test_nested_proposal() -> Result<(), crate::v2::api::Error> {
         let mut db = Db::default();
@@ -266,7 +295,9 @@ mod test {
             },
             BatchOp::Delete { key: b"z" },
         ];
+
         let proposal1 = db.propose(batch).await?.upgrade().unwrap();
+
         // create proposal2 which adds key "z" with value "undo"
         let proposal2 = proposal1
             .propose(vec![BatchOp::Put {
