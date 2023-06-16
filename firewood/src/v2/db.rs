@@ -35,7 +35,6 @@ impl api::Db for Db {
         let mut dbview_latest_cache_guard = self.latest_cache.lock().unwrap();
 
         if dbview_latest_cache_guard.is_none() {
-
             // TODO: actually get the latest dbview
             *dbview_latest_cache_guard = Some(Arc::new(DbView {
                 proposals: RwLock::new(vec![]),
