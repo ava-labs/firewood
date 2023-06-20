@@ -610,7 +610,10 @@ impl DiskBufferRequester {
 #[cfg(test)]
 mod tests {
     use sha3::Digest;
-    use std::path::{Path, PathBuf};
+    use std::{
+        path::{Path, PathBuf},
+        thread, time,
+    };
     use tempdir::TempDir;
 
     use super::*;
@@ -626,19 +629,14 @@ mod tests {
     const STATE_SPACE: SpaceId = 0x0;
     const HASH_SIZE: usize = 32;
     #[test]
-    #[ignore = "ref: https://github.com/ava-labs/firewood/issues/45"]
     fn test_buffer_with_undo() {
-        let tmpdb = [
-            &std::env::var("CARGO_TARGET_DIR").unwrap_or("/tmp".to_string()),
-            "sender_api_test_db",
-        ];
-
         let buf_cfg = DiskBufferConfig::builder().max_buffered(1).build();
         let wal_cfg = WalConfig::builder().build();
         let disk_requester = init_buffer(buf_cfg, wal_cfg);
 
         // TODO: Run the test in a separate standalone directory for concurrency reasons
-        let path = std::path::PathBuf::from(r"/tmp/firewood");
+        let root_path = "/tmp/firewood";
+        let path = std::path::PathBuf::from(root_path);
         let (root_db_path, reset) = crate::file::open_dir(path, true).unwrap();
 
         // file descriptor of the state directory
@@ -700,25 +698,21 @@ mod tests {
             assert!(d1.get_page(STATE_SPACE, 0).is_none());
             d1.write(page_batch, write_batch);
         });
-        // wait for the write to complete.
         write_thread_handle.join().unwrap();
-        // This is not ACID compliant, write should not return before Wal log
-        // is written to disk.
-        assert!([
-            &tmpdb.into_iter().collect::<String>(),
-            "wal",
-            "00000000.log"
-        ]
-        .iter()
-        .collect::<PathBuf>()
-        .exists());
+
+        // Sleep for a bit to allow the disk buffer persist the writes.
+        let duration = time::Duration::from_millis(500);
+        thread::sleep(duration);
+        assert!([root_path, "wal", "00000000.log"]
+            .iter()
+            .collect::<PathBuf>()
+            .exists());
 
         // verify
         assert_eq!(disk_requester.collect_ash(1).unwrap().len(), 1);
     }
 
     #[test]
-    #[ignore = "ref: https://github.com/ava-labs/firewood/issues/45"]
     fn test_buffer_with_redo() {
         let buf_cfg = DiskBufferConfig::builder().max_buffered(1).build();
         let wal_cfg = WalConfig::builder().build();
@@ -789,6 +783,10 @@ mod tests {
             }],
             AshRecord([(STATE_SPACE, wal)].into()),
         );
+
+        // Sleep for a bit to allow the disk buffer persist the writes.
+        let duration = time::Duration::from_millis(500);
+        thread::sleep(duration);
 
         // verify
         assert_eq!(disk_requester.collect_ash(1).unwrap().len(), 1);
