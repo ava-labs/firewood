@@ -543,8 +543,16 @@ impl Db {
                 wal_block_nbit: cfg.wal.block_nbit,
                 root_hash_file_nbit: cfg.root_hash_file_nbit,
             };
-            nix::sys::uio::pwrite(fd0, &shale::util::get_raw_bytes(&header), 0)
-                .map_err(DbError::System)?;
+
+            let header_bytes = unsafe {
+                std::slice::from_raw_parts(
+                    &header as *const DbParams as *const u8,
+                    std::mem::size_of::<DbParams>(),
+                )
+                .to_vec()
+            };
+
+            nix::sys::uio::pwrite(fd0, &header_bytes, 0).map_err(DbError::System)?;
         }
 
         // read DbParams

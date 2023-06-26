@@ -13,7 +13,6 @@ use thiserror::Error;
 
 pub mod cached;
 pub mod compact;
-pub mod util;
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
