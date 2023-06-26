@@ -90,26 +90,35 @@ pub struct AshRecord(pub HashMap<SpaceId, Ash>);
 
 impl growthring::wal::Record for AshRecord {
     fn serialize(&self) -> growthring::wal::WalBytes {
-        let mut bytes = Vec::new();
-        bytes.extend((self.0.len() as u64).to_le_bytes());
-        for (space_id, w) in self.0.iter() {
-            bytes.extend((*space_id).to_le_bytes());
-            bytes.extend(
-                (u32::try_from(w.undo.len()).expect("size of undo shoud be a `u32`")).to_le_bytes(),
-            );
+        let len_bytes = (self.0.len() as u64).to_le_bytes();
+        let ash_record_bytes = self
+            .0
+            .iter()
+            .map(|(space_id, w)| {
+                let space_id_bytes = space_id.to_le_bytes();
+                let undo_len = u32::try_from(w.undo.len()).expect("size of undo shoud be a `u32`");
+                let ash_bytes = w.iter().flat_map(|(undo, redo)| {
+                    let undo_data_len = u64::try_from(undo.data.len())
+                        .expect("length of undo data shoud be a `u64`");
 
-            for (sw_undo, sw_redo) in w.iter() {
-                bytes.extend(sw_undo.offset.to_le_bytes());
-                bytes.extend(
-                    (u64::try_from(sw_undo.data.len())
-                        .expect("length of undo data shoud be a `u64`"))
-                    .to_le_bytes(),
-                );
-                bytes.extend(&*sw_undo.data);
-                bytes.extend(&*sw_redo.data);
-            }
-        }
-        bytes.into()
+                    undo.offset
+                        .to_le_bytes()
+                        .into_iter()
+                        .chain(undo_data_len.to_le_bytes().into_iter())
+                        .chain(undo.data.iter().copied())
+                        .chain(redo.data.iter().copied())
+                });
+
+                (space_id_bytes, undo_len, ash_bytes)
+            })
+            .flat_map(|(space_id_bytes, undo_len, ash_bytes)| {
+                space_id_bytes
+                    .into_iter()
+                    .chain(undo_len.to_le_bytes().into_iter())
+                    .chain(ash_bytes)
+            });
+
+        len_bytes.into_iter().chain(ash_record_bytes).collect()
     }
 }
 
