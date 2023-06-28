@@ -172,13 +172,6 @@ struct DynamicMemView {
 
 struct DynamicMemShared(DynamicMem);
 
-// impl Deref for DynamicMemView {
-//     type Target = [u8];
-//     fn deref(&self) -> &[u8] {
-//         &self.mem.space.read().unwrap()[self.offset..self.offset + self.length]
-//     }
-// }
-
 impl Deref for DynamicMemShared {
     type Target = dyn CachedStore;
     fn deref(&self) -> &(dyn CachedStore + 'static) {

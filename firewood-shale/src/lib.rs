@@ -545,19 +545,34 @@ impl<T: Send + Sync> ObjCache<T> {
         ptr: ObjPtr<T>,
     ) -> Result<Option<ObjRef<'a, T>>, ShaleError> {
         if let Some(r) = inner.cached.pop(&ptr) {
-            return if inner.pinned.insert(ptr, false).is_some() {
-                Err(ShaleError::InvalidObj {
-                    addr: ptr.addr(),
-                    obj_type: type_name::<T>(),
-                    error: "address already in use",
-                })
-            } else {
-                Ok(Some(ObjRef {
-                    inner: Some(r),
-                    cache: Self(self.0.clone()),
-                    _life: PhantomData,
-                }))
-            };
+            // insert and set to `false` if you can
+            // When using `get` in parallel, one should not `write` to the same address
+            inner
+                .pinned
+                .entry(ptr)
+                .and_modify(|is_pinned| *is_pinned = false)
+                .or_insert(false);
+
+            // return if inner.pinned.insert(ptr, false).is_some() {
+            //     Err(ShaleError::InvalidObj {
+            //         addr: ptr.addr(),
+            //         obj_type: type_name::<T>(),
+            //         error: "address already in use",
+            //     })
+            // } else {
+            //     Ok(Some(ObjRef {
+            //         inner: Some(r),
+            //         cache: Self(self.0.clone()),
+            //         _life: PhantomData,
+            //     }))
+            // };
+
+            // always return instead of the code above
+            return Ok(Some(ObjRef {
+                inner: Some(r),
+                cache: Self(self.0.clone()),
+                _life: PhantomData,
+            }));
         }
 
         Ok(None)

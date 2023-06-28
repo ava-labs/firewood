@@ -57,19 +57,24 @@ fn main() {
             items_rev.sort();
 
             let items = items_rev;
+            std::thread::scope(|scope| {
+                for _ in 0..3 {
+                    scope.spawn(|| {
+                        let (keys, vals) = items.iter().cloned().unzip();
 
-            let (keys, vals) = items.iter().cloned().unzip();
-
-            let proof = build_proof(&revision, &items);
-            revision
-                .verify_range_proof(
-                    proof,
-                    items.first().unwrap().0,
-                    items.last().unwrap().0,
-                    keys,
-                    vals,
-                )
-                .unwrap();
+                        let proof = build_proof(&revision, &items);
+                        revision
+                            .verify_range_proof(
+                                proof,
+                                items.first().unwrap().0,
+                                items.last().unwrap().0,
+                                keys,
+                                vals,
+                            )
+                            .unwrap();
+                    });
+                }
+            })
         });
 
         scope.spawn(|| {
