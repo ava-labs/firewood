@@ -1,4 +1,4 @@
-extern crate firewood_shale as shale;
+use shale_archive as shale;
 
 use criterion::{
     black_box, criterion_group, criterion_main, profiler::Profiler, Bencher, Criterion,
