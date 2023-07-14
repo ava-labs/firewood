@@ -39,7 +39,7 @@ impl api::Db for Db {
     }
 
     async fn propose<K: KeyType, V: ValueType>(
-        &mut self,
+        &self,
         data: Batch<K, V>,
     ) -> Result<Weak<Proposal>, api::Error> {
         let mut dbview_latest_cache_guard = self.latest_cache.lock().unwrap();
@@ -270,7 +270,7 @@ mod test {
 
     #[tokio::test]
     async fn test_basic_proposal() -> Result<(), crate::v2::api::Error> {
-        let mut db = Db::default();
+        let db = Db::default();
 
         let batch = vec![
             BatchOp::Put {
@@ -294,7 +294,7 @@ mod test {
 
     #[tokio::test]
     async fn test_nested_proposal() -> Result<(), crate::v2::api::Error> {
-        let mut db = Db::default();
+        let db = Db::default();
 
         // create proposal1 which adds key "k" with value "v" and deletes "z"
         let batch = vec![

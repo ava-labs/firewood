@@ -111,7 +111,7 @@ pub trait Db {
     ///            [BatchOp::Delete] operations to apply
     ///
     async fn propose<K: KeyType, V: ValueType>(
-        &mut self,
+        &self,
         data: Batch<K, V>,
     ) -> Result<Weak<Self::Proposal>, Error>;
 }
