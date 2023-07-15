@@ -130,7 +130,7 @@ pub trait Db {
 ///
 /// A [Proposal] requires implementing DbView
 #[async_trait]
-pub trait DbView {
+pub trait DbView: Default {
     /// Get the hash for the current DbView
     async fn hash(&self) -> Result<HashKey, Error>;
 
@@ -176,7 +176,7 @@ pub trait Proposal<T: DbView>: DbView {
     /// # Return value
     ///
     /// * A weak reference to a new historical view
-    async fn commit(self) -> Result<T, Error>;
+    async fn commit(self: Arc<Self>) -> Result<Arc<T>, Error>;
 
     /// Propose a new revision on top of an existing proposal
     ///
