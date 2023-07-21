@@ -1,4 +1,4 @@
-use std::{fmt::Debug, sync::Arc};
+use std::{fmt::Debug, ops::DerefMut, sync::Arc};
 
 use tokio::sync::Mutex;
 
@@ -48,14 +48,16 @@ where
     ) -> Result<Arc<Self::Proposal>, api::Error> {
         let mut dbview_latest_cache_guard = self.latest_cache.lock().await;
 
-        if dbview_latest_cache_guard.is_none() {
-            let root = self.root_hash().await?;
-            *dbview_latest_cache_guard = Some(self.revision(root).await?);
+        let revision = match dbview_latest_cache_guard.deref_mut() {
+            Some(revision) => revision.clone(),
+            revision => {
+                let default_revision = Arc::new(T::default());
+                *revision = Some(default_revision.clone());
+                default_revision
+            }
         };
-        let proposal = Self::Proposal::new(
-            propose::ProposalBase::View(dbview_latest_cache_guard.as_ref().unwrap().clone()),
-            data,
-        );
+
+        let proposal = Self::Proposal::new(propose::ProposalBase::View(revision), data);
 
         Ok(Arc::new(proposal))
     }
