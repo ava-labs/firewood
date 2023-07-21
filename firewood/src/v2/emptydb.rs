@@ -75,12 +75,12 @@ impl DbView for HistoricalImpl {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use crate::v2::api::{BatchOp, Proposal};
 
     #[tokio::test]
-    async fn test_basic_proposal() -> Result<(), Error> {
+    async fn basic_proposal() -> Result<(), Error> {
         let db = Arc::new(EmptyDb::default());
 
         let batch = vec![
@@ -104,7 +104,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_nested_proposal() -> Result<(), Error> {
+    async fn nested_proposal() -> Result<(), Error> {
         let db = Arc::new(EmptyDb::default());
 
         // create proposal1 which adds key "k" with value "v" and deletes "z"
