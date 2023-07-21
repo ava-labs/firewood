@@ -1,4 +1,4 @@
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
@@ -27,9 +27,9 @@ impl Db for EmptyDb {
 
     type Proposal = Proposal<HistoricalImpl>;
 
-    async fn revision(&self, hash_key: HashKey) -> Result<Weak<Self::Historical>, Error> {
+    async fn revision(&self, hash_key: HashKey) -> Result<Arc<Self::Historical>, Error> {
         if hash_key == ROOT_HASH {
-            Ok(std::sync::Arc::<HistoricalImpl>::downgrade(&self.root))
+            Ok(self.root.clone())
         } else {
             Err(Error::HashNotFound { provided: hash_key })
         }

@@ -27,13 +27,7 @@ impl<T: api::DbView> Clone for ProposalBase<T> {
     }
 }
 
-impl<T: api::DbView> Default for ProposalBase<T> {
-    fn default() -> Self {
-        ProposalBase::View(Arc::new(T::default()))
-    }
-}
-
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Proposal<T: api::DbView> {
     pub(crate) base: ProposalBase<T>,
     pub(crate) delta: BTreeMap<Vec<u8>, KeyOp<Vec<u8>>>,
