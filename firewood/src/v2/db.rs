@@ -1,7 +1,6 @@
-use std::{
-    fmt::Debug,
-    sync::{Arc, Mutex, Weak},
-};
+use std::{fmt::Debug, sync::Arc};
+
+use tokio::sync::Mutex;
 
 use async_trait::async_trait;
 
@@ -29,12 +28,13 @@ impl<T> api::Db for Db<T>
 where
     T: api::DbView,
     T: Send + Sync,
+    T: Default,
 {
     type Historical = T;
 
     type Proposal = propose::Proposal<T>;
 
-    async fn revision(&self, _hash: api::HashKey) -> Result<Weak<Self::Historical>, api::Error> {
+    async fn revision(&self, _hash: api::HashKey) -> Result<Arc<Self::Historical>, api::Error> {
         todo!()
     }
 
@@ -46,14 +46,13 @@ where
         self: Arc<Self>,
         data: Batch<K, V>,
     ) -> Result<Arc<Self::Proposal>, api::Error> {
-        let mut dbview_latest_cache_guard = self.latest_cache.lock().unwrap();
+        let mut dbview_latest_cache_guard = self.latest_cache.lock().await;
 
         if dbview_latest_cache_guard.is_none() {
-            // TODO: actually get the latest dbview
-            *dbview_latest_cache_guard = Some(Arc::new(T::default()));
+            let root = self.root_hash().await?;
+            *dbview_latest_cache_guard = Some(self.revision(root).await?);
         };
-
-        let proposal = propose::Proposal::new(
+        let proposal = Self::Proposal::new(
             propose::ProposalBase::View(dbview_latest_cache_guard.as_ref().unwrap().clone()),
             data,
         );
