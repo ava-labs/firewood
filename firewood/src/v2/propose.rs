@@ -109,11 +109,9 @@ impl<T: api::DbView + Send + Sync> api::Proposal<T> for Proposal<T> {
     async fn propose<K: KeyType, V: ValueType>(
         self: Arc<Self>,
         data: api::Batch<K, V>,
-    ) -> Result<Arc<Self::Proposal>, api::Error> {
+    ) -> Result<Self::Proposal, api::Error> {
         // find the Arc for this base proposal from the parent
-        let proposal = Arc::new(Proposal::new(ProposalBase::Proposal(self), data));
-
-        Ok(proposal)
+        Ok(Proposal::new(ProposalBase::Proposal(self), data))
     }
 
     async fn commit(self: Arc<Self>) -> Result<Arc<T>, api::Error> {

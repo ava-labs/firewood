@@ -39,14 +39,12 @@ impl Db for EmptyDb {
         Ok(ROOT_HASH)
     }
 
-    async fn propose<K, V>(&self, data: Batch<K, V>) -> Result<Arc<Self::Proposal>, Error>
+    async fn propose<K, V>(&self, data: Batch<K, V>) -> Result<Self::Proposal, Error>
     where
         K: KeyType,
         V: ValueType,
     {
-        let proposal = Arc::new(Proposal::new(ProposalBase::View(self.root.clone()), data));
-
-        Ok(proposal)
+    Ok(Proposal::new(ProposalBase::View(self.root.clone()), data))
     }
 }
 
@@ -116,7 +114,7 @@ mod tests {
             BatchOp::Delete { key: b"z" },
         ];
 
-        let proposal1 = db.propose(batch).await?;
+        let proposal1 = Arc::new(db.propose(batch).await?);
 
         // create proposal2 which adds key "z" with value "undo"
         let proposal2 = proposal1
@@ -126,6 +124,7 @@ mod tests {
                 value: "undo",
             }])
             .await?;
+        let proposal2 = Arc::new(proposal2);
         // both proposals still have (k,v)
         assert_eq!(proposal1.val(b"k").await.unwrap(), b"v");
         assert_eq!(proposal2.val(b"k").await.unwrap(), b"v");

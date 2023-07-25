@@ -45,7 +45,7 @@ where
     async fn propose<K: KeyType, V: ValueType>(
         &self,
         data: Batch<K, V>,
-    ) -> Result<Arc<Self::Proposal>, api::Error> {
+    ) -> Result<Self::Proposal, api::Error> {
         let mut dbview_latest_cache_guard = self.latest_cache.lock().await;
 
         let revision = match dbview_latest_cache_guard.deref_mut() {
@@ -59,7 +59,7 @@ where
 
         let proposal = Self::Proposal::new(propose::ProposalBase::View(revision), data);
 
-        Ok(Arc::new(proposal))
+        Ok(proposal)
     }
 }
 
