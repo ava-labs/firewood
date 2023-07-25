@@ -18,6 +18,8 @@ pub(crate) enum ProposalBase<T: api::DbView> {
     View(Arc<T>),
 }
 
+// Implement Clone because T doesn't need to be Clone
+// so an automatically derived Clone won't work
 impl<T: api::DbView> Clone for ProposalBase<T> {
     fn clone(&self) -> Self {
         match self {
