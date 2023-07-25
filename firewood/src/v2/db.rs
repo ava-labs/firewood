@@ -43,7 +43,7 @@ where
     }
 
     async fn propose<K: KeyType, V: ValueType>(
-        self: Arc<Self>,
+        &self,
         data: Batch<K, V>,
     ) -> Result<Arc<Self::Proposal>, api::Error> {
         let mut dbview_latest_cache_guard = self.latest_cache.lock().await;

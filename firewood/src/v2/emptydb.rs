@@ -39,7 +39,7 @@ impl Db for EmptyDb {
         Ok(ROOT_HASH)
     }
 
-    async fn propose<K, V>(self: Arc<Self>, data: Batch<K, V>) -> Result<Arc<Self::Proposal>, Error>
+    async fn propose<K, V>(&self, data: Batch<K, V>) -> Result<Arc<Self::Proposal>, Error>
     where
         K: KeyType,
         V: ValueType,
