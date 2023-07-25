@@ -111,8 +111,7 @@ impl<T: api::DbView + Send + Sync> api::Proposal<T> for Proposal<T> {
         data: api::Batch<K, V>,
     ) -> Result<Arc<Self::Proposal>, api::Error> {
         // find the Arc for this base proposal from the parent
-        let proposal: Arc<Proposal<T>> =
-            Arc::new(Proposal::new(ProposalBase::Proposal(self), data));
+        let proposal = Arc::new(Proposal::new(ProposalBase::Proposal(self), data));
 
         Ok(proposal)
     }
