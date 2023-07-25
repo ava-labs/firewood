@@ -35,7 +35,7 @@ pub struct Proposal<T: api::DbView> {
     pub(crate) delta: BTreeMap<Vec<u8>, KeyOp<Vec<u8>>>,
 }
 
-impl<T: api::DbView + Clone> Clone for Proposal<T> {
+impl<T: api::DbView> Clone for Proposal<T> {
     fn clone(&self) -> Self {
         Self {
             base: self.base.clone(),
