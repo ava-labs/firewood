@@ -19,7 +19,7 @@ use super::propose;
 ///     DB -- commit proposal --> DB
 /// ```
 #[derive(Debug, Default)]
-pub struct Db<T: api::DbView> {
+pub struct Db<T> {
     latest_cache: Mutex<Option<Arc<T>>>,
 }
 
