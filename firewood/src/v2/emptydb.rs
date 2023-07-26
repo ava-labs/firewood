@@ -44,7 +44,7 @@ impl Db for EmptyDb {
         K: KeyType,
         V: ValueType,
     {
-    Ok(Proposal::new(ProposalBase::View(self.root.clone()), data))
+        Ok(Proposal::new(ProposalBase::View(self.root.clone()), data))
     }
 }
 
