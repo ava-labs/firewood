@@ -46,7 +46,7 @@ impl<T: api::DbView> Clone for Proposal<T> {
     }
 }
 
-impl<T: api::DbView> Proposal<T> {
+impl<T> Proposal<T> {
     pub(crate) fn new<K: KeyType, V: ValueType>(
         base: ProposalBase<T>,
         batch: api::Batch<K, V>,
