@@ -13,7 +13,7 @@ pub(crate) enum KeyOp<V: ValueType> {
 }
 
 #[derive(Debug)]
-pub(crate) enum ProposalBase<T: api::DbView> {
+pub(crate) enum ProposalBase<T> {
     Proposal(Arc<Proposal<T>>),
     View(Arc<T>),
 }
@@ -30,7 +30,7 @@ impl<T: api::DbView> Clone for ProposalBase<T> {
 }
 
 #[derive(Debug)]
-pub struct Proposal<T: api::DbView> {
+pub struct Proposal<T> {
     pub(crate) base: ProposalBase<T>,
     pub(crate) delta: BTreeMap<Vec<u8>, KeyOp<Vec<u8>>>,
 }
