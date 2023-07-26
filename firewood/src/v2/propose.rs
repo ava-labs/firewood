@@ -28,7 +28,6 @@
 ///   historical ==> committed_head
 ///   committed_head ==> new_committing
 /// ```
-
 use std::{collections::BTreeMap, fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
