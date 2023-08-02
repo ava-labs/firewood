@@ -458,7 +458,7 @@ impl Clone for StoreRevMutDelta {
 pub struct StoreRevMut {
     base_space: Arc<dyn MemStoreR>,
     deltas: Arc<RwLock<StoreRevMutDelta>>,
-    prev_deltas: Arc<StoreRevMutDelta>,
+    prev_deltas: Arc<RwLock<StoreRevMutDelta>>,
 }
 
 impl StoreRevMut {
@@ -474,7 +474,7 @@ impl StoreRevMut {
         Self {
             base_space: other.base_space.clone(),
             deltas: Default::default(),
-            prev_deltas: Arc::new(other.deltas.read().clone()),
+            prev_deltas: other.deltas.clone(),
         }
     }
 
@@ -502,19 +502,20 @@ impl StoreRevMut {
     }
 
     pub fn take_delta(&self) -> (StoreDelta, Ash) {
-        let mut pages = Vec::new();
-        let deltas = std::mem::replace(
-            &mut *self.deltas.write(),
-            StoreRevMutDelta {
-                pages: HashMap::new(),
-                plain: Ash::new(),
-            },
-        );
-        for (pid, page) in deltas.pages.into_iter() {
-            pages.push(DeltaPage(pid, page));
-        }
+        let mut guard = self.deltas.write();
+        let mut pages: Vec<DeltaPage> = guard
+            .pages
+            .iter()
+            .map(|page| DeltaPage(*page.0, page.1.clone()))
+            .collect();
         pages.sort_by_key(|p| p.0);
-        (StoreDelta(pages), deltas.plain)
+        let cloned_plain = guard.plain.clone();
+        // TODO: remove this line, since we don't know why this works
+        *guard = StoreRevMutDelta {
+            pages: HashMap::new(),
+            plain: Ash::new(),
+        };
+        (StoreDelta(pages), cloned_plain)
     }
 }
 
@@ -582,7 +583,7 @@ impl CachedStore for StoreRevMut {
 
         if s_pid == e_pid {
             let mut deltas = self.deltas.write();
-            let slice = &mut self.get_page_mut(deltas.deref_mut(), &self.prev_deltas, s_pid)
+            let slice = &mut self.get_page_mut(deltas.deref_mut(), &self.prev_deltas.read(), s_pid)
                 [s_off..e_off + 1];
             undo.extend(&*slice);
             slice.copy_from_slice(change)
@@ -592,7 +593,8 @@ impl CachedStore for StoreRevMut {
             {
                 let mut deltas = self.deltas.write();
                 let slice =
-                    &mut self.get_page_mut(deltas.deref_mut(), &self.prev_deltas, s_pid)[s_off..];
+                    &mut self.get_page_mut(deltas.deref_mut(), &self.prev_deltas.read(), s_pid)
+                        [s_off..];
                 undo.extend(&*slice);
                 slice.copy_from_slice(&change[..len]);
             }
@@ -601,14 +603,14 @@ impl CachedStore for StoreRevMut {
 
             let mut deltas = self.deltas.write();
             for p in s_pid + 1..e_pid {
-                let slice = self.get_page_mut(deltas.deref_mut(), &self.prev_deltas, p);
+                let slice = self.get_page_mut(deltas.deref_mut(), &self.prev_deltas.read(), p);
                 undo.extend(&*slice);
                 slice.copy_from_slice(&change[..PAGE_SIZE as usize]);
                 change = &change[PAGE_SIZE as usize..];
             }
 
-            let slice =
-                &mut self.get_page_mut(deltas.deref_mut(), &self.prev_deltas, e_pid)[..e_off + 1];
+            let slice = &mut self.get_page_mut(deltas.deref_mut(), &self.prev_deltas.read(), e_pid)
+                [..e_off + 1];
             undo.extend(&*slice);
             slice.copy_from_slice(change);
         }
