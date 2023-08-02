@@ -458,11 +458,7 @@ impl Clone for StoreRevMutDelta {
 pub struct StoreRevMut {
     base_space: Arc<dyn MemStoreR>,
     deltas: Arc<RwLock<StoreRevMutDelta>>,
-<<<<<<< HEAD
     prev_deltas: Arc<RwLock<StoreRevMutDelta>>,
-=======
-    prev_deltas: Arc<StoreRevMutDelta>,
->>>>>>> bad3ddd7 (feat: supports chains of `StoreRevMut`)
 }
 
 impl StoreRevMut {
@@ -478,11 +474,7 @@ impl StoreRevMut {
         Self {
             base_space: other.base_space.clone(),
             deltas: Default::default(),
-<<<<<<< HEAD
             prev_deltas: other.deltas.clone(),
-=======
-            prev_deltas: Arc::new(other.deltas.read().clone()),
->>>>>>> bad3ddd7 (feat: supports chains of `StoreRevMut`)
         }
     }
 
@@ -591,11 +583,7 @@ impl CachedStore for StoreRevMut {
 
         if s_pid == e_pid {
             let mut deltas = self.deltas.write();
-<<<<<<< HEAD
             let slice = &mut self.get_page_mut(deltas.deref_mut(), &self.prev_deltas.read(), s_pid)
-=======
-            let slice = &mut self.get_page_mut(deltas.deref_mut(), &self.prev_deltas, s_pid)
->>>>>>> bad3ddd7 (feat: supports chains of `StoreRevMut`)
                 [s_off..e_off + 1];
             undo.extend(&*slice);
             slice.copy_from_slice(change)
@@ -605,12 +593,8 @@ impl CachedStore for StoreRevMut {
             {
                 let mut deltas = self.deltas.write();
                 let slice =
-<<<<<<< HEAD
                     &mut self.get_page_mut(deltas.deref_mut(), &self.prev_deltas.read(), s_pid)
                         [s_off..];
-=======
-                    &mut self.get_page_mut(deltas.deref_mut(), &self.prev_deltas, s_pid)[s_off..];
->>>>>>> bad3ddd7 (feat: supports chains of `StoreRevMut`)
                 undo.extend(&*slice);
                 slice.copy_from_slice(&change[..len]);
             }
@@ -619,23 +603,14 @@ impl CachedStore for StoreRevMut {
 
             let mut deltas = self.deltas.write();
             for p in s_pid + 1..e_pid {
-<<<<<<< HEAD
                 let slice = self.get_page_mut(deltas.deref_mut(), &self.prev_deltas.read(), p);
-=======
-                let slice = self.get_page_mut(deltas.deref_mut(), &self.prev_deltas, p);
->>>>>>> bad3ddd7 (feat: supports chains of `StoreRevMut`)
                 undo.extend(&*slice);
                 slice.copy_from_slice(&change[..PAGE_SIZE as usize]);
                 change = &change[PAGE_SIZE as usize..];
             }
 
-<<<<<<< HEAD
             let slice = &mut self.get_page_mut(deltas.deref_mut(), &self.prev_deltas.read(), e_pid)
                 [..e_off + 1];
-=======
-            let slice =
-                &mut self.get_page_mut(deltas.deref_mut(), &self.prev_deltas, e_pid)[..e_off + 1];
->>>>>>> bad3ddd7 (feat: supports chains of `StoreRevMut`)
             undo.extend(&*slice);
             slice.copy_from_slice(change);
         }

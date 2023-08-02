@@ -897,7 +897,7 @@ mod tests {
         assert_eq!(view.as_deref(), hash);
 
         state_cache.update(&another_redo_delta).unwrap();
-        let another_store = StoreRevMut::new(state_cache.clone());
+        let another_store = StoreRevMut::new(state_cache);
         let view = another_store.get_view(0, HASH_SIZE as u64).unwrap();
         assert_eq!(view.as_deref(), another_hash);
     }
