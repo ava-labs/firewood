@@ -42,7 +42,7 @@ const BLOB_PAYLOAD_SPACE: SpaceId = 0x3;
 const ROOT_HASH_SPACE: SpaceId = 0x4;
 const SPACE_RESERVED: u64 = 0x1000;
 
-const MAGIC_STR: &[u8; 13] = b"firewood v0.1";
+const MAGIC_STR: &[u8; 16] = b"firewood v0.1\0\0\0";
 
 type Store = CompactSpace<Node, StoreRevMut>;
 type SharedStore = CompactSpace<Node, StoreRevShared>;
@@ -496,10 +496,8 @@ impl Db<Store, SharedStore> {
             }
             nix::unistd::ftruncate(fd0, 0).map_err(DbError::System)?;
             nix::unistd::ftruncate(fd0, 1 << cfg.meta_file_nbit).map_err(DbError::System)?;
-            let mut magic = [0; 16];
-            magic[..MAGIC_STR.len()].copy_from_slice(MAGIC_STR);
             let header = DbParams {
-                magic,
+                magic: *MAGIC_STR,
                 meta_file_nbit: cfg.meta_file_nbit,
                 payload_file_nbit: cfg.payload_file_nbit,
                 payload_regn_nbit: cfg.payload_regn_nbit,
