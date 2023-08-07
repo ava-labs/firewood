@@ -737,29 +737,22 @@ impl Db<Store, SharedStore> {
         let merkle_payload_header: ObjPtr<CompactSpaceHeader> = ObjPtr::new_from_addr(offset);
         offset += CompactSpaceHeader::MSIZE;
         assert!(offset <= SPACE_RESERVED);
-        // Blob CompactSpaceHeader starts right in blob meta space
-        let blob_payload_header: ObjPtr<CompactSpaceHeader> = ObjPtr::new_from_addr(0);
 
-        let (mut db_header_ref, merkle_payload_header_ref, _blob_payload_header_ref) = {
-            let merkle_meta_ref = &store.merkle.meta;
-            let blob_meta_ref = &store.blob.meta;
+        let mut db_header_ref =
+            StoredView::ptr_to_obj(&store.merkle.meta, db_header, DbHeader::MSIZE).unwrap();
 
-            (
-                StoredView::ptr_to_obj(merkle_meta_ref, db_header, DbHeader::MSIZE).unwrap(),
-                StoredView::ptr_to_obj(
-                    merkle_meta_ref,
-                    merkle_payload_header,
-                    shale::compact::CompactHeader::MSIZE,
-                )
-                .unwrap(),
-                StoredView::ptr_to_obj(
-                    blob_meta_ref,
-                    blob_payload_header,
-                    shale::compact::CompactHeader::MSIZE,
-                )
-                .unwrap(),
-            )
-        };
+        let merkle_payload_header_ref = StoredView::ptr_to_obj(
+            &store.merkle.meta,
+            merkle_payload_header,
+            shale::compact::CompactHeader::MSIZE,
+        )?;
+
+        #[cfg(feature = "eth")]
+        let blob_payload_header_ref = StoredView::ptr_to_obj(
+            &store.blob.meta,
+            blob_payload_header,
+            shale::compact::CompactHeader::MSIZE,
+        )?;
 
         let merkle_space = shale::compact::CompactSpace::new(
             Arc::new(store.merkle.meta.clone()),
