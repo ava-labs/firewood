@@ -472,7 +472,14 @@ impl Db<Store, SharedStore> {
         if cfg.truncate {
             let _ = std::fs::remove_dir_all(db_path.as_ref());
         }
-        let (db_path, reset) = file::open_dir(db_path, cfg.truncate)?;
+
+        let open_options = if cfg.truncate {
+            file::Options::Truncate
+        } else {
+            file::Options::NoTruncate
+        };
+
+        let (db_path, reset) = file::open_dir(db_path, open_options)?;
 
         let merkle_path = file::touch_dir("merkle", &db_path)?;
         let merkle_meta_path = file::touch_dir("meta", &merkle_path)?;
@@ -1122,6 +1129,11 @@ pub enum BatchOp<K> {
 /// can be proposed
 pub type Batch<K> = Vec<BatchOp<K>>;
 
+/// An atomic batch of changes proposed against the latest committed revision,
+/// or any existing [Proposal]. Multiple proposals can be created against the
+/// latest committed revision at the same time. [Proposal] is immutable meaning
+/// the internal batch cannot be altered after creation. Committing a proposal
+/// invalidates all other proposals that are not children of the committed one.
 pub struct Proposal<S, T> {
     // State of the Db
     m: Arc<RwLock<DbInner<S>>>,
@@ -1142,6 +1154,8 @@ pub enum ProposalBase<S, T> {
 }
 
 impl Proposal<Store, SharedStore> {
+    // Propose a new proposal from this proposal. The new proposal will be
+    // the child of it.
     pub fn propose<K: AsRef<[u8]>>(
         self: Arc<Self>,
         data: Batch<K>,
@@ -1196,6 +1210,8 @@ impl Proposal<Store, SharedStore> {
         })
     }
 
+    /// Persist all changes to the DB. The atomicity of the [Proposal] guarantees all changes are
+    /// either retained on disk or lost together during a crash.
     pub fn commit(&self) -> Result<(), DbError> {
         let mut committed = self.committed.lock();
         if *committed {
