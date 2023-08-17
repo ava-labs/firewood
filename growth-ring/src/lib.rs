@@ -93,23 +93,17 @@ impl From<RawWalFile> for WalFileImpl {
 #[async_trait(?Send)]
 impl WalFile for WalFileImpl {
     async fn allocate(&self, offset: WalPos, length: usize) -> Result<(), WalError> {
-        self.file_mutex
+        Ok(self
+            .file_mutex
             .lock()
             .await
             .0
             .set_len(offset + length as u64)
-            .await
-            .map_err(Into::into)
+            .await?)
     }
 
     async fn truncate(&self, len: usize) -> Result<(), WalError> {
-        self.file_mutex
-            .lock()
-            .await
-            .0
-            .set_len(len as u64)
-            .await
-            .map_err(Into::into)
+        Ok(self.file_mutex.lock().await.0.set_len(len as u64).await?)
     }
 
     async fn write(&self, offset: WalPos, data: WalBytes) -> Result<(), WalError> {
@@ -184,7 +178,7 @@ impl WalStore<WalFileImpl> for WalStoreImpl {
 
     async fn remove_file(&self, filename: String) -> Result<(), WalError> {
         let file_to_remove = self.root_dir.join(filename);
-        fs::remove_file(file_to_remove).map_err(From::from)
+        Ok(fs::remove_file(file_to_remove)?)
     }
 
     fn enumerate_files(&self) -> Result<Self::FileNameIter, WalError> {

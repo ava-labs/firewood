@@ -683,17 +683,20 @@ impl Db {
         header_offset: u64,
     ) -> Result<Obj<CompactSpaceHeader>, DbError> {
         let payload_header = ObjPtr::<CompactSpaceHeader>::new_from_addr(header_offset);
-        StoredView::ptr_to_obj(
+        Ok(StoredView::ptr_to_obj(
             meta_ref,
             payload_header,
             shale::compact::CompactHeader::MSIZE,
-        )
-        .map_err(Into::into)
+        )?)
     }
 
     fn get_db_header_ref<K: CachedStore>(meta_ref: &K) -> Result<Obj<DbHeader>, DbError> {
         let db_header = ObjPtr::<DbHeader>::new_from_addr(Db::PARAM_SIZE);
-        StoredView::ptr_to_obj(meta_ref, db_header, DbHeader::MSIZE).map_err(Into::into)
+        Ok(StoredView::ptr_to_obj(
+            meta_ref,
+            db_header,
+            DbHeader::MSIZE,
+        )?)
     }
 
     fn new_revision<K: CachedStore, T: Into<Arc<K>>>(
@@ -890,7 +893,7 @@ impl Db {
             blob_payload_header_ref,
         );
 
-        Revision {
+        Some(Revision {
             rev: Db::new_revision(
                 header_refs,
                 (space.merkle.meta.clone(), space.merkle.payload.clone()),
@@ -900,8 +903,7 @@ impl Db {
                 &self.cfg.rev,
             )
             .unwrap(),
-        }
-        .into()
+        })
     }
 }
 
