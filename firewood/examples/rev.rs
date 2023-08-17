@@ -106,11 +106,11 @@ fn main() {
 
 struct RevisionTracker {
     hashes: VecDeque<TrieHash>,
-    db: Db<SharedStore>,
+    db: Db,
 }
 
 impl RevisionTracker {
-    fn new(db: Db<SharedStore>) -> Self {
+    fn new(db: Db) -> Self {
         Self {
             hashes: VecDeque::new(),
             db,
