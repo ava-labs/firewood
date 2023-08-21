@@ -50,18 +50,12 @@ impl DiskAddress {
 
     /// Get the little endian bytes for a DiskAddress for storage
     pub fn to_le_bytes(&self) -> [u8; 8] {
-        match self.0 {
-            Some(v) => v.get().to_le_bytes(),
-            None => 0usize.to_le_bytes(),
-        }
+        self.0.map(|v| v.get()).unwrap_or_default().to_le_bytes()
     }
 
     /// Get the inner usize, using 0 if None
     pub fn get(&self) -> usize {
-        match self.0 {
-            Some(v) => v.get(),
-            None => 0,
-        }
+        self.0.map(|v| v.get()).unwrap_or_default()
     }
 }
 
