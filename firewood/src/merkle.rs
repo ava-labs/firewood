@@ -1872,19 +1872,24 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                 },
                 NodeType::Leaf(_) => break,
                 NodeType::Extension(n) => {
+                    // the key passed in must match the entire remainder of this
+                    // extension node, otherwise we break out
                     let n_path = &*n.0;
                     let remaining_path = key_nibbles.skip(i);
-                    if remaining_path.len() < n_path.len()
-                        || !remaining_path
-                            .iter()
-                            .take(n_path.len())
-                            .eq(n_path.iter().cloned())
-                    {
+                    if remaining_path.len() < n_path.len() {
+                        // all bytes aren't there
                         break;
-                    } else {
-                        nskip = n_path.len() - 1;
-                        n.1
                     }
+                    if !remaining_path
+                        .iter()
+                        .take(n_path.len())
+                        .eq(n_path.iter().cloned())
+                    {
+                        // contents aren't the same
+                        break;
+                    }
+                    nskip = n_path.len() - 1;
+                    n.1
                 }
             };
             u_ref = self.get_node(next_ptr)?;

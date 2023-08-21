@@ -2,7 +2,7 @@ use std::ops::Index;
 
 static NIBBLES: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
-/// Nibbles is a newtype that contains only a pointer to a u8, and produces
+/// Nibbles is a newtype that contains only a reference to a [u8], and produces
 /// nibbles. Nibbles can be indexed using nib\[x\] or you can get an iterator
 /// with iter()
 ///
@@ -31,7 +31,9 @@ static NIBBLES: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
 /// assert_eq!(nib[1], 0x6);
 /// # }
 /// ```
+#[derive(Debug)]
 pub struct Nibbles<'a, const LEADING_ZEROES: usize>(pub &'a [u8]);
+
 impl<'a, const LEADING_ZEROES: usize> Index<usize> for Nibbles<'a, LEADING_ZEROES> {
     type Output = u8;
 
@@ -76,6 +78,7 @@ impl<'a, const LEADING_ZEROES: usize> Nibbles<'a, LEADING_ZEROES> {
 /// NibblesSlice is created by [Nibbles::skip]. This is
 /// used to create an interator that starts at some particular
 /// nibble
+#[derive(Debug)]
 pub struct NibblesSlice<'a> {
     nibbles: Nibbles<'a, 0>,
     skipfirst: bool,
@@ -102,6 +105,7 @@ impl<'a> NibblesSlice<'a> {
 
 /// An interator returned by [Nibbles::iter] or [NibblesSlice::iter].
 /// See their documentation for details.
+#[derive(Debug)]
 pub struct NibblesIterator<'a, const LEADING_ZEROES: usize> {
     data: &'a Nibbles<'a, LEADING_ZEROES>,
     pos: usize,
