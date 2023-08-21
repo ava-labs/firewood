@@ -7,7 +7,7 @@ use firewood::{
     storage::StoreRevMut,
 };
 use firewood_shale::{
-    cached::PlainMem, compact::CompactSpace, diskaddress::DiskAddress, CachedStore, Storable,
+    cached::PlainMem, compact::CompactSpace, disk_address::DiskAddress, CachedStore, Storable,
     StoredView,
 };
 use rand::{distributions::Alphanumeric, Rng, SeedableRng};

@@ -4,7 +4,7 @@
 use crate::proof::Proof;
 use enum_as_inner::EnumAsInner;
 use sha3::Digest;
-use shale::{diskaddress::DiskAddress, CachedStore, ObjRef, ShaleError, ShaleStore, Storable};
+use shale::{disk_address::DiskAddress, CachedStore, ObjRef, ShaleError, ShaleStore, Storable};
 use std::{
     collections::HashMap,
     error::Error,

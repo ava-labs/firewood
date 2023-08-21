@@ -6,7 +6,7 @@ use crate::{
     proof::{Proof, ProofError},
 };
 use shale::{
-    cached::DynamicMem, compact::CompactSpace, diskaddress::DiskAddress, CachedStore, ShaleStore,
+    cached::DynamicMem, compact::CompactSpace, disk_address::DiskAddress, CachedStore, ShaleStore,
     StoredView,
 };
 use std::{num::NonZeroUsize, sync::Arc};

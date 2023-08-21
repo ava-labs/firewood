@@ -1,4 +1,4 @@
-use diskaddress::DiskAddress;
+use disk_address::DiskAddress;
 use std::any::type_name;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Formatter};
@@ -11,7 +11,7 @@ use thiserror::Error;
 
 pub mod cached;
 pub mod compact;
-pub mod diskaddress;
+pub mod disk_address;
 
 #[derive(Debug, Error)]
 #[non_exhaustive]

@@ -20,7 +20,7 @@ use metered::{metered, HitCount};
 use parking_lot::{Mutex, RwLock};
 use shale::{
     compact::{CompactSpace, CompactSpaceHeader},
-    diskaddress::DiskAddress,
+    disk_address::DiskAddress,
     CachedStore, Obj, ShaleError, ShaleStore, SpaceId, Storable, StoredView,
 };
 use std::{

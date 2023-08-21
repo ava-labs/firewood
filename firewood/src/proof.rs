@@ -8,7 +8,7 @@ use crate::merkle_util::*;
 use nix::errno::Errno;
 use serde::{Deserialize, Serialize};
 use sha3::Digest;
-use shale::diskaddress::DiskAddress;
+use shale::disk_address::DiskAddress;
 use shale::ShaleError;
 use shale::ShaleStore;
 

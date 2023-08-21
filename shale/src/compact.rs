@@ -1,4 +1,4 @@
-use super::diskaddress::DiskAddress;
+use super::disk_address::DiskAddress;
 use super::{CachedStore, Obj, ObjRef, ShaleError, ShaleStore, Storable, StoredView};
 use std::fmt::Debug;
 use std::io::{Cursor, Write};

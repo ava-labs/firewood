@@ -8,7 +8,7 @@ use rand::Rng;
 use shale::{
     cached::{DynamicMem, PlainMem},
     compact::CompactSpaceHeader,
-    diskaddress::DiskAddress,
+    disk_address::DiskAddress,
     CachedStore, Obj, StoredView,
 };
 use std::{fs::File, os::raw::c_int, path::Path};
