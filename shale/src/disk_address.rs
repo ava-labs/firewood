@@ -1,4 +1,3 @@
-use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::Hash;
 use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut};
@@ -8,15 +7,6 @@ use crate::{CachedStore, ShaleError, Storable};
 /// The virtual disk address of an object
 #[derive(Debug, Copy, Clone, Eq, Hash, Ord, PartialOrd, PartialEq)]
 pub struct DiskAddress(pub Option<NonZeroUsize>);
-
-impl Display for DiskAddress {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self.0 {
-            None => write!(f, "[DiskAddress:NULL]"),
-            Some(addr) => write!(f, "[DiskAddress:{:08x}]", addr),
-        }
-    }
-}
 
 impl Deref for DiskAddress {
     type Target = Option<NonZeroUsize>;

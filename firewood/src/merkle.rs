@@ -170,7 +170,7 @@ impl Debug for BranchNode {
         write!(f, "[Branch")?;
         for (i, c) in self.chd.iter().enumerate() {
             if let Some(c) = c {
-                write!(f, " ({i:x} {c})")?;
+                write!(f, " ({i:x} {c:?})")?;
             }
         }
         for (i, c) in self.chd_eth_rlp.iter().enumerate() {
@@ -316,7 +316,7 @@ pub struct ExtNode(PartialPath, DiskAddress, Option<Vec<u8>>);
 
 impl Debug for ExtNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        write!(f, "[Extension {:?} {} {:?}]", self.0, self.1, self.2)
+        write!(f, "[Extension {:?} {:?} {:?}]", self.0, self.1, self.2)
     }
 }
 
@@ -939,8 +939,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
         let u_ref = self.get_node(u)?;
         write!(
             w,
-            "{} => {}: ",
-            u,
+            "{u:?} => {}: ",
             match u_ref.root_hash.get() {
                 Some(h) => hex::encode(**h),
                 None => "<lazy>".to_string(),
