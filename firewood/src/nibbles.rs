@@ -1,33 +1,33 @@
 use std::ops::Index;
 
-static NIBBLES: [u8; 16] = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15];
+static NIBBLES: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
 /// Nibbles is a newtype that contains only a pointer to a u8, and produces
 /// nibbles. Nibbles can be indexed using nib\[x\] or you can get an iterator
 /// with iter()
-/// 
+///
 /// Nibbles can be constructed with a number of leading zeroes. This is used
 /// in firewood because there is a sentinel node, so we always want the first
 /// byte to be 0
-/// 
+///
 /// When creating a Nibbles object, use the syntax `Nibbles::<N>(r)` where
 /// `N` is the number of leading zero bytes you need and `r` is a reference to
 /// a [u8]
-/// 
+///
 /// # Examples
-/// 
+///
 /// ```
 /// # use firewood::nibbles;
 /// # fn main() {
 /// let nib = nibbles::Nibbles::<0>(&[0x56, 0x78]);
 /// assert_eq!(nib.iter().collect::<Vec<_>>(), [0x5, 0x6, 0x7, 0x8]);
-/// 
+///
 /// // nibbles can be efficiently advanced without rendering the
 /// // intermediate values
 /// assert_eq!(nib.skip(3).iter().collect::<Vec<_>>(), [0x8]);
-/// 
+///
 /// // nibbles can also be indexed
-/// 
+///
 /// assert_eq!(nib[1], 0x6);
 /// # }
 /// ```
@@ -38,8 +38,10 @@ impl<'a, const LEADING_ZEROES: usize> Index<usize> for Nibbles<'a, LEADING_ZEROE
     fn index(&self, index: usize) -> &Self::Output {
         match index {
             _ if index < LEADING_ZEROES => &NIBBLES[0],
-            _ if (index-LEADING_ZEROES) % 2 == 0 => &NIBBLES[(self.0[(index - LEADING_ZEROES)/2] >> 4) as usize],
-            _ => &NIBBLES[(self.0[(index - LEADING_ZEROES)/2] & 0xf) as usize],
+            _ if (index - LEADING_ZEROES) % 2 == 0 => {
+                &NIBBLES[(self.0[(index - LEADING_ZEROES) / 2] >> 4) as usize]
+            }
+            _ => &NIBBLES[(self.0[(index - LEADING_ZEROES) / 2] & 0xf) as usize],
         }
     }
 }
@@ -54,7 +56,10 @@ impl<'a, const LEADING_ZEROES: usize> Nibbles<'a, LEADING_ZEROES> {
     #[must_use]
     pub fn skip(&self, at: usize) -> NibblesSlice<'a> {
         assert!(at >= LEADING_ZEROES, "Cannot split before LEADING_ZEROES (requested split at {at} is less than the {LEADING_ZEROES} leading zero(es)");
-        NibblesSlice{skipfirst: (at - LEADING_ZEROES) % 2 != 0, nibbles: Nibbles(&self.0[(at - LEADING_ZEROES)/2..])}
+        NibblesSlice {
+            skipfirst: (at - LEADING_ZEROES) % 2 != 0,
+            nibbles: Nibbles(&self.0[(at - LEADING_ZEROES) / 2..]),
+        }
     }
 
     #[must_use]
@@ -80,7 +85,10 @@ impl<'a> NibblesSlice<'a> {
     /// Returns an iterator over this subset of nibbles
     pub fn iter(&self) -> NibblesIterator<'_, 0> {
         let pos = if self.skipfirst { 1 } else { 0 };
-        NibblesIterator { data: &self.nibbles, pos }
+        NibblesIterator {
+            data: &self.nibbles,
+            pos,
+        }
     }
 
     pub fn len(&self) -> usize {

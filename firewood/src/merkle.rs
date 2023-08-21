@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{proof::Proof, nibbles::Nibbles};
+use crate::{nibbles::Nibbles, proof::Proof};
 use enum_as_inner::EnumAsInner;
 use sha3::Digest;
 use shale::{disk_address::DiskAddress, CachedStore, ObjRef, ShaleError, ShaleStore, Storable};
@@ -1875,7 +1875,10 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                     let n_path = &*n.0;
                     let remaining_path = key_nibbles.skip(i);
                     if remaining_path.len() < n_path.len()
-                        || !remaining_path.iter().take(n_path.len()).eq(n_path.iter().cloned())
+                        || !remaining_path
+                            .iter()
+                            .take(n_path.len())
+                            .eq(n_path.iter().cloned())
                     {
                         break;
                     } else {
