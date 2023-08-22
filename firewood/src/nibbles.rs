@@ -19,7 +19,7 @@ static NIBBLES: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
 /// ```
 /// # use firewood::nibbles;
 /// # fn main() {
-/// let nib = nibbles::Nibbles::<0>(&[0x56, 0x78]);
+/// let nib = nibbles::Nibbles::<0>::new(&[0x56, 0x78]);
 /// assert_eq!(nib.iter().collect::<Vec<_>>(), [0x5, 0x6, 0x7, 0x8]);
 ///
 /// // nibbles can be efficiently advanced without rendering the
