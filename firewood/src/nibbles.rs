@@ -32,7 +32,7 @@ static NIBBLES: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
 /// # }
 /// ```
 #[derive(Debug)]
-pub struct Nibbles<'a, const LEADING_ZEROES: usize>(pub &'a [u8]);
+pub struct Nibbles<'a, const LEADING_ZEROES: usize>(&'a [u8]);
 
 impl<'a, const LEADING_ZEROES: usize> Index<usize> for Nibbles<'a, LEADING_ZEROES> {
     type Output = u8;
@@ -62,6 +62,10 @@ impl<'a, const LEADING_ZEROES: usize> Nibbles<'a, LEADING_ZEROES> {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         LEADING_ZEROES == 0 && self.0.is_empty()
+    }
+
+    pub fn new(inner: &'a [u8]) -> Self {
+        Nibbles(inner)
     }
 }
 
