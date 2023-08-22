@@ -1880,10 +1880,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                         // all bytes aren't there
                         break;
                     }
-                    if !remaining_path
-                        .take(n_path.len())
-                        .eq(n_path.iter().cloned())
-                    {
+                    if !remaining_path.take(n_path.len()).eq(n_path.iter().cloned()) {
                         // contents aren't the same
                         break;
                     }

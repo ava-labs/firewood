@@ -65,7 +65,6 @@ impl<'a, const LEADING_ZEROES: usize> Nibbles<'a, LEADING_ZEROES> {
     }
 }
 
-
 /// An interator returned by [Nibbles::iter]
 /// See their documentation for details.
 #[derive(Debug)]
