@@ -2,16 +2,25 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::db::DbError;
-use crate::merkle::*;
-use crate::merkle_util::*;
-
+use crate::merkle::to_nibble_array;
+use crate::merkle::BranchNode;
+use crate::merkle::ExtNode;
+use crate::merkle::LeafNode;
+use crate::merkle::Merkle;
+use crate::merkle::MerkleError;
+use crate::merkle::Node;
+use crate::merkle::NodeType;
+use crate::merkle::PartialPath;
+use crate::merkle::NBRANCH;
+use crate::merkle_util::new_merkle;
+use crate::merkle_util::DataStoreError;
+use crate::merkle_util::MerkleSetup;
 use nix::errno::Errno;
 use serde::{Deserialize, Serialize};
 use sha3::Digest;
 use shale::disk_address::DiskAddress;
 use shale::ShaleError;
 use shale::ShaleStore;
-
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::error::Error;
