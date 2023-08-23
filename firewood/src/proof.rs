@@ -1,31 +1,19 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::db::DbError;
-use crate::merkle::to_nibble_array;
-use crate::merkle::BranchNode;
-use crate::merkle::ExtNode;
-use crate::merkle::LeafNode;
-use crate::merkle::Merkle;
-use crate::merkle::MerkleError;
-use crate::merkle::Node;
-use crate::merkle::NodeType;
-use crate::merkle::PartialPath;
-use crate::merkle::NBRANCH;
-use crate::merkle_util::new_merkle;
-use crate::merkle_util::DataStoreError;
-use crate::merkle_util::MerkleSetup;
+use crate::{
+    db::DbError,
+    merkle::{
+        to_nibble_array, BranchNode, ExtNode, LeafNode, Merkle, MerkleError, Node, NodeType,
+        PartialPath, NBRANCH,
+    },
+    merkle_util::{new_merkle, DataStoreError, MerkleSetup},
+};
 use nix::errno::Errno;
 use serde::{Deserialize, Serialize};
 use sha3::Digest;
-use shale::disk_address::DiskAddress;
-use shale::ShaleError;
-use shale::ShaleStore;
-use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::error::Error;
-use std::fmt;
-use std::ops::Deref;
+use shale::{disk_address::DiskAddress, ShaleError, ShaleStore};
+use std::{cmp::Ordering, collections::HashMap, error::Error, fmt, ops::Deref};
 
 /// Hash -> RLP encoding map
 #[derive(Debug, Serialize, Deserialize)]
