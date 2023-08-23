@@ -3,8 +3,8 @@ use firewood::{
     merkle_util::*,
     proof::{Proof, ProofError},
 };
-use firewood_shale::{cached::DynamicMem, compact::CompactSpace};
 use rand::Rng;
+use shale::{cached::DynamicMem, compact::CompactSpace};
 use std::collections::HashMap;
 
 type Store = CompactSpace<Node, DynamicMem>;
