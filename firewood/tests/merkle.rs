@@ -1,6 +1,6 @@
 use firewood::{
     merkle::Node,
-    merkle_util::*,
+    merkle_util::{new_merkle, DataStoreError, MerkleSetup},
     proof::{Proof, ProofError},
 };
 use rand::Rng;
