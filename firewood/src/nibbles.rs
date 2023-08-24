@@ -131,6 +131,7 @@ mod test {
     }
 
     #[test]
+    #[allow(clippy::iter_skip_zero)]
     fn skip_zero() {
         let nib = Nibbles::<0>(&TEST_BYTES);
         assert!(nib.iter().skip(0).eq(nib.iter()));
@@ -151,6 +152,7 @@ mod test {
     }
 
     #[test]
+    #[allow(clippy::iter_skip_zero)]
     fn skip_before_zeroes() {
         let nib = Nibbles::<1>(&TEST_BYTES);
         assert!(nib.iter().skip(0).eq(nib.iter()));
