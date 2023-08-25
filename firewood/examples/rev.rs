@@ -123,10 +123,7 @@ impl RevisionTracker {
         K: AsRef<[u8]>,
         V: AsRef<[u8]>,
     {
-        for (k, v) in iter {
-            self.create_revision(k, v)?
-        }
-        Ok(())
+        iter.map(|(k, v)| self.create_revision(k, v)).collect()
     }
 
     fn create_revision<K, V>(&mut self, k: K, v: V) -> Result<(), DbError>
