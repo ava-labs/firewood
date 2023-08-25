@@ -176,12 +176,6 @@ mod test {
     }
 
     #[test]
-    fn skip_before_zeroes() {
-        let nib = Nibbles::<2>(&TEST_BYTES);
-        assert!(nib.iter().skip(1).eq(nib.iter().skip(1)));
-    }
-
-    #[test]
     fn last_nibble() {
         let nib = Nibbles::<0>(&TEST_BYTES);
         assert_eq!(nib[7], 0xf);
