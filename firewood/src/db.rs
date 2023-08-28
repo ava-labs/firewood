@@ -7,7 +7,7 @@ pub use crate::{
 };
 use crate::{
     file,
-    merkle::{Merkle, MerkleError, Node, Ref, TrieHash, TRIE_HASH_LEN},
+    merkle::{Merkle, MerkleError, Node, TrieHash, TRIE_HASH_LEN},
     proof::ProofError,
     storage::{
         buffer::{DiskBuffer, DiskBufferRequester},
@@ -274,7 +274,7 @@ pub struct DbRev<S> {
 }
 
 #[async_trait]
-impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
+impl<S: ShaleStore<Node> + Send + Sync, 'a> api::DbView for DbRev<S> {
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         self.merkle
             .root_hash(self.header.kv_root)
@@ -283,7 +283,7 @@ impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
     }
 
     async fn val<K: api::KeyType>(&self, key: K) -> Result<Option<&[u8]>, api::Error> {
-        let obj_ref: Result<Option<crate::merkle::Ref>, _> =
+        let obj_ref =
             self.merkle.get(key, self.header.kv_root);
         match obj_ref {
             Err(e) => Err(api::Error::IO(std::io::Error::new(ErrorKind::Other, e))),
@@ -296,16 +296,16 @@ impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
 
     async fn single_key_proof<K: api::KeyType, N: AsRef<[u8]> + Send>(
         &self,
-        key: K,
+        _key: K,
     ) -> Result<Option<Proof<N>>, api::Error> {
         todo!()
     }
 
-    async fn range_proof<K: api::KeyType, V: api::ValueType, N: AsRef<[u8]> + Send>(
+    async fn range_proof<K: api::KeyType, V, N>(
         &self,
-        first_key: Option<K>,
-        last_key: Option<K>,
-        limit: usize,
+        _first_key: Option<K>,
+        _last_key: Option<K>,
+        _limit: usize,
     ) -> Result<Option<api::RangeProof<K, V, N>>, api::Error> {
         todo!()
     }
