@@ -33,7 +33,7 @@ use std::{
     num::NonZeroUsize,
     path::Path,
     sync::Arc,
-    thread::JoinHandle,
+    thread::JoinHandle, os::fd::AsFd,
 };
 
 const MERKLE_META_SPACE: SpaceId = 0x0;
@@ -407,7 +407,7 @@ impl Db {
         let root_hash_path = file::touch_dir("root_hash", &db_path)?;
 
         let file0 = crate::file::File::new(0, SPACE_RESERVED, &merkle_meta_path)?;
-        let fd0 = file0.get_fd();
+        let fd0 = file0.as_fd();
 
         if reset {
             // initialize dbparams
