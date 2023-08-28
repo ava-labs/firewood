@@ -1,7 +1,7 @@
 //! Disk buffer for staging in memory pages and flushing them to disk.
 use std::fmt::Debug;
 use std::ops::IndexMut;
-use std::os::fd::{AsRawFd, AsFd};
+use std::os::fd::{AsFd, AsRawFd};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -228,7 +228,12 @@ fn schedule_write(
             .unwrap()
             .get_file(fid)
             .unwrap();
-        aiomgr.write(file.as_raw_fd(), offset & fmask, p.staging_data.clone(), None)
+        aiomgr.write(
+            file.as_raw_fd(),
+            offset & fmask,
+            p.staging_data.clone(),
+            None,
+        )
     };
 
     let task = {

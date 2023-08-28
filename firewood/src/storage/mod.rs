@@ -9,8 +9,9 @@ use std::{
     fmt::{self, Debug},
     num::NonZeroUsize,
     ops::{Deref, DerefMut},
+    os::fd::{AsFd, AsRawFd},
     path::PathBuf,
-    sync::Arc, os::fd::{AsFd, AsRawFd},
+    sync::Arc,
 };
 use thiserror::Error;
 use tokio::sync::{mpsc::error::SendError, oneshot::error::RecvError};

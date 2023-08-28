@@ -31,9 +31,10 @@ use std::{
     io::{Cursor, Write},
     mem::size_of,
     num::NonZeroUsize,
+    os::fd::AsFd,
     path::Path,
     sync::Arc,
-    thread::JoinHandle, os::fd::AsFd,
+    thread::JoinHandle,
 };
 
 const MERKLE_META_SPACE: SpaceId = 0x0;

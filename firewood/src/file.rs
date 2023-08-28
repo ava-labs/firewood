@@ -32,7 +32,8 @@ impl File {
             .read(true)
             .write(true)
             .mode(0o600)
-            .open(filepath)?.into())
+            .open(filepath)?
+            .into())
     }
 
     pub fn create_file(rootpath: PathBuf, fname: &str) -> Result<OwnedFd, std::io::Error> {
@@ -43,7 +44,8 @@ impl File {
             .read(true)
             .write(true)
             .mode(0o600)
-            .open(filepath)?.into())
+            .open(filepath)?
+            .into())
     }
 
     fn _get_fname(fid: u64) -> String {
