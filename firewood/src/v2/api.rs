@@ -74,7 +74,7 @@ pub enum Error {
 /// A range proof, consisting of a proof of the first key and the last key,
 /// and a vector of all key/value pairs
 #[derive(Debug)]
-pub struct RangeProof<K: KeyType, V: ValueType, N: AsRef<[u8]> + Send> {
+pub struct RangeProof<K, V, N> {
     pub first_key: Proof<N>,
     pub last_key: Proof<N>,
     pub middle: Vec<(K, V)>,
@@ -152,7 +152,7 @@ pub trait DbView {
     /// * `last_key` - If None, continue to the end of the database
     /// * `limit` - The maximum number of keys in the range proof
     ///
-    async fn range_proof<K: KeyType, V: ValueType, N: AsRef<[u8]> + Send>(
+    async fn range_proof<K: KeyType, V, N>(
         &self,
         first_key: Option<K>,
         last_key: Option<K>,
