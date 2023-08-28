@@ -66,7 +66,7 @@ impl DbView for HistoricalImpl {
         Ok(None)
     }
 
-    async fn range_proof<K: KeyType, V, N>(
+    async fn range_proof<K: KeyType, V: ValueType, N: AsRef<[u8]> + Send>(
         &self,
         _first_key: Option<K>,
         _last_key: Option<K>,
