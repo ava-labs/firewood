@@ -7,14 +7,14 @@ pub use crate::{
 };
 use crate::{
     file,
-    merkle::{Merkle, MerkleError, Node, TrieHash, TRIE_HASH_LEN},
+    merkle::{Merkle, MerkleError, Node, Ref, TrieHash, TRIE_HASH_LEN},
     proof::ProofError,
     storage::{
         buffer::{DiskBuffer, DiskBufferRequester},
         CachedSpace, MemStoreR, SpaceWrite, StoreConfig, StoreDelta, StoreRevMut, StoreRevShared,
         ZeroStore, PAGE_SIZE_NBIT,
     },
-    v2::api::{self, Proof},
+    v2::api::{self, {self, Proof}},
 };
 use async_trait::async_trait;
 use bytemuck::{cast_slice, AnyBitPattern};
@@ -282,29 +282,30 @@ impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
             .map_err(|e| api::Error::IO(std::io::Error::new(ErrorKind::Other, e)))
     }
 
-    async fn val<K: api::KeyType>(&self, key: K) -> Result<Option<Vec<u8>>, api::Error> {
-        let obj_ref = self.merkle.get(key, self.header.kv_root);
+    async fn val<K: api::KeyType>(&self, key: K) -> Result<Option<&[u8]>, api::Error> {
+        let obj_ref: Result<Option<crate::merkle::Ref>, _> =
+            self.merkle.get(key, self.header.kv_root);
         match obj_ref {
             Err(e) => Err(api::Error::IO(std::io::Error::new(ErrorKind::Other, e))),
             Ok(obj) => match obj {
                 None => Ok(None),
-                Some(inner) => Ok(Some(inner.as_ref().to_owned())),
+                Some(inner) => Ok(Some(inner.as_ref())),
             },
         }
     }
 
     async fn single_key_proof<K: api::KeyType, N: AsRef<[u8]> + Send>(
         &self,
-        _key: K,
+        key: K,
     ) -> Result<Option<Proof<N>>, api::Error> {
         todo!()
     }
 
-    async fn range_proof<K: api::KeyType, V, N>(
+    async fn range_proof<K: api::KeyType, V: api::ValueType, N: AsRef<[u8]> + Send>(
         &self,
-        _first_key: Option<K>,
-        _last_key: Option<K>,
-        _limit: usize,
+        first_key: Option<K>,
+        last_key: Option<K>,
+        limit: usize,
     ) -> Result<Option<api::RangeProof<K, V, N>>, api::Error> {
         todo!()
     }
