@@ -67,11 +67,11 @@ impl File {
 }
 
 impl Deref for File {
+    type Target = OwnedFd;
+
     fn deref(&self) -> &Self::Target {
         &self.fd
     }
-
-    type Target = OwnedFd;
 }
 
 pub fn touch_dir(dirname: &str, rootdir: &Path) -> Result<PathBuf, std::io::Error> {
