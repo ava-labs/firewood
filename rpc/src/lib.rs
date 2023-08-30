@@ -7,3 +7,5 @@ pub mod rpcdb {
 }
 
 pub mod service;
+
+pub use service::Database as DatabaseService;

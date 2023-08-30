@@ -1,3 +1,4 @@
+use super::{Database as DatabaseService, IntoStatusResultExt, Iter};
 use crate::rpcdb::{
     database_server::Database, CloseRequest, CloseResponse, CompactRequest, CompactResponse,
     DeleteRequest, DeleteResponse, GetRequest, GetResponse, HasRequest, HasResponse,
@@ -6,65 +7,9 @@ use crate::rpcdb::{
     NewIteratorWithStartAndPrefixRequest, NewIteratorWithStartAndPrefixResponse, PutRequest,
     PutResponse, WriteBatchRequest, WriteBatchResponse,
 };
-use firewood::v2::{
-    api::{BatchOp, Db, DbView, Error as DbError, Proposal},
-    emptydb::{EmptyDb, HistoricalImpl},
-};
-use std::{
-    collections::HashMap,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
-};
-use tokio::sync::Mutex;
+use firewood::v2::api::{BatchOp, Db, DbView, Proposal};
+use std::sync::Arc;
 use tonic::{async_trait, Request, Response, Status};
-
-pub struct DatabaseService {
-    db: EmptyDb,
-    iterators: Arc<Mutex<Iterators>>,
-}
-
-impl Default for DatabaseService {
-    fn default() -> Self {
-        Self {
-            db: EmptyDb,
-            iterators: Default::default(),
-        }
-    }
-}
-
-impl DatabaseService {
-    async fn revision(&self) -> Result<Arc<HistoricalImpl>, DbError> {
-        let root_hash = self.db.root_hash().await?;
-        self.db.revision(root_hash).await
-    }
-}
-
-// TODO: implement Iterator
-struct Iter;
-
-#[derive(Default)]
-struct Iterators {
-    map: HashMap<u64, Iter>,
-    next_id: AtomicU64,
-}
-
-impl Iterators {
-    fn insert(&mut self, iter: Iter) -> u64 {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.map.insert(id, iter);
-        id
-    }
-
-    fn _get(&self, id: u64) -> Option<&Iter> {
-        self.map.get(&id)
-    }
-
-    fn remove(&mut self, id: u64) {
-        self.map.remove(&id);
-    }
-}
 
 #[async_trait]
 impl Database for DatabaseService {
@@ -207,25 +152,6 @@ impl Database for DatabaseService {
         }
 
         Ok(Response::new(IteratorReleaseResponse::default()))
-    }
-}
-
-trait IntoStatusResult<T> {
-    fn into_status_result(self) -> Result<T, Status>;
-}
-
-impl<T> IntoStatusResult<T> for Result<T, DbError> {
-    fn into_status_result(self) -> Result<T, Status> {
-        self.map_err(|err| match err {
-            DbError::HashNotFound { provided: _ } => todo!(),
-            DbError::IncorrectRootHash {
-                provided: _,
-                current: _,
-            } => todo!(),
-            DbError::IO(_) => todo!(),
-            DbError::InvalidProposal => todo!(),
-            _ => todo!(),
-        })
     }
 }
 

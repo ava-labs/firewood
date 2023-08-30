@@ -1,5 +1,8 @@
-use rpc::{rpcdb::database_server::DatabaseServer, service::database::DatabaseService};
-
+use rpc::{
+    rpcdb::database_server::DatabaseServer as RpcServer, sync::db_server::DbServer as SyncServer,
+    DatabaseService,
+};
+use std::sync::Arc;
 use tonic::transport::Server;
 
 // TODO: use clap to parse command line input to run the server
@@ -9,12 +12,12 @@ async fn main() {
 
     println!("Database-Server listening on: {}", addr);
 
-    let svc = DatabaseService::default();
-    let svc = DatabaseServer::new(svc);
+    let svc = Arc::new(DatabaseService::default());
 
     // TODO: graceful shutdown
     Server::builder()
-        .add_service(svc)
+        .add_service(RpcServer::from_arc(svc.clone()))
+        .add_service(SyncServer::from_arc(svc))
         .serve(addr)
         .await
         .unwrap();
