@@ -5,3 +5,5 @@ pub mod sync {
 pub mod rpcdb {
     tonic::include_proto!("rpcdb");
 }
+
+pub mod service;
