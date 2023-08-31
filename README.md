@@ -1,6 +1,6 @@
 # Firewood: non-archival blockchain key-value store with hyper-fast recent state retrieval.
 
-[![Latest version](https://img.shields.io/crates/v/firewood.svg)](https://crates.io/crates/firewood)
+![Github Actions](https://github.com/ava-labs/firewood/actions/workflows/ci.yaml/badge.svg)
 [![Ecosystem license](https://img.shields.io/badge/License-Ecosystem-blue.svg)](./LICENSE.md)
 
 > :warning: firewood is alpha-level software and is not ready for production
@@ -23,7 +23,8 @@ it is not built on top of a generic KV store such as LevelDB/RocksDB. Like a
 B+-tree based store, firewood directly uses the tree structure as the index on
 disk. Thus, there is no additional “emulation” of the logical trie to flatten
 out the data structure to feed into the underlying DB that is unaware of the
-data being stored.
+data being stored. It provides generic trie storage for arbitrary keys and
+values.
 
 Firewood provides OS-level crash recovery via a write-ahead log (WAL). The WAL
 guarantees atomicity and durability in the database, but also offers
@@ -32,14 +33,6 @@ allow a fast in-memory rollback to recover some past versions of the entire
 store back in memory. While running the store, new changes will also contribute
 to the configured window of changes (at batch granularity) to access any past
 versions with no additional cost at all.
-
-Firewood provides two isolated storage spaces which can be both or selectively
-used the user. The account model portion of the storage offers something very similar
-to StateDB in geth, which captures the address-“state key” style of two-level access for
-an account’s (smart contract’s) state. Therefore, it takes minimal effort to
-delegate all state storage from an EVM implementation to firewood. The other
-portion of the storage supports generic trie storage for arbitrary keys and
-values. When unused, there is no additional cost.
 
 ## License
 firewood is licensed by the Ecosystem License. For more information, see the
