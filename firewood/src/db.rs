@@ -45,7 +45,7 @@ use self::proposal::ProposalBase;
 
 const MERKLE_META_SPACE: SpaceId = 0x0;
 const MERKLE_PAYLOAD_SPACE: SpaceId = 0x1;
-const ROOT_HASH_SPACE: SpaceId = 0x4;
+const ROOT_HASH_SPACE: SpaceId = 0x2;
 const SPACE_RESERVED: u64 = 0x1000;
 
 const MAGIC_STR: &[u8; 16] = b"firewood v0.1\0\0\0";
