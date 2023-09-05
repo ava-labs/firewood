@@ -31,7 +31,6 @@ use std::{
     io::{Cursor, Write},
     mem::size_of,
     num::NonZeroUsize,
-    ops::DerefMut,
     os::fd::AsFd,
     path::Path,
     sync::Arc,
@@ -100,7 +99,7 @@ impl Error for DbError {}
 /// correct parameters are used when the DB is opened later (the parameters here will override the
 /// parameters in [DbConfig] if the DB already exists).
 #[repr(C)]
-#[derive(Debug, Clone, Copy, AnyBitPattern)]
+#[derive(Debug, Clone, Copy, AnyBitPattern, bytemuck::NoUninit)]
 struct DbParams {
     magic: [u8; 16],
     meta_file_nbit: u64,
@@ -181,10 +180,9 @@ fn get_sub_universe_from_empty_delta(
     get_sub_universe_from_deltas(sub_universe, StoreDelta::default(), StoreDelta::default())
 }
 
-/// DB-wide metadata, it keeps track of the roots of the top-level tries.
+/// mutable DB-wide metadata, it keeps track of the root of the top-level trie.
 #[derive(Debug)]
 struct DbHeader {
-    /// The root node of the generic key-value store.
     kv_root: DiskAddress,
 }
 
@@ -399,38 +397,42 @@ impl Db {
             }
             nix::unistd::ftruncate(fd0, 0).map_err(DbError::System)?;
             nix::unistd::ftruncate(fd0, 1 << cfg.meta_file_nbit).map_err(DbError::System)?;
-            let header = DbParams {
-                magic: *MAGIC_STR,
-                meta_file_nbit: cfg.meta_file_nbit,
-                payload_file_nbit: cfg.payload_file_nbit,
-                payload_regn_nbit: cfg.payload_regn_nbit,
-                wal_file_nbit: cfg.wal.file_nbit,
-                wal_block_nbit: cfg.wal.block_nbit,
-                root_hash_file_nbit: cfg.root_hash_file_nbit,
-            };
 
-            let mut header_bytes = unsafe {
-                std::slice::from_raw_parts(
-                    &header as *const DbParams as *const u8,
-                    size_of::<DbParams>(),
-                )
-                .to_vec()
-            };
-
-            // write out the DbHeader
-            let hdr = DbHeader::new_empty();
-            let mut hdr_bytes: Vec<u8> = vec![0; hdr.dehydrated_len() as usize];
-            hdr.dehydrate(hdr_bytes.deref_mut())?;
-            header_bytes.extend(hdr_bytes);
-
-            // write out the CompactSpaceHeader
-            let csh = CompactSpaceHeader::new(
-                NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(),
-                NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(),
-            );
-            let mut csh_bytes = vec![0; csh.dehydrated_len() as usize];
-            csh.dehydrate(&mut csh_bytes)?;
-            header_bytes.extend(csh_bytes);
+            // The header consists of three parts:
+            // DbParams
+            // DbHeader (just a pointer to the sentinel)
+            // CompactSpaceHeader for future allocations
+            let header_bytes: Vec<u8> = 
+                {
+                    let params = DbParams {
+                        magic: *MAGIC_STR,
+                        meta_file_nbit: cfg.meta_file_nbit,
+                        payload_file_nbit: cfg.payload_file_nbit,
+                        payload_regn_nbit: cfg.payload_regn_nbit,
+                        wal_file_nbit: cfg.wal.file_nbit,
+                        wal_block_nbit: cfg.wal.block_nbit,
+                        root_hash_file_nbit: cfg.root_hash_file_nbit,
+                    };
+                    let bytes = bytemuck::bytes_of(&params).to_vec();
+                    bytes.into_iter()
+                }.chain(
+                {
+                    // compute the DbHeader as bytes
+                    let hdr = DbHeader::new_empty();
+                    let mut dbhdr_bytes: Vec<u8> = vec![0; hdr.dehydrated_len() as usize];
+                    hdr.dehydrate(&mut dbhdr_bytes)?;
+                    dbhdr_bytes
+                }).chain(
+                {
+                    // write out the CompactSpaceHeader
+                    let csh = CompactSpaceHeader::new(
+                        NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(),
+                        NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(),
+                    );
+                    let mut csh_bytes = vec![0; csh.dehydrated_len() as usize];
+                    csh.dehydrate(&mut csh_bytes)?;
+                    csh_bytes
+                }).collect();
 
             nix::sys::uio::pwrite(fd0, &header_bytes, 0).map_err(DbError::System)?;
         }
