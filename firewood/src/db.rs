@@ -31,10 +31,11 @@ use std::{
     io::{Cursor, Write},
     mem::size_of,
     num::NonZeroUsize,
+    ops::DerefMut,
     os::fd::AsFd,
     path::Path,
     sync::Arc,
-    thread::JoinHandle, ops::DerefMut,
+    thread::JoinHandle,
 };
 
 mod proposal;
@@ -423,7 +424,10 @@ impl Db {
             header_bytes.extend(hdr_bytes);
 
             // write out the CompactSpaceHeader
-            let csh = CompactSpaceHeader::new(NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(), NonZeroUsize::new(SPACE_RESERVED as usize).unwrap());
+            let csh = CompactSpaceHeader::new(
+                NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(),
+                NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(),
+            );
             let mut csh_bytes = vec![0; csh.dehydrated_len() as usize];
             csh.dehydrate(&mut csh_bytes)?;
             header_bytes.extend(csh_bytes);
