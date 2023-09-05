@@ -34,7 +34,7 @@ use std::{
     os::fd::AsFd,
     path::Path,
     sync::Arc,
-    thread::JoinHandle,
+    thread::JoinHandle, ops::DerefMut,
 };
 
 mod proposal;
@@ -191,7 +191,7 @@ struct DbHeader {
 }
 
 impl DbHeader {
-    pub const MSIZE: u64 = 16;
+    pub const MSIZE: u64 = std::mem::size_of::<Self>() as u64;
 
     pub fn new_empty() -> Self {
         Self {
@@ -414,13 +414,25 @@ impl Db {
                 root_hash_file_nbit: cfg.root_hash_file_nbit,
             };
 
-            let header_bytes = unsafe {
+            let mut header_bytes = unsafe {
                 std::slice::from_raw_parts(
                     &header as *const DbParams as *const u8,
                     size_of::<DbParams>(),
                 )
                 .to_vec()
             };
+
+            // write out the DbHeader
+            let hdr = DbHeader::new_empty();
+            let mut hdr_bytes: Vec<u8> = vec![0; hdr.dehydrated_len() as usize];
+            hdr.dehydrate(hdr_bytes.deref_mut())?;
+            header_bytes.extend(hdr_bytes);
+
+            // write out the CompactSpaceHeader
+            let csh = CompactSpaceHeader::new(NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(), NonZeroUsize::new(SPACE_RESERVED as usize).unwrap());
+            let mut csh_bytes = vec![0; csh.dehydrated_len() as usize];
+            csh.dehydrate(&mut csh_bytes)?;
+            header_bytes.extend(csh_bytes);
 
             nix::sys::uio::pwrite(fd0, &header_bytes, 0).map_err(DbError::System)?;
         }
@@ -659,7 +671,6 @@ impl Db {
             db_header_ref
                 .write(|r| {
                     err = (|| {
-                        r.acc_root = merkle.init_root()?;
                         r.kv_root = merkle.init_root()?;
                         Ok(())
                     })();
