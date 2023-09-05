@@ -183,9 +183,6 @@ fn get_sub_universe_from_empty_delta(
 /// DB-wide metadata, it keeps track of the roots of the top-level tries.
 #[derive(Debug)]
 struct DbHeader {
-    /// The root node of the account model storage. (Where the values are [Account] objects, which
-    /// may contain the root for the secondary trie.)
-    acc_root: DiskAddress,
     /// The root node of the generic key-value store.
     kv_root: DiskAddress,
 }
@@ -195,7 +192,6 @@ impl DbHeader {
 
     pub fn new_empty() -> Self {
         Self {
-            acc_root: DiskAddress::null(),
             kv_root: DiskAddress::null(),
         }
     }
@@ -210,8 +206,7 @@ impl Storable for DbHeader {
                 size: Self::MSIZE,
             })?;
         Ok(Self {
-            acc_root: raw.as_deref()[..8].into(),
-            kv_root: raw.as_deref()[8..].into(),
+            kv_root: raw.as_deref().as_slice().into(),
         })
     }
 
@@ -221,7 +216,6 @@ impl Storable for DbHeader {
 
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {
         let mut cur = Cursor::new(to);
-        cur.write_all(&self.acc_root.to_le_bytes())?;
         cur.write_all(&self.kv_root.to_le_bytes())?;
         Ok(())
     }
