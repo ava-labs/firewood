@@ -181,7 +181,8 @@ fn get_sub_universe_from_empty_delta(
 }
 
 /// mutable DB-wide metadata, it keeps track of the root of the top-level trie.
-#[derive(Debug)]
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 struct DbHeader {
     kv_root: DiskAddress,
 }
@@ -418,9 +419,9 @@ impl Db {
             .chain({
                 // compute the DbHeader as bytes
                 let hdr = DbHeader::new_empty();
-                let mut dbhdr_bytes: Vec<u8> = vec![0; hdr.dehydrated_len() as usize];
-                hdr.dehydrate(&mut dbhdr_bytes)?;
-                dbhdr_bytes
+                // clippy thinks to_vec isn't necessary, but it actually is :(
+                #[allow(clippy::unnecessary_to_owned)]
+                bytemuck::bytes_of(&hdr).to_vec().into_iter()
             })
             .chain({
                 // write out the CompactSpaceHeader
@@ -428,9 +429,8 @@ impl Db {
                     NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(),
                     NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(),
                 );
-                let mut csh_bytes = vec![0; csh.dehydrated_len() as usize];
-                csh.dehydrate(&mut csh_bytes)?;
-                csh_bytes
+                #[allow(clippy::unnecessary_to_owned)]
+                bytemuck::bytes_of(&csh).to_vec().into_iter()
             })
             .collect();
 
