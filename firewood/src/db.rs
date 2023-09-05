@@ -402,37 +402,37 @@ impl Db {
             // DbParams
             // DbHeader (just a pointer to the sentinel)
             // CompactSpaceHeader for future allocations
-            let header_bytes: Vec<u8> = 
-                {
-                    let params = DbParams {
-                        magic: *MAGIC_STR,
-                        meta_file_nbit: cfg.meta_file_nbit,
-                        payload_file_nbit: cfg.payload_file_nbit,
-                        payload_regn_nbit: cfg.payload_regn_nbit,
-                        wal_file_nbit: cfg.wal.file_nbit,
-                        wal_block_nbit: cfg.wal.block_nbit,
-                        root_hash_file_nbit: cfg.root_hash_file_nbit,
-                    };
-                    let bytes = bytemuck::bytes_of(&params).to_vec();
-                    bytes.into_iter()
-                }.chain(
-                {
-                    // compute the DbHeader as bytes
-                    let hdr = DbHeader::new_empty();
-                    let mut dbhdr_bytes: Vec<u8> = vec![0; hdr.dehydrated_len() as usize];
-                    hdr.dehydrate(&mut dbhdr_bytes)?;
-                    dbhdr_bytes
-                }).chain(
-                {
-                    // write out the CompactSpaceHeader
-                    let csh = CompactSpaceHeader::new(
-                        NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(),
-                        NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(),
-                    );
-                    let mut csh_bytes = vec![0; csh.dehydrated_len() as usize];
-                    csh.dehydrate(&mut csh_bytes)?;
-                    csh_bytes
-                }).collect();
+            let header_bytes: Vec<u8> = {
+                let params = DbParams {
+                    magic: *MAGIC_STR,
+                    meta_file_nbit: cfg.meta_file_nbit,
+                    payload_file_nbit: cfg.payload_file_nbit,
+                    payload_regn_nbit: cfg.payload_regn_nbit,
+                    wal_file_nbit: cfg.wal.file_nbit,
+                    wal_block_nbit: cfg.wal.block_nbit,
+                    root_hash_file_nbit: cfg.root_hash_file_nbit,
+                };
+                let bytes = bytemuck::bytes_of(&params).to_vec();
+                bytes.into_iter()
+            }
+            .chain({
+                // compute the DbHeader as bytes
+                let hdr = DbHeader::new_empty();
+                let mut dbhdr_bytes: Vec<u8> = vec![0; hdr.dehydrated_len() as usize];
+                hdr.dehydrate(&mut dbhdr_bytes)?;
+                dbhdr_bytes
+            })
+            .chain({
+                // write out the CompactSpaceHeader
+                let csh = CompactSpaceHeader::new(
+                    NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(),
+                    NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(),
+                );
+                let mut csh_bytes = vec![0; csh.dehydrated_len() as usize];
+                csh.dehydrate(&mut csh_bytes)?;
+                csh_bytes
+            })
+            .collect();
 
             nix::sys::uio::pwrite(fd0, &header_bytes, 0).map_err(DbError::System)?;
         }
