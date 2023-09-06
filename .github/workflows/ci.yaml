@@ -20,6 +20,7 @@ jobs:
           toolchain: stable
           override: true
       - uses: arduino/setup-protoc@v2
+      # caution: this is the same restore as in gh-pages.yaml
       - name: Restore Cargo Cache
         id: cargo-cache
         uses: actions/cache/restore@v3
@@ -175,3 +176,8 @@ jobs:
             target/
           key: ${{ needs.build.outputs.cache-key }}
       - run: RUSTDOCFLAGS="-D warnings" cargo doc --all --document-private-items --no-deps
+      - run: |
+          git clean -f docs
+          echo "<meta http-equiv=\"refresh\" content=\"0; url=firewood\">" > target/doc/index.html
+          echo "copying documentation to doc..."
+          cp -r target/doc ./docs
