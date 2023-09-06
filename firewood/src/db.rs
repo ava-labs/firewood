@@ -521,42 +521,42 @@ impl Db {
     }
 
     fn initialize_header_on_disk(cfg: &DbConfig, fd0: BorrowedFd) -> Result<(), DbError> {
-            // The header consists of three parts:
-            // DbParams
-            // DbHeader (just a pointer to the sentinel)
-            // CompactSpaceHeader for future allocations
-            let (params, hdr, csh);
-            let header_bytes: Vec<u8> = {
-                params = DbParams {
-                    magic: *MAGIC_STR,
-                    meta_file_nbit: cfg.meta_file_nbit,
-                    payload_file_nbit: cfg.payload_file_nbit,
-                    payload_regn_nbit: cfg.payload_regn_nbit,
-                    wal_file_nbit: cfg.wal.file_nbit,
-                    wal_block_nbit: cfg.wal.block_nbit,
-                    root_hash_file_nbit: cfg.root_hash_file_nbit,
-                };
-                let bytes = bytemuck::bytes_of(&params);
-                bytes.iter()
-            }
-            .chain({
-                // compute the DbHeader as bytes
-                hdr = DbHeader::new_empty();
-                bytemuck::bytes_of(&hdr)
-            })
-            .chain({
-                // write out the CompactSpaceHeader
-                csh = CompactSpaceHeader::new(
-                    NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(),
-                    NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(),
-                );
-                bytemuck::bytes_of(&csh)
-            })
-            .copied()
-            .collect();
+        // The header consists of three parts:
+        // DbParams
+        // DbHeader (just a pointer to the sentinel)
+        // CompactSpaceHeader for future allocations
+        let (params, hdr, csh);
+        let header_bytes: Vec<u8> = {
+            params = DbParams {
+                magic: *MAGIC_STR,
+                meta_file_nbit: cfg.meta_file_nbit,
+                payload_file_nbit: cfg.payload_file_nbit,
+                payload_regn_nbit: cfg.payload_regn_nbit,
+                wal_file_nbit: cfg.wal.file_nbit,
+                wal_block_nbit: cfg.wal.block_nbit,
+                root_hash_file_nbit: cfg.root_hash_file_nbit,
+            };
+            let bytes = bytemuck::bytes_of(&params);
+            bytes.iter()
+        }
+        .chain({
+            // compute the DbHeader as bytes
+            hdr = DbHeader::new_empty();
+            bytemuck::bytes_of(&hdr)
+        })
+        .chain({
+            // write out the CompactSpaceHeader
+            csh = CompactSpaceHeader::new(
+                NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(),
+                NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(),
+            );
+            bytemuck::bytes_of(&csh)
+        })
+        .copied()
+        .collect();
 
-            nix::sys::uio::pwrite(fd0, &header_bytes, 0).map_err(DbError::System)?;
-            Ok(())
+        nix::sys::uio::pwrite(fd0, &header_bytes, 0).map_err(DbError::System)?;
+        Ok(())
     }
 
     /// Create a new mutable store and an alterable revision of the DB on top.
