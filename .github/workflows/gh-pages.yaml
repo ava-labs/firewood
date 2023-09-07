@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - "main"
-      - "doc-debug"
-      - "rkuris/doc-it-hurts-when-i-do-this"
 
 env:
   CARGO_TERM_COLOR: always
@@ -39,7 +37,7 @@ jobs:
             ${{ runner.os }}-deps-${{ hashFiles('**/Cargo.toml') }}-
             ${{ runner.os }}-deps-
       - name: Build
-        run: cargo doc --no-deps
+        run: cargo doc --document-private-items --no-deps
       - name: Set up _site redirect to firewood
         run: |
           rm -fr _site
