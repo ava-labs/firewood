@@ -78,7 +78,6 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
-          components: rustfmt, clippy
       - uses: arduino/setup-protoc@v2
       - name: Restore Check Deps
         id: cache-build-deps-restore
