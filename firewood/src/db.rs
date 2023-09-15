@@ -274,7 +274,7 @@ pub struct DbRev<S> {
 }
 
 #[async_trait]
-impl<S: ShaleStore<Node> + Send + Sync, 'a> api::DbView for DbRev<S> {
+impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         self.merkle
             .root_hash(self.header.kv_root)
@@ -282,14 +282,14 @@ impl<S: ShaleStore<Node> + Send + Sync, 'a> api::DbView for DbRev<S> {
             .map_err(|e| api::Error::IO(std::io::Error::new(ErrorKind::Other, e)))
     }
 
-    async fn val<K: api::KeyType>(&self, key: K) -> Result<Option<&[u8]>, api::Error> {
+    async fn val<K: api::KeyType>(&self, key: K) -> Result<Option<Vec<u8>>, api::Error> {
         let obj_ref =
             self.merkle.get(key, self.header.kv_root);
         match obj_ref {
             Err(e) => Err(api::Error::IO(std::io::Error::new(ErrorKind::Other, e))),
             Ok(obj) => match obj {
                 None => Ok(None),
-                Some(inner) => Ok(Some(inner.as_ref())),
+                Some(inner) => Ok(Some(inner.as_ref().to_owned())),
             },
         }
     }
