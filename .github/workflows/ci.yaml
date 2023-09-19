@@ -90,6 +90,12 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ needs.build.outputs.cache-key }}
+      - name: Check license headers
+        uses: viperproject/check-license-header@v2
+        with:
+          path: .
+          config: .github/check-license-headers.yaml
+          strict: true
       - name: Format
         run: cargo fmt -- --check
       - name: Clippy
