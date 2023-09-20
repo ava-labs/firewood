@@ -77,7 +77,7 @@
 //!   objects that are persisted on disk but also made accessible in memory transparently. It is
 //!   built on top of `CachedStore` by defining how "items" of the given type are laid out, allocated
 //!   and recycled throughout their life cycles (there is a disk-friendly, malloc-style kind of
-//!   basic implementation in `shale` crate, but one can always define his/her own `ShaleStore`).
+//!   basic implementation in `shale` crate, but one can always define their own `ShaleStore`).
 //!
 //! - Data structure: in Firewood, one trie is maintained by invoking `ShaleStore` (see `src/merkle.rs`).
 //!   The data structure code is totally unaware of how its objects (i.e., nodes) are organized or
