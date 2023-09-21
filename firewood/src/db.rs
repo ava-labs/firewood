@@ -14,7 +14,7 @@ use crate::{
         CachedSpace, MemStoreR, SpaceWrite, StoreConfig, StoreDelta, StoreRevMut, StoreRevShared,
         ZeroStore, PAGE_SIZE_NBIT,
     },
-    v2::api::{self, {self, Proof}},
+    v2::api::{self, HashKey, KeyType, Proof, ValueType},
 };
 use async_trait::async_trait;
 use bytemuck::{cast_slice, AnyBitPattern};
@@ -283,8 +283,7 @@ impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
     }
 
     async fn val<K: api::KeyType>(&self, key: K) -> Result<Option<Vec<u8>>, api::Error> {
-        let obj_ref =
-            self.merkle.get(key, self.header.kv_root);
+        let obj_ref = self.merkle.get(key, self.header.kv_root);
         match obj_ref {
             Err(e) => Err(api::Error::IO(std::io::Error::new(ErrorKind::Other, e))),
             Ok(obj) => match obj {
@@ -294,11 +293,14 @@ impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
         }
     }
 
-    async fn single_key_proof<K: api::KeyType, N: AsRef<[u8]> + Send>(
+    async fn single_key_proof<K: api::KeyType>(
         &self,
-        _key: K,
-    ) -> Result<Option<Proof<N>>, api::Error> {
-        todo!()
+        key: K,
+    ) -> Result<Option<Proof<Vec<u8>>>, api::Error> {
+        self.merkle
+            .prove(key, self.header.kv_root)
+            .map(Some)
+            .map_err(|e| api::Error::IO(std::io::Error::new(ErrorKind::Other, e)))
     }
 
     async fn range_proof<K: api::KeyType, V, N>(
@@ -378,6 +380,28 @@ impl Drop for DbInner {
     fn drop(&mut self) {
         self.disk_requester.shutdown();
         self.disk_thread.take().map(JoinHandle::join);
+    }
+}
+
+#[async_trait]
+impl api::Db for DbInner {
+    type Historical = DbRev<SharedStore>;
+
+    type Proposal = DbRev<Store>;
+
+    async fn revision(&self, _hash: HashKey) -> Result<Arc<Self::Historical>, api::Error> {
+        todo!()
+    }
+
+    async fn root_hash(&self) -> Result<HashKey, api::Error> {
+        todo!()
+    }
+
+    async fn propose<K: KeyType, V: ValueType>(
+        &self,
+        _batch: api::Batch<K, V>,
+    ) -> Result<Self::Proposal, api::Error> {
+        todo!()
     }
 }
 

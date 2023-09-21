@@ -9,10 +9,12 @@ use super::{
 use crate::{
     merkle::{TrieHash, TRIE_HASH_LEN},
     storage::{buffer::BufferWrite, AshRecord, StoreRevMut},
+    v2::api,
 };
+use async_trait::async_trait;
 use parking_lot::{Mutex, RwLock};
 use shale::CachedStore;
-use std::sync::Arc;
+use std::{io::ErrorKind, sync::Arc};
 
 /// A key/value pair operation. Only put (upsert) and delete are
 /// supported
@@ -48,6 +50,22 @@ pub struct Proposal {
 pub enum ProposalBase {
     Proposal(Arc<Proposal>),
     View(Arc<DbRev<SharedStore>>),
+}
+
+#[async_trait]
+impl<T: crate::v2::api::DbView> crate::v2::api::Proposal<T> for Proposal {
+    type Proposal = Proposal;
+
+    async fn commit(self: Arc<Self>) -> Result<Arc<T>, api::Error> {
+        todo!()
+    }
+
+    async fn propose<K: api::KeyType, V: api::ValueType>(
+        self: Arc<Self>,
+        _data: api::Batch<K, V>,
+    ) -> Result<Self::Proposal, api::Error> {
+        todo!()
+    }
 }
 
 impl Proposal {
@@ -254,6 +272,45 @@ impl Proposal {
 impl Proposal {
     pub fn get_revision(&self) -> &DbRev<Store> {
         &self.rev
+    }
+}
+
+#[async_trait]
+impl api::DbView for Proposal {
+    async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
+        self.get_revision()
+            .kv_root_hash()
+            .map(|hash| hash.0)
+            .map_err(|e| api::Error::IO(std::io::Error::new(ErrorKind::Other, e)))
+    }
+    async fn val<K>(&self, key: K) -> Result<Option<Vec<u8>>, api::Error>
+    where
+        K: api::KeyType,
+    {
+        // TODO: pass back errors from kv_get
+        Ok(self.get_revision().kv_get(key))
+    }
+
+    async fn single_key_proof<K>(&self, key: K) -> Result<Option<api::Proof<Vec<u8>>>, api::Error>
+    where
+        K: api::KeyType,
+    {
+        self.get_revision()
+            .prove(key)
+            .map(Some)
+            .map_err(|e| api::Error::IO(std::io::Error::new(ErrorKind::Other, e)))
+    }
+
+    async fn range_proof<K, V, N>(
+        &self,
+        _first_key: Option<K>,
+        _last_key: Option<K>,
+        _limit: usize,
+    ) -> Result<Option<api::RangeProof<K, V, N>>, api::Error>
+    where
+        K: api::KeyType,
+    {
+        todo!()
     }
 }
 
