@@ -1,6 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use bincode::Options;
 use enum_as_inner::EnumAsInner;
 use sha3::{Digest, Keccak256};
 use shale::{disk_address::DiskAddress, CachedStore, ShaleError, ShaleStore, Storable};
@@ -78,13 +79,19 @@ impl BranchNode {
     }
 
     fn calc_eth_rlp<S: ShaleStore<Node>>(&self, store: &S) -> Vec<u8> {
-        let mut stream = rlp::RlpStream::new_list(17);
+        // let mut stream = rlp::RlpStream::new_list(NBRANCH + 1);
+        let mut list = <[Vec<u8>; NBRANCH + 1]>::default();
+
         for (i, c) in self.chd.iter().enumerate() {
             match c {
                 Some(c) => {
                     let mut c_ref = store.get_item(*c).unwrap();
                     if c_ref.get_eth_rlp_long::<S>(store) {
-                        stream.append(&&(*c_ref.get_root_hash::<S>(store))[..]);
+                        // stream.append(&&(*c_ref.get_root_hash::<S>(store))[..]);
+                        list[i] = bincode::DefaultOptions::new()
+                            .serialize(&c_ref.get_root_hash::<S>(store).0)
+                            .unwrap();
+
                         // See struct docs for ordering requirements
                         if c_ref.lazy_dirty.load(Ordering::Relaxed) {
                             c_ref.write(|_| {}).unwrap();
@@ -92,30 +99,47 @@ impl BranchNode {
                         }
                     } else {
                         let c_rlp = &c_ref.get_eth_rlp::<S>(store);
-                        stream.append_raw(c_rlp, 1);
+                        // stream.append_raw(c_rlp, 1);
+                        list[i] = c_rlp.to_vec();
                     }
                 }
                 None => {
                     // Check if there is already a calculated rlp for the child, which
                     // can happen when manually constructing a trie from proof.
-                    if self.chd_eth_rlp[i].is_none() {
-                        stream.append_empty_data();
-                    } else {
-                        let v = self.chd_eth_rlp[i].clone().unwrap();
+                    if let Some(v) = self.chd_eth_rlp[i].clone() {
                         if v.len() == TRIE_HASH_LEN {
-                            stream.append(&v);
+                            // stream.append(&v);
+                            list[i] = bincode::DefaultOptions::new().serialize(&v).unwrap();
                         } else {
-                            stream.append_raw(&v, 1);
+                            // stream.append_raw(&v, 1);
+                            list[i] = v;
                         }
                     }
+                    // if self.chd_eth_rlp[i].is_none() {
+                    //     stream.append_empty_data();
+                    // } else {
+                    //     let v = self.chd_eth_rlp[i].clone().unwrap();
+                    //     if v.len() == TRIE_HASH_LEN {
+                    //         stream.append(&v);
+                    //     } else {
+                    //         stream.append_raw(&v, 1);
+                    //     }
+                    // }
                 }
             };
         }
-        match &self.value {
-            Some(val) => stream.append(&val.to_vec()),
-            None => stream.append_empty_data(),
-        };
-        stream.out().into()
+
+        // match &self.value {
+        //     Some(val) => stream.append(&val.to_vec()),
+        //     None => stream.append_empty_data(),
+        // };
+        // stream.out().into()
+
+        if let Some(val) = self.value.clone() {
+            list[NBRANCH] = val.to_vec();
+        }
+
+        bincode::DefaultOptions::new().serialize(&list).unwrap()
     }
 
     pub fn new(
@@ -197,34 +221,56 @@ impl Debug for ExtNode {
 
 impl ExtNode {
     fn calc_eth_rlp<S: ShaleStore<Node>>(&self, store: &S) -> Vec<u8> {
-        let mut stream = rlp::RlpStream::new_list(2);
+        // let mut stream = rlp::RlpStream::new_list(2);
+        let mut list = <[Vec<u8>; 2]>::default();
+
         if !self.1.is_null() {
             let mut r = store.get_item(self.1).unwrap();
-            stream.append(&from_nibbles(&self.0.encode(false)).collect::<Vec<_>>());
+            // stream.append(&from_nibbles(&self.0.encode(false)).collect::<Vec<_>>());
+            list[0] = bincode::DefaultOptions::new()
+                .serialize(&from_nibbles(&self.0.encode(false)).collect::<Vec<_>>())
+                .unwrap();
+
             if r.get_eth_rlp_long(store) {
-                stream.append(&&(*r.get_root_hash(store))[..]);
+                // stream.append(&&(*r.get_root_hash(store))[..]);
+                list[1] = bincode::DefaultOptions::new()
+                    .serialize(&r.get_root_hash(store).0)
+                    .unwrap();
+
                 if r.lazy_dirty.load(Ordering::Relaxed) {
                     r.write(|_| {}).unwrap();
                     r.lazy_dirty.store(false, Ordering::Relaxed);
                 }
             } else {
-                stream.append_raw(r.get_eth_rlp(store), 1);
+                // stream.append_raw(r.get_eth_rlp(store), 1);
+                list[1] = r.get_eth_rlp(store).to_vec();
             }
         } else {
             // Check if there is already a caclucated rlp for the child, which
             // can happen when manually constructing a trie from proof.
-            if self.2.is_none() {
-                stream.append_empty_data();
-            } else {
-                let v = self.2.clone().unwrap();
+            // if self.2.is_none() {
+            //     stream.append_empty_data();
+            // } else {
+            //     let v = self.2.clone().unwrap();
+            //     if v.len() == TRIE_HASH_LEN {
+            //         stream.append(&v);
+            //     } else {
+            //         stream.append_raw(&v, 1);
+            //     }
+            // }
+
+            if let Some(v) = self.2.as_ref() {
                 if v.len() == TRIE_HASH_LEN {
-                    stream.append(&v);
+                    // stream.append(&v);
+                    list[1] = bincode::DefaultOptions::new().serialize(v).unwrap();
                 } else {
-                    stream.append_raw(&v, 1);
+                    // stream.append_raw(&v, 1);
+                    list[1] = v.clone();
                 }
             }
         }
-        stream.out().into()
+        // stream.out().into()
+        bincode::DefaultOptions::new().serialize(&list).unwrap()
     }
 
     pub fn new(path: Vec<u8>, chd: DiskAddress, chd_eth_rlp: Option<Vec<u8>>) -> Self {
