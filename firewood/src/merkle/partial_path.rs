@@ -1,9 +1,8 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use crate::nibbles::NibblesIterator;
 use std::fmt::{self, Debug};
-
-use crate::nibbles::Nibbles;
 
 /// PartialPath keeps a list of nibbles to represent a path on the Trie.
 #[derive(PartialEq, Eq, Clone)]
@@ -43,6 +42,8 @@ impl PartialPath {
     }
 
     // TODO: remove all non `Nibbles` usages and delete this function.
+    // I also think `PartialPath` could probably borrow instead of own data.
+    //
     /// returns a tuple of the decoded partial path and whether the path is terminal
     pub fn decode(raw: &[u8]) -> (Self, bool) {
         let prefix = raw[0];
@@ -53,10 +54,10 @@ impl PartialPath {
     }
 
     /// returns a tuple of the decoded partial path and whether the path is terminal
-    pub fn from_nibbles<'a, const N: usize>(nibbles: Nibbles<'a, N>) -> (Self, bool) {
-        let prefix = nibbles[0];
+    pub fn from_nibbles<const N: usize>(mut nibbles: NibblesIterator<'_, N>) -> (Self, bool) {
+        let prefix = nibbles.next().unwrap();
         let is_odd = (prefix & 1) as usize;
-        let decoded = nibbles.iter().skip(1).skip(1 - is_odd).collect();
+        let decoded = nibbles.skip(1 - is_odd).collect();
 
         (Self(decoded), prefix > 1)
     }
