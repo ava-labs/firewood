@@ -40,8 +40,7 @@ impl PartialPath {
         res
     }
 
-    pub fn decode<R: AsRef<[u8]>>(raw: R) -> (Self, bool) {
-        let raw = raw.as_ref();
+    pub fn decode(raw: &[u8]) -> (Self, bool) {
         let term = raw[0] > 1;
         let odd_len = raw[0] & 1;
         (

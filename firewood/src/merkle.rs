@@ -1287,7 +1287,7 @@ mod test {
     #[test]
     fn test_partial_path_encoding() {
         let check = |steps: &[u8], term| {
-            let (d, t) = PartialPath::decode(PartialPath(steps.to_vec()).encode(term));
+            let (d, t) = PartialPath::decode(&PartialPath(steps.to_vec()).encode(term));
             assert_eq!(d.0, steps);
             assert_eq!(t, term);
         };

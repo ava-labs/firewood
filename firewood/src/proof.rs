@@ -160,7 +160,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                     .into_iter()
                     .flat_map(to_nibble_array)
                     .collect();
-                let (cur_key_path, term) = PartialPath::decode(decoded_key_nibbles);
+                let (cur_key_path, term) = PartialPath::decode(&decoded_key_nibbles);
                 let cur_key = cur_key_path.into_inner();
 
                 let rlp = rlp.at(1).unwrap();
@@ -557,7 +557,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                     .flat_map(to_nibble_array)
                     .collect();
 
-                let (cur_key_path, term) = PartialPath::decode(cur_key_path);
+                let (cur_key_path, term) = PartialPath::decode(&cur_key_path);
                 let cur_key = cur_key_path.into_inner();
 
                 let rlp = rlp.at(1)?;
