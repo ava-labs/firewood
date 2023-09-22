@@ -136,7 +136,7 @@ impl BranchNode {
         // stream.out().into()
 
         if let Some(val) = self.value.clone() {
-            list[NBRANCH] = val.to_vec();
+            list[NBRANCH] = bincode::DefaultOptions::new().serialize(&val).unwrap();
         }
 
         bincode::DefaultOptions::new().serialize(&list).unwrap()
