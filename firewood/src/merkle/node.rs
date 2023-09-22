@@ -170,7 +170,9 @@ impl BranchNode {
             );
         }
 
-        bincode::DefaultOptions::new().serialize(&list).unwrap()
+        bincode::DefaultOptions::new()
+            .serialize(list.as_slice())
+            .unwrap()
     }
 
     pub fn new(
@@ -313,7 +315,9 @@ impl ExtNode {
             }
         }
         // stream.out().into()
-        bincode::DefaultOptions::new().serialize(&list).unwrap()
+        bincode::DefaultOptions::new()
+            .serialize(list.as_slice())
+            .unwrap()
     }
 
     pub fn new(path: Vec<u8>, chd: DiskAddress, chd_eth_rlp: Option<Vec<u8>>) -> Self {
