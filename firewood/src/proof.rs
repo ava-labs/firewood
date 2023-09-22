@@ -4,6 +4,7 @@
 use std::cmp::Ordering;
 use std::ops::Deref;
 
+use bincode::Options;
 use nix::errno::Errno;
 use sha3::Digest;
 use shale::disk_address::DiskAddress;
@@ -26,7 +27,8 @@ use crate::{
 #[derive(Debug, Error)]
 pub enum ProofError {
     #[error("decoding error")]
-    DecodeError(#[from] rlp::DecoderError),
+    // DecodeError(#[from] rlp::DecoderError),
+    DecodeError(#[from] bincode::Error),
     #[error("no such node")]
     NoSuchNode,
     #[error("proof node missing")]
@@ -146,24 +148,36 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
         mut key_nibbles: NibblesIterator<'a, 0>,
         rlp_encoded_node: &[u8],
     ) -> Result<(Option<SubProof>, NibblesIterator<'a, 0>), ProofError> {
-        let rlp = rlp::Rlp::new(rlp_encoded_node);
+        // let rlp = rlp::Rlp::new(rlp_encoded_node);
+        let items: Vec<Vec<u8>> = bincode::DefaultOptions::new()
+            .deserialize(rlp_encoded_node)
+            .map_err(|e| ProofError::DecodeError(e))?;
 
-        match rlp.item_count() {
-            Ok(EXT_NODE_SIZE) => {
-                let decoded_key = rlp.at(0).unwrap().as_val::<Vec<u8>>().unwrap();
+        // match rlp.item_count() {
+        match items.len() {
+            // Ok(EXT_NODE_SIZE) => {
+            EXT_NODE_SIZE => {
+                // let decoded_key = rlp.at(0).unwrap().as_val::<Vec<u8>>().unwrap();
+                let decoded_key: Vec<u8> = bincode::DefaultOptions::new().deserialize(&items[0])?;
+
                 let decoded_key_nibbles = Nibbles::<0>::new(&decoded_key);
 
                 let (cur_key_path, term) =
                     PartialPath::from_nibbles(decoded_key_nibbles.into_iter());
                 let cur_key = cur_key_path.into_inner();
 
-                let rlp = rlp.at(1).unwrap();
+                // let rlp = rlp.at(1).unwrap();
+                // let data = if rlp.is_data() {
+                //     rlp.as_val::<Vec<u8>>().unwrap()
+                // } else {
+                //     rlp.as_raw().to_vec()
+                // };
 
-                let data = if rlp.is_data() {
-                    rlp.as_val::<Vec<u8>>().unwrap()
-                } else {
-                    rlp.as_raw().to_vec()
-                };
+                let item = &items[1];
+
+                let data: Vec<u8> = bincode::DefaultOptions::new()
+                    .deserialize(item)
+                    .unwrap_or_else(|_| item.to_vec());
 
                 // Check if the key of current node match with the given key
                 // and consume the current-key portion of the nibbles-iterator
@@ -186,24 +200,34 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 Ok((sub_proof.into(), key_nibbles))
             }
 
-            Ok(BRANCH_NODE_SIZE) if key_nibbles.size_hint().0 == 0 => Err(ProofError::NoSuchNode),
+            // Ok(BRANCH_NODE_SIZE) if key_nibbles.size_hint().0 == 0 => Err(ProofError::NoSuchNode),
+            BRANCH_NODE_SIZE if key_nibbles.size_hint().0 == 0 => Err(ProofError::NoSuchNode),
 
-            Ok(BRANCH_NODE_SIZE) => {
+            // Ok(BRANCH_NODE_SIZE) => {
+            BRANCH_NODE_SIZE => {
                 let index = key_nibbles.next().unwrap() as usize;
-                let rlp = rlp.at(index).unwrap();
+                // let rlp = rlp.at(index).unwrap();
 
-                let data = if rlp.is_data() {
-                    rlp.as_val::<Vec<u8>>().unwrap()
-                } else {
-                    rlp.as_raw().to_vec()
-                };
+                // let data = if rlp.is_data() {
+                //     rlp.as_val::<Vec<u8>>().unwrap()
+                // } else {
+                //     rlp.as_raw().to_vec()
+                // };
+
+                let item = &items[index];
+                let data: Vec<u8> = bincode::DefaultOptions::new()
+                    .deserialize(item)
+                    .unwrap_or_else(|_| item.to_vec());
 
                 self.generate_subproof(data)
                     .map(|subproof| (Some(subproof), key_nibbles))
             }
 
-            Ok(_) => Err(ProofError::DecodeError(rlp::DecoderError::RlpInvalidLength)),
-            Err(e) => Err(ProofError::DecodeError(e)),
+            // Ok(_) => Err(ProofError::DecodeError(rlp::DecoderError::RlpInvalidLength)),
+            // Err(e) => Err(ProofError::DecodeError(e)),
+            _ => Err(ProofError::DecodeError(Box::new(
+                bincode::ErrorKind::Custom(String::from("")),
+            ))),
         }
     }
 
@@ -225,7 +249,10 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                     hash: Some(sub_hash),
                 })
             }
-            _ => Err(ProofError::DecodeError(rlp::DecoderError::RlpInvalidLength)),
+            // _ => Err(ProofError::DecodeError(rlp::DecoderError::RlpInvalidLength)),
+            _ => Err(ProofError::DecodeError(Box::new(
+                bincode::ErrorKind::Custom(String::from("")),
+            ))),
         }
     }
 
@@ -541,14 +568,23 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
         buf: &[u8],
         end_node: bool,
     ) -> Result<(DiskAddress, Option<SubProof>, usize), ProofError> {
-        let rlp = rlp::Rlp::new(buf);
-        let size = rlp.item_count()?;
+        // let rlp = rlp::Rlp::new(buf);
+        // let size = rlp.item_count()?;
+
+        let items: Vec<Vec<u8>> = bincode::DefaultOptions::new().deserialize(buf)?;
+        let size = items.len();
 
         match size {
             EXT_NODE_SIZE => {
-                let cur_key_path: Vec<_> = rlp
-                    .at(0)?
-                    .as_val::<Vec<u8>>()?
+                // let cur_key_path: Vec<_> = rlp
+                //     .at(0)?
+                //     .as_val::<Vec<u8>>()?
+                //     .into_iter()
+                //     .flat_map(to_nibble_array)
+                //     .collect();
+
+                let cur_key_path: Vec<_> = bincode::DefaultOptions::new()
+                    .deserialize::<Vec<u8>>(&items[0])?
                     .into_iter()
                     .flat_map(to_nibble_array)
                     .collect();
@@ -556,13 +592,18 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 let (cur_key_path, term) = PartialPath::decode(&cur_key_path);
                 let cur_key = cur_key_path.into_inner();
 
-                let rlp = rlp.at(1)?;
+                // let rlp = rlp.at(1)?;
 
-                let data = if rlp.is_data() {
-                    rlp.as_val::<Vec<u8>>()?
-                } else {
-                    rlp.as_raw().to_vec()
-                };
+                // let data = if rlp.is_data() {
+                //     rlp.as_val::<Vec<u8>>()?
+                // } else {
+                //     rlp.as_raw().to_vec()
+                // };
+
+                let item = &items[1];
+                let data: Vec<u8> = bincode::DefaultOptions::new()
+                    .deserialize(item)
+                    .unwrap_or_else(|_| item.to_vec());
 
                 // Check if the key of current node match with the given key.
                 if key.len() < cur_key.len() || key[..cur_key.len()] != cur_key {
@@ -588,16 +629,29 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
             }
 
             BRANCH_NODE_SIZE => {
-                let data_rlp = rlp.at(NBRANCH)?;
+                // let data_rlp = rlp.at(NBRANCH)?;
 
+                // // Extract the value of the branch node.
+                // // Skip if rlp is empty data
+                // let value = if !data_rlp.is_empty() {
+                //     let data = if data_rlp.is_data() {
+                //         data_rlp.as_val::<Vec<u8>>().unwrap()
+                //     } else {
+                //         data_rlp.as_raw().to_vec()
+                //     };
+
+                //     Some(data)
+                // } else {
+                //     None
+                // };
+
+                let item = &items[NBRANCH];
                 // Extract the value of the branch node.
                 // Skip if rlp is empty data
-                let value = if !data_rlp.is_empty() {
-                    let data = if data_rlp.is_data() {
-                        data_rlp.as_val::<Vec<u8>>().unwrap()
-                    } else {
-                        data_rlp.as_raw().to_vec()
-                    };
+                let value = if !item.is_empty() {
+                    let data: Vec<u8> = bincode::DefaultOptions::new()
+                        .deserialize(item)
+                        .unwrap_or_else(|_| item.to_vec());
 
                     Some(data)
                 } else {
@@ -607,14 +661,24 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 // Record rlp values of all children.
                 let mut chd_eth_rlp: [Option<Vec<u8>>; NBRANCH] = Default::default();
 
-                for (i, chd) in rlp.into_iter().take(NBRANCH).enumerate() {
+                // for (i, chd) in rlp.into_iter().take(NBRANCH).enumerate() {
+                //     if !chd.is_empty() {
+                //         // Skip if chd is empty data
+                //         let data = if chd.is_data() {
+                //             chd.as_val()?
+                //         } else {
+                //             chd.as_raw().to_vec()
+                //         };
+
+                //         chd_eth_rlp[i] = Some(data);
+                //     }
+                // }
+
+                for (i, chd) in items.into_iter().take(NBRANCH).enumerate() {
                     if !chd.is_empty() {
-                        // Skip if chd is empty data
-                        let data = if chd.is_data() {
-                            chd.as_val()?
-                        } else {
-                            chd.as_raw().to_vec()
-                        };
+                        let data: Vec<u8> = bincode::DefaultOptions::new()
+                            .deserialize(&chd)
+                            .unwrap_or_else(|_| chd.to_vec());
 
                         chd_eth_rlp[i] = Some(data);
                     }
@@ -647,7 +711,10 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
             }
 
             // RLP length can only be the two cases above.
-            _ => Err(ProofError::DecodeError(rlp::DecoderError::RlpInvalidLength)),
+            // _ => Err(ProofError::DecodeError(rlp::DecoderError::RlpInvalidLength)),
+            _ => Err(ProofError::DecodeError(Box::new(
+                bincode::ErrorKind::Custom(String::from("")),
+            ))),
         }
     }
 }

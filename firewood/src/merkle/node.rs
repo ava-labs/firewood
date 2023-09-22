@@ -185,12 +185,20 @@ impl Debug for LeafNode {
 }
 
 impl LeafNode {
+    // fn calc_eth_rlp(&self) -> Vec<u8> {
+    //     rlp::encode_list::<Vec<u8>, _>(&[
+    //         from_nibbles(&self.0.encode(true)).collect(),
+    //         self.1.to_vec(),
+    //     ])
+    //     .into()
+    // }
     fn calc_eth_rlp(&self) -> Vec<u8> {
-        rlp::encode_list::<Vec<u8>, _>(&[
-            from_nibbles(&self.0.encode(true)).collect(),
-            self.1.to_vec(),
-        ])
-        .into()
+        bincode::DefaultOptions::new()
+            .serialize(&[
+                from_nibbles(&self.0.encode(true)).collect(),
+                self.1.to_vec(),
+            ])
+            .unwrap()
     }
 
     pub fn new(path: Vec<u8>, data: Vec<u8>) -> Self {
