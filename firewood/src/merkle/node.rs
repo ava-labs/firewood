@@ -8,6 +8,7 @@ use shale::{disk_address::DiskAddress, CachedStore, ShaleError, ShaleStore, Stor
 use std::{
     fmt::{self, Debug},
     io::{Cursor, Read, Write},
+    ops::Deref,
     sync::{
         atomic::{AtomicBool, Ordering},
         OnceLock,
@@ -136,7 +137,9 @@ impl BranchNode {
         // stream.out().into()
 
         if let Some(val) = self.value.clone() {
-            list[NBRANCH] = bincode::DefaultOptions::new().serialize(&val).unwrap();
+            list[NBRANCH] = bincode::DefaultOptions::new()
+                .serialize(val.deref())
+                .unwrap();
         }
 
         bincode::DefaultOptions::new().serialize(&list).unwrap()
