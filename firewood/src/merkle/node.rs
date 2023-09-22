@@ -9,7 +9,6 @@ use shale::{disk_address::DiskAddress, CachedStore, ShaleError, ShaleStore, Stor
 use std::{
     fmt::{self, Debug},
     io::{Cursor, Read, Write},
-    ops::Deref,
     sync::{
         atomic::{AtomicBool, Ordering},
         OnceLock,
@@ -38,9 +37,10 @@ pub(crate) enum Encoded<T> {
     Data(T),
 }
 
-impl<T: Default> Default for Encoded<T> {
+impl Default for Encoded<Vec<u8>> {
     fn default() -> Self {
-        Encoded::Raw(T::default())
+        // This is the default serialized empty vector
+        Encoded::Data(vec![0])
     }
 }
 
@@ -113,7 +113,7 @@ impl BranchNode {
                         // stream.append(&&(*c_ref.get_root_hash::<S>(store))[..]);
                         list[i] = Encoded::Data(
                             bincode::DefaultOptions::new()
-                                .serialize(&c_ref.get_root_hash::<S>(store).0)
+                                .serialize(&&(*c_ref.get_root_hash::<S>(store))[..])
                                 .unwrap(),
                         );
 
@@ -165,7 +165,7 @@ impl BranchNode {
         if let Some(val) = self.value.clone() {
             list[NBRANCH] = Encoded::Data(
                 bincode::DefaultOptions::new()
-                    .serialize(val.deref())
+                    .serialize(&val.to_vec())
                     .unwrap(),
             );
         }
@@ -278,7 +278,7 @@ impl ExtNode {
                 // stream.append(&&(*r.get_root_hash(store))[..]);
                 list[1] = Encoded::Data(
                     bincode::DefaultOptions::new()
-                        .serialize(&r.get_root_hash(store).0)
+                        .serialize(&&(*r.get_root_hash(store))[..])
                         .unwrap(),
                 );
 
