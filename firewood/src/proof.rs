@@ -151,7 +151,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     ) -> Result<(Option<SubProof>, NibblesIterator<'a, 0>), ProofError> {
         // let rlp = rlp::Rlp::new(rlp_encoded_node);
         let items: Vec<Encoded<Vec<u8>>> =
-            dbg!(bincode::DefaultOptions::new().deserialize(rlp_encoded_node))
+            dbg!(bincode::DefaultOptions::new().deserialize(dbg!(rlp_encoded_node)))
                 .map_err(|e| ProofError::DecodeError(e))?;
 
         // match rlp.item_count() {
