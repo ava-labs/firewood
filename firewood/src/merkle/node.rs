@@ -3,6 +3,7 @@
 
 use bincode::Options;
 use enum_as_inner::EnumAsInner;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use shale::{disk_address::DiskAddress, CachedStore, ShaleError, ShaleStore, Storable};
 use std::{
@@ -28,6 +29,27 @@ impl std::ops::Deref for Data {
     type Target = [u8];
     fn deref(&self) -> &[u8] {
         &self.0
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub(crate) enum Encoded<T> {
+    Raw(T),
+    Data(T),
+}
+
+impl<T: Default> Default for Encoded<T> {
+    fn default() -> Self {
+        Encoded::Raw(T::default())
+    }
+}
+
+impl<T: DeserializeOwned + AsRef<[u8]>> Encoded<T> {
+    pub fn decode(self) -> Result<T, bincode::Error> {
+        match self {
+            Encoded::Raw(raw) => Ok(raw),
+            Encoded::Data(data) => bincode::DefaultOptions::new().deserialize(data.as_ref()),
+        }
     }
 }
 
@@ -81,7 +103,7 @@ impl BranchNode {
 
     fn calc_eth_rlp<S: ShaleStore<Node>>(&self, store: &S) -> Vec<u8> {
         // let mut stream = rlp::RlpStream::new_list(NBRANCH + 1);
-        let mut list = <[Vec<u8>; NBRANCH + 1]>::default();
+        let mut list = <[Encoded<Vec<u8>>; NBRANCH + 1]>::default();
 
         for (i, c) in self.chd.iter().enumerate() {
             match c {
@@ -89,9 +111,11 @@ impl BranchNode {
                     let mut c_ref = store.get_item(*c).unwrap();
                     if c_ref.get_eth_rlp_long::<S>(store) {
                         // stream.append(&&(*c_ref.get_root_hash::<S>(store))[..]);
-                        list[i] = bincode::DefaultOptions::new()
-                            .serialize(&c_ref.get_root_hash::<S>(store).0)
-                            .unwrap();
+                        list[i] = Encoded::Data(
+                            bincode::DefaultOptions::new()
+                                .serialize(&c_ref.get_root_hash::<S>(store).0)
+                                .unwrap(),
+                        );
 
                         // See struct docs for ordering requirements
                         if c_ref.lazy_dirty.load(Ordering::Relaxed) {
@@ -101,7 +125,7 @@ impl BranchNode {
                     } else {
                         let c_rlp = &c_ref.get_eth_rlp::<S>(store);
                         // stream.append_raw(c_rlp, 1);
-                        list[i] = c_rlp.to_vec();
+                        list[i] = Encoded::Raw(c_rlp.to_vec());
                     }
                 }
                 None => {
@@ -110,10 +134,12 @@ impl BranchNode {
                     if let Some(v) = self.chd_eth_rlp[i].clone() {
                         if v.len() == TRIE_HASH_LEN {
                             // stream.append(&v);
-                            list[i] = bincode::DefaultOptions::new().serialize(&v).unwrap();
+                            list[i] = Encoded::Data(
+                                bincode::DefaultOptions::new().serialize(&v).unwrap(),
+                            );
                         } else {
                             // stream.append_raw(&v, 1);
-                            list[i] = v;
+                            list[i] = Encoded::Raw(v);
                         }
                     }
                     // if self.chd_eth_rlp[i].is_none() {
@@ -137,9 +163,11 @@ impl BranchNode {
         // stream.out().into()
 
         if let Some(val) = self.value.clone() {
-            list[NBRANCH] = bincode::DefaultOptions::new()
-                .serialize(val.deref())
-                .unwrap();
+            list[NBRANCH] = Encoded::Data(
+                bincode::DefaultOptions::new()
+                    .serialize(val.deref())
+                    .unwrap(),
+            );
         }
 
         bincode::DefaultOptions::new().serialize(&list).unwrap()
@@ -198,8 +226,8 @@ impl LeafNode {
     fn calc_eth_rlp(&self) -> Vec<u8> {
         bincode::DefaultOptions::new()
             .serialize(&[
-                from_nibbles(&self.0.encode(true)).collect(),
-                self.1.to_vec(),
+                Encoded::Data(from_nibbles(&self.0.encode(true)).collect()),
+                Encoded::Data(self.1.to_vec()),
             ])
             .unwrap()
     }
@@ -233,20 +261,24 @@ impl Debug for ExtNode {
 impl ExtNode {
     fn calc_eth_rlp<S: ShaleStore<Node>>(&self, store: &S) -> Vec<u8> {
         // let mut stream = rlp::RlpStream::new_list(2);
-        let mut list = <[Vec<u8>; 2]>::default();
+        let mut list = <[Encoded<Vec<u8>>; 2]>::default();
 
         if !self.1.is_null() {
             let mut r = store.get_item(self.1).unwrap();
             // stream.append(&from_nibbles(&self.0.encode(false)).collect::<Vec<_>>());
-            list[0] = bincode::DefaultOptions::new()
-                .serialize(&from_nibbles(&self.0.encode(false)).collect::<Vec<_>>())
-                .unwrap();
+            list[0] = Encoded::Data(
+                bincode::DefaultOptions::new()
+                    .serialize(&from_nibbles(&self.0.encode(false)).collect::<Vec<_>>())
+                    .unwrap(),
+            );
 
             if r.get_eth_rlp_long(store) {
                 // stream.append(&&(*r.get_root_hash(store))[..]);
-                list[1] = bincode::DefaultOptions::new()
-                    .serialize(&r.get_root_hash(store).0)
-                    .unwrap();
+                list[1] = Encoded::Data(
+                    bincode::DefaultOptions::new()
+                        .serialize(&r.get_root_hash(store).0)
+                        .unwrap(),
+                );
 
                 if r.lazy_dirty.load(Ordering::Relaxed) {
                     r.write(|_| {}).unwrap();
@@ -254,7 +286,7 @@ impl ExtNode {
                 }
             } else {
                 // stream.append_raw(r.get_eth_rlp(store), 1);
-                list[1] = r.get_eth_rlp(store).to_vec();
+                list[1] = Encoded::Raw(r.get_eth_rlp(store).to_vec());
             }
         } else {
             // Check if there is already a caclucated rlp for the child, which
@@ -273,10 +305,10 @@ impl ExtNode {
             if let Some(v) = self.2.as_ref() {
                 if v.len() == TRIE_HASH_LEN {
                     // stream.append(&v);
-                    list[1] = bincode::DefaultOptions::new().serialize(v).unwrap();
+                    list[1] = Encoded::Data(bincode::DefaultOptions::new().serialize(v).unwrap());
                 } else {
                     // stream.append_raw(&v, 1);
-                    list[1] = v.clone();
+                    list[1] = Encoded::Raw(v.clone());
                 }
             }
         }

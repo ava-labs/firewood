@@ -12,6 +12,7 @@ use shale::ShaleError;
 use shale::ShaleStore;
 use thiserror::Error;
 
+use crate::merkle::Encoded;
 use crate::nibbles::Nibbles;
 use crate::nibbles::NibblesIterator;
 use crate::{
@@ -149,16 +150,20 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
         rlp_encoded_node: &[u8],
     ) -> Result<(Option<SubProof>, NibblesIterator<'a, 0>), ProofError> {
         // let rlp = rlp::Rlp::new(rlp_encoded_node);
-        let items: Vec<Vec<u8>> = bincode::DefaultOptions::new()
-            .deserialize(rlp_encoded_node)
-            .map_err(|e| ProofError::DecodeError(e))?;
+        let items: Vec<Encoded<Vec<u8>>> =
+            dbg!(bincode::DefaultOptions::new().deserialize(rlp_encoded_node))
+                .map_err(|e| ProofError::DecodeError(e))?;
 
         // match rlp.item_count() {
         match items.len() {
             // Ok(EXT_NODE_SIZE) => {
+            // [Encoded<Vec<u8>>; 2]
+            // 0 is always Encoded::Data
+            // 1 could be either
             EXT_NODE_SIZE => {
                 // let decoded_key = rlp.at(0).unwrap().as_val::<Vec<u8>>().unwrap();
-                let decoded_key: Vec<u8> = bincode::DefaultOptions::new().deserialize(&items[0])?;
+                let mut items = items.into_iter();
+                let decoded_key: Vec<u8> = items.next().unwrap().decode()?;
 
                 let decoded_key_nibbles = Nibbles::<0>::new(&decoded_key);
 
@@ -173,11 +178,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 //     rlp.as_raw().to_vec()
                 // };
 
-                let item = &items[1];
-
-                let data: Vec<u8> = bincode::DefaultOptions::new()
-                    .deserialize(item)
-                    .unwrap_or_else(|_| item.to_vec());
+                let data: Vec<u8> = items.next().unwrap().decode()?;
 
                 // Check if the key of current node match with the given key
                 // and consume the current-key portion of the nibbles-iterator
@@ -214,10 +215,9 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 //     rlp.as_raw().to_vec()
                 // };
 
-                let item = &items[index];
-                let data: Vec<u8> = bincode::DefaultOptions::new()
-                    .deserialize(item)
-                    .unwrap_or_else(|_| item.to_vec());
+                // consume items returning the item at index
+
+                let data: Vec<u8> = items.into_element_at(index).decode()?;
 
                 self.generate_subproof(data)
                     .map(|subproof| (Some(subproof), key_nibbles))
@@ -571,7 +571,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
         // let rlp = rlp::Rlp::new(buf);
         // let size = rlp.item_count()?;
 
-        let items: Vec<Vec<u8>> = bincode::DefaultOptions::new().deserialize(buf)?;
+        let mut items: Vec<Encoded<Vec<u8>>> = bincode::DefaultOptions::new().deserialize(buf)?;
         let size = items.len();
 
         match size {
@@ -582,9 +582,12 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 //     .into_iter()
                 //     .flat_map(to_nibble_array)
                 //     .collect();
+                let mut items = items.into_iter();
 
-                let cur_key_path: Vec<_> = bincode::DefaultOptions::new()
-                    .deserialize::<Vec<u8>>(&items[0])?
+                let cur_key_path: Vec<u8> = items
+                    .next()
+                    .unwrap()
+                    .decode()?
                     .into_iter()
                     .flat_map(to_nibble_array)
                     .collect();
@@ -600,10 +603,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 //     rlp.as_raw().to_vec()
                 // };
 
-                let item = &items[1];
-                let data: Vec<u8> = bincode::DefaultOptions::new()
-                    .deserialize(item)
-                    .unwrap_or_else(|_| item.to_vec());
+                let data: Vec<u8> = items.next().unwrap().decode()?;
 
                 // Check if the key of current node match with the given key.
                 if key.len() < cur_key.len() || key[..cur_key.len()] != cur_key {
@@ -645,18 +645,10 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 //     None
                 // };
 
-                let item = &items[NBRANCH];
-                // Extract the value of the branch node.
-                // Skip if rlp is empty data
-                let value = if !item.is_empty() {
-                    let data: Vec<u8> = bincode::DefaultOptions::new()
-                        .deserialize(item)
-                        .unwrap_or_else(|_| item.to_vec());
-
-                    Some(data)
-                } else {
-                    None
-                };
+                // we've already validated the size, that's why we can safely unwrap
+                let data = items.pop().unwrap().decode()?;
+                // Extract the value of the branch node and set to None if it's an empty Vec
+                let value = Some(data).filter(|data| !data.is_empty());
 
                 // Record rlp values of all children.
                 let mut chd_eth_rlp: [Option<Vec<u8>>; NBRANCH] = Default::default();
@@ -674,14 +666,10 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 //     }
                 // }
 
-                for (i, chd) in items.into_iter().take(NBRANCH).enumerate() {
-                    if !chd.is_empty() {
-                        let data: Vec<u8> = bincode::DefaultOptions::new()
-                            .deserialize(&chd)
-                            .unwrap_or_else(|_| chd.to_vec());
-
-                        chd_eth_rlp[i] = Some(data);
-                    }
+                // we popped the last element, so their should only be NBRANCH items left
+                for (i, chd) in items.into_iter().enumerate() {
+                    let data = chd.decode()?;
+                    chd_eth_rlp[i] = Some(data).filter(|data| !data.is_empty());
                 }
 
                 // If the node is the last one to be decoded, then no subproof to be extracted.
@@ -1142,5 +1130,19 @@ fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync>(
 
             Ok(())
         }
+    }
+}
+
+trait IntoElementAt {
+    type Element;
+
+    fn into_element_at(self, index: usize) -> Self::Element;
+}
+
+impl<T> IntoElementAt for Vec<T> {
+    type Element = T;
+
+    fn into_element_at(self, index: usize) -> Self::Element {
+        self.into_iter().nth(index).unwrap()
     }
 }
