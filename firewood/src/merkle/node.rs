@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use bincode::Options;
+use bincode::{Error, Options};
 use enum_as_inner::EnumAsInner;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
@@ -134,13 +134,11 @@ impl BranchNode {
 
     fn encode<S: ShaleStore<Node>>(&self, store: &S) -> Vec<u8> {
         let mut list = <[Encoded<Vec<u8>>; NBRANCH + 1]>::default();
-
         for (i, c) in self.chd.iter().enumerate() {
             match c {
                 Some(c) => {
                     let mut c_ref = store.get_item(*c).unwrap();
                     if c_ref.decode_big::<S>(store) {
-                        // stream.append(&&(*c_ref.get_root_hash::<S>(store))[..]);
                         list[i] = Encoded::Data(
                             bincode::DefaultOptions::new()
                                 .serialize(&&(*c_ref.get_root_hash::<S>(store))[..])
@@ -162,12 +160,10 @@ impl BranchNode {
                     // can happen when manually constructing a trie from proof.
                     if let Some(v) = self.chld_encoded[i].clone() {
                         if v.len() == TRIE_HASH_LEN {
-                            // stream.append(&v);
                             list[i] = Encoded::Data(
                                 bincode::DefaultOptions::new().serialize(&v).unwrap(),
                             );
                         } else {
-                            // stream.append_raw(&v, 1);
                             list[i] = Encoded::Raw(v);
                         }
                     }
@@ -280,10 +276,8 @@ impl ExtNode {
 
         if !self.1.is_null() {
             let mut r = store.get_item(self.1).unwrap();
-            // stream.append(&from_nibbles(&self.0.encode(false)).collect::<Vec<_>>());
 
             if r.decode_big(store) {
-                // stream.append(&&(*r.get_root_hash(store))[..]);
                 list[1] = Encoded::Data(
                     bincode::DefaultOptions::new()
                         .serialize(&&(*r.get_root_hash(store))[..])
@@ -300,17 +294,14 @@ impl ExtNode {
         } else {
             // Check if there is already a caclucated encoded value for the child, which
             // can happen when manually constructing a trie from proof.
-            if let Some(v) = self.2.as_ref() {
+            if let Some(v) = &self.2 {
                 if v.len() == TRIE_HASH_LEN {
-                    // stream.append(&v);
                     list[1] = Encoded::Data(bincode::DefaultOptions::new().serialize(v).unwrap());
                 } else {
-                    // stream.append_raw(&v, 1);
                     list[1] = Encoded::Raw(v.clone());
                 }
             }
         }
-        // stream.out().into()
         bincode::DefaultOptions::new()
             .serialize(list.as_slice())
             .unwrap()
@@ -425,6 +416,38 @@ impl NodeType {
             BRANCH_NODE_SIZE => Ok(NodeType::Branch(BranchNode::decode(buf)?)),
             _ => Err(Error::Decode(Box::new(bincode::ErrorKind::Custom(
                 String::from(""),
+            )))),
+        }
+    }
+
+    pub fn decode(buf: &[u8]) -> Result<NodeType, Error> {
+        let items: Vec<Encoded<Vec<u8>>> = bincode::DefaultOptions::new().deserialize(buf)?;
+
+        match items.len() {
+            EXT_NODE_SIZE => {
+                let mut items = items.into_iter();
+                let decoded_key: Vec<u8> = items.next().unwrap().decode()?;
+
+                let decoded_key_nibbles = Nibbles::<0>::new(&decoded_key);
+
+                let (cur_key_path, term) =
+                    PartialPath::from_nibbles(decoded_key_nibbles.into_iter());
+                let cur_key = cur_key_path.into_inner();
+                let data: Vec<u8> = items.next().unwrap().decode()?;
+
+                if term {
+                    Ok(NodeType::Leaf(LeafNode::new(cur_key, data)))
+                } else {
+                    Ok(NodeType::Extension(ExtNode::new(
+                        cur_key,
+                        DiskAddress::null(),
+                        Some(data),
+                    )))
+                }
+            }
+            BRANCH_NODE_SIZE => Ok(NodeType::Branch(BranchNode::decode(buf)?)),
+            size => Err(Box::new(bincode::ErrorKind::Custom(format!(
+                "invalid size: {size}"
             )))),
         }
     }
