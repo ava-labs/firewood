@@ -186,20 +186,22 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 Ok((sub_proof.into(), key_nibbles))
             }
 
+            // Ok(BRANCH_NODE_SIZE) if key_nibbles.size_hint().0 == 0 => Err(ProofError::NoSuchNode),
             BRANCH_NODE_SIZE if key_nibbles.size_hint().0 == 0 => Err(ProofError::NoSuchNode),
 
+            // Ok(BRANCH_NODE_SIZE) => {
             BRANCH_NODE_SIZE => {
                 let index = key_nibbles.next().unwrap() as usize;
-
                 // consume items returning the item at index
-                let data: Vec<u8> = items.into_iter().nth(index).unwrap().decode()?;
+
+                let data: Vec<u8> = items.into_element_at(index).decode()?;
 
                 self.generate_subproof(data)
                     .map(|subproof| (Some(subproof), key_nibbles))
             }
 
-            size => Err(ProofError::DecodeError(Box::new(
-                bincode::ErrorKind::Custom(format!("invalid size: {size}")),
+            _ => Err(ProofError::DecodeError(Box::new(
+                bincode::ErrorKind::Custom(String::from("")),
             ))),
         }
     }
@@ -213,7 +215,6 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                     hash: Some(sub_hash),
                 })
             }
-
             32 => {
                 let sub_hash: &[u8] = &data;
                 let sub_hash = sub_hash.try_into().unwrap();
@@ -223,8 +224,8 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                     hash: Some(sub_hash),
                 })
             }
-            len => Err(ProofError::DecodeError(Box::new(
-                bincode::ErrorKind::Custom(format!("invalid proof length: {len}")),
+            _ => Err(ProofError::DecodeError(Box::new(
+                bincode::ErrorKind::Custom(String::from("")),
             ))),
         }
     }
@@ -558,6 +559,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
 
                 let (cur_key_path, term) = PartialPath::decode(&cur_key_path);
                 let cur_key = cur_key_path.into_inner();
+
                 let data: Vec<u8> = items.next().unwrap().decode()?;
 
                 // Check if the key of current node match with the given key.
@@ -1054,19 +1056,5 @@ fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync>(
 
             Ok(())
         }
-    }
-}
-
-trait IntoElementAt {
-    type Element;
-
-    fn into_element_at(self, index: usize) -> Self::Element;
-}
-
-impl<T> IntoElementAt for Vec<T> {
-    type Element = T;
-
-    fn into_element_at(self, index: usize) -> Self::Element {
-        self.into_iter().nth(index).unwrap()
     }
 }

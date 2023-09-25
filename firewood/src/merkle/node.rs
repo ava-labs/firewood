@@ -151,20 +151,19 @@ impl BranchNode {
                 None => {
                     // Check if there is already a calculated encoded value for the child, which
                     // can happen when manually constructing a trie from proof.
-                    if let Some(v) = self.chld_encoded[i].clone() {
+                    if let Some(v) = &self.chld_encoded[i] {
                         if v.len() == TRIE_HASH_LEN {
-                            list[i] = Encoded::Data(
-                                bincode::DefaultOptions::new().serialize(&v).unwrap(),
-                            );
+                            list[i] =
+                                Encoded::Data(bincode::DefaultOptions::new().serialize(v).unwrap());
                         } else {
-                            list[i] = Encoded::Raw(v);
+                            list[i] = Encoded::Raw(v.clone());
                         }
                     }
                 }
             };
         }
 
-        if let Some(val) = self.value.clone() {
+        if let Some(val) = &self.value {
             list[NBRANCH] = Encoded::Data(
                 bincode::DefaultOptions::new()
                     .serialize(&val.to_vec())
