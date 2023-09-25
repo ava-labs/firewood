@@ -1420,7 +1420,7 @@ mod test {
                 Data(vec![0x4, 0x5]),
             )));
             let chd_ref = merkle.new_node(chd.clone()).unwrap();
-            let chd_decoded = chd_ref.get_eth_rlp(merkle.store.as_ref());
+            let chd_decoded = chd_ref.decode(merkle.store.as_ref());
             let new_chd = Node::new(NodeType::decode(chd_decoded).unwrap());
             let new_chd_decoded = new_chd.decode(merkle.store.as_ref());
             assert_eq!(chd_decoded, new_chd_decoded);

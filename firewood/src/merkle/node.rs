@@ -17,7 +17,6 @@ use std::{
 
 use crate::merkle::to_nibble_array;
 use crate::nibbles::Nibbles;
-use thiserror::Error;
 
 use super::{from_nibbles, PartialPath, TrieHash, TRIE_HASH_LEN};
 
@@ -56,12 +55,6 @@ impl<T: DeserializeOwned + AsRef<[u8]>> Encoded<T> {
             Encoded::Data(data) => bincode::DefaultOptions::new().deserialize(data.as_ref()),
         }
     }
-}
-
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("decoding error")]
-    Decode(#[from] bincode::Error),
 }
 
 #[derive(PartialEq, Eq, Clone)]
@@ -383,40 +376,6 @@ impl NodeType {
             NodeType::Leaf(n) => n.encode(),
             NodeType::Extension(n) => n.encode(store),
             NodeType::Branch(n) => n.encode(store),
-        }
-    }
-
-    pub fn decode(buf: &[u8]) -> Result<NodeType, Error> {
-        let items: Vec<Encoded<Vec<u8>>> = bincode::DefaultOptions::new()
-            .deserialize(dbg!(buf))
-            .map_err(Error::Decode)?;
-
-        match items.len() {
-            EXT_NODE_SIZE => {
-                let mut items = items.into_iter();
-                let decoded_key: Vec<u8> = items.next().unwrap().decode()?;
-
-                let decoded_key_nibbles = Nibbles::<0>::new(&decoded_key);
-
-                let (cur_key_path, term) =
-                    PartialPath::from_nibbles(decoded_key_nibbles.into_iter());
-                let cur_key = cur_key_path.into_inner();
-                let data: Vec<u8> = items.next().unwrap().decode()?;
-
-                if term {
-                    Ok(NodeType::Leaf(LeafNode::new(cur_key, data)))
-                } else {
-                    Ok(NodeType::Extension(ExtNode::new(
-                        cur_key,
-                        DiskAddress::null(),
-                        Some(data),
-                    )))
-                }
-            }
-            BRANCH_NODE_SIZE => Ok(NodeType::Branch(BranchNode::decode(buf)?)),
-            _ => Err(Error::Decode(Box::new(bincode::ErrorKind::Custom(
-                String::from(""),
-            )))),
         }
     }
 
