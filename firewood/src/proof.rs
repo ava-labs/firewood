@@ -201,32 +201,20 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 Ok((sub_proof.into(), key_nibbles))
             }
 
-            // Ok(BRANCH_NODE_SIZE) if key_nibbles.size_hint().0 == 0 => Err(ProofError::NoSuchNode),
             BRANCH_NODE_SIZE if key_nibbles.size_hint().0 == 0 => Err(ProofError::NoSuchNode),
 
-            // Ok(BRANCH_NODE_SIZE) => {
             BRANCH_NODE_SIZE => {
                 let index = key_nibbles.next().unwrap() as usize;
-                // let rlp = rlp.at(index).unwrap();
-
-                // let data = if rlp.is_data() {
-                //     rlp.as_val::<Vec<u8>>().unwrap()
-                // } else {
-                //     rlp.as_raw().to_vec()
-                // };
 
                 // consume items returning the item at index
-
-                let data: Vec<u8> = items.into_element_at(index).decode()?;
+                let data: Vec<u8> = items.into_iter().nth(index).unwrap().decode()?;
 
                 self.generate_subproof(data)
                     .map(|subproof| (Some(subproof), key_nibbles))
             }
 
-            // Ok(_) => Err(ProofError::DecodeError(rlp::DecoderError::RlpInvalidLength)),
-            // Err(e) => Err(ProofError::DecodeError(e)),
-            _ => Err(ProofError::DecodeError(Box::new(
-                bincode::ErrorKind::Custom(String::from("")),
+            size => Err(ProofError::DecodeError(Box::new(
+                bincode::ErrorKind::Custom(format!("invalid size: {size}")),
             ))),
         }
     }
@@ -240,6 +228,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                     hash: Some(sub_hash),
                 })
             }
+
             32 => {
                 let sub_hash: &[u8] = &data;
                 let sub_hash = sub_hash.try_into().unwrap();
@@ -249,9 +238,9 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                     hash: Some(sub_hash),
                 })
             }
-            // _ => Err(ProofError::DecodeError(rlp::DecoderError::RlpInvalidLength)),
-            _ => Err(ProofError::DecodeError(Box::new(
-                bincode::ErrorKind::Custom(String::from("")),
+
+            len => Err(ProofError::DecodeError(Box::new(
+                bincode::ErrorKind::Custom(format!("invalid proof length: {len}")),
             ))),
         }
     }
@@ -1130,19 +1119,5 @@ fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync>(
 
             Ok(())
         }
-    }
-}
-
-trait IntoElementAt {
-    type Element;
-
-    fn into_element_at(self, index: usize) -> Self::Element;
-}
-
-impl<T> IntoElementAt for Vec<T> {
-    type Element = T;
-
-    fn into_element_at(self, index: usize) -> Self::Element {
-        self.into_iter().nth(index).unwrap()
     }
 }
