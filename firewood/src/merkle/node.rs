@@ -258,10 +258,10 @@ impl LeafNode {
     // }
     fn calc_eth_rlp(&self) -> Vec<u8> {
         bincode::DefaultOptions::new()
-            .serialize(&[
-                Encoded::Data(from_nibbles(&self.0.encode(true)).collect()),
-                Encoded::Data(self.1.to_vec()),
-            ])
+            .serialize([
+                Encoded::Raw(from_nibbles(&self.0.encode(true)).collect::<Vec<_>>()),
+                Encoded::Raw(self.1.to_vec()),
+            ].as_slice())
             .unwrap()
     }
 
