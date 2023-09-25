@@ -16,10 +16,15 @@ use std::{
 };
 
 use crate::merkle::to_nibble_array;
+use crate::nibbles::Nibbles;
+use thiserror::Error;
 
 use super::{from_nibbles, PartialPath, TrieHash, TRIE_HASH_LEN};
 
 pub const NBRANCH: usize = 16;
+
+const EXT_NODE_SIZE: usize = 2;
+const BRANCH_NODE_SIZE: usize = 17;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Data(pub(super) Vec<u8>);
@@ -51,6 +56,12 @@ impl<T: DeserializeOwned + AsRef<[u8]>> Encoded<T> {
             Encoded::Data(data) => bincode::DefaultOptions::new().deserialize(data.as_ref()),
         }
     }
+}
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("decoding error")]
+    Decode(#[from] bincode::Error),
 }
 
 #[derive(PartialEq, Eq, Clone)]
@@ -99,6 +110,26 @@ impl BranchNode {
             }
         }
         (only_chd, has_chd)
+    }
+
+    pub fn decode(buf: &[u8]) -> Result<Self, Error> {
+        let mut items: Vec<Encoded<Vec<u8>>> = bincode::DefaultOptions::new().deserialize(buf)?;
+
+        // we've already validated the size, that's why we can safely unwrap
+        let data = items.pop().unwrap().decode()?;
+        // Extract the value of the branch node and set to None if it's an empty Vec
+        let value = Some(data).filter(|data| !data.is_empty());
+
+        // Record rlp values of all children.
+        let mut chd_eth_rlp: [Option<Vec<u8>>; NBRANCH] = Default::default();
+
+        // we popped the last element, so their should only be NBRANCH items left
+        for (i, chd) in items.into_iter().enumerate() {
+            let data = chd.decode()?;
+            chd_eth_rlp[i] = Some(data).filter(|data| !data.is_empty());
+        }
+
+        Ok(BranchNode::new([None; NBRANCH], value, chd_eth_rlp))
     }
 
     fn calc_eth_rlp<S: ShaleStore<Node>>(&self, store: &S) -> Vec<u8> {
@@ -264,15 +295,15 @@ impl ExtNode {
     fn calc_eth_rlp<S: ShaleStore<Node>>(&self, store: &S) -> Vec<u8> {
         // let mut stream = rlp::RlpStream::new_list(2);
         let mut list = <[Encoded<Vec<u8>>; 2]>::default();
+        list[0] = Encoded::Data(
+            bincode::DefaultOptions::new()
+                .serialize(&from_nibbles(&self.0.encode(false)).collect::<Vec<_>>())
+                .unwrap(),
+        );
 
         if !self.1.is_null() {
             let mut r = store.get_item(self.1).unwrap();
             // stream.append(&from_nibbles(&self.0.encode(false)).collect::<Vec<_>>());
-            list[0] = Encoded::Data(
-                bincode::DefaultOptions::new()
-                    .serialize(&from_nibbles(&self.0.encode(false)).collect::<Vec<_>>())
-                    .unwrap(),
-            );
 
             if r.get_eth_rlp_long(store) {
                 // stream.append(&&(*r.get_root_hash(store))[..]);
@@ -391,11 +422,45 @@ pub enum NodeType {
 }
 
 impl NodeType {
-    fn calc_eth_rlp<S: ShaleStore<Node>>(&self, store: &S) -> Vec<u8> {
+    pub fn calc_eth_rlp<S: ShaleStore<Node>>(&self, store: &S) -> Vec<u8> {
         match &self {
             NodeType::Leaf(n) => n.calc_eth_rlp(),
             NodeType::Extension(n) => n.calc_eth_rlp(store),
             NodeType::Branch(n) => n.calc_eth_rlp(store),
+        }
+    }
+
+    pub fn decode(buf: &[u8]) -> Result<NodeType, Error> {
+        let items: Vec<Encoded<Vec<u8>>> = bincode::DefaultOptions::new()
+            .deserialize(dbg!(buf))
+            .map_err(Error::Decode)?;
+
+        match items.len() {
+            EXT_NODE_SIZE => {
+                let mut items = items.into_iter();
+                let decoded_key: Vec<u8> = items.next().unwrap().decode()?;
+
+                let decoded_key_nibbles = Nibbles::<0>::new(&decoded_key);
+
+                let (cur_key_path, term) =
+                    PartialPath::from_nibbles(decoded_key_nibbles.into_iter());
+                let cur_key = cur_key_path.into_inner();
+                let data: Vec<u8> = items.next().unwrap().decode()?;
+
+                if term {
+                    Ok(NodeType::Leaf(LeafNode::new(cur_key, data)))
+                } else {
+                    Ok(NodeType::Extension(ExtNode::new(
+                        cur_key,
+                        DiskAddress::null(),
+                        Some(data),
+                    )))
+                }
+            }
+            BRANCH_NODE_SIZE => Ok(NodeType::Branch(BranchNode::decode(buf)?)),
+            _ => Err(Error::Decode(Box::new(bincode::ErrorKind::Custom(
+                String::from(""),
+            )))),
         }
     }
 }
