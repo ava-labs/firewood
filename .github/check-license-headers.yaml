@@ -1,7 +1,10 @@
 [
   {
     "include": [
-      "firewood/src/*.rs"
+      "**/**/*.rs"
+    ],
+    "exclude": [
+      "target/**"
     ],
     "license": "./.github/license-header.txt"
   }
