@@ -4,6 +4,7 @@
 use std::cmp::Ordering;
 use std::ops::Deref;
 
+use bincode::Options;
 use nix::errno::Errno;
 use sha3::Digest;
 use shale::disk_address::DiskAddress;
@@ -11,6 +12,9 @@ use shale::ShaleError;
 use shale::ShaleStore;
 use thiserror::Error;
 
+use crate::merkle::Encoded;
+use crate::nibbles::Nibbles;
+use crate::nibbles::NibblesIterator;
 use crate::{
     db::DbError,
     merkle::{
@@ -24,7 +28,8 @@ use crate::{
 #[derive(Debug, Error)]
 pub enum ProofError {
     #[error("decoding error")]
-    DecodeError(#[from] rlp::DecoderError),
+    // DecodeError(#[from] rlp::DecoderError),
+    DecodeError(#[from] bincode::Error),
     #[error("no such node")]
     NoSuchNode,
     #[error("proof node missing")]
@@ -114,100 +119,103 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
         key: K,
         root_hash: [u8; 32],
     ) -> Result<Option<Vec<u8>>, ProofError> {
-        let mut key_nibbles = Vec::new();
-        key_nibbles.extend(key.as_ref().iter().copied().flat_map(to_nibble_array));
+        let mut key_nibbles = Nibbles::<0>::new(key.as_ref()).into_iter();
 
-        let mut remaining_key_nibbles: &[u8] = &key_nibbles;
         let mut cur_hash = root_hash;
         let proofs_map = &self.0;
-        let mut index = 0;
 
         loop {
             let cur_proof = proofs_map
                 .get(&cur_hash)
                 .ok_or(ProofError::ProofNodeMissing)?;
-            let (sub_proof, size) =
-                self.locate_subproof(remaining_key_nibbles, cur_proof.as_ref())?;
-            index += size;
+            let (sub_proof, traversed_nibbles) =
+                self.locate_subproof(key_nibbles, cur_proof.as_ref())?;
+            key_nibbles = traversed_nibbles;
 
-            match sub_proof {
+            cur_hash = match sub_proof {
                 // Return when reaching the end of the key.
-                Some(p) if index == key_nibbles.len() => return Ok(Some(p.rlp)),
+                Some(p) if key_nibbles.size_hint().0 == 0 => return Ok(Some(p.rlp)),
                 // The trie doesn't contain the key.
-                Some(SubProof { hash: None, .. }) | None => return Ok(None),
-                Some(p) => {
-                    cur_hash = p.hash.unwrap();
-                    remaining_key_nibbles = &key_nibbles[index..];
-                }
-            }
+                Some(SubProof {
+                    hash: Some(hash), ..
+                }) => hash,
+                _ => return Ok(None),
+            };
         }
     }
 
-    fn locate_subproof(
+    fn locate_subproof<'a>(
         &self,
-        key_nibbles: &[u8],
+        mut key_nibbles: NibblesIterator<'a, 0>,
         rlp_encoded_node: &[u8],
-    ) -> Result<(Option<SubProof>, usize), ProofError> {
-        let rlp = rlp::Rlp::new(rlp_encoded_node);
+    ) -> Result<(Option<SubProof>, NibblesIterator<'a, 0>), ProofError> {
+        // let rlp = rlp::Rlp::new(rlp_encoded_node);
+        let items: Vec<Encoded<Vec<u8>>> = bincode::DefaultOptions::new()
+            .deserialize(rlp_encoded_node)
+            .map_err(ProofError::DecodeError)?;
 
-        match rlp.item_count() {
-            Ok(EXT_NODE_SIZE) => {
-                let decoded_key_nibbles: Vec<_> = rlp
-                    .at(0)
-                    .unwrap()
-                    .as_val::<Vec<u8>>()
-                    .unwrap()
-                    .into_iter()
-                    .flat_map(to_nibble_array)
-                    .collect();
-                let (cur_key_path, term) = PartialPath::decode(decoded_key_nibbles);
+        // match rlp.item_count() {
+        match items.len() {
+            // Ok(EXT_NODE_SIZE) => {
+            // [Encoded<Vec<u8>>; 2]
+            // 0 is always Encoded::Data
+            // 1 could be either
+            EXT_NODE_SIZE => {
+                // let decoded_key = rlp.at(0).unwrap().as_val::<Vec<u8>>().unwrap();
+                let mut items = items.into_iter();
+                let decoded_key: Vec<u8> = items.next().unwrap().decode()?;
+
+                let decoded_key_nibbles = Nibbles::<0>::new(&decoded_key);
+
+                let (cur_key_path, term) =
+                    PartialPath::from_nibbles(decoded_key_nibbles.into_iter());
                 let cur_key = cur_key_path.into_inner();
 
-                let rlp = rlp.at(1).unwrap();
+                // let rlp = rlp.at(1).unwrap();
+                // let data = if rlp.is_data() {
+                //     rlp.as_val::<Vec<u8>>().unwrap()
+                // } else {
+                //     rlp.as_raw().to_vec()
+                // };
 
-                let data = if rlp.is_data() {
-                    rlp.as_val::<Vec<u8>>().unwrap()
+                let data: Vec<u8> = items.next().unwrap().decode()?;
+
+                // Check if the key of current node match with the given key
+                // and consume the current-key portion of the nibbles-iterator
+                let does_not_match = key_nibbles.size_hint().0 < cur_key.len()
+                    || !cur_key.iter().all(|val| key_nibbles.next() == Some(*val));
+
+                if does_not_match {
+                    return Ok((None, Nibbles::<0>::new(&[]).into_iter()));
+                }
+
+                let sub_proof = if term {
+                    SubProof {
+                        rlp: data,
+                        hash: None,
+                    }
                 } else {
-                    rlp.as_raw().to_vec()
+                    self.generate_subproof(data)?
                 };
 
-                // Check if the key of current node match with the given key.
-                if key_nibbles.len() < cur_key.len() || key_nibbles[..cur_key.len()] != cur_key {
-                    return Ok((None, 0));
-                }
-
-                if term {
-                    Ok((
-                        Some(SubProof {
-                            rlp: data,
-                            hash: None,
-                        }),
-                        cur_key.len(),
-                    ))
-                } else {
-                    self.generate_subproof(data)
-                        .map(|subproof| (Some(subproof), cur_key.len()))
-                }
+                Ok((sub_proof.into(), key_nibbles))
             }
 
-            Ok(BRANCH_NODE_SIZE) if key_nibbles.is_empty() => Err(ProofError::NoSuchNode),
+            BRANCH_NODE_SIZE if key_nibbles.size_hint().0 == 0 => Err(ProofError::NoSuchNode),
 
-            Ok(BRANCH_NODE_SIZE) => {
-                let index = key_nibbles[0];
-                let rlp = rlp.at(index as usize).unwrap();
+            BRANCH_NODE_SIZE => {
+                let index = key_nibbles.next().unwrap() as usize;
 
-                let data = if rlp.is_data() {
-                    rlp.as_val::<Vec<u8>>().unwrap()
-                } else {
-                    rlp.as_raw().to_vec()
-                };
+                // consume items returning the item at index
+                let data: Vec<u8> = items.into_iter().nth(index).unwrap().decode()?;
 
                 self.generate_subproof(data)
-                    .map(|subproof| (Some(subproof), 1))
+                    .map(|subproof| (Some(subproof), key_nibbles))
             }
 
-            Ok(_) => Err(ProofError::DecodeError(rlp::DecoderError::RlpInvalidLength)),
-            Err(e) => Err(ProofError::DecodeError(e)),
+            size => Err(ProofError::DecodeError(Box::new(
+                bincode::ErrorKind::Custom(format!("invalid size: {size}")),
+            ))),
         }
     }
 
@@ -220,6 +228,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                     hash: Some(sub_hash),
                 })
             }
+
             32 => {
                 let sub_hash: &[u8] = &data;
                 let sub_hash = sub_hash.try_into().unwrap();
@@ -229,7 +238,10 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                     hash: Some(sub_hash),
                 })
             }
-            _ => Err(ProofError::DecodeError(rlp::DecoderError::RlpInvalidLength)),
+
+            len => Err(ProofError::DecodeError(Box::new(
+                bincode::ErrorKind::Custom(format!("invalid proof length: {len}")),
+            ))),
         }
     }
 
@@ -545,28 +557,42 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
         buf: &[u8],
         end_node: bool,
     ) -> Result<(DiskAddress, Option<SubProof>, usize), ProofError> {
-        let rlp = rlp::Rlp::new(buf);
-        let size = rlp.item_count()?;
+        // let rlp = rlp::Rlp::new(buf);
+        // let size = rlp.item_count()?;
+
+        let mut items: Vec<Encoded<Vec<u8>>> = bincode::DefaultOptions::new().deserialize(buf)?;
+        let size = items.len();
 
         match size {
             EXT_NODE_SIZE => {
-                let cur_key_path: Vec<_> = rlp
-                    .at(0)?
-                    .as_val::<Vec<u8>>()?
+                // let cur_key_path: Vec<_> = rlp
+                //     .at(0)?
+                //     .as_val::<Vec<u8>>()?
+                //     .into_iter()
+                //     .flat_map(to_nibble_array)
+                //     .collect();
+                let mut items = items.into_iter();
+
+                let cur_key_path: Vec<u8> = items
+                    .next()
+                    .unwrap()
+                    .decode()?
                     .into_iter()
                     .flat_map(to_nibble_array)
                     .collect();
 
-                let (cur_key_path, term) = PartialPath::decode(cur_key_path);
+                let (cur_key_path, term) = PartialPath::decode(&cur_key_path);
                 let cur_key = cur_key_path.into_inner();
 
-                let rlp = rlp.at(1)?;
+                // let rlp = rlp.at(1)?;
 
-                let data = if rlp.is_data() {
-                    rlp.as_val::<Vec<u8>>()?
-                } else {
-                    rlp.as_raw().to_vec()
-                };
+                // let data = if rlp.is_data() {
+                //     rlp.as_val::<Vec<u8>>()?
+                // } else {
+                //     rlp.as_raw().to_vec()
+                // };
+
+                let data: Vec<u8> = items.next().unwrap().decode()?;
 
                 // Check if the key of current node match with the given key.
                 if key.len() < cur_key.len() || key[..cur_key.len()] != cur_key {
@@ -592,36 +618,47 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
             }
 
             BRANCH_NODE_SIZE => {
-                let data_rlp = rlp.at(NBRANCH)?;
+                // let data_rlp = rlp.at(NBRANCH)?;
 
-                // Extract the value of the branch node.
-                // Skip if rlp is empty data
-                let value = if !data_rlp.is_empty() {
-                    let data = if data_rlp.is_data() {
-                        data_rlp.as_val::<Vec<u8>>().unwrap()
-                    } else {
-                        data_rlp.as_raw().to_vec()
-                    };
+                // // Extract the value of the branch node.
+                // // Skip if rlp is empty data
+                // let value = if !data_rlp.is_empty() {
+                //     let data = if data_rlp.is_data() {
+                //         data_rlp.as_val::<Vec<u8>>().unwrap()
+                //     } else {
+                //         data_rlp.as_raw().to_vec()
+                //     };
 
-                    Some(data)
-                } else {
-                    None
-                };
+                //     Some(data)
+                // } else {
+                //     None
+                // };
+
+                // we've already validated the size, that's why we can safely unwrap
+                let data = items.pop().unwrap().decode()?;
+                // Extract the value of the branch node and set to None if it's an empty Vec
+                let value = Some(data).filter(|data| !data.is_empty());
 
                 // Record rlp values of all children.
                 let mut chd_eth_rlp: [Option<Vec<u8>>; NBRANCH] = Default::default();
 
-                for (i, chd) in rlp.into_iter().take(NBRANCH).enumerate() {
-                    if !chd.is_empty() {
-                        // Skip if chd is empty data
-                        let data = if chd.is_data() {
-                            chd.as_val()?
-                        } else {
-                            chd.as_raw().to_vec()
-                        };
+                // for (i, chd) in rlp.into_iter().take(NBRANCH).enumerate() {
+                //     if !chd.is_empty() {
+                //         // Skip if chd is empty data
+                //         let data = if chd.is_data() {
+                //             chd.as_val()?
+                //         } else {
+                //             chd.as_raw().to_vec()
+                //         };
 
-                        chd_eth_rlp[i] = Some(data);
-                    }
+                //         chd_eth_rlp[i] = Some(data);
+                //     }
+                // }
+
+                // we popped the last element, so their should only be NBRANCH items left
+                for (i, chd) in items.into_iter().enumerate() {
+                    let data = chd.decode()?;
+                    chd_eth_rlp[i] = Some(data).filter(|data| !data.is_empty());
                 }
 
                 // If the node is the last one to be decoded, then no subproof to be extracted.
@@ -651,7 +688,10 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
             }
 
             // RLP length can only be the two cases above.
-            _ => Err(ProofError::DecodeError(rlp::DecoderError::RlpInvalidLength)),
+            // _ => Err(ProofError::DecodeError(rlp::DecoderError::RlpInvalidLength)),
+            _ => Err(ProofError::DecodeError(Box::new(
+                bincode::ErrorKind::Custom(String::from("")),
+            ))),
         }
     }
 }

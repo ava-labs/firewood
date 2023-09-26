@@ -15,6 +15,7 @@ mod node;
 mod partial_path;
 mod trie_hash;
 
+pub(crate) use node::Encoded;
 pub use node::{BranchNode, Data, ExtNode, LeafNode, Node, NodeType, NBRANCH};
 pub use partial_path::PartialPath;
 pub use trie_hash::{TrieHash, TRIE_HASH_LEN};
@@ -370,7 +371,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
         let mut val = Some(val);
 
         // walk down the merkle tree starting from next_node, currently the root
-        for (key_nib_offset, key_nib) in key_nibbles.iter().enumerate() {
+        for (key_nib_offset, key_nib) in key_nibbles.into_iter().enumerate() {
             // special handling for extension nodes
             if nskip > 0 {
                 nskip -= 1;
@@ -393,7 +394,9 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                         // create a new leaf
                         let leaf_ptr = self
                             .new_node(Node::new(NodeType::Leaf(LeafNode(
-                                PartialPath(key_nibbles.iter().skip(key_nib_offset + 1).collect()),
+                                PartialPath(
+                                    key_nibbles.into_iter().skip(key_nib_offset + 1).collect(),
+                                ),
                                 Data(val.take().unwrap()),
                             ))))?
                             .as_ptr();
@@ -412,7 +415,10 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                     // of the stored key to pass into split
                     let n_path = n.0.to_vec();
                     let n_value = Some(n.1.clone());
-                    let rem_path = key_nibbles.iter().skip(key_nib_offset).collect::<Vec<_>>();
+                    let rem_path = key_nibbles
+                        .into_iter()
+                        .skip(key_nib_offset)
+                        .collect::<Vec<_>>();
                     self.split(
                         node,
                         &mut parents,
@@ -428,7 +434,10 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                     let n_path = n.0.to_vec();
                     let n_ptr = n.1;
                     nskip = n_path.len() - 1;
-                    let rem_path = key_nibbles.iter().skip(key_nib_offset).collect::<Vec<_>>();
+                    let rem_path = key_nibbles
+                        .into_iter()
+                        .skip(key_nib_offset)
+                        .collect::<Vec<_>>();
 
                     if let Some(v) = self.split(
                         node,
@@ -1044,7 +1053,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
 
         let mut nskip = 0;
         let mut nodes: Vec<DiskAddress> = Vec::new();
-        for (i, nib) in key_nibbles.iter().enumerate() {
+        for (i, nib) in key_nibbles.into_iter().enumerate() {
             if nskip > 0 {
                 nskip -= 1;
                 continue;
@@ -1060,7 +1069,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                     // the key passed in must match the entire remainder of this
                     // extension node, otherwise we break out
                     let n_path = &*n.0;
-                    let remaining_path = key_nibbles.iter().skip(i);
+                    let remaining_path = key_nibbles.into_iter().skip(i);
                     if remaining_path.size_hint().0 < n_path.len() {
                         // all bytes aren't there
                         break;
@@ -1115,7 +1124,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
         let mut u_ref = self.get_node(root)?;
         let mut nskip = 0;
 
-        for (i, nib) in key_nibbles.iter().enumerate() {
+        for (i, nib) in key_nibbles.into_iter().enumerate() {
             if nskip > 0 {
                 nskip -= 1;
                 continue;
@@ -1126,14 +1135,14 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                     None => return Ok(None),
                 },
                 NodeType::Leaf(n) => {
-                    if !key_nibbles.iter().skip(i).eq(n.0.iter().cloned()) {
+                    if !key_nibbles.into_iter().skip(i).eq(n.0.iter().cloned()) {
                         return Ok(None);
                     }
                     return Ok(Some(Ref(u_ref)));
                 }
                 NodeType::Extension(n) => {
                     let n_path = &*n.0;
-                    let rem_path = key_nibbles.iter().skip(i);
+                    let rem_path = key_nibbles.into_iter().skip(i);
                     if rem_path.size_hint().0 < n_path.len() {
                         return Ok(None);
                     }
@@ -1248,9 +1257,10 @@ pub fn from_nibbles(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
 #[cfg(test)]
 mod test {
     use super::*;
-    use shale::cached::PlainMem;
+    use shale::cached::{DynamicMem, PlainMem};
     use shale::{CachedStore, Storable};
     use std::ops::Deref;
+    use std::sync::Arc;
     use test_case::test_case;
 
     #[test_case(vec![0x12, 0x34, 0x56], vec![0x1, 0x2, 0x3, 0x4, 0x5, 0x6])]
@@ -1287,7 +1297,7 @@ mod test {
     #[test]
     fn test_partial_path_encoding() {
         let check = |steps: &[u8], term| {
-            let (d, t) = PartialPath::decode(PartialPath(steps.to_vec()).encode(term));
+            let (d, t) = PartialPath::decode(&PartialPath(steps.to_vec()).encode(term));
             assert_eq!(d.0, steps);
             assert_eq!(t, term);
         };
@@ -1371,6 +1381,89 @@ mod test {
             ),
         ] {
             check(node);
+        }
+    }
+    #[test]
+    fn test_encode() {
+        const RESERVED: usize = 0x1000;
+
+        let mut dm = shale::cached::DynamicMem::new(0x10000, 0);
+        let compact_header = DiskAddress::null();
+        dm.write(
+            compact_header.into(),
+            &shale::to_dehydrated(&shale::compact::CompactSpaceHeader::new(
+                std::num::NonZeroUsize::new(RESERVED).unwrap(),
+                std::num::NonZeroUsize::new(RESERVED).unwrap(),
+            ))
+            .unwrap(),
+        );
+        let compact_header = shale::StoredView::ptr_to_obj(
+            &dm,
+            compact_header,
+            shale::compact::CompactHeader::MSIZE,
+        )
+        .unwrap();
+        let mem_meta = Arc::new(dm);
+        let mem_payload = Arc::new(DynamicMem::new(0x10000, 0x1));
+
+        let cache = shale::ObjCache::new(1);
+        let space =
+            shale::compact::CompactSpace::new(mem_meta, mem_payload, compact_header, cache, 10, 16)
+                .expect("CompactSpace init fail");
+
+        let store = Box::new(space);
+        let merkle = Merkle::new(store);
+
+        {
+            let chd = Node::new(NodeType::Leaf(LeafNode(
+                PartialPath(vec![0x1, 0x2, 0x3]),
+                Data(vec![0x4, 0x5]),
+            )));
+            let chd_ref = merkle.new_node(chd.clone()).unwrap();
+            let chd_rlp = chd_ref.get_eth_rlp(merkle.store.as_ref());
+            let new_chd = Node::new(NodeType::decode(chd_rlp).unwrap());
+            let new_chd_rlp = new_chd.get_eth_rlp(merkle.store.as_ref());
+            assert_eq!(chd_rlp, new_chd_rlp);
+
+            let mut chd_eth_rlp: [Option<Vec<u8>>; NBRANCH] = Default::default();
+            chd_eth_rlp[0] = Some(chd_rlp.to_vec());
+            let node = Node::new(NodeType::Branch(BranchNode {
+                chd: [None; NBRANCH],
+                value: Some(Data("value1".as_bytes().to_vec())),
+                chd_eth_rlp,
+            }));
+
+            let node_ref = merkle.new_node(node.clone()).unwrap();
+
+            let r = node_ref.get_eth_rlp(merkle.store.as_ref());
+            let new_node = Node::new(NodeType::decode(r).unwrap());
+            let new_rlp = new_node.get_eth_rlp(merkle.store.as_ref());
+            assert_eq!(r, new_rlp);
+        }
+
+        {
+            let chd = Node::new(NodeType::Branch(BranchNode {
+                chd: [None; NBRANCH],
+                value: Some(Data("value1".as_bytes().to_vec())),
+                chd_eth_rlp: Default::default(),
+            }));
+            let chd_ref = merkle.new_node(chd.clone()).unwrap();
+            let chd_rlp = chd_ref.get_eth_rlp(merkle.store.as_ref());
+            let new_chd = Node::new(NodeType::decode(chd_rlp).unwrap());
+            let new_chd_rlp = new_chd.get_eth_rlp(merkle.store.as_ref());
+            assert_eq!(chd_rlp, new_chd_rlp);
+
+            let node = Node::new(NodeType::Extension(ExtNode(
+                PartialPath(vec![0x1, 0x2, 0x3]),
+                DiskAddress::null(),
+                Some(chd_rlp.to_vec()),
+            )));
+            let node_ref = merkle.new_node(node.clone()).unwrap();
+
+            let r = node_ref.get_eth_rlp(merkle.store.as_ref());
+            let new_node = Node::new(NodeType::decode(r).unwrap());
+            let new_rlp = new_node.get_eth_rlp(merkle.store.as_ref());
+            assert_eq!(r, new_rlp);
         }
     }
 }
