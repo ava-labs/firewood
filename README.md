@@ -1,7 +1,7 @@
 # Firewood: Compaction-Less Database Optimized for Efficiently Storing Recent Merkleized Blockchain State
 
 ![Github Actions](https://github.com/ava-labs/firewood/actions/workflows/ci.yaml/badge.svg?branch=main)
-![Ecosystem license](https://img.shields.io/badge/License-Ecosystem-blue.svg)(./LICENSE.md)
+[![Ecosystem license](https://img.shields.io/badge/License-Ecosystem-blue.svg)](./LICENSE.md)
 
 > :warning: Firewood is alpha-level software and is not ready for production
 > use. The Firewood API and on-disk state representation may change with
