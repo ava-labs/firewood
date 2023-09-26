@@ -40,7 +40,7 @@ firewood is licensed by the Ecosystem License. For more information, see the
 
 ## Architecture Diagram
 
-![architecture diagram](./docs/assets/architecture.svg)<img src="./docs/assets/architecture.svg">
+![architecture diagram](./docs/assets/architecture.svg)
 
 ## Termimology
 
