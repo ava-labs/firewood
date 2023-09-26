@@ -77,7 +77,7 @@ firewood is licensed by the Ecosystem License. For more information, see the
 
 **LEGEND**
 - [ ] Not started
-- :runner: In progress
+- [ ] :runner: In progress
 - [x] Complete
 
 ### Green Milestone
