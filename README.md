@@ -77,7 +77,7 @@ firewood is licensed by the Ecosystem License. For more information, see the
 
 **LEGEND**
 - [ ] Not started
-- [.] In progress
+- :runner: In progress
 - [x] Complete
 
 ### Green Milestone
@@ -111,8 +111,8 @@ that are not children of the committed proposed batch.
 The focus of this milestone will be to support synchronization to other
 instances to replicate the state. A synchronization library should also
 be developed for this milestone.
-- [.] Add support for Ava Labs generic test tool via grpc client
-- [.] Pluggable encoding for nodes, for optional compatibilty with merkledb
+- [ ] :runner: Add support for Ava Labs generic test tool via grpc client
+- [ ] :runner: Pluggable encoding for nodes, for optional compatibilty with merkledb
 - [ ] Support replicating the full state with corresponding range proofs that
 verify the correctness of the data.
 - [ ] Support replicating the delta state from the last sync point with
