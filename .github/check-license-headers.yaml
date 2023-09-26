@@ -15,7 +15,7 @@
       "rpc/**",
       "README*",
       "*/README*",
-      "Cargo.toml"
+      "Cargo.toml",
       "*/Cargo.toml",
       "libaio/**",
       "docs/**",
