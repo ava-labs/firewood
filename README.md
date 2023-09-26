@@ -34,10 +34,6 @@ store back in memory. While running the store, new changes will also contribute
 to the configured window of changes (at batch granularity) to access any past
 versions with no additional cost at all.
 
-## License
-Firewood is licensed by the Ecosystem License. For more information, see the
-[LICENSE file](./LICENSE.md).
-
 ## Architecture Diagram
 
 ![architecture diagram](./docs/assets/architecture.svg)
@@ -75,7 +71,6 @@ Firewood is licensed by the Ecosystem License. For more information, see the
   to `Commit`.
 * `Commit` - The operation of applying one or more `Proposal`s to the most recent
   `Revision`.
-
 
 ## Roadmap
 
@@ -151,3 +146,7 @@ Firewood comes with a CLI tool called `fwdctl` that enables one to create and in
 ```
 cargo test --release
 ```
+
+## License
+Firewood is licensed by the Ecosystem License. For more information, see the
+[LICENSE file](./LICENSE.md).
