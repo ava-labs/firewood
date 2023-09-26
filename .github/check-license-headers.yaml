@@ -4,7 +4,13 @@
       "**/**/*.rs"
     ],
     "exclude": [
-      "target/**"
+      "target/**",
+      "**/LICENSE*",
+      "rpc/**",
+      "**/README*",
+      "**/Cargo.toml",
+      "libaio/**",
+      "docs/**"
     ],
     "license": "./.github/license-header.txt"
   }
