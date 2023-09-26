@@ -195,7 +195,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 // consume items returning the item at index
 
                 let data: Vec<u8> = items.into_iter().nth(index).unwrap().decode()?;
-                
+
                 self.generate_subproof(data)
                     .map(|subproof| (Some(subproof), key_nibbles))
             }
