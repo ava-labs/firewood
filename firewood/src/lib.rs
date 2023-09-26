@@ -84,12 +84,6 @@
 //!   persisted on disk. It is as if they're just in memory, which makes it much easier to write
 //!   and maintain the code.
 //!
-//! The three layers are depicted as follows:
-//!
-//! <p align="center">
-//!     <img src="https://ava-labs.github.io/firewood/assets/three-layers.svg" width="80%">
-//! </p>
-//!
 //! Given the abstraction, one can easily realize the fact that the actual data that affect the
 //! state of the data structure (trie) is what the linear space (`CachedStore`) keeps track of, that is,
 //! a flat but conceptually large byte vector. In other words, given a valid byte vector as the
