@@ -1,4 +1,4 @@
-# Firewood: Compaction-Less Database Optimized for Efficiently Storing the Latest Merkleized Blockchain State
+# Firewood: Compaction-Less Database Optimized for Efficiently Storing Recent Merkleized Blockchain State
 
 ![Github Actions](https://github.com/ava-labs/firewood/actions/workflows/ci.yaml/badge.svg?branch=main)
 ![Ecosystem license](https://img.shields.io/badge/License-Ecosystem-blue.svg)(./LICENSE.md)
@@ -7,22 +7,24 @@
 > use. The Firewood API and on-disk state representation may change with
 > little to no warning.
 
-Firewood is an embedded key-value store, optimized to store Merkleized blockchain
-state. It prioritizes access to latest state, by providing extremely fast reads, but
-also provides a limited view into past state. It does not copy-on-write the
-state trie to generate an ever growing forest of tries like other databases,
-but instead keeps one latest version of the trie index on disk and applies
-in-place updates to it. This ensures that the database overhead is small and stable
-during the course of running Firewood. Firewood was first conceived to provide
+Firewood is an embedded key-value store, optimized to store recent Merkleized blockchain
+state with minimal overhead. Firewood is implemented from the ground up to directly
+store trie nodes on-disk. Unlike most of state management approaches in the field,
+it is not built on top of a generic KV store such as LevelDB/RocksDB. Firewood, like a
+B+-tree based database, directly uses the trie structure as the index on-disk. Thus,
+there is no additional “emulation” of the logical trie to flatten out the data structure
+to feed into the underlying database that is unaware of the data being stored. The convenient
+byproduct of this approach is that iteration is still fast (for serving state sync queries)
+but compaction is not required to maintain the index. Firewood was first conceived to provide
 a very fast storage layer for the EVM but could be used on any blockchain that
 requires authenticated state.
 
-Firewood is implemented from the ground up to directly store trie nodes. Unlike most
-(if not all) of the solutions in the field, it is not built on top of a generic KV
-store such as LevelDB/RocksDB. Like a B+-tree based store, Firewood directly uses
-the tree structure as the index on disk. Thus, there is no additional “emulation”
-of the logical trie to flatten out the data structure to feed into the underlying
-DB that is unaware of the data being stored.
+Firewood only attempts to store the latest state on-disk and will actively clean up
+unused state when state diffs are committed. To avoid reference counting trie nodes,
+Firewood does not copy-on-write (COW) the state trie and instead keeps
+one latest version of the trie index on disk and applies in-place updates to it.
+Firewood keeps some configurable number of previous states in memory to power
+state sync (which may occur at a few roots behind the current state).
 
 Firewood provides OS-level crash recovery via a write-ahead log (WAL). The WAL
 guarantees atomicity and durability in the database, but also offers
