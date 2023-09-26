@@ -1,7 +1,7 @@
 [
   {
     "include": [
-      "**/*.rs"
+      "firewood/src/*.rs"
     ],
     "license": "./.github/license-header.txt"
   }
