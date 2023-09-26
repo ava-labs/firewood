@@ -5,7 +5,6 @@
     ],
     "exclude": [
       "target/**",
-      "rpc**",
     ],
     "license": "./.github/license-header.txt"
   },
@@ -19,8 +18,8 @@
       "Cargo.toml"
       "*/Cargo.toml",
       "libaio/**",
-      "docs/**"
-      "CODEOWNERS",
+      "docs/**",
+      "CODEOWNERS"
     ],
   }
 ]
