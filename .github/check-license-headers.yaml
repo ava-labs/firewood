@@ -6,6 +6,8 @@
     "exclude": [
       "target/**",
       "*/LICENSE*",
+      "LICENSE.md",
+      "RELEASE.md",
       "rpc/**",
       "README*",
       "*/README*",
@@ -21,6 +23,8 @@
     "include": [
       "target/**",
       "*/LICENSE*",
+      "LICENSE.md",
+      "RELEASE.md",
       "rpc/**",
       "README*",
       "*/README*",
