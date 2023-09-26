@@ -61,7 +61,7 @@ impl<T: DeserializeOwned + AsRef<[u8]>> Encoded<T> {
 pub struct BranchNode {
     pub(super) chd: [Option<DiskAddress>; NBRANCH],
     pub(super) value: Option<Data>,
-    pub(super) chld_encoded: [Option<Vec<u8>>; NBRANCH],
+    pub(super) chd_encoded: [Option<Vec<u8>>; NBRANCH],
 }
 
 impl Debug for BranchNode {
@@ -72,7 +72,7 @@ impl Debug for BranchNode {
                 write!(f, " ({i:x} {c:?})")?;
             }
         }
-        for (i, c) in self.chld_encoded.iter().enumerate() {
+        for (i, c) in self.chd_encoded.iter().enumerate() {
             if let Some(c) = c {
                 write!(f, " ({i:x} {:?})", c)?;
             }
@@ -133,7 +133,7 @@ impl BranchNode {
                 Some(c) => {
                     let mut c_ref = store.get_item(*c).unwrap();
 
-                    if c_ref.decode_big::<S>(store) {
+                    if c_ref.is_encoded_big::<S>(store) {
                         list[i] = Encoded::Data(
                             bincode::DefaultOptions::new()
                                 .serialize(&&(*c_ref.get_root_hash::<S>(store))[..])
@@ -146,14 +146,14 @@ impl BranchNode {
                             c_ref.lazy_dirty.store(false, Ordering::Relaxed)
                         }
                     } else {
-                        let child_encoded = &c_ref.decode::<S>(store);
+                        let child_encoded = &c_ref.get_encoded::<S>(store);
                         list[i] = Encoded::Raw(child_encoded.to_vec());
                     }
                 }
                 None => {
                     // Check if there is already a calculated encoded value for the child, which
                     // can happen when manually constructing a trie from proof.
-                    if let Some(v) = &self.chld_encoded[i] {
+                    if let Some(v) = &self.chd_encoded[i] {
                         if v.len() == TRIE_HASH_LEN {
                             list[i] =
                                 Encoded::Data(bincode::DefaultOptions::new().serialize(v).unwrap());
@@ -182,7 +182,7 @@ impl BranchNode {
         BranchNode {
             chd,
             value: value.map(Data),
-            chld_encoded: chd_encoded,
+            chd_encoded,
         }
     }
 
@@ -199,11 +199,11 @@ impl BranchNode {
     }
 
     pub fn chd_encode(&self) -> &[Option<Vec<u8>>; NBRANCH] {
-        &self.chld_encoded
+        &self.chd_encoded
     }
 
     pub fn chd_encoded_mut(&mut self) -> &mut [Option<Vec<u8>>; NBRANCH] {
-        &mut self.chld_encoded
+        &mut self.chd_encoded
     }
 }
 
@@ -267,7 +267,7 @@ impl ExtNode {
         if !self.1.is_null() {
             let mut r = store.get_item(self.1).unwrap();
 
-            if r.decode_big(store) {
+            if r.is_encoded_big(store) {
                 list[1] = Encoded::Data(
                     bincode::DefaultOptions::new()
                         .serialize(&&(*r.get_root_hash(store))[..])
@@ -279,7 +279,7 @@ impl ExtNode {
                     r.lazy_dirty.store(false, Ordering::Relaxed);
                 }
             } else {
-                list[1] = Encoded::Raw(r.decode(store).to_vec());
+                list[1] = Encoded::Raw(r.get_encoded(store).to_vec());
             }
         } else {
             // Check if there is already a caclucated encoded value for the child, which
@@ -425,7 +425,7 @@ impl Node {
                 inner: NodeType::Branch(BranchNode {
                     chd: [Some(DiskAddress::null()); NBRANCH],
                     value: Some(Data(Vec::new())),
-                    chld_encoded: Default::default(),
+                    chd_encoded: Default::default(),
                 }),
                 lazy_dirty: AtomicBool::new(false),
             }
@@ -433,21 +433,21 @@ impl Node {
         })
     }
 
-    pub(super) fn decode<S: ShaleStore<Node>>(&self, store: &S) -> &[u8] {
+    pub(super) fn get_encoded<S: ShaleStore<Node>>(&self, store: &S) -> &[u8] {
         self.encoded.get_or_init(|| self.inner.encode::<S>(store))
     }
 
     pub(super) fn get_root_hash<S: ShaleStore<Node>>(&self, store: &S) -> &TrieHash {
         self.root_hash.get_or_init(|| {
             self.lazy_dirty.store(true, Ordering::Relaxed);
-            TrieHash(Keccak256::digest(self.decode::<S>(store)).into())
+            TrieHash(Keccak256::digest(self.get_encoded::<S>(store)).into())
         })
     }
 
-    fn decode_big<S: ShaleStore<Node>>(&self, store: &S) -> bool {
+    fn is_encoded_big<S: ShaleStore<Node>>(&self, store: &S) -> bool {
         *self.is_encoded_big.get_or_init(|| {
             self.lazy_dirty.store(true, Ordering::Relaxed);
-            self.decode(store).len() >= TRIE_HASH_LEN
+            self.get_encoded(store).len() >= TRIE_HASH_LEN
         })
     }
 
@@ -599,7 +599,7 @@ impl Storable for Node {
                     NodeType::Branch(BranchNode {
                         chd,
                         value,
-                        chld_encoded: chd_encoded,
+                        chd_encoded,
                     }),
                 ))
             }
@@ -719,7 +719,7 @@ impl Storable for Node {
             + match &self.inner {
                 NodeType::Branch(n) => {
                     let mut encoded_len = 0;
-                    for emcoded in n.chld_encoded.iter() {
+                    for emcoded in n.chd_encoded.iter() {
                         encoded_len += match emcoded {
                             Some(v) => 1 + v.len() as u64,
                             None => 1,
@@ -785,7 +785,7 @@ impl Storable for Node {
                 }
                 // Since child encoding will only be unset after initialization (only used for range proof),
                 // it is fine to encode its value adjacent to other fields. Same for extention node.
-                for encoded in n.chld_encoded.iter() {
+                for encoded in n.chd_encoded.iter() {
                     match encoded {
                         Some(v) => {
                             cur.write_all(&[v.len() as u8])?;
