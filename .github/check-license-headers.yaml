@@ -5,6 +5,15 @@
     ],
     "exclude": [
       "target/**",
+      "*/LICENSE*",
+      "rpc/**",
+      "README*",
+      "*/README*",
+      "Cargo.toml",
+      "*/Cargo.toml",
+      "libaio/**",
+      "docs/**",
+      "CODEOWNERS"
     ],
     "license": "./.github/license-header.txt"
   },
