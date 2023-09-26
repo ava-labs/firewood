@@ -74,6 +74,12 @@ firewood is licensed by the Ecosystem License. For more information, see the
 
 
 ## Roadmap
+
+**LEGEND**
+- [ ] Not started
+- [.] In progress
+- [x] Complete
+
 ### Green Milestone
 This milestone will focus on additional code cleanup, including supporting
 concurrent access to a specific revision, as well as cleaning up the basic
