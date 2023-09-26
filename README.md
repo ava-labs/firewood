@@ -38,6 +38,10 @@ versions with no additional cost at all.
 firewood is licensed by the Ecosystem License. For more information, see the
 [LICENSE file](./LICENSE.md).
 
+## Architecture Diagram
+
+![architecture diagram](./docs/assets/architecture.svg)<img src="./docs/assets/architecture.svg">
+
 ## Termimology
 
 * `Revision` - A historical point-in-time state/version of the trie. This
