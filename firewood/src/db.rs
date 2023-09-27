@@ -283,8 +283,7 @@ impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
     }
 
     async fn val<K: api::KeyType>(&self, key: K) -> Result<Option<Vec<u8>>, api::Error> {
-        let obj_ref =
-            self.merkle.get(key, self.header.kv_root);
+        let obj_ref = self.merkle.get(key, self.header.kv_root);
         match obj_ref {
             Err(e) => Err(api::Error::IO(std::io::Error::new(ErrorKind::Other, e))),
             Ok(obj) => match obj {
