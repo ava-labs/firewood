@@ -642,6 +642,26 @@ mod tests {
             .join("firewood")
     }
 
+    fn create_state_cache(
+        state_path: PathBuf,
+        disk_requester: DiskBufferRequester,
+    ) -> Arc<CachedSpace> {
+        // create a new state cache which tracks on disk state.
+        Arc::new(
+            CachedSpace::new(
+                &StoreConfig::builder()
+                    .ncached_pages(1)
+                    .ncached_files(1)
+                    .space_id(STATE_SPACE)
+                    .file_nbit(1)
+                    .rootdir(state_path)
+                    .build(),
+                disk_requester,
+            )
+            .unwrap(),
+        )
+    }
+
     #[test]
     #[ignore = "ref: https://github.com/ava-labs/firewood/issues/45"]
     fn test_buffer_with_undo() {
@@ -662,19 +682,7 @@ mod tests {
         disk_requester.init_wal("wal", &root_db_path);
 
         // create a new state cache which tracks on disk state.
-        let state_cache = Arc::new(
-            CachedSpace::new(
-                &StoreConfig::builder()
-                    .ncached_pages(1)
-                    .ncached_files(1)
-                    .space_id(STATE_SPACE)
-                    .file_nbit(1)
-                    .rootdir(state_path)
-                    .build(),
-                disk_requester.clone(),
-            )
-            .unwrap(),
-        );
+        let state_cache = create_state_cache(state_path, disk_requester.clone());
 
         // add an in memory cached space. this will allow us to write to the
         // disk buffer then later persist the change to disk.
@@ -749,20 +757,7 @@ mod tests {
         // create a new wal directory on top of root_db_fd
         disk_requester.init_wal("wal", &root_db_path);
 
-        // create a new state cache which tracks on disk state.
-        let state_cache = Arc::new(
-            CachedSpace::new(
-                &StoreConfig::builder()
-                    .ncached_pages(1)
-                    .ncached_files(1)
-                    .space_id(STATE_SPACE)
-                    .file_nbit(1)
-                    .rootdir(state_path)
-                    .build(),
-                disk_requester.clone(),
-            )
-            .unwrap(),
-        );
+        let state_cache = create_state_cache(state_path, disk_requester.clone());
 
         // add an in memory cached space. this will allow us to write to the
         // disk buffer then later persist the change to disk.
