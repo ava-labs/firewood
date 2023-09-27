@@ -723,10 +723,10 @@ impl CachedSpace {
     pub fn new(
         cfg: &StoreConfig,
         disk_requester: DiskBufferRequester,
-    ) -> Result<Self, StoreError<std::io::Error>> {
+    ) -> Result<Arc<Self>, StoreError<std::io::Error>> {
         let space_id = cfg.space_id;
         let files = Arc::new(FilePool::new(cfg)?);
-        Ok(Self {
+        Ok(Arc::new(Self {
             inner: Arc::new(RwLock::new(CachedSpaceInner {
                 cached_pages: lru::LruCache::new(
                     NonZeroUsize::new(cfg.ncached_pages).expect("non-zero cache size"),
@@ -736,7 +736,7 @@ impl CachedSpace {
                 disk_requester,
             })),
             space_id,
-        })
+        }))
     }
 
     pub fn clone_files(&self) -> Arc<FilePool> {
