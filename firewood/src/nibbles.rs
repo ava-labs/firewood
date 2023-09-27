@@ -107,14 +107,14 @@ impl<'a, const LEADING_ZEROES: usize> Iterator for NibblesIterator<'a, LEADING_Z
         result
     }
 
-    fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        self.head += std::cmp::min(n, self.tail - self.head);
-        self.next()
-    }
-
     fn size_hint(&self) -> (usize, Option<usize>) {
         let remaining = self.tail - self.head;
         (remaining, Some(remaining))
+    }
+
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        self.head += std::cmp::min(n, self.tail - self.head);
+        self.next()
     }
 }
 
