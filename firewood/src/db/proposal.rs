@@ -9,7 +9,7 @@ use super::{
 use crate::{
     merkle::{TrieHash, TRIE_HASH_LEN},
     storage::{buffer::BufferWrite, AshRecord, StoreRevMut},
-    v2::api::{self, ValueType, KeyType},
+    v2::api::{self, KeyType, ValueType},
 };
 use async_trait::async_trait;
 use parking_lot::{Mutex, RwLock};
@@ -61,7 +61,10 @@ impl<T: crate::v2::api::DbView> crate::v2::api::Proposal<T> for Proposal {
 impl Proposal {
     // Propose a new proposal from this proposal. The new proposal will be
     // the child of it.
-    pub fn propose<K: KeyType, V: ValueType>(self: Arc<Self>, data: Batch<K, V>) -> Result<Proposal, DbError> {
+    pub fn propose<K: KeyType, V: ValueType>(
+        self: Arc<Self>,
+        data: Batch<K, V>,
+    ) -> Result<Proposal, DbError> {
         let store = self.store.new_from_other();
 
         let m = Arc::clone(&self.m);

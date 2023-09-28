@@ -31,7 +31,9 @@ pub fn run(opts: &Options) -> Result<()> {
 
     let db = Db::new(opts.db.as_str(), &cfg.build()).map_err(Error::msg)?;
 
-    let batch:Vec<BatchOp<String, String>> = vec![BatchOp::Delete { key: opts.key.clone() }];
+    let batch: Vec<BatchOp<String, String>> = vec![BatchOp::Delete {
+        key: opts.key.clone(),
+    }];
     let proposal = db.new_proposal(batch).map_err(Error::msg)?;
     proposal.commit().map_err(Error::msg)?;
 

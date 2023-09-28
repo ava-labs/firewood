@@ -7,7 +7,10 @@ use tokio::sync::Mutex;
 
 use async_trait::async_trait;
 
-use crate::{v2::api::{self, Batch, KeyType, ValueType}, db::DbError};
+use crate::{
+    db::DbError,
+    v2::api::{self, Batch, KeyType, ValueType},
+};
 
 use super::propose;
 

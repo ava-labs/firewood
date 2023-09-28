@@ -7,7 +7,7 @@ use firewood::{
     db::{BatchOp, Db, DbConfig, DbError, Proposal, Revision, WalConfig},
     merkle::{Node, TrieHash},
     storage::StoreRevShared,
-    v2::api::{Proof, ValueType, KeyType},
+    v2::api::{KeyType, Proof, ValueType},
 };
 use shale::compact::CompactSpace;
 

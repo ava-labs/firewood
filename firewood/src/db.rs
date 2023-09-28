@@ -389,20 +389,25 @@ impl api::Db for Db {
 
     type Proposal = Proposal;
 
-    async fn revision(&self, _hash: HashKey) -> Result<Arc<Self::Historical>, api::Error> {
-        todo!()
+    async fn revision(&self, root_hash: HashKey) -> Result<Arc<Self::Historical>, api::Error> {
+        if let Some(rev) = self.get_revision(&TrieHash(root_hash)) {
+            Ok(Arc::new(rev.rev))
+        } else {
+            Err(api::Error::HashNotFound {
+                provided: root_hash,
+            })
+        }
     }
 
     async fn root_hash(&self) -> Result<HashKey, api::Error> {
-        todo!()
+        self.kv_root_hash().map(|hash| hash.0).map_err(Into::into)
     }
 
     async fn propose<K: KeyType, V: ValueType>(
         &self,
         batch: api::Batch<K, V>,
     ) -> Result<Self::Proposal, api::Error> {
-        self.new_proposal(batch)
-        .map_err(Into::into)
+        self.new_proposal(batch).map_err(Into::into)
     }
 }
 
@@ -748,7 +753,10 @@ impl Db {
     }
 
     /// Create a proposal.
-    pub fn new_proposal<K: KeyType, V: ValueType>(&self, data: Batch<K, V>) -> Result<Proposal, DbError> {
+    pub fn new_proposal<K: KeyType, V: ValueType>(
+        &self,
+        data: Batch<K, V>,
+    ) -> Result<Proposal, DbError> {
         let mut inner = self.inner.write();
         let reset_store_headers = inner.reset_store_headers;
         let (store, mut rev) = Db::new_store(
