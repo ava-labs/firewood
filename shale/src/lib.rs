@@ -5,7 +5,6 @@ use disk_address::DiskAddress;
 use std::any::type_name;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Formatter};
-use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, RwLock, RwLockWriteGuard};
@@ -190,11 +189,14 @@ impl<T: ?Sized + Send + Sync> Deref for Obj<T> {
 /// User handle that offers read & write access to the stored [ShaleStore] item.
 pub struct ObjRef<'a, T: Send + Sync> {
     inner: Option<Obj<T>>,
-    cache: ObjCache<T>,
-    _life: PhantomData<&'a mut ()>,
+    cache: &'a ObjCache<T>,
 }
 
 impl<'a, T: Send + Sync> ObjRef<'a, T> {
+    fn new(inner: Option<Obj<T>>, cache: &'a ObjCache<T>) -> Self {
+        Self { inner, cache }
+    }
+
     #[inline]
     pub fn write(&mut self, modify: impl FnOnce(&mut T)) -> Result<(), ObjWriteError> {
         let inner = self.inner.as_mut().unwrap();
@@ -447,7 +449,7 @@ impl<T: Send + Sync> ObjCache<T> {
     }
 
     #[inline(always)]
-    pub fn get<'a>(&mut self, ptr: DiskAddress) -> Result<Option<ObjRef<'a, T>>, ShaleError> {
+    fn get(&self, ptr: DiskAddress) -> Result<Option<Obj<T>>, ShaleError> {
         let mut inner = self.0.write().unwrap();
 
         let obj_ref = inner.cached.pop(&ptr).map(|r| {
@@ -476,25 +478,17 @@ impl<T: Send + Sync> ObjCache<T> {
             // };
 
             // always return instead of the code above
-            ObjRef {
-                inner: Some(r),
-                cache: Self(self.0.clone()),
-                _life: PhantomData,
-            }
+            r
         });
 
         Ok(obj_ref)
     }
 
     #[inline(always)]
-    pub fn put<'a>(&self, inner: Obj<T>) -> ObjRef<'a, T> {
+    fn put(&self, inner: Obj<T>) -> Obj<T> {
         let ptr = inner.as_ptr();
         self.lock().pinned.insert(ptr, false);
-        ObjRef {
-            inner: Some(inner),
-            cache: Self(self.0.clone()),
-            _life: PhantomData,
-        }
+        inner
     }
 
     #[inline(always)]
