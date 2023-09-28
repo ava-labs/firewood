@@ -642,7 +642,7 @@ mod tests {
             .join("firewood")
     }
 
-    fn create_state_cache(
+    fn new_cached_space_for_test(
         state_path: PathBuf,
         disk_requester: DiskBufferRequester,
     ) -> Arc<CachedSpace> {
@@ -680,7 +680,7 @@ mod tests {
         disk_requester.init_wal("wal", &root_db_path);
 
         // create a new state cache which tracks on disk state.
-        let state_cache = create_state_cache(state_path, disk_requester.clone());
+        let state_cache = new_cached_space_for_test(state_path, disk_requester.clone());
 
         // add an in memory cached space. this will allow us to write to the
         // disk buffer then later persist the change to disk.
@@ -756,7 +756,7 @@ mod tests {
         disk_requester.init_wal("wal", &root_db_path);
 
         // create a new state cache which tracks on disk state.
-        let state_cache = create_state_cache(state_path, disk_requester.clone());
+        let state_cache = new_cached_space_for_test(state_path, disk_requester.clone());
 
         // add an in memory cached space. this will allow us to write to the
         // disk buffer then later persist the change to disk.
