@@ -447,12 +447,10 @@ impl<T: Send + Sync> ObjCache<T> {
     }
 
     #[inline(always)]
-    pub fn get<'a>(
-        &self,
-        inner: &mut ObjCacheInner<T>,
-        ptr: DiskAddress,
-    ) -> Result<Option<ObjRef<'a, T>>, ShaleError> {
-        if let Some(r) = inner.cached.pop(&ptr) {
+    pub fn get<'a>(&mut self, ptr: DiskAddress) -> Result<Option<ObjRef<'a, T>>, ShaleError> {
+        let mut inner = self.0.write().unwrap();
+
+        let obj_ref = inner.cached.pop(&ptr).map(|r| {
             // insert and set to `false` if you can
             // When using `get` in parallel, one should not `write` to the same address
             inner
@@ -461,6 +459,8 @@ impl<T: Send + Sync> ObjCache<T> {
                 .and_modify(|is_pinned| *is_pinned = false)
                 .or_insert(false);
 
+            // if we need to re-enable this code, it has to return from the outer function
+            //
             // return if inner.pinned.insert(ptr, false).is_some() {
             //     Err(ShaleError::InvalidObj {
             //         addr: ptr.addr(),
@@ -476,14 +476,14 @@ impl<T: Send + Sync> ObjCache<T> {
             // };
 
             // always return instead of the code above
-            return Ok(Some(ObjRef {
+            ObjRef {
                 inner: Some(r),
                 cache: Self(self.0.clone()),
                 _life: PhantomData,
-            }));
-        }
+            }
+        });
 
-        Ok(None)
+        Ok(obj_ref)
     }
 
     #[inline(always)]

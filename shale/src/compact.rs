@@ -6,7 +6,6 @@ use super::{CachedStore, Obj, ObjRef, ShaleError, ShaleStore, Storable, StoredVi
 use std::fmt::Debug;
 use std::io::{Cursor, Write};
 use std::num::NonZeroUsize;
-use std::ops::DerefMut;
 use std::sync::{Arc, RwLock};
 
 #[derive(Debug)]
@@ -632,10 +631,8 @@ impl<T: Storable + Send + Sync + Debug + 'static, M: CachedStore + Send + Sync> 
 
     fn get_item(&self, ptr: DiskAddress) -> Result<ObjRef<'_, T>, ShaleError> {
         let inner = {
-            let inner = self.inner.read().unwrap();
-            let obj_ref = inner
-                .obj_cache
-                .get(inner.obj_cache.lock().deref_mut(), ptr)?;
+            let mut inner = self.inner.write().unwrap();
+            let obj_ref = inner.obj_cache.get(ptr)?;
 
             if let Some(obj_ref) = obj_ref {
                 return Ok(obj_ref);
