@@ -180,7 +180,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                     return Ok((None, Nibbles::<0>::new(&[]).into_iter()));
                 }
                 let data = n.chd_encoded().ok_or(ProofError::InvalidData)?.to_vec();
-                let sub_proof = self.generate_subproof(data)?;
+                let sub_proof = generate_subproof(data)?;
 
                 Ok((sub_proof.into(), key_nibbles))
             }
@@ -192,35 +192,8 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                     .as_ref()
                     .ok_or(ProofError::InvalidData)?
                     .to_vec();
-                self.generate_subproof(data)
-                    .map(|subproof| (Some(subproof), key_nibbles))
+                generate_subproof(data).map(|subproof| (Some(subproof), key_nibbles))
             }
-        }
-    }
-
-    fn generate_subproof(&self, data: Vec<u8>) -> Result<SubProof, ProofError> {
-        match data.len() {
-            0..=31 => {
-                let sub_hash = sha3::Keccak256::digest(&data).into();
-                Ok(SubProof {
-                    encoded: data,
-                    hash: Some(sub_hash),
-                })
-            }
-
-            32 => {
-                let sub_hash: &[u8] = &data;
-                let sub_hash = sub_hash.try_into().unwrap();
-
-                Ok(SubProof {
-                    encoded: data,
-                    hash: Some(sub_hash),
-                })
-            }
-
-            len => Err(ProofError::DecodeError(Box::new(
-                bincode::ErrorKind::Custom(format!("invalid proof length: {len}")),
-            ))),
         }
     }
 
@@ -569,7 +542,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                         hash: None,
                     })
                 } else {
-                    self.generate_subproof(data.clone()).map(Some)?
+                    generate_subproof(data.clone()).map(Some)?
                 };
 
                 let cur_key_len = cur_key.len();
@@ -615,7 +588,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 };
 
                 let branch_ptr = build_branch_ptr(merkle, value, chd_encoded)?;
-                let subproof = self.generate_subproof(data)?;
+                let subproof = generate_subproof(data)?;
 
                 Ok((branch_ptr, Some(subproof), 1))
             }
@@ -624,6 +597,32 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 bincode::ErrorKind::Custom(String::from("")),
             ))),
         }
+    }
+}
+
+fn generate_subproof(data: Vec<u8>) -> Result<SubProof, ProofError> {
+    match data.len() {
+        0..=31 => {
+            let sub_hash = sha3::Keccak256::digest(&data).into();
+            Ok(SubProof {
+                encoded: data,
+                hash: Some(sub_hash),
+            })
+        }
+
+        32 => {
+            let sub_hash: &[u8] = &data;
+            let sub_hash = sub_hash.try_into().unwrap();
+
+            Ok(SubProof {
+                encoded: data,
+                hash: Some(sub_hash),
+            })
+        }
+
+        len => Err(ProofError::DecodeError(Box::new(
+            bincode::ErrorKind::Custom(format!("invalid proof length: {len}")),
+        ))),
     }
 }
 
