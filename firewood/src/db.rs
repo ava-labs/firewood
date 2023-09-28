@@ -384,10 +384,10 @@ impl Drop for DbInner {
 }
 
 #[async_trait]
-impl api::Db for DbInner {
+impl api::Db for Db {
     type Historical = DbRev<SharedStore>;
 
-    type Proposal = DbRev<Store>;
+    type Proposal = Proposal;
 
     async fn revision(&self, _hash: HashKey) -> Result<Arc<Self::Historical>, api::Error> {
         todo!()
@@ -399,9 +399,10 @@ impl api::Db for DbInner {
 
     async fn propose<K: KeyType, V: ValueType>(
         &self,
-        _batch: api::Batch<K, V>,
+        batch: api::Batch<K, V>,
     ) -> Result<Self::Proposal, api::Error> {
-        todo!()
+        self.new_proposal(batch)
+        .map_err(Into::into)
     }
 }
 
@@ -747,7 +748,7 @@ impl Db {
     }
 
     /// Create a proposal.
-    pub fn new_proposal<K: AsRef<[u8]>>(&self, data: Batch<K>) -> Result<Proposal, DbError> {
+    pub fn new_proposal<K: KeyType, V: ValueType>(&self, data: Batch<K, V>) -> Result<Proposal, DbError> {
         let mut inner = self.inner.write();
         let reset_store_headers = inner.reset_store_headers;
         let (store, mut rev) = Db::new_store(
@@ -767,7 +768,7 @@ impl Db {
                 BatchOp::Put { key, value } => {
                     let (header, merkle) = rev.borrow_split();
                     merkle
-                        .insert(key, value, header.kv_root)
+                        .insert(key, value.as_ref().to_vec(), header.kv_root)
                         .map_err(DbError::Merkle)?;
                     Ok(())
                 }

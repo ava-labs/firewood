@@ -7,7 +7,7 @@ use firewood::{
     db::{BatchOp, Db, DbConfig, DbError, Proposal, Revision, WalConfig},
     merkle::{Node, TrieHash},
     storage::StoreRevShared,
-    v2::api::Proof,
+    v2::api::{Proof, ValueType, KeyType},
 };
 use shale::compact::CompactSpace;
 
@@ -118,7 +118,7 @@ impl RevisionTracker {
         }
     }
 
-    fn create_revisions<K, V>(
+    fn create_revisions<K: KeyType, V: ValueType>(
         &mut self,
         mut iter: impl Iterator<Item = (K, V)>,
     ) -> Result<(), DbError>
@@ -129,7 +129,7 @@ impl RevisionTracker {
         iter.try_for_each(|(k, v)| self.create_revision(k, v))
     }
 
-    fn create_revision<K, V>(&mut self, k: K, v: V) -> Result<(), DbError>
+    fn create_revision<K: KeyType, V: ValueType>(&mut self, k: K, v: V) -> Result<(), DbError>
     where
         K: AsRef<[u8]>,
         V: AsRef<[u8]>,

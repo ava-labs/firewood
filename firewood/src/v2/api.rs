@@ -69,6 +69,9 @@ pub enum Error {
 
     #[error("Invalid proposal")]
     InvalidProposal,
+
+    #[error("Internal error")]
+    InternalError(Box<dyn std::error::Error>),
 }
 
 /// A range proof, consisting of a proof of the first key and the last key,

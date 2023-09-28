@@ -7,7 +7,7 @@ use tokio::sync::Mutex;
 
 use async_trait::async_trait;
 
-use crate::v2::api::{self, Batch, KeyType, ValueType};
+use crate::{v2::api::{self, Batch, KeyType, ValueType}, db::DbError};
 
 use super::propose;
 
@@ -24,6 +24,20 @@ use super::propose;
 #[derive(Debug, Default)]
 pub struct Db<T> {
     latest_cache: Mutex<Option<Arc<T>>>,
+}
+
+impl From<DbError> for api::Error {
+    fn from(value: DbError) -> Self {
+        match value {
+            DbError::InvalidParams => api::Error::InternalError(value.into()),
+            DbError::Merkle(e) => api::Error::InternalError(e.into()),
+            DbError::System(e) => api::Error::IO(e.into()),
+            DbError::KeyNotFound | DbError::CreateError => api::Error::InternalError(value.into()),
+            DbError::Shale(e) => api::Error::InternalError(e.into()),
+            DbError::IO(e) => api::Error::IO(e),
+            DbError::InvalidProposal => api::Error::InvalidProposal,
+        }
+    }
 }
 
 #[async_trait]

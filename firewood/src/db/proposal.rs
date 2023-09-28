@@ -9,24 +9,14 @@ use super::{
 use crate::{
     merkle::{TrieHash, TRIE_HASH_LEN},
     storage::{buffer::BufferWrite, AshRecord, StoreRevMut},
-    v2::api,
+    v2::api::{self, ValueType, KeyType},
 };
 use async_trait::async_trait;
 use parking_lot::{Mutex, RwLock};
 use shale::CachedStore;
 use std::{io::ErrorKind, sync::Arc};
 
-/// A key/value pair operation. Only put (upsert) and delete are
-/// supported
-#[derive(Debug)]
-pub enum BatchOp<K> {
-    Put { key: K, value: Vec<u8> },
-    Delete { key: K },
-}
-
-/// A list of operations to consist of a batch that
-/// can be proposed
-pub type Batch<K> = Vec<BatchOp<K>>;
+pub use crate::v2::api::{Batch, BatchOp};
 
 /// An atomic batch of changes proposed against the latest committed revision,
 /// or any existing [Proposal]. Multiple proposals can be created against the
@@ -71,7 +61,7 @@ impl<T: crate::v2::api::DbView> crate::v2::api::Proposal<T> for Proposal {
 impl Proposal {
     // Propose a new proposal from this proposal. The new proposal will be
     // the child of it.
-    pub fn propose<K: AsRef<[u8]>>(self: Arc<Self>, data: Batch<K>) -> Result<Proposal, DbError> {
+    pub fn propose<K: KeyType, V: ValueType>(self: Arc<Self>, data: Batch<K, V>) -> Result<Proposal, DbError> {
         let store = self.store.new_from_other();
 
         let m = Arc::clone(&self.m);
@@ -99,7 +89,7 @@ impl Proposal {
                 BatchOp::Put { key, value } => {
                     let (header, merkle) = rev.borrow_split();
                     merkle
-                        .insert(key, value, header.kv_root)
+                        .insert(key, value.as_ref().to_vec(), header.kv_root)
                         .map_err(DbError::Merkle)?;
                     Ok(())
                 }
