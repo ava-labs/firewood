@@ -664,6 +664,7 @@ impl<T: Storable + Send + Sync + Debug + 'static, M: CachedStore + Send + Sync> 
     fn flush_dirty(&self) -> Option<()> {
         let mut inner = self.inner.write().unwrap();
         inner.header.flush_dirty();
+        // hold the write lock to ensure that both cache and header are flushed in-sync
         self.obj_cache.flush_dirty()
     }
 }
