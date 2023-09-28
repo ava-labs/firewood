@@ -52,16 +52,16 @@ impl<T: crate::v2::api::DbView> crate::v2::api::Proposal<T> for Proposal {
 
     async fn propose<K: api::KeyType, V: api::ValueType>(
         self: Arc<Self>,
-        _data: api::Batch<K, V>,
+        data: api::Batch<K, V>,
     ) -> Result<Self::Proposal, api::Error> {
-        todo!()
+        self.propose_sync(data).map_err(Into::into)
     }
 }
 
 impl Proposal {
     // Propose a new proposal from this proposal. The new proposal will be
     // the child of it.
-    pub fn propose<K: KeyType, V: ValueType>(
+    pub fn propose_sync<K: KeyType, V: ValueType>(
         self: Arc<Self>,
         data: Batch<K, V>,
     ) -> Result<Proposal, DbError> {
@@ -122,14 +122,14 @@ impl Proposal {
 
     /// Persist all changes to the DB. The atomicity of the [Proposal] guarantees all changes are
     /// either retained on disk or lost together during a crash.
-    pub fn commit(&self) -> Result<(), DbError> {
+    pub fn commit_sync(&self) -> Result<(), DbError> {
         let mut committed = self.committed.lock();
         if *committed {
             return Ok(());
         }
 
         if let ProposalBase::Proposal(p) = &self.parent {
-            p.commit()?;
+            p.commit_sync()?;
         };
 
         // Check for if it can be committed

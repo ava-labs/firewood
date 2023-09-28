@@ -43,7 +43,7 @@ pub fn run(opts: &Options) -> Result<()> {
         value: opts.value.bytes().collect(),
     }];
     let proposal = db.new_proposal(batch).map_err(Error::msg)?;
-    proposal.commit().map_err(Error::msg)?;
+    proposal.commit_sync().map_err(Error::msg)?;
 
     println!("{}", opts.key);
     Ok(())

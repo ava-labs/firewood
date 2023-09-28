@@ -35,7 +35,7 @@ pub fn run(opts: &Options) -> Result<()> {
         key: opts.key.clone(),
     }];
     let proposal = db.new_proposal(batch).map_err(Error::msg)?;
-    proposal.commit().map_err(Error::msg)?;
+    proposal.commit_sync().map_err(Error::msg)?;
 
     println!("key {} deleted successfully", opts.key);
     Ok(())
