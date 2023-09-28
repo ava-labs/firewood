@@ -418,7 +418,7 @@ impl Db {
             disk_buffer.run()
         }));
 
-        let root_hash_cache = CachedSpace::new(
+        let root_hash_cache: Arc<CachedSpace> = CachedSpace::new(
             &StoreConfig::builder()
                 .ncached_pages(cfg.root_hash_ncached_pages)
                 .ncached_files(cfg.root_hash_ncached_files)
@@ -428,11 +428,12 @@ impl Db {
                 .build(),
             disk_requester.clone(),
         )
-        .unwrap();
+        .unwrap()
+        .into();
 
         // setup disk buffer
         let data_cache = Universe {
-            merkle: SubUniverse::new(
+            merkle: SubUniverse::<Arc<CachedSpace>>::new(
                 CachedSpace::new(
                     &StoreConfig::builder()
                         .ncached_pages(cfg.meta_ncached_pages)
@@ -443,7 +444,8 @@ impl Db {
                         .build(),
                     disk_requester.clone(),
                 )
-                .unwrap(),
+                .unwrap()
+                .into(),
                 CachedSpace::new(
                     &StoreConfig::builder()
                         .ncached_pages(cfg.payload_ncached_pages)
@@ -454,7 +456,8 @@ impl Db {
                         .build(),
                     disk_requester.clone(),
                 )
-                .unwrap(),
+                .unwrap()
+                .into(),
             ),
         };
 

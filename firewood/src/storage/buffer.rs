@@ -657,6 +657,7 @@ mod tests {
             disk_requester,
         )
         .unwrap()
+        .into()
     }
 
     #[test]
@@ -828,7 +829,7 @@ mod tests {
         disk_requester.init_wal("wal", &root_db_path);
 
         // create a new state cache which tracks on disk state.
-        let state_cache = CachedSpace::new(
+        let state_cache: Arc<CachedSpace> = CachedSpace::new(
             &StoreConfig::builder()
                 .ncached_pages(1)
                 .ncached_files(1)
@@ -838,7 +839,8 @@ mod tests {
                 .build(),
             disk_requester.clone(),
         )
-        .unwrap();
+        .unwrap()
+        .into();
 
         // add an in memory cached space. this will allow us to write to the
         // disk buffer then later persist the change to disk.
