@@ -109,7 +109,7 @@ impl Notifiers {
 }
 
 /// Responsible for processing [`BufferCmd`]s from the [`DiskBufferRequester`]
-/// and managing the persistance of pages.
+/// and managing the persistence of pages.
 pub struct DiskBuffer {
     inbound: mpsc::Receiver<BufferCmd>,
     aiomgr: AioManager,
@@ -262,7 +262,7 @@ fn schedule_write(
 
                         false
                     } else {
-                        // if `staging` is not empty, move all semaphors to `writing` and recurse
+                        // if `staging` is not empty, move all semaphores to `writing` and recurse
                         // to schedule the new writes.
                         slot.notifiers.staging_to_writing();
 
@@ -432,7 +432,7 @@ async fn run_wal_queue(
                 .await
                 .peel(ring_ids, max.revisions)
                 .await
-                .map_err(|_| "Wal errore while pruning")
+                .map_err(|_| "Wal errored while pruning")
                 .unwrap()
         };
 
@@ -642,6 +642,24 @@ mod tests {
             .join("firewood")
     }
 
+    fn new_cached_space_for_test(
+        state_path: PathBuf,
+        disk_requester: DiskBufferRequester,
+    ) -> Arc<CachedSpace> {
+        CachedSpace::new(
+            &StoreConfig::builder()
+                .ncached_pages(1)
+                .ncached_files(1)
+                .space_id(STATE_SPACE)
+                .file_nbit(1)
+                .rootdir(state_path)
+                .build(),
+            disk_requester,
+        )
+        .unwrap()
+        .into()
+    }
+
     #[test]
     #[ignore = "ref: https://github.com/ava-labs/firewood/issues/45"]
     fn test_buffer_with_undo() {
@@ -662,19 +680,7 @@ mod tests {
         disk_requester.init_wal("wal", &root_db_path);
 
         // create a new state cache which tracks on disk state.
-        let state_cache = Arc::new(
-            CachedSpace::new(
-                &StoreConfig::builder()
-                    .ncached_pages(1)
-                    .ncached_files(1)
-                    .space_id(STATE_SPACE)
-                    .file_nbit(1)
-                    .rootdir(state_path)
-                    .build(),
-                disk_requester.clone(),
-            )
-            .unwrap(),
-        );
+        let state_cache = new_cached_space_for_test(state_path, disk_requester.clone());
 
         // add an in memory cached space. this will allow us to write to the
         // disk buffer then later persist the change to disk.
@@ -750,19 +756,7 @@ mod tests {
         disk_requester.init_wal("wal", &root_db_path);
 
         // create a new state cache which tracks on disk state.
-        let state_cache = Arc::new(
-            CachedSpace::new(
-                &StoreConfig::builder()
-                    .ncached_pages(1)
-                    .ncached_files(1)
-                    .space_id(STATE_SPACE)
-                    .file_nbit(1)
-                    .rootdir(state_path)
-                    .build(),
-                disk_requester.clone(),
-            )
-            .unwrap(),
-        );
+        let state_cache = new_cached_space_for_test(state_path, disk_requester.clone());
 
         // add an in memory cached space. this will allow us to write to the
         // disk buffer then later persist the change to disk.
@@ -835,19 +829,18 @@ mod tests {
         disk_requester.init_wal("wal", &root_db_path);
 
         // create a new state cache which tracks on disk state.
-        let state_cache = Arc::new(
-            CachedSpace::new(
-                &StoreConfig::builder()
-                    .ncached_pages(1)
-                    .ncached_files(1)
-                    .space_id(STATE_SPACE)
-                    .file_nbit(1)
-                    .rootdir(state_path)
-                    .build(),
-                disk_requester.clone(),
-            )
-            .unwrap(),
-        );
+        let state_cache: Arc<CachedSpace> = CachedSpace::new(
+            &StoreConfig::builder()
+                .ncached_pages(1)
+                .ncached_files(1)
+                .space_id(STATE_SPACE)
+                .file_nbit(1)
+                .rootdir(state_path)
+                .build(),
+            disk_requester.clone(),
+        )
+        .unwrap()
+        .into();
 
         // add an in memory cached space. this will allow us to write to the
         // disk buffer then later persist the change to disk.
@@ -880,14 +873,14 @@ mod tests {
         let view = another_store.get_view(0, HASH_SIZE as u64).unwrap();
         assert_eq!(view.as_deref(), hash);
 
-        // get RO view of the buffer from the second hash. Only the new store shoulde see the value.
+        // get RO view of the buffer from the second hash. Only the new store should see the value.
         let view = another_store.get_view(32, HASH_SIZE as u64).unwrap();
         assert_eq!(view.as_deref(), another_hash);
         let empty: [u8; HASH_SIZE] = [0; HASH_SIZE];
         let view = store.get_view(32, HASH_SIZE as u64).unwrap();
         assert_eq!(view.as_deref(), empty);
 
-        // Overwrite the value from the beginning in the new store.  Only the new store shoulde see the change.
+        // Overwrite the value from the beginning in the new store.  Only the new store should see the change.
         another_store.write(0, &another_hash);
         let view = another_store.get_view(0, HASH_SIZE as u64).unwrap();
         assert_eq!(view.as_deref(), another_hash);
