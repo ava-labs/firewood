@@ -102,7 +102,7 @@ const BRANCH_NODE_SIZE: usize = 17;
 /// to a single proof step. If reaches an end step during proof verification,
 /// the hash value will be none, and the encoded value will be the value of the
 /// node.
-pub struct SubProof {
+struct SubProof {
     encoded: Vec<u8>,
     hash: Option<[u8; 32]>,
 }
