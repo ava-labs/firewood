@@ -195,14 +195,6 @@ pub struct ObjRef<'a, T: Send + Sync> {
 }
 
 impl<'a, T: Send + Sync> ObjRef<'a, T> {
-    pub fn to_longlive(mut self) -> ObjRef<'static, T> {
-        ObjRef {
-            inner: self.inner.take(),
-            cache: ObjCache(self.cache.0.clone()),
-            _life: PhantomData,
-        }
-    }
-
     #[inline]
     pub fn write(&mut self, modify: impl FnOnce(&mut T)) -> Result<(), ObjWriteError> {
         let inner = self.inner.as_mut().unwrap();
