@@ -127,8 +127,8 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
             let cur_proof = proofs_map
                 .get(&cur_hash)
                 .ok_or(ProofError::ProofNodeMissing)?;
-            let (sub_proof, traversed_nibbles) =
-                self.locate_subproof(key_nibbles, cur_proof.as_ref())?;
+            let node = NodeType::decode(cur_proof.as_ref())?;
+            let (sub_proof, traversed_nibbles) = self.locate_subproof(key_nibbles, node)?;
             key_nibbles = traversed_nibbles;
 
             cur_hash = match sub_proof {
@@ -146,9 +146,8 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     fn locate_subproof<'a>(
         &self,
         mut key_nibbles: NibblesIterator<'a, 0>,
-        encoded_node: &[u8],
+        node: NodeType,
     ) -> Result<(Option<SubProof>, NibblesIterator<'a, 0>), ProofError> {
-        let node = NodeType::decode(encoded_node)?;
         match node {
             NodeType::Leaf(n) => {
                 let cur_key = &n.path().0;
@@ -180,7 +179,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 if does_not_match {
                     return Ok((None, Nibbles::<0>::new(&[]).into_iter()));
                 }
-                let data = n.chd_encoded().as_ref().ok_or(ProofError::InvalidData)?;
+                let data = n.chd_encoded().ok_or(ProofError::InvalidData)?;
 
                 let sub_proof = self.generate_subproof(data.to_vec())?;
 
