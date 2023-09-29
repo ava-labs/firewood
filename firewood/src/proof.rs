@@ -160,10 +160,10 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                     return Ok((None, Nibbles::<0>::new(&[]).into_iter()));
                 }
 
-                let data = n.data();
+                let encoded = n.data().to_vec();
 
                 let sub_proof = SubProof {
-                    encoded: data.to_vec(),
+                    encoded,
                     hash: None,
                 };
 
@@ -179,22 +179,20 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 if does_not_match {
                     return Ok((None, Nibbles::<0>::new(&[]).into_iter()));
                 }
-                let data = n.chd_encoded().ok_or(ProofError::InvalidData)?;
-
-                let sub_proof = self.generate_subproof(data.to_vec())?;
+                let data = n.chd_encoded().ok_or(ProofError::InvalidData)?.to_vec();
+                let sub_proof = self.generate_subproof(data)?;
 
                 Ok((sub_proof.into(), key_nibbles))
             }
+            NodeType::Branch(_) if key_nibbles.size_hint().0 == 0 => Err(ProofError::NoSuchNode),
             NodeType::Branch(n) => {
-                if key_nibbles.size_hint().0 == 0 {
-                    return Err(ProofError::NoSuchNode);
-                }
                 let index = key_nibbles.next().unwrap() as usize;
                 // consume items returning the item at index
                 let data = n.chd_encode()[index]
                     .as_ref()
-                    .ok_or(ProofError::InvalidData)?;
-                self.generate_subproof(data.to_vec())
+                    .ok_or(ProofError::InvalidData)?
+                    .to_vec();
+                self.generate_subproof(data)
                     .map(|subproof| (Some(subproof), key_nibbles))
             }
         }
