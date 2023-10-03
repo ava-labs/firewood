@@ -448,11 +448,11 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
         end_node: bool,
     ) -> Result<(DiskAddress, Option<SubProof>, usize), ProofError> {
         let node = NodeType::decode(buf)?;
-        let addr = merkle
-            .new_node(Node::new(node.clone()))
-            .map(|node| node.as_ptr())
+        let new_node = merkle
+            .new_node(Node::new(node))
             .map_err(ProofError::InvalidNode)?;
-        match node {
+        let addr = new_node.as_ptr();
+        match new_node.inner() {
             NodeType::Leaf(n) => {
                 let cur_key = &n.path().0;
                 // Check if the key of current node match with the given key.
@@ -460,9 +460,8 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                     return Ok((addr, None, 0));
                 }
 
-                let encoded = n.data().to_vec();
                 let subproof = Some(SubProof {
-                    encoded,
+                    encoded: n.data().to_vec(),
                     hash: None,
                 });
                 Ok((addr, subproof, cur_key.len()))
@@ -486,10 +485,10 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
             NodeType::Branch(n) => {
                 // Check if the subproof with the given key exist.
                 let index = key[0] as usize;
-                let Some(data) = n.chd_encode()[index].clone() else {
+                let Some(data) = &n.chd_encode()[index] else {
                     return Ok((addr, None, 1));
                 };
-                let subproof = generate_subproof(data)?;
+                let subproof = generate_subproof(data.to_vec())?;
                 Ok((addr, Some(subproof), 1))
             }
         }
