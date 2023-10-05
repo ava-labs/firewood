@@ -3,7 +3,7 @@
 
 use crate::{nibbles::Nibbles, v2::api::Proof};
 use sha3::Digest;
-use shale::{disk_address::DiskAddress, ObjRef, ShaleError, ShaleStore};
+use shale::{disk_address::DiskAddress, ObjRef, ObjWriteError, ShaleError, ShaleStore};
 use std::{
     collections::HashMap,
     io::Write,
@@ -34,6 +34,8 @@ pub enum MerkleError {
     ParentLeafBranch,
     #[error("removing internal node references failed")]
     UnsetInternal,
+    #[error("error updating nodes: {0}")]
+    WriteError(#[from] ObjWriteError),
 }
 
 macro_rules! write_node {
@@ -341,16 +343,30 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
         val: Vec<u8>,
         root: DiskAddress,
     ) -> Result<(), MerkleError> {
+        let (parents, deleted) = self.insert_and_return_updates(key, val, root)?;
+
+        for mut r in parents {
+            r.write(|u| u.rehash())?;
+        }
+
+        for ptr in deleted {
+            self.free_node(ptr)?
+        }
+
+        Ok(())
+    }
+
+    fn insert_and_return_updates<K: AsRef<[u8]>>(
+        &self,
+        key: K,
+        mut val: Vec<u8>,
+        root: DiskAddress,
+    ) -> Result<(impl Iterator<Item = ObjRef<Node>>, Vec<DiskAddress>), MerkleError> {
         // as we split a node, we need to track deleted nodes and parents
         let mut deleted = Vec::new();
         let mut parents = Vec::new();
 
-        let mut next_node = Some(self.get_node(root)?);
-
-        // wrap the current value into an Option to indicate whether it has been
-        // inserted yet. If we haven't inserted it after we traverse the tree, we
-        // have to do some splitting
-        let mut val = Some(val);
+        let mut next_node = None;
 
         // we use Nibbles::<1> so that 1 zero nibble is at the front
         // this is for the sentinel node, which avoids moving the root
@@ -358,41 +374,42 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
         let mut key_nibbles = Nibbles::<1>::new(key.as_ref()).into_iter();
 
         // walk down the merkle tree starting from next_node, currently the root
-        loop {
-            let Some(key_nib) = key_nibbles.next() else {
-                break;
-            };
-
-            // move the current node into node; next_node becomes None
-            // unwrap() is okay here since we are certain we have something
-            // in next_node at this point
-            let mut node = next_node.take().unwrap();
+        // return None if the value is inserted
+        let next_node_and_val = loop {
+            let mut node = next_node
+                .take()
+                .map(Ok)
+                .unwrap_or_else(|| self.get_node(root))?;
             let node_ptr = node.as_ptr();
 
-            let next_node_ptr = match &node.inner {
+            let Some(current_nibble) = key_nibbles.next() else {
+                break Some((node, val));
+            };
+
+            let (node, next_node_ptr) = match &node.inner {
                 // For a Branch node, we look at the child pointer. If it points
                 // to another node, we walk down that. Otherwise, we can store our
                 // value as a leaf and we're done
-                NodeType::Branch(n) => match n.chd[key_nib as usize] {
-                    Some(c) => c,
+                NodeType::Branch(n) => match n.chd[current_nibble as usize] {
+                    Some(c) => (node, c),
                     None => {
                         // insert the leaf to the empty slot
                         // create a new leaf
                         let leaf_ptr = self
                             .new_node(Node::new(NodeType::Leaf(LeafNode(
                                 PartialPath(key_nibbles.collect()),
-                                Data(val.take().unwrap()),
+                                Data(val),
                             ))))?
                             .as_ptr();
                         // set the current child to point to this leaf
                         node.write(|u| {
                             let uu = u.inner.as_branch_mut().unwrap();
-                            uu.chd[key_nib as usize] = Some(leaf_ptr);
+                            uu.chd[current_nibble as usize] = Some(leaf_ptr);
                             u.rehash();
                         })
                         .unwrap();
 
-                        break;
+                        break None;
                     }
                 },
 
@@ -401,24 +418,27 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                     // of the stored key to pass into split
                     let n_path = n.0.to_vec();
                     let n_value = Some(n.1.clone());
-                    let rem_path = once(key_nib).chain(key_nibbles).collect::<Vec<_>>();
+                    let rem_path = once(current_nibble).chain(key_nibbles).collect::<Vec<_>>();
+
                     self.split(
                         node,
                         &mut parents,
                         &rem_path,
                         n_path,
                         n_value,
-                        val.take().unwrap(),
+                        val,
                         &mut deleted,
                     )?;
 
-                    break;
+                    break None;
                 }
 
                 NodeType::Extension(n) => {
                     let n_path = n.path.to_vec();
                     let n_ptr = n.chd();
-                    let rem_path = once(key_nib).chain(key_nibbles.clone()).collect::<Vec<_>>();
+                    let rem_path = once(current_nibble)
+                        .chain(key_nibbles.clone())
+                        .collect::<Vec<_>>();
                     let n_path_len = n_path.len();
 
                     if let Some(v) = self.split(
@@ -427,7 +447,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                         &rem_path,
                         n_path,
                         None,
-                        val.take().unwrap(),
+                        val,
                         &mut deleted,
                     )? {
                         (0..n_path_len).skip(1).for_each(|_| {
@@ -437,45 +457,46 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                         // we couldn't split this, so we
                         // skip n_path items and follow the
                         // extension node's next pointer
-                        val = Some(v);
-                        node = self.get_node(node_ptr)?;
-                        n_ptr
+                        val = v;
+
+                        (self.get_node(node_ptr)?, n_ptr)
                     } else {
                         // successfully inserted
-                        break;
+                        break None;
                     }
                 }
             };
 
             // push another parent, and follow the next pointer
-            parents.push((node, key_nib));
-            next_node = Some(self.get_node(next_node_ptr)?);
-        }
+            parents.push((node, current_nibble));
+            next_node = self.get_node(next_node_ptr)?.into();
+        };
 
-        if val.is_some() {
+        if let Some((mut node, val)) = next_node_and_val {
             // we walked down the tree and reached the end of the key,
             // but haven't inserted the value yet
             let mut info = None;
             let u_ptr = {
-                let mut u = next_node.take().unwrap();
                 write_node!(
                     self,
-                    u,
+                    node,
                     |u| {
                         info = match &mut u.inner {
                             NodeType::Branch(n) => {
-                                n.value = Some(Data(val.take().unwrap()));
+                                n.value = Some(Data(val));
                                 None
                             }
                             NodeType::Leaf(n) => {
                                 if n.0.len() == 0 {
-                                    n.1 = Data(val.take().unwrap());
+                                    n.1 = Data(val);
+
                                     None
                                 } else {
                                     let idx = n.0[0];
                                     n.0 = PartialPath(n.0[1..].to_vec());
                                     u.rehash();
-                                    Some((idx, true, None))
+
+                                    Some((idx, true, None, val))
                                 }
                             }
                             NodeType::Extension(n) => {
@@ -486,48 +507,45 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                                 } else {
                                     false
                                 };
-                                Some((idx, more, Some(n.chd())))
+
+                                Some((idx, more, Some(n.chd()), val))
                             }
                         };
+
                         u.rehash()
                     },
                     &mut parents,
                     &mut deleted
                 );
-                u.as_ptr()
+
+                node.as_ptr()
             };
 
-            if let Some((idx, more, ext)) = info {
+            if let Some((idx, more, ext, val)) = info {
                 let mut chd = [None; NBRANCH];
+
                 let c_ptr = if more {
                     u_ptr
                 } else {
                     deleted.push(u_ptr);
                     ext.unwrap()
                 };
+
                 chd[idx as usize] = Some(c_ptr);
+
                 let branch = self
                     .new_node(Node::new(NodeType::Branch(BranchNode {
                         chd,
-                        value: Some(Data(val.take().unwrap())),
+                        value: Some(Data(val)),
                         chd_encoded: Default::default(),
                     })))?
                     .as_ptr();
+
                 set_parent(branch, &mut parents);
             }
         }
 
-        drop(next_node);
-
-        for (mut r, _) in parents.into_iter().rev() {
-            r.write(|u| u.rehash()).unwrap();
-        }
-
-        for ptr in deleted.into_iter() {
-            self.free_node(ptr)?
-        }
-
-        Ok(())
+        Ok((parents.into_iter().rev().map(|(node, _)| node), deleted))
     }
 
     fn after_remove_leaf(
