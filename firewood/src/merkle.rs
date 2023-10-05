@@ -40,7 +40,7 @@ macro_rules! write_node {
     ($self: expr, $r: expr, $modify: expr, $parents: expr, $deleted: expr) => {
         if let Err(_) = $r.write($modify) {
             let ptr = $self.new_node($r.clone())?.as_ptr();
-            $self.set_parent(ptr, $parents);
+            set_parent(ptr, $parents);
             $deleted.push($r.as_ptr());
             true
         } else {
@@ -154,20 +154,6 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
             self.dump_(root, w)?;
         };
         Ok(())
-    }
-
-    fn set_parent(&self, new_chd: DiskAddress, parents: &mut [(ObjRef<'_, Node>, u8)]) {
-        let (p_ref, idx) = parents.last_mut().unwrap();
-        p_ref
-            .write(|p| {
-                match &mut p.inner {
-                    NodeType::Branch(pp) => pp.chd[*idx as usize] = Some(new_chd),
-                    NodeType::Extension(pp) => *pp.chd_mut() = new_chd,
-                    _ => unreachable!(),
-                }
-                p.rehash();
-            })
-            .unwrap();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -345,7 +331,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
         // observation:
         // - leaf/extension node can only be the child of a branch node
         // - branch node can only be the child of a branch/extension node
-        self.set_parent(new_chd, parents);
+        set_parent(new_chd, parents);
         Ok(None)
     }
 
@@ -527,7 +513,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                         chd_encoded: Default::default(),
                     })))?
                     .as_ptr();
-                self.set_parent(branch, &mut parents);
+                set_parent(branch, &mut parents);
             }
         }
 
@@ -596,7 +582,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                         ))))?
                         .as_ptr();
                     deleted.push(p_ptr);
-                    self.set_parent(leaf, parents);
+                    set_parent(leaf, parents);
                 }
                 _ => unreachable!(),
             }
@@ -620,7 +606,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                                     child_encoded: None,
                                 })))?
                                 .as_ptr();
-                            self.set_parent(ext, &mut [(p_ref, p_idx)]);
+                            set_parent(ext, &mut [(p_ref, p_idx)]);
                         }
                         NodeType::Extension(_) => {
                             //                         ____[Branch]
@@ -709,7 +695,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
 
                             if !write_failed {
                                 drop(c_ref);
-                                self.set_parent(c_ptr, parents);
+                                set_parent(c_ptr, parents);
                             }
                         }
                         _ => unreachable!(),
@@ -825,7 +811,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
 
                     deleted.push(b_ref.as_ptr());
                     drop(c_ref);
-                    self.set_parent(c_ptr, parents);
+                    set_parent(c_ptr, parents);
                 }
                 _ => unreachable!(),
             },
@@ -1180,6 +1166,20 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
     pub fn flush_dirty(&self) -> Option<()> {
         self.store.flush_dirty()
     }
+}
+
+fn set_parent(new_chd: DiskAddress, parents: &mut [(ObjRef<'_, Node>, u8)]) {
+    let (p_ref, idx) = parents.last_mut().unwrap();
+    p_ref
+        .write(|p| {
+            match &mut p.inner {
+                NodeType::Branch(pp) => pp.chd[*idx as usize] = Some(new_chd),
+                NodeType::Extension(pp) => *pp.chd_mut() = new_chd,
+                _ => unreachable!(),
+            }
+            p.rehash();
+        })
+        .unwrap();
 }
 
 pub struct Ref<'a>(ObjRef<'a, Node>);
