@@ -7,6 +7,7 @@ use shale::{disk_address::DiskAddress, ObjRef, ShaleError, ShaleStore};
 use std::{
     collections::HashMap,
     io::Write,
+    iter::once,
     sync::{atomic::Ordering, OnceLock},
 };
 use thiserror::Error;
@@ -53,7 +54,7 @@ pub struct Merkle<S> {
     store: Box<S>,
 }
 
-impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
+impl<S: ShaleStore<Node>> Merkle<S> {
     pub fn get_node(&self, ptr: DiskAddress) -> Result<ObjRef<Node>, MerkleError> {
         self.store.get_item(ptr).map_err(Into::into)
     }
@@ -358,26 +359,24 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
         let mut deleted = Vec::new();
         let mut parents = Vec::new();
 
-        // we use Nibbles::<1> so that 1 zero nibble is at the front
-        // this is for the sentinel node, which avoids moving the root
-        // and always only has one child
-        let key_nibbles = Nibbles::<1>::new(key.as_ref());
-
         let mut next_node = Some(self.get_node(root)?);
-        let mut nskip = 0;
 
         // wrap the current value into an Option to indicate whether it has been
         // inserted yet. If we haven't inserted it after we traverse the tree, we
         // have to do some splitting
         let mut val = Some(val);
 
+        // we use Nibbles::<1> so that 1 zero nibble is at the front
+        // this is for the sentinel node, which avoids moving the root
+        // and always only has one child
+        let mut key_nibbles = Nibbles::<1>::new(key.as_ref()).into_iter();
+
         // walk down the merkle tree starting from next_node, currently the root
-        for (key_nib_offset, key_nib) in key_nibbles.into_iter().enumerate() {
-            // special handling for extension nodes
-            if nskip > 0 {
-                nskip -= 1;
-                continue;
-            }
+        loop {
+            let Some(key_nib) = key_nibbles.next() else {
+                break;
+            };
+
             // move the current node into node; next_node becomes None
             // unwrap() is okay here since we are certain we have something
             // in next_node at this point
@@ -395,9 +394,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                         // create a new leaf
                         let leaf_ptr = self
                             .new_node(Node::new(NodeType::Leaf(LeafNode(
-                                PartialPath(
-                                    key_nibbles.into_iter().skip(key_nib_offset + 1).collect(),
-                                ),
+                                PartialPath(key_nibbles.collect()),
                                 Data(val.take().unwrap()),
                             ))))?
                             .as_ptr();
@@ -408,18 +405,17 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                             u.rehash();
                         })
                         .unwrap();
+
                         break;
                     }
                 },
+
                 NodeType::Leaf(n) => {
                     // we collided with another key; make a copy
                     // of the stored key to pass into split
                     let n_path = n.0.to_vec();
                     let n_value = Some(n.1.clone());
-                    let rem_path = key_nibbles
-                        .into_iter()
-                        .skip(key_nib_offset)
-                        .collect::<Vec<_>>();
+                    let rem_path = once(key_nib).chain(key_nibbles).collect::<Vec<_>>();
                     self.split(
                         node,
                         &mut parents,
@@ -429,16 +425,15 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                         val.take().unwrap(),
                         &mut deleted,
                     )?;
+
                     break;
                 }
+
                 NodeType::Extension(n) => {
                     let n_path = n.path().to_vec();
                     let n_ptr = n.chd();
-                    nskip = n_path.len() - 1;
-                    let rem_path = key_nibbles
-                        .into_iter()
-                        .skip(key_nib_offset)
-                        .collect::<Vec<_>>();
+                    let rem_path = once(key_nib).chain(key_nibbles.clone()).collect::<Vec<_>>();
+                    let n_path_len = n_path.len();
 
                     if let Some(v) = self.split(
                         node,
@@ -449,6 +444,10 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                         val.take().unwrap(),
                         &mut deleted,
                     )? {
+                        (0..n_path_len).skip(1).for_each(|_| {
+                            key_nibbles.next();
+                        });
+
                         // we couldn't split this, so we
                         // skip n_path items and follow the
                         // extension node's next pointer
@@ -461,10 +460,12 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                     }
                 }
             };
+
             // push another parent, and follow the next pointer
             parents.push((node, key_nib));
             next_node = Some(self.get_node(next_node_ptr)?);
         }
+
         if val.is_some() {
             // we walked down the tree and reached the end of the key,
             // but haven't inserted the value yet
@@ -539,6 +540,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
         for ptr in deleted.into_iter() {
             self.free_node(ptr)?
         }
+
         Ok(())
     }
 
