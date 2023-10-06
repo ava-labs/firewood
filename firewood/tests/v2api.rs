@@ -28,10 +28,8 @@ async fn smoke() -> Result<(), Box<dyn Error>> {
     assert_ne!(empty_hash, [0; 32]);
 
     // insert a single key/value
-    let batch_put = BatchOp::Put {
-        key: b"smoke",
-        value: b"test",
-    };
+    let (key, value) = (b"smoke", b"test");
+    let batch_put = BatchOp::Put { key, value };
     let proposal: Arc<firewood::db::Proposal> = db.propose(vec![batch_put]).await?.into();
     proposal.commit().await?;
 
@@ -43,8 +41,8 @@ async fn smoke() -> Result<(), Box<dyn Error>> {
     let view = db.revision(latest).await.unwrap();
 
     // check that the key/value is there
-    let value = view.val(b"smoke").await.unwrap();
-    assert_eq!(value, Some(b"test".to_vec()));
+    let got_value = view.val(key).await.unwrap().unwrap();
+    assert_eq!(got_value, value);
 
     // TODO: also fetch view of empty; this currently does not work, as you can't reference
     // the empty hash

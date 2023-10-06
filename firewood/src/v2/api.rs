@@ -176,10 +176,6 @@ pub trait Proposal: DbView {
     type Proposal: DbView + Proposal;
 
     /// Commit this revision
-    ///
-    /// # Return value
-    ///
-    /// * A reference to a new historical view
     async fn commit(self: Arc<Self>) -> Result<(), Error>;
 
     /// Propose a new revision on top of an existing proposal
