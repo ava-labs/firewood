@@ -5,13 +5,16 @@
 // insert some random keys using the front-end API.
 
 use clap::Parser;
-use std::{error::Error, ops::RangeInclusive, sync::Arc, time::Instant};
+use std::{collections::HashMap, error::Error, ops::RangeInclusive, sync::Arc, time::Instant};
 
 use firewood::{
     db::{Batch, BatchOp, Db, DbConfig},
-    v2::api::{Db as DbApi, Proposal},
+    v2::api::{Db as DbApi, DbView, Proposal},
 };
-use rand::{distributions::Alphanumeric, Rng};
+use rand::{
+    distributions::Alphanumeric,
+    Rng,
+};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -23,6 +26,8 @@ struct Args {
     batch_keys: usize,
     #[arg(short, long, default_value_t = 100)]
     inserts: usize,
+    #[arg(short, long, default_value_t = 0, value_parser = clap::value_parser!(u16).range(0..=100))]
+    read_verify_percent: u16,
 }
 
 fn string_to_range(input: &str) -> Result<RangeInclusive<usize>, Box<dyn Error + Sync + Send>> {
@@ -69,12 +74,36 @@ async fn main() -> Result<(), Box<dyn Error>> {
             })
             .map(|(key, value)| BatchOp::Put { key, value })
             .collect();
+        let verify: HashMap<Vec<u8>, Vec<u8>> = if args.read_verify_percent == 0 {
+            HashMap::new()
+        } else {
+            batch
+                .iter()
+                .filter(|_last_key| {
+                    rand::thread_rng().gen_range(0..=(100 - args.read_verify_percent)) == 0
+                })
+                .map(|op| {
+                    if let BatchOp::Put { key, value } = op {
+                        (key.clone(), value.clone())
+                    } else {
+                        unreachable!()
+                    }
+                })
+                .collect()
+        };
         let proposal: Arc<firewood::db::Proposal> = db.propose(batch).await.unwrap().into();
         proposal.commit().await?;
+        if args.read_verify_percent > 0 {
+            let hash = db.root_hash().await?;
+            let revision = db.revision(hash).await?;
+            for (key, value) in verify {
+                assert_eq!(*value, revision.val(key).await?.unwrap());
+            }
+        }
     }
 
     let duration = start.elapsed();
-    println!("Generated and inserted {keys} in {duration:?}");
+    println!("Generated and inserted {} batches of size {keys} in {duration:?}", args.inserts);
 
     Ok(())
 }
