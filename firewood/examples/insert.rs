@@ -1,6 +1,9 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+// This example isn't an actual benchmark, it's just an example of how to
+// insert some random keys using the front-end API.
+
 use clap::Parser;
 use std::{error::Error, ops::RangeInclusive, sync::Arc, time::Instant};
 
@@ -47,6 +50,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let keys = args.batch_keys;
     let start = Instant::now();
+
     for _ in 0..args.inserts {
         let keylen = rand::thread_rng().gen_range(args.keylen.clone());
         let datalen = rand::thread_rng().gen_range(args.datalen.clone());
@@ -68,7 +72,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let proposal: Arc<firewood::db::Proposal> = db.propose(batch).await.unwrap().into();
         proposal.commit().await?;
     }
+
     let duration = start.elapsed();
-    println!("Inserted {keys} in {duration:?}");
+    println!("Generated and inserted {keys} in {duration:?}");
+
     Ok(())
 }
