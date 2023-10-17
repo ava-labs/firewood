@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::{fmt::Debug, ops::DerefMut, sync::Arc};
+use std::{any::Any, fmt::Debug, ops::DerefMut, sync::Arc};
 
 use tokio::sync::Mutex;
 
@@ -49,6 +49,7 @@ where
     T: api::DbView,
     T: Send + Sync,
     T: Default,
+    T: 'static,
 {
     type Historical = T;
 
@@ -80,5 +81,9 @@ where
         let proposal = Self::Proposal::new(propose::ProposalBase::View(revision), data);
 
         Ok(proposal)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }

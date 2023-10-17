@@ -26,6 +26,7 @@ use shale::{
     CachedStore, Obj, ShaleError, ShaleStore, SpaceId, Storable, StoredView,
 };
 use std::{
+    any::Any,
     collections::VecDeque,
     error::Error,
     fmt,
@@ -411,6 +412,10 @@ impl api::Db for Db {
     ) -> Result<Self::Proposal, api::Error> {
         block_in_place(|| self.new_proposal(batch)).map_err(Into::into)
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 #[derive(Debug)]
@@ -436,8 +441,19 @@ pub struct Db {
 impl Db {
     const PARAM_SIZE: u64 = size_of::<DbParams>() as u64;
 
+    #[allow(clippy::new_ret_no_self)]
+    pub async fn new<P: AsRef<Path>>(
+        db_path: P,
+        cfg: &DbConfig,
+    ) -> Result<impl api::Db, api::Error> {
+        Db::new_internal(db_path, cfg).await.map_err(Into::into)
+    }
+
     /// Open a database.
-    pub fn new<P: AsRef<Path>>(db_path: P, cfg: &DbConfig) -> Result<Self, DbError> {
+    async fn new_internal<P: AsRef<Path>>(
+        db_path: P,
+        cfg: &DbConfig,
+    ) -> Result<impl api::Db, DbError> {
         // TODO: make sure all fds are released at the end
         if cfg.truncate {
             let _ = std::fs::remove_dir_all(db_path.as_ref());
@@ -449,7 +465,7 @@ impl Db {
             file::Options::NoTruncate
         };
 
-        let (db_path, reset) = file::open_dir(db_path, open_options)?;
+        let (db_path, reset) = file::open_dir(db_path, open_options).await?;
 
         let merkle_path = file::touch_dir("merkle", &db_path)?;
         let merkle_meta_path = file::touch_dir("meta", &merkle_path)?;

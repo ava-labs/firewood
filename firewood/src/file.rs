@@ -85,17 +85,17 @@ pub fn touch_dir(dirname: &str, rootdir: &Path) -> Result<PathBuf, std::io::Erro
     Ok(path)
 }
 
-pub fn open_dir<P: AsRef<Path>>(
+pub(crate) async fn open_dir<P: AsRef<Path>>(
     path: P,
     options: Options,
 ) -> Result<(PathBuf, bool), std::io::Error> {
     let truncate = options == Options::Truncate;
 
     if truncate {
-        let _ = std::fs::remove_dir_all(path.as_ref());
+        let _ = tokio::fs::remove_dir_all(path.as_ref()).await;
     }
 
-    match std::fs::create_dir(path.as_ref()) {
+    match tokio::fs::create_dir(path.as_ref()).await {
         Err(e) if truncate || e.kind() != ErrorKind::AlreadyExists => Err(e),
         // the DB already exists
         Err(_) => Ok((path.as_ref().to_path_buf(), false)),

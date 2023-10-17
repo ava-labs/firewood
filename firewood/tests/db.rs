@@ -2,47 +2,28 @@
 // See the file LICENSE.md for licensing terms.
 
 use firewood::{
-    db::{BatchOp, Db as PersistedDb, DbConfig, DbError, WalConfig},
-    merkle::TrieHash,
+    db::{BatchOp, Db as PersistedDb, DbConfig, WalConfig},
+    v2::api::{self, Db, DbView, Proposal},
 };
 
-use std::{
-    collections::VecDeque,
-    fs::remove_dir_all,
-    ops::{Deref, DerefMut},
-    path::Path,
-    sync::Arc,
-};
+use std::{any::Any, collections::VecDeque, sync::Arc};
 
 // TODO: use a trait
 macro_rules! kv_dump {
     ($e: ident) => {{
         let mut s = Vec::new();
-        $e.kv_root_hash().unwrap();
-        $e.kv_dump(&mut s).unwrap();
+        let boxed_any: Box<&dyn Any> = Box::new(&$e);
+        boxed_any
+            .downcast_ref::<firewood::db::Db>()
+            .unwrap()
+            .kv_dump(&mut s)
+            .unwrap();
         String::from_utf8(s).unwrap()
     }};
 }
 
-struct Db<'a, P: AsRef<Path> + ?Sized>(PersistedDb, &'a P);
-
-impl<'a, P: AsRef<Path> + ?Sized> Db<'a, P> {
-    fn new(path: &'a P, cfg: &DbConfig) -> Result<Self, DbError> {
-        PersistedDb::new(path, cfg).map(|db| Self(db, path))
-    }
-}
-
-impl<P: AsRef<Path> + ?Sized> Drop for Db<'_, P> {
-    fn drop(&mut self) {
-        // if you're using absolute paths, you have to clean up after yourself
-        if self.1.as_ref().is_relative() {
-            remove_dir_all(self.1).expect("should be able to remove db-directory");
-        }
-    }
-}
-
-#[test]
-fn test_basic_metrics() {
+#[tokio::test]
+async fn test_basic_metrics() {
     let cfg = DbConfig::builder()
         .meta_ncached_pages(1024)
         .meta_ncached_files(128)
@@ -57,15 +38,23 @@ fn test_basic_metrics() {
                 .max_revisions(10)
                 .build(),
         );
-    let db = Db::new("test_revisions_db2", &cfg.truncate(true).build()).unwrap();
-    let metrics = db.metrics();
+    let db = firewood::db::Db::new("test_revisions_db2", &cfg.truncate(true).build())
+        .await
+        .unwrap();
+    let metrics = db
+        .as_any()
+        .downcast_ref::<firewood::db::Db>()
+        .unwrap()
+        .metrics();
     assert_eq!(metrics.kv_get.hit_count.get(), 0);
-    db.kv_get("a").ok();
+    let root = db.root_hash().await.unwrap();
+    let rev = db.revision(root).await.unwrap();
+    rev.val("a").await.ok();
     assert_eq!(metrics.kv_get.hit_count.get(), 1);
 }
 
-#[test]
-fn test_revisions() {
+#[tokio::test]
+async fn test_revisions() {
     use rand::{rngs::StdRng, Rng, SeedableRng};
     let cfg = DbConfig::builder()
         .meta_ncached_pages(1024)
@@ -100,10 +89,11 @@ fn test_revisions() {
         key
     };
     for i in 0..10 {
-        let db =
-            PersistedDb::new("test_revisions_db", &cfg.clone().truncate(true).build()).unwrap();
+        let db = PersistedDb::new("test_revisions_db", &cfg.clone().truncate(true).build())
+            .await
+            .unwrap();
         let mut dumped = VecDeque::new();
-        let mut hashes: VecDeque<TrieHash> = VecDeque::new();
+        let mut hashes: VecDeque<firewood::v2::api::HashKey> = VecDeque::new();
         for _ in 0..10 {
             {
                 let mut batch = Vec::new();
@@ -117,48 +107,34 @@ fn test_revisions() {
                     };
                     batch.push(write);
                 }
-                let proposal = db.new_proposal(batch).unwrap();
-                proposal.commit_sync().unwrap();
+                let proposal = Arc::new(db.propose(batch).await.unwrap());
+                proposal.commit().await.unwrap();
             }
             while dumped.len() > 10 {
                 dumped.pop_back();
                 hashes.pop_back();
             }
-            let root_hash = db.kv_root_hash().unwrap();
+            let root_hash = db.root_hash().await.unwrap();
             hashes.push_front(root_hash);
             dumped.push_front(kv_dump!(db));
-            dumped
-                .iter()
-                .zip(hashes.iter().cloned())
-                .map(|(data, hash)| (data, db.get_revision(&hash).unwrap()))
-                .map(|(data, rev)| (data, kv_dump!(rev)))
-                .for_each(|(b, a)| {
-                    if &a != b {
-                        print!("{a}\n{b}");
-                        panic!("not the same");
-                    }
-                });
+            for (dump, hash) in dumped.iter().zip(hashes.iter().cloned()) {
+                let rev = db.revision(hash).await.unwrap();
+                assert_eq!(kv_dump!(rev), *dump);
+            }
         }
         drop(db);
-        let db = Db::new("test_revisions_db", &cfg.clone().truncate(false).build()).unwrap();
-        dumped
-            .iter()
-            .zip(hashes.iter().cloned())
-            .map(|(data, hash)| (data, db.get_revision(&hash).unwrap()))
-            .map(|(data, rev)| (data, kv_dump!(rev)))
-            .for_each(|(previous_dump, after_reopen_dump)| {
-                if &after_reopen_dump != previous_dump {
-                    panic!(
-                        "not the same: pass {i}:\n{after_reopen_dump}\n--------\n{previous_dump}"
-                    );
-                }
-            });
-        println!("i = {i}");
+        let db = PersistedDb::new("test_revisions_db", &cfg.clone().truncate(false).build())
+            .await
+            .unwrap();
+        for (dump, hash) in dumped.iter().zip(hashes.iter().cloned()) {
+            let rev = db.revision(hash).await.unwrap();
+            assert_eq!(*dump, kv_dump!(rev), "not the same: pass {i}");
+        }
     }
 }
 
-#[test]
-fn create_db_issue_proof() {
+#[tokio::test]
+async fn create_db_issue_proof() {
     let cfg = DbConfig::builder()
         .meta_ncached_pages(1024)
         .meta_ncached_files(128)
@@ -174,7 +150,9 @@ fn create_db_issue_proof() {
                 .build(),
         );
 
-    let db = Db::new("test_db_proof", &cfg.truncate(true).build()).unwrap();
+    let db = firewood::db::Db::new("test_db_proof", &cfg.truncate(true).build())
+        .await
+        .unwrap();
 
     let items = vec![
         ("d", "verb"),
@@ -191,10 +169,10 @@ fn create_db_issue_proof() {
         };
         batch.push(write);
     }
-    let proposal = db.new_proposal(batch).unwrap();
-    proposal.commit_sync().unwrap();
+    let proposal = Arc::new(db.propose(batch).await.unwrap());
+    proposal.commit().await.unwrap();
 
-    let root_hash = db.kv_root_hash().unwrap();
+    let root_hash = db.root_hash().await.unwrap();
 
     // Add second commit
     let mut batch = Vec::new();
@@ -205,16 +183,16 @@ fn create_db_issue_proof() {
         };
         batch.push(write);
     }
-    let proposal = db.new_proposal(batch).unwrap();
-    proposal.commit_sync().unwrap();
+    let proposal = Arc::new(db.propose(batch).await.unwrap());
+    proposal.commit().await.unwrap();
 
-    let rev = db.get_revision(&root_hash).unwrap();
+    let rev = db.revision(root_hash).await.unwrap();
     let key = "doe".as_bytes();
-    let root_hash = rev.kv_root_hash();
+    let root_hash = rev.root_hash().await.unwrap();
 
-    match rev.prove::<&[u8]>(key) {
+    match rev.single_key_proof(key).await {
         Ok(proof) => {
-            let verification = proof.verify_proof(key, *root_hash.unwrap()).unwrap();
+            let verification = proof.unwrap().verify_proof(key, root_hash).unwrap();
             assert!(verification.is_some());
         }
         Err(e) => {
@@ -224,38 +202,25 @@ fn create_db_issue_proof() {
 
     let missing_key = "dog".as_bytes();
     // The proof for the missing key will return the path to the missing key
-    if let Err(e) = rev.prove(missing_key) {
+    if let Err(e) = rev.single_key_proof(missing_key).await {
         println!("Error: {}", e);
         // TODO do type assertion on error
     }
 }
 
-impl<P: AsRef<Path> + ?Sized> Deref for Db<'_, P> {
-    type Target = PersistedDb;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<P: AsRef<Path> + ?Sized> DerefMut for Db<'_, P> {
-    fn deref_mut(&mut self) -> &mut PersistedDb {
-        &mut self.0
-    }
-}
-
 macro_rules! assert_val {
     ($rev: ident, $key:literal, $expected_val:literal) => {
-        let actual = $rev.kv_get($key.as_bytes()).unwrap();
+        let actual = $rev.val($key.as_bytes()).await.unwrap().unwrap();
         assert_eq!(actual, $expected_val.as_bytes().to_vec());
     };
 }
 
-#[test]
-fn db_proposal() -> Result<(), DbError> {
+#[tokio::test]
+async fn db_proposal() -> Result<(), api::Error> {
     let cfg = DbConfig::builder().wal(WalConfig::builder().max_revisions(10).build());
 
-    let db = Db::new("test_db_proposal", &cfg.clone().truncate(true).build())
+    let db = firewood::db::Db::new("test_db_proposal", &cfg.clone().truncate(true).build())
+        .await
         .expect("db initiation should succeed");
 
     let batch = vec![
@@ -266,73 +231,50 @@ fn db_proposal() -> Result<(), DbError> {
         BatchOp::Delete { key: b"z" },
     ];
 
-    let proposal = Arc::new(db.new_proposal(batch)?);
-    let rev = proposal.get_revision();
-    assert_val!(rev, "k", "v");
+    let proposal = Arc::new(db.propose(batch).await?);
+    assert_val!(proposal, "k", "v");
 
     let batch_2 = vec![BatchOp::Put {
         key: b"k2",
         value: "v2".as_bytes().to_vec(),
     }];
-    let proposal_2 = proposal.clone().propose_sync(batch_2)?;
-    let rev = proposal_2.get_revision();
-    assert_val!(rev, "k", "v");
-    assert_val!(rev, "k2", "v2");
+    let proposal_2 = Arc::new(proposal.clone().propose(batch_2).await?);
+    assert_val!(proposal_2, "k", "v");
+    assert_val!(proposal_2, "k2", "v2");
 
-    proposal.commit_sync()?;
-    proposal_2.commit_sync()?;
+    proposal.clone().commit().await?;
+    proposal_2.commit().await?;
 
-    std::thread::scope(|scope| {
-        scope.spawn(|| -> Result<(), DbError> {
-            let another_batch = vec![BatchOp::Put {
-                key: b"another_k",
-                value: "another_v".as_bytes().to_vec(),
-            }];
-            let another_proposal = proposal.clone().propose_sync(another_batch)?;
-            let rev = another_proposal.get_revision();
-            assert_val!(rev, "k", "v");
-            assert_val!(rev, "another_k", "another_v");
-            // The proposal is invalid and cannot be committed
-            assert!(another_proposal.commit_sync().is_err());
-            Ok(())
-        });
-
-        scope.spawn(|| -> Result<(), DbError> {
-            let another_batch = vec![BatchOp::Put {
-                key: b"another_k_1",
-                value: "another_v_1".as_bytes().to_vec(),
-            }];
-            let another_proposal = proposal.clone().propose_sync(another_batch)?;
-            let rev = another_proposal.get_revision();
-            assert_val!(rev, "k", "v");
-            assert_val!(rev, "another_k_1", "another_v_1");
-            Ok(())
-        });
-    });
-
+    {
+        let another_batch = vec![BatchOp::Put {
+            key: b"another_k_1",
+            value: "another_v_1".as_bytes().to_vec(),
+        }];
+        let another_proposal = Arc::new(proposal.propose(another_batch).await?);
+        assert_val!(another_proposal, "k", "v");
+        assert_val!(another_proposal, "another_k_1", "another_v_1");
+    }
     // Recursive commit
 
     let batch = vec![BatchOp::Put {
         key: b"k3",
         value: "v3".as_bytes().to_vec(),
     }];
-    let proposal = Arc::new(db.new_proposal(batch)?);
-    let rev = proposal.get_revision();
-    assert_val!(rev, "k", "v");
-    assert_val!(rev, "k2", "v2");
-    assert_val!(rev, "k3", "v3");
+    let proposal = Arc::new(db.propose(batch).await?);
+    assert_val!(proposal, "k", "v");
+    assert_val!(proposal, "k2", "v2");
+    assert_val!(proposal, "k3", "v3");
 
     let batch_2 = vec![BatchOp::Put {
         key: b"k4",
         value: "v4".as_bytes().to_vec(),
     }];
-    let proposal_2 = proposal.clone().propose_sync(batch_2)?;
-    let rev = proposal_2.get_revision();
-    assert_val!(rev, "k", "v");
-    assert_val!(rev, "k2", "v2");
-    assert_val!(rev, "k3", "v3");
-    assert_val!(rev, "k4", "v4");
+    let proposal_2 = Arc::new(proposal.clone().propose(batch_2).await?);
+    assert_val!(proposal_2, "k", "v");
+    assert_val!(proposal_2, "k2", "v2");
+    assert_val!(proposal_2, "k3", "v3");
+    assert_val!(proposal_2, "k4", "v4");
 
-    proposal_2.commit_sync()?;
+    proposal_2.commit().await?;
     Ok(())
 }

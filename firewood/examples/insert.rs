@@ -44,11 +44,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let args = Args::parse();
 
-    let db = tokio::task::spawn_blocking(move || {
-        Db::new("rev_db", &cfg).expect("db initiation should succeed")
-    })
-    .await
-    .unwrap();
+    let db = Db::new("rev_db", &cfg)
+        .await
+        .expect("db initiation should succeed");
 
     let keys = args.batch_keys;
     let start = Instant::now();

@@ -657,9 +657,9 @@ mod tests {
         .into()
     }
 
-    #[test]
+    #[tokio::test]
     #[ignore = "ref: https://github.com/ava-labs/firewood/issues/45"]
-    fn test_buffer_with_undo() {
+    async fn test_buffer_with_undo() {
         let temp_dir = get_tmp_dir();
 
         let buf_cfg = DiskBufferConfig::builder().build();
@@ -667,8 +667,9 @@ mod tests {
         let disk_requester = init_buffer(buf_cfg, wal_cfg);
 
         // TODO: Run the test in a separate standalone directory for concurrency reasons
-        let (root_db_path, reset) =
-            file::open_dir(temp_dir.as_path(), file::Options::Truncate).unwrap();
+        let (root_db_path, reset) = file::open_dir(temp_dir.as_path(), file::Options::Truncate)
+            .await
+            .unwrap();
 
         // file descriptor of the state directory
         let state_path = file::touch_dir("state", &root_db_path).unwrap();
@@ -734,9 +735,9 @@ mod tests {
         assert_eq!(disk_requester.collect_ash(1).unwrap().len(), 1);
     }
 
-    #[test]
+    #[tokio::test]
     #[ignore = "ref: https://github.com/ava-labs/firewood/issues/45"]
-    fn test_buffer_with_redo() {
+    async fn test_buffer_with_redo() {
         let buf_cfg = DiskBufferConfig::builder().build();
         let wal_cfg = WalConfig::builder().build();
         let disk_requester = init_buffer(buf_cfg, wal_cfg);
@@ -744,7 +745,7 @@ mod tests {
         // TODO: Run the test in a separate standalone directory for concurrency reasons
         let tmp_dir = get_tmp_dir();
         let path = get_file_path(tmp_dir.as_path(), file!(), line!());
-        let (root_db_path, reset) = file::open_dir(path, file::Options::Truncate).unwrap();
+        let (root_db_path, reset) = file::open_dir(path, file::Options::Truncate).await.unwrap();
 
         // file descriptor of the state directory
         let state_path = file::touch_dir("state", &root_db_path).unwrap();
@@ -808,8 +809,8 @@ mod tests {
         assert_eq!(view.as_deref(), hash);
     }
 
-    #[test]
-    fn test_multi_stores() {
+    #[tokio::test]
+    async fn test_multi_stores() {
         let buf_cfg = DiskBufferConfig::builder().build();
         let wal_cfg = WalConfig::builder().build();
         let disk_requester = init_buffer(buf_cfg, wal_cfg);
@@ -817,7 +818,7 @@ mod tests {
         let tmp_dir = get_tmp_dir();
         let path = get_file_path(tmp_dir.as_path(), file!(), line!());
         std::fs::create_dir_all(&path).unwrap();
-        let (root_db_path, reset) = file::open_dir(path, file::Options::Truncate).unwrap();
+        let (root_db_path, reset) = file::open_dir(path, file::Options::Truncate).await.unwrap();
 
         // file descriptor of the state directory
         let state_path = file::touch_dir("state", &root_db_path).unwrap();
