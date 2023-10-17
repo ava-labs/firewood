@@ -8,6 +8,7 @@ use clap::Parser;
 use std::{collections::HashMap, error::Error, ops::RangeInclusive, sync::Arc, time::Instant};
 
 use firewood::{
+    api,
     db::{Batch, BatchOp, Db, DbConfig},
     v2::api::{Db as DbApi, DbView, Proposal},
 };
@@ -72,7 +73,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         let verify = get_keys_to_verify(&batch, args.read_verify_percent);
 
-        let proposal: Arc<firewood::db::Proposal> = db.propose(batch).await.unwrap().into();
+        let proposal = Arc::new(db.propose(batch).await.unwrap());
         proposal.commit().await?;
         verify_keys(&db, verify).await?;
     }
@@ -105,7 +106,7 @@ fn get_keys_to_verify(batch: &Batch<Vec<u8>, Vec<u8>>, pct: u16) -> HashMap<Vec<
 }
 
 async fn verify_keys(
-    db: &Db,
+    db: &impl firewood::v2::api::Db,
     verify: HashMap<Vec<u8>, Vec<u8>>,
 ) -> Result<(), firewood::v2::api::Error> {
     if !verify.is_empty() {
