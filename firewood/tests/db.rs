@@ -2,8 +2,8 @@
 // See the file LICENSE.md for licensing terms.
 
 use firewood::{
-    db::{BatchOp, Db as PersistedDb, DbConfig, WalConfig},
-    v2::api::{self, Db, DbView, Proposal},
+    db::{Db, DbConfig, WalConfig},
+    v2::api::{self, Db as _, DbView, Proposal, BatchOp},
 };
 
 use std::{any::Any, collections::VecDeque, sync::Arc};
@@ -42,9 +42,6 @@ async fn test_basic_metrics() {
         .await
         .unwrap();
     let metrics = db
-        .as_any()
-        .downcast_ref::<firewood::db::Db>()
-        .unwrap()
         .metrics();
     assert_eq!(metrics.kv_get.hit_count.get(), 0);
     let root = db.root_hash().await.unwrap();
@@ -89,7 +86,7 @@ async fn test_revisions() {
         key
     };
     for i in 0..10 {
-        let db = PersistedDb::new("test_revisions_db", &cfg.clone().truncate(true).build())
+        let db = Db::new("test_revisions_db", &cfg.clone().truncate(true).build())
             .await
             .unwrap();
         let mut dumped = VecDeque::new();
@@ -123,7 +120,7 @@ async fn test_revisions() {
             }
         }
         drop(db);
-        let db = PersistedDb::new("test_revisions_db", &cfg.clone().truncate(false).build())
+        let db = Db::new("test_revisions_db", &cfg.clone().truncate(false).build())
             .await
             .unwrap();
         for (dump, hash) in dumped.iter().zip(hashes.iter().cloned()) {

@@ -4,7 +4,7 @@
 use clap::Args;
 use firewood::{
     db::{Db, DbConfig, WalConfig},
-    v2::api::{self, Db as _},
+    v2::api::{self},
 };
 use log;
 
@@ -28,8 +28,5 @@ pub async fn run(opts: &Options) -> Result<(), api::Error> {
 
     let db = Db::new(opts.db.as_str(), &cfg.build()).await?;
     Ok(db
-        .as_any()
-        .downcast_ref::<Db>()
-        .unwrap()
         .kv_dump(&mut std::io::stdout().lock())?)
 }

@@ -8,9 +8,8 @@ use clap::Parser;
 use std::{collections::HashMap, error::Error, ops::RangeInclusive, sync::Arc, time::Instant};
 
 use firewood::{
-    api,
     db::{Batch, BatchOp, Db, DbConfig},
-    v2::api::{Db as DbApi, DbView, Proposal},
+    v2::api::{Db as _, DbView, Proposal},
 };
 use rand::{distributions::Alphanumeric, Rng};
 

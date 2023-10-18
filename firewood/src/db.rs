@@ -4,6 +4,7 @@
 pub use crate::{
     config::{DbConfig, DbRevConfig},
     storage::{buffer::DiskBufferConfig, WalConfig},
+    v2::api::{Batch, BatchOp, Proposal},
 };
 use crate::{
     file,
@@ -26,7 +27,6 @@ use shale::{
     CachedStore, Obj, ShaleError, ShaleStore, SpaceId, Storable, StoredView,
 };
 use std::{
-    any::Any,
     collections::VecDeque,
     error::Error,
     fmt,
@@ -41,8 +41,6 @@ use std::{
 use tokio::task::block_in_place;
 
 mod proposal;
-
-pub use proposal::{Batch, BatchOp, Proposal};
 
 use self::proposal::ProposalBase;
 
@@ -389,7 +387,7 @@ impl Drop for DbInner {
 impl api::Db for Db {
     type Historical = DbRev<SharedStore>;
 
-    type Proposal = Proposal;
+    type Proposal = proposal::Proposal;
 
     async fn revision(&self, root_hash: HashKey) -> Result<Arc<Self::Historical>, api::Error> {
         let rev = block_in_place(|| self.get_revision(&TrieHash(root_hash)));
@@ -411,10 +409,6 @@ impl api::Db for Db {
         batch: api::Batch<K, V>,
     ) -> Result<Self::Proposal, api::Error> {
         block_in_place(|| self.new_proposal(batch)).map_err(Into::into)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -445,7 +439,7 @@ impl Db {
     pub async fn new<P: AsRef<Path>>(
         db_path: P,
         cfg: &DbConfig,
-    ) -> Result<impl api::Db, api::Error> {
+    ) -> Result<Self, api::Error> {
         Db::new_internal(db_path, cfg).await.map_err(Into::into)
     }
 
@@ -453,7 +447,7 @@ impl Db {
     async fn new_internal<P: AsRef<Path>>(
         db_path: P,
         cfg: &DbConfig,
-    ) -> Result<impl api::Db, DbError> {
+    ) -> Result<Self, DbError> {
         // TODO: make sure all fds are released at the end
         if cfg.truncate {
             let _ = std::fs::remove_dir_all(db_path.as_ref());
@@ -774,7 +768,7 @@ impl Db {
     pub fn new_proposal<K: KeyType, V: ValueType>(
         &self,
         data: Batch<K, V>,
-    ) -> Result<Proposal, DbError> {
+    ) -> Result<proposal::Proposal, DbError> {
         let mut inner = self.inner.write();
         let reset_store_headers = inner.reset_store_headers;
         let (store, mut rev) = Db::new_store(
@@ -810,7 +804,7 @@ impl Db {
         rev.flush_dirty().unwrap();
 
         let parent = ProposalBase::View(Arc::clone(&self.revisions.lock().base_revision));
-        Ok(Proposal {
+        Ok(proposal::Proposal {
             m: Arc::clone(&self.inner),
             r: Arc::clone(&self.revisions),
             cfg: self.cfg.clone(),

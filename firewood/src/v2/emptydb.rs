@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::any::Any;
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -50,10 +50,6 @@ impl Db for EmptyDb {
             ProposalBase::View(HistoricalImpl.into()),
             data,
         ))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 

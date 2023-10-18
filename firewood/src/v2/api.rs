@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
+use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
 
@@ -94,7 +94,7 @@ pub struct Proof<N>(pub HashMap<HashKey, N>);
 /// is the api::DbView trait defined next.
 #[async_trait]
 pub trait Db {
-    type Historical: DbView + Any;
+    type Historical: DbView;
 
     type Proposal: DbView + Proposal;
 
@@ -122,8 +122,6 @@ pub trait Db {
         &self,
         data: Batch<K, V>,
     ) -> Result<Self::Proposal, Error>;
-
-    fn as_any(&self) -> &dyn Any;
 }
 
 /// A view of the database at a specific time. These are wrapped with
