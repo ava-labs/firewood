@@ -3,7 +3,7 @@
 
 use firewood::{
     db::{Db, DbConfig, WalConfig},
-    v2::api::{self, Db as _, DbView, Proposal, BatchOp},
+    v2::api::{self, BatchOp, Db as _, DbView, Proposal},
 };
 
 use std::{any::Any, collections::VecDeque, sync::Arc};
@@ -41,8 +41,7 @@ async fn test_basic_metrics() {
     let db = firewood::db::Db::new("test_revisions_db2", &cfg.truncate(true).build())
         .await
         .unwrap();
-    let metrics = db
-        .metrics();
+    let metrics = db.metrics();
     assert_eq!(metrics.kv_get.hit_count.get(), 0);
     let root = db.root_hash().await.unwrap();
     let rev = db.revision(root).await.unwrap();

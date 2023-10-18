@@ -435,22 +435,15 @@ pub struct Db {
 impl Db {
     const PARAM_SIZE: u64 = size_of::<DbParams>() as u64;
 
-    #[allow(clippy::new_ret_no_self)]
-    pub async fn new<P: AsRef<Path>>(
-        db_path: P,
-        cfg: &DbConfig,
-    ) -> Result<Self, api::Error> {
+    pub async fn new<P: AsRef<Path>>(db_path: P, cfg: &DbConfig) -> Result<Self, api::Error> {
         Db::new_internal(db_path, cfg).await.map_err(Into::into)
     }
 
     /// Open a database.
-    async fn new_internal<P: AsRef<Path>>(
-        db_path: P,
-        cfg: &DbConfig,
-    ) -> Result<Self, DbError> {
+    async fn new_internal<P: AsRef<Path>>(db_path: P, cfg: &DbConfig) -> Result<Self, DbError> {
         // TODO: make sure all fds are released at the end
         if cfg.truncate {
-            let _ = std::fs::remove_dir_all(db_path.as_ref());
+            let _ = tokio::fs::remove_dir_all(db_path.as_ref()).await;
         }
 
         let open_options = if cfg.truncate {
@@ -461,11 +454,11 @@ impl Db {
 
         let (db_path, reset) = file::open_dir(db_path, open_options).await?;
 
-        let merkle_path = file::touch_dir("merkle", &db_path)?;
-        let merkle_meta_path = file::touch_dir("meta", &merkle_path)?;
-        let merkle_payload_path = file::touch_dir("compact", &merkle_path)?;
+        let merkle_path = file::touch_dir("merkle", &db_path).await?;
+        let merkle_meta_path = file::touch_dir("meta", &merkle_path).await?;
+        let merkle_payload_path = file::touch_dir("compact", &merkle_path).await?;
 
-        let root_hash_path = file::touch_dir("root_hash", &db_path)?;
+        let root_hash_path = file::touch_dir("root_hash", &db_path).await?;
 
         let file0 = crate::file::File::new(0, SPACE_RESERVED, &merkle_meta_path)?;
         let fd0 = file0.as_fd();
@@ -494,10 +487,12 @@ impl Db {
         let (sender, inbound) = tokio::sync::mpsc::unbounded_channel();
         let disk_requester = DiskBufferRequester::new(sender);
         let buffer = cfg.buffer.clone();
-        let disk_thread = Some(std::thread::spawn(move || {
-            let disk_buffer = DiskBuffer::new(inbound, &buffer, &wal).unwrap();
-            disk_buffer.run()
-        }));
+        let disk_thread = block_in_place(|| {
+            Some(std::thread::spawn(move || {
+                let disk_buffer = DiskBuffer::new(inbound, &buffer, &wal).unwrap();
+                disk_buffer.run()
+            }))
+        });
 
         let root_hash_cache: Arc<CachedSpace> = CachedSpace::new(
             &StoreConfig::builder()

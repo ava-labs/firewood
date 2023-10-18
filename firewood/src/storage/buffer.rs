@@ -553,7 +553,7 @@ async fn process(
 /// ```
 #[derive(Clone, Debug)]
 pub struct DiskBufferRequester {
-    sender: mpsc::UnboundedSender<BufferCmd>,
+    sender: tokio::sync::mpsc::UnboundedSender<BufferCmd>,
 }
 
 impl DiskBufferRequester {
@@ -672,7 +672,7 @@ mod tests {
             .unwrap();
 
         // file descriptor of the state directory
-        let state_path = file::touch_dir("state", &root_db_path).unwrap();
+        let state_path = file::touch_dir("state", &root_db_path).await.unwrap();
         assert!(reset);
         // create a new wal directory on top of root_db_fd
         disk_requester.init_wal("wal", &root_db_path);
@@ -748,7 +748,7 @@ mod tests {
         let (root_db_path, reset) = file::open_dir(path, file::Options::Truncate).await.unwrap();
 
         // file descriptor of the state directory
-        let state_path = file::touch_dir("state", &root_db_path).unwrap();
+        let state_path = file::touch_dir("state", &root_db_path).await.unwrap();
         assert!(reset);
         // create a new wal directory on top of root_db_fd
         disk_requester.init_wal("wal", &root_db_path);
@@ -821,7 +821,7 @@ mod tests {
         let (root_db_path, reset) = file::open_dir(path, file::Options::Truncate).await.unwrap();
 
         // file descriptor of the state directory
-        let state_path = file::touch_dir("state", &root_db_path).unwrap();
+        let state_path = file::touch_dir("state", &root_db_path).await.unwrap();
         assert!(reset);
         // create a new wal directory on top of root_db_fd
         disk_requester.init_wal("wal", &root_db_path);

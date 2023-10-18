@@ -74,7 +74,7 @@ impl Deref for File {
     }
 }
 
-pub fn touch_dir(dirname: &str, rootdir: &Path) -> Result<PathBuf, std::io::Error> {
+pub(crate) async fn touch_dir(dirname: &str, rootdir: &Path) -> Result<PathBuf, std::io::Error> {
     let path = rootdir.join(dirname);
     if let Err(e) = std::fs::create_dir(&path) {
         // ignore already-exists error
