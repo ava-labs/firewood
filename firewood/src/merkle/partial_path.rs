@@ -4,6 +4,7 @@
 use crate::nibbles::NibblesIterator;
 use std::fmt::{self, Debug};
 
+// TODO: use smallvec
 /// PartialPath keeps a list of nibbles to represent a path on the Trie.
 #[derive(PartialEq, Eq, Clone)]
 pub struct PartialPath(pub Vec<u8>);
@@ -21,6 +22,12 @@ impl std::ops::Deref for PartialPath {
     type Target = [u8];
     fn deref(&self) -> &[u8] {
         &self.0
+    }
+}
+
+impl From<Vec<u8>> for PartialPath {
+    fn from(value: Vec<u8>) -> Self {
+        Self(value)
     }
 }
 

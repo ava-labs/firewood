@@ -59,6 +59,7 @@ impl<T: DeserializeOwned + AsRef<[u8]>> Encoded<T> {
 
 #[derive(PartialEq, Eq, Clone)]
 pub struct BranchNode {
+    pub(super) path: PartialPath,
     pub(super) children: [Option<DiskAddress>; NBRANCH],
     pub(super) value: Option<Data>,
     pub(super) children_encoded: [Option<Vec<u8>>; NBRANCH],
@@ -67,16 +68,20 @@ pub struct BranchNode {
 impl Debug for BranchNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         write!(f, "[Branch")?;
+        write!(f, " path={:?}", self.path)?;
+
         for (i, c) in self.children.iter().enumerate() {
             if let Some(c) = c {
                 write!(f, " ({i:x} {c:?})")?;
             }
         }
+
         for (i, c) in self.children_encoded.iter().enumerate() {
             if let Some(c) = c {
                 write!(f, " ({i:x} {:?})", c)?;
             }
         }
+
         write!(
             f,
             " v={}]",
@@ -122,10 +127,14 @@ impl BranchNode {
             chd_encoded[i] = Some(data).filter(|data| !data.is_empty());
         }
 
-        Ok(BranchNode::new([None; NBRANCH], value, chd_encoded))
+        // TODO: add path
+        let path = Vec::new().into();
+
+        Ok(BranchNode::new(path, [None; NBRANCH], value, chd_encoded))
     }
 
     fn encode<S: ShaleStore<Node>>(&self, store: &S) -> Vec<u8> {
+        // TODO: add path to encoded node
         let mut list = <[Encoded<Vec<u8>>; NBRANCH + 1]>::default();
 
         for (i, c) in self.children.iter().enumerate() {
@@ -175,11 +184,13 @@ impl BranchNode {
     }
 
     pub fn new(
+        path: PartialPath,
         chd: [Option<DiskAddress>; NBRANCH],
         value: Option<Vec<u8>>,
         chd_encoded: [Option<Vec<u8>>; NBRANCH],
     ) -> Self {
         BranchNode {
+            path,
             children: chd,
             value: value.map(Data),
             children_encoded: chd_encoded,
@@ -396,6 +407,7 @@ impl NodeType {
                     }))
                 }
             }
+            // TODO: add path
             BRANCH_NODE_SIZE => Ok(NodeType::Branch(BranchNode::decode(buf)?)),
             size => Err(Box::new(bincode::ErrorKind::Custom(format!(
                 "invalid size: {size}"
@@ -411,14 +423,12 @@ impl NodeType {
         }
     }
 
-    pub fn path_mut(&mut self) -> Option<&mut PartialPath> {
-        let path = match self {
-            NodeType::Branch(_) => return None,
+    pub fn path_mut(&mut self) -> &mut PartialPath {
+        match self {
+            NodeType::Branch(u) => &mut u.path,
             NodeType::Leaf(node) => &mut node.0,
             NodeType::Extension(node) => &mut node.path,
-        };
-
-        path.into()
+        }
     }
 }
 
@@ -449,6 +459,7 @@ impl Node {
                 is_encoded_longer_than_hash_len: OnceLock::new(),
                 encoded: OnceLock::new(),
                 inner: NodeType::Branch(BranchNode {
+                    path: vec![].into(),
                     children: [Some(DiskAddress::null()); NBRANCH],
                     value: Some(Data(Vec::new())),
                     children_encoded: Default::default(),
@@ -551,6 +562,7 @@ impl Storable for Node {
         };
         match meta_raw.as_deref()[33] {
             Self::BRANCH_NODE => {
+                // TODO: add path
                 let branch_header_size = NBRANCH as u64 * 8 + 4;
                 let node_raw = mem.get_view(addr + META_SIZE, branch_header_size).ok_or(
                     ShaleError::InvalidCacheView {
@@ -619,6 +631,7 @@ impl Storable for Node {
                     root_hash,
                     is_encoded_longer_than_hash_len,
                     NodeType::Branch(BranchNode {
+                        path: vec![].into(),
                         children: chd,
                         value,
                         children_encoded: chd_encoded,
@@ -744,6 +757,7 @@ impl Storable for Node {
             + 1
             + match &self.inner {
                 NodeType::Branch(n) => {
+                    // TODO: add path
                     let mut encoded_len = 0;
                     for emcoded in n.children_encoded.iter() {
                         encoded_len += match emcoded {
@@ -793,6 +807,7 @@ impl Storable for Node {
 
         match &self.inner {
             NodeType::Branch(n) => {
+                // TODO: add path
                 cur.write_all(&[Self::BRANCH_NODE]).unwrap();
                 for c in n.children.iter() {
                     cur.write_all(&match c {
@@ -884,6 +899,7 @@ pub(super) mod tests {
             .unwrap_or_default();
 
         Node::branch(BranchNode {
+            path: vec![].into(),
             children,
             value: value.map(Data),
             children_encoded,
