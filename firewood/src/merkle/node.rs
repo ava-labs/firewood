@@ -421,6 +421,20 @@ impl NodeType {
     }
 }
 
+impl From<NodeType> for Node {
+    fn from(inner: NodeType) -> Self {
+        let mut s = Self {
+            root_hash: OnceLock::new(),
+            is_encoded_longer_than_hash_len: OnceLock::new(),
+            encoded: OnceLock::new(),
+            inner,
+            lazy_dirty: AtomicBool::new(false),
+        };
+        s.rehash();
+        s
+    }
+}
+
 impl Node {
     const BRANCH_NODE: u8 = 0x0;
     const EXT_NODE: u8 = 0x1;
@@ -468,24 +482,12 @@ impl Node {
         self.root_hash = OnceLock::new();
     }
 
-    pub fn new(inner: NodeType) -> Self {
-        let mut s = Self {
-            root_hash: OnceLock::new(),
-            is_encoded_longer_than_hash_len: OnceLock::new(),
-            encoded: OnceLock::new(),
-            inner,
-            lazy_dirty: AtomicBool::new(false),
-        };
-        s.rehash();
-        s
-    }
-
     pub fn branch(node: BranchNode) -> Self {
-        Self::new(NodeType::Branch(node))
+        Self::from(NodeType::Branch(node))
     }
 
     pub fn leaf(path: PartialPath, data: Data) -> Self {
-        Self::new(NodeType::Leaf(LeafNode(path, data)))
+        Self::from(NodeType::Leaf(LeafNode(path, data)))
     }
 
     pub fn inner(&self) -> &NodeType {

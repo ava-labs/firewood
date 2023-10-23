@@ -79,11 +79,11 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
     pub fn init_root(&self) -> Result<DiskAddress, MerkleError> {
         self.store
             .put_item(
-                Node::new(NodeType::Branch(BranchNode {
+                Node::branch(BranchNode {
                     children: [None; NBRANCH],
                     value: None,
                     children_encoded: Default::default(),
-                })),
+                }),
                 Node::max_branch_node_size(),
             )
             .map_err(MerkleError::Shale)
@@ -219,7 +219,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
             let new_branch_address = self.put_node(new_branch)?.as_ptr();
 
             if idx > 0 {
-                self.put_node(Node::new(NodeType::Extension(ExtNode {
+                self.put_node(Node::from(NodeType::Extension(ExtNode {
                     path: PartialPath(matching_path[..idx].to_vec()),
                     child: new_branch_address,
                     child_encoded: None,
@@ -347,7 +347,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                 .as_ptr();
 
             if !prefix.is_empty() {
-                self.put_node(Node::new(NodeType::Extension(ExtNode {
+                self.put_node(Node::from(NodeType::Extension(ExtNode {
                     path: PartialPath(prefix.to_vec()),
                     child: branch_address,
                     child_encoded: None,
@@ -427,10 +427,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                         // insert the leaf to the empty slot
                         // create a new leaf
                         let leaf_ptr = self
-                            .put_node(Node::new(NodeType::Leaf(LeafNode(
-                                PartialPath(key_nibbles.collect()),
-                                Data(val),
-                            ))))?
+                            .put_node(Node::leaf(PartialPath(key_nibbles.collect()), Data(val)))?
                             .as_ptr();
                         // set the current child to point to this leaf
                         node.write(|u| {
@@ -565,11 +562,11 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                 chd[idx as usize] = Some(c_ptr);
 
                 let branch = self
-                    .put_node(Node::new(NodeType::Branch(BranchNode {
+                    .put_node(Node::branch(BranchNode {
                         children: chd,
                         value: Some(Data(val)),
                         children_encoded: Default::default(),
-                    })))?
+                    }))?
                     .as_ptr();
 
                 set_parent(branch, &mut parents);
@@ -609,10 +606,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                     // from: [p: Branch] -> [b (v)]x -> [Leaf]x
                     // to: [p: Branch] -> [Leaf (v)]
                     let leaf = self
-                        .put_node(Node::new(NodeType::Leaf(LeafNode(
-                            PartialPath(Vec::new()),
-                            val,
-                        ))))?
+                        .put_node(Node::leaf(PartialPath(Vec::new()), val))?
                         .as_ptr();
                     p_ref
                         .write(|p| {
@@ -625,10 +619,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                     // from: P -> [p: Ext]x -> [b (v)]x -> [leaf]x
                     // to: P -> [Leaf (v)]
                     let leaf = self
-                        .put_node(Node::new(NodeType::Leaf(LeafNode(
-                            PartialPath(n.path.clone().into_inner()),
-                            val,
-                        ))))?
+                        .put_node(Node::leaf(PartialPath(n.path.clone().into_inner()), val))?
                         .as_ptr();
                     deleted.push(p_ptr);
                     set_parent(leaf, parents);
@@ -649,7 +640,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                             //                           \____[Leaf]x
                             // to: [p: Branch] -> [Ext] -> [Branch]
                             let ext = self
-                                .put_node(Node::new(NodeType::Extension(ExtNode {
+                                .put_node(Node::from(NodeType::Extension(ExtNode {
                                     path: PartialPath(vec![idx]),
                                     child: c_ptr,
                                     child_encoded: None,
@@ -778,7 +769,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                                     // from: [Branch] -> [Branch]x -> [Branch]
                                     // to: [Branch] -> [Ext] -> [Branch]
                                     n.children[b_idx as usize] = Some(
-                                        self.put_node(Node::new(NodeType::Extension(ExtNode {
+                                        self.put_node(Node::from(NodeType::Extension(ExtNode {
                                             path: PartialPath(vec![idx]),
                                             child: c_ptr,
                                             child_encoded: None,
@@ -1468,19 +1459,19 @@ mod test {
         let merkle = Merkle::new(store);
 
         {
-            let chd = Node::new(NodeType::Leaf(LeafNode(
+            let chd = Node::from(NodeType::Leaf(LeafNode(
                 PartialPath(vec![0x1, 0x2, 0x3]),
                 Data(vec![0x4, 0x5]),
             )));
             let chd_ref = merkle.put_node(chd.clone()).unwrap();
             let chd_encoded = chd_ref.get_encoded(merkle.store.as_ref());
-            let new_chd = Node::new(NodeType::decode(chd_encoded).unwrap());
+            let new_chd = Node::from(NodeType::decode(chd_encoded).unwrap());
             let new_chd_encoded = new_chd.get_encoded(merkle.store.as_ref());
             assert_eq!(chd_encoded, new_chd_encoded);
 
             let mut chd_encoded: [Option<Vec<u8>>; NBRANCH] = Default::default();
             chd_encoded[0] = Some(new_chd_encoded.to_vec());
-            let node = Node::new(NodeType::Branch(BranchNode {
+            let node = Node::from(NodeType::Branch(BranchNode {
                 children: [None; NBRANCH],
                 value: Some(Data("value1".as_bytes().to_vec())),
                 children_encoded: chd_encoded,
@@ -1489,24 +1480,24 @@ mod test {
             let node_ref = merkle.put_node(node.clone()).unwrap();
 
             let r = node_ref.get_encoded(merkle.store.as_ref());
-            let new_node = Node::new(NodeType::decode(r).unwrap());
+            let new_node = Node::from(NodeType::decode(r).unwrap());
             let new_encoded = new_node.get_encoded(merkle.store.as_ref());
             assert_eq!(r, new_encoded);
         }
 
         {
-            let chd = Node::new(NodeType::Branch(BranchNode {
+            let chd = Node::from(NodeType::Branch(BranchNode {
                 children: [None; NBRANCH],
                 value: Some(Data("value1".as_bytes().to_vec())),
                 children_encoded: Default::default(),
             }));
             let chd_ref = merkle.put_node(chd.clone()).unwrap();
             let chd_encoded = chd_ref.get_encoded(merkle.store.as_ref());
-            let new_chd = Node::new(NodeType::decode(chd_encoded).unwrap());
+            let new_chd = Node::from(NodeType::decode(chd_encoded).unwrap());
             let new_chd_encoded = new_chd.get_encoded(merkle.store.as_ref());
             assert_eq!(chd_encoded, new_chd_encoded);
 
-            let node = Node::new(NodeType::Extension(ExtNode {
+            let node = Node::from(NodeType::Extension(ExtNode {
                 path: PartialPath(vec![0x1, 0x2, 0x3]),
                 child: DiskAddress::null(),
                 child_encoded: Some(chd_encoded.to_vec()),
@@ -1514,7 +1505,7 @@ mod test {
             let node_ref = merkle.put_node(node.clone()).unwrap();
 
             let r = node_ref.get_encoded(merkle.store.as_ref());
-            let new_node = Node::new(NodeType::decode(r).unwrap());
+            let new_node = Node::from(NodeType::decode(r).unwrap());
             let new_encoded = new_node.get_encoded(merkle.store.as_ref());
             assert_eq!(r, new_encoded);
         }
