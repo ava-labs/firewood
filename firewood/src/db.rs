@@ -19,7 +19,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use bytemuck::{cast_slice, AnyBitPattern};
-use metered::{metered, HitCount};
+use metered::metered;
 use parking_lot::{Mutex, RwLock};
 use shale::{
     compact::{CompactSpace, CompactSpaceHeader},
@@ -435,30 +435,36 @@ pub struct Db {
 impl Db {
     const PARAM_SIZE: u64 = size_of::<DbParams>() as u64;
 
-    pub async fn new<P: AsRef<Path>>(db_path: P, cfg: &DbConfig) -> Result<Self, api::Error> {
-        Db::new_internal(db_path, cfg).await.map_err(Into::into)
-    }
-
-    /// Open a database.
-    async fn new_internal<P: AsRef<Path>>(db_path: P, cfg: &DbConfig) -> Result<Self, DbError> {
-        // TODO: make sure all fds are released at the end
+    pub async fn new<P: AsRef<Path> + Send + Sync + 'static>(
+        db_path: P,
+        cfg: &DbConfig,
+    ) -> Result<Self, api::Error> {
         if cfg.truncate {
             let _ = tokio::fs::remove_dir_all(db_path.as_ref()).await;
         }
 
+        block_in_place(|| Db::new_internal(db_path, cfg.clone()))
+            .map_err(|e| api::Error::InternalError(e.into()))
+    }
+
+    /// Open a database.
+    fn new_internal<P: AsRef<Path> + Send + Sync + 'static>(
+        db_path: P,
+        cfg: DbConfig,
+    ) -> Result<Self, DbError> {
         let open_options = if cfg.truncate {
             file::Options::Truncate
         } else {
             file::Options::NoTruncate
         };
 
-        let (db_path, reset) = file::open_dir(db_path, open_options).await?;
+        let (db_path, reset) = file::open_dir(db_path, open_options)?;
 
-        let merkle_path = file::touch_dir("merkle", &db_path).await?;
-        let merkle_meta_path = file::touch_dir("meta", &merkle_path).await?;
-        let merkle_payload_path = file::touch_dir("compact", &merkle_path).await?;
+        let merkle_path = file::touch_dir("merkle", &db_path)?;
+        let merkle_meta_path = file::touch_dir("meta", &merkle_path)?;
+        let merkle_payload_path = file::touch_dir("compact", &merkle_path)?;
 
-        let root_hash_path = file::touch_dir("root_hash", &db_path).await?;
+        let root_hash_path = file::touch_dir("root_hash", &db_path)?;
 
         let file0 = crate::file::File::new(0, SPACE_RESERVED, &merkle_meta_path)?;
         let fd0 = file0.as_fd();
@@ -470,7 +476,7 @@ impl Db {
             {
                 return Err(DbError::InvalidParams);
             }
-            Self::initialize_header_on_disk(cfg, fd0)?;
+            Self::initialize_header_on_disk(&cfg, fd0)?;
         }
 
         // read DbParams
@@ -760,7 +766,7 @@ impl Db {
     }
 
     /// Create a proposal.
-    pub fn new_proposal<K: KeyType, V: ValueType>(
+    pub(crate) fn new_proposal<K: KeyType, V: ValueType>(
         &self,
         data: Batch<K, V>,
     ) -> Result<proposal::Proposal, DbError> {
@@ -911,18 +917,8 @@ impl Db {
         self.revisions.lock().base_revision.kv_dump(w)
     }
     /// Get root hash of the latest generic key-value storage.
-    pub fn kv_root_hash(&self) -> Result<TrieHash, DbError> {
+    pub(crate) fn kv_root_hash(&self) -> Result<TrieHash, DbError> {
         self.revisions.lock().base_revision.kv_root_hash()
-    }
-
-    /// Get a value in the kv store associated with a particular key.
-    #[measure(HitCount)]
-    pub fn kv_get<K: AsRef<[u8]>>(&self, key: K) -> Result<Vec<u8>, DbError> {
-        self.revisions
-            .lock()
-            .base_revision
-            .kv_get(key)
-            .ok_or(DbError::KeyNotFound)
     }
 
     pub fn metrics(&self) -> Arc<DbMetrics> {

@@ -26,6 +26,6 @@ pub async fn run(opts: &Options) -> Result<(), api::Error> {
         .truncate(false)
         .wal(WalConfig::builder().max_revisions(10).build());
 
-    let db = Db::new(opts.db.as_str(), &cfg.build()).await?;
+    let db = Db::new(opts.db.clone(), &cfg.build()).await?;
     Ok(db.kv_dump(&mut std::io::stdout().lock())?)
 }

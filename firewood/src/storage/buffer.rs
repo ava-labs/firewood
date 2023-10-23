@@ -553,7 +553,7 @@ async fn process(
 /// ```
 #[derive(Clone, Debug)]
 pub struct DiskBufferRequester {
-    sender: tokio::sync::mpsc::UnboundedSender<BufferCmd>,
+    sender: mpsc::UnboundedSender<BufferCmd>,
 }
 
 impl DiskBufferRequester {
@@ -617,6 +617,7 @@ impl DiskBufferRequester {
 #[cfg(test)]
 mod tests {
     use sha3::Digest;
+    use tokio::task::block_in_place;
     use std::path::{Path, PathBuf};
 
     use super::*;
@@ -668,11 +669,10 @@ mod tests {
 
         // TODO: Run the test in a separate standalone directory for concurrency reasons
         let (root_db_path, reset) = file::open_dir(temp_dir.as_path(), file::Options::Truncate)
-            .await
             .unwrap();
 
         // file descriptor of the state directory
-        let state_path = file::touch_dir("state", &root_db_path).await.unwrap();
+        let state_path = file::touch_dir("state", &root_db_path).unwrap();
         assert!(reset);
         // create a new wal directory on top of root_db_fd
         disk_requester.init_wal("wal", &root_db_path);
@@ -745,10 +745,10 @@ mod tests {
         // TODO: Run the test in a separate standalone directory for concurrency reasons
         let tmp_dir = get_tmp_dir();
         let path = get_file_path(tmp_dir.as_path(), file!(), line!());
-        let (root_db_path, reset) = file::open_dir(path, file::Options::Truncate).await.unwrap();
+        let (root_db_path, reset) = file::open_dir(path, file::Options::Truncate).unwrap();
 
         // file descriptor of the state directory
-        let state_path = file::touch_dir("state", &root_db_path).await.unwrap();
+        let state_path = file::touch_dir("state", &root_db_path).unwrap();
         assert!(reset);
         // create a new wal directory on top of root_db_fd
         disk_requester.init_wal("wal", &root_db_path);
@@ -809,7 +809,7 @@ mod tests {
         assert_eq!(view.as_deref(), hash);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor="multi_thread")]
     async fn test_multi_stores() {
         let buf_cfg = DiskBufferConfig::builder().build();
         let wal_cfg = WalConfig::builder().build();
@@ -818,10 +818,10 @@ mod tests {
         let tmp_dir = get_tmp_dir();
         let path = get_file_path(tmp_dir.as_path(), file!(), line!());
         std::fs::create_dir_all(&path).unwrap();
-        let (root_db_path, reset) = file::open_dir(path, file::Options::Truncate).await.unwrap();
+        let (root_db_path, reset) = file::open_dir(path, file::Options::Truncate).unwrap();
 
         // file descriptor of the state directory
-        let state_path = file::touch_dir("state", &root_db_path).await.unwrap();
+        let state_path = file::touch_dir("state", &root_db_path).unwrap();
         assert!(reset);
         // create a new wal directory on top of root_db_fd
         disk_requester.init_wal("wal", &root_db_path);
@@ -850,7 +850,7 @@ mod tests {
         // mutate the in memory buffer.
         let data = b"this is a test";
         let hash: [u8; HASH_SIZE] = sha3::Keccak256::digest(data).into();
-        store.write(0, &hash);
+        block_in_place(|| store.write(0, &hash));
         assert_eq!(store.id(), STATE_SPACE);
 
         let another_data = b"this is another test";
@@ -858,11 +858,11 @@ mod tests {
 
         // mutate the in memory buffer in another StoreRev new from the above.
         let mut another_store = StoreRevMut::new_from_other(&store);
-        another_store.write(32, &another_hash);
+        block_in_place(|| another_store.write(32, &another_hash));
         assert_eq!(another_store.id(), STATE_SPACE);
 
         // wal should have no records.
-        assert!(disk_requester.collect_ash(1).unwrap().is_empty());
+        assert!(block_in_place(|| disk_requester.collect_ash(1)).unwrap().is_empty());
 
         // get RO view of the buffer from the beginning. Both stores should have the same view.
         let view = store.get_view(0, HASH_SIZE as u64).unwrap();
@@ -905,7 +905,7 @@ mod tests {
         let another_store = StoreRevMut::new(state_cache);
         let view = another_store.get_view(0, HASH_SIZE as u64).unwrap();
         assert_eq!(view.as_deref(), another_hash);
-        disk_requester.shutdown();
+        block_in_place(|| disk_requester.shutdown());
     }
 
     fn get_file_path(path: &Path, file: &str, line: u32) -> PathBuf {

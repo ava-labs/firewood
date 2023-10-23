@@ -3,6 +3,7 @@
 
 // Copied from CedrusDB
 
+use std::fs::{remove_dir_all, create_dir};
 use std::ops::Deref;
 use std::os::fd::OwnedFd;
 
@@ -74,7 +75,7 @@ impl Deref for File {
     }
 }
 
-pub(crate) async fn touch_dir(dirname: &str, rootdir: &Path) -> Result<PathBuf, std::io::Error> {
+pub(crate) fn touch_dir(dirname: &str, rootdir: &Path) -> Result<PathBuf, std::io::Error> {
     let path = rootdir.join(dirname);
     if let Err(e) = std::fs::create_dir(&path) {
         // ignore already-exists error
@@ -85,17 +86,17 @@ pub(crate) async fn touch_dir(dirname: &str, rootdir: &Path) -> Result<PathBuf, 
     Ok(path)
 }
 
-pub(crate) async fn open_dir<P: AsRef<Path>>(
+pub(crate) fn open_dir<P: AsRef<Path>>(
     path: P,
     options: Options,
 ) -> Result<(PathBuf, bool), std::io::Error> {
     let truncate = options == Options::Truncate;
 
     if truncate {
-        let _ = tokio::fs::remove_dir_all(path.as_ref()).await;
+        let _ = remove_dir_all(path.as_ref());
     }
 
-    match tokio::fs::create_dir(path.as_ref()).await {
+    match create_dir(path.as_ref()) {
         Err(e) if truncate || e.kind() != ErrorKind::AlreadyExists => Err(e),
         // the DB already exists
         Err(_) => Ok((path.as_ref().to_path_buf(), false)),

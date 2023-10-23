@@ -6,23 +6,18 @@ use firewood::{
     v2::api::{self, BatchOp, Db as _, DbView, Proposal},
 };
 
-use std::{any::Any, collections::VecDeque, sync::Arc};
+use std::{collections::VecDeque, env::temp_dir, path::PathBuf, sync::Arc};
 
 // TODO: use a trait
 macro_rules! kv_dump {
     ($e: ident) => {{
         let mut s = Vec::new();
-        let boxed_any: Box<&dyn Any> = Box::new(&$e);
-        boxed_any
-            .downcast_ref::<firewood::db::Db>()
-            .unwrap()
-            .kv_dump(&mut s)
-            .unwrap();
+        $e.kv_dump(&mut s).unwrap();
         String::from_utf8(s).unwrap()
     }};
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_basic_metrics() {
     let cfg = DbConfig::builder()
         .meta_ncached_pages(1024)
@@ -38,18 +33,39 @@ async fn test_basic_metrics() {
                 .max_revisions(10)
                 .build(),
         );
-    let db = firewood::db::Db::new("test_revisions_db2", &cfg.truncate(true).build())
+
+    let mut tmpdir: PathBuf = std::env::var_os("CARGO_TARGET_DIRY")
+        .unwrap_or(temp_dir().into())
+        .into();
+    tmpdir.push("/tmp/testdb");
+
+    let db = firewood::db::Db::new(tmpdir, &cfg.truncate(true).build())
         .await
         .unwrap();
-    let metrics = db.metrics();
-    assert_eq!(metrics.kv_get.hit_count.get(), 0);
+    // let metrics = db.metrics();
+    // TODO: kv_get is no longer a valid metric, and DbRev has no access to Db.metrics (yet)
+    //assert_eq!(metrics.kv_get.hit_count.get(), 0);
+
+    // TODO: we can't fetch the revision for the empty tree, so insert a single value
+    Arc::new(
+        db.propose(vec![BatchOp::Put {
+            key: b"a",
+            value: b"b",
+        }])
+        .await
+        .unwrap(),
+    )
+    .commit()
+    .await
+    .unwrap();
+
     let root = db.root_hash().await.unwrap();
     let rev = db.revision(root).await.unwrap();
-    rev.val("a").await.ok();
-    assert_eq!(metrics.kv_get.hit_count.get(), 1);
+    rev.val("a").await.ok().unwrap().unwrap();
+    //assert_eq!(metrics.val.hit_count.get(), 1);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_revisions() {
     use rand::{rngs::StdRng, Rng, SeedableRng};
     let cfg = DbConfig::builder()
@@ -84,8 +100,14 @@ async fn test_revisions() {
             .collect();
         key
     };
+
+    let mut tmpdir: PathBuf = std::env::var_os("CARGO_TARGET_DIRY")
+        .unwrap_or(temp_dir().into())
+        .into();
+    tmpdir.push("/tmp/testdb");
+
     for i in 0..10 {
-        let db = Db::new("test_revisions_db", &cfg.clone().truncate(true).build())
+        let db = Db::new(tmpdir.clone(), &cfg.clone().truncate(true).build())
             .await
             .unwrap();
         let mut dumped = VecDeque::new();
@@ -115,11 +137,11 @@ async fn test_revisions() {
             dumped.push_front(kv_dump!(db));
             for (dump, hash) in dumped.iter().zip(hashes.iter().cloned()) {
                 let rev = db.revision(hash).await.unwrap();
-                assert_eq!(kv_dump!(rev), *dump);
+                assert_eq!(kv_dump!(rev), *dump, "not the same: Pass {i}");
             }
         }
         drop(db);
-        let db = Db::new("test_revisions_db", &cfg.clone().truncate(false).build())
+        let db = Db::new(tmpdir.clone(), &cfg.clone().truncate(false).build())
             .await
             .unwrap();
         for (dump, hash) in dumped.iter().zip(hashes.iter().cloned()) {
@@ -129,7 +151,7 @@ async fn test_revisions() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn create_db_issue_proof() {
     let cfg = DbConfig::builder()
         .meta_ncached_pages(1024)
@@ -211,7 +233,7 @@ macro_rules! assert_val {
     };
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn db_proposal() -> Result<(), api::Error> {
     let cfg = DbConfig::builder().wal(WalConfig::builder().max_revisions(10).build());
 
