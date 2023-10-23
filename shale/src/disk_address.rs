@@ -164,9 +164,7 @@ impl DiskAddress {
 }
 
 impl Storable for DiskAddress {
-    fn dehydrated_len(&self) -> u64 {
-        Self::MSIZE
-    }
+    const DEHYDRATED_LENGTH: u64 = Self::MSIZE;
 
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {
         use std::io::{Cursor, Write};

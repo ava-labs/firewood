@@ -247,19 +247,20 @@ pub trait ShaleStore<T: Send + Sync> {
 /// A stored item type that can be decoded from or encoded to on-disk raw bytes. An efficient
 /// implementation could be directly transmuting to/from a POD struct. But sometimes necessary
 /// compression/decompression is needed to reduce disk I/O and facilitate faster in-memory access.
-pub trait Storable {
-    fn dehydrated_len(&self) -> u64;
+pub trait Storable: Sized {
+    const DEHYDRATED_LENGTH: u64;
+
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError>;
-    fn hydrate<T: CachedStore>(addr: usize, mem: &T) -> Result<Self, ShaleError>
-    where
-        Self: Sized;
+
+    fn hydrate<T: CachedStore>(addr: usize, mem: &T) -> Result<Self, ShaleError>;
+
     fn is_mem_mapped(&self) -> bool {
         false
     }
 }
 
-pub fn to_dehydrated(item: &dyn Storable) -> Result<Vec<u8>, ShaleError> {
-    let mut buff = vec![0; item.dehydrated_len() as usize];
+pub fn to_dehydrated<I: Storable>(item: &I) -> Result<Vec<u8>, ShaleError> {
+    let mut buff = vec![0; I::DEHYDRATED_LENGTH as usize];
     item.dehydrate(&mut buff)?;
     Ok(buff)
 }
@@ -272,7 +273,7 @@ pub struct StoredView<T> {
     len_limit: u64,
 }
 
-impl<T: Storable + Debug> Debug for StoredView<T> {
+impl<T: Debug> Debug for StoredView<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let StoredView {
             decoded,
@@ -288,8 +289,9 @@ impl<T: Storable + Debug> Debug for StoredView<T> {
     }
 }
 
-impl<T: Storable> Deref for StoredView<T> {
+impl<T> Deref for StoredView<T> {
     type Target = T;
+
     fn deref(&self) -> &T {
         &self.decoded
     }
@@ -309,12 +311,7 @@ impl<T: Storable + Debug + Send + Sync> TypedView<T> for StoredView<T> {
     }
 
     fn estimate_mem_image(&self) -> Option<u64> {
-        let len = self.decoded.dehydrated_len();
-        if len > self.len_limit {
-            None
-        } else {
-            Some(len)
-        }
+        Some(T::DEHYDRATED_LENGTH).filter(|len| len <= &self.len_limit)
     }
 
     fn write_mem_image(&self, mem_image: &mut [u8]) -> Result<(), ShaleError> {

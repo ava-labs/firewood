@@ -29,6 +29,8 @@ impl CompactHeader {
 }
 
 impl Storable for CompactHeader {
+    const DEHYDRATED_LENGTH: u64 = Self::MSIZE;
+
     fn hydrate<T: CachedStore>(addr: usize, mem: &T) -> Result<Self, ShaleError> {
         let raw = mem
             .get_view(addr, Self::MSIZE)
@@ -46,10 +48,6 @@ impl Storable for CompactHeader {
             is_freed,
             desc_addr: DiskAddress(NonZeroUsize::new(desc_addr)),
         })
-    }
-
-    fn dehydrated_len(&self) -> u64 {
-        Self::MSIZE
     }
 
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {
@@ -71,6 +69,8 @@ impl CompactFooter {
 }
 
 impl Storable for CompactFooter {
+    const DEHYDRATED_LENGTH: u64 = Self::MSIZE;
+
     fn hydrate<T: CachedStore>(addr: usize, mem: &T) -> Result<Self, ShaleError> {
         let raw = mem
             .get_view(addr, Self::MSIZE)
@@ -80,10 +80,6 @@ impl Storable for CompactFooter {
             })?;
         let payload_size = u64::from_le_bytes(raw.as_deref().try_into().unwrap());
         Ok(Self { payload_size })
-    }
-
-    fn dehydrated_len(&self) -> u64 {
-        Self::MSIZE
     }
 
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {
@@ -103,6 +99,8 @@ impl CompactDescriptor {
 }
 
 impl Storable for CompactDescriptor {
+    const DEHYDRATED_LENGTH: u64 = Self::MSIZE;
+
     fn hydrate<T: CachedStore>(addr: usize, mem: &T) -> Result<Self, ShaleError> {
         let raw = mem
             .get_view(addr, Self::MSIZE)
@@ -117,10 +115,6 @@ impl Storable for CompactDescriptor {
             payload_size,
             haddr,
         })
-    }
-
-    fn dehydrated_len(&self) -> u64 {
-        Self::MSIZE
     }
 
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {
@@ -180,6 +174,8 @@ impl CompactSpaceHeader {
 }
 
 impl Storable for CompactSpaceHeader {
+    const DEHYDRATED_LENGTH: u64 = Self::MSIZE;
+
     fn hydrate<T: CachedStore + Debug>(addr: usize, mem: &T) -> Result<Self, ShaleError> {
         let raw = mem
             .get_view(addr, Self::MSIZE)
@@ -199,10 +195,6 @@ impl Storable for CompactSpaceHeader {
         })
     }
 
-    fn dehydrated_len(&self) -> u64 {
-        Self::MSIZE
-    }
-
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {
         let mut cur = Cursor::new(to);
         cur.write_all(&self.meta_space_tail.to_le_bytes())?;
@@ -220,6 +212,8 @@ impl ObjPtrField {
 }
 
 impl Storable for ObjPtrField {
+    const DEHYDRATED_LENGTH: u64 = Self::MSIZE;
+
     fn hydrate<U: CachedStore>(addr: usize, mem: &U) -> Result<Self, ShaleError> {
         let raw = mem
             .get_view(addr, Self::MSIZE)
@@ -234,10 +228,6 @@ impl Storable for ObjPtrField {
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {
         Cursor::new(to).write_all(&self.to_le_bytes())?;
         Ok(())
-    }
-
-    fn dehydrated_len(&self) -> u64 {
-        Self::MSIZE
     }
 }
 
@@ -262,6 +252,8 @@ impl U64Field {
 }
 
 impl Storable for U64Field {
+    const DEHYDRATED_LENGTH: u64 = Self::MSIZE;
+
     fn hydrate<U: CachedStore>(addr: usize, mem: &U) -> Result<Self, ShaleError> {
         let raw = mem
             .get_view(addr, Self::MSIZE)
@@ -270,10 +262,6 @@ impl Storable for U64Field {
                 size: Self::MSIZE,
             })?;
         Ok(Self(u64::from_le_bytes(raw.as_deref().try_into().unwrap())))
-    }
-
-    fn dehydrated_len(&self) -> u64 {
-        Self::MSIZE
     }
 
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {
@@ -607,7 +595,7 @@ impl<T: Storable + Send + Sync + Debug + 'static, M: CachedStore + Send + Sync> 
     for CompactSpace<T, M>
 {
     fn put_item(&self, item: T, extra: u64) -> Result<ObjRef<'_, T>, ShaleError> {
-        let size = item.dehydrated_len() + extra;
+        let size = T::DEHYDRATED_LENGTH + extra;
         let addr = self.inner.write().unwrap().alloc(size)?;
 
         let obj = {
@@ -695,6 +683,8 @@ mod tests {
     }
 
     impl Storable for Hash {
+        const DEHYDRATED_LENGTH: u64 = Self::MSIZE;
+
         fn hydrate<T: CachedStore>(addr: usize, mem: &T) -> Result<Self, ShaleError> {
             let raw = mem
                 .get_view(addr, Self::MSIZE)
@@ -707,10 +697,6 @@ mod tests {
                     .try_into()
                     .expect("invalid slice"),
             ))
-        }
-
-        fn dehydrated_len(&self) -> u64 {
-            Self::MSIZE
         }
 
         fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {

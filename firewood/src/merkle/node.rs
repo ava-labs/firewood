@@ -440,7 +440,7 @@ impl Node {
                 }),
                 lazy_dirty: AtomicBool::new(false),
             }
-            .dehydrated_len()
+            .len()
         })
     }
 
@@ -516,6 +516,38 @@ impl Node {
         }
     }
 
+    pub(super) fn len(&self) -> u64 {
+        32 + 1
+            + 1
+            + match &self.inner {
+                NodeType::Branch(n) => {
+                    let mut encoded_len = 0;
+                    for emcoded in n.children_encoded.iter() {
+                        encoded_len += match emcoded {
+                            Some(v) => 1 + v.len() as u64,
+                            None => 1,
+                        }
+                    }
+                    NBRANCH as u64 * 8
+                        + 4
+                        + match &n.value {
+                            Some(val) => val.len() as u64,
+                            None => 0,
+                        }
+                        + encoded_len
+                }
+                NodeType::Extension(n) => {
+                    1 + 8
+                        + n.path.dehydrated_len()
+                        + match n.chd_encoded() {
+                            Some(v) => 1 + v.len() as u64,
+                            None => 1,
+                        }
+                }
+                NodeType::Leaf(n) => 1 + 4 + n.0.dehydrated_len() + n.1.len() as u64,
+            }
+    }
+
     const ROOT_HASH_VALID_BIT: u8 = 1 << 0;
     // TODO: why are these different?
     const IS_ENCODED_BIG_VALID: u8 = 1 << 1;
@@ -523,6 +555,8 @@ impl Node {
 }
 
 impl Storable for Node {
+    const DEHYDRATED_LENGTH: u64 = todo!();
+
     fn hydrate<T: CachedStore>(addr: usize, mem: &T) -> Result<Self, ShaleError> {
         const META_SIZE: usize = 32 + 1 + 1;
         let meta_raw =
@@ -736,37 +770,37 @@ impl Storable for Node {
         }
     }
 
-    fn dehydrated_len(&self) -> u64 {
-        32 + 1
-            + 1
-            + match &self.inner {
-                NodeType::Branch(n) => {
-                    let mut encoded_len = 0;
-                    for emcoded in n.children_encoded.iter() {
-                        encoded_len += match emcoded {
-                            Some(v) => 1 + v.len() as u64,
-                            None => 1,
-                        }
-                    }
-                    NBRANCH as u64 * 8
-                        + 4
-                        + match &n.value {
-                            Some(val) => val.len() as u64,
-                            None => 0,
-                        }
-                        + encoded_len
-                }
-                NodeType::Extension(n) => {
-                    1 + 8
-                        + n.path.dehydrated_len()
-                        + match n.chd_encoded() {
-                            Some(v) => 1 + v.len() as u64,
-                            None => 1,
-                        }
-                }
-                NodeType::Leaf(n) => 1 + 4 + n.0.dehydrated_len() + n.1.len() as u64,
-            }
-    }
+    // fn dehydrated_len(&self) -> u64 {
+    //     32 + 1
+    //         + 1
+    //         + match &self.inner {
+    //             NodeType::Branch(n) => {
+    //                 let mut encoded_len = 0;
+    //                 for emcoded in n.children_encoded.iter() {
+    //                     encoded_len += match emcoded {
+    //                         Some(v) => 1 + v.len() as u64,
+    //                         None => 1,
+    //                     }
+    //                 }
+    //                 NBRANCH as u64 * 8
+    //                     + 4
+    //                     + match &n.value {
+    //                         Some(val) => val.len() as u64,
+    //                         None => 0,
+    //                     }
+    //                     + encoded_len
+    //             }
+    //             NodeType::Extension(n) => {
+    //                 1 + 8
+    //                     + n.path.dehydrated_len()
+    //                     + match n.chd_encoded() {
+    //                         Some(v) => 1 + v.len() as u64,
+    //                         None => 1,
+    //                     }
+    //             }
+    //             NodeType::Leaf(n) => 1 + 4 + n.0.dehydrated_len() + n.1.len() as u64,
+    //         }
+    // }
 
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {
         let mut cur = Cursor::new(to);

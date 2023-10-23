@@ -24,6 +24,8 @@ impl std::ops::Deref for TrieHash {
 }
 
 impl Storable for TrieHash {
+    const DEHYDRATED_LENGTH: u64 = Self::MSIZE;
+
     fn hydrate<T: CachedStore>(addr: usize, mem: &T) -> Result<Self, ShaleError> {
         let raw = mem
             .get_view(addr, Self::MSIZE)
@@ -34,10 +36,6 @@ impl Storable for TrieHash {
         Ok(Self(
             raw.as_deref()[..Self::MSIZE as usize].try_into().unwrap(),
         ))
-    }
-
-    fn dehydrated_len(&self) -> u64 {
-        Self::MSIZE
     }
 
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {

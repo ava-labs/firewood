@@ -200,6 +200,8 @@ impl DbHeader {
 }
 
 impl Storable for DbHeader {
+    const DEHYDRATED_LENGTH: u64 = Self::MSIZE;
+
     fn hydrate<T: CachedStore>(addr: usize, mem: &T) -> Result<Self, shale::ShaleError> {
         let raw = mem
             .get_view(addr, Self::MSIZE)
@@ -210,10 +212,6 @@ impl Storable for DbHeader {
         Ok(Self {
             kv_root: raw.as_deref().as_slice().into(),
         })
-    }
-
-    fn dehydrated_len(&self) -> u64 {
-        Self::MSIZE
     }
 
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {
