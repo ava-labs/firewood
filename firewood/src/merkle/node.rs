@@ -844,3 +844,78 @@ impl Storable for Node {
         }
     }
 }
+
+#[cfg(test)]
+pub(super) mod tests {
+    use std::array::from_fn;
+
+    use super::*;
+    use shale::cached::PlainMem;
+    use test_case::test_case;
+
+    pub fn leaf(path: Vec<u8>, data: Vec<u8>) -> Node {
+        Node::leaf(PartialPath(path), Data(data))
+    }
+
+    pub fn branch(
+        repeated_disk_adderss: usize,
+        value: Option<Vec<u8>>,
+        repeated_encoded_child: Option<Vec<u8>>,
+    ) -> Node {
+        let children: [Option<DiskAddress>; NBRANCH] = from_fn(|i| {
+            if i < NBRANCH / 2 {
+                DiskAddress::from(repeated_disk_adderss).into()
+            } else {
+                None
+            }
+        });
+
+        let children_encoded = repeated_encoded_child
+            .map(|child| {
+                from_fn(|i| {
+                    if i < NBRANCH / 2 {
+                        child.clone().into()
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or_default();
+
+        Node::branch(BranchNode {
+            children,
+            value: value.map(Data),
+            children_encoded,
+        })
+    }
+
+    pub fn extension(
+        path: Vec<u8>,
+        child_address: DiskAddress,
+        child_encoded: Option<Vec<u8>>,
+    ) -> Node {
+        Node::from(NodeType::Extension(ExtNode {
+            path: PartialPath(path),
+            child: child_address,
+            child_encoded,
+        }))
+    }
+
+    #[test_case(leaf(vec![0x01, 0x02, 0x03], vec![0x04, 0x05]); "leaf_node")]
+    #[test_case(extension(vec![0x01, 0x02, 0x03], DiskAddress::from(0x42), None); "extension with child address")]
+    #[test_case(extension(vec![0x01, 0x02, 0x03], DiskAddress::null(), vec![0x01, 0x02, 0x03].into()) ; "extension without child address")]
+    #[test_case(branch(0x0a, b"hello world".to_vec().into(), None); "branch with data")]
+    #[test_case(branch(0x0a, None, vec![0x01, 0x02, 0x03].into()); "branch without data")]
+    fn test_encoding(node: Node) {
+        let mut bytes = vec![0; node.dehydrated_len() as usize];
+
+        node.dehydrate(&mut bytes).unwrap();
+
+        let mut mem = PlainMem::new(node.dehydrated_len(), 0x00);
+        mem.write(0, &bytes);
+
+        let hydrated_node = Node::hydrate(0, &mem).unwrap();
+
+        assert_eq!(node, hydrated_node);
+    }
+}
