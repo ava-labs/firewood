@@ -858,13 +858,13 @@ pub(super) mod tests {
     }
 
     pub fn branch(
-        repeated_disk_adderss: usize,
+        repeated_disk_address: usize,
         value: Option<Vec<u8>>,
         repeated_encoded_child: Option<Vec<u8>>,
     ) -> Node {
         let children: [Option<DiskAddress>; NBRANCH] = from_fn(|i| {
             if i < NBRANCH / 2 {
-                DiskAddress::from(repeated_disk_adderss).into()
+                DiskAddress::from(repeated_disk_address).into()
             } else {
                 None
             }

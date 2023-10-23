@@ -1374,4 +1374,48 @@ mod tests {
 
         assert_eq!(encoded, new_node_encoded);
     }
+
+    #[test]
+    fn insert_and_retrieve() {
+        let key = b"hello";
+        let val = b"world";
+
+        let mut merkle = create_test_merkle();
+        let root = merkle.init_root().unwrap();
+
+        merkle.insert(key, val.to_vec(), root).unwrap();
+
+        let fetched_val = merkle.get(key, root).unwrap();
+
+        assert_eq!(fetched_val.as_deref(), val.as_slice().into());
+    }
+
+    #[test]
+    fn insert_and_retrieve_multiple() {
+        let mut merkle = create_test_merkle();
+        let root = merkle.init_root().unwrap();
+
+        // insert values
+        for key_val in u8::MIN..=u8::MAX {
+            let key = vec![key_val];
+            let val = vec![key_val];
+
+            merkle.insert(&key, val.clone(), root).unwrap();
+
+            let fetched_val = merkle.get(&key, root).unwrap();
+
+            // make sure the value was inserted
+            assert_eq!(fetched_val.as_deref(), val.as_slice().into());
+        }
+
+        // make sure none of the previous values were forgotten after initial insert
+        for key_val in u8::MIN..=u8::MAX {
+            let key = vec![key_val];
+            let val = vec![key_val];
+
+            let fetched_val = merkle.get(&key, root).unwrap();
+
+            assert_eq!(fetched_val.as_deref(), val.as_slice().into());
+        }
+    }
 }
