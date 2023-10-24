@@ -864,85 +864,49 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
         key: K,
         root: DiskAddress,
     ) -> Result<Option<Vec<u8>>, MerkleError> {
-        let key_nibbles = Nibbles::<1>::new(key.as_ref());
-
         if root.is_null() {
             return Ok(None);
         }
 
-        let mut deleted = Vec::new();
-        let mut parents: Vec<(ObjRef<Node>, _)> = Vec::new();
-        let mut u_ref = self.get_node(root)?;
-        let mut nskip = 0;
-        let mut found = None;
+        let (found, parents, deleted) = {
+            let mut parents = Vec::new();
+            let node_ref = self.get_node_by_key(self.get_node(root)?, key, |node_ref, nib| {
+                parents.push((node_ref, nib))
+            })?;
 
-        for (i, nib) in key_nibbles.into_iter().enumerate() {
-            if nskip > 0 {
-                nskip -= 1;
-                continue;
-            }
-            let next_ptr = match &u_ref.inner {
-                NodeType::Branch(n) => match n.children[nib as usize] {
-                    Some(c) => c,
-                    None => return Ok(None),
-                },
-                NodeType::Leaf(n) => {
-                    if !key_nibbles.into_iter().skip(i).eq(n.0.iter().cloned()) {
-                        return Ok(None);
-                    }
-                    found = Some(n.1.clone());
-                    deleted.push(u_ref.as_ptr());
-                    self.after_remove_leaf(&mut parents, &mut deleted)?;
-                    break;
-                }
-                NodeType::Extension(n) => {
-                    let n_path = &*n.path.0;
-                    let rem_path = key_nibbles.into_iter().skip(i);
-                    if rem_path.size_hint().0 < n_path.len() {
-                        return Ok(None);
-                    }
-                    if !rem_path.take(n_path.len()).eq(n_path.iter().cloned()) {
-                        return Ok(None);
-                    }
-                    nskip = n_path.len() - 1;
-                    n.chd()
-                }
+            let Some(mut node_ref) = node_ref else {
+                return Ok(None);
             };
+            let mut deleted = Vec::new();
+            let mut found = None;
 
-            parents.push((u_ref, nib));
-            u_ref = self.get_node(next_ptr)?;
-        }
-        if found.is_none() {
-            match &u_ref.inner {
+            match &node_ref.inner {
                 NodeType::Branch(n) => {
-                    if n.value.is_none() {
-                        return Ok(None);
-                    }
                     let (c_chd, _) = n.single_child();
-                    u_ref
+
+                    node_ref
                         .write(|u| {
                             found = u.inner.as_branch_mut().unwrap().value.take();
                             u.rehash()
                         })
                         .unwrap();
+
                     if let Some((c_ptr, idx)) = c_chd {
-                        deleted.push(u_ref.as_ptr());
+                        deleted.push(node_ref.as_ptr());
                         self.after_remove_branch((c_ptr, idx), &mut parents, &mut deleted)?
                     }
                 }
+
                 NodeType::Leaf(n) => {
-                    if n.0.len() > 0 {
-                        return Ok(None);
-                    }
                     found = Some(n.1.clone());
-                    deleted.push(u_ref.as_ptr());
+                    deleted.push(node_ref.as_ptr());
                     self.after_remove_leaf(&mut parents, &mut deleted)?
                 }
                 _ => (),
-            }
-        }
+            };
 
-        drop(u_ref);
+            (found, parents, deleted)
+        };
 
         for (mut r, _) in parents.into_iter().rev() {
             r.write(|u| u.rehash()).unwrap();
@@ -951,6 +915,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
         for ptr in deleted.into_iter() {
             self.free_node(ptr)?;
         }
+
         Ok(found.map(|e| e.0))
     }
 
@@ -985,6 +950,67 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
         Ok(())
     }
 
+    fn get_node_by_key<'a, K: AsRef<[u8]>>(
+        &'a self,
+        mut node_ref: ObjRef<'a, Node>,
+        key: K,
+        mut loop_callback: impl FnMut(ObjRef<'a, Node>, u8),
+    ) -> Result<Option<ObjRef<'a, Node>>, MerkleError> {
+        let mut key_nibbles = Nibbles::<1>::new(key.as_ref()).into_iter();
+
+        loop {
+            let Some(nib) = key_nibbles.next() else {
+                break;
+            };
+
+            let next_ptr = match &node_ref.inner {
+                NodeType::Branch(n) => match n.children[nib as usize] {
+                    Some(c) => c,
+                    None => return Ok(None),
+                },
+                NodeType::Leaf(n) => {
+                    let node_ref = if once(nib).chain(key_nibbles).eq(n.0.iter().copied()) {
+                        Some(node_ref)
+                    } else {
+                        None
+                    };
+
+                    return Ok(node_ref);
+                }
+                NodeType::Extension(n) => {
+                    let mut n_path_iter = n.path.iter().copied();
+
+                    if n_path_iter.next() != Some(nib) {
+                        return Ok(None);
+                    }
+
+                    let path_matches = n_path_iter
+                        .map(Some)
+                        .all(|n_path_nibble| key_nibbles.next() == n_path_nibble);
+
+                    if !path_matches {
+                        return Ok(None);
+                    }
+
+                    n.chd()
+                }
+            };
+
+            loop_callback(node_ref, nib);
+
+            node_ref = self.get_node(next_ptr)?;
+        }
+
+        // when we're done iterating over nibbles, check if the node we're at has a value
+        let node_ref = match &node_ref.inner {
+            NodeType::Branch(n) if n.value.as_ref().is_some() => Some(node_ref),
+            NodeType::Leaf(n) if n.0.len() == 0 => Some(node_ref),
+            _ => None,
+        };
+
+        Ok(node_ref)
+    }
+
     pub fn get_mut<K: AsRef<[u8]>>(
         &mut self,
         key: K,
@@ -995,64 +1021,16 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
         }
 
         let mut parents = Vec::new();
-        let key_nibbles = Nibbles::<1>::new(key.as_ref());
 
-        let mut u_ref = self.get_node(root)?;
-        let mut nskip = 0;
+        let root_node = self.get_node(root)?;
 
-        for (i, nib) in key_nibbles.into_iter().enumerate() {
-            let u_ptr = u_ref.as_ptr();
-            if nskip > 0 {
-                nskip -= 1;
-                continue;
-            }
-            let next_ptr = match &u_ref.inner {
-                NodeType::Branch(n) => match n.children[nib as usize] {
-                    Some(c) => c,
-                    None => return Ok(None),
-                },
-                NodeType::Leaf(n) => {
-                    if !key_nibbles.into_iter().skip(i).eq(n.0.iter().cloned()) {
-                        return Ok(None);
-                    }
-                    drop(u_ref);
-                    return Ok(Some(RefMut::new(u_ptr, parents, self)));
-                }
-                NodeType::Extension(n) => {
-                    let n_path = &n.path;
-                    let rem_path = key_nibbles.into_iter().skip(i);
-                    if rem_path.size_hint().0 < n_path.len() {
-                        return Ok(None);
-                    }
-                    if !rem_path.take(n_path.len()).eq(n_path.iter().cloned()) {
-                        return Ok(None);
-                    }
-                    nskip = n_path.len() - 1;
-                    n.chd()
-                }
-            };
-            parents.push((u_ptr, nib));
-            u_ref = self.get_node(next_ptr)?;
-        }
+        let ptr = self
+            .get_node_by_key(root_node, key, |node_ref, nib| {
+                parents.push((node_ref.as_ptr(), nib));
+            })?
+            .map(|node_ref| node_ref.into_ptr());
 
-        let u_ptr = u_ref.as_ptr();
-        match &u_ref.inner {
-            NodeType::Branch(n) => {
-                if n.value.as_ref().is_some() {
-                    drop(u_ref);
-                    return Ok(Some(RefMut::new(u_ptr, parents, self)));
-                }
-            }
-            NodeType::Leaf(n) => {
-                if n.0.len() == 0 {
-                    drop(u_ref);
-                    return Ok(Some(RefMut::new(u_ptr, parents, self)));
-                }
-            }
-            _ => (),
-        }
-
-        Ok(None)
+        Ok(ptr.map(|ptr| RefMut::new(ptr, parents, self)))
     }
 
     /// Constructs a merkle proof for key. The result contains all encoded nodes
@@ -1087,6 +1065,8 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
 
         let mut nskip = 0;
         let mut nodes: Vec<DiskAddress> = Vec::new();
+
+        // TODO: use get_node_by_key (and write proper unit test)
         for (i, nib) in key_nibbles.into_iter().enumerate() {
             if nskip > 0 {
                 nskip -= 1;
@@ -1153,58 +1133,10 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
             return Ok(None);
         }
 
-        let key_nibbles = Nibbles::<1>::new(key.as_ref());
+        let root_node = self.get_node(root)?;
+        let node_ref = self.get_node_by_key(root_node, key, |_, _| {})?;
 
-        let mut u_ref = self.get_node(root)?;
-        let mut nskip = 0;
-
-        for (i, nib) in key_nibbles.into_iter().enumerate() {
-            if nskip > 0 {
-                nskip -= 1;
-                continue;
-            }
-            let next_ptr = match &u_ref.inner {
-                NodeType::Branch(n) => match n.children[nib as usize] {
-                    Some(c) => c,
-                    None => return Ok(None),
-                },
-                NodeType::Leaf(n) => {
-                    if !key_nibbles.into_iter().skip(i).eq(n.0.iter().cloned()) {
-                        return Ok(None);
-                    }
-                    return Ok(Some(Ref(u_ref)));
-                }
-                NodeType::Extension(n) => {
-                    let n_path = &n.path;
-                    let rem_path = key_nibbles.into_iter().skip(i);
-                    if rem_path.size_hint().0 < n_path.len() {
-                        return Ok(None);
-                    }
-                    if !rem_path.take(n_path.len()).eq(n_path.iter().cloned()) {
-                        return Ok(None);
-                    }
-                    nskip = n_path.len() - 1;
-                    n.chd()
-                }
-            };
-            u_ref = self.get_node(next_ptr)?;
-        }
-
-        match &u_ref.inner {
-            NodeType::Branch(n) => {
-                if n.value.as_ref().is_some() {
-                    return Ok(Some(Ref(u_ref)));
-                }
-            }
-            NodeType::Leaf(n) => {
-                if n.0.len() == 0 {
-                    return Ok(Some(Ref(u_ref)));
-                }
-            }
-            _ => (),
-        }
-
-        Ok(None)
+        Ok(node_ref.map(Ref))
     }
 
     pub fn flush_dirty(&self) -> Option<()> {
@@ -1420,6 +1352,59 @@ mod tests {
             let fetched_val = merkle.get(&key, root).unwrap();
 
             assert_eq!(fetched_val.as_deref(), val.as_slice().into());
+        }
+    }
+
+    #[test]
+    fn remove_one() {
+        let key = b"hello";
+        let val = b"world";
+
+        let mut merkle = create_test_merkle();
+        let root = merkle.init_root().unwrap();
+
+        merkle.insert(key, val.to_vec(), root).unwrap();
+
+        assert_eq!(
+            merkle.get(key, root).unwrap().as_deref(),
+            val.as_slice().into()
+        );
+
+        let removed_val = merkle.remove(key, root).unwrap();
+        assert_eq!(removed_val.as_deref(), val.as_slice().into());
+
+        let fetched_val = merkle.get(key, root).unwrap();
+        assert!(fetched_val.is_none());
+    }
+
+    #[test]
+    fn remove_many() {
+        let mut merkle = create_test_merkle();
+        let root = merkle.init_root().unwrap();
+
+        // insert values
+        for key_val in u8::MIN..=u8::MAX {
+            let key = vec![key_val];
+            let val = vec![key_val];
+
+            merkle.insert(&key, val.clone(), root).unwrap();
+
+            let fetched_val = merkle.get(&key, root).unwrap();
+
+            // make sure the value was inserted
+            assert_eq!(fetched_val.as_deref(), val.as_slice().into());
+        }
+
+        // remove values
+        for key_val in u8::MIN..=u8::MAX {
+            let key = vec![key_val];
+            let val = vec![key_val];
+
+            let removed_val = merkle.remove(&key, root).unwrap();
+            assert_eq!(removed_val.as_deref(), val.as_slice().into());
+
+            let fetched_val = merkle.get(&key, root).unwrap();
+            assert!(fetched_val.is_none());
         }
     }
 }
