@@ -7,6 +7,7 @@ use firewood::{
     v2::api::{self},
 };
 use log;
+use tokio::task::block_in_place;
 
 #[derive(Debug, Args)]
 pub struct Options {
@@ -27,5 +28,7 @@ pub async fn run(opts: &Options) -> Result<(), api::Error> {
         .wal(WalConfig::builder().max_revisions(10).build());
 
     let db = Db::new(opts.db.clone(), &cfg.build()).await?;
-    Ok(db.kv_dump(&mut std::io::stdout().lock())?)
+    Ok(block_in_place(|| {
+        db.kv_dump(&mut std::io::stdout().lock())
+    })?)
 }
