@@ -161,7 +161,7 @@ async fn bench_db<const N: usize>(criterion: &mut Criterion) {
                                 .await
                                 .unwrap()
                         };
-
+                        // TODO: actually instantiate the db object here, rather than opening it by evaluating the future in the routine
                         (db, batch_ops)
                     },
                     |(db, batch_ops)| async {
