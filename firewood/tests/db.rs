@@ -5,6 +5,7 @@ use firewood::{
     db::{Db, DbConfig, WalConfig},
     v2::api::{self, BatchOp, Db as _, DbView, Proposal},
 };
+use tokio::task::block_in_place;
 
 use std::{collections::VecDeque, env::temp_dir, path::PathBuf, sync::Arc};
 
@@ -137,6 +138,7 @@ async fn test_revisions() {
             dumped.push_front(kv_dump!(db));
             for (dump, hash) in dumped.iter().zip(hashes.iter().cloned()) {
                 let rev = db.revision(hash).await.unwrap();
+                assert_eq!(rev.root_hash().await.unwrap(), hash);
                 assert_eq!(kv_dump!(rev), *dump, "not the same: Pass {i}");
             }
         }
@@ -146,7 +148,12 @@ async fn test_revisions() {
             .unwrap();
         for (dump, hash) in dumped.iter().zip(hashes.iter().cloned()) {
             let rev = db.revision(hash).await.unwrap();
-            assert_eq!(*dump, kv_dump!(rev), "not the same: pass {i}");
+            rev.root_hash().await.unwrap();
+            assert_eq!(
+                *dump,
+                block_in_place(|| kv_dump!(rev)),
+                "not the same: pass {i}"
+            );
         }
     }
 }

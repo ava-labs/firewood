@@ -276,8 +276,7 @@ pub struct DbRev<S> {
 #[async_trait]
 impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
-        self.merkle
-            .root_hash(self.header.kv_root)
+        block_in_place(|| self.merkle.root_hash(self.header.kv_root))
             .map(|h| *h)
             .map_err(|e| api::Error::IO(std::io::Error::new(ErrorKind::Other, e)))
     }
@@ -401,7 +400,9 @@ impl api::Db for Db {
     }
 
     async fn root_hash(&self) -> Result<HashKey, api::Error> {
-        self.kv_root_hash().map(|hash| hash.0).map_err(Into::into)
+        block_in_place(|| self.kv_root_hash())
+            .map(|hash| hash.0)
+            .map_err(Into::into)
     }
 
     async fn propose<K: KeyType, V: ValueType>(
