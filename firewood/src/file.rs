@@ -3,7 +3,7 @@
 
 // Copied from CedrusDB
 
-use std::fs::{remove_dir_all, create_dir};
+use std::fs::{create_dir, remove_dir_all};
 use std::ops::Deref;
 use std::os::fd::OwnedFd;
 

@@ -617,8 +617,8 @@ impl DiskBufferRequester {
 #[cfg(test)]
 mod tests {
     use sha3::Digest;
-    use tokio::task::block_in_place;
     use std::path::{Path, PathBuf};
+    use tokio::task::block_in_place;
 
     use super::*;
     use crate::{
@@ -668,8 +668,8 @@ mod tests {
         let disk_requester = init_buffer(buf_cfg, wal_cfg);
 
         // TODO: Run the test in a separate standalone directory for concurrency reasons
-        let (root_db_path, reset) = file::open_dir(temp_dir.as_path(), file::Options::Truncate)
-            .unwrap();
+        let (root_db_path, reset) =
+            file::open_dir(temp_dir.as_path(), file::Options::Truncate).unwrap();
 
         // file descriptor of the state directory
         let state_path = file::touch_dir("state", &root_db_path).unwrap();
@@ -809,7 +809,7 @@ mod tests {
         assert_eq!(view.as_deref(), hash);
     }
 
-    #[tokio::test(flavor="multi_thread")]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_multi_stores() {
         let buf_cfg = DiskBufferConfig::builder().build();
         let wal_cfg = WalConfig::builder().build();
@@ -862,7 +862,9 @@ mod tests {
         assert_eq!(another_store.id(), STATE_SPACE);
 
         // wal should have no records.
-        assert!(block_in_place(|| disk_requester.collect_ash(1)).unwrap().is_empty());
+        assert!(block_in_place(|| disk_requester.collect_ash(1))
+            .unwrap()
+            .is_empty());
 
         // get RO view of the buffer from the beginning. Both stores should have the same view.
         let view = store.get_view(0, HASH_SIZE as u64).unwrap();
