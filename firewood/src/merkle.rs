@@ -990,46 +990,48 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
         key: K,
         root: DiskAddress,
     ) -> Result<Option<RefMut<S>>, MerkleError> {
-        let mut chunks = vec![0];
-        chunks.extend(key.as_ref().iter().copied().flat_map(to_nibble_array));
-        let mut parents = Vec::new();
-
         if root.is_null() {
             return Ok(None);
         }
 
+        let mut parents = Vec::new();
+        let key_nibbles = Nibbles::<1>::new(key.as_ref());
+
         let mut u_ref = self.get_node(root)?;
         let mut nskip = 0;
 
-        for (i, nib) in chunks.iter().enumerate() {
+        for (i, nib) in key_nibbles.into_iter().enumerate() {
             let u_ptr = u_ref.as_ptr();
             if nskip > 0 {
                 nskip -= 1;
                 continue;
             }
             let next_ptr = match &u_ref.inner {
-                NodeType::Branch(n) => match n.children[*nib as usize] {
+                NodeType::Branch(n) => match n.children[nib as usize] {
                     Some(c) => c,
                     None => return Ok(None),
                 },
                 NodeType::Leaf(n) => {
-                    if chunks[i..] != *n.0 {
+                    if !key_nibbles.into_iter().skip(i).eq(n.0.iter().cloned()) {
                         return Ok(None);
                     }
                     drop(u_ref);
                     return Ok(Some(RefMut::new(u_ptr, parents, self)));
                 }
                 NodeType::Extension(n) => {
-                    let n_path = &*n.path.0;
-                    let rem_path = &chunks[i..];
-                    if rem_path.len() < n_path.len() || &rem_path[..n_path.len()] != n_path {
+                    let n_path = &n.path;
+                    let rem_path = key_nibbles.into_iter().skip(i);
+                    if rem_path.size_hint().0 < n_path.len() {
+                        return Ok(None);
+                    }
+                    if !rem_path.take(n_path.len()).eq(n_path.iter().cloned()) {
                         return Ok(None);
                     }
                     nskip = n_path.len() - 1;
                     n.chd()
                 }
             };
-            parents.push((u_ptr, *nib));
+            parents.push((u_ptr, nib));
             u_ref = self.get_node(next_ptr)?;
         }
 
