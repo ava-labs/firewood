@@ -864,8 +864,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
         key: K,
         root: DiskAddress,
     ) -> Result<Option<Vec<u8>>, MerkleError> {
-        let mut chunks = vec![0];
-        chunks.extend(key.as_ref().iter().copied().flat_map(to_nibble_array));
+        let key_nibbles = Nibbles::<1>::new(key.as_ref());
 
         if root.is_null() {
             return Ok(None);
@@ -877,18 +876,18 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
         let mut nskip = 0;
         let mut found = None;
 
-        for (i, nib) in chunks.iter().enumerate() {
+        for (i, nib) in key_nibbles.into_iter().enumerate() {
             if nskip > 0 {
                 nskip -= 1;
                 continue;
             }
             let next_ptr = match &u_ref.inner {
-                NodeType::Branch(n) => match n.children[*nib as usize] {
+                NodeType::Branch(n) => match n.children[nib as usize] {
                     Some(c) => c,
                     None => return Ok(None),
                 },
                 NodeType::Leaf(n) => {
-                    if chunks[i..] != *n.0 {
+                    if !key_nibbles.into_iter().skip(i).eq(n.0.iter().cloned()) {
                         return Ok(None);
                     }
                     found = Some(n.1.clone());
@@ -898,8 +897,11 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                 }
                 NodeType::Extension(n) => {
                     let n_path = &*n.path.0;
-                    let rem_path = &chunks[i..];
-                    if rem_path < n_path || &rem_path[..n_path.len()] != n_path {
+                    let rem_path = key_nibbles.into_iter().skip(i);
+                    if rem_path.size_hint().0 < n_path.len() {
+                        return Ok(None);
+                    }
+                    if !rem_path.take(n_path.len()).eq(n_path.iter().cloned()) {
                         return Ok(None);
                     }
                     nskip = n_path.len() - 1;
@@ -907,7 +909,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                 }
             };
 
-            parents.push((u_ref, *nib));
+            parents.push((u_ref, nib));
             u_ref = self.get_node(next_ptr)?;
         }
         if found.is_none() {
