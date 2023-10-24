@@ -77,11 +77,11 @@ mod tests {
     use super::*;
     use test_case::test_case;
 
-    #[test_case(&[0x1, 0x2, 0x3, 0x4], true)]
-    #[test_case(&[0x1, 0x2, 0x3], false)]
-    #[test_case(&[0x0, 0x1, 0x2], false)]
-    #[test_case(&[0x1, 0x2], true)]
-    #[test_case(&[0x1], true)]
+    #[test_case(&[1, 2, 3, 4], true)]
+    #[test_case(&[1, 2, 3], false)]
+    #[test_case(&[0, 1, 2], false)]
+    #[test_case(&[1, 2], true)]
+    #[test_case(&[1], true)]
     fn test_encoding(steps: &[u8], term: bool) {
         let path = PartialPath(steps.to_vec()).encode(term);
         let (decoded, decoded_term) = PartialPath::decode(&path);
