@@ -869,10 +869,8 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
         }
 
         let (found, parents, deleted) = {
-            let mut parents = Vec::new();
-            let node_ref = self.get_node_by_key(self.get_node(root)?, key, |node_ref, nib| {
-                parents.push((node_ref, nib))
-            })?;
+            let (node_ref, mut parents) =
+                self.get_node_and_parents_by_key(self.get_node(root)?, key)?;
 
             let Some(mut node_ref) = node_ref else {
                 return Ok(None);
@@ -952,6 +950,40 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
 
     fn get_node_by_key<'a, K: AsRef<[u8]>>(
         &'a self,
+        node_ref: ObjRef<'a, Node>,
+        key: K,
+    ) -> Result<Option<ObjRef<'a, Node>>, MerkleError> {
+        self.get_node_by_key_with_callback(node_ref, key, |_, _| {})
+    }
+
+    fn get_node_and_parents_by_key<'a, K: AsRef<[u8]>>(
+        &'a self,
+        node_ref: ObjRef<'a, Node>,
+        key: K,
+    ) -> Result<(Option<ObjRef<'a, Node>>, Vec<(ObjRef<'a, Node>, u8)>), MerkleError> {
+        let mut parents = Vec::new();
+        let node_ref = self.get_node_by_key_with_callback(node_ref, key, |node_ref, nib| {
+            parents.push((node_ref, nib));
+        })?;
+
+        Ok((node_ref, parents))
+    }
+
+    fn get_node_and_parent_addresses_by_key<'a, K: AsRef<[u8]>>(
+        &'a self,
+        node_ref: ObjRef<'a, Node>,
+        key: K,
+    ) -> Result<(Option<ObjRef<'a, Node>>, Vec<(DiskAddress, u8)>), MerkleError> {
+        let mut parents = Vec::new();
+        let node_ref = self.get_node_by_key_with_callback(node_ref, key, |node_ref, nib| {
+            parents.push((node_ref.into_ptr(), nib));
+        })?;
+
+        Ok((node_ref, parents))
+    }
+
+    fn get_node_by_key_with_callback<'a, K: AsRef<[u8]>>(
+        &'a self,
         mut node_ref: ObjRef<'a, Node>,
         key: K,
         mut loop_callback: impl FnMut(ObjRef<'a, Node>, u8),
@@ -1020,15 +1052,12 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
             return Ok(None);
         }
 
-        let mut parents = Vec::new();
+        let (ptr, parents) = {
+            let root_node = self.get_node(root)?;
+            let (node_ref, parents) = self.get_node_and_parent_addresses_by_key(root_node, key)?;
 
-        let root_node = self.get_node(root)?;
-
-        let ptr = self
-            .get_node_by_key(root_node, key, |node_ref, nib| {
-                parents.push((node_ref.as_ptr(), nib));
-            })?
-            .map(|node_ref| node_ref.into_ptr());
+            (node_ref.map(|n| n.into_ptr()), parents)
+        };
 
         Ok(ptr.map(|ptr| RefMut::new(ptr, parents, self)))
     }
@@ -1134,7 +1163,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
         }
 
         let root_node = self.get_node(root)?;
-        let node_ref = self.get_node_by_key(root_node, key, |_, _| {})?;
+        let node_ref = self.get_node_by_key(root_node, key)?;
 
         Ok(node_ref.map(Ref))
     }
