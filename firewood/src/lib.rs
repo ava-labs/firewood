@@ -191,7 +191,6 @@ pub mod merkle_util;
 pub mod proof;
 pub mod storage;
 
-pub mod api;
 pub mod config;
 pub mod nibbles;
 
