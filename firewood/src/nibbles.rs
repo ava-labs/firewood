@@ -74,11 +74,6 @@ impl<'a, const LEADING_ZEROES: usize> Nibbles<'a, LEADING_ZEROES> {
         LEADING_ZEROES + 2 * self.0.len()
     }
 
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        LEADING_ZEROES == 0 && self.0.is_empty()
-    }
-
     pub fn new(inner: &'a [u8]) -> Self {
         Nibbles(inner)
     }
