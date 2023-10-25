@@ -208,8 +208,7 @@ impl<'a, T: Send + Sync> ObjRef<'a, T> {
     }
 
     pub fn into_ptr(self) -> DiskAddress {
-        let ptr = self.deref().as_ptr();
-        ptr
+        self.deref().as_ptr()
     }
 }
 
