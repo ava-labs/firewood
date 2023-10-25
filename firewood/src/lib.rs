@@ -191,8 +191,7 @@ pub mod merkle_util;
 pub mod proof;
 pub mod storage;
 
-pub mod api;
 pub(crate) mod config;
-pub mod nibbles;
+pub(crate) mod nibbles;
 
 pub mod v2;
