@@ -192,6 +192,6 @@ pub mod proof;
 pub mod storage;
 
 pub(crate) mod config;
-pub(crate) mod nibbles;
+pub mod nibbles;
 
 pub mod v2;
