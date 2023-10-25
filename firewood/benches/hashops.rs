@@ -127,7 +127,7 @@ fn bench_merkle<const N: usize>(criterion: &mut Criterion) {
         });
 }
 
-async fn bench_db<const N: usize>(criterion: &mut Criterion) {
+fn bench_db<const N: usize>(criterion: &mut Criterion) {
     const KEY_LEN: usize = 4;
     let mut rng = StdRng::seed_from_u64(1234);
 
@@ -138,9 +138,6 @@ async fn bench_db<const N: usize>(criterion: &mut Criterion) {
             b.to_async(tokio::runtime::Runtime::new().unwrap())
                 .iter_batched(
                     || {
-                        let cfg =
-                            DbConfig::builder().wal(WalConfig::builder().max_revisions(10).build());
-
                         let batch_ops: Vec<_> = repeat_with(|| {
                             (&mut rng)
                                 .sample_iter(&Alphanumeric)
@@ -153,19 +150,19 @@ async fn bench_db<const N: usize>(criterion: &mut Criterion) {
                         })
                         .take(N)
                         .collect();
+                        batch_ops
+                    },
+                    |batch_ops| async {
                         let db_path = dbg!(std::env::temp_dir());
                         let db_path = db_path.join("benchmark_db");
+                        let cfg =
+                            DbConfig::builder().wal(WalConfig::builder().max_revisions(10).build());
 
-                        let db = async move {
+                        let db =
                             firewood::db::Db::new(db_path, &cfg.clone().truncate(true).build())
                                 .await
-                                .unwrap()
-                        };
-                        // TODO: actually instantiate the db object here, rather than opening it by evaluating the future in the routine
-                        (db, batch_ops)
-                    },
-                    |(db, batch_ops)| async {
-                        let db = db.await;
+                                .unwrap();
+
                         Arc::new(db.propose(batch_ops).await.unwrap())
                             .commit()
                             .await

@@ -35,10 +35,10 @@ async fn test_basic_metrics() {
                 .build(),
         );
 
-    let mut tmpdir: PathBuf = std::env::var_os("CARGO_TARGET_DIRY")
+    let mut tmpdir: PathBuf = std::env::var_os("CARGO_TARGET_DIR")
         .unwrap_or(temp_dir().into())
         .into();
-    tmpdir.push("/tmp/testdb");
+    tmpdir.push("/tmp/test_basic_metrics");
 
     let db = firewood::db::Db::new(tmpdir, &cfg.truncate(true).build())
         .await
@@ -102,17 +102,17 @@ async fn test_revisions() {
         key
     };
 
-    let mut tmpdir: PathBuf = std::env::var_os("CARGO_TARGET_DIRY")
+    let mut tmpdir: PathBuf = std::env::var_os("CARGO_TARGET_DIR")
         .unwrap_or(temp_dir().into())
         .into();
-    tmpdir.push("/tmp/testdb");
+    tmpdir.push("/tmp/test_revisions");
 
     for i in 0..10 {
         let db = Db::new(tmpdir.clone(), &cfg.clone().truncate(true).build())
             .await
             .unwrap();
         let mut dumped = VecDeque::new();
-        let mut hashes: VecDeque<firewood::v2::api::HashKey> = VecDeque::new();
+        let mut hashes: VecDeque<api::HashKey> = VecDeque::new();
         for _ in 0..10 {
             {
                 let mut batch = Vec::new();
@@ -175,7 +175,12 @@ async fn create_db_issue_proof() {
                 .build(),
         );
 
-    let db = firewood::db::Db::new("test_db_proof", &cfg.truncate(true).build())
+    let mut tmpdir: PathBuf = std::env::var_os("CARGO_TARGET_DIR")
+        .unwrap_or(temp_dir().into())
+        .into();
+    tmpdir.push("/tmp/test_db_proof");
+
+    let db = firewood::db::Db::new(tmpdir, &cfg.truncate(true).build())
         .await
         .unwrap();
 
@@ -244,7 +249,12 @@ macro_rules! assert_val {
 async fn db_proposal() -> Result<(), api::Error> {
     let cfg = DbConfig::builder().wal(WalConfig::builder().max_revisions(10).build());
 
-    let db = firewood::db::Db::new("test_db_proposal", &cfg.clone().truncate(true).build())
+    let mut tmpdir: PathBuf = std::env::var_os("CARGO_TARGET_DIR")
+        .unwrap_or(temp_dir().into())
+        .into();
+    tmpdir.push("/tmp/test_db_proposal");
+
+    let db = firewood::db::Db::new(tmpdir, &cfg.clone().truncate(true).build())
         .await
         .expect("db initiation should succeed");
 
@@ -270,15 +280,39 @@ async fn db_proposal() -> Result<(), api::Error> {
     proposal.clone().commit().await?;
     proposal_2.commit().await?;
 
-    {
-        let another_batch = vec![BatchOp::Put {
-            key: b"another_k_1",
-            value: "another_v_1".as_bytes().to_vec(),
-        }];
-        let another_proposal = Arc::new(proposal.propose(another_batch).await?);
-        assert_val!(another_proposal, "k", "v");
-        assert_val!(another_proposal, "another_k_1", "another_v_1");
-    }
+    let t1 = tokio::spawn({
+        let proposal = proposal.clone();
+        async move {
+            let another_batch = vec![BatchOp::Put {
+                key: b"another_k_t1",
+                value: "another_v_t1".as_bytes().to_vec(),
+            }];
+            let another_proposal = proposal.clone().propose(another_batch).await.unwrap();
+            let rev = another_proposal.get_revision();
+            assert_val!(rev, "k", "v");
+            assert_val!(rev, "another_k_t1", "another_v_t1");
+            // The proposal is invalid and cannot be committed
+            assert!(Arc::new(another_proposal).commit().await.is_err());
+        }
+    });
+    let t2 = tokio::spawn({
+        let proposal = proposal.clone();
+        async move {
+            let another_batch = vec![BatchOp::Put {
+                key: b"another_k_t2",
+                value: "another_v_t2".as_bytes().to_vec(),
+            }];
+            let another_proposal = proposal.clone().propose(another_batch).await.unwrap();
+            let rev = another_proposal.get_revision();
+            assert_val!(rev, "k", "v");
+            assert_val!(rev, "another_k_t2", "another_v_t2");
+            assert!(Arc::new(another_proposal).commit().await.is_err());
+        }
+    });
+    let (first, second) = tokio::join!(t1, t2);
+    first.unwrap();
+    second.unwrap();
+
     // Recursive commit
 
     let batch = vec![BatchOp::Put {
