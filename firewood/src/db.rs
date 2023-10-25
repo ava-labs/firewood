@@ -436,10 +436,7 @@ pub struct Db {
 impl Db {
     const PARAM_SIZE: u64 = size_of::<DbParams>() as u64;
 
-    pub async fn new<P: AsRef<Path> + Send + Sync + 'static>(
-        db_path: P,
-        cfg: &DbConfig,
-    ) -> Result<Self, api::Error> {
+    pub async fn new<P: AsRef<Path>>(db_path: P, cfg: &DbConfig) -> Result<Self, api::Error> {
         if cfg.truncate {
             let _ = tokio::fs::remove_dir_all(db_path.as_ref()).await;
         }
@@ -449,10 +446,7 @@ impl Db {
     }
 
     /// Open a database.
-    fn new_internal<P: AsRef<Path> + Send + Sync + 'static>(
-        db_path: P,
-        cfg: DbConfig,
-    ) -> Result<Self, DbError> {
+    fn new_internal<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> Result<Self, DbError> {
         let open_options = if cfg.truncate {
             file::Options::Truncate
         } else {
