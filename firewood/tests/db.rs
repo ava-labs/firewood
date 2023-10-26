@@ -108,7 +108,7 @@ async fn test_revisions() {
     tmpdir.push("/tmp/test_revisions");
 
     for i in 0..10 {
-        let db = Db::new(tmpdir.clone(), &cfg.clone().truncate(true).build())
+        let db = Db::new(&tmpdir, &cfg.clone().truncate(true).build())
             .await
             .unwrap();
         let mut dumped = VecDeque::new();
