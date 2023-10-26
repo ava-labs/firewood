@@ -1,3 +1,6 @@
+// Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
+// See the file LICENSE.md for licensing terms.
+
 use std::{env::temp_dir, fs::remove_dir_all, ops::Deref, path::PathBuf};
 
 use firewood::db::{Db, DbConfig};
