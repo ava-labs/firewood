@@ -2,9 +2,9 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::hash::Hash;
+use std::mem::size_of;
 use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut};
-use std::mem::size_of;
 
 use bytemuck::NoUninit;
 
@@ -172,12 +172,12 @@ impl Storable for DiskAddress {
     }
 
     fn hydrate<U: CachedStore>(addr: usize, mem: &U) -> Result<Self, ShaleError> {
-        let raw = mem
-            .get_view(addr, size_of::<Self>() as u64)
-            .ok_or(ShaleError::InvalidCacheView {
-                offset: addr,
-                size: size_of::<Self>() as u64,
-            })?;
+        let raw =
+            mem.get_view(addr, size_of::<Self>() as u64)
+                .ok_or(ShaleError::InvalidCacheView {
+                    offset: addr,
+                    size: size_of::<Self>() as u64,
+                })?;
         let addrdyn = raw.deref();
         let addrvec = addrdyn.as_deref();
         Ok(Self(NonZeroUsize::new(usize::from_le_bytes(
