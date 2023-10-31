@@ -4,7 +4,6 @@
 use std::hash::Hash;
 use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut};
-use std::mem::size_of;
 
 use bytemuck::NoUninit;
 
@@ -160,9 +159,13 @@ impl std::ops::BitAnd<usize> for DiskAddress {
     }
 }
 
+impl DiskAddress {
+    const MSIZE: u64 = 8;
+}
+
 impl Storable for DiskAddress {
     fn dehydrated_len(&self) -> u64 {
-        size_of::<Self>() as u64
+        Self::MSIZE
     }
 
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError> {
@@ -173,10 +176,10 @@ impl Storable for DiskAddress {
 
     fn hydrate<U: CachedStore>(addr: usize, mem: &U) -> Result<Self, ShaleError> {
         let raw = mem
-            .get_view(addr, size_of::<Self>() as u64)
+            .get_view(addr, Self::MSIZE)
             .ok_or(ShaleError::InvalidCacheView {
                 offset: addr,
-                size: size_of::<Self>() as u64,
+                size: Self::MSIZE,
             })?;
         let addrdyn = raw.deref();
         let addrvec = addrdyn.as_deref();
