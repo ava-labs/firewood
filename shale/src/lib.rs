@@ -243,7 +243,7 @@ pub fn to_dehydrated(item: &dyn Storable) -> Result<Vec<u8>, ShaleError> {
     Ok(buff)
 }
 
-/// Reference implementation of [TypedView]. It takes any type that implements [Storable]
+/// A stored view of any [Storable]
 pub struct StoredView<T> {
     decoded: T,
     mem: Box<dyn SendSyncDerefMut<Target = dyn CachedStore>>,
