@@ -93,7 +93,6 @@ pub trait CachedStore: Debug + Send + Sync {
     fn id(&self) -> SpaceId;
 }
 
-
 /// A wrapper of `TypedView` to enable writes. The direct construction (by [Obj::from_typed_view]
 /// or [StoredView::ptr_to_obj]) could be useful for some unsafe access to a low-level item (e.g.
 /// headers/metadata at bootstrap or part of [ShaleStore] implementation) stored at a given [DiskAddress]

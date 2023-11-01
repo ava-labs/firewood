@@ -521,9 +521,7 @@ impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
     }
 }
 
-impl<T: Storable + 'static, M: CachedStore + Send + Sync> ShaleStore<T>
-    for CompactSpace<T, M>
-{
+impl<T: Storable + 'static, M: CachedStore + Send + Sync> ShaleStore<T> for CompactSpace<T, M> {
     fn put_item(&self, item: T, extra: u64) -> Result<ObjRef<'_, T>, ShaleError> {
         let size = item.dehydrated_len() + extra;
         let addr = self.inner.write().unwrap().alloc(size)?;
