@@ -109,7 +109,7 @@ impl<T: Storable> Obj<T> {
         DiskAddress(NonZeroUsize::new(self.value.get_offset()))
     }
 
-    /// Write to the underlying object. Returns `Some(())` on success.
+    /// Write to the underlying object. Returns `Ok(())` on success.
     #[inline]
     pub fn write(&mut self, modify: impl FnOnce(&mut T)) -> Result<(), ObjWriteError> {
         modify(self.value.write());
