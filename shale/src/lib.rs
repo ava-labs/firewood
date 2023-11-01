@@ -226,7 +226,7 @@ pub trait ShaleStore<T: Storable> {
 /// A stored item type that can be decoded from or encoded to on-disk raw bytes. An efficient
 /// implementation could be directly transmuting to/from a POD struct. But sometimes necessary
 /// compression/decompression is needed to reduce disk I/O and facilitate faster in-memory access.
-pub trait Storable: Debug + Send + Sync {
+pub trait Storable {
     fn dehydrated_len(&self) -> u64;
     fn dehydrate(&self, to: &mut [u8]) -> Result<(), ShaleError>;
     fn hydrate<T: CachedStore>(addr: usize, mem: &T) -> Result<Self, ShaleError>
