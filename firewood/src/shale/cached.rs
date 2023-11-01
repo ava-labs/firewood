@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{CachedStore, CachedView, SendSyncDerefMut, SpaceId};
+use crate::shale::{CachedStore, CachedView, SendSyncDerefMut, SpaceId};
 use std::{
     borrow::BorrowMut,
     fmt::Debug,

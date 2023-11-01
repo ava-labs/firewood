@@ -1,6 +1,11 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use crate::shale::{
+    compact::{CompactSpace, CompactSpaceHeader},
+    disk_address::DiskAddress,
+    CachedStore, Obj, ShaleError, ShaleStore, SpaceId, Storable, StoredView,
+};
 pub use crate::{
     config::{DbConfig, DbRevConfig},
     storage::{buffer::DiskBufferConfig, WalConfig},
@@ -21,11 +26,6 @@ use async_trait::async_trait;
 use bytemuck::{cast_slice, AnyBitPattern};
 use metered::metered;
 use parking_lot::{Mutex, RwLock};
-use shale::{
-    compact::{CompactSpace, CompactSpaceHeader},
-    disk_address::DiskAddress,
-    CachedStore, Obj, ShaleError, ShaleStore, SpaceId, Storable, StoredView,
-};
 use std::{
     collections::VecDeque,
     error::Error,
@@ -200,7 +200,7 @@ impl DbHeader {
 }
 
 impl Storable for DbHeader {
-    fn hydrate<T: CachedStore>(addr: usize, mem: &T) -> Result<Self, shale::ShaleError> {
+    fn hydrate<T: CachedStore>(addr: usize, mem: &T) -> Result<Self, crate::shale::ShaleError> {
         let raw = mem
             .get_view(addr, Self::MSIZE)
             .ok_or(ShaleError::InvalidCacheView {
@@ -270,7 +270,7 @@ impl<T: MemStoreR + 'static> Universe<Arc<T>> {
 /// Some readable version of the DB.
 #[derive(Debug)]
 pub struct DbRev<S> {
-    header: shale::Obj<DbHeader>,
+    header: crate::shale::Obj<DbHeader>,
     merkle: Merkle<S>,
 }
 
@@ -317,7 +317,7 @@ impl<S: ShaleStore<Node> + Send + Sync> DbRev<S> {
         Some(())
     }
 
-    fn borrow_split(&mut self) -> (&mut shale::Obj<DbHeader>, &mut Merkle<S>) {
+    fn borrow_split(&mut self) -> (&mut crate::shale::Obj<DbHeader>, &mut Merkle<S>) {
         (&mut self.header, &mut self.merkle)
     }
 
@@ -651,14 +651,14 @@ impl Db {
             // initialize store headers
             merkle_meta_store.write(
                 merkle_payload_header.into(),
-                &shale::to_dehydrated(&shale::compact::CompactSpaceHeader::new(
+                &crate::shale::to_dehydrated(&crate::shale::compact::CompactSpaceHeader::new(
                     NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(),
                     NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(),
                 ))?,
             );
             merkle_meta_store.write(
                 db_header.into(),
-                &shale::to_dehydrated(&DbHeader::new_empty())?,
+                &crate::shale::to_dehydrated(&DbHeader::new_empty())?,
             );
         }
 
@@ -698,7 +698,7 @@ impl Db {
         StoredView::ptr_to_obj(
             meta_ref,
             payload_header,
-            shale::compact::CompactHeader::MSIZE,
+            crate::shale::compact::CompactHeader::MSIZE,
         )
         .map_err(Into::into)
     }
@@ -726,11 +726,11 @@ impl Db {
         let merkle_meta = merkle.0.into();
         let merkle_payload = merkle.1.into();
 
-        let merkle_space = shale::compact::CompactSpace::new(
+        let merkle_space = crate::shale::compact::CompactSpace::new(
             merkle_meta,
             merkle_payload,
             merkle_payload_header_ref,
-            shale::ObjCache::new(cfg.merkle_ncached_objs),
+            crate::shale::ObjCache::new(cfg.merkle_ncached_objs),
             payload_max_walk,
             payload_regn_nbit,
         )
