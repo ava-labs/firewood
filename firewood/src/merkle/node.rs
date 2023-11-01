@@ -1,9 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::shale::{
-    disk_address::DiskAddress, CachedStore, ShaleError, ShaleStore, Storable,
-};
+use crate::shale::{disk_address::DiskAddress, CachedStore, ShaleError, ShaleStore, Storable};
 use bincode::{Error, Options};
 use enum_as_inner::EnumAsInner;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
