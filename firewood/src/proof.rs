@@ -4,9 +4,7 @@
 use std::cmp::Ordering;
 use std::ops::Deref;
 
-use crate::shale::disk_address::DiskAddress;
-use crate::shale::ShaleError;
-use crate::shale::ShaleStore;
+use crate::shale::{disk_address::DiskAddress, ShaleError, ShaleStore};
 use nix::errno::Errno;
 use sha3::Digest;
 use thiserror::Error;

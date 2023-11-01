@@ -2,8 +2,8 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::shale::{
-    cached::DynamicMem, compact::CompactSpace, disk_address::DiskAddress, CachedStore, ShaleStore,
-    StoredView,
+    self, cached::DynamicMem, compact::CompactSpace, disk_address::DiskAddress, CachedStore,
+    ShaleStore, StoredView,
 };
 use crate::{
     merkle::{Merkle, Node, Ref, RefMut, TrieHash},
@@ -128,31 +128,21 @@ pub fn new_merkle(
     let compact_header = DiskAddress::null();
     dm.write(
         compact_header.into(),
-        &crate::shale::to_dehydrated(&crate::shale::compact::CompactSpaceHeader::new(
+        &shale::to_dehydrated(&shale::compact::CompactSpaceHeader::new(
             NonZeroUsize::new(RESERVED).unwrap(),
             NonZeroUsize::new(RESERVED).unwrap(),
         ))
         .unwrap(),
     );
-    let compact_header = StoredView::ptr_to_obj(
-        &dm,
-        compact_header,
-        crate::shale::compact::CompactHeader::MSIZE,
-    )
-    .unwrap();
+    let compact_header =
+        StoredView::ptr_to_obj(&dm, compact_header, shale::compact::CompactHeader::MSIZE).unwrap();
     let mem_meta = Arc::new(dm);
     let mem_payload = Arc::new(DynamicMem::new(compact_size, 0x1));
 
-    let cache = crate::shale::ObjCache::new(1);
-    let space = crate::shale::compact::CompactSpace::new(
-        mem_meta,
-        mem_payload,
-        compact_header,
-        cache,
-        10,
-        16,
-    )
-    .expect("CompactSpace init fail");
+    let cache = shale::ObjCache::new(1);
+    let space =
+        shale::compact::CompactSpace::new(mem_meta, mem_payload, compact_header, cache, 10, 16)
+            .expect("CompactSpace init fail");
 
     let merkle = Merkle::new(Box::new(space));
     let root = merkle.init_root().unwrap();

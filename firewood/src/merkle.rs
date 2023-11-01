@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::shale::{disk_address::DiskAddress, ObjWriteError, ShaleError, ShaleStore};
+use crate::shale::{self, disk_address::DiskAddress, ObjWriteError, ShaleError, ShaleStore};
 use crate::{nibbles::Nibbles, v2::api::Proof};
 use sha3::Digest;
 use std::{
@@ -21,7 +21,7 @@ pub use node::{BranchNode, Data, ExtNode, LeafNode, Node, NodeType, NBRANCH};
 pub use partial_path::PartialPath;
 pub use trie_hash::{TrieHash, TRIE_HASH_LEN};
 
-type ObjRef<'a> = crate::shale::ObjRef<'a, Node>;
+type ObjRef<'a> = shale::ObjRef<'a, Node>;
 type ParentRefs<'a> = Vec<(ObjRef<'a>, u8)>;
 type ParentAddresses = Vec<(DiskAddress, u8)>;
 
@@ -1270,8 +1270,8 @@ pub fn from_nibbles(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shale::{cached::DynamicMem, compact::CompactSpace, CachedStore};
     use node::tests::{extension, leaf};
+    use shale::{cached::DynamicMem, compact::CompactSpace, CachedStore};
     use std::sync::Arc;
     use test_case::test_case;
 
@@ -1285,35 +1285,29 @@ mod tests {
     fn create_test_merkle() -> Merkle<CompactSpace<Node, DynamicMem>> {
         const RESERVED: usize = 0x1000;
 
-        let mut dm = crate::shale::cached::DynamicMem::new(0x10000, 0);
+        let mut dm = shale::cached::DynamicMem::new(0x10000, 0);
         let compact_header = DiskAddress::null();
         dm.write(
             compact_header.into(),
-            &crate::shale::to_dehydrated(&crate::shale::compact::CompactSpaceHeader::new(
+            &shale::to_dehydrated(&shale::compact::CompactSpaceHeader::new(
                 std::num::NonZeroUsize::new(RESERVED).unwrap(),
                 std::num::NonZeroUsize::new(RESERVED).unwrap(),
             ))
             .unwrap(),
         );
-        let compact_header = crate::shale::StoredView::ptr_to_obj(
+        let compact_header = shale::StoredView::ptr_to_obj(
             &dm,
             compact_header,
-            crate::shale::compact::CompactHeader::MSIZE,
+            shale::compact::CompactHeader::MSIZE,
         )
         .unwrap();
         let mem_meta = Arc::new(dm);
         let mem_payload = Arc::new(DynamicMem::new(0x10000, 0x1));
 
-        let cache = crate::shale::ObjCache::new(1);
-        let space = crate::shale::compact::CompactSpace::new(
-            mem_meta,
-            mem_payload,
-            compact_header,
-            cache,
-            10,
-            16,
-        )
-        .expect("CompactSpace init fail");
+        let cache = shale::ObjCache::new(1);
+        let space =
+            shale::compact::CompactSpace::new(mem_meta, mem_payload, compact_header, cache, 10, 16)
+                .expect("CompactSpace init fail");
 
         let store = Box::new(space);
         Merkle::new(store)

@@ -4,7 +4,7 @@
 // TODO: try to get rid of the use `RefCell` in this file
 use self::buffer::DiskBufferRequester;
 use crate::file::File;
-use crate::shale::{CachedStore, CachedView, SendSyncDerefMut, SpaceId};
+use crate::shale::{self, CachedStore, CachedView, SendSyncDerefMut, SpaceId};
 use nix::fcntl::{flock, FlockArg};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -589,7 +589,7 @@ impl MemStoreR for ZeroStore {
     }
 
     fn id(&self) -> SpaceId {
-        crate::shale::INVALID_SPACE_ID
+        shale::INVALID_SPACE_ID
     }
 }
 
