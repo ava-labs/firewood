@@ -1,8 +1,12 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use super::Flags;
 use crate::nibbles::NibblesIterator;
-use std::fmt::{self, Debug};
+use std::{
+    fmt::{self, Debug},
+    iter::once,
+};
 
 // TODO: use smallvec
 /// PartialPath keeps a list of nibbles to represent a path on the Trie.
@@ -36,16 +40,27 @@ impl PartialPath {
         self.0
     }
 
-    pub(super) fn encode(&self, term: bool) -> Vec<u8> {
-        let odd_len = (self.0.len() & 1) as u8;
-        let flags = if term { 2 } else { 0 } + odd_len;
-        let mut res = if odd_len == 1 {
-            vec![flags]
+    pub(super) fn encode(&self, is_terminal: bool) -> Vec<u8> {
+        let mut flags = Flags::empty();
+
+        if is_terminal {
+            flags.insert(Flags::TERMINAL);
+        }
+
+        let has_odd_len = self.0.len() & 1 == 1;
+
+        let extra_byte = if has_odd_len {
+            flags.insert(Flags::ODD_LEN);
+
+            None
         } else {
-            vec![flags, 0x0]
+            Some(0)
         };
-        res.extend(&self.0);
-        res
+
+        once(flags.bits())
+            .chain(extra_byte)
+            .chain(self.0.iter().copied())
+            .collect()
     }
 
     // TODO: remove all non `Nibbles` usages and delete this function.
@@ -53,35 +68,46 @@ impl PartialPath {
     //
     /// returns a tuple of the decoded partial path and whether the path is terminal
     pub fn decode(raw: &[u8]) -> (Self, bool) {
-        let prefix = raw[0];
-        let is_odd = (prefix & 1) as usize;
-        let decoded = raw.iter().skip(1).skip(1 - is_odd).copied().collect();
+        let mut raw = raw.iter().copied();
+        let flags = Flags::from_bits_retain(raw.next().unwrap_or_default());
 
-        (Self(decoded), prefix > 1)
+        if !flags.contains(Flags::ODD_LEN) {
+            let _ = raw.next();
+        }
+
+        (Self(raw.collect()), flags.contains(Flags::TERMINAL))
     }
 
     /// returns a tuple of the decoded partial path and whether the path is terminal
     pub fn from_nibbles<const N: usize>(mut nibbles: NibblesIterator<'_, N>) -> (Self, bool) {
-        let prefix = nibbles.next().unwrap();
-        let is_odd = (prefix & 1) as usize;
-        let decoded = nibbles.skip(1 - is_odd).collect();
+        let flags = Flags::from_bits_retain(nibbles.next().unwrap_or_default());
 
-        (Self(decoded), prefix > 1)
+        if !flags.contains(Flags::ODD_LEN) {
+            let _ = nibbles.next();
+        }
+
+        (Self(nibbles.collect()), flags.contains(Flags::TERMINAL))
     }
 
-    pub(super) fn dehydrated_len(&self) -> u64 {
-        let len = self.0.len() as u64;
-        if len & 1 == 1 {
-            (len + 1) >> 1
+    pub(super) fn serialized_len(&self) -> u64 {
+        let len = self.0.len();
+
+        // if len is even the prefix takes an extra byte
+        // otherwise is combined with the first nibble
+        let len = if len & 1 == 1 {
+            (len + 1) / 2
         } else {
-            (len >> 1) + 1
-        }
+            len / 2 + 1
+        };
+
+        len as u64
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ops::Deref;
     use test_case::test_case;
 
     #[test_case(&[1, 2, 3, 4], true)]
@@ -90,9 +116,14 @@ mod tests {
     #[test_case(&[1, 2], true)]
     #[test_case(&[1], true)]
     fn test_encoding(steps: &[u8], term: bool) {
-        let path = PartialPath(steps.to_vec()).encode(term);
-        let (decoded, decoded_term) = PartialPath::decode(&path);
-        assert_eq!(&decoded.0, &steps);
+        let path = PartialPath(steps.to_vec());
+        let encoded = path.encode(term);
+
+        assert_eq!(encoded.len(), path.serialized_len() as usize * 2);
+
+        let (decoded, decoded_term) = PartialPath::decode(&encoded);
+
+        assert_eq!(&decoded.deref(), &steps);
         assert_eq!(decoded_term, term);
     }
 }

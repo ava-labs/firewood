@@ -16,12 +16,10 @@ use std::{
 use thiserror::Error;
 
 mod node;
-mod partial_path;
 pub(super) mod range_proof;
 mod trie_hash;
 
-pub use node::{BranchNode, Data, ExtNode, LeafNode, Node, NodeType, MAX_CHILDREN};
-pub use partial_path::PartialPath;
+pub use node::{BranchNode, Data, ExtNode, LeafNode, Node, NodeType, PartialPath, MAX_CHILDREN};
 pub use trie_hash::{TrieHash, TRIE_HASH_LEN};
 
 type ObjRef<'a> = shale::ObjRef<'a, Node>;
@@ -226,9 +224,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                 children_encoded: Default::default(),
             });
 
-            let new_branch_address = self.put_node(new_branch)?.as_ptr();
-
-            new_branch_address
+            self.put_node(new_branch)?.as_ptr()
         } else {
             // paths do not diverge
             let (leaf_address, prefix, idx, value) =
@@ -342,16 +338,13 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
 
             children[idx] = leaf_address.into();
 
-            let branch_address = self
-                .put_node(Node::branch(BranchNode {
-                    path: PartialPath(prefix.to_vec()),
-                    children,
-                    value,
-                    children_encoded: Default::default(),
-                }))?
-                .as_ptr();
-
-            branch_address
+            self.put_node(Node::branch(BranchNode {
+                path: PartialPath(prefix.to_vec()),
+                children,
+                value,
+                children_encoded: Default::default(),
+            }))?
+            .as_ptr()
         };
 
         // observation:
