@@ -289,15 +289,15 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
             match &u_ref.inner() {
                 NodeType::Branch(n) => match n.chd()[branch_index] {
                     // If the child already resolved, then use the existing node.
-                    Some(node) => {
+                    node if !node.is_null() => {
                         chd_ptr = node;
                     }
-                    None => {
+                    _ => {
                         // insert the leaf to the empty slot
                         u_ref
                             .write(|u| {
                                 let uu = u.inner_mut().as_branch_mut().unwrap();
-                                uu.chd_mut()[branch_index] = Some(chd_ptr);
+                                uu.chd_mut()[branch_index] = chd_ptr;
                             })
                             .unwrap();
                     }
@@ -362,7 +362,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                                     u_ref
                                         .write(|u| {
                                             let uu = u.inner_mut().as_branch_mut().unwrap();
-                                            uu.chd_mut()[branch_index] = Some(chd_ptr);
+                                            uu.chd_mut()[branch_index] = chd_ptr;
                                         })
                                         .unwrap();
                                 }
@@ -618,7 +618,7 @@ fn unset_internal<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync>(
                 };
 
                 parent = u_ref.as_ptr();
-                u_ref = merkle.get_node(left_node.unwrap())?;
+                u_ref = merkle.get_node(left_node)?;
                 index += 1;
             }
 
@@ -678,7 +678,7 @@ fn unset_internal<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync>(
                 u_ref
                     .write(|u| {
                         let uu = u.inner_mut().as_branch_mut().unwrap();
-                        uu.chd_mut()[i as usize] = None;
+                        uu.chd_mut()[i as usize] = DiskAddress::null();
                         uu.chd_encoded_mut()[i as usize] = None;
                     })
                     .unwrap();
@@ -721,7 +721,7 @@ fn unset_internal<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync>(
                 p_ref
                     .write(|p| {
                         let pp = p.inner_mut().as_branch_mut().expect("not a branch node");
-                        pp.chd_mut()[left_chunks[index - 1] as usize] = None;
+                        pp.chd_mut()[left_chunks[index - 1] as usize] = DiskAddress::null();
                         pp.chd_encoded_mut()[left_chunks[index - 1] as usize] = None;
                     })
                     .unwrap();
@@ -734,27 +734,13 @@ fn unset_internal<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync>(
 
             // Only one proof points to non-existent key.
             if fork_right.is_ne() {
-                unset_node_ref(
-                    merkle,
-                    p,
-                    Some(node),
-                    &left_chunks[index..],
-                    cur_key.len(),
-                    false,
-                )?;
+                unset_node_ref(merkle, p, node, &left_chunks[index..], cur_key.len(), false)?;
 
                 return Ok(false);
             }
 
             if fork_left.is_ne() {
-                unset_node_ref(
-                    merkle,
-                    p,
-                    Some(node),
-                    &right_chunks[index..],
-                    cur_key.len(),
-                    true,
-                )?;
+                unset_node_ref(merkle, p, node, &right_chunks[index..], cur_key.len(), true)?;
 
                 return Ok(false);
             }
@@ -783,7 +769,7 @@ fn unset_internal<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync>(
                             *n.chd_encoded_mut() = None;
                         }
                         NodeType::Branch(n) => {
-                            n.chd_mut()[left_chunks[index - 1] as usize] = None;
+                            n.chd_mut()[left_chunks[index - 1] as usize] = DiskAddress::null();
                             n.chd_encoded_mut()[left_chunks[index - 1] as usize] = None;
                         }
                         _ => {}
@@ -793,7 +779,7 @@ fn unset_internal<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync>(
                 p_ref
                     .write(|p| {
                         let pp = p.inner_mut().as_branch_mut().expect("not a branch node");
-                        pp.chd_mut()[left_chunks[index - 1] as usize] = None;
+                        pp.chd_mut()[left_chunks[index - 1] as usize] = DiskAddress::null();
                         pp.chd_encoded_mut()[left_chunks[index - 1] as usize] = None;
                     })
                     .unwrap();
@@ -801,7 +787,7 @@ fn unset_internal<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync>(
                 p_ref
                     .write(|p| {
                         let pp = p.inner_mut().as_branch_mut().expect("not a branch node");
-                        pp.chd_mut()[right_chunks[index - 1] as usize] = None;
+                        pp.chd_mut()[right_chunks[index - 1] as usize] = DiskAddress::null();
                         pp.chd_encoded_mut()[right_chunks[index - 1] as usize] = None;
                     })
                     .unwrap();
@@ -827,7 +813,7 @@ fn unset_internal<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync>(
 fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync>(
     merkle: &Merkle<S>,
     parent: DiskAddress,
-    node: Option<DiskAddress>,
+    node: DiskAddress,
     key: K,
     index: usize,
     remove_left: bool,
@@ -841,9 +827,7 @@ fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync>(
     let mut chunks = Vec::new();
     chunks.extend(key.as_ref());
 
-    let mut u_ref = merkle
-        .get_node(node.unwrap())
-        .map_err(|_| ProofError::NoSuchNode)?;
+    let mut u_ref = merkle.get_node(node).map_err(|_| ProofError::NoSuchNode)?;
     let p = u_ref.as_ptr();
 
     match &u_ref.inner() {
@@ -862,7 +846,7 @@ fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync>(
                 u_ref
                     .write(|u| {
                         let uu = u.inner_mut().as_branch_mut().unwrap();
-                        uu.chd_mut()[i] = None;
+                        uu.chd_mut()[i] = DiskAddress::null();
                         uu.chd_encoded_mut()[i] = None;
                     })
                     .unwrap();
@@ -874,7 +858,7 @@ fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync>(
         }
 
         NodeType::Extension(n) if chunks[index..].starts_with(&n.path) => {
-            let node = Some(n.chd());
+            let node = n.chd();
             unset_node_ref(merkle, p, node, key, index + n.path.len(), remove_left)
         }
 
@@ -906,7 +890,7 @@ fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync>(
                 p_ref
                     .write(|p| {
                         let pp = p.inner_mut().as_branch_mut().expect("not a branch node");
-                        pp.chd_mut()[chunks[index - 1] as usize] = None;
+                        pp.chd_mut()[chunks[index - 1] as usize] = DiskAddress::null();
                         pp.chd_encoded_mut()[chunks[index - 1] as usize] = None;
                     })
                     .unwrap();
@@ -930,7 +914,7 @@ fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync>(
                             .write(|p| {
                                 let pp = p.inner_mut().as_branch_mut().expect("not a branch node");
                                 let index = chunks[index - 1] as usize;
-                                pp.chd_mut()[index] = None;
+                                pp.chd_mut()[index] = DiskAddress::null();
                                 pp.chd_encoded_mut()[index] = None;
                             })
                             .expect("node write failure");
@@ -947,7 +931,7 @@ fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync>(
                         NodeType::Branch(n) => {
                             let index = chunks[index - 1] as usize;
 
-                            n.chd_mut()[index] = None;
+                            n.chd_mut()[index] = DiskAddress::null();
                             n.chd_encoded_mut()[index] = None;
                         }
                         _ => {}

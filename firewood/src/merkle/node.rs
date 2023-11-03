@@ -59,7 +59,7 @@ impl<T: DeserializeOwned + AsRef<[u8]>> Encoded<T> {
 
 #[derive(PartialEq, Eq, Clone)]
 pub struct BranchNode {
-    pub(super) children: [Option<DiskAddress>; NBRANCH],
+    pub(super) children: [DiskAddress; NBRANCH],
     pub(super) value: Option<Data>,
     pub(super) children_encoded: [Option<Vec<u8>>; NBRANCH],
 }
@@ -68,7 +68,7 @@ impl Debug for BranchNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         write!(f, "[Branch")?;
         for (i, c) in self.children.iter().enumerate() {
-            if let Some(c) = c {
+            if !c.is_null() {
                 write!(f, " ({i:x} {c:?})")?;
             }
         }
@@ -91,7 +91,7 @@ impl Debug for BranchNode {
 impl BranchNode {
     pub(super) fn single_child(&self) -> (Option<(DiskAddress, u8)>, bool) {
         let mut has_chd = false;
-        let mut only_chd = None;
+        let mut only_chd: Option<(DiskAddress, u8)> = None;
         for (i, c) in self.children.iter().enumerate() {
             if c.is_some() {
                 has_chd = true;
@@ -99,7 +99,7 @@ impl BranchNode {
                     only_chd = None;
                     break;
                 }
-                only_chd = (*c).map(|e| (e, i as u8))
+                only_chd = c.map(|e| (DiskAddress::new(e), i as u8))
             }
         }
         (only_chd, has_chd)
@@ -122,7 +122,7 @@ impl BranchNode {
             chd_encoded[i] = Some(data).filter(|data| !data.is_empty());
         }
 
-        Ok(BranchNode::new([None; NBRANCH], value, chd_encoded))
+        Ok(BranchNode::new(Default::default(), value, chd_encoded))
     }
 
     fn encode<S: ShaleStore<Node>>(&self, store: &S) -> Vec<u8> {
@@ -130,7 +130,7 @@ impl BranchNode {
 
         for (i, c) in self.children.iter().enumerate() {
             match c {
-                Some(c) => {
+                c if !c.is_none() => {
                     let mut c_ref = store.get_item(*c).unwrap();
 
                     if c_ref.is_encoded_longer_than_hash_len::<S>(store) {
@@ -150,7 +150,7 @@ impl BranchNode {
                         list[i] = Encoded::Raw(child_encoded.to_vec());
                     }
                 }
-                None => {
+                _ => {
                     // Check if there is already a calculated encoded value for the child, which
                     // can happen when manually constructing a trie from proof.
                     if let Some(v) = &self.children_encoded[i] {
@@ -175,7 +175,7 @@ impl BranchNode {
     }
 
     pub fn new(
-        chd: [Option<DiskAddress>; NBRANCH],
+        chd: [DiskAddress; NBRANCH],
         value: Option<Vec<u8>>,
         chd_encoded: [Option<Vec<u8>>; NBRANCH],
     ) -> Self {
@@ -190,11 +190,11 @@ impl BranchNode {
         &self.value
     }
 
-    pub fn chd(&self) -> &[Option<DiskAddress>; NBRANCH] {
+    pub fn chd(&self) -> &[DiskAddress; NBRANCH] {
         &self.children
     }
 
-    pub fn chd_mut(&mut self) -> &mut [Option<DiskAddress>; NBRANCH] {
+    pub fn chd_mut(&mut self) -> &mut [DiskAddress; NBRANCH] {
         &mut self.children
     }
 
@@ -448,7 +448,7 @@ impl Node {
                 is_encoded_longer_than_hash_len: OnceLock::new(),
                 encoded: OnceLock::new(),
                 inner: NodeType::Branch(BranchNode {
-                    children: [Some(DiskAddress::null()); NBRANCH],
+                    children: Default::default(),
                     value: Some(Data(Vec::new())),
                     children_encoded: Default::default(),
                 }),
@@ -558,13 +558,13 @@ impl Storable for Node {
                     },
                 )?;
                 let mut cur = Cursor::new(node_raw.as_deref());
-                let mut chd = [None; NBRANCH];
+                let mut chd: [DiskAddress; 16] = Default::default();
                 let mut buff = [0; 8];
                 for chd in chd.iter_mut() {
                     cur.read_exact(&mut buff)?;
                     let addr = usize::from_le_bytes(buff);
                     if addr != 0 {
-                        *chd = Some(DiskAddress::from(addr))
+                        *chd = DiskAddress::from(addr)
                     }
                 }
                 cur.read_exact(&mut buff[..4])?;
@@ -795,8 +795,8 @@ impl Storable for Node {
                 cur.write_all(&[Self::BRANCH_NODE]).unwrap();
                 for c in n.children.iter() {
                     cur.write_all(&match c {
-                        Some(p) => p.to_le_bytes(),
-                        None => 0u64.to_le_bytes(),
+                        p if !p.is_null() => p.to_le_bytes(),
+                        _ => 0u64.to_le_bytes(),
                     })?;
                 }
                 match &n.value {
@@ -862,11 +862,11 @@ pub(super) mod tests {
         value: Option<Vec<u8>>,
         repeated_encoded_child: Option<Vec<u8>>,
     ) -> Node {
-        let children: [Option<DiskAddress>; NBRANCH] = from_fn(|i| {
+        let children: [DiskAddress; NBRANCH] = from_fn(|i| {
             if i < NBRANCH / 2 {
-                DiskAddress::from(repeated_disk_address).into()
+                DiskAddress::from(repeated_disk_address)
             } else {
-                None
+                DiskAddress::null()
             }
         });
 

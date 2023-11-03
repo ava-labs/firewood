@@ -12,7 +12,7 @@ use crate::shale::{CachedStore, ShaleError, Storable};
 
 /// The virtual disk address of an object
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Eq, Hash, Ord, PartialOrd, PartialEq, NoUninit)]
+#[derive(Debug, Default, Copy, Clone, Eq, Hash, Ord, PartialOrd, PartialEq, NoUninit)]
 pub struct DiskAddress(pub Option<NonZeroUsize>);
 
 impl Deref for DiskAddress {
