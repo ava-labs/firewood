@@ -1,12 +1,12 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::shale::{
+use crate::{shale::{
     self,
     compact::{CompactSpace, CompactSpaceHeader},
     disk_address::DiskAddress,
     CachedStore, Obj, ShaleError, ShaleStore, SpaceId, Storable, StoredView,
-};
+}, merkle};
 pub use crate::{
     config::{DbConfig, DbRevConfig},
     storage::{buffer::DiskBufferConfig, WalConfig},
@@ -25,6 +25,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use bytemuck::{cast_slice, AnyBitPattern};
+
 use metered::metered;
 use parking_lot::{Mutex, RwLock};
 use std::{
@@ -312,6 +313,11 @@ impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
 }
 
 impl<S: ShaleStore<Node> + Send + Sync> DbRev<S> {
+    pub fn stream<K: KeyType>(&self, start_key: Option<K>) -> Result<merkle::MerkleKeyValueStream<'_, S>, api::Error> {
+        // TODO: get first key when start_key is None
+        self.merkle.get_iter(start_key.unwrap(), self.header.kv_root).map_err(|e| api::Error::InternalError(e.into()))
+    }
+    
     fn flush_dirty(&mut self) -> Option<()> {
         self.header.flush_dirty();
         self.merkle.flush_dirty()?;

@@ -3,6 +3,7 @@
 
 use crate::shale::{self, disk_address::DiskAddress, ObjWriteError, ShaleError, ShaleStore};
 use crate::{nibbles::Nibbles, v2::api::Proof};
+use futures::Stream;
 use sha3::Digest;
 use std::{
     cmp::Ordering,
@@ -1174,6 +1175,38 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
 
     pub fn flush_dirty(&self) -> Option<()> {
         self.store.flush_dirty()
+    }
+
+    pub fn get_iter<K: AsRef<[u8]>>(
+        &self,
+        key: K,
+        root: DiskAddress,
+    ) -> Result<MerkleKeyValueStream<'_, S>, MerkleError> {
+        // TODO: if DiskAddress::is_null() ...
+        let root_node = self.get_node(root)?;
+        let (node, parents) = self.get_node_and_parents_by_key(root_node, key)?;
+        Ok(MerkleKeyValueStream{_merkle: self, node, _parents: parents})
+    }
+}
+
+pub struct MerkleKeyValueStream<'a, S> {
+    _merkle: &'a Merkle<S>,
+    node: Option<ObjRef<'a>>,
+    _parents: Vec<(ObjRef<'a>, u8)>,
+}
+
+impl<'a, S> Stream for MerkleKeyValueStream<'a, S> {
+    type Item = (Vec<u8>, Vec<u8>);
+
+    fn poll_next(self: std::pin::Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
+        let node = match &self.node {
+            None => return std::task::Poll::Ready(None),
+            Some(node) => node,
+        };
+        let ret = node.inner().as_leaf().unwrap();
+        // TODO: advance to next leaf
+        // TODO: construct full path at this point, maybe save it
+        std::task::Poll::Ready(Some((ret.0.to_vec(), ret.1.to_vec())))    
     }
 }
 
