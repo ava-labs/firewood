@@ -144,7 +144,9 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
             NodeType::Branch(n) => {
                 writeln!(w, "{n:?}")?;
                 for c in n.children {
-                    self.dump_(c, w)?
+                    if !c.is_null() {
+                        self.dump_(c, w)?
+                    }
                 }
             }
             NodeType::Leaf(n) => writeln!(w, "{n:?}").unwrap(),
@@ -929,7 +931,9 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
         match &u_ref.inner {
             NodeType::Branch(n) => {
                 for c in n.children {
-                    self.remove_tree_(c, deleted)?
+                    if !c.is_none() {
+                        self.remove_tree_(c, deleted)?
+                    }
                 }
             }
             NodeType::Leaf(_) => (),
