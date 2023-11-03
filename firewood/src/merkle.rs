@@ -199,7 +199,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
             let new_node = Node::leaf(PartialPath(new_node_path.to_vec()), Data(val));
             let leaf_address = self.put_node(new_node)?.as_ptr();
 
-            let mut chd: [DiskAddress; 16] = Default::default();
+            let mut chd: [DiskAddress; NBRANCH] = Default::default();
 
             let last_matching_nibble = matching_path[idx];
             chd[last_matching_nibble as usize] = leaf_address;
@@ -338,7 +338,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
                 };
 
             // [parent] (-> [ExtNode]) -> [branch with v] -> [Leaf]
-            let mut children: [DiskAddress; 16] = Default::default();
+            let mut children: [DiskAddress; NBRANCH] = Default::default();
 
             children[idx] = leaf_address;
 
@@ -554,7 +554,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
             };
 
             if let Some((idx, more, ext, val)) = info {
-                let mut chd: [DiskAddress; 16] = Default::default();
+                let mut chd: [DiskAddress; NBRANCH] = Default::default();
 
                 let c_ptr = if more {
                     u_ptr
