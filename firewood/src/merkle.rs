@@ -1185,7 +1185,11 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
         // TODO: if DiskAddress::is_null() ...
         let root_node = self.get_node(root)?;
         let (node, parents) = self.get_node_and_parents_by_key(root_node, key)?;
-        Ok(MerkleKeyValueStream{_merkle: self, node, _parents: parents})
+        Ok(MerkleKeyValueStream {
+            _merkle: self,
+            node,
+            _parents: parents,
+        })
     }
 }
 
@@ -1198,7 +1202,10 @@ pub struct MerkleKeyValueStream<'a, S> {
 impl<'a, S> Stream for MerkleKeyValueStream<'a, S> {
     type Item = (Vec<u8>, Vec<u8>);
 
-    fn poll_next(self: std::pin::Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
         let node = match &self.node {
             None => return std::task::Poll::Ready(None),
             Some(node) => node,
@@ -1206,7 +1213,7 @@ impl<'a, S> Stream for MerkleKeyValueStream<'a, S> {
         let ret = node.inner().as_leaf().unwrap();
         // TODO: advance to next leaf
         // TODO: construct full path at this point, maybe save it
-        std::task::Poll::Ready(Some((ret.0.to_vec(), ret.1.to_vec())))    
+        std::task::Poll::Ready(Some((ret.0.to_vec(), ret.1.to_vec())))
     }
 }
 
