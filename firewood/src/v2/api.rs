@@ -49,10 +49,10 @@ pub fn vec_into_batch<K: KeyType, V: ValueType>(value: Vec<(K, V)>) -> Batch<K, 
     value
         .into_iter()
         .map(|(key, value)| BatchOp::Put { key, value })
-        .collect()
-}
+        .collect()}
 
-/// Errors returned through the API
+
+/// Errors returned through the AIP
 #[derive(thiserror::Error, Debug)]
 #[non_exhaustive]
 pub enum Error {

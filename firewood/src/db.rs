@@ -319,10 +319,10 @@ impl<S: ShaleStore<Node> + Send + Sync> DbRev<S> {
     pub fn stream<K: KeyType>(
         &self,
         start_key: Option<K>,
-    ) -> Result<merkle::MerkleKeyValueStream<'_, S>, api::Error> {
+    ) -> Result<merkle::MerkleKeyValueStream<'_, K, S>, api::Error> {
         // TODO: get first key when start_key is None
         self.merkle
-            .get_iter(start_key.unwrap(), self.header.kv_root)
+            .get_iter(start_key, self.header.kv_root)
             .map_err(|e| api::Error::InternalError(e.into()))
     }
 

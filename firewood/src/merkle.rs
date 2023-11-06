@@ -2,9 +2,11 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::shale::{self, disk_address::DiskAddress, ObjWriteError, ShaleError, ShaleStore};
+use crate::v2::api;
 use crate::{nibbles::Nibbles, v2::api::Proof};
 use futures::Stream;
 use sha3::Digest;
+use std::pin::pin;
 use std::{
     cmp::Ordering,
     collections::HashMap,
@@ -875,7 +877,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
 
         let (found, parents, deleted) = {
             let (node_ref, mut parents) =
-                self.get_node_and_parents_by_key(self.get_node(root)?, key)?;
+                self.get_node_and_parents_by_key(self.get_node(root)?, &key)?;
 
             let Some(mut node_ref) = node_ref else {
                 return Ok(None);
@@ -964,7 +966,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
     fn get_node_and_parents_by_key<'a, K: AsRef<[u8]>>(
         &'a self,
         node_ref: ObjRef<'a>,
-        key: K,
+        key: &K,
     ) -> Result<(Option<ObjRef<'a>>, ParentRefs<'a>), MerkleError> {
         let mut parents = Vec::new();
         let node_ref = self.get_node_by_key_with_callback(node_ref, key, |node_ref, nib| {
@@ -1179,41 +1181,87 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
 
     pub fn get_iter<K: AsRef<[u8]>>(
         &self,
-        key: K,
+        key: Option<K>,
         root: DiskAddress,
-    ) -> Result<MerkleKeyValueStream<'_, S>, MerkleError> {
+    ) -> Result<MerkleKeyValueStream<'_, K, S>, MerkleError> {
         // TODO: if DiskAddress::is_null() ...
-        let root_node = self.get_node(root)?;
-        let (node, parents) = self.get_node_and_parents_by_key(root_node, key)?;
         Ok(MerkleKeyValueStream {
-            _merkle: self,
-            node,
-            _parents: parents,
+            skip: key,
+            root,
+            merkle: self,
+            node: Default::default(),
+            parents: Default::default(),
+            current_key: Default::default(),
         })
     }
 }
 
-pub struct MerkleKeyValueStream<'a, S> {
-    _merkle: &'a Merkle<S>,
+pub struct MerkleKeyValueStream<'a, K, S> {
+    skip: Option<K>,
+    root: DiskAddress,
+    merkle: &'a Merkle<S>,
     node: Option<ObjRef<'a>>,
-    _parents: Vec<(ObjRef<'a>, u8)>,
+    parents: Vec<(ObjRef<'a>, u8)>,
+    current_key: Option<Vec<u8>>,
 }
 
-impl<'a, S> Stream for MerkleKeyValueStream<'a, S> {
-    type Item = (Vec<u8>, Vec<u8>);
+impl<'a, K: AsRef<[u8]> + Unpin, S: shale::ShaleStore<node::Node> + Send + Sync> Stream
+    for MerkleKeyValueStream<'a, K, S>
+{
+    type Item = Result<(Vec<u8>, Vec<u8>), api::Error>;
 
     fn poll_next(
         self: std::pin::Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        let node = match &self.node {
+        let mut pinned_self = pin!(self);
+        if let Some(key) = pinned_self.skip.take() {
+            // skip to this key, which must exist
+            // TODO: support finding the next key after K
+            let root_node = pinned_self
+                .merkle
+                .get_node(pinned_self.root)
+                .map_err(|e| api::Error::InternalError(e.into()))?;
+
+            (pinned_self.node, pinned_self.parents) = pinned_self
+                .merkle
+                .get_node_and_parents_by_key(root_node, &key)
+                .map_err(|e| api::Error::InternalError(e.into()))?;
+            pinned_self.current_key = Some(key.as_ref().to_vec());
+            return match pinned_self.node.as_ref().unwrap().inner() {
+                NodeType::Branch(branch) => std::task::Poll::Ready(Some(Ok((
+                    key.as_ref().to_vec(),
+                    branch.value.to_owned().unwrap().to_vec(),
+                )))),
+
+                NodeType::Leaf(leaf) => {
+                    std::task::Poll::Ready(Some(Ok((key.as_ref().to_vec(), leaf.1.to_vec()))))
+                }
+                NodeType::Extension(_) => todo!(),
+            };
+        }
+        let node = match &pinned_self.node {
             None => return std::task::Poll::Ready(None),
             Some(node) => node,
         };
+        // we previously rendered the value from a branch node, so walk down the children, if any
+        if let NodeType::Branch(branch) = node.inner() {
+            if let Some(child) = branch.children[0] {
+                pinned_self.parents.push((*node, 0));
+            }
+        }
         let ret = node.inner().as_leaf().unwrap();
-        // TODO: advance to next leaf
-        // TODO: construct full path at this point, maybe save it
-        std::task::Poll::Ready(Some((ret.0.to_vec(), ret.1.to_vec())))
+        let value = ret.1.to_vec();
+
+        match pinned_self.get_mut().parents.pop() {
+            None => return std::task::Poll::Ready(None),
+            Some(objref) => match objref.0.inner() {
+                NodeType::Branch(_) => todo!(),
+                NodeType::Leaf(_) => todo!(),
+                NodeType::Extension(_) => todo!(),
+            },
+        }
+        std::task::Poll::Ready(Some(Ok((current_key, value))))
     }
 }
 
@@ -1310,10 +1358,12 @@ pub fn from_nibbles(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::StreamExt;
     use node::tests::{extension, leaf};
     use shale::{cached::DynamicMem, compact::CompactSpace, CachedStore};
     use std::sync::Arc;
     use test_case::test_case;
+    //use itertools::Itertools;
 
     #[test_case(vec![0x12, 0x34, 0x56], vec![0x1, 0x2, 0x3, 0x4, 0x5, 0x6])]
     #[test_case(vec![0xc0, 0xff], vec![0xc, 0x0, 0xf, 0xf])]
@@ -1426,6 +1476,33 @@ mod tests {
 
             assert_eq!(fetched_val.as_deref(), val.as_slice().into());
         }
+    }
+
+    #[tokio::test]
+    async fn iterate_empty() {
+        let merkle = create_test_merkle();
+        let root = merkle.init_root().unwrap();
+        let mut it = merkle.get_iter(Some(b"x"), root).unwrap();
+        let next = it.next().await;
+        assert!(next.is_none())
+    }
+
+    #[tokio::test]
+    async fn iterate_many() {
+        let mut merkle = create_test_merkle();
+        let root = merkle.init_root().unwrap();
+
+        for k in u8::MIN..=u8::MAX {
+            merkle.insert([k], vec![k], root).unwrap();
+        }
+
+        let mut it = merkle.get_iter(Some([u8::MIN]), root).unwrap();
+        for k in u8::MIN..=u8::MAX {
+            let next = it.next().await.unwrap().unwrap();
+            assert_eq!(next.1, vec![k]);
+            assert_eq!(next.0, next.1);
+        }
+        assert!(it.next().await.is_none())
     }
 
     #[test]
