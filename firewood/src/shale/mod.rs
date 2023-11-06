@@ -237,7 +237,7 @@ pub trait Storable {
     }
 }
 
-pub fn to_dehydrated(item: &dyn Storable) -> Result<Vec<u8>, ShaleError> {
+pub fn to_dehydrated<S: Storable>(item: &S) -> Result<Vec<u8>, ShaleError> {
     let mut buff = vec![0; item.serialized_len() as usize];
     item.serialize(&mut buff)?;
     Ok(buff)
