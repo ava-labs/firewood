@@ -6,7 +6,7 @@ use crate::shale::ObjCache;
 use super::disk_address::DiskAddress;
 use super::{CachedStore, Obj, ObjRef, ShaleError, ShaleStore, Storable, StoredView};
 use std::fmt::Debug;
-use std::io::{Cursor, Write};
+use std::io::Write;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, RwLock};
 
@@ -52,11 +52,11 @@ impl Storable for CompactHeader {
         Self::MSIZE
     }
 
-    fn serialize(&self, to: &mut [u8]) -> Result<(), ShaleError> {
-        let mut cur = Cursor::new(to);
-        cur.write_all(&self.payload_size.to_le_bytes())?;
-        cur.write_all(&[if self.is_freed { 1 } else { 0 }])?;
-        cur.write_all(&self.desc_addr.to_le_bytes())?;
+    fn serialize<W: Write>(&self, mut to: W) -> Result<(), ShaleError> {
+        to.write_all(&self.payload_size.to_le_bytes())?;
+        to.write_all(&[if self.is_freed { 1 } else { 0 }])?;
+        to.write_all(&self.desc_addr.to_le_bytes())?;
+
         Ok(())
     }
 }
@@ -86,8 +86,8 @@ impl Storable for CompactFooter {
         Self::MSIZE
     }
 
-    fn serialize(&self, to: &mut [u8]) -> Result<(), ShaleError> {
-        Cursor::new(to).write_all(&self.payload_size.to_le_bytes())?;
+    fn serialize<W: Write>(&self, mut to: W) -> Result<(), ShaleError> {
+        to.write_all(&self.payload_size.to_le_bytes())?;
         Ok(())
     }
 }
@@ -123,10 +123,9 @@ impl Storable for CompactDescriptor {
         Self::MSIZE
     }
 
-    fn serialize(&self, to: &mut [u8]) -> Result<(), ShaleError> {
-        let mut cur = Cursor::new(to);
-        cur.write_all(&self.payload_size.to_le_bytes())?;
-        cur.write_all(&self.haddr.to_le_bytes())?;
+    fn serialize<W: Write>(&self, mut to: W) -> Result<(), ShaleError> {
+        to.write_all(&self.payload_size.to_le_bytes())?;
+        to.write_all(&self.haddr.to_le_bytes())?;
         Ok(())
     }
 }
@@ -203,12 +202,12 @@ impl Storable for CompactSpaceHeader {
         Self::MSIZE
     }
 
-    fn serialize(&self, to: &mut [u8]) -> Result<(), ShaleError> {
-        let mut cur = Cursor::new(to);
-        cur.write_all(&self.meta_space_tail.to_le_bytes())?;
-        cur.write_all(&self.compact_space_tail.to_le_bytes())?;
-        cur.write_all(&self.base_addr.to_le_bytes())?;
-        cur.write_all(&self.alloc_addr.to_le_bytes())?;
+    fn serialize<W: Write>(&self, mut to: W) -> Result<(), ShaleError> {
+        to.write_all(&self.meta_space_tail.to_le_bytes())?;
+        to.write_all(&self.compact_space_tail.to_le_bytes())?;
+        to.write_all(&self.base_addr.to_le_bytes())?;
+        to.write_all(&self.alloc_addr.to_le_bytes())?;
+
         Ok(())
     }
 }
@@ -629,9 +628,8 @@ mod tests {
             Self::MSIZE
         }
 
-        fn serialize(&self, to: &mut [u8]) -> Result<(), ShaleError> {
-            let mut cur = to;
-            cur.write_all(&self.0)?;
+        fn serialize<W: Write>(&self, mut to: W) -> Result<(), ShaleError> {
+            to.write_all(&self.0)?;
             Ok(())
         }
     }

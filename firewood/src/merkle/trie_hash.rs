@@ -36,7 +36,7 @@ impl Storable for TrieHash {
         U64_TRIE_HASH_LEN
     }
 
-    fn serialize(&self, mut to: &mut [u8]) -> Result<(), ShaleError> {
+    fn serialize<W: Write>(&self, mut to: W) -> Result<(), ShaleError> {
         to.write_all(&self.0).map_err(ShaleError::Io)
     }
 }
@@ -56,7 +56,7 @@ mod tests {
         let zero_hash = TrieHash([0u8; TRIE_HASH_LEN]);
 
         let mut to = [1u8; TRIE_HASH_LEN];
-        zero_hash.serialize(&mut to).unwrap();
+        zero_hash.serialize(&mut to[..]).unwrap();
 
         assert_eq!(&to, &zero_hash.0);
     }

@@ -2,6 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::hash::Hash;
+use std::io::Write;
 use std::mem::size_of;
 use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut};
@@ -169,9 +170,8 @@ impl Storable for DiskAddress {
         Self::MSIZE
     }
 
-    fn serialize(&self, to: &mut [u8]) -> Result<(), ShaleError> {
-        use std::io::{Cursor, Write};
-        Cursor::new(to).write_all(&self.0.unwrap().get().to_le_bytes())?;
+    fn serialize<W: Write>(&self, mut to: W) -> Result<(), ShaleError> {
+        to.write_all(&self.0.unwrap().get().to_le_bytes())?;
         Ok(())
     }
 

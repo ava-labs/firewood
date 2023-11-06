@@ -67,7 +67,7 @@ fn bench_trie_hash(criterion: &mut Criterion) {
     criterion
         .benchmark_group("TrieHash")
         .bench_function("dehydrate", |b| {
-            b.iter(|| ZERO_HASH.serialize(&mut to).unwrap());
+            b.iter(|| ZERO_HASH.serialize(&mut to[..]).unwrap());
         })
         .bench_function("hydrate", |b| {
             b.iter(|| TrieHash::deserialize(0, &store).unwrap());

@@ -31,7 +31,7 @@ use std::{
     collections::VecDeque,
     error::Error,
     fmt,
-    io::{Cursor, ErrorKind, Write},
+    io::{ErrorKind, Write},
     mem::size_of,
     num::NonZeroUsize,
     ops::Deref,
@@ -217,9 +217,8 @@ impl Storable for DbHeader {
         Self::MSIZE
     }
 
-    fn serialize(&self, to: &mut [u8]) -> Result<(), ShaleError> {
-        let mut cur = Cursor::new(to);
-        cur.write_all(&self.kv_root.to_le_bytes())?;
+    fn serialize<W: Write>(&self, mut to: W) -> Result<(), ShaleError> {
+        to.write_all(&self.kv_root.to_le_bytes())?;
         Ok(())
     }
 }

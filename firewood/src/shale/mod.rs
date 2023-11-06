@@ -5,6 +5,7 @@ use disk_address::DiskAddress;
 use std::any::type_name;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Formatter};
+use std::io::Write;
 use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, RwLock, RwLockWriteGuard};
@@ -136,7 +137,7 @@ impl<T: Storable> Obj<T> {
     pub fn flush_dirty(&mut self) {
         if !self.value.is_mem_mapped() {
             if let Some(new_value_len) = self.dirty.take() {
-                let mut new_value = vec![0; new_value_len as usize];
+                let mut new_value = Vec::with_capacity(new_value_len as usize);
                 // TODO: log error
                 self.value.write_mem_image(&mut new_value).unwrap();
                 let offset = self.value.get_offset();
@@ -228,7 +229,7 @@ pub trait ShaleStore<T: Storable> {
 /// compression/decompression is needed to reduce disk I/O and facilitate faster in-memory access.
 pub trait Storable {
     fn serialized_len(&self) -> u64;
-    fn serialize(&self, to: &mut [u8]) -> Result<(), ShaleError>;
+    fn serialize<W: Write>(&self, to: W) -> Result<(), ShaleError>;
     fn deserialize<T: CachedStore>(addr: usize, mem: &T) -> Result<Self, ShaleError>
     where
         Self: Sized;
@@ -238,7 +239,7 @@ pub trait Storable {
 }
 
 pub fn to_dehydrated<S: Storable>(item: &S) -> Result<Vec<u8>, ShaleError> {
-    let mut buff = vec![0; item.serialized_len() as usize];
+    let mut buff = Vec::with_capacity(item.serialized_len() as usize);
     item.serialize(&mut buff)?;
     Ok(buff)
 }
@@ -296,7 +297,7 @@ impl<T: Storable> StoredView<T> {
         }
     }
 
-    fn write_mem_image(&self, mem_image: &mut [u8]) -> Result<(), ShaleError> {
+    fn write_mem_image<W: Write>(&self, mem_image: W) -> Result<(), ShaleError> {
         self.decoded.serialize(mem_image)
     }
 

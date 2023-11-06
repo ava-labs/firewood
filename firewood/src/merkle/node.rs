@@ -770,17 +770,15 @@ impl Storable for Node {
             }
     }
 
-    fn serialize(&self, to: &mut [u8]) -> Result<(), ShaleError> {
-        let mut cur = Cursor::new(to);
-
+    fn serialize<W: Write>(&self, mut to: W) -> Result<(), ShaleError> {
         let mut attrs = 0;
         attrs |= match self.root_hash.get() {
             Some(h) => {
-                cur.write_all(&h.0)?;
+                to.write_all(&h.0)?;
                 Node::ROOT_HASH_VALID_BIT
             }
             None => {
-                cur.write_all(&[0; 32])?;
+                to.write_all(&[0; 32])?;
                 0
             }
         };
@@ -788,24 +786,24 @@ impl Storable for Node {
             Some(b) => (if *b { Node::LONG_BIT } else { 0 } | Node::IS_ENCODED_BIG_VALID),
             None => 0,
         };
-        cur.write_all(&[attrs]).unwrap();
+        to.write_all(&[attrs]).unwrap();
 
         match &self.inner {
             NodeType::Branch(n) => {
-                cur.write_all(&[Self::BRANCH_NODE]).unwrap();
+                to.write_all(&[Self::BRANCH_NODE]).unwrap();
                 for c in n.children.iter() {
-                    cur.write_all(&match c {
+                    to.write_all(&match c {
                         Some(p) => p.to_le_bytes(),
                         None => 0u64.to_le_bytes(),
                     })?;
                 }
                 match &n.value {
                     Some(val) => {
-                        cur.write_all(&(val.len() as u32).to_le_bytes())?;
-                        cur.write_all(val)?
+                        to.write_all(&(val.len() as u32).to_le_bytes())?;
+                        to.write_all(val)?
                     }
                     None => {
-                        cur.write_all(&u32::MAX.to_le_bytes())?;
+                        to.write_all(&u32::MAX.to_le_bytes())?;
                     }
                 }
                 // Since child encoding will only be unset after initialization (only used for range proof),
@@ -813,33 +811,33 @@ impl Storable for Node {
                 for encoded in n.children_encoded.iter() {
                     match encoded {
                         Some(v) => {
-                            cur.write_all(&[v.len() as u8])?;
-                            cur.write_all(v)?
+                            to.write_all(&[v.len() as u8])?;
+                            to.write_all(v)?
                         }
-                        None => cur.write_all(&0u8.to_le_bytes())?,
+                        None => to.write_all(&0u8.to_le_bytes())?,
                     }
                 }
                 Ok(())
             }
             NodeType::Extension(n) => {
-                cur.write_all(&[Self::EXT_NODE])?;
+                to.write_all(&[Self::EXT_NODE])?;
                 let path: Vec<u8> = from_nibbles(&n.path.encode(false)).collect();
-                cur.write_all(&[path.len() as u8])?;
-                cur.write_all(&n.child.to_le_bytes())?;
-                cur.write_all(&path)?;
+                to.write_all(&[path.len() as u8])?;
+                to.write_all(&n.child.to_le_bytes())?;
+                to.write_all(&path)?;
                 if let Some(encoded) = n.chd_encoded() {
-                    cur.write_all(&[encoded.len() as u8])?;
-                    cur.write_all(encoded)?;
+                    to.write_all(&[encoded.len() as u8])?;
+                    to.write_all(encoded)?;
                 }
                 Ok(())
             }
             NodeType::Leaf(n) => {
-                cur.write_all(&[Self::LEAF_NODE])?;
+                to.write_all(&[Self::LEAF_NODE])?;
                 let path: Vec<u8> = from_nibbles(&n.0.encode(true)).collect();
-                cur.write_all(&[path.len() as u8])?;
-                cur.write_all(&(n.1.len() as u32).to_le_bytes())?;
-                cur.write_all(&path)?;
-                cur.write_all(&n.1).map_err(ShaleError::Io)
+                to.write_all(&[path.len() as u8])?;
+                to.write_all(&(n.1.len() as u32).to_le_bytes())?;
+                to.write_all(&path)?;
+                to.write_all(&n.1).map_err(ShaleError::Io)
             }
         }
     }
@@ -907,7 +905,7 @@ pub(super) mod tests {
     #[test_case(branch(0x0a, b"hello world".to_vec().into(), None); "branch with data")]
     #[test_case(branch(0x0a, None, vec![0x01, 0x02, 0x03].into()); "branch without data")]
     fn test_encoding(node: Node) {
-        let mut bytes = vec![0; node.serialized_len() as usize];
+        let mut bytes = Vec::with_capacity(node.serialized_len() as usize);
 
         node.serialize(&mut bytes).unwrap();
 
