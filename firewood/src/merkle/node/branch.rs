@@ -28,6 +28,29 @@ pub struct BranchNode {
     pub(crate) children_encoded: [Option<Vec<u8>>; MAX_CHILDREN],
 }
 
+enum BranchDataLength {
+    None,
+    Length(u32),
+}
+
+impl From<u32> for BranchDataLength {
+    fn from(value: u32) -> Self {
+        match value {
+            u32::MAX => BranchDataLength::None,
+            len => BranchDataLength::Length(len),
+        }
+    }
+}
+
+impl From<BranchDataLength> for u32 {
+    fn from(value: BranchDataLength) -> Self {
+        match value {
+            BranchDataLength::None => u32::MAX,
+            BranchDataLength::Length(len) => len,
+        }
+    }
+}
+
 impl Debug for BranchNode {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), FmtError> {
         write!(f, "[Branch")?;
