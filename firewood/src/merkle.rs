@@ -1251,9 +1251,8 @@ impl<'a, K: AsRef<[u8]> + Unpin, S: shale::ShaleStore<node::Node> + Send + Sync>
             };
         }
         // The current node might be none if the tree is empty or we happen to be at the end
-        let current_node = match pinned_self.current_node.take() {
-            None => return Poll::Ready(None),
-            Some(node) => node,
+        let Some(current_node) = pinned_self.current_node.take() else {
+            return Poll::Ready(None);
         };
 
         let next_node = match current_node.inner() {
