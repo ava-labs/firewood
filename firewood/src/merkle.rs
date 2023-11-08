@@ -5,6 +5,7 @@ use crate::shale::{self, disk_address::DiskAddress, ObjWriteError, ShaleError, S
 use crate::v2::api;
 use crate::{nibbles::Nibbles, v2::api::Proof};
 use futures::Stream;
+use itertools::Itertools;
 use sha3::Digest;
 use std::pin::pin;
 use std::{
@@ -12,6 +13,7 @@ use std::{
     collections::HashMap,
     io::Write,
     iter::once,
+    task::Poll,
     sync::{atomic::Ordering::Relaxed, OnceLock},
 };
 use thiserror::Error;
@@ -1186,10 +1188,10 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
     ) -> Result<MerkleKeyValueStream<'_, K, S>, MerkleError> {
         // TODO: if DiskAddress::is_null() ...
         Ok(MerkleKeyValueStream {
-            skip: key,
-            root,
+            starting_key: key,
+            merkle_root: root,
             merkle: self,
-            node: Default::default(),
+            current_node: Default::default(),
             parents: Default::default(),
             current_key: Default::default(),
         })
@@ -1197,11 +1199,16 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
 }
 
 pub struct MerkleKeyValueStream<'a, K, S> {
-    skip: Option<K>,
-    root: DiskAddress,
+    starting_key: Option<K>,
+    merkle_root: DiskAddress,
     merkle: &'a Merkle<S>,
-    node: Option<ObjRef<'a>>,
+    // current node is the node that was last returned from poll_next
+    current_node: Option<ObjRef<'a>>,
+    // parents hold pointers up the tree to the parents
     parents: Vec<(ObjRef<'a>, u8)>,
+    // this is the last key returned
+    // TODO: improve this; we can probably just adjust current_key as we walk up
+    // and down the merkle tree rather than fully rebuilding it each time
     current_key: Option<Vec<u8>>,
 }
 
@@ -1213,55 +1220,141 @@ impl<'a, K: AsRef<[u8]> + Unpin, S: shale::ShaleStore<node::Node> + Send + Sync>
     fn poll_next(
         self: std::pin::Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
+    ) -> Poll<Option<Self::Item>> {
         let mut pinned_self = pin!(self);
-        if let Some(key) = pinned_self.skip.take() {
+        if let Some(key) = pinned_self.starting_key.take() {
             // skip to this key, which must exist
             // TODO: support finding the next key after K
             let root_node = pinned_self
                 .merkle
-                .get_node(pinned_self.root)
+                .get_node(pinned_self.merkle_root)
                 .map_err(|e| api::Error::InternalError(e.into()))?;
 
-            (pinned_self.node, pinned_self.parents) = pinned_self
+            (pinned_self.current_node, pinned_self.parents) = pinned_self
                 .merkle
                 .get_node_and_parents_by_key(root_node, &key)
                 .map_err(|e| api::Error::InternalError(e.into()))?;
+            if pinned_self.current_node.as_ref().is_none() {
+                return Poll::Ready(None);
+            }
             pinned_self.current_key = Some(key.as_ref().to_vec());
-            return match pinned_self.node.as_ref().unwrap().inner() {
-                NodeType::Branch(branch) => std::task::Poll::Ready(Some(Ok((
+            return match pinned_self.current_node.as_ref().unwrap().inner() {
+                NodeType::Branch(branch) => Poll::Ready(Some(Ok((
                     key.as_ref().to_vec(),
                     branch.value.to_owned().unwrap().to_vec(),
                 )))),
 
                 NodeType::Leaf(leaf) => {
-                    std::task::Poll::Ready(Some(Ok((key.as_ref().to_vec(), leaf.1.to_vec()))))
+                    Poll::Ready(Some(Ok((key.as_ref().to_vec(), leaf.1.to_vec()))))
                 }
                 NodeType::Extension(_) => todo!(),
             };
         }
-        let node = match &pinned_self.node {
-            None => return std::task::Poll::Ready(None),
+        // The current node might be none if the tree is empty or we happen to be at the end
+        let current_node = match pinned_self.current_node.take() {
+            None => return Poll::Ready(None),
             Some(node) => node,
         };
-        // we previously rendered the value from a branch node, so walk down the children, if any
-        if let NodeType::Branch(branch) = node.inner() {
-            if let Some(child) = branch.children[0] {
-                pinned_self.parents.push((*node, 0));
-            }
-        }
-        let ret = node.inner().as_leaf().unwrap();
-        let value = ret.1.to_vec();
 
-        match pinned_self.get_mut().parents.pop() {
-            None => return std::task::Poll::Ready(None),
-            Some(objref) => match objref.0.inner() {
-                NodeType::Branch(_) => todo!(),
-                NodeType::Leaf(_) => todo!(),
+        let next_node = match current_node.inner() {
+            NodeType::Branch(branch) => {
+                // previously rendered the value from a branch node, so walk down to the first child
+                if let Some(child) = branch.children[0] {
+                    pinned_self.parents.push((current_node, 0));
+                    Some(
+                        pinned_self
+                            .merkle
+                            .get_node(child)
+                            .map_err(|e| api::Error::InternalError(e.into()))?,
+                    )
+                } else {
+                    // Branch node with no first child? Should have been a leaf node?
+                    return Poll::Ready(Some(Err(api::Error::InternalError(Box::new(
+                        MerkleError::ParentLeafBranch,
+                    )))));
+                }
+            }
+            NodeType::Leaf(_leaf) => {
+                let mut next = pinned_self.parents.pop();
+                loop {
+                    match next {
+                        None => return Poll::Ready(None),
+                        Some((parent, child_position)) => {
+                            // This code assumes all parents are branch nodes and will panic otherwise
+                            if child_position as usize == NBRANCH - 1 {
+                                // don't index past end of list
+                                next = pinned_self.parents.pop();
+                                continue;
+                            }
+                            match parent.inner().as_branch().unwrap().chd()[child_position.wrapping_add(1) as usize] {
+                                Some(addr) => {
+                                    // there is a child at the next address, so walk down it
+                                    // We use u8::MAX to walk down the leftmost value, as it
+                                    // gets increased immediately once popped
+                                    let child = pinned_self
+                                        .merkle
+                                        .get_node(addr)
+                                        .map(|node| (node, u8::MAX))
+                                        .map_err(|e| api::Error::InternalError(e.into()))?;
+                                    let keep_going = child.0.inner().is_branch();
+                                    next = Some(child);
+                                    pinned_self.parents.push((parent, child_position.wrapping_add(1)));
+                                    if !keep_going {
+                                        break;
+                                    }
+                                }
+                                None => {
+                                    next = pinned_self.parents.pop();
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
+                // recompute current_key
+                // TODO: Can we keep current_key updated as we walk the tree instead of building it from the top all the time?
+                let current_key = pinned_self
+                    .parents
+                    .iter()
+                    .skip(1)
+                    .map(|parent| parent.1)
+                    .tuples()
+                    .map(|(hi, lo)| {
+                        (hi << 4) + lo
+                    })
+                    .collect::<Vec<u8>>();
+                pinned_self.current_key = current_key.into(); // Some(current_node.inner().as_leaf().unwrap().0.to_vec());
+                pinned_self
+                    .current_key
+                    .as_mut()
+                    .unwrap()
+                    .extend(current_node.inner().as_leaf().unwrap().0.to_vec());
+                next.map(|node| node.0)
+            }
+
+            NodeType::Extension(_) => todo!(),
+        };
+        pinned_self.current_node = next_node;
+
+        match &pinned_self.current_node {
+            None => Poll::Ready(None),
+            Some(objref) => match objref.inner() {
+                NodeType::Branch(branch) => {
+                    Poll::Ready(Some(Ok((
+                        pinned_self.current_key.as_ref().unwrap().to_vec(),
+                        branch.value.to_owned().unwrap().to_vec(),
+                    ))))
+                }
+
+                NodeType::Leaf(leaf) => {
+                    Poll::Ready(Some(Ok((
+                        pinned_self.current_key.as_ref().unwrap().to_vec(),
+                        leaf.1.to_vec(),
+                    ))))
+                }
                 NodeType::Extension(_) => todo!(),
             },
         }
-        std::task::Poll::Ready(Some(Ok((current_key, value))))
     }
 }
 
@@ -1499,8 +1592,8 @@ mod tests {
         let mut it = merkle.get_iter(Some([u8::MIN]), root).unwrap();
         for k in u8::MIN..=u8::MAX {
             let next = it.next().await.unwrap().unwrap();
-            assert_eq!(next.1, vec![k]);
             assert_eq!(next.0, next.1);
+            assert_eq!(next.1, vec![k]);
         }
         assert!(it.next().await.is_none())
     }
