@@ -1191,7 +1191,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
             starting_key: key,
             merkle_root: root,
             merkle: self,
-            current_node: Default::default(),
+            previously_returned_node: Default::default(),
             parents: Default::default(),
             current_key: Default::default(),
         })
@@ -1203,7 +1203,7 @@ pub struct MerkleKeyValueStream<'a, K, S> {
     merkle_root: DiskAddress,
     merkle: &'a Merkle<S>,
     // current node is the node that was last returned from poll_next
-    current_node: Option<ObjRef<'a>>,
+    previously_returned_node: Option<ObjRef<'a>>,
     // parents hold pointers up the tree to the parents
     parents: Vec<(ObjRef<'a>, u8)>,
     // this is the last key returned
@@ -1230,15 +1230,20 @@ impl<'a, K: AsRef<[u8]> + Unpin, S: shale::ShaleStore<node::Node> + Send + Sync>
                 .get_node(pinned_self.merkle_root)
                 .map_err(|e| api::Error::InternalError(e.into()))?;
 
-            (pinned_self.current_node, pinned_self.parents) = pinned_self
+            (pinned_self.previously_returned_node, pinned_self.parents) = pinned_self
                 .merkle
                 .get_node_and_parents_by_key(root_node, &key)
                 .map_err(|e| api::Error::InternalError(e.into()))?;
-            if pinned_self.current_node.as_ref().is_none() {
+            if pinned_self.previously_returned_node.as_ref().is_none() {
                 return Poll::Ready(None);
             }
             pinned_self.current_key = Some(key.as_ref().to_vec());
-            return match pinned_self.current_node.as_ref().unwrap().inner() {
+            return match pinned_self
+                .previously_returned_node
+                .as_ref()
+                .unwrap()
+                .inner()
+            {
                 NodeType::Branch(branch) => Poll::Ready(Some(Ok((
                     key.as_ref().to_vec(),
                     branch.value.to_owned().unwrap().to_vec(),
@@ -1251,7 +1256,7 @@ impl<'a, K: AsRef<[u8]> + Unpin, S: shale::ShaleStore<node::Node> + Send + Sync>
             };
         }
         // The current node might be none if the tree is empty or we happen to be at the end
-        let Some(current_node) = pinned_self.current_node.take() else {
+        let Some(current_node) = pinned_self.previously_returned_node.take() else {
             return Poll::Ready(None);
         };
 
@@ -1332,9 +1337,9 @@ impl<'a, K: AsRef<[u8]> + Unpin, S: shale::ShaleStore<node::Node> + Send + Sync>
 
             NodeType::Extension(_) => todo!(),
         };
-        pinned_self.current_node = next_node;
+        pinned_self.previously_returned_node = next_node;
 
-        match &pinned_self.current_node {
+        match &pinned_self.previously_returned_node {
             None => Poll::Ready(None),
             Some(objref) => match objref.inner() {
                 NodeType::Branch(branch) => Poll::Ready(Some(Ok((
