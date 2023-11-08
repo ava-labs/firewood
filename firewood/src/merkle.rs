@@ -968,7 +968,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
     fn get_node_and_parents_by_key<'a, K: AsRef<[u8]>>(
         &'a self,
         node_ref: ObjRef<'a>,
-        key: &K,
+        key: K,
     ) -> Result<(Option<ObjRef<'a>>, ParentRefs<'a>), MerkleError> {
         let mut parents = Vec::new();
         let node_ref = self.get_node_by_key_with_callback(node_ref, key, |node_ref, nib| {
