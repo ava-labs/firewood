@@ -1306,10 +1306,7 @@ impl<'a, K: AsRef<[u8]> + Unpin, S: shale::ShaleStore<node::Node> + Send + Sync>
                                         break;
                                     }
                                 }
-                                None => {
-                                    next = pinned_self.parents.pop();
-                                    continue;
-                                }
+                                None => next = pinned_self.parents.pop(),
                             }
                         }
                     }
