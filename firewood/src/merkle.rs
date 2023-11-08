@@ -13,8 +13,8 @@ use std::{
     collections::HashMap,
     io::Write,
     iter::once,
-    task::Poll,
     sync::{atomic::Ordering::Relaxed, OnceLock},
+    task::Poll,
 };
 use thiserror::Error;
 
@@ -1286,7 +1286,9 @@ impl<'a, K: AsRef<[u8]> + Unpin, S: shale::ShaleStore<node::Node> + Send + Sync>
                                 next = pinned_self.parents.pop();
                                 continue;
                             }
-                            match parent.inner().as_branch().unwrap().chd()[child_position.wrapping_add(1) as usize] {
+                            match parent.inner().as_branch().unwrap().chd()
+                                [child_position.wrapping_add(1) as usize]
+                            {
                                 Some(addr) => {
                                     // there is a child at the next address, so walk down it
                                     // We use u8::MAX to walk down the leftmost value, as it
@@ -1298,7 +1300,9 @@ impl<'a, K: AsRef<[u8]> + Unpin, S: shale::ShaleStore<node::Node> + Send + Sync>
                                         .map_err(|e| api::Error::InternalError(e.into()))?;
                                     let keep_going = child.0.inner().is_branch();
                                     next = Some(child);
-                                    pinned_self.parents.push((parent, child_position.wrapping_add(1)));
+                                    pinned_self
+                                        .parents
+                                        .push((parent, child_position.wrapping_add(1)));
                                     if !keep_going {
                                         break;
                                     }
@@ -1319,9 +1323,7 @@ impl<'a, K: AsRef<[u8]> + Unpin, S: shale::ShaleStore<node::Node> + Send + Sync>
                     .skip(1)
                     .map(|parent| parent.1)
                     .tuples()
-                    .map(|(hi, lo)| {
-                        (hi << 4) + lo
-                    })
+                    .map(|(hi, lo)| (hi << 4) + lo)
                     .collect::<Vec<u8>>();
                 pinned_self.current_key = current_key.into(); // Some(current_node.inner().as_leaf().unwrap().0.to_vec());
                 pinned_self
@@ -1339,19 +1341,15 @@ impl<'a, K: AsRef<[u8]> + Unpin, S: shale::ShaleStore<node::Node> + Send + Sync>
         match &pinned_self.current_node {
             None => Poll::Ready(None),
             Some(objref) => match objref.inner() {
-                NodeType::Branch(branch) => {
-                    Poll::Ready(Some(Ok((
-                        pinned_self.current_key.as_ref().unwrap().to_vec(),
-                        branch.value.to_owned().unwrap().to_vec(),
-                    ))))
-                }
+                NodeType::Branch(branch) => Poll::Ready(Some(Ok((
+                    pinned_self.current_key.as_ref().unwrap().to_vec(),
+                    branch.value.to_owned().unwrap().to_vec(),
+                )))),
 
-                NodeType::Leaf(leaf) => {
-                    Poll::Ready(Some(Ok((
-                        pinned_self.current_key.as_ref().unwrap().to_vec(),
-                        leaf.1.to_vec(),
-                    ))))
-                }
+                NodeType::Leaf(leaf) => Poll::Ready(Some(Ok((
+                    pinned_self.current_key.as_ref().unwrap().to_vec(),
+                    leaf.1.to_vec(),
+                )))),
                 NodeType::Extension(_) => todo!(),
             },
         }
