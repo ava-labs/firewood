@@ -878,7 +878,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
 
         let (found, parents, deleted) = {
             let (node_ref, mut parents) =
-                self.get_node_and_parents_by_key(self.get_node(root)?, &key)?;
+                self.get_node_and_parents_by_key(self.get_node(root)?, key)?;
 
             let Some(mut node_ref) = node_ref else {
                 return Ok(None);
