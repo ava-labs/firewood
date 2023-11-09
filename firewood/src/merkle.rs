@@ -1252,9 +1252,11 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                     .merkle
                     .get_node_and_parents_by_key(root_node, &key)
                     .map_err(|e| api::Error::InternalError(e.into()))?;
+
                 let Some(last_node) = found_node else {
                     return Poll::Ready(None);
                 };
+
                 let returned_key_value = match last_node.inner() {
                     NodeType::Branch(branch) => {
                         (key.clone(), branch.value.to_owned().unwrap().to_vec())
@@ -1262,7 +1264,9 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                     NodeType::Leaf(leaf) => (key, leaf.1.to_vec()),
                     NodeType::Extension(_) => todo!(),
                 };
+
                 pinned_self.key_state = IteratorState::Iterating { last_node, parents };
+
                 return Poll::Ready(Some(Ok(returned_key_value)));
             }
             IteratorState::Iterating {
@@ -1276,20 +1280,25 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                             branch.children.iter().position(|&addr| addr.is_some())
                         {
                             let child_address = branch.children[child_position].unwrap();
+
                             parents.push((last_node, child_position as u8)); // remember where we walked down from
+
                             let current_node = pinned_self
                                 .merkle
                                 .get_node(child_address)
                                 .map_err(|e| api::Error::InternalError(e.into()))?;
+
                             let found_key = parents[1..]
                                 .chunks_exact(2)
                                 .map(|parents| (parents[0].1 << 4) + parents[1].1)
                                 .collect::<Vec<u8>>();
+
                             pinned_self.key_state = IteratorState::Iterating {
                                 // continue iterating from here
                                 last_node: current_node,
                                 parents,
                             };
+
                             found_key
                         } else {
                             // Branch node with no children?
@@ -1306,7 +1315,9 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                                 Some((parent, child_position)) => {
                                     // Assume all parents are branch nodes
                                     let children = parent.inner().as_branch().unwrap().chd();
+
                                     let mut child_position = child_position.wrapping_add(1);
+
                                     if let Some(found_offset) = children[child_position as usize..]
                                         .iter()
                                         .position(|&addr| addr.is_some())
@@ -1316,16 +1327,21 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                                         next = parents.pop();
                                         continue;
                                     }
+
                                     let addr = children[child_position as usize].unwrap();
+
                                     let child = pinned_self
                                         .merkle
                                         .get_node(addr)
                                         .map(|node| (node, u8::MAX))
                                         .map_err(|e| api::Error::InternalError(e.into()))?;
+
                                     let keep_going = child.0.inner().is_branch();
+
                                     next = Some(child);
 
                                     parents.push((parent, child_position));
+
                                     if !keep_going {
                                         break;
                                     }
@@ -1338,11 +1354,14 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                             .chunks_exact(2)
                             .map(|parents| (parents[0].1 << 4) + parents[1].1)
                             .collect::<Vec<u8>>();
+
                         current_key.extend(leaf.0.to_vec());
+
                         pinned_self.key_state = IteratorState::Iterating {
                             last_node: next.unwrap().0,
                             parents,
                         };
+
                         current_key
                     }
 
@@ -1363,10 +1382,12 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                     NodeType::Leaf(leaf) => leaf.1.to_vec(),
                     NodeType::Extension(_) => todo!(),
                 };
+
                 (found_key, value)
             }
             _ => unreachable!(),
         };
+
         Poll::Ready(Some(Ok(return_value)))
     }
 }
