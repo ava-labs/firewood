@@ -52,7 +52,7 @@ pub fn vec_into_batch<K: KeyType, V: ValueType>(value: Vec<(K, V)>) -> Batch<K, 
         .collect()
 }
 
-/// Errors returned through the AIP
+/// Errors returned through the API
 #[derive(thiserror::Error, Debug)]
 #[non_exhaustive]
 pub enum Error {
