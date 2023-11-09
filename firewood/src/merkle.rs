@@ -6,7 +6,6 @@ use crate::v2::api;
 use crate::{nibbles::Nibbles, v2::api::Proof};
 use futures::Stream;
 use sha3::Digest;
-use std::pin::pin;
 use std::{
     cmp::Ordering,
     collections::HashMap,
@@ -1231,24 +1230,23 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
     type Item = Result<(Vec<u8>, Vec<u8>), api::Error>;
 
     fn poll_next(
-        self: std::pin::Pin<&mut Self>,
+        mut self: std::pin::Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        let mut pinned_self = pin!(self);
         // Note that this sets the key_state to StartAtBeginning temporarily
         //  - if you get to the end you get Ok(None) but can fetch again from the start
         //  - if you get an error, you'll get Err(...), but continuing to fetch starts from the top
         // If this isn't what you want, then consider using [std::iter::fuse]
-        let found_key = match std::mem::take(&mut pinned_self.key_state) {
+        let found_key = match std::mem::take(&mut self.key_state) {
             IteratorState::StartAtBeginning => todo!(),
             IteratorState::StartAtKey(key) => {
                 // TODO: support finding the next key after K
-                let root_node = pinned_self
+                let root_node = self
                     .merkle
-                    .get_node(pinned_self.merkle_root)
+                    .get_node(self.merkle_root)
                     .map_err(|e| api::Error::InternalError(e.into()))?;
 
-                let (found_node, parents) = pinned_self
+                let (found_node, parents) = self
                     .merkle
                     .get_node_and_parents_by_key(root_node, &key)
                     .map_err(|e| api::Error::InternalError(e.into()))?;
@@ -1265,7 +1263,7 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                     NodeType::Extension(_) => todo!(),
                 };
 
-                pinned_self.key_state = IteratorState::Iterating { last_node, parents };
+                self.key_state = IteratorState::Iterating { last_node, parents };
 
                 return Poll::Ready(Some(Ok(returned_key_value)));
             }
@@ -1283,7 +1281,7 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
 
                             parents.push((last_node, child_position as u8)); // remember where we walked down from
 
-                            let current_node = pinned_self
+                            let current_node = self
                                 .merkle
                                 .get_node(child_address)
                                 .map_err(|e| api::Error::InternalError(e.into()))?;
@@ -1293,7 +1291,7 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                                 .map(|parents| (parents[0].1 << 4) + parents[1].1)
                                 .collect::<Vec<u8>>();
 
-                            pinned_self.key_state = IteratorState::Iterating {
+                            self.key_state = IteratorState::Iterating {
                                 // continue iterating from here
                                 last_node: current_node,
                                 parents,
@@ -1330,7 +1328,7 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
 
                                     let addr = children[child_position as usize].unwrap();
 
-                                    let child = pinned_self
+                                    let child = self
                                         .merkle
                                         .get_node(addr)
                                         .map(|node| (node, u8::MAX))
@@ -1357,7 +1355,7 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
 
                         current_key.extend(leaf.0.to_vec());
 
-                        pinned_self.key_state = IteratorState::Iterating {
+                        self.key_state = IteratorState::Iterating {
                             last_node: next.unwrap().0,
                             parents,
                         };
@@ -1372,7 +1370,7 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
 
         // figure out the value to return from the state
         // if we get here, we're sure to have something to return
-        let return_value = match &pinned_self.key_state {
+        let return_value = match &self.key_state {
             IteratorState::Iterating {
                 last_node,
                 parents: _,
