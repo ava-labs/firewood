@@ -1257,7 +1257,7 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
 
                 let returned_key_value = match last_node.inner() {
                     NodeType::Branch(branch) => {
-                        (key.clone(), branch.value.to_owned().unwrap().to_vec())
+                        (key, branch.value.to_owned().unwrap().to_vec())
                     }
                     NodeType::Leaf(leaf) => (key, leaf.1.to_vec()),
                     NodeType::Extension(_) => todo!(),
@@ -1314,6 +1314,8 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                                     // Assume all parents are branch nodes
                                     let children = parent.inner().as_branch().unwrap().chd();
 
+                                    // we use wrapping_add here because the value might be u8::MAX indicating that
+                                    // we want to go down branch
                                     let mut child_position = child_position.wrapping_add(1);
 
                                     if let Some(found_offset) = children[child_position as usize..]
@@ -1328,19 +1330,21 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
 
                                     let addr = children[child_position as usize].unwrap();
 
+                                    // we push (node, u8::MAX) because we will add 1, which will wrap to 0
                                     let child = self
                                         .merkle
                                         .get_node(addr)
                                         .map(|node| (node, u8::MAX))
                                         .map_err(|e| api::Error::InternalError(e.into()))?;
 
-                                    let keep_going = child.0.inner().is_branch();
+                                    // TODO: If the branch has a value, then we shouldn't keep_going
+                                    let keep_going_down = child.0.inner().is_branch();
 
                                     next = Some(child);
 
                                     parents.push((parent, child_position));
 
-                                    if !keep_going {
+                                    if !keep_going_down {
                                         break;
                                     }
                                 }
@@ -1370,6 +1374,8 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
 
         // figure out the value to return from the state
         // if we get here, we're sure to have something to return
+        // TODO: It's possible to return a reference to the data since the last_node is
+        // saved in the iterator
         let return_value = match &self.key_state {
             IteratorState::Iterating {
                 last_node,
