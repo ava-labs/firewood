@@ -5,7 +5,6 @@ use crate::shale::{self, disk_address::DiskAddress, ObjWriteError, ShaleError, S
 use crate::v2::api;
 use crate::{nibbles::Nibbles, v2::api::Proof};
 use futures::Stream;
-use itertools::Itertools;
 use sha3::Digest;
 use std::pin::pin;
 use std::{
@@ -1185,36 +1184,50 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
         &self,
         key: Option<K>,
         root: DiskAddress,
-    ) -> Result<MerkleKeyValueStream<'_, K, S>, MerkleError> {
+    ) -> Result<MerkleKeyValueStream<'_, S>, MerkleError> {
         // TODO: if DiskAddress::is_null() ...
         Ok(MerkleKeyValueStream {
-            starting_key: key,
+            key_state: IteratorState::new(key),
             merkle_root: root,
             merkle: self,
-            previously_returned_node: Default::default(),
-            parents: Default::default(),
-            current_key: Default::default(),
         })
     }
 }
 
-pub struct MerkleKeyValueStream<'a, K, S> {
-    starting_key: Option<K>,
-    merkle_root: DiskAddress,
-    merkle: &'a Merkle<S>,
-    // current node is the node that was last returned from poll_next
-    previously_returned_node: Option<ObjRef<'a>>,
-    // parents hold pointers up the tree to the parents
-    parents: Vec<(ObjRef<'a>, u8)>,
-    // this is the last key returned
-    // TODO: improve this; we can probably just adjust current_key as we walk up
-    // and down the merkle tree rather than fully rebuilding it each time
-    current_key: Option<Vec<u8>>,
+enum IteratorState<'a> {
+    /// Start iterating at the beginning of the trie,
+    /// returning the lowest key/value pair first
+    StartAtBeginning,
+    /// Start iterating at the specified key
+    StartAtKey(Vec<u8>),
+    /// Continue iterating after the given last_node and parents
+    Iterating {
+        last_node: ObjRef<'a>,
+        parents: Vec<(ObjRef<'a>, u8)>,
+    },
+}
+impl IteratorState<'_> {
+    fn new<K: AsRef<[u8]>>(starting: Option<K>) -> Self {
+        match starting {
+            None => Self::StartAtBeginning,
+            Some(key) => Self::StartAtKey(key.as_ref().to_vec()),
+        }
+    }
 }
 
-impl<'a, K: AsRef<[u8]> + Unpin, S: shale::ShaleStore<node::Node> + Send + Sync> Stream
-    for MerkleKeyValueStream<'a, K, S>
-{
+// The default state is to start at the beginning
+impl<'a> Default for IteratorState<'a> {
+    fn default() -> Self {
+        Self::StartAtBeginning
+    }
+}
+pub struct MerkleKeyValueStream<'a, S> {
+    key_state: IteratorState<'a>,
+    merkle_root: DiskAddress,
+    merkle: &'a Merkle<S>,
+}
+
+impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyValueStream<'a, S> {
     type Item = Result<(Vec<u8>, Vec<u8>), api::Error>;
 
     fn poll_next(
@@ -1222,81 +1235,88 @@ impl<'a, K: AsRef<[u8]> + Unpin, S: shale::ShaleStore<node::Node> + Send + Sync>
         _cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let mut pinned_self = pin!(self);
-        if let Some(key) = pinned_self.starting_key.take() {
-            // skip to this key, which must exist
-            // TODO: support finding the next key after K
-            let root_node = pinned_self
-                .merkle
-                .get_node(pinned_self.merkle_root)
-                .map_err(|e| api::Error::InternalError(e.into()))?;
+        // Note that this sets the key_state to StartAtBeginning temporarily
+        //  - if you get to the end you get Ok(None) but can fetch again from the start
+        //  - if you get an error, you'll get Err(...), but continuing to fetch starts from the top
+        // If this isn't what you want, then consider using [std::iter::fuse]
+        let found_key = match std::mem::take(&mut pinned_self.key_state) {
+            IteratorState::StartAtBeginning => todo!(),
+            IteratorState::StartAtKey(key) => {
+                // TODO: support finding the next key after K
+                let root_node = pinned_self
+                    .merkle
+                    .get_node(pinned_self.merkle_root)
+                    .map_err(|e| api::Error::InternalError(e.into()))?;
 
-            (pinned_self.previously_returned_node, pinned_self.parents) = pinned_self
-                .merkle
-                .get_node_and_parents_by_key(root_node, &key)
-                .map_err(|e| api::Error::InternalError(e.into()))?;
-            if pinned_self.previously_returned_node.as_ref().is_none() {
-                return Poll::Ready(None);
+                let (found_node, parents) = pinned_self
+                    .merkle
+                    .get_node_and_parents_by_key(root_node, &key)
+                    .map_err(|e| api::Error::InternalError(e.into()))?;
+                let Some(last_node) = found_node else {
+                    return Poll::Ready(None);
+                };
+                let returned_key_value = match last_node.inner() {
+                    NodeType::Branch(branch) => {
+                        (key.clone(), branch.value.to_owned().unwrap().to_vec())
+                    }
+                    NodeType::Leaf(leaf) => (key, leaf.1.to_vec()),
+                    NodeType::Extension(_) => todo!(),
+                };
+                pinned_self.key_state = IteratorState::Iterating { last_node, parents };
+                return Poll::Ready(Some(Ok(returned_key_value)));
             }
-            pinned_self.current_key = Some(key.as_ref().to_vec());
-            return match pinned_self
-                .previously_returned_node
-                .as_ref()
-                .unwrap()
-                .inner()
-            {
-                NodeType::Branch(branch) => Poll::Ready(Some(Ok((
-                    key.as_ref().to_vec(),
-                    branch.value.to_owned().unwrap().to_vec(),
-                )))),
-
-                NodeType::Leaf(leaf) => {
-                    Poll::Ready(Some(Ok((key.as_ref().to_vec(), leaf.1.to_vec()))))
-                }
-                NodeType::Extension(_) => todo!(),
-            };
-        }
-        // The current node might be none if the tree is empty or we happen to be at the end
-        let Some(current_node) = pinned_self.previously_returned_node.take() else {
-            return Poll::Ready(None);
-        };
-
-        let next_node = match current_node.inner() {
-            NodeType::Branch(branch) => {
-                // previously rendered the value from a branch node, so walk down to the first child
-                if let Some(child) = branch.children[0] {
-                    pinned_self.parents.push((current_node, 0));
-                    Some(
-                        pinned_self
-                            .merkle
-                            .get_node(child)
-                            .map_err(|e| api::Error::InternalError(e.into()))?,
-                    )
-                } else {
-                    // Branch node with no first child? Should have been a leaf node?
-                    return Poll::Ready(Some(Err(api::Error::InternalError(Box::new(
-                        MerkleError::ParentLeafBranch,
-                    )))));
-                }
-            }
-            NodeType::Leaf(_leaf) => {
-                let mut next = pinned_self.parents.pop();
-                loop {
-                    match next {
-                        None => return Poll::Ready(None),
-                        Some((parent, child_position)) => {
-                            // This code assumes all parents are branch nodes and will panic otherwise
-                            if child_position as usize == NBRANCH - 1 {
-                                // don't index past end of list
-                                next = pinned_self.parents.pop();
-                                continue;
-                            }
-                            match parent.inner().as_branch().unwrap().chd()
-                                [child_position.wrapping_add(1) as usize]
-                            {
-                                Some(addr) => {
-                                    // there is a child at the next address, so walk down it
-                                    // We use u8::MAX to walk down the leftmost value, as it
-                                    // gets increased immediately once popped
+            IteratorState::Iterating {
+                last_node,
+                mut parents,
+            } => {
+                match last_node.inner() {
+                    NodeType::Branch(branch) => {
+                        // previously rendered the value from a branch node, so walk down to the first available child
+                        if let Some(child_position) =
+                            branch.children.iter().position(|&addr| addr.is_some())
+                        {
+                            let child_address = branch.children[child_position].unwrap();
+                            parents.push((last_node, child_position as u8)); // remember where we walked down from
+                            let current_node = pinned_self
+                                .merkle
+                                .get_node(child_address)
+                                .map_err(|e| api::Error::InternalError(e.into()))?;
+                            let found_key = parents[1..]
+                                .chunks_exact(2)
+                                .map(|parents| (parents[0].1 << 4) + parents[1].1)
+                                .collect::<Vec<u8>>();
+                            pinned_self.key_state = IteratorState::Iterating {
+                                // continue iterating from here
+                                last_node: current_node,
+                                parents,
+                            };
+                            found_key
+                        } else {
+                            // Branch node with no children?
+                            return Poll::Ready(Some(Err(api::Error::InternalError(Box::new(
+                                MerkleError::ParentLeafBranch,
+                            )))));
+                        }
+                    }
+                    NodeType::Leaf(leaf) => {
+                        let mut next = parents.pop();
+                        loop {
+                            match next {
+                                None => return Poll::Ready(None),
+                                Some((parent, child_position)) => {
+                                    // Assume all parents are branch nodes
+                                    let children = parent.inner().as_branch().unwrap().chd();
+                                    let mut child_position = child_position.wrapping_add(1);
+                                    if let Some(found_offset) = children[child_position as usize..]
+                                        .iter()
+                                        .position(|&addr| addr.is_some())
+                                    {
+                                        child_position += found_offset as u8;
+                                    } else {
+                                        next = parents.pop();
+                                        continue;
+                                    }
+                                    let addr = children[child_position as usize].unwrap();
                                     let child = pinned_self
                                         .merkle
                                         .get_node(addr)
@@ -1304,56 +1324,50 @@ impl<'a, K: AsRef<[u8]> + Unpin, S: shale::ShaleStore<node::Node> + Send + Sync>
                                         .map_err(|e| api::Error::InternalError(e.into()))?;
                                     let keep_going = child.0.inner().is_branch();
                                     next = Some(child);
-                                    pinned_self
-                                        .parents
-                                        .push((parent, child_position.wrapping_add(1)));
+
+                                    parents.push((parent, child_position));
                                     if !keep_going {
                                         break;
                                     }
                                 }
-                                None => next = pinned_self.parents.pop(),
                             }
                         }
+                        // recompute current_key
+                        // TODO: Can we keep current_key updated as we walk the tree instead of building it from the top all the time?
+                        let mut current_key = parents[1..]
+                            .chunks_exact(2)
+                            .map(|parents| (parents[0].1 << 4) + parents[1].1)
+                            .collect::<Vec<u8>>();
+                        current_key.extend(leaf.0.to_vec());
+                        pinned_self.key_state = IteratorState::Iterating {
+                            last_node: next.unwrap().0,
+                            parents,
+                        };
+                        current_key
                     }
+
+                    NodeType::Extension(_) => todo!(),
                 }
-                // recompute current_key
-                // TODO: Can we keep current_key updated as we walk the tree instead of building it from the top all the time?
-                let current_key = pinned_self
-                    .parents
-                    .iter()
-                    .skip(1)
-                    .map(|parent| parent.1)
-                    .tuples()
-                    .map(|(hi, lo)| (hi << 4) + lo)
-                    .collect::<Vec<u8>>();
-                pinned_self.current_key = current_key.into(); // Some(current_node.inner().as_leaf().unwrap().0.to_vec());
-                pinned_self
-                    .current_key
-                    .as_mut()
-                    .unwrap()
-                    .extend(current_node.inner().as_leaf().unwrap().0.to_vec());
-                next.map(|node| node.0)
             }
-
-            NodeType::Extension(_) => todo!(),
         };
-        pinned_self.previously_returned_node = next_node;
 
-        match &pinned_self.previously_returned_node {
-            None => Poll::Ready(None),
-            Some(objref) => match objref.inner() {
-                NodeType::Branch(branch) => Poll::Ready(Some(Ok((
-                    pinned_self.current_key.as_ref().unwrap().to_vec(),
-                    branch.value.to_owned().unwrap().to_vec(),
-                )))),
-
-                NodeType::Leaf(leaf) => Poll::Ready(Some(Ok((
-                    pinned_self.current_key.as_ref().unwrap().to_vec(),
-                    leaf.1.to_vec(),
-                )))),
-                NodeType::Extension(_) => todo!(),
-            },
-        }
+        // figure out the value to return from the state
+        // if we get here, we're sure to have something to return
+        let return_value = match &pinned_self.key_state {
+            IteratorState::Iterating {
+                last_node,
+                parents: _,
+            } => {
+                let value = match last_node.inner() {
+                    NodeType::Branch(branch) => branch.value.to_owned().unwrap().to_vec(),
+                    NodeType::Leaf(leaf) => leaf.1.to_vec(),
+                    NodeType::Extension(_) => todo!(),
+                };
+                (found_key, value)
+            }
+            _ => unreachable!(),
+        };
+        Poll::Ready(Some(Ok(return_value)))
     }
 }
 
