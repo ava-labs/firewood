@@ -1256,9 +1256,7 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                 };
 
                 let returned_key_value = match last_node.inner() {
-                    NodeType::Branch(branch) => {
-                        (key, branch.value.to_owned().unwrap().to_vec())
-                    }
+                    NodeType::Branch(branch) => (key, branch.value.to_owned().unwrap().to_vec()),
                     NodeType::Leaf(leaf) => (key, leaf.1.to_vec()),
                     NodeType::Extension(_) => todo!(),
                 };
