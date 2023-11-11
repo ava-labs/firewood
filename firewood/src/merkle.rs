@@ -1238,7 +1238,55 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
         //  - if you get an error, you'll get Err(...), but continuing to fetch starts from the top
         // If this isn't what you want, then consider using [std::iter::fuse]
         let found_key = match std::mem::take(&mut self.key_state) {
-            IteratorState::StartAtBeginning => todo!(),
+            IteratorState::StartAtBeginning => {
+                let root_node = self
+                    .merkle
+                    .get_node(self.merkle_root)
+                    .map_err(|e| api::Error::InternalError(e.into()))?;
+                let mut last_node = root_node;
+                let mut parents = vec![];
+                loop {
+                    match last_node.inner() {
+                        NodeType::Branch(branch) => {
+                            let leftmost_position =
+                                branch.children.iter().position(|&addr| addr.is_some());
+
+                            let Some(leftmost_position) = leftmost_position else {
+                                // we already exhausted the branch node. This happens with an empty trie
+                                // ... or a corrupt one
+                                return if parents.is_empty() {
+                                    // empty trie
+                                    Poll::Ready(None)
+                                } else {
+                                    // branch with NO children, not at the top
+                                    Poll::Ready(Some(Err(api::Error::InternalError(Box::new(
+                                        MerkleError::ParentLeafBranch,
+                                    )))))
+                                };
+                            };
+
+                            let next = self
+                                .merkle
+                                .get_node(branch.children[leftmost_position].unwrap())
+                                .map_err(|e| api::Error::InternalError(e.into()))?;
+
+                            parents.push((last_node, leftmost_position as u8));
+
+                            last_node = next;
+                        }
+                        NodeType::Leaf(_) => break,
+                        NodeType::Extension(_) => todo!(),
+                    }
+                }
+
+                // last_node should have a leaf; compute the key and value
+                let current_key =
+                    key_from_parents_and_leaf(&parents, last_node.inner().as_leaf().unwrap());
+
+                self.key_state = IteratorState::Iterating { last_node, parents };
+
+                current_key
+            }
             IteratorState::StartAtKey(key) => {
                 // TODO: support finding the next key after K
                 let root_node = self
@@ -1284,10 +1332,7 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                                 .get_node(child_address)
                                 .map_err(|e| api::Error::InternalError(e.into()))?;
 
-                            let found_key = parents[1..]
-                                .chunks_exact(2)
-                                .map(|parents| (parents[0].1 << 4) + parents[1].1)
-                                .collect::<Vec<u8>>();
+                            let found_key = key_from_parents(&parents);
 
                             self.key_state = IteratorState::Iterating {
                                 // continue iterating from here
@@ -1335,14 +1380,20 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                                         .map(|node| (node, u8::MAX))
                                         .map_err(|e| api::Error::InternalError(e.into()))?;
 
-                                    // TODO: If the branch has a value, then we shouldn't keep_going
-                                    let keep_going_down = child.0.inner().is_branch();
+                                    // stop_descending if:
+                                    //  - on a branch and it has a value; OR
+                                    //  - on a leaf
+                                    let stop_descending = match child.0.inner() {
+                                        NodeType::Branch(branch) => branch.value.is_some(),
+                                        NodeType::Leaf(_) => true,
+                                        NodeType::Extension(_) => todo!(),
+                                    };
 
                                     next = Some(child);
 
                                     parents.push((parent, child_position));
 
-                                    if !keep_going_down {
+                                    if stop_descending {
                                         break;
                                     }
                                 }
@@ -1350,12 +1401,7 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                         }
                         // recompute current_key
                         // TODO: Can we keep current_key updated as we walk the tree instead of building it from the top all the time?
-                        let mut current_key = parents[1..]
-                            .chunks_exact(2)
-                            .map(|parents| (parents[0].1 << 4) + parents[1].1)
-                            .collect::<Vec<u8>>();
-
-                        current_key.extend(leaf.0.to_vec());
+                        let current_key = key_from_parents_and_leaf(&parents, leaf);
 
                         self.key_state = IteratorState::Iterating {
                             last_node: next.unwrap().0,
@@ -1392,6 +1438,25 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
 
         Poll::Ready(Some(Ok(return_value)))
     }
+}
+
+/// Compute a key from a set of parents
+fn key_from_parents(parents: &[(ObjRef, u8)]) -> Vec<u8> {
+    parents[1..]
+        .chunks_exact(2)
+        .map(|parents| (parents[0].1 << 4) + parents[1].1)
+        .collect::<Vec<u8>>()
+}
+fn key_from_parents_and_leaf(parents: &[(ObjRef, u8)], leaf: &LeafNode) -> Vec<u8> {
+    let mut iter = parents[1..]
+        .iter()
+        .map(|parent| parent.1)
+        .chain(leaf.0.to_vec());
+    let mut data = Vec::with_capacity(iter.size_hint().0);
+    while let (Some(hi), Some(lo)) = (iter.next(), iter.next()) {
+        data.push((hi << 4) + lo);
+    }
+    data
 }
 
 fn set_parent(new_chd: DiskAddress, parents: &mut [(ObjRef, u8)]) {
@@ -1621,17 +1686,23 @@ mod tests {
         let mut merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
 
+        // insert all values from u8::MIN to u8::MAX, with the key and value the same
         for k in u8::MIN..=u8::MAX {
             merkle.insert([k], vec![k], root).unwrap();
         }
 
-        let mut it = merkle.get_iter(Some([u8::MIN]), root).unwrap();
-        for k in u8::MIN..=u8::MAX {
-            let next = it.next().await.unwrap().unwrap();
-            assert_eq!(next.0, next.1);
-            assert_eq!(next.1, vec![k]);
+        for start in [Some([u8::MIN]), None] {
+            let mut it = merkle.get_iter(start, root).unwrap();
+            // we iterate twice because we should get a None then start over
+            for pass in 0..2 {
+                for k in u8::MIN..=u8::MAX {
+                    let next = it.next().await.unwrap().unwrap();
+                    assert_eq!(next.0, next.1, "start={start:?} pass={pass}");
+                    assert_eq!(next.1, vec![k], "start={start:?} pass={pass}");
+                }
+                assert!(it.next().await.is_none(), "start={start:?} pass={pass}")
+            }
         }
-        assert!(it.next().await.is_none())
     }
 
     #[test]
