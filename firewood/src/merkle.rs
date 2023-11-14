@@ -1248,10 +1248,21 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                 loop {
                     match last_node.inner() {
                         NodeType::Branch(branch) => {
-                            let leftmost_position =
-                                branch.children.iter().position(|&addr| addr.is_some());
+                            if let Some((leftmost_position, leftmost_address)) = branch
+                                .children
+                                .iter()
+                                .enumerate()
+                                .find(|&addr| addr.1.is_some())
+                            {
+                                let next = self
+                                    .merkle
+                                    .get_node(leftmost_address.unwrap())
+                                    .map_err(|e| api::Error::InternalError(e.into()))?;
 
-                            let Some(leftmost_position) = leftmost_position else {
+                                parents.push((last_node, leftmost_position as u8));
+
+                                last_node = next;
+                            } else {
                                 // we already exhausted the branch node. This happens with an empty trie
                                 // ... or a corrupt one
                                 return if parents.is_empty() {
@@ -1264,15 +1275,6 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                                     )))))
                                 };
                             };
-
-                            let next = self
-                                .merkle
-                                .get_node(branch.children[leftmost_position].unwrap())
-                                .map_err(|e| api::Error::InternalError(e.into()))?;
-
-                            parents.push((last_node, leftmost_position as u8));
-
-                            last_node = next;
                         }
                         NodeType::Leaf(_) => break,
                         NodeType::Extension(_) => todo!(),
