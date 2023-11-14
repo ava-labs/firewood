@@ -1687,6 +1687,8 @@ mod tests {
 
     #[test_case(Some(&[u8::MIN]); "Starting at first key")]
     #[test_case(None; "No start specified")]
+    #[test_case(Some(&[128u8]); "Starting in middle")]
+    #[test_case(Some(&[u8::MAX]); "Starting at last key")]
     #[tokio::test]
     async fn iterate_many(start: Option<&[u8]>) {
         let mut merkle = create_test_merkle();
@@ -1699,14 +1701,20 @@ mod tests {
 
         let mut it = merkle.get_iter(start, root).unwrap();
         // we iterate twice because we should get a None then start over
-        for pass in 0..2 {
-            for k in u8::MIN..=u8::MAX {
+        for k in start.map(|r| r[0]).unwrap_or_default()..=u8::MAX {
                 let next = it.next().await.unwrap().unwrap();
-                assert_eq!(next.0, next.1, "start={start:?} pass={pass}");
-                assert_eq!(next.1, vec![k], "start={start:?} pass={pass}");
+                assert_eq!(next.0, next.1, );
+                assert_eq!(next.1, vec![k]);
             }
-            assert!(it.next().await.is_none(), "start={start:?} pass={pass}")
+        assert!(it.next().await.is_none());
+        
+        // ensure that reading past the end returns all the values
+        for k in u8::MIN..=u8::MAX {
+            let next = it.next().await.unwrap().unwrap();
+            assert_eq!(next.0, next.1);
+            assert_eq!(next.1, vec![k]);
         }
+        assert!(it.next().await.is_none());
     }
 
     #[test]
