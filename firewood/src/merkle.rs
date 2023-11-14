@@ -1361,7 +1361,7 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
 
                                     // we use wrapping_add here because the value might be u8::MAX indicating that
                                     // we want to go down branch
-                                    let mut child_position = child_position.unwrap_or(0);
+                                    let mut child_position = child_position.unwrap_or(0) + 1;
 
                                     let found_offset = children[child_position as usize..]
                                         .iter()
