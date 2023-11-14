@@ -1363,10 +1363,11 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                                     // we want to go down branch
                                     let mut child_position = child_position.wrapping_add(1);
 
-                                    if let Some(found_offset) = children[child_position as usize..]
+                                    let found_offset = children[child_position as usize..]
                                         .iter()
-                                        .position(|&addr| addr.is_some())
-                                    {
+                                        .position(|&addr| addr.is_some());
+
+                                    if let Some(found_offset) = found_offset {
                                         child_position += found_offset as u8;
                                     } else {
                                         next = parents.pop();
