@@ -1323,33 +1323,32 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                 match last_node.inner() {
                     NodeType::Branch(branch) => {
                         // previously rendered the value from a branch node, so walk down to the first available child
-                        if let Some(child_position) =
+                        let Some(child_position) =
                             branch.children.iter().position(|&addr| addr.is_some())
-                        {
-                            let child_address = branch.children[child_position].unwrap();
-
-                            parents.push((last_node, child_position as u8)); // remember where we walked down from
-
-                            let current_node = self
-                                .merkle
-                                .get_node(child_address)
-                                .map_err(|e| api::Error::InternalError(e.into()))?;
-
-                            let found_key = key_from_parents(&parents);
-
-                            self.key_state = IteratorState::Iterating {
-                                // continue iterating from here
-                                last_node: current_node,
-                                parents,
-                            };
-
-                            found_key
-                        } else {
+                        else {
                             // Branch node with no children?
                             return Poll::Ready(Some(Err(api::Error::InternalError(Box::new(
                                 MerkleError::ParentLeafBranch,
                             )))));
-                        }
+                        };
+                        let child_address = branch.children[child_position].unwrap();
+
+                        parents.push((last_node, child_position as u8)); // remember where we walked down from
+
+                        let current_node = self
+                            .merkle
+                            .get_node(child_address)
+                            .map_err(|e| api::Error::InternalError(e.into()))?;
+
+                        let found_key = key_from_parents(&parents);
+
+                        self.key_state = IteratorState::Iterating {
+                            // continue iterating from here
+                            last_node: current_node,
+                            parents,
+                        };
+
+                        found_key
                     }
                     NodeType::Leaf(leaf) => {
                         let mut next = parents.pop();
