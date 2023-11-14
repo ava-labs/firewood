@@ -1224,7 +1224,7 @@ impl<'a> Default for IteratorState<'a> {
 /// A MerkleKeyValueStream iterates over keys/values for a merkle trie.
 /// This iterator is not fused. If you read past the None value, you start
 /// over at the beginning. If you need a fused iterator, consider using
-/// [std::iter::fuse]
+/// std::iter::fuse
 pub struct MerkleKeyValueStream<'a, S> {
     key_state: IteratorState<'a>,
     merkle_root: DiskAddress,
