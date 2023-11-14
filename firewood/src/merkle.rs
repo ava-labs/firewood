@@ -1351,7 +1351,7 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                         found_key
                     }
                     NodeType::Leaf(leaf) => {
-                        let mut next = parents.pop();
+                        let mut next = parents.pop().map(|(node, position)| (node, Some(position)));
                         loop {
                             match next {
                                 None => return Poll::Ready(None),
@@ -1361,7 +1361,7 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
 
                                     // we use wrapping_add here because the value might be u8::MAX indicating that
                                     // we want to go down branch
-                                    let mut child_position = child_position.wrapping_add(1);
+                                    let mut child_position = child_position.unwrap_or(0);
 
                                     let found_offset = children[child_position as usize..]
                                         .iter()
@@ -1370,7 +1370,9 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                                     if let Some(found_offset) = found_offset {
                                         child_position += found_offset as u8;
                                     } else {
-                                        next = parents.pop();
+                                        next = parents
+                                            .pop()
+                                            .map(|(node, position)| (node, Some(position)));
                                         continue;
                                     }
 
@@ -1380,7 +1382,7 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                                     let child = self
                                         .merkle
                                         .get_node(addr)
-                                        .map(|node| (node, u8::MAX))
+                                        .map(|node| (node, None))
                                         .map_err(|e| api::Error::InternalError(e.into()))?;
 
                                     // stop_descending if:
