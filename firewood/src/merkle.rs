@@ -1562,7 +1562,6 @@ mod tests {
     use shale::{cached::DynamicMem, compact::CompactSpace, CachedStore};
     use std::sync::Arc;
     use test_case::test_case;
-    //use itertools::Itertools;
 
     #[test_case(vec![0x12, 0x34, 0x56], vec![0x1, 0x2, 0x3, 0x4, 0x5, 0x6])]
     #[test_case(vec![0xc0, 0xff], vec![0xc, 0x0, 0xf, 0xf])]
