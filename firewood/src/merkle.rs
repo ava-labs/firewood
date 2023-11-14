@@ -1361,7 +1361,8 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
 
                                     // we use wrapping_add here because the value might be u8::MAX indicating that
                                     // we want to go down branch
-                                    let mut child_position = child_position.map(|pos| pos + 1).unwrap_or_default();
+                                    let mut child_position =
+                                        child_position.map(|pos| pos + 1).unwrap_or_default();
 
                                     let found_offset = children[child_position as usize..]
                                         .iter()
@@ -1702,12 +1703,12 @@ mod tests {
         let mut it = merkle.get_iter(start, root).unwrap();
         // we iterate twice because we should get a None then start over
         for k in start.map(|r| r[0]).unwrap_or_default()..=u8::MAX {
-                let next = it.next().await.unwrap().unwrap();
-                assert_eq!(next.0, next.1, );
-                assert_eq!(next.1, vec![k]);
-            }
+            let next = it.next().await.unwrap().unwrap();
+            assert_eq!(next.0, next.1,);
+            assert_eq!(next.1, vec![k]);
+        }
         assert!(it.next().await.is_none());
-        
+
         // ensure that reading past the end returns all the values
         for k in u8::MIN..=u8::MAX {
             let next = it.next().await.unwrap().unwrap();
