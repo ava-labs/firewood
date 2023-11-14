@@ -1245,7 +1245,7 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                     .map_err(|e| api::Error::InternalError(e.into()))?;
                 let mut last_node = root_node;
                 let mut parents = vec![];
-                loop {
+                let leaf = loop {
                     match last_node.inner() {
                         NodeType::Branch(branch) => {
                             if let Some((leftmost_position, leftmost_address)) = branch
@@ -1276,14 +1276,13 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                                 };
                             };
                         }
-                        NodeType::Leaf(_) => break,
+                        NodeType::Leaf(leaf) => break leaf,
                         NodeType::Extension(_) => todo!(),
                     }
-                }
+                };
 
                 // last_node should have a leaf; compute the key and value
-                let current_key =
-                    key_from_parents_and_leaf(&parents, last_node.inner().as_leaf().unwrap());
+                let current_key = key_from_parents_and_leaf(&parents, leaf);
 
                 self.key_state = IteratorState::Iterating { last_node, parents };
 
