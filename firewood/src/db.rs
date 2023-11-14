@@ -322,7 +322,7 @@ impl<S: ShaleStore<Node> + Send + Sync> DbRev<S> {
     ) -> Result<merkle::MerkleKeyValueStream<'_, S>, api::Error> {
         self.merkle
             .get_iter(start_key, self.header.kv_root)
-            .map_err(|e| api::Error::InternalError(e.into()))
+            .map_err(|e| api::Error::InternalError(Box::new(e)))
     }
 
     fn flush_dirty(&mut self) -> Option<()> {
@@ -454,7 +454,7 @@ impl Db {
         }
 
         block_in_place(|| Db::new_internal(db_path, cfg.clone()))
-            .map_err(|e| api::Error::InternalError(e.into()))
+            .map_err(|e| api::Error::InternalError(Box::new(e)))
     }
 
     /// Open a database.

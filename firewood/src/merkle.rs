@@ -1243,7 +1243,7 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                 let root_node = self
                     .merkle
                     .get_node(self.merkle_root)
-                    .map_err(|e| api::Error::InternalError(e.into()))?;
+                    .map_err(|e| api::Error::InternalError(Box::new(e)))?;
                 let mut last_node = root_node;
                 let mut parents = vec![];
                 let leaf = loop {
@@ -1272,7 +1272,7 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                             let next = self
                                 .merkle
                                 .get_node(leftmost_address)
-                                .map_err(|e| api::Error::InternalError(e.into()))?;
+                                .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
                             parents.push((last_node, leftmost_position as u8));
 
@@ -1295,12 +1295,12 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                 let root_node = self
                     .merkle
                     .get_node(self.merkle_root)
-                    .map_err(|e| api::Error::InternalError(e.into()))?;
+                    .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
                 let (found_node, parents) = self
                     .merkle
                     .get_node_and_parents_by_key(root_node, &key)
-                    .map_err(|e| api::Error::InternalError(e.into()))?;
+                    .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
                 let Some(last_node) = found_node else {
                     return Poll::Ready(None);
@@ -1343,7 +1343,7 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                         let current_node = self
                             .merkle
                             .get_node(child_address)
-                            .map_err(|e| api::Error::InternalError(e.into()))?;
+                            .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
                         let found_key = key_from_parents(&parents);
 
@@ -1389,7 +1389,7 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                                         .merkle
                                         .get_node(found_address)
                                         .map(|node| (node, None))
-                                        .map_err(|e| api::Error::InternalError(e.into()))?;
+                                        .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
                                     // stop_descending if:
                                     //  - on a branch and it has a value; OR
