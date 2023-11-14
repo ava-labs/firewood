@@ -1367,28 +1367,28 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
 
                                     // we use wrapping_add here because the value might be u8::MAX indicating that
                                     // we want to go down branch
-                                    let mut child_position =
+                                    let start_position =
                                         child_position.map(|pos| pos + 1).unwrap_or_default();
 
-                                    let found_offset = children[child_position as usize..]
+                                    let Some((found_position, found_address)) = children
                                         .iter()
-                                        .position(|&addr| addr.is_some());
-
-                                    if let Some(found_offset) = found_offset {
-                                        child_position += found_offset as u8;
-                                    } else {
+                                        .enumerate()
+                                        .skip(start_position as usize)
+                                        .filter_map(|(offset, addr)| {
+                                            addr.map(|addr| (offset as u8, addr))
+                                        })
+                                        .next()
+                                    else {
                                         next = parents
                                             .pop()
                                             .map(|(node, position)| (node, Some(position)));
                                         continue;
-                                    }
+                                    };
 
-                                    let addr = children[child_position as usize].unwrap();
-
-                                    // we push (node, u8::MAX) because we will add 1, which will wrap to 0
+                                    // we push (node, None) which will start at the beginning of the next branch node
                                     let child = self
                                         .merkle
-                                        .get_node(addr)
+                                        .get_node(found_address)
                                         .map(|node| (node, None))
                                         .map_err(|e| api::Error::InternalError(e.into()))?;
 
@@ -1403,7 +1403,7 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
 
                                     next = Some(child);
 
-                                    parents.push((parent, child_position));
+                                    parents.push((parent, found_position));
 
                                     if stop_descending {
                                         break;
