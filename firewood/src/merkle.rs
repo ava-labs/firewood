@@ -1220,6 +1220,11 @@ impl<'a> Default for IteratorState<'a> {
         Self::StartAtBeginning
     }
 }
+
+/// A MerkleKeyValueStream iterates over keys/values for a merkle trie.
+/// This iterator is not fused. If you read past the None value, you start
+/// over at the beginning. If you need a fused iterator, consider using
+/// [std::iter::fuse]
 pub struct MerkleKeyValueStream<'a, S> {
     key_state: IteratorState<'a>,
     merkle_root: DiskAddress,
@@ -1234,9 +1239,6 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
         _cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         // Note that this sets the key_state to StartAtBeginning temporarily
-        //  - if you get to the end you get Ok(None) but can fetch again from the start
-        //  - if you get an error, you'll get Err(...), but continuing to fetch starts from the top
-        // If this isn't what you want, then consider using [std::iter::fuse]
         let found_key = match std::mem::take(&mut self.key_state) {
             IteratorState::StartAtBeginning => {
                 let root_node = self
