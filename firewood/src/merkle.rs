@@ -1250,21 +1250,13 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                 let leaf = loop {
                     match last_node.inner() {
                         NodeType::Branch(branch) => {
-                            if let Some((leftmost_position, leftmost_address)) = branch
+                            let Some((leftmost_position, leftmost_address)) = branch
                                 .children
                                 .iter()
                                 .enumerate()
-                                .find(|&addr| addr.1.is_some())
-                            {
-                                let next = self
-                                    .merkle
-                                    .get_node(leftmost_address.unwrap())
-                                    .map_err(|e| api::Error::InternalError(e.into()))?;
-
-                                parents.push((last_node, leftmost_position as u8));
-
-                                last_node = next;
-                            } else {
+                                .filter_map(|(i, addr)| addr.map(|addr| (i, addr)))
+                                .next()
+                            else {
                                 // we already exhausted the branch node. This happens with an empty trie
                                 // ... or a corrupt one
                                 return if parents.is_empty() {
@@ -1277,6 +1269,15 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                                     )))))
                                 };
                             };
+
+                            let next = self
+                                .merkle
+                                .get_node(leftmost_address)
+                                .map_err(|e| api::Error::InternalError(e.into()))?;
+
+                            parents.push((last_node, leftmost_position as u8));
+
+                            last_node = next;
                         }
                         NodeType::Leaf(leaf) => break leaf,
                         NodeType::Extension(_) => todo!(),
@@ -1323,15 +1324,20 @@ impl<'a, S: shale::ShaleStore<node::Node> + Send + Sync> Stream for MerkleKeyVal
                 match last_node.inner() {
                     NodeType::Branch(branch) => {
                         // previously rendered the value from a branch node, so walk down to the first available child
-                        let Some(child_position) =
-                            branch.children.iter().position(|&addr| addr.is_some())
+                        let Some((child_position, child_address)) = branch
+                            .children
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(child_position, &addr)| {
+                                addr.map(|addr| (child_position, addr))
+                            })
+                            .next()
                         else {
                             // Branch node with no children?
                             return Poll::Ready(Some(Err(api::Error::InternalError(Box::new(
                                 MerkleError::ParentLeafBranch,
                             )))));
                         };
-                        let child_address = branch.children[child_position].unwrap();
 
                         parents.push((last_node, child_position as u8)); // remember where we walked down from
 
