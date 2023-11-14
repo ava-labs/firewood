@@ -73,8 +73,8 @@ pub enum Error {
     #[error("Internal error")]
     InternalError(Box<dyn std::error::Error + Send>),
 
-    #[error("RangeProofError")]
-    RangeProofError(String),
+    #[error("Range too small")]
+    RangeTooSmall,
 }
 
 /// A range proof, consisting of a proof of the first key and the last key,

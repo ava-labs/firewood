@@ -351,7 +351,7 @@ impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
 
         // remove the last key from middle and do a proof on it
         let last_key = match middle.pop() {
-            None => return Err(api::Error::RangeProofError("Range too small".to_owned())),
+            None => return Err(api::Error::RangeTooSmall),
             Some((last_key, _)) => self.single_key_proof(last_key).await,
         };
 
