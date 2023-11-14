@@ -305,7 +305,7 @@ impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
             .map_err(|e| api::Error::IO(std::io::Error::new(ErrorKind::Other, e)))
     }
 
-    async fn range_proof<K: api::KeyType, V, N>(
+    async fn range_proof<K: api::KeyType, V>(
         &self,
         _first_key: Option<K>,
         _last_key: Option<K>,
