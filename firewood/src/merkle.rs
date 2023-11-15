@@ -1179,12 +1179,11 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
         self.store.flush_dirty()
     }
 
-    pub fn get_iter<K: AsRef<[u8]>>(
+    pub(crate) fn get_iter<K: AsRef<[u8]>>(
         &self,
         key: Option<K>,
         root: DiskAddress,
     ) -> Result<MerkleKeyValueStream<'_, S>, MerkleError> {
-        // TODO: if DiskAddress::is_null() ...
         Ok(MerkleKeyValueStream {
             key_state: IteratorState::new(key),
             merkle_root: root,
