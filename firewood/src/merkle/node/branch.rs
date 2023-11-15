@@ -164,6 +164,11 @@ impl BranchNode {
                         list[i] = Encoded::Raw(child_encoded.to_vec());
                     }
                 }
+
+                // I'm not sure that this case makes sense. Why would there be an encoded child if there isn't a
+                // a disk-address in the same slot?
+                // TODO:
+                // change the data-structure children: [(Option<DiskAddress>, Option<Vec<u8>>); Self::MAX_CHILDREN]
                 None => {
                     // Check if there is already a calculated encoded value for the child, which
                     // can happen when manually constructing a trie from proof.
