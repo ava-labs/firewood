@@ -1,6 +1,5 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
-
 use crate::shale::{self, disk_address::DiskAddress, ObjWriteError, ShaleError, ShaleStore};
 use crate::v2::api;
 use crate::{nibbles::Nibbles, v2::api::Proof};
@@ -1570,9 +1569,9 @@ mod tests {
     use std::sync::Arc;
     use test_case::test_case;
 
-    #[test_case(vec![0x12, 0x34, 0x56], vec![0x1, 0x2, 0x3, 0x4, 0x5, 0x6])]
-    #[test_case(vec![0xc0, 0xff], vec![0xc, 0x0, 0xf, 0xf])]
-    fn to_nibbles(bytes: Vec<u8>, nibbles: Vec<u8>) {
+    #[test_case(vec![0x12, 0x34, 0x56], &[0x1, 0x2, 0x3, 0x4, 0x5, 0x6])]
+    #[test_case(vec![0xc0, 0xff], &[0xc, 0x0, 0xf, 0xf])]
+    fn to_nibbles(bytes: Vec<u8>, nibbles: &[u8]) {
         let n: Vec<_> = bytes.into_iter().flat_map(to_nibble_array).collect();
         assert_eq!(n, nibbles);
     }
@@ -1689,7 +1688,7 @@ mod tests {
         let root = merkle.init_root().unwrap();
         let mut it = merkle.get_iter(Some(b"x"), root).unwrap();
         let next = it.next().await;
-        assert!(next.is_none())
+        assert!(next.is_none());
     }
 
     #[test_case(Some(&[u8::MIN]); "Starting at first key")]
@@ -1808,15 +1807,17 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(rangeproof.middle.len(), (u8::MAX - 1).into());
-        assert_ne!(rangeproof.first_key.0, rangeproof.last_key.0);
+        assert_ne!(rangeproof.first_key_proof.0, rangeproof.last_key_proof.0);
         let left_proof = merkle.prove([u8::MIN], root).unwrap();
         let right_proof = merkle.prove([u8::MAX], root).unwrap();
-        assert_eq!(rangeproof.first_key.0, left_proof.0);
-        assert_eq!(rangeproof.last_key.0, right_proof.0);
+        assert_eq!(rangeproof.first_key_proof.0, left_proof.0);
+        assert_eq!(rangeproof.last_key_proof.0, right_proof.0);
     }
 
     #[tokio::test]
     async fn single_value_range_proof() {
+        const RANDOM_KEY: u8 = 42;
+
         let mut merkle: Merkle<CompactSpace<Node, DynamicMem>> = create_test_merkle();
         let root = merkle.init_root().unwrap();
         // insert values
@@ -1828,13 +1829,12 @@ mod tests {
         }
         merkle.flush_dirty();
 
-        const RANDOM_KEY: u8 = 42;
         let rangeproof = merkle
             .range_proof(root, Some([RANDOM_KEY]), None, Some(1))
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(rangeproof.first_key.0, rangeproof.last_key.0);
+        assert_eq!(rangeproof.first_key_proof.0, rangeproof.last_key_proof.0);
         assert_eq!(rangeproof.middle.len(), 0);
     }
 }

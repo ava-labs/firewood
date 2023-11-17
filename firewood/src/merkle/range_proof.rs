@@ -39,7 +39,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
             return Ok(None);
         };
 
-        let first_key = self
+        let first_key_proof = self
             .prove(key, root)
             .map_err(|e| api::Error::InternalError(Box::new(e)))?;
         let limit = limit.map(|old_limit| old_limit - 1);
@@ -66,12 +66,12 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
             .await?;
 
         // remove the last key from middle and do a proof on it
-        let last_key = match middle.pop() {
+        let last_key_proof = match middle.pop() {
             None => {
                 return Ok(Some(api::RangeProof {
-                    first_key: first_key.clone(),
+                    first_key_proof: first_key_proof.clone(),
                     middle: vec![],
-                    last_key: first_key,
+                    last_key_proof: first_key_proof,
                 }))
             }
             Some((last_key, _)) => self
@@ -80,9 +80,9 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
         };
 
         Ok(Some(api::RangeProof {
-            first_key,
+            first_key_proof,
             middle,
-            last_key,
+            last_key_proof,
         }))
     }
 }
