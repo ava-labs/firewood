@@ -89,7 +89,7 @@ pub struct RangeProof<K, V> {
 /// A proof that a single key is present
 ///
 /// The generic N represents the storage for the node data
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Proof<N>(pub HashMap<HashKey, N>);
 
 /// The database interface, which includes a type for a static view of

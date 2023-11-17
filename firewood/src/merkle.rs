@@ -18,6 +18,7 @@ use thiserror::Error;
 
 mod node;
 mod partial_path;
+pub(super) mod range_proof;
 mod trie_hash;
 
 pub use node::{BranchNode, Data, ExtNode, LeafNode, Node, NodeType, NBRANCH};
@@ -1747,7 +1748,7 @@ mod tests {
 
     #[test]
     fn remove_many() {
-        let mut merkle = create_test_merkle();
+        let mut merkle: Merkle<CompactSpace<Node, DynamicMem>> = create_test_merkle();
         let root = merkle.init_root().unwrap();
 
         // insert values
@@ -1774,5 +1775,66 @@ mod tests {
             let fetched_val = merkle.get(key, root).unwrap();
             assert!(fetched_val.is_none());
         }
+    }
+
+    #[tokio::test]
+    async fn empty_range_proof() {
+        let merkle: Merkle<CompactSpace<Node, DynamicMem>> = create_test_merkle();
+        let root = merkle.init_root().unwrap();
+
+        assert!(merkle
+            .range_proof::<&[u8]>(root, None, None, None)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn full_range_proof() {
+        let mut merkle: Merkle<CompactSpace<Node, DynamicMem>> = create_test_merkle();
+        let root = merkle.init_root().unwrap();
+        // insert values
+        for key_val in u8::MIN..=u8::MAX {
+            let key = &[key_val];
+            let val = &[key_val];
+
+            merkle.insert(key, val.to_vec(), root).unwrap();
+        }
+        merkle.flush_dirty();
+
+        let rangeproof = merkle
+            .range_proof::<&[u8]>(root, None, None, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(rangeproof.middle.len(), (u8::MAX - 1).into());
+        assert_ne!(rangeproof.first_key.0, rangeproof.last_key.0);
+        let left_proof = merkle.prove([u8::MIN], root).unwrap();
+        let right_proof = merkle.prove([u8::MAX], root).unwrap();
+        assert_eq!(rangeproof.first_key.0, left_proof.0);
+        assert_eq!(rangeproof.last_key.0, right_proof.0);
+    }
+
+    #[tokio::test]
+    async fn single_value_range_proof() {
+        let mut merkle: Merkle<CompactSpace<Node, DynamicMem>> = create_test_merkle();
+        let root = merkle.init_root().unwrap();
+        // insert values
+        for key_val in u8::MIN..=u8::MAX {
+            let key = &[key_val];
+            let val = &[key_val];
+
+            merkle.insert(key, val.to_vec(), root).unwrap();
+        }
+        merkle.flush_dirty();
+
+        const RANDOM_KEY: u8 = 42;
+        let rangeproof = merkle
+            .range_proof(root, Some([RANDOM_KEY]), None, Some(1))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(rangeproof.first_key.0, rangeproof.last_key.0);
+        assert_eq!(rangeproof.middle.len(), 0);
     }
 }

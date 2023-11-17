@@ -29,7 +29,6 @@ use crate::{
 use async_trait::async_trait;
 use bytemuck::{cast_slice, AnyBitPattern};
 
-use futures::{future::ready, StreamExt as _, TryStreamExt as _};
 use metered::metered;
 use parking_lot::{Mutex, RwLock};
 use std::{
@@ -312,58 +311,10 @@ impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
         last_key: Option<K>,
         limit: Option<usize>,
     ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>>>, api::Error> {
-        let mut stream = self.stream(first_key.as_ref())?;
-
-        // fetch the first key from the stream
-        let first_result = stream.next().await;
-
-        // transpose the Option<Result<T, E>> to Result<Option<T>, E>
-        // If this is an error, the ? operator will return it
-        let Some((key, _)) = first_result.transpose()? else {
-            // nothing returned, either the trie is empty or the key wasn't found
-            return Ok(None);
-        };
-
-        let Some(first_key) = self.single_key_proof(key).await? else {
-            return Ok(None);
-        };
-
-        // we stop streaming if either we hit the limit or the key returned was larger
-        // than the largest key requested
-        let mut middle = stream
-            .take(limit.unwrap_or(usize::MAX))
-            .take_while(|kv_result| {
-                // no last key asked for, so keep going
-                let Some(last_key) = last_key.as_ref() else {
-                    return ready(true);
-                };
-
-                // return the error if there was one
-                let Ok(kv) = kv_result else {
-                    return ready(true);
-                };
-
-                // keep going if the key returned is less than the last key requested
-                ready(kv.0.as_slice() <= last_key.as_ref())
-            })
-            .try_collect::<Vec<(Vec<u8>, Vec<u8>)>>()
-            .await?;
-
-        // remove the last key from middle and do a proof on it
-        let last_key = match middle.pop() {
-            None => return Err(api::Error::RangeTooSmall),
-            Some((last_key, _)) => self.single_key_proof(last_key).await,
-        };
-
-        let Ok(Some(last_key)) = last_key else {
-            return Ok(None);
-        };
-
-        Ok(Some(api::RangeProof {
-            first_key,
-            middle,
-            last_key,
-        }))
+        self.merkle
+            .range_proof(self.header.kv_root, first_key, last_key, limit)
+            .await
+            .map_err(|e| api::Error::InternalError(Box::new(e)))
     }
 }
 
