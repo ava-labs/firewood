@@ -18,7 +18,7 @@ pub const SIZE: usize = MAX_CHILDREN + 1;
 
 #[derive(PartialEq, Eq, Clone)]
 pub struct BranchNode {
-    pub(crate) path: PartialPath,
+    // pub(crate) path: PartialPath,
     pub(crate) children: [Option<DiskAddress>; MAX_CHILDREN],
     pub(crate) value: Option<Data>,
     pub(crate) children_encoded: [Option<Vec<u8>>; MAX_CHILDREN],
@@ -27,7 +27,7 @@ pub struct BranchNode {
 impl Debug for BranchNode {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), FmtError> {
         write!(f, "[Branch")?;
-        write!(f, " path={:?}", self.path)?;
+        // write!(f, " path={:?}", self.path)?;
 
         for (i, c) in self.children.iter().enumerate() {
             if let Some(c) = c {
@@ -54,13 +54,13 @@ impl Debug for BranchNode {
 
 impl BranchNode {
     pub fn new(
-        path: PartialPath,
+        _path: PartialPath,
         chd: [Option<DiskAddress>; MAX_CHILDREN],
         value: Option<Vec<u8>>,
         chd_encoded: [Option<Vec<u8>>; MAX_CHILDREN],
     ) -> Self {
         BranchNode {
-            path,
+            // path,
             children: chd,
             value: value.map(Data),
             children_encoded: chd_encoded,

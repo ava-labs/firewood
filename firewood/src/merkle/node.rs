@@ -174,7 +174,7 @@ impl NodeType {
 
     pub fn path_mut(&mut self) -> &mut PartialPath {
         match self {
-            NodeType::Branch(u) => &mut u.path,
+            NodeType::Branch(_u) => todo!(),
             NodeType::Leaf(node) => &mut node.path,
             NodeType::Extension(node) => &mut node.path,
         }
@@ -208,7 +208,7 @@ impl Node {
                 is_encoded_longer_than_hash_len: OnceLock::new(),
                 encoded: OnceLock::new(),
                 inner: NodeType::Branch(BranchNode {
-                    path: vec![].into(),
+                    // path: vec![].into(),
                     children: [Some(DiskAddress::null()); MAX_CHILDREN],
                     value: Some(Data(Vec::new())),
                     children_encoded: Default::default(),
@@ -385,7 +385,7 @@ impl Storable for Node {
                     root_hash,
                     is_encoded_longer_than_hash_len,
                     NodeType::Branch(BranchNode {
-                        path: vec![].into(),
+                        // path: vec![].into(),
                         children: chd,
                         value,
                         children_encoded: chd_encoded,
@@ -667,7 +667,7 @@ pub(super) mod tests {
             .unwrap_or_default();
 
         Node::branch(BranchNode {
-            path: vec![].into(),
+            // path: vec![].into(),
             children,
             value: value.map(Data),
             children_encoded,
