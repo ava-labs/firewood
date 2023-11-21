@@ -219,11 +219,14 @@ impl BranchNode {
 }
 
 #[derive(PartialEq, Eq, Clone)]
-pub struct LeafNode(pub(super) PartialPath, pub(super) Data);
+pub struct LeafNode {
+    pub(super) path: PartialPath,
+    pub(super) data: Data,
+}
 
 impl Debug for LeafNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        write!(f, "[Leaf {:?} {}]", self.0, hex::encode(&*self.1))
+        write!(f, "[Leaf {:?} {}]", self.path, hex::encode(&*self.data))
     }
 }
 
@@ -232,8 +235,8 @@ impl LeafNode {
         bincode::DefaultOptions::new()
             .serialize(
                 [
-                    Encoded::Raw(from_nibbles(&self.0.encode(true)).collect()),
-                    Encoded::Raw(self.1.to_vec()),
+                    Encoded::Raw(from_nibbles(&self.path.encode(true)).collect()),
+                    Encoded::Raw(self.data.to_vec()),
                 ]
                 .as_slice(),
             )
@@ -241,15 +244,18 @@ impl LeafNode {
     }
 
     pub fn new(path: Vec<u8>, data: Vec<u8>) -> Self {
-        LeafNode(PartialPath(path), Data(data))
+        LeafNode {
+            path: PartialPath(path),
+            data: Data(data),
+        }
     }
 
     pub fn path(&self) -> &PartialPath {
-        &self.0
+        &self.path
     }
 
     pub fn data(&self) -> &Data {
-        &self.1
+        &self.data
     }
 }
 
@@ -426,7 +432,7 @@ impl NodeType {
     pub fn path_mut(&mut self) -> &mut PartialPath {
         match self {
             NodeType::Branch(u) => &mut u.path,
-            NodeType::Leaf(node) => &mut node.0,
+            NodeType::Leaf(node) => &mut node.path,
             NodeType::Extension(node) => &mut node.path,
         }
     }
@@ -499,7 +505,7 @@ impl Node {
     }
 
     pub fn leaf(path: PartialPath, data: Data) -> Self {
-        Self::from(NodeType::Leaf(LeafNode(path, data)))
+        Self::from(NodeType::Leaf(LeafNode { path, data }))
     }
 
     pub fn inner(&self) -> &NodeType {
@@ -745,7 +751,7 @@ impl Storable for Node {
                 Ok(Self::new_from_hash(
                     root_hash,
                     is_encoded_longer_than_hash_len,
-                    NodeType::Leaf(LeafNode(path, value)),
+                    NodeType::Leaf(LeafNode { path, data: value }),
                 ))
             }
             _ => Err(ShaleError::InvalidNodeType),
@@ -781,7 +787,7 @@ impl Storable for Node {
                             None => 1,
                         }
                 }
-                NodeType::Leaf(n) => 1 + 4 + n.0.dehydrated_len() + n.1.len() as u64,
+                NodeType::Leaf(n) => 1 + 4 + n.path.dehydrated_len() + n.data.len() as u64,
             }
     }
 
@@ -851,11 +857,11 @@ impl Storable for Node {
             }
             NodeType::Leaf(n) => {
                 cur.write_all(&[Self::LEAF_NODE])?;
-                let path: Vec<u8> = from_nibbles(&n.0.encode(true)).collect();
+                let path: Vec<u8> = from_nibbles(&n.path.encode(true)).collect();
                 cur.write_all(&[path.len() as u8])?;
-                cur.write_all(&(n.1.len() as u32).to_le_bytes())?;
+                cur.write_all(&(n.data.len() as u32).to_le_bytes())?;
                 cur.write_all(&path)?;
-                cur.write_all(&n.1).map_err(ShaleError::Io)
+                cur.write_all(&n.data).map_err(ShaleError::Io)
             }
         }
     }
