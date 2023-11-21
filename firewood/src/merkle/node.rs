@@ -141,7 +141,7 @@ impl NodeType {
                 let decoded_key_nibbles = Nibbles::<0>::new(&decoded_key);
 
                 let (cur_key_path, term) =
-                    dbg!(PartialPath::from_nibbles(decoded_key_nibbles.into_iter()));
+                    PartialPath::from_nibbles(decoded_key_nibbles.into_iter());
 
                 let cur_key = cur_key_path.into_inner();
                 let data: Vec<u8> = items.next().unwrap().decode()?;
