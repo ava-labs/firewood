@@ -20,7 +20,7 @@ use crate::nibbles::Nibbles;
 
 use super::{from_nibbles, PartialPath, TrieHash, TRIE_HASH_LEN};
 
-pub const NBRANCH: usize = 16;
+pub const MAX_CHILDREN: usize = 16;
 
 const EXT_NODE_SIZE: usize = 2;
 const BRANCH_NODE_SIZE: usize = 17;
@@ -60,9 +60,9 @@ impl<T: DeserializeOwned + AsRef<[u8]>> Encoded<T> {
 #[derive(PartialEq, Eq, Clone)]
 pub struct BranchNode {
     pub(super) path: PartialPath,
-    pub(super) children: [Option<DiskAddress>; NBRANCH],
+    pub(super) children: [Option<DiskAddress>; MAX_CHILDREN],
     pub(super) value: Option<Data>,
-    pub(super) children_encoded: [Option<Vec<u8>>; NBRANCH],
+    pub(super) children_encoded: [Option<Vec<u8>>; MAX_CHILDREN],
 }
 
 impl Debug for BranchNode {
@@ -119,7 +119,7 @@ impl BranchNode {
         let value = Some(data).filter(|data| !data.is_empty());
 
         // encode all children.
-        let mut chd_encoded: [Option<Vec<u8>>; NBRANCH] = Default::default();
+        let mut chd_encoded: [Option<Vec<u8>>; MAX_CHILDREN] = Default::default();
 
         // we popped the last element, so their should only be NBRANCH items left
         for (i, chd) in items.into_iter().enumerate() {
@@ -130,12 +130,17 @@ impl BranchNode {
         // TODO: add path
         let path = Vec::new().into();
 
-        Ok(BranchNode::new(path, [None; NBRANCH], value, chd_encoded))
+        Ok(BranchNode::new(
+            path,
+            [None; MAX_CHILDREN],
+            value,
+            chd_encoded,
+        ))
     }
 
     fn encode<S: ShaleStore<Node>>(&self, store: &S) -> Vec<u8> {
         // TODO: add path to encoded node
-        let mut list = <[Encoded<Vec<u8>>; NBRANCH + 1]>::default();
+        let mut list = <[Encoded<Vec<u8>>; MAX_CHILDREN + 1]>::default();
 
         for (i, c) in self.children.iter().enumerate() {
             match c {
@@ -175,7 +180,8 @@ impl BranchNode {
         }
 
         if let Some(Data(val)) = &self.value {
-            list[NBRANCH] = Encoded::Data(bincode::DefaultOptions::new().serialize(val).unwrap());
+            list[MAX_CHILDREN] =
+                Encoded::Data(bincode::DefaultOptions::new().serialize(val).unwrap());
         }
 
         bincode::DefaultOptions::new()
@@ -185,9 +191,9 @@ impl BranchNode {
 
     pub fn new(
         path: PartialPath,
-        chd: [Option<DiskAddress>; NBRANCH],
+        chd: [Option<DiskAddress>; MAX_CHILDREN],
         value: Option<Vec<u8>>,
-        chd_encoded: [Option<Vec<u8>>; NBRANCH],
+        chd_encoded: [Option<Vec<u8>>; MAX_CHILDREN],
     ) -> Self {
         BranchNode {
             path,
@@ -201,19 +207,19 @@ impl BranchNode {
         &self.value
     }
 
-    pub fn chd(&self) -> &[Option<DiskAddress>; NBRANCH] {
+    pub fn chd(&self) -> &[Option<DiskAddress>; MAX_CHILDREN] {
         &self.children
     }
 
-    pub fn chd_mut(&mut self) -> &mut [Option<DiskAddress>; NBRANCH] {
+    pub fn chd_mut(&mut self) -> &mut [Option<DiskAddress>; MAX_CHILDREN] {
         &mut self.children
     }
 
-    pub fn chd_encode(&self) -> &[Option<Vec<u8>>; NBRANCH] {
+    pub fn chd_encode(&self) -> &[Option<Vec<u8>>; MAX_CHILDREN] {
         &self.children_encoded
     }
 
-    pub fn chd_encoded_mut(&mut self) -> &mut [Option<Vec<u8>>; NBRANCH] {
+    pub fn chd_encoded_mut(&mut self) -> &mut [Option<Vec<u8>>; MAX_CHILDREN] {
         &mut self.children_encoded
     }
 }
@@ -466,7 +472,7 @@ impl Node {
                 encoded: OnceLock::new(),
                 inner: NodeType::Branch(BranchNode {
                     path: vec![].into(),
-                    children: [Some(DiskAddress::null()); NBRANCH],
+                    children: [Some(DiskAddress::null()); MAX_CHILDREN],
                     value: Some(Data(Vec::new())),
                     children_encoded: Default::default(),
                 }),
@@ -569,7 +575,7 @@ impl Storable for Node {
         match meta_raw.as_deref()[33] {
             Self::BRANCH_NODE => {
                 // TODO: add path
-                let branch_header_size = NBRANCH as u64 * 8 + 4;
+                let branch_header_size = MAX_CHILDREN as u64 * 8 + 4;
                 let node_raw = mem.get_view(addr + META_SIZE, branch_header_size).ok_or(
                     ShaleError::InvalidCacheView {
                         offset: addr + META_SIZE,
@@ -577,7 +583,7 @@ impl Storable for Node {
                     },
                 )?;
                 let mut cur = Cursor::new(node_raw.as_deref());
-                let mut chd = [None; NBRANCH];
+                let mut chd = [None; MAX_CHILDREN];
                 let mut buff = [0; 8];
                 for chd in chd.iter_mut() {
                     cur.read_exact(&mut buff)?;
@@ -601,7 +607,7 @@ impl Storable for Node {
                             .as_deref(),
                     ))
                 };
-                let mut chd_encoded: [Option<Vec<u8>>; NBRANCH] = Default::default();
+                let mut chd_encoded: [Option<Vec<u8>>; MAX_CHILDREN] = Default::default();
                 let offset = if raw_len == u32::MAX as u64 {
                     addr + META_SIZE + branch_header_size as usize
                 } else {
@@ -771,7 +777,7 @@ impl Storable for Node {
                             None => 1,
                         }
                     }
-                    NBRANCH as u64 * 8
+                    MAX_CHILDREN as u64 * 8
                         + 4
                         + match &n.value {
                             Some(val) => val.len() as u64,
@@ -884,8 +890,8 @@ pub(super) mod tests {
         value: Option<Vec<u8>>,
         repeated_encoded_child: Option<Vec<u8>>,
     ) -> Node {
-        let children: [Option<DiskAddress>; NBRANCH] = from_fn(|i| {
-            if i < NBRANCH / 2 {
+        let children: [Option<DiskAddress>; MAX_CHILDREN] = from_fn(|i| {
+            if i < MAX_CHILDREN / 2 {
                 DiskAddress::from(repeated_disk_address).into()
             } else {
                 None
@@ -895,7 +901,7 @@ pub(super) mod tests {
         let children_encoded = repeated_encoded_child
             .map(|child| {
                 from_fn(|i| {
-                    if i < NBRANCH / 2 {
+                    if i < MAX_CHILDREN / 2 {
                         child.clone().into()
                     } else {
                         None
