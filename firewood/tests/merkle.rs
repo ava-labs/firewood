@@ -8,17 +8,19 @@ use firewood::{
     shale::{cached::DynamicMem, compact::CompactSpace},
 };
 use rand::Rng;
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Write};
 
 type Store = CompactSpace<Node, DynamicMem>;
 
-fn merkle_build_test<K: AsRef<[u8]> + std::cmp::Ord + Clone, V: AsRef<[u8]> + Clone>(
+fn merkle_build_test<
+    K: AsRef<[u8]> + std::cmp::Ord + Clone + std::fmt::Debug,
+    V: AsRef<[u8]> + Clone,
+>(
     items: Vec<(K, V)>,
     meta_size: u64,
     compact_size: u64,
 ) -> Result<MerkleSetup<Store, Bincode>, DataStoreError> {
     let mut merkle = new_merkle(meta_size, compact_size);
-
     for (k, v) in items.iter() {
         merkle.insert(k, v.as_ref().to_vec())?;
     }
@@ -64,12 +66,19 @@ fn test_root_hash_fuzz_insertions() -> Result<(), DataStoreError> {
         key
     };
 
-    for _ in 0..10 {
+    for i in 0..10 {
+        dbg!(i);
         let mut items = Vec::new();
         for _ in 0..10 {
             let val: Vec<u8> = (0..8).map(|_| rng.borrow_mut().gen()).collect();
             items.push((keygen(), val));
         }
+
+        if i == 6 {
+            eprintln!("{:?}", &items);
+            dbg!("this one breaks");
+        }
+
         merkle_build_test(items, 0x1000000, 0x1000000)?;
     }
 
@@ -97,54 +106,49 @@ fn test_root_hash_reversed_deletions() -> Result<(), DataStoreError> {
             .collect();
         key
     };
-    for i in 0..10 {
-        let mut items = std::collections::HashMap::new();
-        for _ in 0..10 {
-            let val: Vec<u8> = (0..8).map(|_| rng.borrow_mut().gen()).collect();
-            items.insert(keygen(), val);
-        }
-        let mut items: Vec<_> = items.into_iter().collect();
+
+    for _ in 0..10 {
+        let mut items: Vec<_> = (0..10)
+            .map(|_| keygen())
+            .map(|key| {
+                let val: Vec<u8> = (0..8).map(|_| rng.borrow_mut().gen()).collect();
+                (key, val)
+            })
+            .collect();
+
         items.sort();
+
         let mut merkle = new_merkle(0x100000, 0x100000);
+
         let mut hashes = Vec::new();
-        let mut dumps = Vec::new();
+
         for (k, v) in items.iter() {
-            dumps.push(merkle.dump());
+            hashes.push((merkle.root_hash()?, merkle.dump()?));
             merkle.insert(k, v.to_vec())?;
-            hashes.push(merkle.root_hash());
         }
-        hashes.pop();
-        println!("----");
-        let mut prev_dump = merkle.dump()?;
-        for (((k, _), h), d) in items
-            .iter()
-            .rev()
-            .zip(hashes.iter().rev())
-            .zip(dumps.iter().rev())
-        {
+
+        let mut new_hashes = Vec::new();
+
+        for (k, _) in items.iter().rev() {
+            let before = merkle.dump()?;
             merkle.remove(k)?;
-            let h0 = merkle.root_hash()?.0;
-            if h.as_ref().unwrap().0 != h0 {
-                for (k, _) in items.iter() {
-                    println!("{}", hex::encode(k));
-                }
-                println!(
-                    "{} != {}",
-                    hex::encode(**h.as_ref().unwrap()),
-                    hex::encode(h0)
-                );
-                println!("== before {} ===", hex::encode(k));
-                print!("{prev_dump}");
-                println!("== after {} ===", hex::encode(k));
-                print!("{}", merkle.dump()?);
-                println!("== should be ===");
-                print!("{:?}", d);
-                panic!();
-            }
-            prev_dump = merkle.dump()?;
+            new_hashes.push((merkle.root_hash()?, k, before, merkle.dump()?));
         }
-        println!("i = {i}");
+
+        hashes.reverse();
+
+        for i in 0..hashes.len() {
+            let (new_hash, key, before_removal, after_removal) = &new_hashes[i];
+            let (expected_hash, expected_dump) = &hashes[i];
+            let key = key.iter().fold(String::new(), |mut s, b| {
+                let _ = write!(s, "{:02x}", b);
+                s
+            });
+
+            assert_eq!(new_hash, expected_hash, "\n\nkey: {key}\nbefore:\n{before_removal}\nafter:\n{after_removal}\n\nexpected:\n{expected_dump}\n");
+        }
     }
+
     Ok(())
 }
 
@@ -169,38 +173,59 @@ fn test_root_hash_random_deletions() -> Result<(), DataStoreError> {
             .collect();
         key
     };
+
     for i in 0..10 {
         let mut items = std::collections::HashMap::new();
+
         for _ in 0..10 {
             let val: Vec<u8> = (0..8).map(|_| rng.borrow_mut().gen()).collect();
             items.insert(keygen(), val);
         }
+
         let mut items_ordered: Vec<_> = items.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         items_ordered.sort();
         items_ordered.shuffle(&mut *rng.borrow_mut());
         let mut merkle = new_merkle(0x100000, 0x100000);
+
         for (k, v) in items.iter() {
+            dbg!(&k, &v);
             merkle.insert(k, v.to_vec())?;
         }
+
+        for (k, v) in items.iter() {
+            dbg!(k);
+            assert_eq!(&*merkle.get(k)?.unwrap(), &v[..]);
+            assert_eq!(&*merkle.get_mut(k)?.unwrap().get(), &v[..]);
+        }
+
         for (k, _) in items_ordered.into_iter() {
             assert!(merkle.get(&k)?.is_some());
             assert!(merkle.get_mut(&k)?.is_some());
+
             merkle.remove(&k)?;
+
             assert!(merkle.get(&k)?.is_none());
             assert!(merkle.get_mut(&k)?.is_none());
+
             items.remove(&k);
+
             for (k, v) in items.iter() {
+                dbg!(k);
                 assert_eq!(&*merkle.get(k)?.unwrap(), &v[..]);
                 assert_eq!(&*merkle.get_mut(k)?.unwrap().get(), &v[..]);
             }
+
             let h = triehash::trie_root::<keccak_hasher::KeccakHasher, Vec<_>, _, _>(
                 items.iter().collect(),
             );
+
             let h0 = merkle.root_hash()?;
+
             if h[..] != *h0 {
                 println!("{} != {}", hex::encode(h), hex::encode(*h0));
             }
         }
+
         println!("i = {i}");
     }
     Ok(())

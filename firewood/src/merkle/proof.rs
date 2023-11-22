@@ -440,6 +440,17 @@ fn locate_subproof(
             Ok((sub_proof.into(), key_nibbles))
         }
         NodeType::Branch(n) => {
+            let partial_path = &n.path.0;
+
+            let does_not_match = key_nibbles.size_hint().0 < partial_path.len()
+                || !partial_path
+                    .iter()
+                    .all(|val| key_nibbles.next() == Some(*val));
+
+            if dbg!(does_not_match) {
+                return Ok((None, Nibbles::<0>::new(&[]).into_iter()));
+            }
+
             let Some(index) = key_nibbles.next().map(|nib| nib as usize) else {
                 let encoded = n.value;
 
