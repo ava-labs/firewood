@@ -40,7 +40,7 @@ fn main() -> Result<(), WalError> {
     let store = WalStoreImpl::new(wal_dir, true).unwrap();
     let mut wal = block_on(loader.load(store, recover, 0)).unwrap();
     for _ in 0..3 {
-        test(
+        let _ = test(
             ["hi", "hello", "lol"]
                 .iter()
                 .map(|s| s.to_string())
@@ -49,7 +49,7 @@ fn main() -> Result<(), WalError> {
         );
     }
     for _ in 0..3 {
-        test(
+        let _ = test(
             vec!["a".repeat(10), "b".repeat(100), "c".repeat(1000)],
             &mut wal,
         );
@@ -58,7 +58,7 @@ fn main() -> Result<(), WalError> {
     let store = WalStoreImpl::new(wal_dir, false).unwrap();
     let mut wal = block_on(loader.load(store, recover, 0)).unwrap();
     for _ in 0..3 {
-        test(
+        let _ = test(
             vec![
                 "a".repeat(10),
                 "b".repeat(100),
