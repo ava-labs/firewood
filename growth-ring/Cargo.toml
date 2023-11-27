@@ -32,3 +32,6 @@ test-case = "3.1.0"
 name = "growthring"
 path = "src/lib.rs"
 crate-type = ["dylib", "rlib", "staticlib"]
+
+[lints.clippy]
+missing_const_for_fn = "warn"

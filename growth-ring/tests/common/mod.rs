@@ -21,7 +21,7 @@ pub trait FailGen {
 struct FileContentEmul(RefCell<Vec<u8>>);
 
 impl FileContentEmul {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         FileContentEmul(RefCell::new(Vec::new()))
     }
 }
@@ -188,7 +188,7 @@ pub struct SingleFailGen {
 }
 
 impl SingleFailGen {
-    pub fn new(fail_point: usize) -> Self {
+    pub const fn new(fail_point: usize) -> Self {
         SingleFailGen {
             cnt: std::cell::Cell::new(0),
             fail_point,
@@ -215,7 +215,7 @@ impl FailGen for ZeroFailGen {
 pub struct CountFailGen(std::cell::Cell<usize>);
 
 impl CountFailGen {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         CountFailGen(std::cell::Cell::new(0))
     }
     pub fn get_count(&self) -> usize {
@@ -235,7 +235,7 @@ impl FailGen for CountFailGen {
 pub struct PaintStrokes(Vec<(u32, u32, u32)>);
 
 impl PaintStrokes {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         PaintStrokes(Vec::new())
     }
 
