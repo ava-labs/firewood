@@ -98,8 +98,7 @@ fn main() -> Result<(), WalError> {
         }
     }
     for (rec, ans) in
-        block_on(wal.read_recent_records(100, &growthring::wal::RecoverPolicy::Strict))
-            ?
+        block_on(wal.read_recent_records(100, &growthring::wal::RecoverPolicy::Strict))?
             .into_iter()
             .zip(history.into_iter().rev())
     {
