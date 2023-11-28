@@ -235,7 +235,6 @@ mod test {
         assert_eq!(it.next(), Some(0));
         assert!(it.is_empty());
         assert_eq!(it.size_hint(), (0, Some(0)));
-
     }
     #[test]
     fn not_empty_because_of_data() {
