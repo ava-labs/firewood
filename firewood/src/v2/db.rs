@@ -1,16 +1,14 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::{fmt::Debug, ops::DerefMut, sync::Arc};
-
-use tokio::sync::Mutex;
-
-use async_trait::async_trait;
-
 use crate::{
     db::DbError,
+    merkle::proof::HashKey,
     v2::api::{self, Batch, KeyType, ValueType},
 };
+use async_trait::async_trait;
+use std::{fmt::Debug, ops::DerefMut, sync::Arc};
+use tokio::sync::Mutex;
 
 use super::propose;
 
@@ -57,11 +55,11 @@ where
 
     type Proposal = propose::Proposal<T>;
 
-    async fn revision(&self, _hash: api::HashKey) -> Result<Arc<Self::Historical>, api::Error> {
+    async fn revision(&self, _hash: HashKey) -> Result<Arc<Self::Historical>, api::Error> {
         todo!()
     }
 
-    async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
+    async fn root_hash(&self) -> Result<HashKey, api::Error> {
         todo!()
     }
 

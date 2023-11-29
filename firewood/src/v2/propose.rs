@@ -1,13 +1,13 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::{collections::BTreeMap, fmt::Debug, sync::Arc};
-
-use async_trait::async_trait;
-
-use crate::{merkle::Proof, v2::api};
-
 use super::api::{KeyType, ValueType};
+use crate::{
+    merkle::proof::{HashKey, Proof},
+    v2::api,
+};
+use async_trait::async_trait;
+use std::{collections::BTreeMap, fmt::Debug, sync::Arc};
 
 #[derive(Clone, Debug)]
 pub(crate) enum KeyOp<V: ValueType> {
@@ -101,7 +101,7 @@ impl<T> Proposal<T> {
 
 #[async_trait]
 impl<T: api::DbView + Send + Sync> api::DbView for Proposal<T> {
-    async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
+    async fn root_hash(&self) -> Result<HashKey, api::Error> {
         todo!()
     }
 

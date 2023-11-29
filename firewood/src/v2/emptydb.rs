@@ -2,10 +2,10 @@
 // See the file LICENSE.md for licensing terms.
 
 use super::{
-    api::{Batch, Db, DbView, Error, HashKey, KeyType, RangeProof, ValueType},
+    api::{Batch, Db, DbView, Error, KeyType, RangeProof, ValueType},
     propose::{Proposal, ProposalBase},
 };
-use crate::merkle::Proof;
+use crate::merkle::{proof::HashKey, Proof};
 use async_trait::async_trait;
 use std::sync::Arc;
 

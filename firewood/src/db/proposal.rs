@@ -6,10 +6,9 @@ use super::{
     DbHeader, DbInner, DbRev, DbRevInner, SharedStore, Store, Universe, MERKLE_META_SPACE,
     MERKLE_PAYLOAD_SPACE, ROOT_HASH_SPACE,
 };
-use crate::merkle::Proof;
-use crate::shale::CachedStore;
 use crate::{
-    merkle::{TrieHash, TRIE_HASH_LEN},
+    merkle::{proof::HashKey, Proof, TrieHash, TRIE_HASH_LEN},
+    shale::CachedStore,
     storage::{buffer::BufferWrite, AshRecord, StoreRevMut},
     v2::api::{self, KeyType, ValueType},
 };
@@ -272,7 +271,7 @@ impl Proposal {
 
 #[async_trait]
 impl api::DbView for Proposal {
-    async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
+    async fn root_hash(&self) -> Result<HashKey, api::Error> {
         self.get_revision()
             .kv_root_hash()
             .map(|hash| hash.0)

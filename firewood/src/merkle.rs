@@ -1,8 +1,10 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
-use crate::nibbles::Nibbles;
-use crate::shale::{self, disk_address::DiskAddress, ObjWriteError, ShaleError, ShaleStore};
-use crate::v2::api;
+use crate::{
+    nibbles::Nibbles,
+    shale::{self, disk_address::DiskAddress, ObjWriteError, ShaleError, ShaleStore},
+    v2::api,
+};
 use futures::{Stream, StreamExt, TryStreamExt};
 use sha3::Digest;
 use std::{
@@ -1099,6 +1101,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
         K: AsRef<[u8]>,
     {
         let mut proofs = HashMap::new();
+
         if root.is_null() {
             return Ok(Proof(proofs));
         }
@@ -1135,6 +1138,7 @@ impl<S: ShaleStore<Node> + Send + Sync> Merkle<S> {
             let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(encoded).into();
             proofs.insert(hash, encoded.to_vec());
         }
+
         Ok(Proof(proofs))
     }
 

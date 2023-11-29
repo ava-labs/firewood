@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::merkle::Proof;
+use crate::merkle::proof::{HashKey, Proof};
 use async_trait::async_trait;
 use std::{fmt::Debug, sync::Arc};
 
@@ -21,14 +21,6 @@ impl<T> KeyType for T where T: AsRef<[u8]> + Send + Sync + Debug {}
 pub trait ValueType: AsRef<[u8]> + Send + Sync + Debug + 'static {}
 
 impl<T> ValueType for T where T: AsRef<[u8]> + Send + Sync + Debug + 'static {}
-
-/// The type and size of a single hash key
-/// These are 256-bit hashes that are used for a variety of reasons:
-///  - They identify a version of the datastore at a specific point
-///    in time
-///  - They are used to provide integrity at different points in a
-///    proof
-pub type HashKey = [u8; 32];
 
 /// A key/value pair operation. Only put (upsert) and delete are
 /// supported

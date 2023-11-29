@@ -1,23 +1,33 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::ops::Deref;
-
-use crate::shale::{disk_address::DiskAddress, ShaleError, ShaleStore};
-use crate::v2::api::HashKey;
-use nix::errno::Errno;
-use sha3::Digest;
-use thiserror::Error;
-
-use crate::nibbles::Nibbles;
-use crate::nibbles::NibblesIterator;
 use crate::{
     db::DbError,
     merkle::{to_nibble_array, Merkle, MerkleError, Node, NodeType},
     merkle_util::{new_merkle, DataStoreError, MerkleSetup},
+    nibbles::{Nibbles, NibblesIterator},
+    shale::{disk_address::DiskAddress, ShaleError, ShaleStore},
 };
+use nix::errno::Errno;
+use sha3::Digest;
+use std::{cmp::Ordering, collections::HashMap, ops::Deref};
+use thiserror::Error;
+
+/// A proof that a single key is present
+///
+/// The generic N represents the storage for the node data
+#[derive(Clone, Debug)]
+pub struct Proof<N>(pub HashMap<HashKey, N>);
+
+/// The type and size of a single hash key
+/// These are 256-bit hashes that are used for a variety of reasons:
+///  - They identify a version of the datastore at a specific point
+///    in time
+///  - They are used to provide integrity at different points in a
+///    proof
+pub type HashKey = [u8; 32];
+
+// TODO: move this file inside the merkle mod.
 
 #[derive(Debug, Error)]
 pub enum ProofError {
@@ -85,17 +95,10 @@ impl From<DbError> for ProofError {
     }
 }
 
-/// A proof that a single key is present
-///
-/// The generic N represents the storage for the node data
-#[derive(Clone, Debug)]
-pub struct Proof<N>(pub HashMap<HashKey, N>);
-
 /// SubProof contains the encoded value and the hash value of a node that maps
 /// to a single proof step. If reaches an end step during proof verification,
 /// the hash value will be none, and the encoded value will be the value of the
 /// node.
-
 #[derive(Debug)]
 struct SubProof {
     encoded: Vec<u8>,
