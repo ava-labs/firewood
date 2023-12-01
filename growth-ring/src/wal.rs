@@ -112,7 +112,6 @@ const fn counter_lt(a: u32, b: u32) -> bool {
     }
 }
 
-
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, AnyBitPattern, NoUninit)]
 struct Header {
@@ -301,7 +300,6 @@ impl<F: WalFile + 'static, S: WalStore<F>> WalFilePool<F, S> {
             .copied()
             .ok_or(WalError::Other("short read".to_string()))
     }
-
 
     async fn write_header(&self, header: Header) -> Result<(), WalError> {
         self.header_file
