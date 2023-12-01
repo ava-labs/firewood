@@ -165,8 +165,10 @@ impl BranchNode {
                     }
                 }
 
-                // I'm not sure that this case makes sense. Why would there be an encoded child if there isn't a
-                // a disk-address in the same slot?
+                // TODO:
+                // we need a better solution for this. This is only used for reconstructing a
+                // merkle-tree in memory. The proper way to do it is to abstract a trait for nodes
+                // but that's a heavy lift.
                 // TODO:
                 // change the data-structure children: [(Option<DiskAddress>, Option<Vec<u8>>); Self::MAX_CHILDREN]
                 None => {
