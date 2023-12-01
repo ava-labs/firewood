@@ -26,7 +26,7 @@ mod extension;
 mod leaf;
 mod partial_path;
 
-pub use branch::{BranchNode, SIZE as BRANCH_NODE_SIZE};
+pub use branch::BranchNode;
 pub use extension::ExtNode;
 pub use leaf::{LeafNode, SIZE as LEAF_NODE_SIZE};
 pub use partial_path::PartialPath;
@@ -469,12 +469,12 @@ impl Storable for Node {
     }
 }
 
-pub struct EncodedNode<T: ?Sized> {
+pub struct EncodedNode<T> {
     pub(crate) node: EncodedNodeType,
     pub(crate) phantom: PhantomData<T>,
 }
 
-impl<T: ?Sized> EncodedNode<T> {
+impl<T> EncodedNode<T> {
     pub fn new(node: EncodedNodeType) -> Self {
         Self {
             node,
@@ -571,7 +571,7 @@ impl<'de> Deserialize<'de> for EncodedNode<Bincode> {
                     phantom: PhantomData,
                 })
             }
-            BRANCH_NODE_SIZE => {
+            BranchNode::MSIZE => {
                 let mut children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
                 let mut value: Option<Data> = Default::default();
                 let len = items.len();

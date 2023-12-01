@@ -19,7 +19,6 @@ pub type DataLen = u32;
 pub type EncodedChildLen = u8;
 
 const MAX_CHILDREN: usize = 16;
-pub const SIZE: usize = MAX_CHILDREN + 1;
 
 #[derive(PartialEq, Eq, Clone)]
 pub struct BranchNode {
