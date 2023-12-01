@@ -112,7 +112,8 @@ const fn counter_lt(a: u32, b: u32) -> bool {
     }
 }
 
-#[repr(C)]
+
+#[repr(transparent)]
 #[derive(Debug, Clone, Copy, AnyBitPattern, NoUninit)]
 struct Header {
     /// all preceding files (<fid) could be removed if not yet
@@ -301,9 +302,10 @@ impl<F: WalFile + 'static, S: WalStore<F>> WalFilePool<F, S> {
             .ok_or(WalError::Other("short read".to_string()))
     }
 
-    async fn write_header(&self, header: &Header) -> Result<(), WalError> {
+
+    async fn write_header(&self, header: Header) -> Result<(), WalError> {
         self.header_file
-            .write(0, cast_slice(&[*header]).into())
+            .write(0, cast_slice(&[header]).into())
             .await?;
         Ok(())
     }
@@ -1292,7 +1294,7 @@ impl WalLoader {
             None => 0,
         };
 
-        file_pool.write_header(&Header { recover_fid }).await?;
+        file_pool.write_header(Header { recover_fid }).await?;
 
         let mut skip_remove = false;
         for (fname, f) in scanned.into_iter() {
