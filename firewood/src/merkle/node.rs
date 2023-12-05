@@ -491,6 +491,85 @@ pub enum EncodedNodeType {
 }
 
 // Note that the serializer passed in should always be the same type as T in EncodedNode<T>.
+impl Serialize for EncodedNode<PlainCodec> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::Error;
+
+        let mut list: Vec<Vec<u8>> = Default::default();
+        let (num_chd, chd, has_value, serialized_val) = match &self.node {
+            EncodedNodeType::Leaf(n) => {
+                let serialized_val = Bincode::serialize(&n.data().0)
+                    .map_err(|e| S::Error::custom(format!("encode data error: {e}")))?;
+                let chd: Vec<(u64, Vec<u8>)> = Default::default();
+                (0_u64, chd, true, serialized_val)
+            }
+            EncodedNodeType::Branch { children, value } => {
+                let num_chd = children.iter().filter(|&n| n.is_none()).count();
+                let mut chd: Vec<(u64, Vec<u8>)> = Default::default();
+
+                for (i, c) in children
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, c)| c.as_ref().map(|c| (i, c)))
+                {
+                    if c.len() >= TRIE_HASH_LEN {
+                        let serialized_hash = Bincode::serialize(&Keccak256::digest(c).to_vec())
+                            .map_err(|e| S::Error::custom(format!("encode chd hash error: {e}")))?;
+                        chd.push((i as u64, serialized_hash));
+                    } else {
+                        chd.push((i as u64, c.to_vec()));
+                    }
+                }
+
+                let mut serialized_val = Vec::new();
+                if let Some(Data(val)) = &value {
+                    serialized_val = Bincode::serialize(val)
+                        .map_err(|e| S::Error::custom(format!("encode data error: {e}")))?;
+                }
+
+                (num_chd as u64, chd, value.is_some(), serialized_val)
+            }
+        };
+
+        list.push(
+            PlainCodec::serialize(&num_chd)
+                .map_err(|e| S::Error::custom(format!("encode num_chd error: {e}")))?,
+        );
+        for (index, serialized_hash) in chd {
+            list.push(
+                PlainCodec::serialize(&index)
+                    .map_err(|e| S::Error::custom(format!("encode chd index error: {e}")))?,
+            );
+            list.push(serialized_hash);
+        }
+        list.push(
+            Bincode::serialize(&has_value)
+                .map_err(|e| S::Error::custom(format!("encode value indicator error: {e}")))?,
+        );
+        list.push(serialized_val);
+        // TODO: add path
+
+        let mut seq = serializer.serialize_seq(Some(list.len()))?;
+        for e in list {
+            seq.serialize_element(&e)?;
+        }
+        seq.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        todo!()
+    }
+}
+
+// Note that the serializer passed in should always be the same type as T in EncodedNode<T>.
 impl Serialize for EncodedNode<Bincode> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::Error;
@@ -647,6 +726,34 @@ impl Debug for Bincode {
 }
 
 impl BinarySerde for Bincode {
+    type SerializeError = bincode::Error;
+    type DeserializeError = Self::SerializeError;
+
+    fn new() -> Self {
+        Self(bincode::DefaultOptions::new())
+    }
+
+    fn serialize_impl<T: Serialize>(&self, t: &T) -> Result<Vec<u8>, Self::SerializeError> {
+        self.0.serialize(t)
+    }
+
+    fn deserialize_impl<'de, T: Deserialize<'de>>(
+        &self,
+        bytes: &'de [u8],
+    ) -> Result<T, Self::DeserializeError> {
+        self.0.deserialize(bytes)
+    }
+}
+
+pub struct PlainCodec(pub bincode::DefaultOptions);
+
+impl Debug for PlainCodec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, "PlainCodec")
+    }
+}
+
+impl BinarySerde for PlainCodec {
     type SerializeError = bincode::Error;
     type DeserializeError = Self::SerializeError;
 

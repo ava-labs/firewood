@@ -1399,6 +1399,8 @@ pub fn from_nibbles(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
 
 #[cfg(test)]
 mod tests {
+    use crate::merkle::node::PlainCodec;
+
     use super::*;
     use node::tests::{extension, leaf};
     use shale::{cached::DynamicMem, compact::CompactSpace, CachedStore};
@@ -1412,7 +1414,11 @@ mod tests {
         assert_eq!(n, nibbles);
     }
 
-    pub(super) fn create_test_merkle() -> Merkle<CompactSpace<Node, DynamicMem>, Bincode> {
+    pub(super) fn create_test_merkle<'de, T>() -> Merkle<CompactSpace<Node, DynamicMem>, T>
+    where
+        T: BinarySerde,
+        EncodedNode<T>: serde::Serialize + serde::Deserialize<'de>,
+    {
         const RESERVED: usize = 0x1000;
 
         let mut dm = shale::cached::DynamicMem::new(0x10000, 0);
@@ -1467,7 +1473,7 @@ mod tests {
     #[test_case(branch(Vec::new(), None); "branch without value and chd")]
     #[test_case(extension(vec![1, 2, 3], DiskAddress::null(), vec![4, 5].into()) ; "extension without child address")]
     fn encode_(node: Node) {
-        let merkle = create_test_merkle();
+        let merkle = create_test_merkle::<Bincode>();
 
         let node_ref = merkle.put_node(node).unwrap();
         let encoded = node_ref.get_encoded(merkle.store.as_ref());
@@ -1483,7 +1489,7 @@ mod tests {
     #[test_case(branch(b"value".to_vec(), None); "branch without chd")]
     #[test_case(branch(Vec::new(), None); "branch without value and chd")]
     fn node_encode_decode_(node: Node) {
-        let merkle = create_test_merkle();
+        let merkle = create_test_merkle::<Bincode>();
         let node_ref = merkle.put_node(node.clone()).unwrap();
         let encoded = merkle.encode(&node_ref).unwrap();
         let new_node = Node::from(merkle.decode(encoded.as_ref()).unwrap());
@@ -1492,12 +1498,28 @@ mod tests {
         assert_eq!(new_node_hash, expected_hash);
     }
 
+    #[test_case(leaf(Vec::new(), Vec::new()) ; "empty leaf encoding")]
+    #[test_case(leaf(vec![1, 2, 3], vec![4, 5]) ; "leaf encoding")]
+    #[test_case(branch(b"value".to_vec(), vec![1, 2, 3].into()) ; "branch with chd")]
+    #[test_case(branch(b"value".to_vec(), None); "branch without chd")]
+    #[test_case(branch(Vec::new(), None); "branch without value and chd")]
+    fn node_encode_decode_plain_(node: Node) {
+        let merkle = create_test_merkle::<PlainCodec>();
+        let node_ref = merkle.put_node(node.clone()).unwrap();
+        let encoded = merkle.encode(&node_ref).unwrap();
+        println!("encoded: {:?}", encoded);
+        // let new_node = Node::from(merkle.decode(encoded.as_ref()).unwrap());
+        // let new_node_hash = new_node.get_root_hash(merkle.store.as_ref());
+        // let expected_hash = node.get_root_hash(merkle.store.as_ref());
+        // assert_eq!(new_node_hash, expected_hash);
+    }
+
     #[test]
     fn insert_and_retrieve_one() {
         let key = b"hello";
         let val = b"world";
 
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<Bincode>();
         let root = merkle.init_root().unwrap();
 
         merkle.insert(key, val.to_vec(), root).unwrap();
@@ -1509,7 +1531,7 @@ mod tests {
 
     #[test]
     fn insert_and_retrieve_multiple() {
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<Bincode>();
         let root = merkle.init_root().unwrap();
 
         // insert values
@@ -1541,7 +1563,7 @@ mod tests {
         let key = b"hello";
         let val = b"world";
 
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<Bincode>();
         let root = merkle.init_root().unwrap();
 
         merkle.insert(key, val.to_vec(), root).unwrap();
@@ -1560,7 +1582,7 @@ mod tests {
 
     #[test]
     fn remove_many() {
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<Bincode>();
         let root = merkle.init_root().unwrap();
 
         // insert values
@@ -1591,7 +1613,7 @@ mod tests {
 
     #[test]
     fn get_empty_proof() {
-        let merkle = create_test_merkle();
+        let merkle = create_test_merkle::<Bincode>();
         let root = merkle.init_root().unwrap();
 
         let proof = merkle.prove(b"any-key", root).unwrap();
@@ -1601,7 +1623,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_range_proof() {
-        let merkle = create_test_merkle();
+        let merkle = create_test_merkle::<Bincode>();
         let root = merkle.init_root().unwrap();
 
         assert!(merkle
@@ -1613,7 +1635,7 @@ mod tests {
 
     #[tokio::test]
     async fn full_range_proof() {
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<Bincode>();
         let root = merkle.init_root().unwrap();
         // insert values
         for key_val in u8::MIN..=u8::MAX {
@@ -1641,7 +1663,7 @@ mod tests {
     async fn single_value_range_proof() {
         const RANDOM_KEY: u8 = 42;
 
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<Bincode>();
         let root = merkle.init_root().unwrap();
         // insert values
         for key_val in u8::MIN..=u8::MAX {
@@ -1663,7 +1685,7 @@ mod tests {
 
     #[test]
     fn shared_path_proof() {
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<Bincode>();
         let root = merkle.init_root().unwrap();
 
         let key1 = b"key1";
@@ -1716,7 +1738,7 @@ mod tests {
             ),
         ];
 
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<Bincode>();
         let root = merkle.init_root().unwrap();
 
         for (key, val) in &pairs {
@@ -1743,7 +1765,7 @@ mod tests {
         let val = vec![1];
         let overwrite = vec![2];
 
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<Bincode>();
         let root = merkle.init_root().unwrap();
 
         merkle.insert(&key, val.clone(), root).unwrap();
@@ -1768,7 +1790,7 @@ mod tests {
         let key_2 = vec![0xff, 0x00];
         let val_2 = vec![2];
 
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<Bincode>();
         let root = merkle.init_root().unwrap();
 
         merkle.insert(&key, val.clone(), root).unwrap();
@@ -1792,7 +1814,7 @@ mod tests {
         let key_2 = vec![0xff];
         let val_2 = vec![2];
 
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<Bincode>();
         let root = merkle.init_root().unwrap();
 
         merkle.insert(&key, val.clone(), root).unwrap();
@@ -1818,7 +1840,7 @@ mod tests {
         let key_3 = vec![0xff, 0x0f];
         let val_3 = vec![3];
 
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<Bincode>();
         let root = merkle.init_root().unwrap();
 
         merkle.insert(&key, val.clone(), root).unwrap();
@@ -1850,7 +1872,7 @@ mod tests {
         let key_3 = vec![0xff];
         let val_3 = vec![3];
 
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<Bincode>();
         let root = merkle.init_root().unwrap();
 
         merkle.insert(&key, val.clone(), root).unwrap();
@@ -1882,7 +1904,7 @@ mod tests {
 
         let overwrite = vec![3];
 
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<Bincode>();
         let root = merkle.init_root().unwrap();
 
         merkle.insert(&key, val.clone(), root).unwrap();
@@ -1913,7 +1935,7 @@ mod tests {
 
     #[test]
     fn single_key_proof_with_one_node() {
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<Bincode>();
         let root = merkle.init_root().unwrap();
         let key = b"key";
         let value = b"value";
@@ -1930,7 +1952,7 @@ mod tests {
 
     #[test]
     fn two_key_proof_without_shared_path() {
-        let mut merkle = create_test_merkle();
+        let mut merkle = create_test_merkle::<Bincode>();
         let root = merkle.init_root().unwrap();
 
         let key1 = &[0x00];
