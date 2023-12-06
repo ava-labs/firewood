@@ -1400,7 +1400,6 @@ pub fn from_nibbles(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::StreamExt;
     use node::tests::{extension, leaf};
     use shale::{cached::DynamicMem, compact::CompactSpace, CachedStore};
     use std::sync::Arc;
@@ -1535,47 +1534,6 @@ mod tests {
 
             assert_eq!(fetched_val.as_deref(), val.as_slice().into());
         }
-    }
-
-    #[tokio::test]
-    async fn iterate_empty() {
-        let merkle = create_test_merkle();
-        let root = merkle.init_root().unwrap();
-        let mut it = merkle.get_iter(Some(b"x"), root).unwrap();
-        let next = it.next().await;
-        assert!(next.is_none());
-    }
-
-    #[test_case(Some(&[u8::MIN]); "Starting at first key")]
-    #[test_case(None; "No start specified")]
-    #[test_case(Some(&[128u8]); "Starting in middle")]
-    #[test_case(Some(&[u8::MAX]); "Starting at last key")]
-    #[tokio::test]
-    async fn iterate_many(start: Option<&[u8]>) {
-        let mut merkle = create_test_merkle();
-        let root = merkle.init_root().unwrap();
-
-        // insert all values from u8::MIN to u8::MAX, with the key and value the same
-        for k in u8::MIN..=u8::MAX {
-            merkle.insert([k], vec![k], root).unwrap();
-        }
-
-        let mut it = merkle.get_iter(start, root).unwrap();
-        // we iterate twice because we should get a None then start over
-        for k in start.map(|r| r[0]).unwrap_or_default()..=u8::MAX {
-            let next = it.next().await.unwrap().unwrap();
-            assert_eq!(next.0, next.1,);
-            assert_eq!(next.1, vec![k]);
-        }
-        assert!(it.next().await.is_none());
-
-        // ensure that reading past the end returns all the values
-        for k in u8::MIN..=u8::MAX {
-            let next = it.next().await.unwrap().unwrap();
-            assert_eq!(next.0, next.1);
-            assert_eq!(next.1, vec![k]);
-        }
-        assert!(it.next().await.is_none());
     }
 
     #[test]
