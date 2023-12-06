@@ -6,7 +6,9 @@ use clap::Parser;
 use env_logger::{Builder, Target};
 use log::{info, LevelFilter};
 use rpc::{
-    rpcdb::database_server::DatabaseServer as RpcServer, sync::db_server::DbServer as SyncServer,
+    rpcdb::database_server::DatabaseServer as RpcServer,
+    sync::db_server::DbServer as SyncServer,
+    process_server::process_server_service_server::ProcessServerServiceServer,
     DatabaseService,
 };
 use std::{
@@ -48,16 +50,6 @@ fn temp_path() -> clap::builder::OsStr {
     Box::leak(Box::new(tmpdir.into_path())).as_os_str().into()
 }
 
-/// ```mermaid
-/// sequenceDiagram
-///  Orchestrator->>ProcessServer: Startup (via command line)
-///  ProcessServer->>Firewood: Open or create database
-///  Orchestrator->>+ProcessServer: GRPC request
-///  ProcessServer->>+Firewood: Native API Call
-///  Firewood->>-ProcessServer: Response
-///  ProcessServer->>-Orchestrator: Response
-/// ```
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     // parse command line options
@@ -95,7 +87,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // TODO: graceful shutdown
     Ok(Server::builder()
         .add_service(RpcServer::from_arc(svc.clone()))
-        .add_service(SyncServer::from_arc(svc))
+        .add_service(SyncServer::from_arc(svc.clone()))
+        .add_service(ProcessServerServiceServer::from_arc(svc.clone()))
         .serve(std::net::SocketAddr::new(
             V4(Ipv4Addr::LOCALHOST),
             args.grpc_port,
