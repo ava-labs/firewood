@@ -6,9 +6,8 @@ use clap::Parser;
 use env_logger::{Builder, Target};
 use log::{info, LevelFilter};
 use rpc::{
-    rpcdb::database_server::DatabaseServer as RpcServer,
-    sync::db_server::DbServer as SyncServer,
     process_server::process_server_service_server::ProcessServerServiceServer,
+    rpcdb::database_server::DatabaseServer as RpcServer, sync::db_server::DbServer as SyncServer,
     DatabaseService,
 };
 use std::{
