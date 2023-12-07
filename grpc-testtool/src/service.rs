@@ -61,9 +61,7 @@ impl Deref for Database {
 }
 
 impl Database {
-    async fn latest(
-        &self,
-    ) -> Result<Arc<<EmptyDb as firewood::v2::api::Db>::Historical>, Error> {
+    async fn latest(&self) -> Result<Arc<<EmptyDb as firewood::v2::api::Db>::Historical>, Error> {
         let root_hash = self.root_hash().await?;
         self.revision(root_hash).await
     }
