@@ -26,7 +26,8 @@ tempdir = "0.3.7"
 log = "0.4.20"
 env_logger = "0.10.1"
 chrono = "0.4.31"
-log-panics = { version = "2.1.0", features = ["backtrace", "with-backtrace"] }
+serde_json = "1.0.108"
+serde = { version = "1.0.193", features = ["derive"] }
 
 [build-dependencies]
 tonic-build = "0.10.0"
