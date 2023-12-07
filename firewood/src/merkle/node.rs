@@ -8,7 +8,11 @@ use crate::{
 use bincode::{Error, Options};
 use bitflags::bitflags;
 use enum_as_inner::EnumAsInner;
-use serde::{de::DeserializeOwned, ser::SerializeSeq, Deserialize, Serialize};
+use serde::{
+    de::DeserializeOwned,
+    ser::{SerializeSeq, SerializeTuple},
+    Deserialize, Serialize,
+};
 use sha3::{Digest, Keccak256};
 use std::{
     fmt::Debug,
@@ -498,16 +502,21 @@ impl Serialize for EncodedNode<PlainCodec> {
     {
         use serde::ser::Error;
 
-        let mut list: Vec<Vec<u8>> = Default::default();
-        let (num_chd, chd, has_value, serialized_val) = match &self.node {
+        let (num_chd, chd, serialized_val) = match &self.node {
             EncodedNodeType::Leaf(n) => {
-                let serialized_val = Bincode::serialize(&n.data().0)
-                    .map_err(|e| S::Error::custom(format!("encode data error: {e}")))?;
+                let serialized_val = if n.data().0.is_empty() {
+                    None
+                } else {
+                    Some(
+                        Bincode::serialize(&n.data().0)
+                            .map_err(|e| S::Error::custom(format!("encode data error: {e}")))?,
+                    )
+                };
                 let chd: Vec<(u64, Vec<u8>)> = Default::default();
-                (0_u64, chd, true, serialized_val)
+                (0_u64, chd, serialized_val)
             }
             EncodedNodeType::Branch { children, value } => {
-                let num_chd = children.iter().filter(|&n| n.is_none()).count();
+                let num_chd = children.iter().filter(|&n| n.is_some()).count();
                 let mut chd: Vec<(u64, Vec<u8>)> = Default::default();
 
                 for (i, c) in children
@@ -524,39 +533,29 @@ impl Serialize for EncodedNode<PlainCodec> {
                     }
                 }
 
-                let mut serialized_val = Vec::new();
+                let mut serialized_val = None;
                 if let Some(Data(val)) = &value {
-                    serialized_val = Bincode::serialize(val)
-                        .map_err(|e| S::Error::custom(format!("encode data error: {e}")))?;
+                    serialized_val = Some(
+                        Bincode::serialize(val)
+                            .map_err(|e| S::Error::custom(format!("encode data error: {e}")))?,
+                    );
                 }
 
-                (num_chd as u64, chd, value.is_some(), serialized_val)
+                (num_chd as u64, chd, serialized_val)
             }
         };
 
-        list.push(
-            PlainCodec::serialize(&num_chd)
-                .map_err(|e| S::Error::custom(format!("encode num_chd error: {e}")))?,
-        );
-        for (index, serialized_hash) in chd {
-            list.push(
-                PlainCodec::serialize(&index)
-                    .map_err(|e| S::Error::custom(format!("encode chd index error: {e}")))?,
-            );
-            list.push(serialized_hash);
-        }
-        list.push(
-            Bincode::serialize(&has_value)
-                .map_err(|e| S::Error::custom(format!("encode value indicator error: {e}")))?,
-        );
-        list.push(serialized_val);
-        // TODO: add path
+        let unused_len = 0;
+        let mut tup = serializer.serialize_tuple(unused_len)?;
+        tup.serialize_element(&num_chd)?;
 
-        let mut seq = serializer.serialize_seq(Some(list.len()))?;
-        for e in list {
-            seq.serialize_element(&e)?;
+        for (index, serialized_hash) in chd {
+            tup.serialize_element(&index)?;
+            tup.serialize_element(&serialized_hash)?;
         }
-        seq.end()
+
+        tup.serialize_element(&serialized_val)?;
+        tup.end()
     }
 }
 
@@ -565,6 +564,7 @@ impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
     where
         D: serde::Deserializer<'de>,
     {
+        // Deserialize:
         todo!()
     }
 }
@@ -762,7 +762,10 @@ impl BinarySerde for PlainCodec {
     }
 
     fn serialize_impl<T: Serialize>(&self, t: &T) -> Result<Vec<u8>, Self::SerializeError> {
-        self.0.serialize(t)
+        // Serializes the object directly into a Writer without include the length.
+        let mut writer = Vec::new();
+        self.0.serialize_into(&mut writer, t)?;
+        Ok(writer)
     }
 
     fn deserialize_impl<'de, T: Deserialize<'de>>(

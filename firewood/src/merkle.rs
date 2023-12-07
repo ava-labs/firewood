@@ -1451,7 +1451,7 @@ mod tests {
 
     fn branch(value: Vec<u8>, encoded_child: Option<Vec<u8>>) -> Node {
         let children = Default::default();
-        let value = Some(Data(value));
+        let value = Some(Data(value)).filter(|data| !data.is_empty());
         let mut children_encoded = <[Option<Vec<u8>>; BranchNode::MAX_CHILDREN]>::default();
 
         if let Some(child) = encoded_child {
