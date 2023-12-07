@@ -3,10 +3,11 @@
 
 use firewood::v2::{
     api::{Db, Error},
-    emptydb::{EmptyDb, HistoricalImpl},
+    emptydb::EmptyDb,
 };
 use std::{
     collections::HashMap,
+    ops::Deref,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -51,10 +52,20 @@ impl Default for Database {
     }
 }
 
+impl Deref for Database {
+    type Target = EmptyDb;
+
+    fn deref(&self) -> &Self::Target {
+        &self.db
+    }
+}
+
 impl Database {
-    async fn revision(&self) -> Result<Arc<HistoricalImpl>, Error> {
-        let root_hash = self.db.root_hash().await?;
-        self.db.revision(root_hash).await
+    async fn latest(
+        &self,
+    ) -> Result<Arc<<EmptyDb as firewood::v2::api::Db>::Historical>, Error> {
+        let root_hash = self.root_hash().await?;
+        self.revision(root_hash).await
     }
 }
 
