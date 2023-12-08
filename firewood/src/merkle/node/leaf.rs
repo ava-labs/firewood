@@ -9,7 +9,7 @@ use std::{
 
 use bincode::Options;
 
-use super::{BranchNode, Data, Encoded};
+use super::{Data, Encoded};
 use crate::{
     merkle::{from_nibbles, to_nibble_array, PartialPath},
     shale::{ShaleError::InvalidCacheView, Storable},
@@ -61,15 +61,6 @@ impl LeafNode {
                 .as_slice(),
             )
             .unwrap()
-    }
-
-    pub fn to_branch(self) -> BranchNode {
-        BranchNode::new(
-            self.path,
-            [None; BranchNode::MAX_CHILDREN],
-            Some(self.data.0),
-            Default::default(),
-        )
     }
 }
 
