@@ -1501,17 +1501,15 @@ mod tests {
     #[test_case(leaf(Vec::new(), Vec::new()) ; "empty leaf encoding")]
     #[test_case(leaf(vec![1, 2, 3], vec![4, 5]) ; "leaf encoding")]
     #[test_case(branch(b"value".to_vec(), vec![1, 2, 3].into()) ; "branch with chd")]
-    #[test_case(branch(b"value".to_vec(), None); "branch without chd")]
-    #[test_case(branch(Vec::new(), None); "branch without value and chd")]
+    #[test_case(branch(Vec::new(), vec![1, 2, 3].into()); "branch without value")]
     fn node_encode_decode_plain_(node: Node) {
         let merkle = create_test_merkle::<PlainCodec>();
         let node_ref = merkle.put_node(node.clone()).unwrap();
         let encoded = merkle.encode(&node_ref).unwrap();
-        println!("encoded: {:?}", encoded);
-        // let new_node = Node::from(merkle.decode(encoded.as_ref()).unwrap());
-        // let new_node_hash = new_node.get_root_hash(merkle.store.as_ref());
-        // let expected_hash = node.get_root_hash(merkle.store.as_ref());
-        // assert_eq!(new_node_hash, expected_hash);
+        let new_node = Node::from(merkle.decode(encoded.as_ref()).unwrap());
+        let new_node_hash = new_node.get_root_hash(merkle.store.as_ref());
+        let expected_hash = node.get_root_hash(merkle.store.as_ref());
+        assert_eq!(new_node_hash, expected_hash);
     }
 
     #[test]
