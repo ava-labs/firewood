@@ -84,8 +84,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .filter(None, args.log_level)
         .init();
 
+    tracing_subscriber::fmt::init();
+
     // log to the file and to stderr
-    eprintln!("Database-Server listening on: {}", args.grpc_port);
     info!("Starting up: Listening on {}", args.grpc_port);
 
     let svc = Arc::new(
@@ -100,6 +101,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // TODO: graceful shutdown
     Ok(Server::builder()
+        .trace_fn(|_m| tracing::debug_span!("process-server"))
         .add_service(RpcServer::from_arc(svc.clone()))
         .add_service(SyncServer::from_arc(svc.clone()))
         .add_service(ProcessServerServiceServer::from_arc(svc.clone()))

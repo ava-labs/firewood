@@ -39,6 +39,8 @@ impl<T> IntoStatusResultExt<T> for Result<T, Error> {
         })
     }
 }
+
+#[derive(Debug)]
 pub struct Database {
     db: Db,
     iterators: Arc<Mutex<Iterators>>,
@@ -80,9 +82,10 @@ impl Database {
 }
 
 // TODO: implement Iterator
+#[derive(Debug)]
 struct Iter;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct Iterators {
     map: HashMap<u64, Iter>,
     next_id: AtomicU64,
