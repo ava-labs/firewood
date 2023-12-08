@@ -69,14 +69,6 @@ impl Deref for Database {
     }
 }
 
-impl Deref for Database {
-    type Target = EmptyDb;
-
-    fn deref(&self) -> &Self::Target {
-        &self.db
-    }
-}
-
 impl Database {
     async fn latest(&self) -> Result<Arc<<Db as firewood::v2::api::Db>::Historical>, Error> {
         let root_hash = self.root_hash().await?;
