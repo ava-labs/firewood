@@ -294,6 +294,45 @@ use super::tests::create_test_merkle;
 mod tests {
     use super::*;
     use futures::StreamExt;
+    use test_case::test_case;
+
+    #[tokio::test]
+    async fn iterate_empty() {
+        let merkle = create_test_merkle();
+        let root = merkle.init_root().unwrap();
+        let mut it = merkle.get_iter(Some(b"x"), root).unwrap();
+        let next = it.next().await;
+        assert!(next.is_none());
+    }
+
+    #[test_case(Some(&[u8::MIN]); "Starting at first key")]
+    #[test_case(None; "No start specified")]
+    #[test_case(Some(&[128u8]); "Starting in middle")]
+    #[test_case(Some(&[u8::MAX]); "Starting at last key")]
+    #[tokio::test]
+    async fn iterate_many(start: Option<&[u8]>) {
+        let mut merkle = create_test_merkle();
+        let root = merkle.init_root().unwrap();
+
+        // insert all values from u8::MIN to u8::MAX, with the key and value the same
+        for k in u8::MIN..=u8::MAX {
+            merkle.insert([k], vec![k], root).unwrap();
+        }
+
+        let mut it = merkle.get_iter(start, root).unwrap();
+        // we iterate twice because we should get a None then start over
+        for k in start.map(|r| r[0]).unwrap_or_default()..=u8::MAX {
+            let next = it.next().await.map(|kv| {
+                let (k, v) = kv.unwrap();
+                assert_eq!(k, v);
+                k
+            });
+
+            assert_eq!(next, Some(vec![k]));
+        }
+
+        assert!(it.next().await.is_none());
+    }
 
     #[ignore]
     #[tokio::test]
@@ -301,8 +340,8 @@ mod tests {
         let mut merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
 
-        let first_leaf = &[0x00, 0x0f];
-        let second_leaf = &[0x00, 0x00];
+        let first_leaf = &[0x00, 0x00];
+        let second_leaf = &[0x00, 0x0f];
         let branch = &[0x00];
 
         merkle
@@ -330,5 +369,47 @@ mod tests {
             stream.next().await.unwrap().unwrap(),
             (second_leaf.to_vec(), second_leaf.to_vec())
         );
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn start_at_key_not_in_trie() {
+        let mut merkle = create_test_merkle();
+        let root = merkle.init_root().unwrap();
+
+        let first_key = 0x00;
+        let intermediate = 0x80;
+
+        assert!(first_key < intermediate);
+
+        let key_values = vec![
+            vec![first_key],
+            vec![intermediate, intermediate],
+            vec![intermediate, intermediate, intermediate],
+        ];
+        assert!(key_values[0] < key_values[1]);
+        assert!(key_values[1] < key_values[2]);
+
+        for key in key_values.iter() {
+            merkle.insert(key, key.to_vec(), root).unwrap();
+        }
+
+        let mut stream = merkle.get_iter(Some([intermediate]), root).unwrap();
+
+        let first_expected = key_values[1].as_slice();
+        let first = stream.next().await.unwrap().unwrap();
+
+        assert_eq!(first.0, first.1);
+        assert_eq!(first.0, first_expected);
+
+        let second_expected = key_values[2].as_slice();
+        let second = stream.next().await.unwrap().unwrap();
+
+        assert_eq!(second.0, second.1);
+        assert_eq!(second.0, second_expected);
+
+        let done = stream.next().await;
+
+        assert!(done.is_none());
     }
 }
