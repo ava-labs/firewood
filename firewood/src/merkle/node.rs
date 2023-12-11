@@ -511,28 +511,27 @@ impl Serialize for EncodedNode<PlainCodec> {
     {
         let n = match &self.node {
             EncodedNodeType::Leaf(n) => {
-                let data = Some(n.data.to_vec()).filter(|d| !d.is_empty());
+                let data = Some(n.data.to_vec());
                 let chd: Vec<(u64, Vec<u8>)> = Default::default();
                 let path = from_nibbles(&n.path.encode(true)).collect();
                 EncodedBranchNode { chd, data, path }
             }
             EncodedNodeType::Branch { children, value } => {
-                let mut chd: Vec<(u64, Vec<u8>)> = Default::default();
-
-                for (i, c) in children
+                let chd: Vec<(u64, Vec<u8>)> = children
                     .iter()
                     .enumerate()
-                    .filter_map(|(i, c)| c.as_ref().map(|c| (i, c)))
-                {
-                    if c.len() >= TRIE_HASH_LEN {
-                        let hash = Keccak256::digest(c).to_vec();
-                        chd.push((i as u64, hash));
-                    } else {
-                        chd.push((i as u64, c.to_vec()));
-                    }
-                }
+                    .filter_map(|(i, c)| {
+                        c.as_ref().map(|c| {
+                            if c.len() >= TRIE_HASH_LEN {
+                                (i as u64, Keccak256::digest(c).to_vec())
+                            } else {
+                                (i as u64, c.to_vec())
+                            }
+                        })
+                    })
+                    .collect();
 
-                let data = value.clone().map(|v| v.0);
+                let data = value.as_ref().map(|v| v.0.to_vec());
                 EncodedBranchNode {
                     chd,
                     data,
