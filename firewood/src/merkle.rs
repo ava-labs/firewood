@@ -1451,10 +1451,7 @@ mod tests {
         Merkle::new(store)
     }
 
-    pub(super) fn create_test_merkle<'de>() -> Merkle<CompactSpace<Node, DynamicMem>, Bincode>
-    where
-        EncodedNode<Bincode>: serde::Serialize + serde::Deserialize<'de>,
-    {
+    pub(super) fn create_test_merkle() -> Merkle<CompactSpace<Node, DynamicMem>, Bincode> {
         create_generic_test_merkle::<Bincode>()
     }
 
@@ -1512,7 +1509,8 @@ mod tests {
     #[test_case(leaf(Vec::new(), Vec::new()) ; "empty leaf encoding")]
     #[test_case(leaf(vec![1, 2, 3], vec![4, 5]) ; "leaf encoding")]
     #[test_case(branch(b"value".to_vec(), vec![1, 2, 3].into()) ; "branch with chd")]
-    #[test_case(branch(Vec::new(), vec![1, 2, 3].into()); "branch without value")]
+    #[test_case(branch(b"value".to_vec(), None); "branch without chd")]
+    #[test_case(branch(Vec::new(), None); "branch without value and chd")]
     fn node_encode_decode_plain(node: Node) {
         let merkle = create_test_merkle();
         let node_ref = merkle.put_node(node.clone()).unwrap();

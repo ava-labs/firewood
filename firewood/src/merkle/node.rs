@@ -10,7 +10,7 @@ use bitflags::bitflags;
 use enum_as_inner::EnumAsInner;
 use serde::{
     de::DeserializeOwned,
-    ser::{SerializeSeq, SerializeStruct},
+    ser::{SerializeSeq, SerializeTuple},
     Deserialize, Serialize,
 };
 use sha3::{Digest, Keccak256};
@@ -540,10 +540,10 @@ impl Serialize for EncodedNode<PlainCodec> {
             }
         };
 
-        let mut s = serializer.serialize_struct("", 3)?;
-        s.serialize_field("", &n.chd)?;
-        s.serialize_field("", &n.data)?;
-        s.serialize_field("", &n.path)?;
+        let mut s = serializer.serialize_tuple(3)?;
+        s.serialize_element(&n.chd)?;
+        s.serialize_element(&n.data)?;
+        s.serialize_element(&n.path)?;
         s.end()
     }
 }
@@ -569,7 +569,7 @@ impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
             let value = node.data.map(Data).filter(|data| !data.is_empty());
 
             for (i, chd) in node.chd {
-                children[i as usize] = Some(chd).filter(|chd| !chd.is_empty());
+                children[i as usize] = Some(chd);
             }
 
             let node = EncodedNodeType::Branch {
