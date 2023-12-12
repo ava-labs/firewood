@@ -520,14 +520,13 @@ impl Serialize for EncodedNode<PlainCodec> {
                 let chd: Vec<(u64, Vec<u8>)> = children
                     .iter()
                     .enumerate()
-                    .filter_map(|(i, c)| {
-                        c.as_ref().map(|c| {
-                            if c.len() >= TRIE_HASH_LEN {
-                                (i as u64, Keccak256::digest(c).to_vec())
-                            } else {
-                                (i as u64, c.to_vec())
-                            }
-                        })
+                    .filter_map(|(i, c)| c.as_ref().map(|c| (i as u64, c)))
+                    .map(|(i, c)| {
+                        if c.len() >= TRIE_HASH_LEN {
+                            (i, Keccak256::digest(c).to_vec())
+                        } else {
+                            (i, c.to_vec())
+                        }
                     })
                     .collect();
 
@@ -566,7 +565,7 @@ impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
             Ok(Self::new(node))
         } else {
             let mut children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
-            let value = node.data.map(Data).filter(|data| !data.is_empty());
+            let value = node.data.map(Data);
 
             for (i, chd) in node.chd {
                 children[i as usize] = Some(chd);
