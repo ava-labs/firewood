@@ -123,7 +123,6 @@ impl<'a, const LEADING_ZEROES: usize> NibblesIterator<'a, LEADING_ZEROES> {
     pub fn is_empty(&self) -> bool {
         self.head == self.tail
     }
-
 }
 
 impl<'a, const LEADING_ZEROES: usize> DoubleEndedIterator for NibblesIterator<'a, LEADING_ZEROES> {
@@ -141,15 +140,15 @@ impl<'a, const LEADING_ZEROES: usize> DoubleEndedIterator for NibblesIterator<'a
     }
 }
 
-pub(crate) trait IntoBytes : Iterator<Item = u8> {
+pub(crate) trait IntoBytes: Iterator<Item = u8> {
     fn nibbles_into_bytes(&mut self) -> Vec<u8> {
         let mut data = Vec::with_capacity(self.size_hint().0 / 2);
 
         while let (Some(hi), Some(lo)) = (self.next(), self.next()) {
             data.push((hi << 4) + lo);
         }
-    
-        data    
+
+        data
     }
 }
 impl<T: Iterator<Item = u8>> IntoBytes for T {}
