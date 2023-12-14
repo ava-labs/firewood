@@ -322,7 +322,10 @@ impl<S: ShaleStore<Node> + Send + Sync> DbRev<S> {
         self.merkle.iter(self.header.kv_root)
     }
 
-    pub fn stream_from(&self, start_key: Vec<u8>) -> merkle::MerkleKeyValueStream<'_, S, Bincode> {
+    pub fn stream_from(
+        &self,
+        start_key: Box<[u8]>,
+    ) -> merkle::MerkleKeyValueStream<'_, S, Bincode> {
         self.merkle.iter_from(self.header.kv_root, start_key)
     }
 

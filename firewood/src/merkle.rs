@@ -1227,7 +1227,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
     pub(crate) fn iter_from(
         &self,
         root: DiskAddress,
-        key: Vec<u8>,
+        key: Box<[u8]>,
     ) -> MerkleKeyValueStream<'_, S, T> {
         MerkleKeyValueStream::from_key(self, root, key)
     }
@@ -1245,7 +1245,8 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         }
 
         let mut stream = match first_key {
-            Some(key) => self.iter_from(root, key.as_ref().to_vec()),
+            // TODO: fix the call-site to force the caller to do the allocation
+            Some(key) => self.iter_from(root, key.as_ref().to_vec().into_boxed_slice()),
             None => self.iter(root),
         };
 
@@ -1264,7 +1265,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             .map_err(|e| api::Error::InternalError(Box::new(e)))?;
         let limit = limit.map(|old_limit| old_limit - 1);
 
-        let mut middle = vec![(first_key, first_data)];
+        let mut middle = vec![(first_key.into_vec(), first_data)];
 
         // we stop streaming if either we hit the limit or the key returned was larger
         // than the largest key requested
@@ -1283,8 +1284,9 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                     };
 
                     // keep going if the key returned is less than the last key requested
-                    ready(kv.0.as_slice() <= last_key.as_ref())
+                    ready(&*kv.0 <= last_key.as_ref())
                 })
+                .map(|kv_result| kv_result.map(|(k, v)| (k.into_vec(), v)))
                 .try_collect::<Vec<(Vec<u8>, Vec<u8>)>>()
                 .await?,
         );

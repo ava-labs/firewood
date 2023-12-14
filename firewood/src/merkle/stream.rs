@@ -7,20 +7,24 @@ use crate::{
     v2::api,
 };
 use futures::{stream::FusedStream, Stream};
-use std::{ops::Not, task::Poll};
+use helper_types::{Either, MustUse};
+use std::task::Poll;
+
+type Key = Box<[u8]>;
+type Value = Vec<u8>;
 
 enum IteratorState<'a> {
     /// Start iterating at the specified key
-    StartAtKey(Vec<u8>),
+    StartAtKey(Key),
     /// Continue iterating after the given `next_node` and parents
     Iterating { parents: Vec<(ObjRef<'a>, u8)> },
 }
 impl IteratorState<'_> {
     fn new() -> Self {
-        Self::StartAtKey(vec![])
+        Self::StartAtKey(vec![].into_boxed_slice())
     }
 
-    fn with_key(key: Vec<u8>) -> Self {
+    fn with_key(key: Key) -> Self {
         Self::StartAtKey(key)
     }
 }
@@ -52,11 +56,7 @@ impl<'a, S, T> MerkleKeyValueStream<'a, S, T> {
         }
     }
 
-    pub(super) fn from_key(
-        merkle: &'a Merkle<S, T>,
-        merkle_root: DiskAddress,
-        key: Vec<u8>,
-    ) -> Self {
+    pub(super) fn from_key(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress, key: Key) -> Self {
         let key_state = IteratorState::with_key(key);
 
         Self {
@@ -68,13 +68,13 @@ impl<'a, S, T> MerkleKeyValueStream<'a, S, T> {
 }
 
 impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'a, S, T> {
-    type Item = Result<(Vec<u8>, Vec<u8>), api::Error>;
+    type Item = Result<(Key, Value), api::Error>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        let MerkleKeyValueStream {
+        let Self {
             key_state,
             merkle_root,
             merkle,
@@ -126,7 +126,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
     }
 }
 
-enum ParentNode<'a> {
+enum NodeRef<'a> {
     New(ObjRef<'a>),
     Visited(ObjRef<'a>),
 }
@@ -137,7 +137,7 @@ enum InnerNode<'a> {
     Visited(&'a NodeType),
 }
 
-impl<'a> ParentNode<'a> {
+impl<'a> NodeRef<'a> {
     fn inner(&self) -> InnerNode<'_> {
         match self {
             Self::New(node) => InnerNode::New(node.inner()),
@@ -153,22 +153,20 @@ impl<'a> ParentNode<'a> {
     }
 }
 
-type NextResult = Option<(Vec<u8>, Vec<u8>)>;
-
 fn find_next_result<'a, S: ShaleStore<Node>, T>(
     merkle: &'a Merkle<S, T>,
-    parents: &mut Vec<(ObjRef<'a>, u8)>,
-) -> Result<NextResult, super::MerkleError> {
-    let next = find_next_node_with_data(merkle, parents)?.map(|(next_node, value)| {
-        let node_path_iter = match next_node.inner() {
+    visited_path: &mut Vec<(ObjRef<'a>, u8)>,
+) -> Result<Option<(Key, Value)>, super::MerkleError> {
+    let next = find_next_node_with_data(merkle, visited_path)?.map(|(next_node, value)| {
+        let partial_path = match next_node.inner() {
             NodeType::Leaf(leaf) => leaf.path.iter().copied(),
             NodeType::Extension(extension) => extension.path.iter().copied(),
             _ => [].iter().copied(),
         };
 
-        let key = key_from_nibble_iter(nibble_iter_from_parents(parents).chain(node_path_iter));
+        let key = key_from_nibble_iter(nibble_iter_from_parents(visited_path).chain(partial_path));
 
-        parents.push((next_node, 0));
+        visited_path.push((next_node, 0));
 
         (key, value)
     });
@@ -178,15 +176,15 @@ fn find_next_result<'a, S: ShaleStore<Node>, T>(
 
 fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
     merkle: &'a Merkle<S, T>,
-    visited_parents: &mut Vec<(ObjRef<'a>, u8)>,
+    visited_path: &mut Vec<(ObjRef<'a>, u8)>,
 ) -> Result<Option<(ObjRef<'a>, Vec<u8>)>, super::MerkleError> {
     use InnerNode::*;
 
-    let Some((visited_parent, visited_pos)) = visited_parents.pop() else {
+    let Some((visited_parent, visited_pos)) = visited_path.pop() else {
         return Ok(None);
     };
 
-    let mut node = ParentNode::Visited(visited_parent);
+    let mut node = NodeRef::Visited(visited_parent);
     let mut pos = visited_pos;
     let mut first_loop = true;
 
@@ -198,11 +196,11 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
             }
 
             Visited(NodeType::Leaf(_)) | Visited(NodeType::Extension(_)) => {
-                let Some((next_parent, next_pos)) = visited_parents.pop() else {
+                let Some((next_parent, next_pos)) = visited_path.pop() else {
                     return Ok(None);
                 };
 
-                node = ParentNode::Visited(next_parent);
+                node = NodeRef::Visited(next_parent);
                 pos = next_pos;
             }
 
@@ -210,9 +208,9 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
                 let child = merkle.get_node(extension.chd())?;
 
                 pos = 0;
-                visited_parents.push((node.into_node(), pos));
+                visited_path.push((node.into_node(), pos));
 
-                node = ParentNode::New(child);
+                node = NodeRef::New(child);
             }
 
             Visited(NodeType::Branch(branch)) => {
@@ -225,10 +223,10 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
                 let children = get_children_iter(branch)
                     .filter(move |(_, child_pos)| compare_op(child_pos, &pos));
 
-                let next_child_success =
-                    next_child(merkle, children, visited_parents, &mut node, &mut pos)?;
+                let next_node_success =
+                    next_node(merkle, children, visited_path, &mut node, &mut pos)?;
 
-                if !next_child_success {
+                if !next_node_success {
                     return Ok(None);
                 }
             }
@@ -241,10 +239,10 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
 
                 let children = get_children_iter(branch);
 
-                let next_child_success =
-                    next_child(merkle, children, visited_parents, &mut node, &mut pos)?;
+                let next_node_success =
+                    next_node(merkle, children, visited_path, &mut node, &mut pos)?;
 
-                if !next_child_success {
+                if !next_node_success {
                     return Ok(None);
                 }
             }
@@ -262,28 +260,14 @@ fn get_children_iter(branch: &BranchNode) -> impl Iterator<Item = (DiskAddress, 
         .filter_map(|(pos, child_addr)| child_addr.map(|child_addr| (child_addr, pos as u8)))
 }
 
-#[must_use]
-struct MustUse<T>(T);
-
-impl<T> From<T> for MustUse<T> {
-    fn from(t: T) -> Self {
-        Self(t)
-    }
-}
-
-impl<T: Not> Not for MustUse<T> {
-    type Output = T::Output;
-
-    fn not(self) -> Self::Output {
-        self.0.not()
-    }
-}
-
-fn next_child<'a, S, T, Iter>(
+/// This function is a little complicated because we need to be able to early return from the parent
+/// when we return `false`. `MustUse` forces the caller to check the inner value of `Result::Ok`.
+/// It also replaces `node`
+fn next_node<'a, S, T, Iter>(
     merkle: &'a Merkle<S, T>,
     mut children: Iter,
     parents: &mut Vec<(ObjRef<'a>, u8)>,
-    node: &mut ParentNode<'a>,
+    node: &mut NodeRef<'a>,
     pos: &mut u8,
 ) -> Result<MustUse<bool>, super::MerkleError>
 where
@@ -294,14 +278,14 @@ where
         let child = merkle.get_node(child_addr)?;
 
         *pos = child_pos;
-        let node = std::mem::replace(node, ParentNode::New(child));
+        let node = std::mem::replace(node, NodeRef::New(child));
         parents.push((node.into_node(), *pos));
     } else {
         let Some((next_parent, next_pos)) = parents.pop() else {
             return Ok(false.into());
         };
 
-        *node = ParentNode::Visited(next_parent);
+        *node = NodeRef::Visited(next_parent);
         *pos = next_pos;
     }
 
@@ -320,34 +304,60 @@ fn nibble_iter_from_parents<'a>(parents: &'a [(ObjRef, u8)]) -> impl Iterator<It
         })
 }
 
-enum Either<T, U> {
-    Left(T),
-    Right(U),
-}
-
-impl<T, U> Iterator for Either<T, U>
-where
-    T: Iterator,
-    U: Iterator<Item = T::Item>,
-{
-    type Item = T::Item;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::Left(left) => left.next(),
-            Self::Right(right) => right.next(),
-        }
-    }
-}
-
-fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Vec<u8> {
+fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
     let mut data = Vec::with_capacity(nibbles.size_hint().0 / 2);
 
     while let (Some(hi), Some(lo)) = (nibbles.next(), nibbles.next()) {
         data.push((hi << 4) + lo);
     }
 
-    data
+    data.into_boxed_slice()
+}
+
+mod helper_types {
+    use std::ops::Not;
+
+    /// Enums enable stack-based dynamic-dispatch as opposed to heap-based `Box<dyn Trait>`.
+    /// This helps us with match arms that return different types that implement the same trait.
+    /// It's possible that https://github.com/rust-lang/rust/issues/63065 will make this unnecessary.
+    ///
+    /// And this can be replaced by the `either` crate from crates.io if we ever need more functionality.
+    pub(super) enum Either<T, U> {
+        Left(T),
+        Right(U),
+    }
+
+    impl<T, U> Iterator for Either<T, U>
+    where
+        T: Iterator,
+        U: Iterator<Item = T::Item>,
+    {
+        type Item = T::Item;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            match self {
+                Self::Left(left) => left.next(),
+                Self::Right(right) => right.next(),
+            }
+        }
+    }
+
+    #[must_use]
+    pub(super) struct MustUse<T>(T);
+
+    impl<T> From<T> for MustUse<T> {
+        fn from(t: T) -> Self {
+            Self(t)
+        }
+    }
+
+    impl<T: Not> Not for MustUse<T> {
+        type Output = T::Output;
+
+        fn not(self) -> Self::Output {
+            self.0.not()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -363,7 +373,7 @@ mod tests {
     async fn iterate_empty() {
         let merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
-        let mut it = merkle.iter_from(root, b"x".to_vec());
+        let mut it = merkle.iter_from(root, b"x".to_vec().into_boxed_slice());
         let next = it.next().await;
         assert!(next.is_none());
     }
@@ -383,7 +393,7 @@ mod tests {
         }
 
         let mut it = match start {
-            Some(start) => merkle.iter_from(root, start.to_vec()),
+            Some(start) => merkle.iter_from(root, start.to_vec().into_boxed_slice()),
             None => merkle.iter(root),
         };
 
@@ -391,11 +401,11 @@ mod tests {
         for k in start.map(|r| r[0]).unwrap_or_default()..=u8::MAX {
             let next = it.next().await.map(|kv| {
                 let (k, v) = kv.unwrap();
-                assert_eq!(k, v);
+                assert_eq!(&*k, &*v);
                 k
             });
 
-            assert_eq!(next, Some(vec![k]));
+            assert_eq!(next, Some(vec![k].into_boxed_slice()));
         }
 
         assert!(it.next().await.is_none());
@@ -434,7 +444,7 @@ mod tests {
 
         for kv in key_values.iter() {
             let next = it.next().await.unwrap().unwrap();
-            assert_eq!(&next.0, kv);
+            assert_eq!(&*next.0, &*next.1);
             assert_eq!(&next.1, kv);
         }
 
@@ -447,7 +457,7 @@ mod tests {
         let mut merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
 
-        let key = vec![];
+        let key = vec![].into_boxed_slice();
         let value = vec![0x00];
 
         merkle.insert(&key, value.clone(), root).unwrap();
@@ -479,17 +489,20 @@ mod tests {
 
         assert_eq!(
             stream.next().await.unwrap().unwrap(),
-            (branch.to_vec(), branch.to_vec())
+            (branch.to_vec().into_boxed_slice(), branch.to_vec())
         );
 
         assert_eq!(
             stream.next().await.unwrap().unwrap(),
-            (first_leaf.to_vec(), first_leaf.to_vec())
+            (first_leaf.to_vec().into_boxed_slice(), first_leaf.to_vec())
         );
 
         assert_eq!(
             stream.next().await.unwrap().unwrap(),
-            (second_leaf.to_vec(), second_leaf.to_vec())
+            (
+                second_leaf.to_vec().into_boxed_slice(),
+                second_leaf.to_vec()
+            )
         );
     }
 
@@ -515,19 +528,19 @@ mod tests {
             merkle.insert(key, key.to_vec(), root).unwrap();
         }
 
-        let mut stream = merkle.iter_from(root, vec![intermediate]);
+        let mut stream = merkle.iter_from(root, vec![intermediate].into_boxed_slice());
 
         let first_expected = key_values[1].as_slice();
         let first = stream.next().await.unwrap().unwrap();
 
-        assert_eq!(first.0, first.1);
-        assert_eq!(first.0, first_expected);
+        assert_eq!(&*first.0, &*first.1);
+        assert_eq!(first.1, first_expected);
 
         let second_expected = key_values[2].as_slice();
         let second = stream.next().await.unwrap().unwrap();
 
-        assert_eq!(second.0, second.1);
-        assert_eq!(second.0, second_expected);
+        assert_eq!(&*second.0, &*second.1);
+        assert_eq!(second.1, second_expected);
 
         let done = stream.next().await;
 
