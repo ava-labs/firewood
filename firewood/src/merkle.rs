@@ -1221,13 +1221,24 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         self.store.flush_dirty()
     }
 
-    pub(crate) fn get_iter<K: AsRef<[u8]>>(
+    pub(crate) fn iter(
         &self,
-        key: Option<K>,
         root: DiskAddress,
     ) -> Result<MerkleKeyValueStream<'_, S, T>, MerkleError> {
         Ok(MerkleKeyValueStream {
-            key_state: IteratorState::new(key),
+            key_state: IteratorState::new(),
+            merkle_root: root,
+            merkle: self,
+        })
+    }
+
+    pub(crate) fn iter_from<K: AsRef<[u8]>>(
+        &self,
+        key: K,
+        root: DiskAddress,
+    ) -> Result<MerkleKeyValueStream<'_, S, T>, MerkleError> {
+        Ok(MerkleKeyValueStream {
+            key_state: IteratorState::with_key(key),
             merkle_root: root,
             merkle: self,
         })
@@ -1245,9 +1256,11 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             return Ok(None);
         }
 
-        let mut stream = self
-            .get_iter(first_key, root)
-            .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+        let mut stream = match first_key {
+            Some(key) => self.iter_from(key, root),
+            None => self.iter(root),
+        }
+        .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
         // fetch the first key from the stream
         let first_result = stream.next().await;

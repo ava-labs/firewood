@@ -6,7 +6,7 @@ use crate::{
     shale::{DiskAddress, ShaleStore},
     v2::api,
 };
-use futures::Stream;
+use futures::{stream::FusedStream, Stream};
 use std::{ops::Not, task::Poll};
 
 pub(super) enum IteratorState<'a> {
@@ -19,11 +19,12 @@ pub(super) enum IteratorState<'a> {
     Iterating { parents: Vec<(ObjRef<'a>, u8)> },
 }
 impl IteratorState<'_> {
-    pub(super) fn new<K: AsRef<[u8]>>(starting: Option<K>) -> Self {
-        match starting {
-            None => Self::StartAtBeginning,
-            Some(key) => Self::StartAtKey(key.as_ref().to_vec()),
-        }
+    pub(super) fn new() -> Self {
+        Self::StartAtBeginning
+    }
+
+    pub(super) fn with_key<K: AsRef<[u8]>>(key: K) -> Self {
+        Self::StartAtKey(key.as_ref().to_vec())
     }
 }
 
@@ -39,6 +40,15 @@ pub struct MerkleKeyValueStream<'a, S, T> {
     pub(super) key_state: IteratorState<'a>,
     pub(super) merkle_root: DiskAddress,
     pub(super) merkle: &'a Merkle<S, T>,
+}
+
+impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleKeyValueStream<'a, S, T> {
+    fn is_terminated(&self) -> bool {
+        match &self.key_state {
+            IteratorState::Iterating { parents } if parents.is_empty() => true,
+            _ => false,
+        }
+    }
 }
 
 impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'a, S, T> {
@@ -359,7 +369,7 @@ mod tests {
     async fn iterate_empty() {
         let merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
-        let mut it = merkle.get_iter(Some(b"x"), root).unwrap();
+        let mut it = merkle.iter_from(b"x", root).unwrap();
         let next = it.next().await;
         assert!(next.is_none());
     }
@@ -378,7 +388,12 @@ mod tests {
             merkle.insert([k], vec![k], root).unwrap();
         }
 
-        let mut it = merkle.get_iter(start, root).unwrap();
+        let mut it = match start {
+            Some(start) => merkle.iter_from(start, root),
+            None => merkle.iter(root),
+        }
+        .unwrap();
+
         // we iterate twice because we should get a None then start over
         for k in start.map(|r| r[0]).unwrap_or_default()..=u8::MAX {
             let next = it.next().await.map(|kv| {
@@ -394,6 +409,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fused_empty() {
+        let merkle = create_test_merkle();
+        let root = merkle.init_root().unwrap();
+        let mut it = merkle.iter(root).unwrap();
+        assert!(it.next().await.is_none());
+        assert!(it.is_terminated());
+    }
+
+    #[tokio::test]
+    async fn fused_full() {
+        let mut merkle = create_test_merkle();
+        let root = merkle.init_root().unwrap();
+
+        let last = vec![0x00, 0x00, 0x00];
+
+        let mut key_values = vec![vec![0x00], vec![0x00, 0x00], last.clone()];
+
+        // branchs with paths (or extensions) will be present as well as leaves with siblings
+        for kv in u8::MIN..=u8::MAX {
+            let mut last = last.clone();
+            last.push(kv);
+            key_values.push(last);
+        }
+
+        for kv in key_values.iter() {
+            merkle.insert(kv, kv.clone(), root).unwrap();
+        }
+
+        let mut it = merkle.iter(root).unwrap();
+
+        for kv in key_values.iter() {
+            let next = it.next().await.unwrap().unwrap();
+            assert_eq!(&next.0, kv);
+            assert_eq!(&next.1, kv);
+        }
+
+        assert!(it.next().await.is_none());
+        assert!(it.is_terminated());
+    }
+
+    #[tokio::test]
     async fn root_with_empty_data() {
         let mut merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
@@ -403,7 +459,7 @@ mod tests {
 
         merkle.insert(&key, value.clone(), root).unwrap();
 
-        let mut stream = merkle.get_iter(None::<&[u8]>, root).unwrap();
+        let mut stream = merkle.iter(root).unwrap();
 
         assert_eq!(stream.next().await.unwrap().unwrap(), (key, value));
     }
@@ -426,7 +482,7 @@ mod tests {
 
         merkle.insert(branch, branch.to_vec(), root).unwrap();
 
-        let mut stream = merkle.get_iter(None::<&[u8]>, root).unwrap();
+        let mut stream = merkle.iter(root).unwrap();
 
         assert_eq!(
             stream.next().await.unwrap().unwrap(),
@@ -466,7 +522,7 @@ mod tests {
             merkle.insert(key, key.to_vec(), root).unwrap();
         }
 
-        let mut stream = merkle.get_iter(Some([intermediate]), root).unwrap();
+        let mut stream = merkle.iter_from([intermediate], root).unwrap();
 
         let first_expected = key_values[1].as_slice();
         let first = stream.next().await.unwrap().unwrap();
