@@ -24,7 +24,6 @@ pub use node::{
     NodeType, PartialPath,
 };
 pub use proof::{Proof, ProofError};
-use stream::IteratorState;
 pub use stream::MerkleKeyValueStream;
 pub use trie_hash::{TrieHash, TRIE_HASH_LEN};
 
@@ -1221,27 +1220,16 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         self.store.flush_dirty()
     }
 
-    pub(crate) fn iter(
-        &self,
-        root: DiskAddress,
-    ) -> Result<MerkleKeyValueStream<'_, S, T>, MerkleError> {
-        Ok(MerkleKeyValueStream {
-            key_state: IteratorState::new(),
-            merkle_root: root,
-            merkle: self,
-        })
+    pub(crate) fn iter(&self, root: DiskAddress) -> MerkleKeyValueStream<'_, S, T> {
+        MerkleKeyValueStream::new(self, root)
     }
 
-    pub(crate) fn iter_from<K: AsRef<[u8]>>(
+    pub(crate) fn iter_from(
         &self,
-        key: K,
         root: DiskAddress,
-    ) -> Result<MerkleKeyValueStream<'_, S, T>, MerkleError> {
-        Ok(MerkleKeyValueStream {
-            key_state: IteratorState::with_key(key),
-            merkle_root: root,
-            merkle: self,
-        })
+        key: Vec<u8>,
+    ) -> MerkleKeyValueStream<'_, S, T> {
+        MerkleKeyValueStream::from_key(self, root, key)
     }
 
     pub(super) async fn range_proof<K: api::KeyType + Send + Sync>(
@@ -1252,15 +1240,14 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         limit: Option<usize>,
     ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>>>, api::Error> {
         // limit of 0 is always an empty RangeProof
-        if let Some(0) = limit {
+        if limit == Some(0) {
             return Ok(None);
         }
 
         let mut stream = match first_key {
-            Some(key) => self.iter_from(key, root),
+            Some(key) => self.iter_from(root, key.as_ref().to_vec()),
             None => self.iter(root),
-        }
-        .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+        };
 
         // fetch the first key from the stream
         let first_result = stream.next().await;

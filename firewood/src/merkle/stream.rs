@@ -9,37 +9,27 @@ use crate::{
 use futures::{stream::FusedStream, Stream};
 use std::{ops::Not, task::Poll};
 
-pub(super) enum IteratorState<'a> {
-    /// Start iterating at the beginning of the trie,
-    /// returning the lowest key/value pair first
-    StartAtBeginning,
+enum IteratorState<'a> {
     /// Start iterating at the specified key
     StartAtKey(Vec<u8>),
     /// Continue iterating after the given `next_node` and parents
     Iterating { parents: Vec<(ObjRef<'a>, u8)> },
 }
 impl IteratorState<'_> {
-    pub(super) fn new() -> Self {
-        Self::StartAtBeginning
+    fn new() -> Self {
+        Self::StartAtKey(vec![])
     }
 
-    pub(super) fn with_key<K: AsRef<[u8]>>(key: K) -> Self {
-        Self::StartAtKey(key.as_ref().to_vec())
-    }
-}
-
-// The default state is to start at the beginning
-impl<'a> Default for IteratorState<'a> {
-    fn default() -> Self {
-        Self::StartAtBeginning
+    fn with_key(key: Vec<u8>) -> Self {
+        Self::StartAtKey(key)
     }
 }
 
 /// A MerkleKeyValueStream iterates over keys/values for a merkle trie.
 pub struct MerkleKeyValueStream<'a, S, T> {
-    pub(super) key_state: IteratorState<'a>,
-    pub(super) merkle_root: DiskAddress,
-    pub(super) merkle: &'a Merkle<S, T>,
+    key_state: IteratorState<'a>,
+    merkle_root: DiskAddress,
+    merkle: &'a Merkle<S, T>,
 }
 
 impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleKeyValueStream<'a, S, T> {
@@ -47,6 +37,32 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleKeyValueStr
         match &self.key_state {
             IteratorState::Iterating { parents } if parents.is_empty() => true,
             _ => false,
+        }
+    }
+}
+
+impl<'a, S, T> MerkleKeyValueStream<'a, S, T> {
+    pub(super) fn new(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress) -> Self {
+        let key_state = IteratorState::new();
+
+        Self {
+            merkle,
+            key_state,
+            merkle_root,
+        }
+    }
+
+    pub(super) fn from_key(
+        merkle: &'a Merkle<S, T>,
+        merkle_root: DiskAddress,
+        key: Vec<u8>,
+    ) -> Self {
+        let key_state = IteratorState::with_key(key);
+
+        Self {
+            merkle,
+            key_state,
+            merkle_root,
         }
     }
 }
@@ -65,29 +81,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
         } = &mut *self;
 
         match key_state {
-            IteratorState::StartAtBeginning => {
-                let root = merkle
-                    .get_node(*merkle_root)
-                    .map_err(|e| api::Error::InternalError(Box::new(e)))?;
-
-                // always put the sentinal node in parents
-                let mut parents = vec![(root, 0)];
-
-                let next_result = find_next_result(merkle, &mut parents)
-                    .map_err(|e| api::Error::InternalError(Box::new(e)))
-                    .transpose();
-
-                self.key_state = IteratorState::Iterating { parents };
-
-                Poll::Ready(next_result)
-            }
-
             IteratorState::StartAtKey(key) => {
-                if key.is_empty() {
-                    self.key_state = IteratorState::StartAtBeginning;
-                    return self.poll_next(_cx);
-                }
-
                 let root_node = merkle
                     .get_node(*merkle_root)
                     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
@@ -369,7 +363,7 @@ mod tests {
     async fn iterate_empty() {
         let merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
-        let mut it = merkle.iter_from(b"x", root).unwrap();
+        let mut it = merkle.iter_from(root, b"x".to_vec());
         let next = it.next().await;
         assert!(next.is_none());
     }
@@ -389,10 +383,9 @@ mod tests {
         }
 
         let mut it = match start {
-            Some(start) => merkle.iter_from(start, root),
+            Some(start) => merkle.iter_from(root, start.to_vec()),
             None => merkle.iter(root),
-        }
-        .unwrap();
+        };
 
         // we iterate twice because we should get a None then start over
         for k in start.map(|r| r[0]).unwrap_or_default()..=u8::MAX {
@@ -412,7 +405,7 @@ mod tests {
     async fn fused_empty() {
         let merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
-        let mut it = merkle.iter(root).unwrap();
+        let mut it = merkle.iter(root);
         assert!(it.next().await.is_none());
         assert!(it.is_terminated());
     }
@@ -437,7 +430,7 @@ mod tests {
             merkle.insert(kv, kv.clone(), root).unwrap();
         }
 
-        let mut it = merkle.iter(root).unwrap();
+        let mut it = merkle.iter(root);
 
         for kv in key_values.iter() {
             let next = it.next().await.unwrap().unwrap();
@@ -459,7 +452,7 @@ mod tests {
 
         merkle.insert(&key, value.clone(), root).unwrap();
 
-        let mut stream = merkle.iter(root).unwrap();
+        let mut stream = merkle.iter(root);
 
         assert_eq!(stream.next().await.unwrap().unwrap(), (key, value));
     }
@@ -482,7 +475,7 @@ mod tests {
 
         merkle.insert(branch, branch.to_vec(), root).unwrap();
 
-        let mut stream = merkle.iter(root).unwrap();
+        let mut stream = merkle.iter(root);
 
         assert_eq!(
             stream.next().await.unwrap().unwrap(),
@@ -522,7 +515,7 @@ mod tests {
             merkle.insert(key, key.to_vec(), root).unwrap();
         }
 
-        let mut stream = merkle.iter_from([intermediate], root).unwrap();
+        let mut stream = merkle.iter_from(root, vec![intermediate]);
 
         let first_expected = key_values[1].as_slice();
         let first = stream.next().await.unwrap().unwrap();
