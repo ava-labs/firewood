@@ -149,11 +149,6 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
             }
 
             IteratorState::Iterating { visited_node_path } => {
-                visited_node_path
-                    .last()
-                    .as_ref()
-                    .map(|(last, pos)| (last.inner(), pos));
-
                 let next = find_next_result(merkle, visited_node_path)
                     .map_err(|e| api::Error::InternalError(Box::new(e)))
                     .transpose();
