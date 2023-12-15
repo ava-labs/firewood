@@ -731,7 +731,6 @@ mod tests {
         check_stream_is_done(stream).await;
     }
 
-    // TODO: start key greater than all keys
     #[tokio::test]
     async fn start_at_key_greater_than_all_others() {
         let greatest = 0xff;
