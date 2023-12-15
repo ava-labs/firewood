@@ -395,11 +395,27 @@ mod helper_types {
     }
 }
 
+// CAUTION: only use with nibble iterators
+trait IntoBytes: Iterator<Item = u8> {
+    fn nibbles_into_bytes(&mut self) -> Vec<u8> {
+        let mut data = Vec::with_capacity(self.size_hint().0 / 2);
+
+        while let (Some(hi), Some(lo)) = (self.next(), self.next()) {
+            data.push((hi << 4) + lo);
+        }
+
+        data
+    }
+}
+impl<T: Iterator<Item = u8>> IntoBytes for T {}
+
 #[cfg(test)]
 use super::tests::create_test_merkle;
 
 #[cfg(test)]
 mod tests {
+    use crate::nibbles::Nibbles;
+
     use super::*;
     use futures::StreamExt;
     use test_case::test_case;
@@ -770,5 +786,22 @@ mod tests {
     {
         assert!(stream.next().await.is_none());
         assert!(stream.is_terminated());
+    }
+
+    #[test]
+    fn remaining_bytes() {
+        let data = &[1];
+        let nib: Nibbles<'_, 0> = Nibbles::<0>::new(data);
+        let mut it = nib.into_iter();
+        assert_eq!(it.nibbles_into_bytes(), data.to_vec());
+    }
+
+    #[test]
+    fn remaining_bytes_off() {
+        let data = &[1];
+        let nib: Nibbles<'_, 0> = Nibbles::<0>::new(data);
+        let mut it = nib.into_iter();
+        it.next();
+        assert_eq!(it.nibbles_into_bytes(), vec![]);
     }
 }
