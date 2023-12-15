@@ -359,7 +359,7 @@ mod helper_types {
 
     /// Enums enable stack-based dynamic-dispatch as opposed to heap-based `Box<dyn Trait>`.
     /// This helps us with match arms that return different types that implement the same trait.
-    /// It's possible that https://github.com/rust-lang/rust/issues/63065 will make this unnecessary.
+    /// It's possible that [rust-lang/rust#63065](https://github.com/rust-lang/rust/issues/63065) will make this unnecessary.
     ///
     /// And this can be replaced by the `either` crate from crates.io if we ever need more functionality.
     pub(super) enum Either<T, U> {
