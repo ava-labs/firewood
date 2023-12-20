@@ -149,7 +149,9 @@ impl<T: Storable> Obj<T> {
 
 impl<T: Storable> Drop for Obj<T> {
     fn drop(&mut self) {
-        self.flush_dirty()
+        if self.dirty.is_some() {
+            self.flush_dirty()
+        }
     }
 }
 
