@@ -1577,7 +1577,11 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                     nib = if let Some(nib) = key_nibbles.next() {
                         nib
                     } else {
-                        break;
+                        return Ok(if n.value.is_some() {
+                            Some(node_ref)
+                        } else {
+                            None
+                        });
                     };
 
                     match n.children[nib as usize] {
@@ -1620,7 +1624,9 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
         // when we're done iterating over nibbles, check if the node we're at has a value
         let node_ref = match &node_ref.inner {
-            NodeType::Branch(n) if n.value.as_ref().is_some() => Some(node_ref),
+            NodeType::Branch(n) if n.value.as_ref().is_some() && n.path.is_empty() => {
+                Some(node_ref)
+            }
             NodeType::Leaf(n) if n.path.len() == 0 => Some(node_ref),
             _ => None,
         };
@@ -2016,7 +2022,7 @@ mod tests {
 
         let children = Default::default();
         // TODO: Properly test empty data as a value
-        let value = Some(value).map(Data);
+        let value = Some(Data(value));
         let mut children_encoded = <[Option<Vec<u8>>; BranchNode::MAX_CHILDREN]>::default();
 
         if let Some(child) = encoded_child {
