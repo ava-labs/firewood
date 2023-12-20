@@ -281,7 +281,7 @@ pub struct DbRev<S> {
 #[async_trait]
 impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
-        block_in_place(|| self.merkle.root_hash(self.header.kv_root))
+        self.merkle.root_hash(self.header.kv_root)
             .map(|h| *h)
             .map_err(|e| api::Error::IO(std::io::Error::new(ErrorKind::Other, e)))
     }
@@ -414,7 +414,7 @@ impl api::Db for Db {
     type Proposal = proposal::Proposal;
 
     async fn revision(&self, root_hash: HashKey) -> Result<Arc<Self::Historical>, api::Error> {
-        let rev = block_in_place(|| self.get_revision(&TrieHash(root_hash)));
+        let rev = self.get_revision(&TrieHash(root_hash));
         if let Some(rev) = rev {
             Ok(Arc::new(rev.rev))
         } else {
@@ -425,7 +425,7 @@ impl api::Db for Db {
     }
 
     async fn root_hash(&self) -> Result<HashKey, api::Error> {
-        block_in_place(|| self.kv_root_hash())
+        self.kv_root_hash()
             .map(|hash| hash.0)
             .map_err(Into::into)
     }
@@ -434,7 +434,7 @@ impl api::Db for Db {
         &self,
         batch: api::Batch<K, V>,
     ) -> Result<Self::Proposal, api::Error> {
-        block_in_place(|| self.new_proposal(batch)).map_err(Into::into)
+        self.new_proposal(batch).map_err(Into::into)
     }
 }
 

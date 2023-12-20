@@ -15,7 +15,6 @@ use crate::{
 use async_trait::async_trait;
 use parking_lot::{Mutex, RwLock};
 use std::{io::ErrorKind, sync::Arc};
-use tokio::task::block_in_place;
 
 pub use crate::v2::api::{Batch, BatchOp};
 
@@ -49,15 +48,14 @@ impl crate::v2::api::Proposal for Proposal {
 
     #[allow(clippy::unwrap_used)]
     async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
-        let proposal = Arc::<Proposal>::into_inner(self).unwrap();
-        block_in_place(|| proposal.commit_sync().map_err(Into::into))
+        block_in_place(|| self.commit_sync().map_err(Into::into))
     }
 
     async fn propose<K: api::KeyType, V: api::ValueType>(
         self: Arc<Self>,
         data: api::Batch<K, V>,
     ) -> Result<Self::Proposal, api::Error> {
-        block_in_place(|| self.propose_sync(data)).map_err(Into::into)
+        self.propose_sync(data).map_err(Into::into)
     }
 }
 
