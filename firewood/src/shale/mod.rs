@@ -134,6 +134,11 @@ impl<T: Storable> Obj<T> {
     }
 
     pub fn flush_dirty(&mut self) {
+        // faster than calling `self.dirty.take()` on a `None`
+        if self.dirty.is_none() {
+            return;
+        }
+
         if let Some(new_value_len) = self.dirty.take() {
             let mut new_value = vec![0; new_value_len as usize];
             // TODO: log error
@@ -147,9 +152,7 @@ impl<T: Storable> Obj<T> {
 
 impl<T: Storable> Drop for Obj<T> {
     fn drop(&mut self) {
-        if self.dirty.is_some() {
-            self.flush_dirty()
-        }
+        self.flush_dirty()
     }
 }
 
