@@ -247,7 +247,7 @@ impl Node {
     }
 
     fn is_encoded_longer_than_hash_len<S: ShaleStore<Node>>(&self, store: &S) -> bool {
-            self.get_encoded(store).len() >= TRIE_HASH_LEN
+        self.get_encoded(store).len() >= TRIE_HASH_LEN
     }
 
     pub(super) fn rehash(&mut self) {
@@ -271,10 +271,7 @@ impl Node {
         &mut self.inner
     }
 
-    pub(super) fn new_from_hash(
-        root_hash: Option<TrieHash>,
-        inner: NodeType,
-    ) -> Self {
+    pub(super) fn new_from_hash(root_hash: Option<TrieHash>, inner: NodeType) -> Self {
         Self {
             root_hash: match root_hash {
                 Some(h) => OnceLock::from(h),
@@ -363,10 +360,7 @@ impl Storable for Node {
             NodeTypeId::Branch => {
                 let inner = NodeType::Branch(Box::new(BranchNode::deserialize(offset, mem)?));
 
-                Ok(Self::new_from_hash(
-                    root_hash,
-                    inner,
-                ))
+                Ok(Self::new_from_hash(root_hash, inner))
             }
 
             NodeTypeId::Extension => {
