@@ -1,3 +1,4 @@
+use crate::db::{MutStore, SharedStore};
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 use crate::nibbles::Nibbles;
@@ -69,6 +70,16 @@ macro_rules! write_node {
 pub struct Merkle<S, T> {
     store: Box<S>,
     phantom: PhantomData<T>,
+}
+
+impl<T> Merkle<MutStore, T> {
+    pub fn into(self) -> Merkle<SharedStore, T> {
+        let store = self.store.into_shared();
+        Merkle {
+            store: Box::new(store),
+            phantom: PhantomData,
+        }
+    }
 }
 
 impl<S: ShaleStore<Node>, T> Merkle<S, T> {

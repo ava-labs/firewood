@@ -1,7 +1,10 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use crate::db::{MutStore, SharedStore};
+use crate::merkle::Node;
 use crate::shale::ObjCache;
+use crate::storage::{StoreRevMut, StoreRevShared};
 
 use super::disk_address::DiskAddress;
 use super::{CachedStore, Obj, ObjRef, ShaleError, ShaleStore, Storable, StoredView};
@@ -221,6 +224,18 @@ struct CompactSpaceInner<M> {
     header: CompactSpaceHeaderSliced,
     alloc_max_walk: u64,
     regn_nbit: u64,
+}
+
+impl CompactSpaceInner<StoreRevMut> {
+    pub fn into_shared(self) -> CompactSpaceInner<StoreRevShared> {
+        CompactSpaceInner {
+            meta_space: Arc::new(self.meta_space.into_shared()),
+            compact_space: Arc::new(self.compact_space.into_shared()),
+            header: self.header,
+            alloc_max_walk: self.alloc_max_walk,
+            regn_nbit: self.regn_nbit,
+        }
+    }
 }
 
 impl<M: CachedStore> CompactSpaceInner<M> {
@@ -519,6 +534,16 @@ impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
             obj_cache,
         };
         Ok(cs)
+    }
+}
+
+impl CompactSpace<Node, StoreRevMut> {
+    pub fn into_shared(self) -> CompactSpace<Node, StoreRevShared> {
+        let inner = self.inner.into_inner().unwrap();
+        CompactSpace {
+            inner: RwLock::new(inner.into_shared()),
+            obj_cache: self.obj_cache,
+        }
     }
 }
 

@@ -56,8 +56,8 @@ const SPACE_RESERVED: u64 = 0x1000;
 
 const MAGIC_STR: &[u8; 16] = b"firewood v0.1\0\0\0";
 
-type Store = CompactSpace<Node, StoreRevMut>;
-type SharedStore = CompactSpace<Node, StoreRevShared>;
+pub type MutStore = CompactSpace<Node, StoreRevMut>;
+pub type SharedStore = CompactSpace<Node, StoreRevShared>;
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -381,6 +381,15 @@ impl<S: ShaleStore<Node> + Send + Sync> DbRev<S> {
     }
 }
 
+impl DbRev<MutStore> {
+    pub fn into_shared(self) -> DbRev<SharedStore> {
+        DbRev {
+            header: self.header,
+            merkle: self.merkle.into(),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct DbInner {
     disk_requester: DiskBufferRequester,
@@ -462,7 +471,7 @@ impl Db {
     }
 
     /// Open a database.
-    fn new_internal<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> Result<Self, DbError> {
+    pub fn new_internal<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> Result<Self, DbError> {
         let open_options = if cfg.truncate {
             file::Options::Truncate
         } else {
@@ -655,7 +664,7 @@ impl Db {
         reset_store_headers: bool,
         payload_regn_nbit: u64,
         cfg: &DbConfig,
-    ) -> Result<(Universe<Arc<StoreRevMut>>, DbRev<Store>), DbError> {
+    ) -> Result<(Universe<Arc<StoreRevMut>>, DbRev<MutStore>), DbError> {
         let mut offset = Db::PARAM_SIZE as usize;
         let db_header: DiskAddress = DiskAddress::from(offset);
         offset += DbHeader::MSIZE as usize;
@@ -777,7 +786,7 @@ impl Db {
     }
 
     /// Create a proposal.
-    pub(crate) fn new_proposal<K: KeyType, V: ValueType>(
+    pub fn new_proposal<K: KeyType, V: ValueType>(
         &self,
         data: Batch<K, V>,
     ) -> Result<proposal::Proposal, DbError> {
@@ -820,7 +829,7 @@ impl Db {
             m: Arc::clone(&self.inner),
             r: Arc::clone(&self.revisions),
             cfg: self.cfg.clone(),
-            rev,
+            rev: Box::new(rev),
             store,
             committed: Arc::new(Mutex::new(false)),
             parent,
@@ -928,7 +937,7 @@ impl Db {
         self.revisions.lock().base_revision.kv_dump(w)
     }
     /// Get root hash of the latest generic key-value storage.
-    pub(crate) fn kv_root_hash(&self) -> Result<TrieHash, DbError> {
+    pub fn kv_root_hash(&self) -> Result<TrieHash, DbError> {
         self.revisions.lock().base_revision.kv_root_hash()
     }
 

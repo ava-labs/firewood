@@ -401,6 +401,14 @@ impl StoreRevMut {
         }
     }
 
+    pub fn into_shared(self) -> StoreRevShared {
+        let rev = Arc::new(StoreRev {
+            base_space: RwLock::new(self.base_space),
+            delta: self.delta().0,
+        });
+        StoreRevShared(rev)
+    }
+
     fn get_page_mut<'a>(
         &self,
         deltas: &'a mut StoreRevMutDelta,

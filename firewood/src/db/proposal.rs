@@ -3,8 +3,8 @@
 
 use super::{
     get_sub_universe_from_deltas, get_sub_universe_from_empty_delta, Db, DbConfig, DbError,
-    DbHeader, DbInner, DbRev, DbRevInner, SharedStore, Store, Universe, MERKLE_META_SPACE,
-    MERKLE_PAYLOAD_SPACE, ROOT_HASH_SPACE,
+    DbHeader, DbInner, DbRev, DbRevInner, SharedStore, Universe, MERKLE_META_SPACE,
+    MERKLE_PAYLOAD_SPACE, ROOT_HASH_SPACE, MutStore,
 };
 use crate::merkle::Proof;
 use crate::shale::CachedStore;
@@ -20,6 +20,8 @@ use tokio::task::block_in_place;
 
 pub use crate::v2::api::{Batch, BatchOp};
 
+
+
 /// An atomic batch of changes proposed against the latest committed revision,
 /// or any existing [Proposal]. Multiple proposals can be created against the
 /// latest committed revision at the same time. [Proposal] is immutable meaning
@@ -32,7 +34,7 @@ pub struct Proposal {
     pub(super) cfg: DbConfig,
 
     // State of the proposal
-    pub(super) rev: DbRev<Store>,
+    pub(super) rev: Box<DbRev<MutStore>>,
     pub(super) store: Universe<Arc<StoreRevMut>>,
     pub(super) committed: Arc<Mutex<bool>>,
 
@@ -115,7 +117,7 @@ impl Proposal {
             m,
             r,
             cfg,
-            rev,
+            rev: Box::new(rev),
             store,
             committed: Arc::new(Mutex::new(false)),
             parent,
@@ -124,7 +126,7 @@ impl Proposal {
 
     /// Persist all changes to the DB. The atomicity of the [Proposal] guarantees all changes are
     /// either retained on disk or lost together during a crash.
-    pub fn commit_sync(&self) -> Result<(), DbError> {
+    pub fn commit_sync(self) -> Result<(), DbError> {
         let mut committed = self.committed.lock();
         if *committed {
             return Ok(());
@@ -220,8 +222,11 @@ impl Proposal {
             self.cfg.payload_max_walk,
             &self.cfg.rev,
         )?;
+
         revisions.base = base;
-        revisions.base_revision = Arc::new(base_revision);
+        let r = self.rev.into_shared();
+
+        revisions.base_revision = Arc::new(r);
 
         // update the rolling window of root hashes
         revisions.root_hashes.push_front(kv_root_hash.clone());
@@ -265,7 +270,7 @@ impl Proposal {
 }
 
 impl Proposal {
-    pub fn get_revision(&self) -> &DbRev<Store> {
+    pub fn get_revision(&self) -> &DbRev<MutStore> {
         &self.rev
     }
 }
