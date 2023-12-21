@@ -407,7 +407,7 @@ impl api::Db for Db {
     async fn revision(&self, root_hash: HashKey) -> Result<Arc<Self::Historical>, api::Error> {
         let rev = block_in_place(|| self.get_revision(&TrieHash(root_hash)));
         if let Some(rev) = rev {
-            Ok(Arc::new(rev.rev))
+            Ok(Arc::new(rev))
         } else {
             Err(api::Error::HashNotFound {
                 provided: root_hash,
@@ -833,7 +833,7 @@ impl Db {
     ///
     /// If no revision with matching root hash found, returns None.
     // #[measure([HitCount])]
-    pub fn get_revision(&self, root_hash: &TrieHash) -> Option<Revision<SharedStore>> {
+    pub fn get_revision(&self, root_hash: &TrieHash) -> Option<DbRev<SharedStore>> {
         let mut revisions = self.revisions.lock();
         let inner_lock = self.inner.read();
 
@@ -910,16 +910,14 @@ impl Db {
 
         let header_refs = (db_header_ref, merkle_payload_header_ref);
 
-        Revision {
-            rev: Db::new_revision(
-                header_refs,
-                (space.merkle.meta.clone(), space.merkle.payload.clone()),
-                self.payload_regn_nbit,
-                0,
-                &self.cfg.rev,
-            )
-            .unwrap(),
-        }
+        Db::new_revision(
+            header_refs,
+            (space.merkle.meta.clone(), space.merkle.payload.clone()),
+            self.payload_regn_nbit,
+            0,
+            &self.cfg.rev,
+        )
+        .unwrap()
         .into()
     }
 
@@ -934,17 +932,5 @@ impl Db {
 
     pub fn metrics(&self) -> Arc<DbMetrics> {
         self.metrics.clone()
-    }
-}
-
-/// Lock protected handle to a readable version of the DB.
-pub struct Revision<S> {
-    rev: DbRev<S>,
-}
-
-impl<S> std::ops::Deref for Revision<S> {
-    type Target = DbRev<S>;
-    fn deref(&self) -> &DbRev<S> {
-        &self.rev
     }
 }
