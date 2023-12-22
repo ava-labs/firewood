@@ -402,7 +402,17 @@ impl StoreRevMut {
     }
 
     pub fn into_shared(self) -> StoreRevShared {
-        let delta = self.delta().0;
+        let mut pages = Vec::new();
+        let deltas = std::mem::replace(
+            &mut *self.deltas.write(),
+            Default::default(),
+        );
+        for (pid, page) in deltas.pages.into_iter() {
+            pages.push(DeltaPage(pid, page));
+        }
+        pages.sort_by_key(|p| p.0);
+        let delta = StoreDelta(pages);
+
         let rev = Arc::new(StoreRev {
             base_space: RwLock::new(self.base_space),
             delta,

@@ -226,10 +226,7 @@ struct CompactSpaceInner<M> {
 }
 
 impl CompactSpaceInner<StoreRevMut> {
-    pub fn into_shared(self) -> CompactSpaceInner<StoreRevShared> {
-        // let meta_space = Arc::<StoreRevMut>::into_inner(self.meta_space).unwrap();
-        // let compact_space = Arc::<StoreRevMut>::into_inner(self.compact_space).unwrap();
-        
+    pub fn into_shared(self) -> CompactSpaceInner<StoreRevShared> {  
         CompactSpaceInner {
             meta_space: self.meta_space.into_shared(),
             compact_space: self.compact_space.into_shared(),
