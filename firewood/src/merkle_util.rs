@@ -6,7 +6,7 @@ use crate::shale::{
     self, cached::DynamicMem, compact::CompactSpace, disk_address::DiskAddress, CachedStore,
     ShaleStore, StoredView,
 };
-use std::{num::NonZeroUsize, sync::Arc};
+use std::num::NonZeroUsize;
 use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq)]

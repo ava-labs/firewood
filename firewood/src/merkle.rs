@@ -1421,7 +1421,6 @@ mod tests {
     use super::*;
     use node::tests::{extension, leaf};
     use shale::{cached::DynamicMem, compact::CompactSpace, CachedStore};
-    use std::sync::Arc;
     use test_case::test_case;
 
     #[test_case(vec![0x12, 0x34, 0x56], &[0x1, 0x2, 0x3, 0x4, 0x5, 0x6])]

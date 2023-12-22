@@ -403,10 +403,7 @@ impl StoreRevMut {
 
     pub fn into_shared(self) -> StoreRevShared {
         let mut pages = Vec::new();
-        let deltas = std::mem::replace(
-            &mut *self.deltas.write(),
-            Default::default(),
-        );
+        let deltas = std::mem::take(&mut *self.deltas.write());
         for (pid, page) in deltas.pages.into_iter() {
             pages.push(DeltaPage(pid, page));
         }

@@ -2,9 +2,8 @@
 // See the file LICENSE.md for licensing terms.
 
 use super::{
-    get_sub_universe_from_deltas, get_sub_universe_from_empty_delta, Db, DbConfig, DbError,
-    DbHeader, DbInner, DbRev, DbRevInner, SharedStore, Universe, MERKLE_META_SPACE,
-    MERKLE_PAYLOAD_SPACE, ROOT_HASH_SPACE, MutStore,
+    get_sub_universe_from_deltas, Db, DbConfig, DbError, DbHeader, DbInner, DbRev, DbRevInner,
+    MutStore, SharedStore, Universe, MERKLE_META_SPACE, MERKLE_PAYLOAD_SPACE, ROOT_HASH_SPACE,
 };
 use crate::merkle::Proof;
 use crate::shale::CachedStore;
@@ -20,8 +19,6 @@ use tokio::task::block_in_place;
 
 pub use crate::v2::api::{Batch, BatchOp};
 
-
-
 /// An atomic batch of changes proposed against the latest committed revision,
 /// or any existing [Proposal]. Multiple proposals can be created against the
 /// latest committed revision at the same time. [Proposal] is immutable meaning
@@ -29,7 +26,6 @@ pub use crate::v2::api::{Batch, BatchOp};
 /// invalidates all other proposals that are not children of the committed one.
 pub struct Proposal {
     // State of the Db
-    // TODO: maybe a referece to Db
     pub(super) m: Arc<RwLock<DbInner>>,
     pub(super) r: Arc<Mutex<DbRevInner<SharedStore>>>,
     pub(super) cfg: DbConfig,
@@ -79,10 +75,8 @@ impl Proposal {
 
         let db_header_ref = Db::get_db_header_ref(&store.merkle.meta)?;
 
-        let merkle_payload_header_ref = Db::get_payload_header_ref(
-            &store.merkle.meta,
-            Db::PARAM_SIZE + DbHeader::MSIZE,
-        )?;
+        let merkle_payload_header_ref =
+            Db::get_payload_header_ref(&store.merkle.meta, Db::PARAM_SIZE + DbHeader::MSIZE)?;
 
         let header_refs = (db_header_ref, merkle_payload_header_ref);
 
@@ -129,15 +123,23 @@ impl Proposal {
     /// Persist all changes to the DB. The atomicity of the [Proposal] guarantees all changes are
     /// either retained on disk or lost together during a crash.
     pub fn commit_sync(self) -> Result<(), DbError> {
-        let Self{ m, r, cfg, rev, store, committed, parent } = self;
-        
+        let Self {
+            m,
+            r,
+            cfg: _,
+            rev,
+            store,
+            committed,
+            parent,
+        } = self;
+
         let mut committed = committed.lock();
         if *committed {
             return Ok(());
         }
-        
+
         if let ProposalBase::Proposal(_p) = parent {
-         //    p.commit_sync()?;
+            // p.commit_sync()?;
             todo!();
         }
 
@@ -209,29 +211,7 @@ impl Proposal {
             revisions.inner.pop_back();
         }
 
-        let base = Universe {
-            merkle: get_sub_universe_from_empty_delta(&rev_inner.cached_space.merkle),
-        };
-
-        let db_header_ref = Db::get_db_header_ref(&base.merkle.meta)?;
-
-        let merkle_payload_header_ref =
-            Db::get_payload_header_ref(&base.merkle.meta, Db::PARAM_SIZE + DbHeader::MSIZE)?;
-
-       // let header_refs = (db_header_ref, merkle_payload_header_ref);
-
-        // let base_revision = Db::new_revision(
-        //     header_refs,
-        //     (base.merkle.meta.clone(), base.merkle.payload.clone()),
-        //     0,
-        //     self.cfg.payload_max_walk,
-        //     &self.cfg.rev,
-        // )?;
-
-        // revisions.base = base_revision;
-        let r = rev.into_shared();
-
-        revisions.base_revision = Arc::new(r);
+        revisions.base_revision = Arc::new(rev.into_shared());
 
         // update the rolling window of root hashes
         revisions.root_hashes.push_front(kv_root_hash.clone());
@@ -318,14 +298,3 @@ impl api::DbView for Proposal {
         todo!()
     }
 }
-
-// impl Drop for Proposal {
-//     fn drop(&mut self) {
-//         if !*self.committed.lock() {
-//             // drop the staging changes
-//             self.store.merkle.payload.reset_deltas();
-//             self.store.merkle.meta.reset_deltas();
-//             self.m.read().root_hash_staging.reset_deltas();
-//         }
-//     }
-// }

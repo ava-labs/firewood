@@ -226,7 +226,7 @@ struct CompactSpaceInner<M> {
 }
 
 impl CompactSpaceInner<StoreRevMut> {
-    pub fn into_shared(self) -> CompactSpaceInner<StoreRevShared> {  
+    pub fn into_shared(self) -> CompactSpaceInner<StoreRevShared> {
         CompactSpaceInner {
             meta_space: self.meta_space.into_shared(),
             compact_space: self.compact_space.into_shared(),

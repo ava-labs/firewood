@@ -58,7 +58,6 @@ const MAGIC_STR: &[u8; 16] = b"firewood v0.1\0\0\0";
 
 pub type MutStore = CompactSpace<Node, StoreRevMut>;
 pub type SharedStore = CompactSpace<Node, StoreRevShared>;
-// pub type SharedStore = CompactSpace<Node, StoreRev>;
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -584,7 +583,6 @@ impl Db {
             merkle: get_sub_universe_from_empty_delta(&data_cache.merkle),
         };
 
-       
         let db_header_ref = Db::get_db_header_ref(&base.merkle.meta)?;
 
         let merkle_payload_header_ref =
@@ -700,14 +698,11 @@ impl Db {
 
         let db_header_ref = Db::get_db_header_ref(&store.merkle.meta)?;
 
-        let merkle_payload_header_ref = Db::get_payload_header_ref(
-            &store.merkle.meta,
-            Db::PARAM_SIZE + DbHeader::MSIZE,
-        )?;
+        let merkle_payload_header_ref =
+            Db::get_payload_header_ref(&store.merkle.meta, Db::PARAM_SIZE + DbHeader::MSIZE)?;
 
         let header_refs = (db_header_ref, merkle_payload_header_ref);
 
-        //let meta = store.merkle.meta;
         let mut rev: DbRev<CompactSpace<Node, StoreRevMut>> = Db::new_revision(
             header_refs,
             (store.merkle.meta.clone(), store.merkle.payload.clone()),
@@ -789,7 +784,7 @@ impl Db {
     }
 
     /// Create a proposal.
-    pub fn new_proposal<K: KeyType, V: ValueType>(
+    pub(crate) fn new_proposal<K: KeyType, V: ValueType>(
         &self,
         data: Batch<K, V>,
     ) -> Result<proposal::Proposal, DbError> {
@@ -940,7 +935,7 @@ impl Db {
         self.revisions.lock().base_revision.kv_dump(w)
     }
     /// Get root hash of the latest generic key-value storage.
-    pub fn kv_root_hash(&self) -> Result<TrieHash, DbError> {
+    pub(crate) fn kv_root_hash(&self) -> Result<TrieHash, DbError> {
         self.revisions.lock().base_revision.kv_root_hash()
     }
 
