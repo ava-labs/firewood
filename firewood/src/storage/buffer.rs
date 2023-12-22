@@ -623,7 +623,7 @@ impl DiskBufferRequester {
             .send(BufferCmd::CollectAsh(nrecords, resp_tx))
             .map_err(StoreError::Send)
             .ok();
-        resp_rx.blocking_recv().map_err(StoreError::Receive)
+        block_in_place(|| resp_rx.blocking_recv().map_err(StoreError::Receive))
     }
 
     /// Register a cached space to the buffer.
