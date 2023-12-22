@@ -402,9 +402,10 @@ impl StoreRevMut {
     }
 
     pub fn into_shared(self) -> StoreRevShared {
+        let delta = self.delta().0;
         let rev = Arc::new(StoreRev {
             base_space: RwLock::new(self.base_space),
-            delta: self.delta().0,
+            delta,
         });
         StoreRevShared(rev)
     }

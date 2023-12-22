@@ -29,12 +29,13 @@ pub use crate::v2::api::{Batch, BatchOp};
 /// invalidates all other proposals that are not children of the committed one.
 pub struct Proposal {
     // State of the Db
+    // TODO: maybe a referece to Db
     pub(super) m: Arc<RwLock<DbInner>>,
     pub(super) r: Arc<Mutex<DbRevInner<SharedStore>>>,
     pub(super) cfg: DbConfig,
 
     // State of the proposal
-    pub(super) rev: Box<DbRev<MutStore>>,
+    pub(super) rev: DbRev<MutStore>,
     pub(super) store: Universe<Arc<StoreRevMut>>,
     pub(super) committed: Arc<Mutex<bool>>,
 
@@ -51,7 +52,8 @@ impl crate::v2::api::Proposal for Proposal {
     type Proposal = Proposal;
 
     async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
-        block_in_place(|| self.commit_sync().map_err(Into::into))
+        let proposal = Arc::<Proposal>::into_inner(self).unwrap();
+        block_in_place(|| proposal.commit_sync().map_err(Into::into))
     }
 
     async fn propose<K: api::KeyType, V: api::ValueType>(
@@ -117,7 +119,7 @@ impl Proposal {
             m,
             r,
             cfg,
-            rev: Box::new(rev),
+            rev,
             store,
             committed: Arc::new(Mutex::new(false)),
             parent,
@@ -127,21 +129,24 @@ impl Proposal {
     /// Persist all changes to the DB. The atomicity of the [Proposal] guarantees all changes are
     /// either retained on disk or lost together during a crash.
     pub fn commit_sync(self) -> Result<(), DbError> {
-        let mut committed = self.committed.lock();
+        let Self{ m, r, cfg, rev, store, committed, parent } = self;
+        
+        let mut committed = committed.lock();
         if *committed {
             return Ok(());
         }
-
-        if let ProposalBase::Proposal(p) = &self.parent {
-            p.commit_sync()?;
-        };
+        
+        if let ProposalBase::Proposal(_p) = parent {
+         //    p.commit_sync()?;
+            todo!();
+        }
 
         // Check for if it can be committed
-        let mut revisions = self.r.lock();
+        let mut revisions = r.lock();
         let committed_root_hash = revisions.base_revision.kv_root_hash().ok();
         let committed_root_hash =
             committed_root_hash.expect("committed_root_hash should not be none");
-        match &self.parent {
+        match &parent {
             ProposalBase::Proposal(p) => {
                 let parent_root_hash = p.rev.kv_root_hash().ok();
                 let parent_root_hash =
@@ -160,14 +165,14 @@ impl Proposal {
             }
         };
 
-        let kv_root_hash = self.rev.kv_root_hash().ok();
+        let kv_root_hash = rev.kv_root_hash().ok();
         let kv_root_hash = kv_root_hash.expect("kv_root_hash should not be none");
 
         // clear the staging layer and apply changes to the CachedSpace
-        let (merkle_payload_redo, merkle_payload_wal) = self.store.merkle.payload.delta();
-        let (merkle_meta_redo, merkle_meta_wal) = self.store.merkle.meta.delta();
+        let (merkle_payload_redo, merkle_payload_wal) = store.merkle.payload.delta();
+        let (merkle_meta_redo, merkle_meta_wal) = store.merkle.meta.delta();
 
-        let mut rev_inner = self.m.write();
+        let mut rev_inner = m.write();
         let merkle_meta_undo = rev_inner
             .cached_space
             .merkle
@@ -213,18 +218,18 @@ impl Proposal {
         let merkle_payload_header_ref =
             Db::get_payload_header_ref(&base.merkle.meta, Db::PARAM_SIZE + DbHeader::MSIZE)?;
 
-        let header_refs = (db_header_ref, merkle_payload_header_ref);
+       // let header_refs = (db_header_ref, merkle_payload_header_ref);
 
-        let base_revision = Db::new_revision(
-            header_refs,
-            (base.merkle.meta.clone(), base.merkle.payload.clone()),
-            0,
-            self.cfg.payload_max_walk,
-            &self.cfg.rev,
-        )?;
+        // let base_revision = Db::new_revision(
+        //     header_refs,
+        //     (base.merkle.meta.clone(), base.merkle.payload.clone()),
+        //     0,
+        //     self.cfg.payload_max_walk,
+        //     &self.cfg.rev,
+        // )?;
 
-        revisions.base = base;
-        let r = self.rev.into_shared();
+        // revisions.base = base_revision;
+        let r = rev.into_shared();
 
         revisions.base_revision = Arc::new(r);
 
@@ -243,11 +248,11 @@ impl Proposal {
         rev_inner.disk_requester.write(
             vec![
                 BufferWrite {
-                    space_id: self.store.merkle.payload.id(),
+                    space_id: store.merkle.payload.id(),
                     delta: merkle_payload_redo,
                 },
                 BufferWrite {
-                    space_id: self.store.merkle.meta.id(),
+                    space_id: store.merkle.meta.id(),
                     delta: merkle_meta_redo,
                 },
                 BufferWrite {
@@ -314,13 +319,13 @@ impl api::DbView for Proposal {
     }
 }
 
-impl Drop for Proposal {
-    fn drop(&mut self) {
-        if !*self.committed.lock() {
-            // drop the staging changes
-            self.store.merkle.payload.reset_deltas();
-            self.store.merkle.meta.reset_deltas();
-            self.m.read().root_hash_staging.reset_deltas();
-        }
-    }
-}
+// impl Drop for Proposal {
+//     fn drop(&mut self) {
+//         if !*self.committed.lock() {
+//             // drop the staging changes
+//             self.store.merkle.payload.reset_deltas();
+//             self.store.merkle.meta.reset_deltas();
+//             self.m.read().root_hash_staging.reset_deltas();
+//         }
+//     }
+// }

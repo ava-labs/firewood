@@ -228,9 +228,12 @@ struct CompactSpaceInner<M> {
 
 impl CompactSpaceInner<StoreRevMut> {
     pub fn into_shared(self) -> CompactSpaceInner<StoreRevShared> {
+        let meta_space = Arc::<StoreRevMut>::into_inner(self.meta_space).unwrap();
+        let compact_space = Arc::<StoreRevMut>::into_inner(self.compact_space).unwrap();
+        
         CompactSpaceInner {
-            meta_space: Arc::new(self.meta_space.into_shared()),
-            compact_space: Arc::new(self.compact_space.into_shared()),
+            meta_space: Arc::new(meta_space.into_shared()),
+            compact_space: Arc::new(compact_space.into_shared()),
             header: self.header,
             alloc_max_walk: self.alloc_max_walk,
             regn_nbit: self.regn_nbit,

@@ -58,6 +58,7 @@ const MAGIC_STR: &[u8; 16] = b"firewood v0.1\0\0\0";
 
 pub type MutStore = CompactSpace<Node, StoreRevMut>;
 pub type SharedStore = CompactSpace<Node, StoreRevShared>;
+// pub type SharedStore = CompactSpace<Node, StoreRev>;
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -829,7 +830,7 @@ impl Db {
             m: Arc::clone(&self.inner),
             r: Arc::clone(&self.revisions),
             cfg: self.cfg.clone(),
-            rev: Box::new(rev),
+            rev,
             store,
             committed: Arc::new(Mutex::new(false)),
             parent,
