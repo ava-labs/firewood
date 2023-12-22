@@ -135,8 +135,8 @@ pub fn new_merkle(
     );
     let compact_header =
         StoredView::ptr_to_obj(&dm, compact_header, shale::compact::CompactHeader::MSIZE).unwrap();
-    let mem_meta = Arc::new(dm);
-    let mem_payload = Arc::new(DynamicMem::new(compact_size, 0x1));
+    let mem_meta = dm;
+    let mem_payload = DynamicMem::new(compact_size, 0x1);
 
     let cache = shale::ObjCache::new(1);
     let space =

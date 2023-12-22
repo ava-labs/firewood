@@ -36,7 +36,7 @@ pub struct Proposal {
 
     // State of the proposal
     pub(super) rev: DbRev<MutStore>,
-    pub(super) store: Universe<Arc<StoreRevMut>>,
+    pub(super) store: Universe<StoreRevMut>,
     pub(super) committed: Arc<Mutex<bool>>,
 
     pub(super) parent: ProposalBase,
@@ -77,10 +77,10 @@ impl Proposal {
         let r = Arc::clone(&self.r);
         let cfg = self.cfg.clone();
 
-        let db_header_ref = Db::get_db_header_ref(store.merkle.meta.as_ref())?;
+        let db_header_ref = Db::get_db_header_ref(&store.merkle.meta)?;
 
         let merkle_payload_header_ref = Db::get_payload_header_ref(
-            store.merkle.meta.as_ref(),
+            &store.merkle.meta,
             Db::PARAM_SIZE + DbHeader::MSIZE,
         )?;
 

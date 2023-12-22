@@ -139,11 +139,11 @@ impl SubUniverse<StoreRevShared> {
     }
 }
 
-impl SubUniverse<Arc<StoreRevMut>> {
-    fn new_from_other(&self) -> SubUniverse<Arc<StoreRevMut>> {
+impl SubUniverse<StoreRevMut> {
+    fn new_from_other(&self) -> SubUniverse<StoreRevMut> {
         SubUniverse {
-            meta: Arc::new(StoreRevMut::new_from_other(self.meta.as_ref())),
-            payload: Arc::new(StoreRevMut::new_from_other(self.payload.as_ref())),
+            meta: StoreRevMut::new_from_other(&self.meta),
+            payload: StoreRevMut::new_from_other(&self.payload),
         }
     }
 }
@@ -242,8 +242,8 @@ impl Universe<StoreRevShared> {
     }
 }
 
-impl Universe<Arc<StoreRevMut>> {
-    fn new_from_other(&self) -> Universe<Arc<StoreRevMut>> {
+impl Universe<StoreRevMut> {
+    fn new_from_other(&self) -> Universe<StoreRevMut> {
         Universe {
             merkle: self.merkle.new_from_other(),
         }
@@ -584,6 +584,7 @@ impl Db {
             merkle: get_sub_universe_from_empty_delta(&data_cache.merkle),
         };
 
+       
         let db_header_ref = Db::get_db_header_ref(&base.merkle.meta)?;
 
         let merkle_payload_header_ref =
@@ -665,7 +666,7 @@ impl Db {
         reset_store_headers: bool,
         payload_regn_nbit: u64,
         cfg: &DbConfig,
-    ) -> Result<(Universe<Arc<StoreRevMut>>, DbRev<MutStore>), DbError> {
+    ) -> Result<(Universe<StoreRevMut>, DbRev<MutStore>), DbError> {
         let mut offset = Db::PARAM_SIZE as usize;
         let db_header: DiskAddress = DiskAddress::from(offset);
         offset += DbHeader::MSIZE as usize;
@@ -692,20 +693,21 @@ impl Db {
 
         let store = Universe {
             merkle: SubUniverse::new(
-                Arc::new(merkle_meta_store),
-                Arc::new(StoreRevMut::new(cached_space.merkle.payload.clone())),
+                merkle_meta_store,
+                StoreRevMut::new(cached_space.merkle.payload.clone()),
             ),
         };
 
-        let db_header_ref = Db::get_db_header_ref(store.merkle.meta.as_ref())?;
+        let db_header_ref = Db::get_db_header_ref(&store.merkle.meta)?;
 
         let merkle_payload_header_ref = Db::get_payload_header_ref(
-            store.merkle.meta.as_ref(),
+            &store.merkle.meta,
             Db::PARAM_SIZE + DbHeader::MSIZE,
         )?;
 
         let header_refs = (db_header_ref, merkle_payload_header_ref);
 
+        //let meta = store.merkle.meta;
         let mut rev: DbRev<CompactSpace<Node, StoreRevMut>> = Db::new_revision(
             header_refs,
             (store.merkle.meta.clone(), store.merkle.payload.clone()),
@@ -736,7 +738,7 @@ impl Db {
         StoredView::ptr_to_obj(meta_ref, db_header, DbHeader::MSIZE).map_err(Into::into)
     }
 
-    fn new_revision<K: CachedStore, T: Into<Arc<K>>>(
+    fn new_revision<K: CachedStore, T: Into<K>>(
         header_refs: (Obj<DbHeader>, Obj<CompactSpaceHeader>),
         merkle: (T, T),
         payload_regn_nbit: u64,

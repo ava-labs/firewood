@@ -1454,8 +1454,8 @@ mod tests {
             shale::compact::CompactHeader::MSIZE,
         )
         .unwrap();
-        let mem_meta = Arc::new(dm);
-        let mem_payload = Arc::new(DynamicMem::new(0x10000, 0x1));
+        let mem_meta = dm;
+        let mem_payload = DynamicMem::new(0x10000, 0x1);
 
         let cache = shale::ObjCache::new(1);
         let space =
