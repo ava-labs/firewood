@@ -102,7 +102,7 @@ pub struct DeltaPage(u64, Page);
 
 impl DeltaPage {
     #[inline(always)]
-    fn offset(&self) -> u64 {
+    const fn offset(&self) -> u64 {
         self.0 << PAGE_SIZE_NBIT
     }
 
@@ -304,7 +304,7 @@ impl StoreRevShared {
         *self.0.base_space.write() = base_space
     }
 
-    pub fn inner(&self) -> &Arc<StoreRev> {
+    pub const fn inner(&self) -> &Arc<StoreRev> {
         &self.0
     }
 }
@@ -890,7 +890,7 @@ impl FilePool {
         Ok(file)
     }
 
-    fn get_file_nbit(&self) -> u64 {
+    const fn get_file_nbit(&self) -> u64 {
         self.file_nbit
     }
 }

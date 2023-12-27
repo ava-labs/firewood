@@ -1429,7 +1429,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> RefMut<'a, S, T> {
 }
 
 // nibbles, high bits first, then low bits
-pub fn to_nibble_array(x: u8) -> [u8; 2] {
+pub const fn to_nibble_array(x: u8) -> [u8; 2] {
     [x >> 4, x & 0b_0000_1111]
 }
 

@@ -573,7 +573,7 @@ pub struct DiskBufferRequester {
 
 impl DiskBufferRequester {
     /// Create a new requester.
-    pub fn new(sender: mpsc::UnboundedSender<BufferCmd>) -> Self {
+    pub const fn new(sender: mpsc::UnboundedSender<BufferCmd>) -> Self {
         Self { sender }
     }
 

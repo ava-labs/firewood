@@ -85,7 +85,7 @@ impl ExtNode {
             .unwrap()
     }
 
-    pub fn chd(&self) -> DiskAddress {
+    pub const fn chd(&self) -> DiskAddress {
         self.child
     }
 

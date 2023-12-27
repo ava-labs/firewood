@@ -265,7 +265,7 @@ impl Node {
         Self::from(NodeType::Leaf(leaf))
     }
 
-    pub fn inner(&self) -> &NodeType {
+    pub const fn inner(&self) -> &NodeType {
         &self.inner
     }
 
@@ -453,7 +453,7 @@ pub struct EncodedNode<T> {
 }
 
 impl<T> EncodedNode<T> {
-    pub fn new(node: EncodedNodeType) -> Self {
+    pub const fn new(node: EncodedNodeType) -> Self {
         Self {
             node,
             phantom: PhantomData,

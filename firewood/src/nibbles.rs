@@ -70,16 +70,16 @@ impl<'a, const LEADING_ZEROES: usize> IntoIterator for Nibbles<'a, LEADING_ZEROE
 
 impl<'a, const LEADING_ZEROES: usize> Nibbles<'a, LEADING_ZEROES> {
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         LEADING_ZEROES + 2 * self.0.len()
     }
 
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         LEADING_ZEROES == 0 && self.0.is_empty()
     }
 
-    pub fn new(inner: &'a [u8]) -> Self {
+    pub const fn new(inner: &'a [u8]) -> Self {
         Nibbles(inner)
     }
 }
@@ -120,7 +120,7 @@ impl<'a, const LEADING_ZEROES: usize> Iterator for NibblesIterator<'a, LEADING_Z
 
 impl<'a, const LEADING_ZEROES: usize> NibblesIterator<'a, LEADING_ZEROES> {
     #[inline(always)]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.head == self.tail
     }
 }

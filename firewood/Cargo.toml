@@ -55,3 +55,4 @@ harness = false
 [lints.clippy]
 unwrap_used = "warn"
 explicit_deref_methods = "warn"
+missing_const_for_fn = "warn"

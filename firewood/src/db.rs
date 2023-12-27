@@ -124,7 +124,7 @@ struct SubUniverse<T> {
 }
 
 impl<T> SubUniverse<T> {
-    fn new(meta: T, payload: T) -> Self {
+    const fn new(meta: T, payload: T) -> Self {
         Self { meta, payload }
     }
 }
@@ -196,7 +196,7 @@ struct DbHeader {
 impl DbHeader {
     pub const MSIZE: u64 = std::mem::size_of::<Self>() as u64;
 
-    pub fn new_empty() -> Self {
+    pub const fn new_empty() -> Self {
         Self {
             kv_root: DiskAddress::null(),
         }

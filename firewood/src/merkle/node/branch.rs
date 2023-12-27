@@ -73,11 +73,11 @@ impl BranchNode {
         }
     }
 
-    pub fn value(&self) -> &Option<Data> {
+    pub const fn value(&self) -> &Option<Data> {
         &self.value
     }
 
-    pub fn chd(&self) -> &[Option<DiskAddress>; Self::MAX_CHILDREN] {
+    pub const fn chd(&self) -> &[Option<DiskAddress>; Self::MAX_CHILDREN] {
         &self.children
     }
 
@@ -85,7 +85,7 @@ impl BranchNode {
         &mut self.children
     }
 
-    pub fn chd_encode(&self) -> &[Option<Vec<u8>>; Self::MAX_CHILDREN] {
+    pub const fn chd_encode(&self) -> &[Option<Vec<u8>>; Self::MAX_CHILDREN] {
         &self.children_encoded
     }
 

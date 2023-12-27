@@ -33,7 +33,7 @@ impl DiskAddress {
     pub(crate) const MSIZE: u64 = size_of::<Self>() as u64;
 
     /// Return a None DiskAddress
-    pub fn null() -> Self {
+    pub const fn null() -> Self {
         DiskAddress(None)
     }
 
@@ -43,7 +43,7 @@ impl DiskAddress {
     }
 
     /// Convert a NonZeroUsize to a DiskAddress
-    pub fn new(addr: NonZeroUsize) -> Self {
+    pub const fn new(addr: NonZeroUsize) -> Self {
         DiskAddress(Some(addr))
     }
 

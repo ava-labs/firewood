@@ -22,11 +22,11 @@ pub struct CompactHeader {
 
 impl CompactHeader {
     pub const MSIZE: u64 = 17;
-    pub fn is_freed(&self) -> bool {
+    pub const fn is_freed(&self) -> bool {
         self.is_freed
     }
 
-    pub fn payload_size(&self) -> u64 {
+    pub const fn payload_size(&self) -> u64 {
         self.payload_size
     }
 }
@@ -164,7 +164,7 @@ impl CompactSpaceHeaderSliced {
 impl CompactSpaceHeader {
     pub const MSIZE: u64 = 32;
 
-    pub fn new(meta_base: NonZeroUsize, compact_base: NonZeroUsize) -> Self {
+    pub const fn new(meta_base: NonZeroUsize, compact_base: NonZeroUsize) -> Self {
         Self {
             meta_space_tail: DiskAddress::new(meta_base),
             compact_space_tail: DiskAddress::new(compact_base),
