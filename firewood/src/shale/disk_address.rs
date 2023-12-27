@@ -182,7 +182,7 @@ impl Storable for DiskAddress {
                 offset: addr,
                 size: Self::MSIZE,
             })?;
-        let addrdyn = raw.deref();
+        let addrdyn = &*raw;
         let addrvec = addrdyn.as_deref();
         #[allow(clippy::unwrap_used)]
         Ok(Self(NonZeroUsize::new(usize::from_le_bytes(

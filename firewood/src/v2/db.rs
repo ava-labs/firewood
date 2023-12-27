@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::{fmt::Debug, ops::DerefMut, sync::Arc};
+use std::{fmt::Debug, sync::Arc};
 
 use tokio::sync::Mutex;
 
@@ -71,7 +71,7 @@ where
     ) -> Result<Self::Proposal, api::Error> {
         let mut dbview_latest_cache_guard = self.latest_cache.lock().await;
 
-        let revision = match dbview_latest_cache_guard.deref_mut() {
+        let revision = match &mut *dbview_latest_cache_guard {
             Some(revision) => revision.clone(),
             revision => {
                 let default_revision = Arc::new(T::default());

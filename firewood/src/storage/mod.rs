@@ -539,9 +539,8 @@ impl CachedStore for StoreRevMut {
 
         if s_pid == e_pid {
             let mut deltas = self.deltas.write();
-            let slice =
-                &mut self.get_page_mut(deltas.deref_mut(), &self.prev_deltas.read(), s_pid as u64)
-                    [s_off..e_off + 1];
+            let slice = &mut self.get_page_mut(&mut deltas, &self.prev_deltas.read(), s_pid as u64)
+                [s_off..e_off + 1];
             undo.extend(&*slice);
             slice.copy_from_slice(change)
         } else {
@@ -549,11 +548,9 @@ impl CachedStore for StoreRevMut {
 
             {
                 let mut deltas = self.deltas.write();
-                let slice = &mut self.get_page_mut(
-                    deltas.deref_mut(),
-                    &self.prev_deltas.read(),
-                    s_pid as u64,
-                )[s_off..];
+                let slice =
+                    &mut self.get_page_mut(&mut deltas, &self.prev_deltas.read(), s_pid as u64)
+                        [s_off..];
                 undo.extend(&*slice);
                 slice.copy_from_slice(&change[..len]);
             }
@@ -562,16 +559,14 @@ impl CachedStore for StoreRevMut {
 
             let mut deltas = self.deltas.write();
             for p in s_pid + 1..e_pid {
-                let slice =
-                    self.get_page_mut(deltas.deref_mut(), &self.prev_deltas.read(), p as u64);
+                let slice = self.get_page_mut(&mut deltas, &self.prev_deltas.read(), p as u64);
                 undo.extend(&*slice);
                 slice.copy_from_slice(&change[..PAGE_SIZE as usize]);
                 change = &change[PAGE_SIZE as usize..];
             }
 
-            let slice =
-                &mut self.get_page_mut(deltas.deref_mut(), &self.prev_deltas.read(), e_pid as u64)
-                    [..e_off + 1];
+            let slice = &mut self.get_page_mut(&mut deltas, &self.prev_deltas.read(), e_pid as u64)
+                [..e_off + 1];
             undo.extend(&*slice);
             slice.copy_from_slice(change);
         }
@@ -752,7 +747,7 @@ impl CachedSpaceInner {
 
                         nix::sys::uio::pread(
                             file.as_fd(),
-                            page.deref_mut(),
+                            &mut *page,
                             (poff & (file_size - 1)) as nix::libc::off_t,
                         )
                         .map_err(StoreError::System)?;

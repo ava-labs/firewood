@@ -12,7 +12,6 @@ use std::{
     fmt::{Debug, Error as FmtError, Formatter},
     io::{Cursor, Read, Write},
     mem::size_of,
-    ops::Deref,
 };
 
 pub type DataLen = u32;
@@ -225,7 +224,7 @@ impl Storable for BranchNode {
         let (value_len, value) = self
             .value
             .as_ref()
-            .map(|val| (val.len() as DataLen, val.deref()))
+            .map(|val| (val.len() as DataLen, &**val))
             .unwrap_or((DataLen::MAX, &[]));
 
         cursor.write_all(&value_len.to_le_bytes())?;
