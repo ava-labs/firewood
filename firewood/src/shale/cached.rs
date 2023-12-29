@@ -59,6 +59,7 @@ impl CachedStore for PlainMem {
         let length = change.len();
         #[allow(clippy::unwrap_used)]
         let mut vect = self.space.deref().write().unwrap();
+        #[allow(clippy::indexing_slicing)]
         vect.as_mut_slice()[offset..offset + length].copy_from_slice(change);
     }
 
@@ -94,6 +95,7 @@ impl CachedView for PlainMemView {
 
     fn as_deref(&self) -> Self::DerefReturn {
         #[allow(clippy::unwrap_used)]
+        #[allow(clippy::indexing_slicing)]
         self.mem.space.read().unwrap()[self.offset..self.offset + self.length].to_vec()
     }
 }
@@ -158,6 +160,7 @@ impl CachedStore for DynamicMem {
         if size > space.len() {
             space.resize(size, 0);
         }
+        #[allow(clippy::indexing_slicing)]
         space[offset..offset + length].copy_from_slice(change)
     }
 
@@ -193,12 +196,14 @@ impl CachedView for DynamicMemView {
 
     fn as_deref(&self) -> Self::DerefReturn {
         #[allow(clippy::unwrap_used)]
+        #[allow(clippy::indexing_slicing)]
         self.mem.space.read().unwrap()[self.offset..self.offset + self.length].to_vec()
     }
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use super::*;
 

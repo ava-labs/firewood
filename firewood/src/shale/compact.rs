@@ -39,9 +39,12 @@ impl Storable for CompactHeader {
                 offset: addr,
                 size: Self::MSIZE,
             })?;
+        #[allow(clippy::indexing_slicing)]
         let payload_size =
             u64::from_le_bytes(raw.as_deref()[..8].try_into().expect("invalid slice"));
+        #[allow(clippy::indexing_slicing)]
         let is_freed = raw.as_deref()[8] != 0;
+        #[allow(clippy::indexing_slicing)]
         let desc_addr =
             usize::from_le_bytes(raw.as_deref()[9..17].try_into().expect("invalid slice"));
         Ok(Self {
@@ -114,8 +117,10 @@ impl Storable for CompactDescriptor {
                 offset: addr,
                 size: Self::MSIZE,
             })?;
+        #[allow(clippy::indexing_slicing)]
         let payload_size =
             u64::from_le_bytes(raw.as_deref()[..8].try_into().expect("invalid slice"));
+        #[allow(clippy::indexing_slicing)]
         let haddr = usize::from_le_bytes(raw.as_deref()[8..].try_into().expect("invalid slice"));
         Ok(Self {
             payload_size,
@@ -191,9 +196,13 @@ impl Storable for CompactSpaceHeader {
                 offset: addr,
                 size: Self::MSIZE,
             })?;
+        #[allow(clippy::indexing_slicing)]
         let meta_space_tail = raw.as_deref()[..8].into();
+        #[allow(clippy::indexing_slicing)]
         let compact_space_tail = raw.as_deref()[8..16].into();
+        #[allow(clippy::indexing_slicing)]
         let base_addr = raw.as_deref()[16..24].into();
+        #[allow(clippy::indexing_slicing)]
         let alloc_addr = raw.as_deref()[24..].into();
         Ok(Self {
             meta_space_tail,
@@ -642,6 +651,7 @@ impl<T: Storable + 'static, M: CachedStore + Send + Sync> ShaleStore<T> for Comp
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use sha3::Digest;
 
