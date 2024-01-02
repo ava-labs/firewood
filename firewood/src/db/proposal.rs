@@ -14,8 +14,8 @@ use crate::{
 };
 use async_trait::async_trait;
 use parking_lot::{Mutex, RwLock};
-use tokio::task::block_in_place;
 use std::{io::ErrorKind, sync::Arc};
+use tokio::task::block_in_place;
 
 pub use crate::v2::api::{Batch, BatchOp};
 
