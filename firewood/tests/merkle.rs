@@ -279,7 +279,7 @@ fn test_bad_proof() -> Result<(), DataStoreError> {
     let merkle = merkle_build_test(items.clone(), 0x10000, 0x10000)?;
     let (keys, _): (Vec<&[u8; 32]>, Vec<&[u8; 20]>) = items.into_iter().unzip();
 
-    for (_, key) in keys.iter().enumerate() {
+    for key in keys.iter() {
         let mut proof = merkle.prove(key)?;
         assert!(!proof.0.is_empty());
 
@@ -719,7 +719,7 @@ fn test_empty_range_proof() -> Result<(), ProofError> {
     let merkle = merkle_build_test(items.clone(), 0x10000, 0x10000)?;
 
     let cases = [(items.len() - 1, false)];
-    for (_, c) in cases.iter().enumerate() {
+    for c in cases.iter() {
         let first = increase_key(items[c.0].0);
         let proof = merkle.prove(first)?;
         assert!(!proof.0.is_empty());
