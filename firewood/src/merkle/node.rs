@@ -106,6 +106,7 @@ impl NodeType {
             LEAF_NODE_SIZE => {
                 let mut items = items.into_iter();
 
+                #[allow(clippy::unwrap_used)]
                 let decoded_key: Vec<u8> = items.next().unwrap().decode()?;
 
                 let decoded_key_nibbles = Nibbles::<0>::new(&decoded_key);
@@ -114,6 +115,7 @@ impl NodeType {
                     PartialPath::from_nibbles(decoded_key_nibbles.into_iter());
 
                 let cur_key = cur_key_path.into_inner();
+                #[allow(clippy::unwrap_used)]
                 let data: Vec<u8> = items.next().unwrap().decode()?;
 
                 if term {
@@ -263,7 +265,7 @@ impl Node {
         Self::from(NodeType::Leaf(leaf))
     }
 
-    pub fn inner(&self) -> &NodeType {
+    pub const fn inner(&self) -> &NodeType {
         &self.inner
     }
 
@@ -344,10 +346,12 @@ impl Storable for Node {
 
         offset += Meta::SIZE;
 
+        #[allow(clippy::indexing_slicing)]
         let attrs = NodeAttributes::from_bits_retain(meta_raw.as_deref()[TRIE_HASH_LEN]);
 
         let root_hash = if attrs.contains(NodeAttributes::ROOT_HASH_VALID) {
             Some(TrieHash(
+                #[allow(clippy::indexing_slicing)]
                 meta_raw.as_deref()[..TRIE_HASH_LEN]
                     .try_into()
                     .expect("invalid slice"),
@@ -356,6 +360,7 @@ impl Storable for Node {
             None
         };
 
+        #[allow(clippy::indexing_slicing)]
         match meta_raw.as_deref()[TRIE_HASH_LEN + 1].try_into()? {
             NodeTypeId::Branch => {
                 let inner = NodeType::Branch(Box::new(BranchNode::deserialize(offset, mem)?));
@@ -413,6 +418,7 @@ impl Storable for Node {
             });
         }
 
+        #[allow(clippy::unwrap_used)]
         cur.write_all(&[attrs.bits()]).unwrap();
 
         match &self.inner {
@@ -422,6 +428,7 @@ impl Storable for Node {
 
                 let pos = cur.position() as usize;
 
+                #[allow(clippy::indexing_slicing)]
                 n.serialize(&mut cur.get_mut()[pos..])
             }
 
@@ -430,6 +437,7 @@ impl Storable for Node {
 
                 let pos = cur.position() as usize;
 
+                #[allow(clippy::indexing_slicing)]
                 n.serialize(&mut cur.get_mut()[pos..])
             }
 
@@ -438,6 +446,7 @@ impl Storable for Node {
 
                 let pos = cur.position() as usize;
 
+                #[allow(clippy::indexing_slicing)]
                 n.serialize(&mut cur.get_mut()[pos..])
             }
         }
@@ -450,7 +459,7 @@ pub struct EncodedNode<T> {
 }
 
 impl<T> EncodedNode<T> {
-    pub fn new(node: EncodedNodeType) -> Self {
+    pub const fn new(node: EncodedNodeType) -> Self {
         Self {
             node,
             phantom: PhantomData,
@@ -539,7 +548,8 @@ impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
             let value = node.data.map(Data);
 
             for (i, chd) in node.chd {
-                children[i as usize] = Some(chd);
+                #[allow(clippy::indexing_slicing)]
+                (children[i as usize] = Some(chd));
             }
 
             let node = EncodedNodeType::Branch {
@@ -579,9 +589,11 @@ impl Serialize for EncodedNode<Bincode> {
                     if c.len() >= TRIE_HASH_LEN {
                         let serialized_hash = Bincode::serialize(&Keccak256::digest(c).to_vec())
                             .map_err(|e| S::Error::custom(format!("bincode error: {e}")))?;
-                        list[i] = Encoded::Data(serialized_hash);
+                        #[allow(clippy::indexing_slicing)]
+                        (list[i] = Encoded::Data(serialized_hash));
                     } else {
-                        list[i] = Encoded::Raw(c.to_vec());
+                        #[allow(clippy::indexing_slicing)]
+                        (list[i] = Encoded::Raw(c.to_vec()));
                     }
                 }
                 if let Some(Data(val)) = &value {
@@ -652,7 +664,8 @@ impl<'de> Deserialize<'de> for EncodedNode<Bincode> {
                             Encoded::Data(chd) => Bincode::deserialize(chd.as_ref())
                                 .map_err(|e| D::Error::custom(format!("bincode error: {e}")))?,
                         };
-                        children[i] = Some(chd).filter(|chd| !chd.is_empty());
+                        #[allow(clippy::indexing_slicing)]
+                        (children[i] = Some(chd).filter(|chd| !chd.is_empty()));
                     }
                 }
                 let node = EncodedNodeType::Branch {
@@ -819,11 +832,13 @@ pub(super) mod tests {
     fn test_encoding(node: Node) {
         let mut bytes = vec![0; node.serialized_len() as usize];
 
+        #[allow(clippy::unwrap_used)]
         node.serialize(&mut bytes).unwrap();
 
         let mut mem = PlainMem::new(node.serialized_len(), 0x00);
         mem.write(0, &bytes);
 
+        #[allow(clippy::unwrap_used)]
         let hydrated_node = Node::deserialize(0, &mem).unwrap();
 
         assert_eq!(node, hydrated_node);

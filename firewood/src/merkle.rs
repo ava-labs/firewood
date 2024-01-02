@@ -183,6 +183,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
     pub fn empty_root() -> &'static TrieHash {
         static V: OnceLock<TrieHash> = OnceLock::new();
+        #[allow(clippy::unwrap_used)]
         V.get_or_init(|| {
             TrieHash(
                 hex::decode("56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421")
@@ -203,6 +204,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         Ok(if let Some(root) = root {
             let mut node = self.get_node(root)?;
             let res = node.get_root_hash::<S>(self.store.as_ref()).clone();
+            #[allow(clippy::unwrap_used)]
             if node.is_dirty() {
                 node.write(|_| {}).unwrap();
                 node.set_dirty(false);
@@ -230,6 +232,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                     self.dump_(*c, w)?
                 }
             }
+            #[allow(clippy::unwrap_used)]
             NodeType::Leaf(n) => writeln!(w, "{n:?}").unwrap(),
             NodeType::Extension(n) => {
                 writeln!(w, "{n:?}")?;
@@ -287,8 +290,10 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
             let mut chd = [None; BranchNode::MAX_CHILDREN];
 
+            #[allow(clippy::indexing_slicing)]
             let last_matching_nibble = matching_path[idx];
-            chd[last_matching_nibble as usize] = Some(leaf_address);
+            #[allow(clippy::indexing_slicing)]
+            (chd[last_matching_nibble as usize] = Some(leaf_address));
 
             let address = match &node_to_split.inner {
                 NodeType::Extension(u) if u.path.len() == 0 => {
@@ -298,7 +303,8 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                 _ => node_to_split_address,
             };
 
-            chd[n_path[idx] as usize] = Some(address);
+            #[allow(clippy::indexing_slicing)]
+            (chd[n_path[idx] as usize] = Some(address));
 
             let new_branch = Node::from_branch(BranchNode {
                 // path: PartialPath(matching_path[..idx].to_vec()),
@@ -311,6 +317,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
             if idx > 0 {
                 self.put_node(Node::from(NodeType::Extension(ExtNode {
+                    #[allow(clippy::indexing_slicing)]
                     path: PartialPath(matching_path[..idx].to_vec()),
                     child: new_branch_address,
                     child_encoded: None,
@@ -337,6 +344,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                                 match &mut u.inner {
                                     NodeType::Leaf(u) => u.data = Data(val),
                                     NodeType::Extension(u) => {
+                                        #[allow(clippy::unwrap_used)]
                                         let write_result =
                                             self.get_node(u.chd()).and_then(|mut b_ref| {
                                                 b_ref
@@ -379,11 +387,13 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                     // if the node-path is greater than the insert path
                     (Ordering::Less, _) => {
                         // key path is a prefix of the path to u
+                        #[allow(clippy::unwrap_used)]
                         node_to_split
                             .write(|u| {
                                 // TODO: handle unwraps better
                                 let path = u.inner.path_mut();
-                                *path = PartialPath(n_path[insert_path.len() + 1..].to_vec());
+                                #[allow(clippy::indexing_slicing)]
+                                (*path = PartialPath(n_path[insert_path.len() + 1..].to_vec()));
 
                                 u.rehash();
                             })
@@ -398,6 +408,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                             _ => node_to_split_address,
                         };
 
+                        #[allow(clippy::indexing_slicing)]
                         (
                             leaf_address,
                             insert_path,
@@ -408,6 +419,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                     // insert path is greather than the path of the leaf
                     (Ordering::Greater, Some(n_value)) => {
                         let leaf = Node::from_leaf(LeafNode::new(
+                            #[allow(clippy::indexing_slicing)]
                             PartialPath(insert_path[n_path.len() + 1..].to_vec()),
                             Data(val),
                         ));
@@ -416,6 +428,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
                         deleted.push(node_to_split_address);
 
+                        #[allow(clippy::indexing_slicing)]
                         (
                             leaf_address,
                             n_path.as_slice(),
@@ -428,7 +441,8 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             // [parent] (-> [ExtNode]) -> [branch with v] -> [Leaf]
             let mut children = [None; BranchNode::MAX_CHILDREN];
 
-            children[idx] = leaf_address.into();
+            #[allow(clippy::indexing_slicing)]
+            (children[idx] = leaf_address.into());
 
             let branch_address = self
                 .put_node(Node::from_branch(BranchNode {
@@ -528,6 +542,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                 }
 
                 NodeType::Branch(n) => {
+                    #[allow(clippy::indexing_slicing)]
                     match n.children[current_nibble as usize] {
                         Some(c) => (node, c),
                         None => {
@@ -540,9 +555,11 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                                 )))?
                                 .as_ptr();
                             // set the current child to point to this leaf
+                            #[allow(clippy::unwrap_used)]
                             node.write(|u| {
                                 let uu = u.inner.as_branch_mut().unwrap();
-                                uu.children[current_nibble as usize] = Some(leaf_ptr);
+                                #[allow(clippy::indexing_slicing)]
+                                (uu.children[current_nibble as usize] = Some(leaf_ptr));
                                 u.rehash();
                             })
                             .unwrap();
@@ -612,17 +629,21 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
                                     None
                                 } else {
+                                    #[allow(clippy::indexing_slicing)]
                                     let idx = n.path[0];
-                                    n.path = PartialPath(n.path[1..].to_vec());
+                                    #[allow(clippy::indexing_slicing)]
+                                    (n.path = PartialPath(n.path[1..].to_vec()));
                                     u.rehash();
 
                                     Some((idx, true, None, val))
                                 }
                             }
                             NodeType::Extension(n) => {
+                                #[allow(clippy::indexing_slicing)]
                                 let idx = n.path[0];
                                 let more = if n.path.len() > 1 {
-                                    n.path = PartialPath(n.path[1..].to_vec());
+                                    #[allow(clippy::indexing_slicing)]
+                                    (n.path = PartialPath(n.path[1..].to_vec()));
                                     true
                                 } else {
                                     false
@@ -648,10 +669,12 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                     u_ptr
                 } else {
                     deleted.push(u_ptr);
+                    #[allow(clippy::unwrap_used)]
                     ext.unwrap()
                 };
 
-                chd[idx as usize] = Some(c_ptr);
+                #[allow(clippy::indexing_slicing)]
+                (chd[idx as usize] = Some(c_ptr));
 
                 let branch = self
                     .put_node(Node::from_branch(BranchNode {
@@ -669,6 +692,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         Ok((parents.into_iter().rev().map(|(node, _)| node), deleted))
     }
 
+    #[allow(clippy::unwrap_used)]
     fn after_remove_leaf(
         &self,
         parents: &mut ParentRefs,
@@ -677,12 +701,15 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         let (b_chd, val) = {
             let (mut b_ref, b_idx) = parents.pop().unwrap();
             // the immediate parent of a leaf must be a branch
+            #[allow(clippy::unwrap_used)]
             b_ref
                 .write(|b| {
-                    b.inner.as_branch_mut().unwrap().children[b_idx as usize] = None;
+                    #[allow(clippy::indexing_slicing)]
+                    (b.inner.as_branch_mut().unwrap().children[b_idx as usize] = None);
                     b.rehash()
                 })
                 .unwrap();
+            #[allow(clippy::unwrap_used)]
             let b_inner = b_ref.inner.as_branch().unwrap();
             let (b_chd, has_chd) = b_inner.single_child();
             if (has_chd && (b_chd.is_none() || b_inner.value.is_some())) || parents.is_empty() {
@@ -691,6 +718,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             deleted.push(b_ref.as_ptr());
             (b_chd, b_inner.value.clone())
         };
+        #[allow(clippy::unwrap_used)]
         let (mut p_ref, p_idx) = parents.pop().unwrap();
         let p_ptr = p_ref.as_ptr();
         if let Some(val) = val {
@@ -701,9 +729,12 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                     let leaf = self
                         .put_node(Node::from_leaf(LeafNode::new(PartialPath(Vec::new()), val)))?
                         .as_ptr();
+                    #[allow(clippy::unwrap_used)]
                     p_ref
                         .write(|p| {
-                            p.inner.as_branch_mut().unwrap().children[p_idx as usize] = Some(leaf);
+                            #[allow(clippy::indexing_slicing)]
+                            (p.inner.as_branch_mut().unwrap().children[p_idx as usize] =
+                                Some(leaf));
                             p.rehash()
                         })
                         .unwrap();
@@ -723,6 +754,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                 _ => unreachable!(),
             }
         } else {
+            #[allow(clippy::unwrap_used)]
             let (c_ptr, idx) = b_chd.unwrap();
             let mut c_ref = self.get_node(c_ptr)?;
             match &c_ref.inner {
@@ -794,10 +826,12 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
                             drop(c_ref);
 
+                            #[allow(clippy::unwrap_used)]
                             p_ref
                                 .write(|p| {
-                                    p.inner.as_branch_mut().unwrap().children[p_idx as usize] =
-                                        Some(c_ptr);
+                                    #[allow(clippy::indexing_slicing)]
+                                    (p.inner.as_branch_mut().unwrap().children[p_idx as usize] =
+                                        Some(c_ptr));
                                     p.rehash()
                                 })
                                 .unwrap();
@@ -849,7 +883,9 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         deleted: &mut Vec<DiskAddress>,
     ) -> Result<(), MerkleError> {
         // [b] -> [u] -> [c]
+        #[allow(clippy::unwrap_used)]
         let (mut b_ref, b_idx) = parents.pop().unwrap();
+        #[allow(clippy::unwrap_used)]
         let mut c_ref = self.get_node(c_ptr).unwrap();
         match &c_ref.inner {
             NodeType::Branch(_) => {
@@ -864,14 +900,15 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                                 NodeType::Branch(n) => {
                                     // from: [Branch] -> [Branch]x -> [Branch]
                                     // to: [Branch] -> [Ext] -> [Branch]
-                                    n.children[b_idx as usize] = Some(
+                                    #[allow(clippy::indexing_slicing)]
+                                    (n.children[b_idx as usize] = Some(
                                         self.put_node(Node::from(NodeType::Extension(ExtNode {
                                             path: PartialPath(vec![idx]),
                                             child: c_ptr,
                                             child_encoded: None,
                                         })))?
                                         .as_ptr(),
-                                    );
+                                    ));
                                 }
                                 NodeType::Extension(n) => {
                                     // from: [Ext] -> [Branch]x -> [Branch]
@@ -915,9 +952,12 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                         c_ptr
                     };
                     drop(c_ref);
+                    #[allow(clippy::unwrap_used)]
                     b_ref
                         .write(|b| {
-                            b.inner.as_branch_mut().unwrap().children[b_idx as usize] = Some(c_ptr);
+                            #[allow(clippy::indexing_slicing)]
+                            (b.inner.as_branch_mut().unwrap().children[b_idx as usize] =
+                                Some(c_ptr));
                             b.rehash()
                         })
                         .unwrap();
@@ -978,6 +1018,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                 NodeType::Branch(n) => {
                     let (c_chd, _) = n.single_child();
 
+                    #[allow(clippy::unwrap_used)]
                     node_ref
                         .write(|u| {
                             found = u.inner.as_branch_mut().unwrap().value.take();
@@ -1002,6 +1043,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             (found, parents, deleted)
         };
 
+        #[allow(clippy::unwrap_used)]
         for (mut r, _) in parents.into_iter().rev() {
             r.write(|u| u.rehash()).unwrap();
         }
@@ -1105,6 +1147,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             start_loop_callback(node_ref.as_ptr(), nib);
 
             let next_ptr = match &node_ref.inner {
+                #[allow(clippy::indexing_slicing)]
                 NodeType::Branch(n) => match n.children[nib as usize] {
                     Some(c) => c,
                     None => return Ok(None),
@@ -1280,6 +1323,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
         // we stop streaming if either we hit the limit or the key returned was larger
         // than the largest key requested
+        #[allow(clippy::unwrap_used)]
         middle.extend(
             stream
                 .take(limit.unwrap_or(usize::MAX))
@@ -1325,10 +1369,13 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 }
 
 fn set_parent(new_chd: DiskAddress, parents: &mut [(ObjRef, u8)]) {
+    #[allow(clippy::unwrap_used)]
     let (p_ref, idx) = parents.last_mut().unwrap();
+    #[allow(clippy::unwrap_used)]
     p_ref
         .write(|p| {
             match &mut p.inner {
+                #[allow(clippy::indexing_slicing)]
                 NodeType::Branch(pp) => pp.children[*idx as usize] = Some(new_chd),
                 NodeType::Extension(pp) => *pp.chd_mut() = new_chd,
                 _ => unreachable!(),
@@ -1348,6 +1395,7 @@ pub struct RefMut<'a, S, T> {
 
 impl<'a> std::ops::Deref for Ref<'a> {
     type Target = [u8];
+    #[allow(clippy::unwrap_used)]
     fn deref(&self) -> &[u8] {
         match &self.0.inner {
             NodeType::Branch(n) => n.value.as_ref().unwrap(),
@@ -1366,14 +1414,17 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> RefMut<'a, S, T> {
         }
     }
 
+    #[allow(clippy::unwrap_used)]
     pub fn get(&self) -> Ref {
         Ref(self.merkle.get_node(self.ptr).unwrap())
     }
 
     pub fn write(&mut self, modify: impl FnOnce(&mut Vec<u8>)) -> Result<(), MerkleError> {
         let mut deleted = Vec::new();
+        #[allow(clippy::unwrap_used)]
         {
             let mut u_ref = self.merkle.get_node(self.ptr).unwrap();
+            #[allow(clippy::unwrap_used)]
             let mut parents: Vec<_> = self
                 .parents
                 .iter()
@@ -1383,6 +1434,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> RefMut<'a, S, T> {
                 self.merkle,
                 u_ref,
                 |u| {
+                    #[allow(clippy::unwrap_used)]
                     modify(match &mut u.inner {
                         NodeType::Branch(n) => &mut n.value.as_mut().unwrap().0,
                         NodeType::Leaf(n) => &mut n.data.0,
@@ -1402,7 +1454,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> RefMut<'a, S, T> {
 }
 
 // nibbles, high bits first, then low bits
-pub fn to_nibble_array(x: u8) -> [u8; 2] {
+pub const fn to_nibble_array(x: u8) -> [u8; 2] {
     [x >> 4, x & 0b_0000_1111]
 }
 
@@ -1411,10 +1463,14 @@ pub fn to_nibble_array(x: u8) -> [u8; 2] {
 // the final nibble is dropped
 pub fn from_nibbles(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
     debug_assert_eq!(nibbles.len() & 1, 0);
+    #[allow(clippy::indexing_slicing)]
+    #[allow(clippy::indexing_slicing)]
     nibbles.chunks_exact(2).map(|p| (p[0] << 4) | p[1])
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use crate::merkle::node::PlainCodec;
 

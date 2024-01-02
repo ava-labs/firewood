@@ -28,7 +28,8 @@ impl Storable for TrieHash {
                 offset: addr,
                 size: U64_TRIE_HASH_LEN,
             })?;
-
+        #[allow(clippy::unwrap_used)]
+        #[allow(clippy::indexing_slicing)]
         Ok(Self(raw.as_deref()[..TRIE_HASH_LEN].try_into().unwrap()))
     }
 
@@ -48,6 +49,7 @@ impl Debug for TrieHash {
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use super::*;
 
@@ -56,6 +58,7 @@ mod tests {
         let zero_hash = TrieHash([0u8; TRIE_HASH_LEN]);
 
         let mut to = [1u8; TRIE_HASH_LEN];
+        #[allow(clippy::unwrap_used)]
         zero_hash.serialize(&mut to).unwrap();
 
         assert_eq!(&to, &zero_hash.0);

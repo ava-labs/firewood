@@ -43,15 +43,16 @@ impl LeafNode {
         }
     }
 
-    pub fn path(&self) -> &PartialPath {
+    pub const fn path(&self) -> &PartialPath {
         &self.path
     }
 
-    pub fn data(&self) -> &Data {
+    pub const fn data(&self) -> &Data {
         &self.data
     }
 
     pub(super) fn encode(&self) -> Vec<u8> {
+        #[allow(clippy::unwrap_used)]
         bincode::DefaultOptions::new()
             .serialize(
                 [
@@ -143,6 +144,7 @@ impl Storable for LeafNode {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use test_case::test_case;

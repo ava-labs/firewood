@@ -33,6 +33,7 @@ impl CachedStore for PlainMem {
         length: u64,
     ) -> Option<Box<dyn CachedView<DerefReturn = Vec<u8>>>> {
         let length = length as usize;
+        #[allow(clippy::unwrap_used)]
         if offset + length > self.space.read().unwrap().len() {
             None
         } else {
@@ -56,7 +57,9 @@ impl CachedStore for PlainMem {
 
     fn write(&mut self, offset: usize, change: &[u8]) {
         let length = change.len();
+        #[allow(clippy::unwrap_used)]
         let mut vect = self.space.deref().write().unwrap();
+        #[allow(clippy::indexing_slicing)]
         vect.as_mut_slice()[offset..offset + length].copy_from_slice(change);
     }
 
@@ -91,6 +94,8 @@ impl CachedView for PlainMemView {
     type DerefReturn = Vec<u8>;
 
     fn as_deref(&self) -> Self::DerefReturn {
+        #[allow(clippy::unwrap_used)]
+        #[allow(clippy::indexing_slicing)]
         self.mem.space.read().unwrap()[self.offset..self.offset + self.length].to_vec()
     }
 }
@@ -119,6 +124,7 @@ impl CachedStore for DynamicMem {
     ) -> Option<Box<dyn CachedView<DerefReturn = Vec<u8>>>> {
         let length = length as usize;
         let size = offset + length;
+        #[allow(clippy::unwrap_used)]
         let mut space = self.space.write().unwrap();
 
         // Increase the size if the request range exceeds the current limit.
@@ -147,12 +153,14 @@ impl CachedStore for DynamicMem {
         let length = change.len();
         let size = offset + length;
 
+        #[allow(clippy::unwrap_used)]
         let mut space = self.space.write().unwrap();
 
         // Increase the size if the request range exceeds the current limit.
         if size > space.len() {
             space.resize(size, 0);
         }
+        #[allow(clippy::indexing_slicing)]
         space[offset..offset + length].copy_from_slice(change)
     }
 
@@ -187,20 +195,25 @@ impl CachedView for DynamicMemView {
     type DerefReturn = Vec<u8>;
 
     fn as_deref(&self) -> Self::DerefReturn {
+        #[allow(clippy::unwrap_used)]
+        #[allow(clippy::indexing_slicing)]
         self.mem.space.read().unwrap()[self.offset..self.offset + self.length].to_vec()
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_plain_mem() {
         let mut view = PlainMemShared(PlainMem::new(2, 0));
-        let mem = view.deref_mut();
+        let mem = &mut *view;
         mem.write(0, &[1, 1]);
         mem.write(0, &[1, 2]);
+        #[allow(clippy::unwrap_used)]
         let r = mem.get_view(0, 2).unwrap().as_deref();
         assert_eq!(r, [1, 2]);
 
@@ -218,7 +231,7 @@ mod tests {
     #[should_panic(expected = "index 3 out of range for slice of length 2")]
     fn test_plain_mem_panic() {
         let mut view = PlainMemShared(PlainMem::new(2, 0));
-        let mem = view.deref_mut();
+        let mem = &mut *view;
 
         // out of range
         mem.write(1, &[7, 8]);
@@ -227,7 +240,7 @@ mod tests {
     #[test]
     fn test_dynamic_mem() {
         let mut view = DynamicMemShared(DynamicMem::new(2, 0));
-        let mem = view.deref_mut();
+        let mem = &mut *view;
         mem.write(0, &[1, 2]);
         mem.write(0, &[3, 4]);
         assert_eq!(mem.get_view(0, 2).unwrap().as_deref(), [3, 4]);

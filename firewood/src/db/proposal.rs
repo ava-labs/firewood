@@ -47,6 +47,7 @@ pub enum ProposalBase {
 impl crate::v2::api::Proposal for Proposal {
     type Proposal = Proposal;
 
+    #[allow(clippy::unwrap_used)]
     async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
         let proposal = Arc::<Proposal>::into_inner(self).unwrap();
         block_in_place(|| proposal.commit_sync().map_err(Into::into))
@@ -105,6 +106,7 @@ impl Proposal {
                 }
             }
         })?;
+        #[allow(clippy::unwrap_used)]
         rev.flush_dirty().unwrap();
 
         let parent = ProposalBase::Proposal(self);
@@ -175,12 +177,14 @@ impl Proposal {
         let (merkle_meta_redo, merkle_meta_wal) = store.merkle.meta.delta();
 
         let mut rev_inner = m.write();
+        #[allow(clippy::unwrap_used)]
         let merkle_meta_undo = rev_inner
             .cached_space
             .merkle
             .meta
             .update(&merkle_meta_redo)
             .unwrap();
+        #[allow(clippy::unwrap_used)]
         let merkle_payload_undo = rev_inner
             .cached_space
             .merkle
@@ -255,7 +259,7 @@ impl Proposal {
 }
 
 impl Proposal {
-    pub fn get_revision(&self) -> &DbRev<MutStore> {
+    pub const fn get_revision(&self) -> &DbRev<MutStore> {
         &self.rev
     }
 }
@@ -295,6 +299,6 @@ impl api::DbView for Proposal {
     where
         K: api::KeyType,
     {
-        todo!()
+        todo!();
     }
 }

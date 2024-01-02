@@ -35,6 +35,7 @@ struct Args {
 fn string_to_range(input: &str) -> Result<RangeInclusive<usize>, Box<dyn Error + Sync + Send>> {
     //<usize as std::str::FromStr>::Err> {
     let parts: Vec<&str> = input.split('-').collect();
+    #[allow(clippy::indexing_slicing)]
     match parts.len() {
         1 => Ok(input.parse()?..=input.parse()?),
         2 => Ok(parts[0].parse()?..=parts[1].parse()?),
@@ -83,6 +84,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         let verify = get_keys_to_verify(&batch, args.read_verify_percent);
 
+        #[allow(clippy::unwrap_used)]
         let proposal = Arc::new(db.propose(batch).await.unwrap());
         proposal.commit().await?;
         verify_keys(&db, verify).await?;

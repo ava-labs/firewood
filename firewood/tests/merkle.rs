@@ -77,6 +77,7 @@ fn test_root_hash_fuzz_insertions() -> Result<(), DataStoreError> {
 }
 
 #[test]
+#[allow(clippy::unwrap_used)]
 fn test_root_hash_reversed_deletions() -> Result<(), DataStoreError> {
     use rand::{rngs::StdRng, Rng, SeedableRng};
     let rng = std::cell::RefCell::new(StdRng::seed_from_u64(42));
@@ -148,6 +149,7 @@ fn test_root_hash_reversed_deletions() -> Result<(), DataStoreError> {
 }
 
 #[test]
+#[allow(clippy::unwrap_used)]
 fn test_root_hash_random_deletions() -> Result<(), DataStoreError> {
     use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
     let rng = std::cell::RefCell::new(StdRng::seed_from_u64(42));
@@ -205,6 +207,8 @@ fn test_root_hash_random_deletions() -> Result<(), DataStoreError> {
 }
 
 #[test]
+#[allow(clippy::unwrap_used)]
+#[allow(clippy::indexing_slicing)]
 fn test_proof() -> Result<(), DataStoreError> {
     let set = generate_random_data(500);
     let mut items = Vec::from_iter(set.iter());
@@ -275,7 +279,7 @@ fn test_bad_proof() -> Result<(), DataStoreError> {
     let merkle = merkle_build_test(items.clone(), 0x10000, 0x10000)?;
     let (keys, _): (Vec<&[u8; 32]>, Vec<&[u8; 20]>) = items.into_iter().unzip();
 
-    for (_, key) in keys.iter().enumerate() {
+    for key in keys.iter() {
         let mut proof = merkle.prove(key)?;
         assert!(!proof.0.is_empty());
 
@@ -321,6 +325,7 @@ fn test_empty_tree_proof() -> Result<(), DataStoreError> {
 #[test]
 // Tests normal range proof with both edge proofs as the existent proof.
 // The test cases are generated randomly.
+#[allow(clippy::indexing_slicing)]
 fn test_range_proof() -> Result<(), ProofError> {
     let set = generate_random_data(4096);
     let mut items = Vec::from_iter(set.iter());
@@ -356,6 +361,7 @@ fn test_range_proof() -> Result<(), ProofError> {
 #[test]
 // Tests a few cases which the proof is wrong.
 // The prover is expected to detect the error.
+#[allow(clippy::indexing_slicing)]
 fn test_bad_range_proof() -> Result<(), ProofError> {
     let set = generate_random_data(4096);
     let mut items = Vec::from_iter(set.iter());
@@ -433,6 +439,7 @@ fn test_bad_range_proof() -> Result<(), ProofError> {
 #[test]
 // Tests normal range proof with two non-existent proofs.
 // The test cases are generated randomly.
+#[allow(clippy::indexing_slicing)]
 fn test_range_proof_with_non_existent_proof() -> Result<(), ProofError> {
     let set = generate_random_data(4096);
     let mut items = Vec::from_iter(set.iter());
@@ -501,6 +508,7 @@ fn test_range_proof_with_non_existent_proof() -> Result<(), ProofError> {
 // Tests such scenarios:
 // - There exists a gap between the first element and the left edge proof
 // - There exists a gap between the last element and the right edge proof
+#[allow(clippy::indexing_slicing)]
 fn test_range_proof_with_invalid_non_existent_proof() -> Result<(), ProofError> {
     let set = generate_random_data(4096);
     let mut items = Vec::from_iter(set.iter());
@@ -559,6 +567,7 @@ fn test_range_proof_with_invalid_non_existent_proof() -> Result<(), ProofError> 
 #[test]
 // Tests the proof with only one element. The first edge proof can be existent one or
 // non-existent one.
+#[allow(clippy::indexing_slicing)]
 fn test_one_element_range_proof() -> Result<(), ProofError> {
     let set = generate_random_data(4096);
     let mut items = Vec::from_iter(set.iter());
@@ -646,6 +655,7 @@ fn test_one_element_range_proof() -> Result<(), ProofError> {
 #[test]
 // Tests the range proof with all elements.
 // The edge proofs can be nil.
+#[allow(clippy::indexing_slicing)]
 fn test_all_elements_proof() -> Result<(), ProofError> {
     let set = generate_random_data(4096);
     let mut items = Vec::from_iter(set.iter());
@@ -701,6 +711,7 @@ fn test_all_elements_proof() -> Result<(), ProofError> {
 #[test]
 // Tests the range proof with "no" element. The first edge proof must
 // be a non-existent proof.
+#[allow(clippy::indexing_slicing)]
 fn test_empty_range_proof() -> Result<(), ProofError> {
     let set = generate_random_data(4096);
     let mut items = Vec::from_iter(set.iter());
@@ -708,7 +719,7 @@ fn test_empty_range_proof() -> Result<(), ProofError> {
     let merkle = merkle_build_test(items.clone(), 0x10000, 0x10000)?;
 
     let cases = [(items.len() - 1, false)];
-    for (_, c) in cases.iter().enumerate() {
+    for c in cases.iter() {
         let first = increase_key(items[c.0].0);
         let proof = merkle.prove(first)?;
         assert!(!proof.0.is_empty());
@@ -732,6 +743,7 @@ fn test_empty_range_proof() -> Result<(), ProofError> {
 #[test]
 // Focuses on the small trie with embedded nodes. If the gapped
 // node is embedded in the trie, it should be detected too.
+#[allow(clippy::indexing_slicing)]
 fn test_gapped_range_proof() -> Result<(), ProofError> {
     let mut items = Vec::new();
     // Sorted entries
@@ -770,6 +782,7 @@ fn test_gapped_range_proof() -> Result<(), ProofError> {
 
 #[test]
 // Tests the element is not in the range covered by proofs.
+#[allow(clippy::indexing_slicing)]
 fn test_same_side_proof() -> Result<(), DataStoreError> {
     let set = generate_random_data(4096);
     let mut items = Vec::from_iter(set.iter());
@@ -809,6 +822,7 @@ fn test_same_side_proof() -> Result<(), DataStoreError> {
 }
 
 #[test]
+#[allow(clippy::indexing_slicing)]
 // Tests the range starts from zero.
 fn test_single_side_range_proof() -> Result<(), ProofError> {
     for _ in 0..10 {
@@ -842,6 +856,7 @@ fn test_single_side_range_proof() -> Result<(), ProofError> {
 }
 
 #[test]
+#[allow(clippy::indexing_slicing)]
 // Tests the range ends with 0xffff...fff.
 fn test_reverse_single_side_range_proof() -> Result<(), ProofError> {
     for _ in 0..10 {
@@ -904,6 +919,7 @@ fn test_both_sides_range_proof() -> Result<(), ProofError> {
 }
 
 #[test]
+#[allow(clippy::indexing_slicing)]
 // Tests normal range proof with both edge proofs
 // as the existent proof, but with an extra empty value included, which is a
 // noop technically, but practically should be rejected.
@@ -939,6 +955,7 @@ fn test_empty_value_range_proof() -> Result<(), ProofError> {
 }
 
 #[test]
+#[allow(clippy::indexing_slicing)]
 // Tests the range proof with all elements,
 // but with an extra empty value included, which is a noop technically, but
 // practically should be rejected.
@@ -1010,6 +1027,7 @@ fn test_range_proof_keys_with_shared_prefix() -> Result<(), ProofError> {
 }
 
 #[test]
+#[allow(clippy::indexing_slicing)]
 // Tests a malicious proof, where the proof is more or less the
 // whole trie. This is to match corresponding test in geth.
 fn test_bloadted_range_proof() -> Result<(), ProofError> {
@@ -1046,6 +1064,7 @@ fn test_bloadted_range_proof() -> Result<(), ProofError> {
     Ok(())
 }
 
+#[allow(clippy::indexing_slicing)]
 fn generate_random_data(n: u32) -> HashMap<[u8; 32], [u8; 20]> {
     let mut items: HashMap<[u8; 32], [u8; 20]> = HashMap::new();
     for i in 0..100_u32 {
@@ -1074,11 +1093,10 @@ fn generate_random_data(n: u32) -> HashMap<[u8; 32], [u8; 20]> {
 
 fn increase_key(key: &[u8; 32]) -> [u8; 32] {
     let mut new_key = *key;
-    for i in (0..key.len()).rev() {
-        if new_key[i] == 0xff {
-            new_key[i] = 0x00;
-        } else {
-            new_key[i] += 1;
+    for ch in new_key.iter_mut().rev() {
+        let overflow;
+        (*ch, overflow) = ch.overflowing_add(1);
+        if !overflow {
             break;
         }
     }
@@ -1087,11 +1105,10 @@ fn increase_key(key: &[u8; 32]) -> [u8; 32] {
 
 fn decrease_key(key: &[u8; 32]) -> [u8; 32] {
     let mut new_key = *key;
-    for i in (0..key.len()).rev() {
-        if new_key[i] == 0x00 {
-            new_key[i] = 0xff;
-        } else {
-            new_key[i] -= 1;
+    for ch in new_key.iter_mut().rev() {
+        let overflow;
+        (*ch, overflow) = ch.overflowing_sub(1);
+        if !overflow {
             break;
         }
     }

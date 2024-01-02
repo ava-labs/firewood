@@ -44,12 +44,14 @@ impl ExtNode {
         list[0] = Encoded::Data(
             bincode::DefaultOptions::new()
                 .serialize(&from_nibbles(&self.path.encode(false)).collect::<Vec<_>>())
-                .unwrap(),
+                .expect("serialization failed"),
         );
 
         if !self.child.is_null() {
+            #[allow(clippy::unwrap_used)]
             let mut r = store.get_item(self.child).unwrap();
 
+            #[allow(clippy::unwrap_used)]
             if r.is_encoded_longer_than_hash_len(store) {
                 list[1] = Encoded::Data(
                     bincode::DefaultOptions::new()
@@ -67,6 +69,7 @@ impl ExtNode {
         } else {
             // Check if there is already a caclucated encoded value for the child, which
             // can happen when manually constructing a trie from proof.
+            #[allow(clippy::unwrap_used)]
             if let Some(v) = &self.child_encoded {
                 if v.len() == TRIE_HASH_LEN {
                     list[1] = Encoded::Data(bincode::DefaultOptions::new().serialize(v).unwrap());
@@ -76,12 +79,13 @@ impl ExtNode {
             }
         }
 
+        #[allow(clippy::unwrap_used)]
         bincode::DefaultOptions::new()
             .serialize(list.as_slice())
             .unwrap()
     }
 
-    pub fn chd(&self) -> DiskAddress {
+    pub const fn chd(&self) -> DiskAddress {
         self.child
     }
 
@@ -155,6 +159,7 @@ impl Storable for ExtNode {
         let mut cursor = Cursor::new(path_and_disk_address);
         let mut buf = [0u8; DiskAddress::MSIZE as usize];
 
+        #[allow(clippy::indexing_slicing)]
         let path_len = {
             let buf = &mut buf[..Self::PATH_LEN_SIZE as usize];
             cursor.read_exact(buf)?;
