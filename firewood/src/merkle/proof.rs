@@ -3,6 +3,7 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::iter::Peekable;
 use std::ops::Deref;
 
 use crate::shale::{disk_address::DiskAddress, ShaleError, ShaleStore};
@@ -258,39 +259,44 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     /// necessary nodes will be resolved and leave the remaining as hashnode.
     ///
     /// The given edge proof is allowed to be an existent or non-existent proof.
-    fn proof_to_path<KV: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySerde>(
+    fn proof_to_path<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySerde>(
         &self,
-        key: KV,
+        key: K,
         root_hash: [u8; 32],
         merkle_setup: &mut MerkleSetup<S, T>,
         allow_non_existent_node: bool,
     ) -> Result<Option<Vec<u8>>, ProofError> {
         // Start with the sentinel root
-        let root = merkle_setup.get_root();
+        let sentinel = merkle_setup.get_sentinel();
         let merkle = merkle_setup.get_merkle_mut();
-        let mut u_ref = merkle.get_node(root).map_err(|_| ProofError::NoSuchNode)?;
+        let mut node_ref = merkle
+            .get_node(sentinel)
+            .map_err(|_| ProofError::NoSuchNode)?;
+
+        let mut key_nibbles = Nibbles::<0>::new(key.as_ref()).into_iter().peekable();
 
         let mut chunks = Vec::new();
         chunks.extend(key.as_ref().iter().copied().flat_map(to_nibble_array));
 
-        let mut cur_key: &[u8] = &chunks;
-        let mut cur_hash = root_hash;
+        let mut child_hash = root_hash;
         let proofs_map = &self.0;
-        let mut key_index = 0;
-        let mut branch_index = 0;
+        let mut child_index = 0;
 
         loop {
-            let cur_proof = proofs_map
-                .get(&cur_hash)
+            let child_proof = proofs_map
+                .get(&child_hash)
                 .ok_or(ProofError::ProofNodeMissing)?;
+
             // TODO(Hao): (Optimization) If a node is already decode we don't need to decode again.
-            let (mut chd_ptr, sub_proof, size) =
-                self.decode_node(merkle, cur_key, cur_proof.as_ref(), false)?;
+            let (mut chd_ptr, sub_proof, nibbles) =
+                self.decode_node(merkle, key_nibbles, child_proof.as_ref(), false)?;
+
+            key_nibbles = nibbles;
 
             // Link the child to the parent based on the node type.
-            match &u_ref.inner() {
+            match &node_ref.inner() {
                 #[allow(clippy::indexing_slicing)]
-                NodeType::Branch(n) => match n.chd()[branch_index] {
+                NodeType::Branch(n) => match n.chd()[child_index] {
                     // If the child already resolved, then use the existing node.
                     Some(node) => {
                         chd_ptr = node;
@@ -298,11 +304,11 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                     None => {
                         // insert the leaf to the empty slot
                         #[allow(clippy::unwrap_used)]
-                        u_ref
-                            .write(|u| {
-                                let uu = u.inner_mut().as_branch_mut().unwrap();
+                        node_ref
+                            .write(|node| {
                                 #[allow(clippy::indexing_slicing)]
-                                (uu.chd_mut()[branch_index] = Some(chd_ptr));
+                                let node = node.inner_mut().as_branch_mut().unwrap();
+                                node.chd_mut()[child_index] = Some(chd_ptr);
                             })
                             .unwrap();
                     }
@@ -311,14 +317,14 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 NodeType::Extension(_) => {
                     // If the child already resolved, then use the existing node.
                     #[allow(clippy::unwrap_used)]
-                    let node = u_ref.inner().as_extension().unwrap().chd();
+                    let node = node_ref.inner().as_extension().unwrap().chd();
 
                     #[allow(clippy::unwrap_used)]
                     if node.is_null() {
-                        u_ref
-                            .write(|u| {
-                                let uu = u.inner_mut().as_extension_mut().unwrap();
-                                *uu.chd_mut() = chd_ptr;
+                        node_ref
+                            .write(|node| {
+                                let node = node.inner_mut().as_extension_mut().unwrap();
+                                *node.chd_mut() = chd_ptr;
                             })
                             .unwrap();
                     } else {
@@ -330,15 +336,13 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 _ => return Err(ProofError::InvalidNode(MerkleError::ParentLeafBranch)),
             };
 
-            u_ref = merkle.get_node(chd_ptr)?;
+            node_ref = merkle.get_node(chd_ptr)?;
 
             // If the new parent is a branch node, record the index to correctly link the next child to it.
-            if u_ref.inner().as_branch().is_some() {
-                #[allow(clippy::indexing_slicing)]
-                (branch_index = chunks[key_index] as usize);
+            #[allow(clippy::unwrap_used)]
+            if node_ref.inner().as_branch().is_some() {
+                child_index = key_nibbles.next().unwrap() as usize;
             }
-
-            key_index += size;
 
             match sub_proof {
                 // The trie doesn't contain the key. It's possible
@@ -352,9 +356,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 }
                 Some(p) => {
                     // Return when reaching the end of the key.
-                    if key_index == chunks.len() {
-                        #[allow(clippy::indexing_slicing)]
-                        (cur_key = &chunks[key_index..]);
+                    if key_nibbles.size_hint().0 == 0 {
                         let mut data = None;
 
                         // Decode the last subproof to get the value.
@@ -363,20 +365,22 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                                 .get(&p_hash)
                                 .ok_or(ProofError::ProofNodeMissing)?;
 
-                            chd_ptr = self.decode_node(merkle, cur_key, proof.as_ref(), true)?.0;
+                            chd_ptr = self
+                                .decode_node(merkle, key_nibbles, proof.as_ref(), true)?
+                                .0;
 
                             // Link the child to the parent based on the node type.
-                            match &u_ref.inner() {
+                            #[allow(clippy::indexing_slicing)]
+                            match &node_ref.inner() {
                                 // TODO: add path
-                                #[allow(clippy::indexing_slicing)]
-                                NodeType::Branch(n) if n.chd()[branch_index].is_none() => {
+                                NodeType::Branch(n) if n.chd()[child_index].is_none() => {
                                     // insert the leaf to the empty slot
                                     #[allow(clippy::unwrap_used)]
-                                    u_ref
+                                    node_ref
                                         .write(|u| {
-                                            let uu = u.inner_mut().as_branch_mut().unwrap();
                                             #[allow(clippy::indexing_slicing)]
-                                            (uu.chd_mut()[branch_index] = Some(chd_ptr));
+                                            let uu = u.inner_mut().as_branch_mut().unwrap();
+                                            uu.chd_mut()[child_index] = Some(chd_ptr);
                                         })
                                         .unwrap();
                                 }
@@ -386,9 +390,9 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
 
                                 #[allow(clippy::unwrap_used)]
                                 NodeType::Extension(_)
-                                    if u_ref.inner().as_extension().unwrap().chd().is_null() =>
+                                    if node_ref.inner().as_extension().unwrap().chd().is_null() =>
                                 {
-                                    u_ref
+                                    node_ref
                                         .write(|u| {
                                             let uu = u.inner_mut().as_extension_mut().unwrap();
                                             *uu.chd_mut() = chd_ptr;
@@ -408,11 +412,9 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                             };
                         }
 
-                        drop(u_ref);
+                        let node_ref = merkle.get_node(chd_ptr)?;
 
-                        let c_ref = merkle.get_node(chd_ptr)?;
-
-                        match &c_ref.inner() {
+                        match &node_ref.inner() {
                             NodeType::Branch(n) => {
                                 if let Some(v) = n.value() {
                                     data = Some(v.deref().to_vec());
@@ -444,9 +446,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                         };
                     };
 
-                    cur_hash = hash;
-                    #[allow(clippy::indexing_slicing)]
-                    (cur_key = &chunks[key_index..]);
+                    child_hash = hash;
                 }
             }
         }
@@ -458,13 +458,21 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     ///
     /// * `end_node` - A boolean indicates whether this is the end node to decode, thus no `key`
     ///                to be present.
-    fn decode_node<S: ShaleStore<Node> + Send + Sync, T: BinarySerde>(
+    // TODO: return the child-index
+    fn decode_node<'a, S: ShaleStore<Node> + Send + Sync, T: BinarySerde>(
         &self,
         merkle: &Merkle<S, T>,
-        key: &[u8],
+        mut key_nibbles: Peekable<NibblesIterator<'a, 0>>,
         buf: &[u8],
         end_node: bool,
-    ) -> Result<(DiskAddress, Option<SubProof>, usize), ProofError> {
+    ) -> Result<
+        (
+            DiskAddress,
+            Option<SubProof>,
+            Peekable<NibblesIterator<'a, 0>>,
+        ),
+        ProofError,
+    > {
         let node = NodeType::decode(buf)?;
         let new_node = merkle
             .put_node(Node::from(node))
@@ -473,41 +481,48 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
 
         match new_node.inner() {
             NodeType::Leaf(n) => {
-                let cur_key = n.path().0.as_ref();
+                let paths_match = n.path.iter().copied().eq(&mut key_nibbles);
 
-                if !key.contains_other(cur_key) {
-                    return Ok((addr, None, 0));
+                if !paths_match {
+                    return Ok((addr, None, Nibbles::new(&[]).into_iter().peekable()));
                 }
 
                 let subproof = SubProof::Data(n.data().to_vec());
 
-                Ok((addr, subproof.into(), cur_key.len()))
+                Ok((addr, subproof.into(), key_nibbles))
             }
             NodeType::Extension(n) => {
-                let cur_key = n.path.0.as_ref();
+                let paths_match = n.path.iter().copied().eq(&mut key_nibbles);
 
-                if !key.contains_other(cur_key) {
-                    return Ok((addr, None, 0));
+                if !paths_match {
+                    return Ok((addr, None, Nibbles::new(&[]).into_iter().peekable()));
                 }
 
                 let encoded = n.chd_encoded().ok_or(ProofError::InvalidData)?.to_vec();
                 let subproof = generate_subproof(encoded).map(Some)?;
 
-                Ok((addr, subproof, cur_key.len()))
+                Ok((addr, subproof, key_nibbles))
             }
             // If the node is the last one to be decoded, then no subproof to be extracted.
-            NodeType::Branch(_) if end_node => Ok((addr, None, 1)),
-            NodeType::Branch(_) if key.is_empty() => Err(ProofError::NoSuchNode),
+            // returned iterator not used for `end_node` case
+            NodeType::Branch(_) if end_node => {
+                Ok((addr, None, Nibbles::new(&[]).into_iter().peekable()))
+            }
+            NodeType::Branch(_) if key_nibbles.size_hint().0 == 0 => Err(ProofError::NoSuchNode),
+
+            #[allow(clippy::unwrap_used)]
             NodeType::Branch(n) => {
                 // Check if the subproof with the given key exist.
-                #[allow(clippy::indexing_slicing)]
-                let index = key[0] as usize;
-                #[allow(clippy::indexing_slicing)]
-                let Some(data) = &n.chd_encode()[index] else {
-                    return Ok((addr, None, 1));
-                };
-                let subproof = generate_subproof(data.to_vec())?;
-                Ok((addr, Some(subproof), 1))
+                let index = *key_nibbles.peek().unwrap() as usize;
+
+                let subproof = n
+                    .chd_encode()
+                    .get(index)
+                    .and_then(|inner| inner.as_ref())
+                    .map(|data| generate_subproof(data.to_vec()))
+                    .transpose()?;
+
+                Ok((addr, subproof, key_nibbles))
             }
         }
     }
@@ -615,7 +630,7 @@ fn unset_internal<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySe
     // Add the sentinel root
     let mut right_chunks = vec![0];
     right_chunks.extend(right.as_ref().iter().copied().flat_map(to_nibble_array));
-    let root = merkle_setup.get_root();
+    let root = merkle_setup.get_sentinel();
     let merkle = merkle_setup.get_merkle_mut();
     let mut u_ref = merkle.get_node(root).map_err(|_| ProofError::NoSuchNode)?;
     let mut parent = DiskAddress::null();
