@@ -1293,16 +1293,10 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         last_key: Option<K>,
         limit: Option<usize>,
     ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>>>, api::Error> {
-        match (&first_key,&last_key) {
-            (Some(k1), Some(k2)) => {
-                match k1.as_ref().cmp(k2.as_ref()) {
-                    Ordering::Greater => {
-                        return Err(api::Error::InvalidRange);
-                    },
-                    _ => (),
-                }
+        if let (Some(k1), Some(k2)) = (&first_key, &last_key) {
+            if k1.as_ref() > k2.as_ref() {
+                return Err(api::Error::InvalidRange);
             }
-            _ => (),
         }
 
         // limit of 0 is always an empty RangeProof
