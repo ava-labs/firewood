@@ -64,6 +64,11 @@ pub enum Error {
     #[error("Incorrect root hash for commit: {provided:?} != {current:?}")]
     IncorrectRootHash { provided: HashKey, current: HashKey },
 
+    /// Invalid range
+    /// TODO how to log the range?
+    #[error("Invalid range")]
+    InvalidRange,
+
     #[error("IO error: {0}")]
     IO(std::io::Error),
 
