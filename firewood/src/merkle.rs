@@ -1712,6 +1712,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn range_proof_invalid_bounds() {
+        let merkle = create_test_merkle();
+        let root = merkle.init_root().unwrap();
+
+        assert!(merkle
+            .range_proof::<&[u8]>(root, Some(&[0x01]), Some(&[0x00]), Some(1))
+            .await
+            .is_err_and(|e| matches!(e, api::Error::InvalidRange{..})));
+
+        assert!(merkle
+            .range_proof::<&[u8]>(root, Some(&[0x01,0x02]), Some(&[0x01]), Some(1))
+            .await
+            .is_err_and(|e| matches!(e, api::Error::InvalidRange{..})));
+    }
+
+    #[tokio::test]
     async fn full_range_proof() {
         let mut merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
