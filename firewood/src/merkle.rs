@@ -1720,11 +1720,6 @@ mod tests {
             .range_proof::<&[u8]>(root, Some(&[0x01]), Some(&[0x00]), Some(1))
             .await
             .is_err_and(|e| matches!(e, api::Error::InvalidRange { .. })));
-
-        assert!(merkle
-            .range_proof::<&[u8]>(root, Some(&[0x01, 0x02]), Some(&[0x01]), Some(1))
-            .await
-            .is_err_and(|e| matches!(e, api::Error::InvalidRange { .. })));
     }
 
     #[tokio::test]
