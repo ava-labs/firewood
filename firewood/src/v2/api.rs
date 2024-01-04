@@ -65,9 +65,8 @@ pub enum Error {
     IncorrectRootHash { provided: HashKey, current: HashKey },
 
     /// Invalid range
-    /// TODO how to log the range?
-    #[error("Invalid range")]
-    InvalidRange,
+    #[error("Invalid range: {first_key:?} > {last_key:?}")]
+    InvalidRange{ first_key: Vec<u8>, last_key: Vec<u8> },
 
     #[error("IO error: {0}")]
     IO(std::io::Error),

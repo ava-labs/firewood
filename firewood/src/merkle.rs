@@ -1295,7 +1295,10 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
     ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>>>, api::Error> {
         if let (Some(k1), Some(k2)) = (&first_key, &last_key) {
             if k1.as_ref() > k2.as_ref() {
-                return Err(api::Error::InvalidRange);
+                return Err(api::Error::InvalidRange{
+                    first_key: k1.as_ref().to_vec(),
+                    last_key: k2.as_ref().to_vec(),
+                });
             }
         }
 
