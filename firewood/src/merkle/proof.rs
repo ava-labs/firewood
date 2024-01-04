@@ -275,9 +275,6 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
 
         let mut key_nibbles = Nibbles::<0>::new(key.as_ref()).into_iter().peekable();
 
-        let mut chunks = Vec::new();
-        chunks.extend(key.as_ref().iter().copied().flat_map(to_nibble_array));
-
         let mut child_hash = root_hash;
         let proofs_map = &self.0;
         let mut child_index = 0;
@@ -360,7 +357,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                         let mut data = None;
 
                         // Decode the last subproof to get the value.
-                        if let SubProof::Hash(p_hash) = p {
+                        let node_ref = if let SubProof::Hash(p_hash) = p {
                             let proof = proofs_map
                                 .get(&p_hash)
                                 .ok_or(ProofError::ProofNodeMissing)?;
@@ -409,10 +406,12 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                                         MerkleError::ParentLeafBranch,
                                     ))
                                 }
-                            };
-                        }
+                            }
 
-                        let node_ref = merkle.get_node(chd_ptr)?;
+                            merkle.get_node(chd_ptr)?
+                        } else {
+                            node_ref
+                        };
 
                         match &node_ref.inner() {
                             NodeType::Branch(n) => {
