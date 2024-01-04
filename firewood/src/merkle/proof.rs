@@ -492,7 +492,11 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 Ok((addr, subproof.into(), key_nibbles))
             }
             NodeType::Extension(n) => {
-                let paths_match = n.path.iter().copied().eq(&mut key_nibbles);
+                let paths_match = n
+                    .path
+                    .iter()
+                    .copied()
+                    .all(|nibble| Some(nibble) == key_nibbles.next());
 
                 if !paths_match {
                     return Ok((addr, None, Nibbles::new(&[]).into_iter().peekable()));
