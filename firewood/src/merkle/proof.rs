@@ -1070,17 +1070,3 @@ fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySe
         }
     }
 }
-
-pub trait ContainsOtherExt {
-    fn contains_other(&self, other: Self) -> bool;
-}
-
-impl<T> ContainsOtherExt for &[T]
-where
-    [T]: PartialEq<[T]>,
-{
-    #[allow(clippy::indexing_slicing)]
-    fn contains_other(&self, other: Self) -> bool {
-        self.len() >= other.len() && &self[..other.len()] == other
-    }
-}
