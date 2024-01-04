@@ -335,12 +335,6 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
 
             node_ref = merkle.get_node(chd_ptr)?;
 
-            // If the new parent is a branch node, record the index to correctly link the next child to it.
-            #[allow(clippy::unwrap_used)]
-            if node_ref.inner().as_branch().is_some() {
-                child_index = key_nibbles.next().unwrap() as usize;
-            }
-
             match sub_proof {
                 // The trie doesn't contain the key. It's possible
                 // the proof is a non-existing proof, but at least
@@ -351,93 +345,10 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                         .then_some(None)
                         .ok_or(ProofError::NodeNotInTrie);
                 }
-                Some(p) => {
-                    // Return when reaching the end of the key.
-                    if key_nibbles.size_hint().0 == 0 {
-                        let mut data = None;
 
-                        // Decode the last subproof to get the value.
-                        let node_ref = if let SubProof::Hash(p_hash) = p {
-                            let proof = proofs_map
-                                .get(&p_hash)
-                                .ok_or(ProofError::ProofNodeMissing)?;
-
-                            chd_ptr = self
-                                .decode_node(merkle, key_nibbles, proof.as_ref(), true)?
-                                .0;
-
-                            // Link the child to the parent based on the node type.
-                            #[allow(clippy::indexing_slicing)]
-                            match &node_ref.inner() {
-                                // TODO: add path
-                                NodeType::Branch(n) if n.chd()[child_index].is_none() => {
-                                    // insert the leaf to the empty slot
-                                    #[allow(clippy::unwrap_used)]
-                                    node_ref
-                                        .write(|u| {
-                                            #[allow(clippy::indexing_slicing)]
-                                            let uu = u.inner_mut().as_branch_mut().unwrap();
-                                            uu.chd_mut()[child_index] = Some(chd_ptr);
-                                        })
-                                        .unwrap();
-                                }
-
-                                // If the child already resolved, then use the existing node.
-                                NodeType::Branch(_) => {}
-
-                                #[allow(clippy::unwrap_used)]
-                                NodeType::Extension(_)
-                                    if node_ref.inner().as_extension().unwrap().chd().is_null() =>
-                                {
-                                    node_ref
-                                        .write(|u| {
-                                            let uu = u.inner_mut().as_extension_mut().unwrap();
-                                            *uu.chd_mut() = chd_ptr;
-                                        })
-                                        .unwrap();
-                                }
-
-                                // If the child already resolved, then use the existing node.
-                                NodeType::Extension(_) => {}
-
-                                // We should not hit a leaf node as a parent.
-                                _ => {
-                                    return Err(ProofError::InvalidNode(
-                                        MerkleError::ParentLeafBranch,
-                                    ))
-                                }
-                            }
-
-                            merkle.get_node(chd_ptr)?
-                        } else {
-                            node_ref
-                        };
-
-                        match &node_ref.inner() {
-                            NodeType::Branch(n) => {
-                                if let Some(v) = n.value() {
-                                    data = Some(v.deref().to_vec());
-                                }
-                            }
-                            NodeType::Leaf(n) => {
-                                // Return the value on the node only when the key matches exactly
-                                // (e.g. the length path of subproof node is 0).
-                                match p {
-                                    SubProof::Data(_) => data = Some(n.data().deref().to_vec()),
-                                    SubProof::Hash(_) if n.path().len() == 0 => {
-                                        data = Some(n.data().deref().to_vec())
-                                    }
-                                    _ => (),
-                                }
-                            }
-                            _ => (),
-                        }
-
-                        return Ok(data);
-                    }
-
-                    // The trie doesn't contain the key.
+                Some(p) if key_nibbles.size_hint().0 != 0 => {
                     let SubProof::Hash(hash) = p else {
+                        // the trie doesn't contain the key
                         return if allow_non_existent_node {
                             Ok(None)
                         } else {
@@ -445,7 +356,107 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                         };
                     };
 
+                    // If the new parent is a branch node, record the index to correctly link the next child to it.
+                    if node_ref.inner().as_branch().is_some() {
+                        let Some(index) = key_nibbles.next().map(|i| i as usize) else {
+                            return Err(ProofError::NodeNotInTrie);
+                        };
+
+                        child_index = index;
+                    }
+
                     child_hash = hash;
+                }
+
+                // Return when reaching the end of the key.
+                Some(p) => {
+                    let mut data = None;
+
+                    // Decode the last subproof to get the value.
+                    let node_ref = if let SubProof::Hash(p_hash) = p {
+                        let proof = proofs_map
+                            .get(&p_hash)
+                            .ok_or(ProofError::ProofNodeMissing)?;
+
+                        // If the new parent is a branch node, record the index to correctly link the next child to it.
+                        if node_ref.inner().as_branch().is_some() {
+                            let Some(index) = key_nibbles.next().map(|i| i as usize) else {
+                                return Err(ProofError::NodeNotInTrie);
+                            };
+
+                            child_index = index;
+                        }
+
+                        chd_ptr = self
+                            .decode_node(merkle, key_nibbles, proof.as_ref(), true)?
+                            .0;
+
+                        // Link the child to the parent based on the node type.
+                        #[allow(clippy::indexing_slicing)]
+                        match &node_ref.inner() {
+                            // TODO: add path
+                            NodeType::Branch(n) if n.chd()[child_index].is_none() => {
+                                // insert the leaf to the empty slot
+                                #[allow(clippy::unwrap_used)]
+                                node_ref
+                                    .write(|u| {
+                                        #[allow(clippy::indexing_slicing)]
+                                        let uu = u.inner_mut().as_branch_mut().unwrap();
+                                        uu.chd_mut()[child_index] = Some(chd_ptr);
+                                    })
+                                    .unwrap();
+                            }
+
+                            // If the child already resolved, then use the existing node.
+                            NodeType::Branch(_) => {}
+
+                            #[allow(clippy::unwrap_used)]
+                            NodeType::Extension(_)
+                                if node_ref.inner().as_extension().unwrap().chd().is_null() =>
+                            {
+                                node_ref
+                                    .write(|u| {
+                                        let uu = u.inner_mut().as_extension_mut().unwrap();
+                                        *uu.chd_mut() = chd_ptr;
+                                    })
+                                    .unwrap();
+                            }
+
+                            // If the child already resolved, then use the existing node.
+                            NodeType::Extension(_) => {}
+
+                            // We should not hit a leaf node as a parent.
+                            _ => {
+                                return Err(ProofError::InvalidNode(MerkleError::ParentLeafBranch))
+                            }
+                        }
+
+                        merkle.get_node(chd_ptr)?
+                    } else {
+                        node_ref
+                    };
+
+                    match &node_ref.inner() {
+                        NodeType::Branch(n) => {
+                            if let Some(v) = n.value() {
+                                data = Some(v.deref().to_vec());
+                            }
+                        }
+                        NodeType::Leaf(n) => {
+                            // Return the value on the node only when the key matches exactly
+                            // (e.g. the length path of subproof node is 0).
+                            match p {
+                                SubProof::Data(_) => data = Some(n.data().deref().to_vec()),
+                                SubProof::Hash(_) if n.path().len() == 0 => {
+                                    data = Some(n.data().deref().to_vec())
+                                }
+                                _ => (),
+                            }
+                        }
+                        _ => (),
+                    }
+
+                    return Ok(data);
                 }
             }
         }
@@ -457,7 +468,6 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     ///
     /// * `end_node` - A boolean indicates whether this is the end node to decode, thus no `key`
     ///                to be present.
-    // TODO: return the child-index
     fn decode_node<'a, S: ShaleStore<Node> + Send + Sync, T: BinarySerde>(
         &self,
         merkle: &Merkle<S, T>,
@@ -480,7 +490,11 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
 
         match new_node.inner() {
             NodeType::Leaf(n) => {
-                let paths_match = n.path.iter().copied().eq(&mut key_nibbles);
+                let paths_match = n
+                    .path
+                    .iter()
+                    .copied()
+                    .all(|nibble| Some(nibble) == key_nibbles.next());
 
                 if !paths_match {
                     return Ok((addr, None, Nibbles::new(&[]).into_iter().peekable()));
@@ -511,12 +525,12 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
             NodeType::Branch(_) if end_node => {
                 Ok((addr, None, Nibbles::new(&[]).into_iter().peekable()))
             }
-            NodeType::Branch(_) if key_nibbles.size_hint().0 == 0 => Err(ProofError::NoSuchNode),
 
-            #[allow(clippy::unwrap_used)]
             NodeType::Branch(n) => {
                 // Check if the subproof with the given key exist.
-                let index = *key_nibbles.peek().unwrap() as usize;
+                let Some(index) = key_nibbles.peek().map(|i| *i as usize) else {
+                    return Err(ProofError::NoSuchNode);
+                };
 
                 let subproof = n
                     .chd_encode()
