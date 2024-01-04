@@ -466,8 +466,25 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     ///
     /// # Arguments
     ///
+    /// * `merkle` - The merkle tree.
+    ///
+    /// * `key_nibbles` - The nibbles iterator of the key.
+    ///
+    /// * `buf` - The encoded node.
+    ///
     /// * `end_node` - A boolean indicates whether this is the end node to decode, thus no `key`
     ///                to be present.
+    ///
+    ///  # Returns `Result<(addr, subproof, nibbles), ProofError>`
+    ///
+    /// * `addr` - The new address of the node after it's decoded and inserted into the cache.
+    ///
+    /// * `subproof` - An `Option<SubProof>`, `None` if the sub-proof does not exist or the node's partial-path
+    /// does not match the given key
+    ///
+    /// * `nibbles` - The remaining nibbles iterator of the key or an empty iterator if the node's partial-path
+    /// does not match the given key
+    ///
     fn decode_node<'a, S: ShaleStore<Node> + Send + Sync, T: BinarySerde>(
         &self,
         merkle: &Merkle<S, T>,
