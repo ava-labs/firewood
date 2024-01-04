@@ -1713,11 +1713,17 @@ mod tests {
     async fn range_proof_invalid_bounds() {
         let merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
+        let start_key = &[0x01];
+        let end_key = &[0x00];
 
-        assert!(merkle
-            .range_proof::<&[u8]>(root, Some(&[0x01]), Some(&[0x00]), Some(1))
+        match merkle
+            .range_proof::<&[u8]>(root, Some(start_key), Some(end_key), Some(1))
             .await
-            .is_err_and(|e| matches!(e, api::Error::InvalidRange { .. })));
+        {
+            Err(api::Error::InvalidRange{ first_key, last_key}) if first_key == start_key && last_key == end_key => (),
+            Err(api::Error::InvalidRange{ .. }) => panic!("wrong bounds on InvalidRange error") ,
+            _ => panic!("expected InvalidRange error"),
+        }
     }
 
     #[tokio::test]
