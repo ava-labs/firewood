@@ -1720,8 +1720,11 @@ mod tests {
             .range_proof::<&[u8]>(root, Some(start_key), Some(end_key), Some(1))
             .await
         {
-            Err(api::Error::InvalidRange{ first_key, last_key}) if first_key == start_key && last_key == end_key => (),
-            Err(api::Error::InvalidRange{ .. }) => panic!("wrong bounds on InvalidRange error") ,
+            Err(api::Error::InvalidRange {
+                first_key,
+                last_key,
+            }) if first_key == start_key && last_key == end_key => (),
+            Err(api::Error::InvalidRange { .. }) => panic!("wrong bounds on InvalidRange error"),
             _ => panic!("expected InvalidRange error"),
         }
     }
