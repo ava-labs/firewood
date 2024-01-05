@@ -21,6 +21,16 @@ pub struct Options {
         help = "Name of the database"
     )]
     pub db: String,
+
+    /// The key to start dumping from (if no key is provided, start from the beginning).
+    /// Defaults to None.
+    #[arg(
+        required = false,
+        value_name = "START_KEY",
+        default_value_t = String::from(""),
+        help = "Start dumping from this key (inclusive)."
+    )]
+    pub start_key: String,
 }
 
 pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
@@ -32,7 +42,12 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     let db = Db::new(opts.db.clone(), &cfg.build()).await?;
     let latest_hash = db.root_hash().await?;
     let latest_rev = db.revision(latest_hash).await?;
-    let mut stream = latest_rev.stream();
+    let start_key_bytes = opts.start_key.as_bytes();
+    let start_key = match start_key_bytes.is_empty() {
+        true => Box::new([]),
+        false => start_key_bytes.to_vec().into_boxed_slice(),
+    };
+    let mut stream = latest_rev.stream_from(start_key);
     loop {
         match stream.next().await {
             None => break,
