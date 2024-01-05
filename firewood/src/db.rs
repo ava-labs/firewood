@@ -599,6 +599,7 @@ impl Db {
             params.payload_regn_nbit,
             cfg.payload_max_walk,
             &cfg.rev,
+            None::<&SharedStore>,
         )?;
 
         Ok(Self {
@@ -664,10 +665,11 @@ impl Db {
     }
 
     /// Create a new mutable store and an alterable revision of the DB on top.
-    fn new_store(
+    fn new_store<M: CachedStore>(
         &self,
         cached_space: &Universe<Arc<CachedSpace>>,
         reset_store_headers: bool,
+        base: Option<&CompactSpace<Node, M>>,
     ) -> Result<(Universe<StoreRevMut>, DbRev<MutStore>), DbError> {
         let mut offset = Db::PARAM_SIZE as usize;
         let db_header: DiskAddress = DiskAddress::from(offset);
@@ -715,6 +717,7 @@ impl Db {
             self.payload_regn_nbit,
             self.cfg.payload_max_walk,
             &self.cfg.rev,
+            base,
         )?;
         #[allow(clippy::unwrap_used)]
         rev.flush_dirty().unwrap();
@@ -740,12 +743,13 @@ impl Db {
         StoredView::ptr_to_obj(meta_ref, db_header, DbHeader::MSIZE).map_err(Into::into)
     }
 
-    fn new_revision<K: CachedStore, T: Into<K>>(
+    fn new_revision<K: CachedStore, B: CachedStore, T: Into<K>>(
         header_refs: (Obj<DbHeader>, Obj<CompactSpaceHeader>),
         merkle: (T, T),
         payload_regn_nbit: u64,
         payload_max_walk: u64,
         cfg: &DbRevConfig,
+        base: Option<&CompactSpace<Node, B>>,
     ) -> Result<DbRev<CompactSpace<Node, K>>, DbError> {
         // TODO: This should be a compile time check
         const DB_OFFSET: u64 = Db::PARAM_SIZE;
@@ -766,7 +770,7 @@ impl Db {
             shale::ObjCache::new(cfg.merkle_ncached_objs),
             payload_max_walk,
             payload_regn_nbit,
-            None,
+            base,
         )
         .unwrap();
 
@@ -800,7 +804,9 @@ impl Db {
     ) -> Result<proposal::Proposal, DbError> {
         let mut inner = self.inner.write();
         let reset_store_headers = inner.reset_store_headers;
-        let (store, mut rev) = self.new_store(&inner.cached_space, reset_store_headers)?;
+        let base = Arc::clone(&self.revisions.lock().base_revision);
+        let m = base.merkle.get_store();
+        let (store, mut rev) = self.new_store(&inner.cached_space, reset_store_headers, Some(m))?;
 
         // Flip the reset flag after resetting the store headers.
         if reset_store_headers {
@@ -831,7 +837,7 @@ impl Db {
         #[allow(clippy::unwrap_used)]
         rev.flush_dirty().unwrap();
 
-        let parent = ProposalBase::View(Arc::clone(&self.revisions.lock().base_revision));
+        let parent = ProposalBase::View(base);
         Ok(proposal::Proposal {
             m: Arc::clone(&self.inner),
             r: Arc::clone(&self.revisions),
@@ -943,6 +949,7 @@ impl Db {
             self.payload_regn_nbit,
             0,
             &self.cfg.rev,
+            None::<&SharedStore>,
         )
         .unwrap()
         .into()

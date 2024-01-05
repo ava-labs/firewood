@@ -141,7 +141,7 @@ async fn test_revisions() {
             dumped.push_front(kv_dump!(db));
             for (dump, hash) in dumped.iter().zip(hashes.iter().cloned()) {
                 let rev = db.revision(hash).await.unwrap();
-                assert_eq!(rev.root_hash().await.unwrap(), hash);
+                assert_eq!(rev.root_hash().await.unwrap(), hash, "pass {i}");
                 assert_eq!(kv_dump!(rev), *dump, "not the same: Pass {i}");
             }
         }

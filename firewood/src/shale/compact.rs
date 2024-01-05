@@ -544,14 +544,14 @@ pub struct CompactSpace<T: Storable, M> {
 }
 
 impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
-    pub fn new(
+    pub fn new<P: CachedStore>(
         meta_space: M,
         compact_space: M,
         header: Obj<CompactSpaceHeader>,
         obj_cache: super::ObjCache<T>,
         alloc_max_walk: u64,
         regn_nbit: u64,
-        parent: Option<CompactSpace<T, M>>,
+        parent: Option<&CompactSpace<T, P>>,
     ) -> Result<Self, ShaleError> {
         let parent_caches = parent
             .map(|parent| {
@@ -562,6 +562,7 @@ impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
                     .into_boxed_slice()
             })
             .unwrap_or_default();
+        let len = parent_caches.len();
         let cs: CompactSpace<T, M> = CompactSpace {
             inner: RwLock::new(CompactSpaceInner {
                 meta_space,
@@ -573,6 +574,7 @@ impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
             obj_cache,
             parent_caches,
         };
+        println!("new cache at {:p} with parents {}", &cs, len);
         Ok(cs)
     }
 }
@@ -610,6 +612,7 @@ impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> Sh
 
         let cache = &self.obj_cache;
 
+        println!("[{:p}] node {} inserted: {:?}", cache, addr, obj);
         let mut obj_ref = ObjRef::new(Some(obj), cache);
 
         // should this use a `?` instead of `unwrap`?
@@ -628,9 +631,17 @@ impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> Sh
     }
 
     fn get_item(&self, ptr: DiskAddress) -> Result<ObjRef<'_, T>, ShaleError> {
-        let cache = &self.obj_cache;
+        #[allow(clippy::unwrap_used)]
+        if ptr < DiskAddress::from(CompactSpaceHeader::MSIZE as usize) {
+            return Err(ShaleError::InvalidAddressLength {
+                expected: DiskAddress::from(CompactSpaceHeader::MSIZE as usize),
+                found: ptr.0.map(|inner| inner.get()).unwrap_or_default() as u64,
+            });
+        }
 
+        let cache = &self.obj_cache;
         if let Some(obj) = cache.get(ptr)? {
+            eprintln!("[{:p}] node {} was in primary", cache, ptr.0.unwrap());
             return Ok(ObjRef::new(Some(obj), cache));
         }
 
@@ -640,15 +651,18 @@ impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> Sh
             .iter()
             .find_map(|cache| cache.get(ptr).transpose())
         {
-            return result.map(|obj| ObjRef::new(Some(obj), cache));
-        }
-
-        #[allow(clippy::unwrap_used)]
-        if ptr < DiskAddress::from(CompactSpaceHeader::MSIZE as usize) {
-            return Err(ShaleError::InvalidAddressLength {
-                expected: DiskAddress::from(CompactSpaceHeader::MSIZE as usize),
-                found: ptr.0.map(|inner| inner.get()).unwrap_or_default() as u64,
-            });
+            // found in the parent cache; insert into this cache
+            let o = self.obj_cache.put(result?);
+            println!(
+                "[{:p}] node {} in the secondary cache: {:?}",
+                self.parent_caches.first().unwrap(),
+                ptr.0.unwrap(),
+                o
+            );
+            println!(" [inserted into cache at {:p}", &self.obj_cache);
+            // we fall through and re-read
+            // TODO: we shouldn't really need to do that, but it doesn't work if we return the original
+            // cache value
         }
 
         let inner = self.inner.read().expect("poisoned cache");
@@ -657,6 +671,12 @@ impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> Sh
             .get_header(ptr - CompactHeader::MSIZE as usize)?
             .payload_size;
         let obj = self.obj_cache.put(inner.get_data_ref(ptr, payload_size)?);
+        println!(
+            "[{:p}] node {} was read into cache: {:?}",
+            cache,
+            ptr.0.unwrap(),
+            obj
+        );
 
         Ok(ObjRef::new(Some(obj), cache))
     }
@@ -746,8 +766,16 @@ mod tests {
         let mem_payload = DynamicMem::new(compact_size.get() as u64, 0x1);
 
         let cache: ObjCache<Hash> = ObjCache::new(1);
-        let space =
-            CompactSpace::new(mem_meta, mem_payload, compact_header, cache, 10, 16, None).unwrap();
+        let space = CompactSpace::new(
+            mem_meta,
+            mem_payload,
+            compact_header,
+            cache,
+            10,
+            16,
+            None::<&CompactSpace<tests::Hash, DynamicMem>>,
+        )
+        .unwrap();
 
         // initial write
         let data = b"hello world";

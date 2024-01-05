@@ -1527,7 +1527,7 @@ mod tests {
             cache,
             10,
             16,
-            None,
+            None::<&SharedStore>,
         )
         .expect("CompactSpace init fail");
 

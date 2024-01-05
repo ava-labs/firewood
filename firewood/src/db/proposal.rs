@@ -88,6 +88,7 @@ impl Proposal {
             cfg.payload_regn_nbit,
             cfg.payload_max_walk,
             &cfg.rev,
+            None::<&SharedStore>,
         )?;
         data.into_iter().try_for_each(|op| -> Result<(), DbError> {
             match op {

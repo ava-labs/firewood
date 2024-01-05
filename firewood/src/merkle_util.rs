@@ -1,6 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use crate::db::SharedStore;
 use crate::merkle::{BinarySerde, Bincode, Merkle, Node, Proof, ProofError, Ref, RefMut, TrieHash};
 use crate::shale::{
     self, cached::DynamicMem, compact::CompactSpace, disk_address::DiskAddress, CachedStore,
@@ -149,7 +150,7 @@ pub fn new_merkle(
         cache,
         10,
         16,
-        None,
+        None::<&SharedStore>,
     )
     .expect("CompactSpace init fail");
 
