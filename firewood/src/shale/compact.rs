@@ -540,6 +540,7 @@ impl<M: CachedStore> CompactSpaceInner<M> {
 pub struct CompactSpace<T: Storable, M> {
     inner: RwLock<CompactSpaceInner<M>>,
     obj_cache: ObjCache<T>,
+    parent_caches: Box<[ObjCache<T>]>,
 }
 
 impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
@@ -560,6 +561,7 @@ impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
                 regn_nbit,
             }),
             obj_cache,
+            parent_caches: [].into(),
         };
         Ok(cs)
     }
@@ -572,6 +574,7 @@ impl From<Box<CompactSpace<Node, StoreRevMut>>> for CompactSpace<Node, StoreRevS
         CompactSpace {
             inner: RwLock::new(inner.into()),
             obj_cache: value.obj_cache,
+            parent_caches: [].into(),
         }
     }
 }
@@ -615,14 +618,19 @@ impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> Sh
     }
 
     fn get_item(&self, ptr: DiskAddress) -> Result<ObjRef<'_, T>, ShaleError> {
-        let obj = self.obj_cache.get(ptr)?;
-
-        #[allow(clippy::unwrap_used)]
-        let inner = self.inner.read().unwrap();
         let cache = &self.obj_cache;
 
-        if let Some(obj) = obj {
+        if let Some(obj) = cache.get(ptr)? {
             return Ok(ObjRef::new(Some(obj), cache));
+        }
+
+        // we missed the cache, so check for any parent caches
+        if let Some(result) = self
+            .parent_caches
+            .iter()
+            .find_map(|cache| cache.get(ptr).transpose())
+        {
+            return result.map(|obj| ObjRef::new(Some(obj), cache));
         }
 
         #[allow(clippy::unwrap_used)]
@@ -633,11 +641,12 @@ impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> Sh
             });
         }
 
+        let inner = self.inner.read().expect("poisoned cache");
+
         let payload_size = inner
             .get_header(ptr - CompactHeader::MSIZE as usize)?
             .payload_size;
         let obj = self.obj_cache.put(inner.get_data_ref(ptr, payload_size)?);
-        let cache = &self.obj_cache;
 
         Ok(ObjRef::new(Some(obj), cache))
     }
