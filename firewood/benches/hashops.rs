@@ -108,6 +108,7 @@ fn bench_merkle<const N: usize>(criterion: &mut Criterion) {
                         ObjCache::new(1 << 20),
                         4096,
                         4096,
+                        None,
                     )
                     .unwrap();
 

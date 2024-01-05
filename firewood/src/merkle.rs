@@ -1520,9 +1520,16 @@ mod tests {
         let mem_payload = DynamicMem::new(0x10000, 0x1);
 
         let cache = shale::ObjCache::new(1);
-        let space =
-            shale::compact::CompactSpace::new(mem_meta, mem_payload, compact_header, cache, 10, 16)
-                .expect("CompactSpace init fail");
+        let space = shale::compact::CompactSpace::new(
+            mem_meta,
+            mem_payload,
+            compact_header,
+            cache,
+            10,
+            16,
+            None,
+        )
+        .expect("CompactSpace init fail");
 
         let store = Box::new(space);
         Merkle::new(store)

@@ -411,6 +411,13 @@ pub struct ObjCacheInner<T: Storable> {
 #[derive(Debug)]
 pub struct ObjCache<T: Storable>(Arc<RwLock<ObjCacheInner<T>>>);
 
+// Since T is not Clone, we can't derive Clone here, so we do it by hand
+impl<T: Storable> Clone for ObjCache<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
 impl<T: Storable> ObjCache<T> {
     pub fn new(capacity: usize) -> Self {
         Self(Arc::new(RwLock::new(ObjCacheInner {

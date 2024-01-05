@@ -766,6 +766,7 @@ impl Db {
             shale::ObjCache::new(cfg.merkle_ncached_objs),
             payload_max_walk,
             payload_regn_nbit,
+            None,
         )
         .unwrap();
 

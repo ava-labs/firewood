@@ -551,8 +551,18 @@ impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
         obj_cache: super::ObjCache<T>,
         alloc_max_walk: u64,
         regn_nbit: u64,
+        parent: Option<CompactSpace<T, M>>,
     ) -> Result<Self, ShaleError> {
-        let cs = CompactSpace {
+        let parent_caches = parent
+            .map(|parent| {
+                std::iter::once(&parent.obj_cache)
+                    .chain(parent.parent_caches.iter())
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice()
+            })
+            .unwrap_or_default();
+        let cs: CompactSpace<T, M> = CompactSpace {
             inner: RwLock::new(CompactSpaceInner {
                 meta_space,
                 compact_space,
@@ -561,7 +571,7 @@ impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
                 regn_nbit,
             }),
             obj_cache,
-            parent_caches: [].into(),
+            parent_caches,
         };
         Ok(cs)
     }
@@ -737,7 +747,7 @@ mod tests {
 
         let cache: ObjCache<Hash> = ObjCache::new(1);
         let space =
-            CompactSpace::new(mem_meta, mem_payload, compact_header, cache, 10, 16).unwrap();
+            CompactSpace::new(mem_meta, mem_payload, compact_header, cache, 10, 16, None).unwrap();
 
         // initial write
         let data = b"hello world";
