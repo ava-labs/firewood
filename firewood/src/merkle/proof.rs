@@ -282,21 +282,18 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 .get(&child_hash)
                 .ok_or(ProofError::ProofNodeMissing)?;
 
-            // TODO(Hao): (Optimization) If a node is already decode we don't need to decode again.
-            let child_node = NodeType::decode(child_proof.as_ref())?;
-            let mut child_node = merkle
-                .put_node(Node::from(child_node))
-                .map_err(ProofError::InvalidNode)?;
-
             // Link the child to the parent based on the node type.
-            match &parent_node_ref.inner() {
+            let child_node = match &parent_node_ref.inner() {
                 #[allow(clippy::indexing_slicing)]
                 NodeType::Branch(n) => match n.chd()[child_index] {
                     // If the child already resolved, then use the existing node.
-                    Some(node) => {
-                        child_node = merkle.get_node(node)?;
-                    }
+                    Some(node) => merkle.get_node(node)?,
                     None => {
+                        let child_node = NodeType::decode(child_proof.as_ref())?;
+                        let child_node = merkle
+                            .put_node(Node::from(child_node))
+                            .map_err(ProofError::InvalidNode)?;
+
                         // insert the leaf to the empty slot
                         #[allow(clippy::unwrap_used)]
                         parent_node_ref
@@ -306,23 +303,31 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                                 node.chd_mut()[child_index] = Some(child_node.as_ptr());
                             })
                             .unwrap();
+
+                        child_node
                     }
                 },
 
                 #[allow(clippy::unwrap_used)]
                 NodeType::Extension(n) if n.chd().is_null() => {
+                    let child_node = NodeType::decode(child_proof.as_ref())?;
+                    let child_node = merkle
+                        .put_node(Node::from(child_node))
+                        .map_err(ProofError::InvalidNode)?;
+
                     parent_node_ref
                         .write(|node| {
                             let node = node.inner_mut().as_extension_mut().unwrap();
                             *node.chd_mut() = child_node.as_ptr();
                         })
                         .unwrap();
+
+                    child_node
                 }
 
                 NodeType::Extension(n) => {
                     // If the child already resolved, then use the existing node.
-                    // child_addr = n.chd();
-                    child_node = merkle.get_node(n.chd())?;
+                    merkle.get_node(n.chd())?
                 }
 
                 // We should not hit a leaf node as a parent.
