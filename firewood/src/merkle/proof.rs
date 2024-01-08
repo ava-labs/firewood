@@ -344,7 +344,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                         break None;
                     }
 
-                    n.chd_encoded().map(Some).ok_or(ProofError::InvalidData)?
+                    Some(n.chd_encoded().ok_or(ProofError::InvalidData)?)
                 }
 
                 NodeType::Branch(n) => {
