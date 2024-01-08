@@ -18,7 +18,7 @@ use crate::{
     merkle_util::{new_merkle, DataStoreError, MerkleSetup},
 };
 
-use super::{BinarySerde, TRIE_HASH_LEN};
+use super::{BinarySerde, ObjRef, TRIE_HASH_LEN};
 
 #[derive(Debug, Error)]
 pub enum ProofError {
@@ -278,21 +278,15 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
         let mut child_index = 0;
 
         let sub_proof = loop {
-            let child_proof = proofs_map
-                .get(&child_hash)
-                .ok_or(ProofError::ProofNodeMissing)?;
-
             // Link the child to the parent based on the node type.
+            // if a child is already linked, use it instead
             let child_node = match &parent_node_ref.inner() {
                 #[allow(clippy::indexing_slicing)]
                 NodeType::Branch(n) => match n.chd()[child_index] {
                     // If the child already resolved, then use the existing node.
                     Some(node) => merkle.get_node(node)?,
                     None => {
-                        let child_node = NodeType::decode(child_proof.as_ref())?;
-                        let child_node = merkle
-                            .put_node(Node::from(child_node))
-                            .map_err(ProofError::InvalidNode)?;
+                        let child_node = decode_subproof(merkle, &proofs_map, &child_hash)?;
 
                         // insert the leaf to the empty slot
                         #[allow(clippy::unwrap_used)]
@@ -310,10 +304,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
 
                 #[allow(clippy::unwrap_used)]
                 NodeType::Extension(n) if n.chd().is_null() => {
-                    let child_node = NodeType::decode(child_proof.as_ref())?;
-                    let child_node = merkle
-                        .put_node(Node::from(child_node))
-                        .map_err(ProofError::InvalidNode)?;
+                    let child_node = decode_subproof(merkle, &proofs_map, &child_hash)?;
 
                     parent_node_ref
                         .write(|node| {
@@ -325,29 +316,21 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                     child_node
                 }
 
-                NodeType::Extension(n) => {
-                    // If the child already resolved, then use the existing node.
-                    merkle.get_node(n.chd())?
-                }
+                NodeType::Extension(n) => merkle.get_node(n.chd())?,
 
                 // We should not hit a leaf node as a parent.
                 _ => return Err(ProofError::InvalidNode(MerkleError::ParentLeafBranch)),
             };
 
-            // find the encoded subproof
-            let (should_break, encoded_sub_proof, next_child_index) = match child_node.inner() {
+            // find the encoded subproof of the child if the partial-path and nibbles match
+            let encoded_sub_proof = match child_node.inner() {
                 NodeType::Leaf(n) => {
-                    let paths_match = n
+                    break n
                         .path
                         .iter()
                         .copied()
-                        .all(|nibble| Some(nibble) == key_nibbles.next());
-
-                    (
-                        true,
-                        paths_match.then(|| n.data().to_vec()),
-                        key_nibbles.next(),
-                    )
+                        .eq(key_nibbles) // all nibbles have to match
+                        .then(|| n.data().to_vec());
                 }
 
                 NodeType::Extension(n) => {
@@ -358,15 +341,15 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                         .all(|nibble| Some(nibble) == key_nibbles.next());
 
                     if !paths_match {
-                        (true, None, None)
-                    } else {
-                        let encoded = n.chd_encoded().ok_or(ProofError::InvalidData)?.to_vec();
-                        (false, Some(encoded), None)
+                        break None;
                     }
+
+                    n.chd_encoded()
+                        .map(|encoded| Some(encoded.to_vec()))
+                        .ok_or(ProofError::InvalidData)?
                 }
 
                 NodeType::Branch(n) => {
-                    // Check if the subproof with the given key exist.
                     if let Some(index) = key_nibbles.next() {
                         let subproof = n
                             .chd_encode()
@@ -374,38 +357,20 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                             .and_then(|inner| inner.as_ref())
                             .map(|data| data.to_vec());
 
-                        (false, subproof, Some(index))
+                        child_index = index as usize;
+
+                        subproof
                     } else {
-                        let data = n.value.as_ref().map(|data| data.to_vec());
-                        (true, data, None)
+                        break n.value.as_ref().map(|data| data.to_vec());
                     }
                 }
             };
 
-            if should_break {
-                break if next_child_index.is_some() {
-                    // there are nibbles left, don't return a subproof
-                    None
-                } else {
-                    encoded_sub_proof
-                };
-            }
-
-            match (encoded_sub_proof, next_child_index) {
-                (None, _) => {
-                    return allow_non_existent_node
-                        .then_some(None)
-                        .ok_or(ProofError::NodeNotInTrie)
-                }
-                // we've landed on an extension but run out of nibbles
-                (Some(encoded), None) => {
+            match encoded_sub_proof {
+                None => break None,
+                Some(encoded) => {
                     let hash = generate_subproof_hash(&encoded)?;
                     child_hash = hash;
-                }
-                (Some(encoded), Some(index)) => {
-                    let hash = generate_subproof_hash(&encoded)?;
-                    child_hash = hash;
-                    child_index = index as usize;
                 }
             }
 
@@ -418,6 +383,20 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
             None => Err(ProofError::NodeNotInTrie),
         }
     }
+}
+
+fn decode_subproof<'a, S: ShaleStore<Node>, T, N: AsRef<[u8]>>(
+    merkle: &'a Merkle<S, T>,
+    proofs_map: &HashMap<[u8; 32], N>,
+    child_hash: &[u8; 32],
+) -> Result<ObjRef<'a>, ProofError> {
+    let child_proof = proofs_map
+        .get(child_hash)
+        .ok_or(ProofError::ProofNodeMissing)?;
+    let child_node = NodeType::decode(child_proof.as_ref())?;
+    merkle
+        .put_node(Node::from(child_node))
+        .map_err(ProofError::InvalidNode)
 }
 
 fn locate_subproof(
