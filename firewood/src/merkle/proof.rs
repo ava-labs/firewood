@@ -56,6 +56,8 @@ pub enum ProofError {
     Shale(ShaleError),
     #[error("invalid root hash")]
     InvalidRootHash,
+    #[error("failed writing the node")]
+    WriteError,
 }
 
 impl From<DataStoreError> for ProofError {
@@ -289,29 +291,33 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                         let child_node = decode_subproof(merkle, proofs_map, &child_hash)?;
 
                         // insert the leaf to the empty slot
-                        #[allow(clippy::unwrap_used)]
                         parent_node_ref
                             .write(|node| {
                                 #[allow(clippy::indexing_slicing)]
-                                let node = node.inner_mut().as_branch_mut().unwrap();
+                                let node = node
+                                    .inner_mut()
+                                    .as_branch_mut()
+                                    .expect("parent_node_ref is a branch");
                                 node.chd_mut()[child_index] = Some(child_node.as_ptr());
                             })
-                            .unwrap();
+                            .map_err(|_| ProofError::WriteError)?;
 
                         child_node
                     }
                 },
 
-                #[allow(clippy::unwrap_used)]
                 NodeType::Extension(n) if n.chd().is_null() => {
                     let child_node = decode_subproof(merkle, proofs_map, &child_hash)?;
 
                     parent_node_ref
                         .write(|node| {
-                            let node = node.inner_mut().as_extension_mut().unwrap();
+                            let node = node
+                                .inner_mut()
+                                .as_extension_mut()
+                                .expect("parent_node_ref is an extension");
                             *node.chd_mut() = child_node.as_ptr();
                         })
-                        .unwrap();
+                        .map_err(|_| ProofError::WriteError)?;
 
                     child_node
                 }
