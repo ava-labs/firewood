@@ -286,7 +286,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                     // If the child already resolved, then use the existing node.
                     Some(node) => merkle.get_node(node)?,
                     None => {
-                        let child_node = decode_subproof(merkle, &proofs_map, &child_hash)?;
+                        let child_node = decode_subproof(merkle, proofs_map, &child_hash)?;
 
                         // insert the leaf to the empty slot
                         #[allow(clippy::unwrap_used)]
@@ -304,7 +304,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
 
                 #[allow(clippy::unwrap_used)]
                 NodeType::Extension(n) if n.chd().is_null() => {
-                    let child_node = decode_subproof(merkle, &proofs_map, &child_hash)?;
+                    let child_node = decode_subproof(merkle, proofs_map, &child_hash)?;
 
                     parent_node_ref
                         .write(|node| {
@@ -344,9 +344,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                         break None;
                     }
 
-                    n.chd_encoded()
-                        .map(|encoded| Some(encoded.to_vec()))
-                        .ok_or(ProofError::InvalidData)?
+                    n.chd_encoded().map(Some).ok_or(ProofError::InvalidData)?
                 }
 
                 NodeType::Branch(n) => {
@@ -355,7 +353,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                             .chd_encode()
                             .get(index as usize)
                             .and_then(|inner| inner.as_ref())
-                            .map(|data| data.to_vec());
+                            .map(|data| &**data);
 
                         child_index = index as usize;
 
@@ -369,7 +367,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
             match encoded_sub_proof {
                 None => break None,
                 Some(encoded) => {
-                    let hash = generate_subproof_hash(&encoded)?;
+                    let hash = generate_subproof_hash(encoded)?;
                     child_hash = hash;
                 }
             }
