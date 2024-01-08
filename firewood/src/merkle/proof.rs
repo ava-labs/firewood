@@ -265,7 +265,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
         allow_non_existent_node: bool,
     ) -> Result<Option<Vec<u8>>, ProofError> {
         // Start with the sentinel root
-        let sentinel = merkle_setup.get_sentinel();
+        let sentinel = merkle_setup.get_sentinel_address();
         let merkle = merkle_setup.get_merkle_mut();
         let mut parent_node_ref = merkle
             .get_node(sentinel)
@@ -502,7 +502,7 @@ fn unset_internal<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySe
     // Add the sentinel root
     let mut right_chunks = vec![0];
     right_chunks.extend(right.as_ref().iter().copied().flat_map(to_nibble_array));
-    let root = merkle_setup.get_sentinel();
+    let root = merkle_setup.get_sentinel_address();
     let merkle = merkle_setup.get_merkle_mut();
     let mut u_ref = merkle.get_node(root).map_err(|_| ProofError::NoSuchNode)?;
     let mut parent = DiskAddress::null();
