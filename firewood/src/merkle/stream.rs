@@ -751,33 +751,13 @@ mod tests {
 
     #[tokio::test]
     async fn start_at_key_greater_than_all_others() {
-        let greatest = 0xff;
-        let children = (0..=0xf)
-            .map(|val| (val << 4) + val) // 0x00, 0x11, ... 0xff
-            .filter(|x| *x != greatest);
         let mut merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
+        let key = vec![0x00];
 
-        let keys: Vec<_> = children
-            .map(|child_path| {
-                let key = vec![child_path];
+        merkle.insert(&key, key.to_vec(), root).unwrap();
 
-                merkle.insert(&key, key.clone(), root).unwrap();
-
-                key
-            })
-            .collect();
-
-        let keys = &keys[((greatest >> 4) as usize)..];
-
-        let mut stream = merkle.iter_from(root, vec![greatest].into_boxed_slice());
-
-        for key in keys {
-            let next = stream.next().await.unwrap().unwrap();
-
-            assert_eq!(&*next.0, &*next.1);
-            assert_eq!(&*next.0, key);
-        }
+        let stream = merkle.iter_from(root, vec![0x01].into_boxed_slice());
 
         check_stream_is_done(stream).await;
     }
