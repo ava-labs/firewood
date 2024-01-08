@@ -1,8 +1,6 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::borrow::Cow;
-
 use clap::Args;
 use firewood::{
     db::{Db, DbConfig, WalConfig},
@@ -10,6 +8,8 @@ use firewood::{
 };
 use futures_util::StreamExt;
 use log;
+use std::borrow::Cow;
+use std::num::ParseIntError;
 
 #[derive(Debug, Args)]
 pub struct Options {
@@ -27,9 +27,10 @@ pub struct Options {
     #[arg(
         required = false,
         value_name = "START_KEY",
+        value_parser = key_parser,
         help = "Start dumping from this key (inclusive)."
     )]
-    pub start_key: Option<String>,
+    pub start_key: Option<Box<[u8]>>,
 }
 
 pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
@@ -41,10 +42,7 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     let db = Db::new(opts.db.clone(), &cfg.build()).await?;
     let latest_hash = db.root_hash().await?;
     let latest_rev = db.revision(latest_hash).await?;
-    let start_key = match &opts.start_key {
-        Some(key) => key.as_bytes().to_vec().into_boxed_slice(),
-        None => Box::new([]),
-    };
+    let start_key = opts.start_key.clone().unwrap_or(Box::new([]));
     let mut stream = latest_rev.stream_from(start_key);
     loop {
         match stream.next().await {
@@ -57,6 +55,17 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     }
     Ok(())
 }
+
 fn u8_to_string(data: &[u8]) -> Cow<'_, str> {
     String::from_utf8_lossy(data)
+}
+
+fn key_parser(s: &str) -> Result<Box<[u8]>, ParseIntError> {
+    let mut result = Vec::with_capacity(s.len() / 2);
+    let mut iter = s.chars().peekable();
+    while iter.peek().is_some() {
+        let chunk = iter.by_ref().take(2).collect::<String>();
+        result.push(u8::from_str_radix(&chunk, 16)?);
+    }
+    Ok(result.into_boxed_slice())
 }
