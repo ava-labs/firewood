@@ -166,7 +166,7 @@ impl<T: Storable> Deref for Obj<T> {
 
 /// User handle that offers read & write access to the stored [ShaleStore] item.
 #[derive(Debug)]
-pub struct ObjRef<'a, T: Storable + Debug> {
+pub struct ObjRef<'a, T: Storable> {
     inner: Option<Obj<T>>,
     cache: &'a ObjCache<T>,
 }
@@ -201,7 +201,7 @@ impl<'a, T: Storable + Debug> Deref for ObjRef<'a, T> {
     }
 }
 
-impl<'a, T: Storable + Debug> Drop for ObjRef<'a, T> {
+impl<'a, T: Storable> Drop for ObjRef<'a, T> {
     fn drop(&mut self) {
         #[allow(clippy::unwrap_used)]
         let mut inner = self.inner.take().unwrap();
