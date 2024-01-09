@@ -142,7 +142,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
         }
     }
 
-    pub fn concat_proofs(&mut self, other: Proof<N>) {
+    pub fn extend(&mut self, other: Proof<N>) {
         self.0.extend(other.0)
     }
 

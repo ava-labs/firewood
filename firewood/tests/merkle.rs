@@ -368,7 +368,7 @@ fn test_range_proof() -> Result<(), ProofError> {
         assert!(!proof.0.is_empty());
         let end_proof = merkle.prove(items[end - 1].0)?;
         assert!(!end_proof.0.is_empty());
-        proof.concat_proofs(end_proof);
+        proof.extend(end_proof);
 
         let mut keys = Vec::new();
         let mut vals = Vec::new();
@@ -404,7 +404,7 @@ fn test_bad_range_proof() -> Result<(), ProofError> {
         assert!(!proof.0.is_empty());
         let end_proof = merkle.prove(items[end - 1].0)?;
         assert!(!end_proof.0.is_empty());
-        proof.concat_proofs(end_proof);
+        proof.extend(end_proof);
 
         let mut keys: Vec<[u8; 32]> = Vec::new();
         let mut vals: Vec<[u8; 20]> = Vec::new();
@@ -501,7 +501,7 @@ fn test_range_proof_with_non_existent_proof() -> Result<(), ProofError> {
         assert!(!proof.0.is_empty());
         let end_proof = merkle.prove(last)?;
         assert!(!end_proof.0.is_empty());
-        proof.concat_proofs(end_proof);
+        proof.extend(end_proof);
 
         let mut keys: Vec<[u8; 32]> = Vec::new();
         let mut vals: Vec<[u8; 20]> = Vec::new();
@@ -520,7 +520,7 @@ fn test_range_proof_with_non_existent_proof() -> Result<(), ProofError> {
     assert!(!proof.0.is_empty());
     let end_proof = merkle.prove(last)?;
     assert!(!end_proof.0.is_empty());
-    proof.concat_proofs(end_proof);
+    proof.extend(end_proof);
 
     let (keys, vals): (Vec<&[u8; 32]>, Vec<&[u8; 20]>) = items.into_iter().unzip();
     merkle.verify_range_proof(&proof, &first, &last, keys, vals)?;
@@ -548,7 +548,7 @@ fn test_range_proof_with_invalid_non_existent_proof() -> Result<(), ProofError> 
     assert!(!proof.0.is_empty());
     let end_proof = merkle.prove(items[end - 1].0)?;
     assert!(!end_proof.0.is_empty());
-    proof.concat_proofs(end_proof);
+    proof.extend(end_proof);
 
     start = 105; // Gap created
     let mut keys: Vec<[u8; 32]> = Vec::new();
@@ -571,7 +571,7 @@ fn test_range_proof_with_invalid_non_existent_proof() -> Result<(), ProofError> 
     assert!(!proof.0.is_empty());
     let end_proof = merkle.prove(last)?;
     assert!(!end_proof.0.is_empty());
-    proof.concat_proofs(end_proof);
+    proof.extend(end_proof);
 
     end = 195; // Capped slice
     let mut keys: Vec<[u8; 32]> = Vec::new();
@@ -618,7 +618,7 @@ fn test_one_element_range_proof() -> Result<(), ProofError> {
     assert!(!proof.0.is_empty());
     let end_proof = merkle.prove(items[start].0)?;
     assert!(!end_proof.0.is_empty());
-    proof.concat_proofs(end_proof);
+    proof.extend(end_proof);
 
     merkle.verify_range_proof(
         &proof,
@@ -634,7 +634,7 @@ fn test_one_element_range_proof() -> Result<(), ProofError> {
     assert!(!proof.0.is_empty());
     let end_proof = merkle.prove(last)?;
     assert!(!end_proof.0.is_empty());
-    proof.concat_proofs(end_proof);
+    proof.extend(end_proof);
 
     merkle.verify_range_proof(
         &proof,
@@ -649,7 +649,7 @@ fn test_one_element_range_proof() -> Result<(), ProofError> {
     assert!(!proof.0.is_empty());
     let end_proof = merkle.prove(last)?;
     assert!(!end_proof.0.is_empty());
-    proof.concat_proofs(end_proof);
+    proof.extend(end_proof);
 
     merkle.verify_range_proof(
         &proof,
@@ -669,7 +669,7 @@ fn test_one_element_range_proof() -> Result<(), ProofError> {
     assert!(!proof.0.is_empty());
     let end_proof = merkle.prove(key)?;
     assert!(!end_proof.0.is_empty());
-    proof.concat_proofs(end_proof);
+    proof.extend(end_proof);
 
     merkle.verify_range_proof(&proof, first, key, vec![key], vec![val])?;
 
@@ -708,7 +708,7 @@ fn test_all_elements_proof() -> Result<(), ProofError> {
     assert!(!proof.0.is_empty());
     let end_proof = merkle.prove(items[end].0)?;
     assert!(!end_proof.0.is_empty());
-    proof.concat_proofs(end_proof);
+    proof.extend(end_proof);
 
     merkle.verify_range_proof(
         &proof,
@@ -725,7 +725,7 @@ fn test_all_elements_proof() -> Result<(), ProofError> {
     assert!(!proof.0.is_empty());
     let end_proof = merkle.prove(last)?;
     assert!(!end_proof.0.is_empty());
-    proof.concat_proofs(end_proof);
+    proof.extend(end_proof);
 
     merkle.verify_range_proof(&proof, &first, &last, keys, vals)?;
 
@@ -787,7 +787,7 @@ fn test_gapped_range_proof() -> Result<(), ProofError> {
     assert!(!proof.0.is_empty());
     let end_proof = merkle.prove(items[last - 1].0)?;
     assert!(!end_proof.0.is_empty());
-    proof.concat_proofs(end_proof);
+    proof.extend(end_proof);
 
     let middle = (first + last) / 2 - first;
     let (keys, vals): (Vec<&[u8; 32]>, Vec<&[u8; 4]>) = items[first..last]
@@ -822,7 +822,7 @@ fn test_same_side_proof() -> Result<(), DataStoreError> {
     assert!(!proof.0.is_empty());
     let end_proof = merkle.prove(last)?;
     assert!(!end_proof.0.is_empty());
-    proof.concat_proofs(end_proof);
+    proof.extend(end_proof);
 
     assert!(merkle
         .verify_range_proof(&proof, first, last, vec![*items[pos].0], vec![items[pos].1])
@@ -836,7 +836,7 @@ fn test_same_side_proof() -> Result<(), DataStoreError> {
     assert!(!proof.0.is_empty());
     let end_proof = merkle.prove(last)?;
     assert!(!end_proof.0.is_empty());
-    proof.concat_proofs(end_proof);
+    proof.extend(end_proof);
 
     assert!(merkle
         .verify_range_proof(&proof, first, last, vec![*items[pos].0], vec![items[pos].1])
@@ -867,7 +867,7 @@ fn test_single_side_range_proof() -> Result<(), ProofError> {
             assert!(!proof.0.is_empty());
             let end_proof = merkle.prove(items[case].0)?;
             assert!(!end_proof.0.is_empty());
-            proof.concat_proofs(end_proof);
+            proof.extend(end_proof);
 
             let item_iter = items.clone().into_iter().take(case + 1);
             let keys = item_iter.clone().map(|item| *item.0).collect();
@@ -901,7 +901,7 @@ fn test_reverse_single_side_range_proof() -> Result<(), ProofError> {
             assert!(!proof.0.is_empty());
             let end_proof = merkle.prove(end)?;
             assert!(!end_proof.0.is_empty());
-            proof.concat_proofs(end_proof);
+            proof.extend(end_proof);
 
             let item_iter = items.clone().into_iter().skip(case);
             let keys = item_iter.clone().map(|item| item.0).collect();
@@ -934,7 +934,7 @@ fn test_both_sides_range_proof() -> Result<(), ProofError> {
         assert!(!proof.0.is_empty());
         let end_proof = merkle.prove(end)?;
         assert!(!end_proof.0.is_empty());
-        proof.concat_proofs(end_proof);
+        proof.extend(end_proof);
 
         let (keys, vals): (Vec<&[u8; 32]>, Vec<&[u8; 20]>) = items.into_iter().unzip();
         merkle.verify_range_proof(&proof, &start, &end, keys, vals)?;
@@ -966,7 +966,7 @@ fn test_empty_value_range_proof() -> Result<(), ProofError> {
     assert!(!proof.0.is_empty());
     let end_proof = merkle.prove(items[end - 1].0)?;
     assert!(!end_proof.0.is_empty());
-    proof.concat_proofs(end_proof);
+    proof.extend(end_proof);
 
     let item_iter = items.clone().into_iter().skip(start).take(end - start);
     let keys = item_iter.clone().map(|item| item.0).collect();
@@ -1002,7 +1002,7 @@ fn test_all_elements_empty_value_range_proof() -> Result<(), ProofError> {
     assert!(!proof.0.is_empty());
     let end_proof = merkle.prove(items[end].0)?;
     assert!(!end_proof.0.is_empty());
-    proof.concat_proofs(end_proof);
+    proof.extend(end_proof);
 
     let item_iter = items.clone().into_iter();
     let keys = item_iter.clone().map(|item| item.0).collect();
@@ -1039,7 +1039,7 @@ fn test_range_proof_keys_with_shared_prefix() -> Result<(), ProofError> {
     assert!(!proof.0.is_empty());
     let end_proof = merkle.prove(&end)?;
     assert!(!end_proof.0.is_empty());
-    proof.concat_proofs(end_proof);
+    proof.extend(end_proof);
 
     let item_iter = items.into_iter();
     let keys = item_iter.clone().map(|item| item.0).collect();
@@ -1076,7 +1076,7 @@ fn test_bloadted_range_proof() -> Result<(), ProofError> {
     for (i, item) in items.iter().enumerate() {
         let cur_proof = merkle.prove(item.0)?;
         assert!(!cur_proof.0.is_empty());
-        proof.concat_proofs(cur_proof);
+        proof.extend(cur_proof);
         if i == 50 {
             keys.push(item.0);
             vals.push(item.1);
