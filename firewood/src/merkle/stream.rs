@@ -19,7 +19,7 @@ enum IteratorState<'a> {
     StartAtKey(Key),
     /// Continue iterating after the last node in the `visited_node_path`
     Iterating {
-        visited_node_path: Vec<(IterationState<'a>, u8)>,
+        visited_node_path: Vec<(IterationState<'a>)>,
     },
 }
 
@@ -110,39 +110,29 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                         .map(|(index, node_and_pos)| {
                             let (node, pos) = node_and_pos;
                             merkle.get_node(node).map(|node| match node.inner() {
-                                NodeType::Branch(_) => (
-                                    IterationState::Branch(BranchIterationState::VisitedSelf(node)),
-                                    pos,
+                                NodeType::Branch(_) => IterationState::Branch(
+                                    BranchIterationState::VisitedChildren(node, pos),
                                 ),
                                 NodeType::Leaf(_) => {
                                     if found_node.is_some() {
                                         // This must be the last node on the path since it's a leaf.
                                         // Since we found a node with the key, this must be the node.
-                                        (IterationState::Leaf(LeafIterationState::New(node)), pos)
+                                        IterationState::Leaf(LeafIterationState::New(node))
                                     } else {
                                         // We didn't find a node with the key, so this must be a
                                         // different leaf that we don't want to return the key-value of.
-                                        (
-                                            IterationState::Leaf(LeafIterationState::Visited(node)),
-                                            pos,
-                                        )
+                                        IterationState::Leaf(LeafIterationState::Visited(node))
                                     }
                                 }
                                 NodeType::Extension(_) => {
                                     if index == num_elts - 1 {
-                                        (
-                                            IterationState::Extension(
-                                                ExtensionIterationState::VisitedSelf(node),
-                                            ),
-                                            pos,
+                                        IterationState::Extension(
+                                            ExtensionIterationState::VisitedSelf(node),
                                         )
                                     } else {
-                                        (
-                                            IterationState::Extension(
-                                                ExtensionIterationState::New(node),
-                                            ),
-                                            pos,
-                                        )
+                                        IterationState::Extension(ExtensionIterationState::New(
+                                            node,
+                                        ))
                                     }
                                 }
                             })
@@ -203,7 +193,6 @@ enum BranchIterationState<'a> {
 enum ExtensionIterationState<'a> {
     New(NodeObjRef<'a>),
     VisitedSelf(NodeObjRef<'a>),
-    VisitedChild(NodeObjRef<'a>),
 }
 
 enum IterationState<'a> {
@@ -241,7 +230,7 @@ impl<'a> VisitableNodeObjRef<'a> {
 
 fn find_next_result<'a, S: ShaleStore<Node>, T>(
     merkle: &'a Merkle<S, T>,
-    visited_path: &mut Vec<(IterationState<'a>, u8)>,
+    visited_path: &mut Vec<IterationState<'a>>,
 ) -> Result<Option<(Key, Value)>, super::MerkleError> {
     let next = find_next_node_with_data(merkle, visited_path)?.map(|(next_node, value)| {
         // TODO uncomment and fix
@@ -267,9 +256,9 @@ fn find_next_result<'a, S: ShaleStore<Node>, T>(
 
 fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
     merkle: &'a Merkle<S, T>,
-    visited_path: &mut Vec<(IterationState<'a>, u8)>,
+    visited_path: &mut Vec<IterationState<'a>>,
 ) -> Result<Option<(NodeObjRef<'a>, Vec<u8>)>, super::MerkleError> {
-    let Some((mut node, mut pos)) = visited_path.pop() else {
+    let Some(mut node) = visited_path.pop() else {
         return Ok(None);
     };
 
@@ -281,30 +270,157 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
                     return Ok(Some((node_ref, value)));
                 }
                 LeafIterationState::Visited(_) => {
-                    let Some((next_parent, next_pos)) = visited_path.pop() else {
+                    let Some(next_parent) = visited_path.pop() else {
                         return Ok(None);
                     };
 
                     node = next_parent;
-                    pos = next_pos;
                 }
             },
-            IterationState::Branch(ref iter_state2) => match iter_state2 {
+            IterationState::Branch(iter_state) => match iter_state {
                 BranchIterationState::New(node_ref) => {
+                    // We haven't returned this node's key-value yet
                     let node = node_ref.inner().as_branch().unwrap();
-                    if let Some(value) = node.value {
+
+                    if let Some(value) = node.value.as_ref() {
                         let value = value.to_vec();
                         return Ok(Some((node_ref, value)));
                     }
                 }
-                BranchIterationState::VisitedSelf(_) => todo!(),
-                BranchIterationState::VisitedChildren(_, _) => todo!(),
+                BranchIterationState::VisitedSelf(node_ref) => {
+                    // We've returned this node's key-value, but we haven't visited any of its children
+                    let branch_node = node_ref.inner().as_branch().unwrap();
+
+                    // Find the first child
+                    let mut children = get_children_iter(branch_node);
+
+                    if let Some(first_child_and_pos) = children.next() {
+                        // Get the first child
+                        let (child_addr, child_pos) = first_child_and_pos;
+                        let child = merkle.get_node(child_addr)?;
+
+                        // Push updated parent (branch) onto the stack
+                        visited_path.push(IterationState::Branch(
+                            BranchIterationState::VisitedChildren(node_ref, child_pos),
+                        ));
+
+                        // Push child onto the stack
+                        match child.inner() {
+                            NodeType::Branch(node) => {
+                                visited_path
+                                    .push(IterationState::Branch(BranchIterationState::New(child)));
+                            }
+                            NodeType::Leaf(node) => {
+                                visited_path
+                                    .push(IterationState::Leaf(LeafIterationState::New(child)));
+                            }
+                            NodeType::Extension(node) => {
+                                visited_path.push(IterationState::Extension(
+                                    ExtensionIterationState::New(child),
+                                ));
+                            }
+                        }
+                    } else {
+                        // There are no children, so we're done with this node.
+                        let Some(next_parent) = visited_path.pop() else {
+                            return Ok(None);
+                        };
+                        node = next_parent;
+                    }
+                }
+                BranchIterationState::VisitedChildren(node_ref, handled_child_pos) => {
+                    let branch_node = node_ref.inner().as_branch().unwrap();
+
+                    // Find the next unhandled child
+                    let mut children = get_children_iter(branch_node)
+                        .filter(|(_, child_pos)| child_pos > &handled_child_pos);
+
+                    if let Some(next_child_and_pos) = children.next() {
+                        // Get the next child
+                        let (child_addr, child_pos) = next_child_and_pos;
+                        let child = merkle.get_node(child_addr)?;
+
+                        // Push updated parent (branch) onto the stack
+                        visited_path.push(IterationState::Branch(
+                            BranchIterationState::VisitedChildren(node_ref, child_pos),
+                        ));
+
+                        // Push child onto the stack
+                        match child.inner() {
+                            NodeType::Branch(_) => {
+                                visited_path
+                                    .push(IterationState::Branch(BranchIterationState::New(child)));
+                            }
+                            NodeType::Leaf(_) => {
+                                visited_path
+                                    .push(IterationState::Leaf(LeafIterationState::New(child)));
+                            }
+                            NodeType::Extension(_) => {
+                                visited_path.push(IterationState::Extension(
+                                    ExtensionIterationState::New(child),
+                                ));
+                            }
+                        }
+                    } else {
+                        // There are no more children, so we're done with this node.
+                        let Some(next_parent) = visited_path.pop() else {
+                            return Ok(None);
+                        };
+                        node = next_parent;
+                    }
+                }
             },
-            IterationState::Extension(iter_state) => todo!(),
+            IterationState::Extension(iter_state) => match iter_state {
+                ExtensionIterationState::New(node_ref) => {
+                    let child = node_ref.inner().as_extension().unwrap().chd();
+
+                    // Push updated parent (extension) onto the stack
+                    visited_path.push(IterationState::Extension(
+                        ExtensionIterationState::VisitedSelf(node_ref),
+                    ));
+
+                    // Push child onto the stack
+                    let child = merkle.get_node(child)?;
+
+                    match child.inner() {
+                        NodeType::Branch(_) => {
+                            visited_path
+                                .push(IterationState::Branch(BranchIterationState::New(child)));
+                        }
+                        NodeType::Leaf(_) => {
+                            visited_path.push(IterationState::Leaf(LeafIterationState::New(child)));
+                        }
+                        NodeType::Extension(_) => {
+                            visited_path.push(IterationState::Extension(
+                                ExtensionIterationState::New(child),
+                            ));
+                        }
+                    }
+                }
+                ExtensionIterationState::VisitedSelf(node_ref) => {
+                    let extension_node = node_ref.inner().as_extension().unwrap();
+
+                    // Push child onto the stack
+                    let child = merkle.get_node(extension_node.chd())?;
+
+                    match child.inner() {
+                        NodeType::Branch(_) => {
+                            visited_path
+                                .push(IterationState::Branch(BranchIterationState::New(child)));
+                        }
+                        NodeType::Leaf(_) => {
+                            visited_path.push(IterationState::Leaf(LeafIterationState::New(child)));
+                        }
+                        NodeType::Extension(_) => {
+                            visited_path.push(IterationState::Extension(
+                                ExtensionIterationState::New(child),
+                            ));
+                        }
+                    }
+                }
+            },
         }
     }
-
-    todo!()
 
     // use VisitableNode::*;
 
