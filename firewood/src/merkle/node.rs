@@ -8,6 +8,7 @@ use crate::{
 use bincode::{Error, Options};
 use bitflags::bitflags;
 use enum_as_inner::EnumAsInner;
+use log::debug;
 use serde::{
     de::DeserializeOwned,
     ser::{SerializeSeq, SerializeTuple},
@@ -351,7 +352,7 @@ mod type_id {
 use type_id::NodeTypeId;
 
 impl Storable for Node {
-    fn deserialize<T: CachedStore>(mut offset: usize, mem: &T) -> Result<Self, ShaleError> {
+    fn deserialize<T: CachedStore>(offset: usize, mem: &T) -> Result<Self, ShaleError> {
         let meta_raw =
             mem.get_view(offset, Meta::SIZE as u64)
                 .ok_or(ShaleError::InvalidCacheView {
@@ -359,7 +360,10 @@ impl Storable for Node {
                     size: Meta::SIZE as u64,
                 })?;
 
-        offset += Meta::SIZE;
+        #[cfg(feature = "logger")]
+        debug!("[{mem:p}] Deserializing node at {offset}");
+
+        let offset = offset + Meta::SIZE;
 
         #[allow(clippy::indexing_slicing)]
         let attrs = NodeAttributes::from_bits_retain(meta_raw.as_deref()[TRIE_HASH_LEN]);
@@ -427,6 +431,7 @@ impl Storable for Node {
     }
 
     fn serialize(&self, to: &mut [u8]) -> Result<(), ShaleError> {
+        debug!("[{self:p}] Serializing node");
         let mut cur = Cursor::new(to);
 
         let mut attrs = match self.root_hash.get() {
