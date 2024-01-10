@@ -159,22 +159,45 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
     }
 }
 
-enum NodeRef<'a> {
+enum LeafIterationState {
+    New,
+    Visited,
+}
+
+enum BranchIterationState {
+    New,
+    VisitedSelf,
+    VisitedChildren(u8), // the last child that was visited
+}
+
+enum ExtensionIterationState {
+    New,
+    VisitedSelf,
+    VisitedChild,
+}
+
+enum IterationState {
+    Leaf(LeafIterationState),
+    Branch(BranchIterationState),
+    Extension(ExtensionIterationState),
+}
+
+enum VisitableNodeObjRef<'a> {
     New(NodeObjRef<'a>),
     Visited(NodeObjRef<'a>),
 }
 
 #[derive(Debug)]
-enum InnerNode<'a> {
+enum VisitableNode<'a> {
     New(&'a NodeType),
     Visited(&'a NodeType),
 }
 
-impl<'a> NodeRef<'a> {
-    fn inner(&self) -> InnerNode<'_> {
+impl<'a> VisitableNodeObjRef<'a> {
+    fn inner(&self) -> VisitableNode<'_> {
         match self {
-            Self::New(node) => InnerNode::New(node.inner()),
-            Self::Visited(node) => InnerNode::Visited(node.inner()),
+            Self::New(node) => VisitableNode::New(node.inner()),
+            Self::Visited(node) => VisitableNode::Visited(node.inner()),
         }
     }
 
@@ -211,13 +234,13 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
     merkle: &'a Merkle<S, T>,
     visited_path: &mut Vec<(NodeObjRef<'a>, u8)>,
 ) -> Result<Option<(NodeObjRef<'a>, Vec<u8>)>, super::MerkleError> {
-    use InnerNode::*;
+    use VisitableNode::*;
 
     let Some((visited_parent, visited_pos)) = visited_path.pop() else {
         return Ok(None);
     };
 
-    let mut node = NodeRef::Visited(visited_parent);
+    let mut node = VisitableNodeObjRef::Visited(visited_parent);
     let mut pos = visited_pos;
     let mut first_loop = true;
 
@@ -233,7 +256,7 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
                     return Ok(None);
                 };
 
-                node = NodeRef::Visited(next_parent);
+                node = VisitableNodeObjRef::Visited(next_parent);
                 pos = next_pos;
             }
 
@@ -243,7 +266,7 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
                 pos = 0;
                 visited_path.push((node.into_node(), pos));
 
-                node = NodeRef::New(child);
+                node = VisitableNodeObjRef::New(child);
             }
 
             Visited(NodeType::Branch(branch)) => {
@@ -302,7 +325,7 @@ fn next_node<'a, S, T, Iter>(
     merkle: &'a Merkle<S, T>,
     mut children: Iter,
     parents: &mut Vec<(NodeObjRef<'a>, u8)>,
-    node: &mut NodeRef<'a>,
+    node: &mut VisitableNodeObjRef<'a>,
     pos: &mut u8,
 ) -> Result<MustUse<bool>, super::MerkleError>
 where
@@ -313,14 +336,14 @@ where
         let child = merkle.get_node(child_addr)?;
 
         *pos = child_pos;
-        let node = std::mem::replace(node, NodeRef::New(child));
+        let node = std::mem::replace(node, VisitableNodeObjRef::New(child));
         parents.push((node.into_node(), *pos));
     } else {
         let Some((next_parent, next_pos)) = parents.pop() else {
             return Ok(false.into());
         };
 
-        *node = NodeRef::Visited(next_parent);
+        *node = VisitableNodeObjRef::Visited(next_parent);
         *pos = next_pos;
     }
 
