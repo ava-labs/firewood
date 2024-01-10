@@ -1,11 +1,12 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::{node::Node, BranchNode, Merkle, NodeObjRef, NodeType};
+use super::{node::Node, BranchNode, ExtNode, LeafNode, Merkle, NodeObjRef, NodeType};
 use crate::{
-    shale::{DiskAddress, ShaleStore},
+    shale::{DiskAddress, ObjRef, ShaleStore},
     v2::api,
 };
+use bitflags::iter::Iter;
 use futures::{stream::FusedStream, Stream};
 use helper_types::{Either, MustUse};
 use std::task::Poll;
@@ -18,7 +19,7 @@ enum IteratorState<'a> {
     StartAtKey(Key),
     /// Continue iterating after the last node in the `visited_node_path`
     Iterating {
-        visited_node_path: Vec<(NodeObjRef<'a>, u8)>,
+        visited_node_path: Vec<(IterationState<'a>, u8)>,
     },
 }
 
@@ -90,7 +91,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                 // traverse the trie along each nibble until we find a node with a value
                 // TODO: merkle.iter_by_key(key) will simplify this entire code-block.
-                let (found_node, mut visited_node_path) = {
+                let visited_node_path = {
                     let mut visited_node_path = vec![];
 
                     let found_node = merkle
@@ -102,46 +103,75 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                         )
                         .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                    let mut visited_node_path = visited_node_path
+                    let num_elts = visited_node_path.len();
+                    let visited_node_path = visited_node_path
                         .into_iter()
-                        .map(|(node, pos)| merkle.get_node(node).map(|node| (node, pos)))
+                        .enumerate()
+                        .map(|(index, node_and_pos)| {
+                            let (node, pos) = node_and_pos;
+                            merkle.get_node(node).map(|node| match node.inner() {
+                                NodeType::Branch(_) => (
+                                    IterationState::Branch(BranchIterationState::VisitedSelf(node)),
+                                    pos,
+                                ),
+                                NodeType::Leaf(_) => {
+                                    if found_node.is_some() {
+                                        // This must be the last node on the path since it's a leaf.
+                                        // Since we found a node with the key, this must be the node.
+                                        (IterationState::Leaf(LeafIterationState::New(node)), pos)
+                                    } else {
+                                        // We didn't find a node with the key, so this must be a
+                                        // different leaf that we don't want to return the key-value of.
+                                        (
+                                            IterationState::Leaf(LeafIterationState::Visited(node)),
+                                            pos,
+                                        )
+                                    }
+                                }
+                                NodeType::Extension(_) => {
+                                    if index == num_elts - 1 {
+                                        (
+                                            IterationState::Extension(
+                                                ExtensionIterationState::VisitedSelf(node),
+                                            ),
+                                            pos,
+                                        )
+                                    } else {
+                                        (
+                                            IterationState::Extension(
+                                                ExtensionIterationState::New(node),
+                                            ),
+                                            pos,
+                                        )
+                                    }
+                                }
+                            })
+                        })
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                    let last_visited_node_not_branch = visited_node_path
-                        .last()
-                        .map(|(node, _)| {
-                            matches!(node.inner(), NodeType::Leaf(_) | NodeType::Extension(_))
-                        })
-                        .unwrap_or_default();
-
-                    // we only want branch in the visited node-path to start
-                    if last_visited_node_not_branch {
-                        visited_node_path.pop();
-                    }
-
-                    (found_node, visited_node_path)
+                    visited_node_path
                 };
 
-                if let Some(found_node) = found_node {
-                    let value = match found_node.inner() {
-                        NodeType::Branch(branch) => branch.value.as_ref(),
-                        NodeType::Leaf(leaf) => Some(&leaf.data),
-                        NodeType::Extension(_) => None,
-                    };
+                // if let Some(found_node) = found_node {
+                //     let value = match found_node.inner() {
+                //         NodeType::Branch(branch) => branch.value.as_ref(),
+                //         NodeType::Leaf(leaf) => Some(&leaf.data),
+                //         NodeType::Extension(_) => None,
+                //     };
 
-                    let next_result = value.map(|value| {
-                        let value = value.to_vec();
+                //     let next_result = value.map(|value| {
+                //         let value = value.to_vec();
 
-                        Ok((std::mem::take(key), value))
-                    });
+                //         Ok((std::mem::take(key), value))
+                //     });
 
-                    visited_node_path.push((found_node, 0));
+                //     visited_node_path.push((found_node, 0));
 
-                    self.key_state = IteratorState::Iterating { visited_node_path };
+                //     self.key_state = IteratorState::Iterating { visited_node_path };
 
-                    return Poll::Ready(next_result);
-                }
+                //     return Poll::Ready(next_result);
+                // }
 
                 self.key_state = IteratorState::Iterating { visited_node_path };
 
@@ -159,27 +189,27 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
     }
 }
 
-enum LeafIterationState {
-    New,
-    Visited,
+enum LeafIterationState<'a> {
+    New(NodeObjRef<'a>),
+    Visited(NodeObjRef<'a>),
 }
 
-enum BranchIterationState {
-    New,
-    VisitedSelf,
-    VisitedChildren(u8), // the last child that was visited
+enum BranchIterationState<'a> {
+    New(NodeObjRef<'a>),
+    VisitedSelf(NodeObjRef<'a>),
+    VisitedChildren(NodeObjRef<'a>, u8), // the last child that was visited
 }
 
-enum ExtensionIterationState {
-    New,
-    VisitedSelf,
-    VisitedChild,
+enum ExtensionIterationState<'a> {
+    New(NodeObjRef<'a>),
+    VisitedSelf(NodeObjRef<'a>),
+    VisitedChild(NodeObjRef<'a>),
 }
 
-enum IterationState {
-    Leaf(LeafIterationState),
-    Branch(BranchIterationState),
-    Extension(ExtensionIterationState),
+enum IterationState<'a> {
+    Leaf(LeafIterationState<'a>),
+    Branch(BranchIterationState<'a>),
+    Extension(ExtensionIterationState<'a>),
 }
 
 enum VisitableNodeObjRef<'a> {
@@ -211,20 +241,25 @@ impl<'a> VisitableNodeObjRef<'a> {
 
 fn find_next_result<'a, S: ShaleStore<Node>, T>(
     merkle: &'a Merkle<S, T>,
-    visited_path: &mut Vec<(NodeObjRef<'a>, u8)>,
+    visited_path: &mut Vec<(IterationState<'a>, u8)>,
 ) -> Result<Option<(Key, Value)>, super::MerkleError> {
     let next = find_next_node_with_data(merkle, visited_path)?.map(|(next_node, value)| {
-        let partial_path = match next_node.inner() {
-            NodeType::Leaf(leaf) => leaf.path.iter().copied(),
-            NodeType::Extension(extension) => extension.path.iter().copied(),
-            _ => [].iter().copied(),
-        };
+        // TODO uncomment and fix
 
-        let key = key_from_nibble_iter(nibble_iter_from_parents(visited_path).chain(partial_path));
+        // let partial_path = match next_node.inner() {
+        //     NodeType::Leaf(leaf) => leaf.path.iter().copied(),
+        //     NodeType::Extension(extension) => extension.path.iter().copied(),
+        //     _ => [].iter().copied(),
+        // };
 
-        visited_path.push((next_node, 0));
+        // let key = key_from_nibble_iter(nibble_iter_from_parents(visited_path).chain(partial_path));
 
-        (key, value)
+        // visited_path.push((next_node, 0));
+
+        // (key, value)
+
+        let empty_box: Box<[u8]> = Box::new([]);
+        (empty_box, value)
     });
 
     Ok(next)
@@ -232,82 +267,119 @@ fn find_next_result<'a, S: ShaleStore<Node>, T>(
 
 fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
     merkle: &'a Merkle<S, T>,
-    visited_path: &mut Vec<(NodeObjRef<'a>, u8)>,
+    visited_path: &mut Vec<(IterationState<'a>, u8)>,
 ) -> Result<Option<(NodeObjRef<'a>, Vec<u8>)>, super::MerkleError> {
-    use VisitableNode::*;
-
-    let Some((visited_parent, visited_pos)) = visited_path.pop() else {
+    let Some((mut node, mut pos)) = visited_path.pop() else {
         return Ok(None);
     };
 
-    let mut node = VisitableNodeObjRef::Visited(visited_parent);
-    let mut pos = visited_pos;
-    let mut first_loop = true;
-
     loop {
-        match node.inner() {
-            New(NodeType::Leaf(leaf)) => {
-                let value = leaf.data.to_vec();
-                return Ok(Some((node.into_node(), value)));
-            }
-
-            Visited(NodeType::Leaf(_)) | Visited(NodeType::Extension(_)) => {
-                let Some((next_parent, next_pos)) = visited_path.pop() else {
-                    return Ok(None);
-                };
-
-                node = VisitableNodeObjRef::Visited(next_parent);
-                pos = next_pos;
-            }
-
-            New(NodeType::Extension(extension)) => {
-                let child = merkle.get_node(extension.chd())?;
-
-                pos = 0;
-                visited_path.push((node.into_node(), pos));
-
-                node = VisitableNodeObjRef::New(child);
-            }
-
-            Visited(NodeType::Branch(branch)) => {
-                // if the first node that we check is a visited branch, that means that the branch had a value
-                // and we need to visit the first child, for all other cases, we need to visit the next child
-                let compare_op = if first_loop {
-                    <u8 as PartialOrd>::ge // >=
-                } else {
-                    <u8 as PartialOrd>::gt
-                };
-
-                let children = get_children_iter(branch)
-                    .filter(move |(_, child_pos)| compare_op(child_pos, &pos));
-
-                let found_next_node =
-                    next_node(merkle, children, visited_path, &mut node, &mut pos)?;
-
-                if !found_next_node {
-                    return Ok(None);
+        match node {
+            IterationState::Leaf(iter_state) => match iter_state {
+                LeafIterationState::New(node_ref) => {
+                    let value = node_ref.inner().as_leaf().unwrap().data.to_vec();
+                    return Ok(Some((node_ref, value)));
                 }
-            }
+                LeafIterationState::Visited(_) => {
+                    let Some((next_parent, next_pos)) = visited_path.pop() else {
+                        return Ok(None);
+                    };
 
-            New(NodeType::Branch(branch)) => {
-                if let Some(value) = branch.value.as_ref() {
-                    let value = value.to_vec();
-                    return Ok(Some((node.into_node(), value)));
+                    node = next_parent;
+                    pos = next_pos;
                 }
-
-                let children = get_children_iter(branch);
-
-                let found_next_node =
-                    next_node(merkle, children, visited_path, &mut node, &mut pos)?;
-
-                if !found_next_node {
-                    return Ok(None);
+            },
+            IterationState::Branch(ref iter_state2) => match iter_state2 {
+                BranchIterationState::New(node_ref) => {
+                    let node = node_ref.inner().as_branch().unwrap();
+                    if let Some(value) = node.value {
+                        let value = value.to_vec();
+                        return Ok(Some((node_ref, value)));
+                    }
                 }
-            }
+                BranchIterationState::VisitedSelf(_) => todo!(),
+                BranchIterationState::VisitedChildren(_, _) => todo!(),
+            },
+            IterationState::Extension(iter_state) => todo!(),
         }
-
-        first_loop = false;
     }
+
+    todo!()
+
+    // use VisitableNode::*;
+
+    // let Some((visited_parent, visited_pos)) = visited_path.pop() else {
+    //     return Ok(None);
+    // };
+
+    // let mut node = VisitableNodeObjRef::Visited(visited_parent);
+    // let mut pos = visited_pos;
+    // let mut first_loop = true;
+
+    // loop {
+    //     match node.inner() {
+    //         New(NodeType::Leaf(leaf)) => {
+    //             let value = leaf.data.to_vec();
+    //             return Ok(Some((node.into_node(), value)));
+    //         }
+
+    //         Visited(NodeType::Leaf(_)) | Visited(NodeType::Extension(_)) => {
+    //             let Some((next_parent, next_pos)) = visited_path.pop() else {
+    //                 return Ok(None);
+    //             };
+
+    //             node = VisitableNodeObjRef::Visited(next_parent);
+    //             pos = next_pos;
+    //         }
+
+    //         New(NodeType::Extension(extension)) => {
+    //             let child = merkle.get_node(extension.chd())?;
+
+    //             pos = 0;
+    //             visited_path.push((node.into_node(), pos));
+
+    //             node = VisitableNodeObjRef::New(child);
+    //         }
+
+    //         Visited(NodeType::Branch(branch)) => {
+    //             // if the first node that we check is a visited branch, that means that the branch had a value
+    //             // and we need to visit the first child, for all other cases, we need to visit the next child
+    //             let compare_op = if first_loop {
+    //                 <u8 as PartialOrd>::ge // >=
+    //             } else {
+    //                 <u8 as PartialOrd>::gt
+    //             };
+
+    //             let children = get_children_iter(branch)
+    //                 .filter(move |(_, child_pos)| compare_op(child_pos, &pos));
+
+    //             let found_next_node =
+    //                 next_node(merkle, children, visited_path, &mut node, &mut pos)?;
+
+    //             if !found_next_node {
+    //                 return Ok(None);
+    //             }
+    //         }
+
+    //         New(NodeType::Branch(branch)) => {
+    //             if let Some(value) = branch.value.as_ref() {
+    //                 let value = value.to_vec();
+    //                 return Ok(Some((node.into_node(), value)));
+    //             }
+
+    //             let children = get_children_iter(branch);
+
+    //             let found_next_node =
+    //                 next_node(merkle, children, visited_path, &mut node, &mut pos)?;
+
+    //             if !found_next_node {
+    //                 return Ok(None);
+    //             }
+    //         }
+    //     }
+
+    //     first_loop = false;
+    // }
 }
 
 fn get_children_iter(branch: &BranchNode) -> impl Iterator<Item = (DiskAddress, u8)> {
