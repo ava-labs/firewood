@@ -119,10 +119,15 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                         // Since we found a node with the key, this must be the node.
                                         IterationState::Leaf(LeafIterationState::New(node))
                                     } else {
-                                        // We didn't find a node with the key, so this must be a
-                                        // different leaf that we don't want to return the key-value of.
-                                        IterationState::Leaf(LeafIterationState::Visited(node))
+                                        // TODO what do we do in the else statement?
+                                        todo!()
                                     }
+
+                                    // } else {
+                                    //     // We didn't find a node with the key, so this must be a
+                                    //     // different leaf that we don't want to return the key-value of.
+                                    //     IterationState::Leaf(LeafIterationState::Visited(node))
+                                    // }
                                 }
                                 NodeType::Extension(_) => {
                                     if index == num_elts - 1 {
@@ -180,14 +185,19 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 }
 
 enum LeafIterationState<'a> {
+    // This leaf's key-value pair hasn't been returned by the iterator.
     New(NodeObjRef<'a>),
-    Visited(NodeObjRef<'a>),
 }
 
 enum BranchIterationState<'a> {
+    // This branch's key-value pair hasn't been returned by the iterator.
     New(NodeObjRef<'a>),
+    // This branch's key-value pair (if any) has been returned by the iterator
+    // but we haven't visited any of its children.
     VisitedSelf(NodeObjRef<'a>),
-    VisitedChildren(NodeObjRef<'a>, u8), // the last child that was visited
+    // This branch's key-value pair (if any) has been returned by the iterator
+    // and we've visited its children up to and including the one at the given index.
+    VisitedChildren(NodeObjRef<'a>, u8),
 }
 
 enum ExtensionIterationState<'a> {
@@ -269,23 +279,21 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
                     let value = node_ref.inner().as_leaf().unwrap().data.to_vec();
                     return Ok(Some((node_ref, value)));
                 }
-                LeafIterationState::Visited(_) => {
-                    let Some(next_parent) = visited_path.pop() else {
-                        return Ok(None);
-                    };
-
-                    node = next_parent;
-                }
             },
-            IterationState::Branch(iter_state) => match iter_state {
+            IterationState::Branch(ref iter_state) => match iter_state {
                 BranchIterationState::New(node_ref) => {
                     // We haven't returned this node's key-value yet
                     let node = node_ref.inner().as_branch().unwrap();
+
+                    // iter_state = BranchIterationState::VisitedSelf(node_ref);
+
+                    visited_path.push(IterationState::Branch(iter_state));
 
                     if let Some(value) = node.value.as_ref() {
                         let value = value.to_vec();
                         return Ok(Some((node_ref, value)));
                     }
+                    todo!();
                 }
                 BranchIterationState::VisitedSelf(node_ref) => {
                     // We've returned this node's key-value, but we haven't visited any of its children
@@ -306,15 +314,15 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
 
                         // Push child onto the stack
                         match child.inner() {
-                            NodeType::Branch(node) => {
+                            NodeType::Branch(_) => {
                                 visited_path
                                     .push(IterationState::Branch(BranchIterationState::New(child)));
                             }
-                            NodeType::Leaf(node) => {
+                            NodeType::Leaf(_) => {
                                 visited_path
                                     .push(IterationState::Leaf(LeafIterationState::New(child)));
                             }
-                            NodeType::Extension(node) => {
+                            NodeType::Extension(_) => {
                                 visited_path.push(IterationState::Extension(
                                     ExtensionIterationState::New(child),
                                 ));
@@ -398,6 +406,7 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
                     }
                 }
                 ExtensionIterationState::VisitedSelf(node_ref) => {
+                    // TODO can we remove this?
                     let extension_node = node_ref.inner().as_extension().unwrap();
 
                     // Push child onto the stack
@@ -1018,3 +1027,29 @@ mod tests {
         assert_eq!(it.nibbles_into_bytes(), vec![]);
     }
 }
+
+/*
+error[E0382]: use of moved value
+   --> firewood/src/merkle/stream.rs:288:36
+    |
+288 |             IterationState::Branch(iter_state) => match iter_state {
+    |                                    ^^^^^^^^^^ value moved here, in previous iteration of loop
+    |
+note: these 3 reinitializations might get skipped
+   --> firewood/src/merkle/stream.rs:285:21
+    |
+285 |                     node = next_parent;
+    |                     ^^^^
+...
+340 |                         node = next_parent;
+    |                         ^^^^
+...
+381 |                         node = next_parent;
+    |                         ^^^^
+    = note: move occurs because value has type `BranchIterationState<'_>`, which does not implement the `Copy` trait
+help: borrow this binding in the pattern to avoid moving the value
+    |
+288 |             IterationState::Branch(ref iter_state) => match iter_state {
+    |                                    +++
+
+*/
