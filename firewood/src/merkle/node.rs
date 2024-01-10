@@ -8,7 +8,6 @@ use crate::{
 use bincode::{Error, Options};
 use bitflags::bitflags;
 use enum_as_inner::EnumAsInner;
-use log::debug;
 use serde::{
     de::DeserializeOwned,
     ser::{SerializeSeq, SerializeTuple},
@@ -25,6 +24,9 @@ use std::{
         OnceLock,
     },
 };
+
+#[cfg(feature = "logger")]
+use log::trace;
 
 mod branch;
 mod extension;
@@ -361,7 +363,7 @@ impl Storable for Node {
                 })?;
 
         #[cfg(feature = "logger")]
-        debug!("[{mem:p}] Deserializing node at {offset}");
+        trace!("[{mem:p}] Deserializing node at {offset}");
 
         let offset = offset + Meta::SIZE;
 
@@ -431,7 +433,9 @@ impl Storable for Node {
     }
 
     fn serialize(&self, to: &mut [u8]) -> Result<(), ShaleError> {
-        debug!("[{self:p}] Serializing node");
+        #[cfg(feature = "logger")]
+        trace!("[{self:p}] Serializing node");
+
         let mut cur = Cursor::new(to);
 
         let mut attrs = match self.root_hash.get() {

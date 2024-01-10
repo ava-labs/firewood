@@ -14,7 +14,7 @@ use std::num::NonZeroUsize;
 use std::sync::RwLock;
 
 #[cfg(feature = "logger")]
-use log::debug;
+use log::trace;
 
 #[derive(Debug)]
 pub struct CompactHeader {
@@ -565,7 +565,10 @@ impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
                     .into_boxed_slice()
             })
             .unwrap_or_default();
+
+        #[cfg(feature = "logger")]
         let len = parent_caches.len();
+
         let cs: CompactSpace<T, M> = CompactSpace {
             inner: RwLock::new(CompactSpaceInner {
                 meta_space,
@@ -577,8 +580,10 @@ impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
             obj_cache,
             parent_caches,
         };
-        #[cfg(logger)]
-        debug!("[{cs:p} New cache");
+
+        #[cfg(feature = "logger")]
+        trace!("[{:p} New cache with {} parents", &cs, len);
+
         Ok(cs)
     }
 }
@@ -604,7 +609,7 @@ impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> Sh
         let addr = self.inner.write().unwrap().alloc(size)?;
 
         #[cfg(feature = "logger")]
-        debug!("{self:p} New item at {addr} size {size}");
+        trace!("{self:p} New item at {addr} size {size}");
 
         #[allow(clippy::unwrap_used)]
         let obj = {
@@ -619,7 +624,9 @@ impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> Sh
 
         let cache = &self.obj_cache;
 
-        println!("[{:p}] node {} inserted: {:?}", cache, addr, obj);
+        #[cfg(feature = "logger")]
+        trace!("[{:p}] node {} inserted: {:?}", cache, addr, obj);
+
         let mut obj_ref = ObjRef::new(Some(obj), cache);
 
         // should this use a `?` instead of `unwrap`?
@@ -648,7 +655,9 @@ impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> Sh
 
         let cache = &self.obj_cache;
         if let Some(obj) = cache.get(ptr)? {
-            eprintln!("[{:p}] node {} was in primary", cache, ptr.0.unwrap());
+            #[cfg(feature = "logger")]
+            trace!("[{:p}] node {:?} was in primary", cache, ptr);
+
             return Ok(ObjRef::new(Some(obj), cache));
         }
 
@@ -658,18 +667,16 @@ impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> Sh
             .iter()
             .find_map(|cache| cache.get(ptr).transpose())
         {
-            // found in the parent cache; insert into this cache
-            let o = self.obj_cache.put(result?);
-            println!(
-                "[{:p}] node {} in the secondary cache: {:?}",
-                self.parent_caches.first().unwrap(),
-                ptr.0.unwrap(),
-                o
+            // found in the parent cache; insert into this cache, unless it's a ShaleError
+            let obj = result?;
+            #[cfg(feature = "logger")]
+            trace!(
+                "[{:p}] node {:?} was in the secondary cache",
+                cache,
+                obj.as_ptr()
             );
-            println!(" [inserted into cache at {:p}", &self.obj_cache);
-            // we fall through and re-read
-            // TODO: we shouldn't really need to do that, but it doesn't work if we return the original
-            // cache value
+
+            self.obj_cache.put(obj);
         }
 
         let inner = self.inner.read().expect("poisoned cache");
@@ -678,10 +685,11 @@ impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> Sh
             .get_header(ptr - CompactHeader::MSIZE as usize)?
             .payload_size;
         let obj = self.obj_cache.put(inner.get_data_ref(ptr, payload_size)?);
-        println!(
-            "[{:p}] node {} was read into cache: {:?}",
+        #[cfg(feature = "logger")]
+        trace!(
+            "[{:p}] node {:?} was read into cache: {:?}",
             cache,
-            ptr.0.unwrap(),
+            ptr,
             obj
         );
 
