@@ -13,6 +13,9 @@ use std::io::{Cursor, Write};
 use std::num::NonZeroUsize;
 use std::sync::RwLock;
 
+#[cfg(feature = "logger")]
+use log::debug;
+
 #[derive(Debug)]
 pub struct CompactHeader {
     payload_size: u64,
@@ -561,6 +564,8 @@ impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
             }),
             obj_cache,
         };
+        #[cfg(logger)]
+        debug!("[{cs:p} New cache");
         Ok(cs)
     }
 }
@@ -583,6 +588,9 @@ impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> Sh
         let size = item.serialized_len() + extra;
         #[allow(clippy::unwrap_used)]
         let addr = self.inner.write().unwrap().alloc(size)?;
+
+        #[cfg(feature = "logger")]
+        debug!("{self:p} New item at {addr} size {size}");
 
         #[allow(clippy::unwrap_used)]
         let obj = {
