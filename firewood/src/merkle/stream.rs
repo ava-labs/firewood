@@ -280,20 +280,17 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
                     return Ok(Some((node_ref, value)));
                 }
             },
-            IterationState::Branch(ref iter_state) => match iter_state {
+            IterationState::Branch(iter_state) => match iter_state {
                 BranchIterationState::New(node_ref) => {
                     // We haven't returned this node's key-value yet
-                    let node = node_ref.inner().as_branch().unwrap();
+                    let branch_node = node_ref.inner().as_branch().unwrap();
 
-                    // iter_state = BranchIterationState::VisitedSelf(node_ref);
-
-                    visited_path.push(IterationState::Branch(iter_state));
-
-                    if let Some(value) = node.value.as_ref() {
+                    if let Some(value) = branch_node.value.as_ref() {
                         let value = value.to_vec();
                         return Ok(Some((node_ref, value)));
                     }
-                    todo!();
+
+                    node = IterationState::Branch(BranchIterationState::VisitedSelf(node_ref));
                 }
                 BranchIterationState::VisitedSelf(node_ref) => {
                     // We've returned this node's key-value, but we haven't visited any of its children
@@ -313,19 +310,15 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
                         ));
 
                         // Push child onto the stack
-                        match child.inner() {
+                        node = match child.inner() {
                             NodeType::Branch(_) => {
-                                visited_path
-                                    .push(IterationState::Branch(BranchIterationState::New(child)));
+                                IterationState::Branch(BranchIterationState::New(child))
                             }
                             NodeType::Leaf(_) => {
-                                visited_path
-                                    .push(IterationState::Leaf(LeafIterationState::New(child)));
+                                IterationState::Leaf(LeafIterationState::New(child))
                             }
                             NodeType::Extension(_) => {
-                                visited_path.push(IterationState::Extension(
-                                    ExtensionIterationState::New(child),
-                                ));
+                                IterationState::Extension(ExtensionIterationState::New(child))
                             }
                         }
                     } else {
@@ -354,19 +347,15 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
                         ));
 
                         // Push child onto the stack
-                        match child.inner() {
+                        node = match child.inner() {
                             NodeType::Branch(_) => {
-                                visited_path
-                                    .push(IterationState::Branch(BranchIterationState::New(child)));
+                                IterationState::Branch(BranchIterationState::New(child))
                             }
                             NodeType::Leaf(_) => {
-                                visited_path
-                                    .push(IterationState::Leaf(LeafIterationState::New(child)));
+                                IterationState::Leaf(LeafIterationState::New(child))
                             }
                             NodeType::Extension(_) => {
-                                visited_path.push(IterationState::Extension(
-                                    ExtensionIterationState::New(child),
-                                ));
+                                IterationState::Extension(ExtensionIterationState::New(child))
                             }
                         }
                     } else {
@@ -390,18 +379,13 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
                     // Push child onto the stack
                     let child = merkle.get_node(child)?;
 
-                    match child.inner() {
+                    node = match child.inner() {
                         NodeType::Branch(_) => {
-                            visited_path
-                                .push(IterationState::Branch(BranchIterationState::New(child)));
+                            IterationState::Branch(BranchIterationState::New(child))
                         }
-                        NodeType::Leaf(_) => {
-                            visited_path.push(IterationState::Leaf(LeafIterationState::New(child)));
-                        }
+                        NodeType::Leaf(_) => IterationState::Leaf(LeafIterationState::New(child)),
                         NodeType::Extension(_) => {
-                            visited_path.push(IterationState::Extension(
-                                ExtensionIterationState::New(child),
-                            ));
+                            IterationState::Extension(ExtensionIterationState::New(child))
                         }
                     }
                 }
@@ -412,18 +396,13 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
                     // Push child onto the stack
                     let child = merkle.get_node(extension_node.chd())?;
 
-                    match child.inner() {
+                    node = match child.inner() {
                         NodeType::Branch(_) => {
-                            visited_path
-                                .push(IterationState::Branch(BranchIterationState::New(child)));
+                            IterationState::Branch(BranchIterationState::New(child))
                         }
-                        NodeType::Leaf(_) => {
-                            visited_path.push(IterationState::Leaf(LeafIterationState::New(child)));
-                        }
+                        NodeType::Leaf(_) => IterationState::Leaf(LeafIterationState::New(child)),
                         NodeType::Extension(_) => {
-                            visited_path.push(IterationState::Extension(
-                                ExtensionIterationState::New(child),
-                            ));
+                            IterationState::Extension(ExtensionIterationState::New(child))
                         }
                     }
                 }
