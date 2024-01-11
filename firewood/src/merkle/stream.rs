@@ -6,19 +6,24 @@ use crate::{
     shale::{DiskAddress, ShaleStore},
     v2::api,
 };
+use core::slice::Iter;
 use futures::{stream::FusedStream, Stream};
 use helper_types::{Either, MustUse};
 use std::task::Poll;
-
 type Key = Box<[u8]>;
 type Value = Vec<u8>;
+
+struct NodeIterator<'a> {
+    node: NodeObjRef<'a>,
+    children_iter: Box<dyn Iterator<Item = DiskAddress>>,
+}
 
 enum IteratorState<'a> {
     /// Start iterating at the specified key
     StartAtKey(Key),
     /// Continue iterating after the last node in the `visited_node_path`
     Iterating {
-        visited_node_path: Vec<(NodeObjRef<'a>, u8)>,
+        node_iter_stack: Vec<NodeIterator<'a>>,
     },
 }
 
@@ -41,7 +46,7 @@ pub struct MerkleKeyValueStream<'a, S, T> {
 
 impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleKeyValueStream<'a, S, T> {
     fn is_terminated(&self) -> bool {
-        matches!(&self.key_state, IteratorState::Iterating { visited_node_path } if visited_node_path.is_empty())
+        matches!(&self.key_state, IteratorState::Iterating { node_iter_stack } if node_iter_stack.is_empty())
     }
 }
 
@@ -88,72 +93,144 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                     .get_node(*merkle_root)
                     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                // traverse the trie along each nibble until we find a node with a value
-                // TODO: merkle.iter_by_key(key) will simplify this entire code-block.
-                let (found_node, mut visited_node_path) = {
-                    let mut visited_node_path = vec![];
+                todo!();
 
-                    let found_node = merkle
-                        .get_node_by_key_with_callbacks(
-                            root_node,
-                            &key,
-                            |node_addr, i| visited_node_path.push((node_addr, i)),
-                            |_, _| {},
-                        )
-                        .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+                // TODO remove
+                // // traverse the trie along each nibble until we find a node with a value
+                // // TODO: merkle.iter_by_key(key) will simplify this entire code-block.
+                // let (found_node, mut visited_node_path) = {
+                //     let mut visited_node_path = vec![];
 
-                    let mut visited_node_path = visited_node_path
-                        .into_iter()
-                        .map(|(node, pos)| merkle.get_node(node).map(|node| (node, pos)))
-                        .collect::<Result<Vec<_>, _>>()
-                        .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+                //     let found_node = merkle
+                //         .get_node_by_key_with_callbacks(
+                //             root_node,
+                //             &key,
+                //             |node_addr, i| visited_node_path.push((node_addr, i)),
+                //             |_, _| {},
+                //         )
+                //         .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                    let last_visited_node_not_branch = visited_node_path
-                        .last()
-                        .map(|(node, _)| {
-                            matches!(node.inner(), NodeType::Leaf(_) | NodeType::Extension(_))
-                        })
-                        .unwrap_or_default();
+                //     let mut visited_node_path = visited_node_path
+                //         .into_iter()
+                //         .map(|(node, pos)| merkle.get_node(node).map(|node| (node, pos)))
+                //         .collect::<Result<Vec<_>, _>>()
+                //         .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                    // we only want branch in the visited node-path to start
-                    if last_visited_node_not_branch {
-                        visited_node_path.pop();
-                    }
+                //     let last_visited_node_not_branch = visited_node_path
+                //         .last()
+                //         .map(|(node, _)| {
+                //             matches!(node.inner(), NodeType::Leaf(_) | NodeType::Extension(_))
+                //         })
+                //         .unwrap_or_default();
 
-                    (found_node, visited_node_path)
-                };
+                //     // we only want branch in the visited node-path to start
+                //     if last_visited_node_not_branch {
+                //         visited_node_path.pop();
+                //     }
 
-                if let Some(found_node) = found_node {
-                    let value = match found_node.inner() {
-                        NodeType::Branch(branch) => branch.value.as_ref(),
-                        NodeType::Leaf(leaf) => Some(&leaf.data),
-                        NodeType::Extension(_) => None,
+                //     (found_node, visited_node_path)
+                // };
+
+                // if let Some(found_node) = found_node {
+                //     let value = match found_node.inner() {
+                //         NodeType::Branch(branch) => branch.value.as_ref(),
+                //         NodeType::Leaf(leaf) => Some(&leaf.data),
+                //         NodeType::Extension(_) => None,
+                //     };
+
+                //     let next_result = value.map(|value| {
+                //         let value = value.to_vec();
+
+                //         Ok((std::mem::take(key), value))
+                //     });
+
+                //     visited_node_path.push((found_node, 0));
+
+                //     self.key_state = IteratorState::Iterating { visited_node_path };
+
+                //     return Poll::Ready(next_result);
+                // }
+
+                // self.key_state = IteratorState::Iterating { visited_node_path };
+
+                // self.poll_next(_cx)
+            }
+            IteratorState::Iterating { node_iter_stack } => {
+                loop {
+                    let Some(mut node_iter) = node_iter_stack.pop() else {
+                        return Poll::Ready(None);
                     };
 
-                    let next_result = value.map(|value| {
-                        let value = value.to_vec();
+                    let Some(next) = node_iter.children_iter.next() else {
+                        // This node iterator is exhausted.
+                        continue;
+                    };
 
-                        Ok((std::mem::take(key), value))
-                    });
+                    // Handle the next child.
+                    // Grab the next node along the traversal path.
+                    let node = merkle
+                        .get_node(next.clone())
+                        .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                    visited_node_path.push((found_node, 0));
+                    match node.inner() {
+                        NodeType::Branch(branch) => {
+                            // Make a NodeIterator for this branch.
+                            let children_iter = Box::new(branch.children.into_iter().flatten());
 
-                    self.key_state = IteratorState::Iterating { visited_node_path };
+                            let key: Box<[u8]> = todo!();
+                            let value = branch.value.clone();
 
-                    return Poll::Ready(next_result);
+                            let node_iter = NodeIterator {
+                                node,
+                                children_iter,
+                            };
+
+                            node_iter_stack.push(node_iter);
+
+                            if let Some(value) = value {
+                                // This branch has a value, so return it.
+                                return Poll::Ready(Some(Ok((key, value.to_vec()))));
+                            }
+                        }
+                        NodeType::Leaf(leaf) => return Poll::Ready(Some(Ok((todo!(), todo!())))),
+                        NodeType::Extension(extension) => {
+                            // Make a NodeIterator for this extension.
+                            let children_iter = Box::new(std::iter::once(extension.chd()));
+
+                            let node_iter = NodeIterator {
+                                node,
+                                children_iter,
+                            };
+
+                            node_iter_stack.push(node_iter);
+                        }
+                    }
                 }
 
-                self.key_state = IteratorState::Iterating { visited_node_path };
+                // TODO remove
+                // let foo2: Iter<'a, DiskAddress> = node_iter
+                //     .node
+                //     .inner()
+                //     .as_branch()
+                //     .unwrap()
+                //     .children
+                //     .iter()
+                //     .filter_map(|addr| if addr.is_some() { *addr } else { None })
+                //     .collect::<Vec<DiskAddress>>()
+                //     .iter();
 
-                self.poll_next(_cx)
-            }
+                // let foo = NodeIterator {
+                //     node: node_iter.node,
+                //     children_iter: foo2,
+                // };
 
-            IteratorState::Iterating { visited_node_path } => {
-                let next = find_next_result(merkle, visited_node_path)
-                    .map_err(|e| api::Error::InternalError(Box::new(e)))
-                    .transpose();
+                // TODO remove
+                // let next = find_next_result(merkle, visited_node_path)
+                //     .map_err(|e| api::Error::InternalError(Box::new(e)))
+                //     .transpose();
 
-                Poll::Ready(next)
+                // Poll::Ready(next)
+                // }
             }
         }
     }
