@@ -89,12 +89,13 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                     .get_node(*merkle_root)
                     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                // traverse the trie along each nibble until we find a node with a value
+                // traverse the trie along each nibble until we find a node with the [key].
                 // TODO: merkle.iter_by_key(key) will simplify this entire code-block.
                 let visited_node_path = {
                     let mut visited_node_path = vec![];
 
-                    let found_node = merkle
+                    // [key_node] is the node with [key], if it exists.
+                    let key_node = merkle
                         .get_node_by_key_with_callbacks(
                             root_node,
                             &key,
@@ -114,7 +115,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                     BranchIterationState::VisitedChildren(node, pos),
                                 ),
                                 NodeType::Leaf(_) => {
-                                    if found_node.is_some() {
+                                    if key_node.is_some() {
                                         // This must be the last node on the path since it's a leaf.
                                         // Since we found a node with the key, this must be the node.
                                         IterationState::Leaf(LeafIterationState::New(node))
