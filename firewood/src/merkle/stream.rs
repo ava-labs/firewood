@@ -216,9 +216,8 @@ fn find_next_result<'a, S: ShaleStore<Node>, T>(
     merkle: &'a Merkle<S, T>,
     visited_path: &mut Vec<IterationState<'a>>,
 ) -> Result<Option<(Key, Value)>, super::MerkleError> {
-    let next = find_next_node_with_data(merkle, visited_path)?.map(|(next_node, value)| {
-        // TODO uncomment and fix
-
+    let next = find_next_node_with_data(merkle, visited_path)?.map(|(next_node)| {
+        // TODO uncomment
         // let partial_path = match next_node.inner() {
         //     NodeType::Leaf(leaf) => leaf.path.iter().copied(),
         //     NodeType::Extension(extension) => extension.path.iter().copied(),
@@ -226,13 +225,15 @@ fn find_next_result<'a, S: ShaleStore<Node>, T>(
         // };
 
         // let key = key_from_nibble_iter(nibble_iter_from_parents(visited_path).chain(partial_path));
+        let key: Box<[u8]> = Box::new([]); // TODO implement and uncomment above
 
-        // visited_path.push((next_node, 0));
+        let value = match next_node.inner() {
+            NodeType::Leaf(leaf) => leaf.data.to_vec(),
+            NodeType::Branch(branch) => branch.value.as_ref().unwrap().to_vec(),
+            _ => unreachable!(), // TODO is this right?
+        };
 
-        // (key, value)
-
-        let empty_box: Box<[u8]> = Box::new([]);
-        (empty_box, value)
+        (key, value)
     });
 
     Ok(next)
@@ -241,7 +242,7 @@ fn find_next_result<'a, S: ShaleStore<Node>, T>(
 fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
     merkle: &'a Merkle<S, T>,
     visited_path: &mut Vec<IterationState<'a>>,
-) -> Result<Option<(NodeObjRef<'a>, Vec<u8>)>, super::MerkleError> {
+) -> Result<Option<NodeObjRef<'a>>, super::MerkleError> {
     let Some(mut node) = visited_path.pop() else {
         return Ok(None);
     };
@@ -250,8 +251,7 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
         match node {
             IterationState::Leaf(iter_state) => match iter_state {
                 LeafIterationState::New(node_ref) => {
-                    let value = node_ref.inner().as_leaf().unwrap().data.to_vec();
-                    return Ok(Some((node_ref, value)));
+                    return Ok(Some(node_ref));
                 }
             },
             IterationState::Branch(iter_state) => match iter_state {
@@ -260,8 +260,7 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
                     let branch_node = node_ref.inner().as_branch().unwrap();
 
                     if let Some(value) = branch_node.value.as_ref() {
-                        let value = value.to_vec();
-                        return Ok(Some((node_ref, value)));
+                        return Ok(Some(node_ref));
                     }
 
                     node = IterationState::Branch(BranchIterationState::VisitedSelf(node_ref));
