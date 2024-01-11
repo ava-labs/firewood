@@ -104,6 +104,8 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                         )
                         .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
+                    let key_in_tree = key_node.is_some();
+
                     let num_elts = visited_node_path.len();
                     let visited_node_path = visited_node_path
                         .into_iter()
@@ -119,16 +121,12 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                     // node's children up to and including that index.
                                     IterationState::BranchVisitedChildren(node, pos)
                                 }
-                                NodeType::Branch(_)
-                                    if index == num_elts - 1 && key_node.is_some() =>
-                                {
+                                NodeType::Branch(_) if index == num_elts - 1 && key_in_tree => {
                                     // This branch node must be [key_node] since we found a node with [key]
                                     // and this is the last node on the path.
                                     IterationState::BranchNew(node)
                                 }
-                                NodeType::Branch(_)
-                                    if index == num_elts - 1 && key_node.is_none() =>
-                                {
+                                NodeType::Branch(_) if index == num_elts - 1 && !key_in_tree => {
                                     // There's no node with [key]. Since the node with [key]
                                     // isn't below this one, don't visit any of its children.
                                     IterationState::BranchVisitedChildren(
@@ -137,27 +135,26 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                     )
                                 }
                                 NodeType::Branch(_) => unreachable!(), // TODO is this OK?
+                                NodeType::Leaf(_) if key_in_tree => {
+                                    // This must be the last node on the path since it's a leaf.
+                                    // Since we found a node with the [key], this must be that node.
+                                    IterationState::LeafNew(node)
+                                }
                                 NodeType::Leaf(_) => {
-                                    if key_node.is_some() {
-                                        // This must be the last node on the path since it's a leaf.
-                                        // Since we found a node with the [key], this must be that node.
-                                        IterationState::LeafNew(node)
-                                    } else {
-                                        // TODO what do we do in the else statement?
-                                        todo!()
-                                    }
+                                    // This must be the last node on the path since it's a leaf.
+                                    // We didn't find a node with the [key], so don't visit this node
+                                    // or its children.
+                                    IterationState::LeafVisited()
                                 }
-                                NodeType::Extension(_) if index == num_elts - 1 => {
-                                    // This extension node is the last one on the path to [key].
-                                    // If it is at [key], then we want to visit its child since
-                                    // the child is after [key].
-                                    IterationState::ExtensionVisitedSelf(node)
-                                }
-                                NodeType::Extension(_) =>
-                                // The extension node's child will be handled by the next iteration
-                                // TODO this is wrong; we don't want to visit the children of this node again.
-                                {
+                                NodeType::Extension(_) if index == num_elts - 1 && key_in_tree => {
+                                    // This extension node must have [key]. We want to visit its descendants.
                                     IterationState::ExtensionNew(node)
+                                }
+                                NodeType::Extension(_) if index == num_elts - 1 && !key_in_tree => {
+                                    IterationState::ExtensionNew(node)
+                                }
+                                NodeType::Extension(_) => {
+                                    IterationState::ExtensionVisitedSelf(node)
                                 }
                             })
                         })
@@ -185,6 +182,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
 enum IterationState<'a> {
     LeafNew(NodeObjRef<'a>),
+    LeafVisited(),
     BranchNew(NodeObjRef<'a>),
     BranchVisitedSelf(NodeObjRef<'a>),
     BranchVisitedChildren(NodeObjRef<'a>, u8),
@@ -257,8 +255,14 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
     loop {
         match node {
             IterationState::LeafNew(node_ref) => return Ok(Some(node_ref)),
+            IterationState::LeafVisited() => {
+                let Some(node_parent) = visited_path.pop() else {
+                    return Ok(None);
+                };
+                node = node_parent;
+            }
             IterationState::BranchNew(node_ref) => {
-                // We haven't returned this node's key-value (if any) yet
+                // We haven't returned this node's key-value (if any) yet.
                 let branch_node = node_ref.inner().as_branch().unwrap();
 
                 if branch_node.value.is_some() {
