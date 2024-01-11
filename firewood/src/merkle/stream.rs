@@ -118,7 +118,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                     if key_node.is_some() {
                                         // This must be the last node on the path since it's a leaf.
                                         // Since we found a node with the key, this must be the node.
-                                        IterationState::Leaf(LeafIterationState::New(node))
+                                        IterationState::NewLeaf(node)
                                     } else {
                                         // TODO what do we do in the else statement?
                                         todo!()
@@ -181,7 +181,7 @@ enum ExtensionIterationState<'a> {
 }
 
 enum IterationState<'a> {
-    Leaf(LeafIterationState<'a>),
+    NewLeaf(NodeObjRef<'a>),
     Branch(BranchIterationState<'a>),
     Extension(ExtensionIterationState<'a>),
 }
@@ -250,11 +250,7 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
 
     loop {
         match node {
-            IterationState::Leaf(iter_state) => match iter_state {
-                LeafIterationState::New(node_ref) => {
-                    return Ok(Some(node_ref));
-                }
-            },
+            IterationState::NewLeaf(node_ref) => return Ok(Some(node_ref)),
             IterationState::Branch(iter_state) => match iter_state {
                 BranchIterationState::New(node_ref) => {
                     // We haven't returned this node's key-value yet
@@ -288,9 +284,7 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
                             NodeType::Branch(_) => {
                                 IterationState::Branch(BranchIterationState::New(child))
                             }
-                            NodeType::Leaf(_) => {
-                                IterationState::Leaf(LeafIterationState::New(child))
-                            }
+                            NodeType::Leaf(_) => IterationState::NewLeaf(child),
                             NodeType::Extension(_) => {
                                 IterationState::Extension(ExtensionIterationState::New(child))
                             }
@@ -325,9 +319,7 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
                             NodeType::Branch(_) => {
                                 IterationState::Branch(BranchIterationState::New(child))
                             }
-                            NodeType::Leaf(_) => {
-                                IterationState::Leaf(LeafIterationState::New(child))
-                            }
+                            NodeType::Leaf(_) => IterationState::NewLeaf(child),
                             NodeType::Extension(_) => {
                                 IterationState::Extension(ExtensionIterationState::New(child))
                             }
@@ -357,7 +349,7 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
                         NodeType::Branch(_) => {
                             IterationState::Branch(BranchIterationState::New(child))
                         }
-                        NodeType::Leaf(_) => IterationState::Leaf(LeafIterationState::New(child)),
+                        NodeType::Leaf(_) => IterationState::NewLeaf(child),
                         NodeType::Extension(_) => {
                             IterationState::Extension(ExtensionIterationState::New(child))
                         }
@@ -374,7 +366,7 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
                         NodeType::Branch(_) => {
                             IterationState::Branch(BranchIterationState::New(child))
                         }
-                        NodeType::Leaf(_) => IterationState::Leaf(LeafIterationState::New(child)),
+                        NodeType::Leaf(_) => IterationState::NewLeaf(child),
                         NodeType::Extension(_) => {
                             IterationState::Extension(ExtensionIterationState::New(child))
                         }
