@@ -198,7 +198,7 @@ fn find_next_key_value<'a, S: ShaleStore<Node>, T>(
     merkle: &'a Merkle<S, T>,
     visited_path: &mut Vec<IterationState<'a>>,
 ) -> Result<Option<(Key, Value)>, super::MerkleError> {
-    let next = find_next_node_with_data(merkle, visited_path)?.map(|next_node| {
+    let next = find_next_node(merkle, visited_path)?.map(|next_node| {
         // TODO uncomment
         // let partial_path = match next_node.inner() {
         //     NodeType::Leaf(leaf) => leaf.path.iter().copied(),
@@ -221,7 +221,7 @@ fn find_next_key_value<'a, S: ShaleStore<Node>, T>(
     Ok(next)
 }
 
-fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
+fn find_next_node<'a, S: ShaleStore<Node>, T>(
     merkle: &'a Merkle<S, T>,
     visited_path: &mut Vec<IterationState<'a>>,
 ) -> Result<Option<NodeObjRef<'a>>, super::MerkleError> {
