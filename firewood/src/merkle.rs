@@ -3,7 +3,7 @@ use crate::db::{MutStore, SharedStore};
 // See the file LICENSE.md for licensing terms.
 use crate::nibbles::Nibbles;
 use crate::shale::{
-    self, cached::PlainMem, compact::CompactSpace, disk_address::DiskAddress, ObjWriteError,
+    self, disk_address::DiskAddress, ObjWriteError,
     ShaleError, ShaleStore,
 };
 use crate::v2::api;
@@ -31,7 +31,6 @@ pub use trie_hash::{TrieHash, TRIE_HASH_LEN};
 type NodeObjRef<'a> = shale::ObjRef<'a, Node>;
 type ParentRefs<'a> = Vec<(NodeObjRef<'a>, u8)>;
 type ParentAddresses = Vec<(DiskAddress, u8)>;
-pub type MerkleWithEncoder = Merkle<CompactSpace<Node, PlainMem>, Bincode>;
 
 #[derive(Debug, Error)]
 pub enum MerkleError {
