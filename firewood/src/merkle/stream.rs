@@ -6,16 +6,16 @@ use crate::{
     shale::{DiskAddress, ShaleStore},
     v2::api,
 };
-use core::slice::Iter;
 use futures::{stream::FusedStream, Stream};
 use helper_types::{Either, MustUse};
+use std::slice::Iter;
 use std::task::Poll;
 type Key = Box<[u8]>;
 type Value = Vec<u8>;
 
 struct NodeIterator<'a> {
     node: NodeObjRef<'a>,
-    children_iter: Box<dyn Iterator<Item = DiskAddress>>,
+    children_iter: Option<Iter<'a, DiskAddress>>,
 }
 
 enum IteratorState<'a> {
@@ -161,76 +161,45 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                         return Poll::Ready(None);
                     };
 
-                    let Some(next) = node_iter.children_iter.next() else {
-                        // This node iterator is exhausted.
-                        continue;
+                    // Check whether the children iterator is set up.
+                    let mut children_iter = match node_iter.children_iter {
+                        Some(iter) => iter,
+                        None => {
+                            // Make a new children iterator.
+                            match node_iter.node.inner() {
+                                NodeType::Branch(branch) => branch
+                                    .children
+                                    .into_iter()
+                                    .flatten()
+                                    .collect::<Vec<DiskAddress>>()
+                                    .iter(),
+                                NodeType::Leaf(_) => todo!(), // TODO is this unreachable?
+                                NodeType::Extension(extension) => [extension.chd()].iter(),
+                            }
+                        }
                     };
 
                     // Handle the next child.
-                    // Grab the next node along the traversal path.
+                    let next_child = match children_iter.next() {
+                        Some(child) => child,
+                        None => {
+                            // We've finished iterating over this node's children.
+                            // Go back to the parent node.
+                            continue;
+                        }
+                    };
+
+                    // Get the node for the next child.
                     let node = merkle
-                        .get_node(next.clone())
+                        .get_node(*next_child)
                         .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
                     match node.inner() {
-                        NodeType::Branch(branch) => {
-                            // Make a NodeIterator for this branch.
-                            let children_iter = Box::new(branch.children.into_iter().flatten());
-
-                            let key: Box<[u8]> = todo!();
-                            let value = branch.value.clone();
-
-                            let node_iter = NodeIterator {
-                                node,
-                                children_iter,
-                            };
-
-                            node_iter_stack.push(node_iter);
-
-                            if let Some(value) = value {
-                                // This branch has a value, so return it.
-                                return Poll::Ready(Some(Ok((key, value.to_vec()))));
-                            }
-                        }
+                        NodeType::Branch(branch) => {}
                         NodeType::Leaf(leaf) => return Poll::Ready(Some(Ok((todo!(), todo!())))),
-                        NodeType::Extension(extension) => {
-                            // Make a NodeIterator for this extension.
-                            let children_iter = Box::new(std::iter::once(extension.chd()));
-
-                            let node_iter = NodeIterator {
-                                node,
-                                children_iter,
-                            };
-
-                            node_iter_stack.push(node_iter);
-                        }
+                        NodeType::Extension(extension) => {}
                     }
                 }
-
-                // TODO remove
-                // let foo2: Iter<'a, DiskAddress> = node_iter
-                //     .node
-                //     .inner()
-                //     .as_branch()
-                //     .unwrap()
-                //     .children
-                //     .iter()
-                //     .filter_map(|addr| if addr.is_some() { *addr } else { None })
-                //     .collect::<Vec<DiskAddress>>()
-                //     .iter();
-
-                // let foo = NodeIterator {
-                //     node: node_iter.node,
-                //     children_iter: foo2,
-                // };
-
-                // TODO remove
-                // let next = find_next_result(merkle, visited_node_path)
-                //     .map_err(|e| api::Error::InternalError(Box::new(e)))
-                //     .transpose();
-
-                // Poll::Ready(next)
-                // }
             }
         }
     }
