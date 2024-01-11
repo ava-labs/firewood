@@ -164,7 +164,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                 }
                                 NodeType::Extension(_) if index == num_elts - 1 && key_in_tree => {
                                     // This extension node must be [key_node].
-                                    // We want to visit its descendants.
+                                    // We want to visit its child.
                                     NodeIterationState::ExtensionNew(node)
                                 }
                                 NodeType::Extension(_) if index == num_elts - 1 && !key_in_tree => {
@@ -175,7 +175,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                 }
                                 NodeType::Extension(_) => {
                                     NodeIterationState::ExtensionVisited(node)
-                                } // TODO Is this right?
+                                }
                             })
                         })
                         .collect::<Result<Vec<_>, _>>()
@@ -227,8 +227,8 @@ fn find_next_key_value<'a, S: ShaleStore<Node>, T>(
     Ok(next)
 }
 
-// Returns the next node to visit in a depth-first traversal of the trie
-// where we visit the smallest (leftmost) child of a branch node first,
+// Returns the next node to visit in a depth-first traversal of the trie's
+// key-values where we visit the smallest (leftmost) child of a branch node first,
 // given the traversal state [visited_path].
 fn find_next_node<'a, S: ShaleStore<Node>, T>(
     merkle: &'a Merkle<S, T>,
