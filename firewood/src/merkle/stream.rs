@@ -13,6 +13,27 @@ use std::task::Poll;
 type Key = Box<[u8]>;
 type Value = Vec<u8>;
 
+enum IterationState<'a> {
+    // We haven't returned this node's key-value pair.
+    LeafNew(NodeObjRef<'a>),
+    // We have returned this node's key-value pair.
+    LeafVisited(),
+    // We haven't returned this node's key-value pair (if any)
+    // or any of its descendants' key-value pairs.
+    BranchNew(NodeObjRef<'a>),
+    // We have returned this node's key-value pair (if any)
+    // but not any of its descendants' key-value pairs.
+    BranchVisitedSelf(NodeObjRef<'a>),
+    // We have returned this node's key-value pair (if any)
+    // and descendants' key-value pairs for the descendants
+    // below the first [pos] indices.
+    BranchVisitedChildren(NodeObjRef<'a>, u8),
+    // TODO write a comment
+    ExtensionNew(NodeObjRef<'a>),
+    // We have visited this extension node's descendants.
+    ExtensionVisited(NodeObjRef<'a>),
+}
+
 enum IteratorState<'a> {
     /// Start iterating at the specified key
     StartAtKey(Key),
@@ -151,14 +172,10 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                 NodeType::Extension(_) if index == num_elts - 1 && !key_in_tree => {
                                     // TODO how to handle this case? It could be that the extension
                                     // node's child is _after_ key and we want to return it.
-                                    // Or it could be that we don't want to return
+                                    // Or it could be that we don't want to return.
                                     IterationState::ExtensionNew(node)
                                 }
-                                NodeType::Extension(_) =>
-                                // TODO is this correct?
-                                {
-                                    IterationState::ExtensionVisited(node)
-                                }
+                                NodeType::Extension(_) => IterationState::ExtensionVisited(node), // TODO Is this right?
                             })
                         })
                         .collect::<Result<Vec<_>, _>>()
@@ -181,16 +198,6 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
             }
         }
     }
-}
-
-enum IterationState<'a> {
-    LeafNew(NodeObjRef<'a>),
-    LeafVisited(),
-    BranchNew(NodeObjRef<'a>),
-    BranchVisitedSelf(NodeObjRef<'a>),
-    BranchVisitedChildren(NodeObjRef<'a>, u8),
-    ExtensionNew(NodeObjRef<'a>),
-    ExtensionVisited(NodeObjRef<'a>),
 }
 
 fn find_next_key_value<'a, S: ShaleStore<Node>, T>(
