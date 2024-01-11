@@ -143,8 +143,12 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                     // [visited_node_path], that will handle all descendants down
                                     // the [pos] branch, so we can mark that we've visited this
                                     // node's children up to and including that index.
-                                    // TODO is this right?
-                                    // Can another node be at index [pos]?
+                                    //
+                                    // TODO I think we actually need to check whether we want to
+                                    // visit the child at [pos] or [pos] + 1 next. It's possible
+                                    // that the child at [pos] isn't a prefix of [key] (i.e. it isn't
+                                    // in visited_node_path) but _is_ greater than [key] (i.e. we
+                                    // want to iterate over it).
                                     IterationState::BranchVisitedChildren(node, pos)
                                 }
                                 NodeType::Leaf(_) if key_in_tree => {
@@ -223,7 +227,7 @@ fn find_next_key_value<'a, S: ShaleStore<Node>, T>(
 
 // Returns the next node to visit in a depth-first traversal of the trie
 // where we visit the smallest (leftmost) child of a branch node first,
-// given that we've traversed the nodes in [visited_path] so far.
+// given the traversal state [visited_path].
 fn find_next_node<'a, S: ShaleStore<Node>, T>(
     merkle: &'a Merkle<S, T>,
     visited_path: &mut Vec<IterationState<'a>>,
