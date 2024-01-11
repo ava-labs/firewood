@@ -143,23 +143,24 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                     // [visited_node_path], that will handle all descendants down
                                     // the [pos] branch, so we can mark that we've visited this
                                     // node's children up to and including that index.
+                                    // TODO is this right?
+                                    // Can another node be at index [pos]?
                                     IterationState::BranchVisitedChildren(node, pos)
                                 }
                                 NodeType::Leaf(_) if key_in_tree => {
-                                    // This must be the last node on the path since it's a leaf.
-                                    // Since we found a node with the [key], this must be that node.
+                                    // This leaf node must be [key_node] since we found a node with [key].
                                     IterationState::LeafNew(node)
                                 }
                                 NodeType::Leaf(_) => {
                                     // This must be the last node on the path since it's a leaf.
-                                    // We didn't find a node with the [key], so don't visit this node
-                                    // or its children.
-                                    // TODO: The LeafVisited type just exists for completeness in this case.
+                                    // Don't return this node's key-value pair since it's before [key].
+                                    // TODO: The LeafVisited type just exists for completeness in this match case.
                                     // Is there a better way to handle this?
                                     IterationState::LeafVisited()
                                 }
                                 NodeType::Extension(_) if index == num_elts - 1 && key_in_tree => {
-                                    // This extension node must have [key]. We want to visit its descendants.
+                                    // This extension node must be [key_node].
+                                    // We want to visit its descendants.
                                     IterationState::ExtensionNew(node)
                                 }
                                 NodeType::Extension(_) if index == num_elts - 1 && !key_in_tree => {
