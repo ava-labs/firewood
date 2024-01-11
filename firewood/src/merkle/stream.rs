@@ -1,14 +1,13 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::{node::Node, BranchNode, ExtNode, LeafNode, Merkle, NodeObjRef, NodeType};
+use super::{node::Node, BranchNode, Merkle, NodeObjRef, NodeType};
 use crate::{
-    shale::{DiskAddress, ObjRef, ShaleStore},
+    shale::{DiskAddress, ShaleStore},
     v2::api,
 };
-use bitflags::iter::Iter;
 use futures::{stream::FusedStream, Stream};
-use helper_types::{Either, MustUse};
+use helper_types::Either;
 use std::task::Poll;
 
 type Key = Box<[u8]>;
@@ -19,7 +18,7 @@ enum IteratorState<'a> {
     StartAtKey(Key),
     /// Continue iterating after the last node in the `visited_node_path`
     Iterating {
-        visited_node_path: Vec<(IterationState<'a>)>,
+        visited_node_path: Vec<IterationState<'a>>,
     },
 }
 
