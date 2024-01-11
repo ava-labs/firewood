@@ -163,6 +163,8 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                     // This must be the last node on the path since it's a leaf.
                                     // We didn't find a node with the [key], so don't visit this node
                                     // or its children.
+                                    // TODO: The LeafVisited type just exists for completeness in this case.
+                                    // Is there a better way to handle this?
                                     IterationState::LeafVisited()
                                 }
                                 NodeType::Extension(_) if index == num_elts - 1 && key_in_tree => {
