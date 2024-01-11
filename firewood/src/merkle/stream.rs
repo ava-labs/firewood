@@ -122,12 +122,6 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                         // TODO what do we do in the else statement?
                                         todo!()
                                     }
-
-                                    // } else {
-                                    //     // We didn't find a node with the key, so this must be a
-                                    //     // different leaf that we don't want to return the key-value of.
-                                    //     IterationState::Leaf(LeafIterationState::Visited(node))
-                                    // }
                                 }
                                 NodeType::Extension(_) => {
                                     if index == num_elts - 1 {
@@ -147,26 +141,6 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                     visited_node_path
                 };
-
-                // if let Some(found_node) = found_node {
-                //     let value = match found_node.inner() {
-                //         NodeType::Branch(branch) => branch.value.as_ref(),
-                //         NodeType::Leaf(leaf) => Some(&leaf.data),
-                //         NodeType::Extension(_) => None,
-                //     };
-
-                //     let next_result = value.map(|value| {
-                //         let value = value.to_vec();
-
-                //         Ok((std::mem::take(key), value))
-                //     });
-
-                //     visited_node_path.push((found_node, 0));
-
-                //     self.key_state = IteratorState::Iterating { visited_node_path };
-
-                //     return Poll::Ready(next_result);
-                // }
 
                 self.key_state = IteratorState::Iterating { visited_node_path };
 
