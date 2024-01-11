@@ -151,10 +151,15 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                     IterationState::ExtensionNew(node)
                                 }
                                 NodeType::Extension(_) if index == num_elts - 1 && !key_in_tree => {
+                                    // TODO how to handle this case? It could be that the extension
+                                    // node's child is _after_ key and we want to return it.
+                                    // Or it could be that we don't want to return
                                     IterationState::ExtensionNew(node)
                                 }
-                                NodeType::Extension(_) => {
-                                    IterationState::ExtensionVisitedSelf(node)
+                                NodeType::Extension(_) =>
+                                // TODO is this correct?
+                                {
+                                    IterationState::ExtensionVisited(node)
                                 }
                             })
                         })
@@ -187,7 +192,7 @@ enum IterationState<'a> {
     BranchVisitedSelf(NodeObjRef<'a>),
     BranchVisitedChildren(NodeObjRef<'a>, u8),
     ExtensionNew(NodeObjRef<'a>),
-    ExtensionVisitedSelf(NodeObjRef<'a>),
+    ExtensionVisited(NodeObjRef<'a>),
 }
 
 enum VisitableNodeObjRef<'a> {
@@ -255,7 +260,7 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
     loop {
         match node {
             IterationState::LeafNew(node_ref) => return Ok(Some(node_ref)),
-            IterationState::LeafVisited() => {
+            IterationState::LeafVisited() | IterationState::ExtensionVisited(_) => {
                 let Some(node_parent) = visited_path.pop() else {
                     return Ok(None);
                 };
@@ -341,24 +346,10 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
                 let child = node_ref.inner().as_extension().unwrap().chd();
 
                 // Update this extension node's state and put it back on the stack
-                visited_path.push(IterationState::ExtensionVisitedSelf(node_ref));
+                visited_path.push(IterationState::ExtensionVisited(node_ref));
 
                 // Push child onto the stack
                 let child = merkle.get_node(child)?;
-
-                node = match child.inner() {
-                    NodeType::Branch(_) => IterationState::BranchNew(child),
-                    NodeType::Leaf(_) => IterationState::LeafNew(child),
-                    NodeType::Extension(_) => IterationState::ExtensionNew(child),
-                }
-            }
-            IterationState::ExtensionVisitedSelf(node_ref) => {
-                // TODO can we remove this?
-
-                let extension_node = node_ref.inner().as_extension().unwrap();
-
-                // Push child onto the stack
-                let child = merkle.get_node(extension_node.chd())?;
 
                 node = match child.inner() {
                     NodeType::Branch(_) => IterationState::BranchNew(child),
