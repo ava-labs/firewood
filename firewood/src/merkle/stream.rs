@@ -270,23 +270,22 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
                 node = IterationState::BranchVisitedSelf(node_ref);
             }
             IterationState::BranchVisitedSelf(node_ref) => {
-                // We've returned this node's key-value (if any), but we haven't visited any of its children
+                // We've returned this node's key-value (if any), but we haven't visited any of its children.
                 let branch_node = node_ref.inner().as_branch().unwrap();
 
                 // Find the first child
                 let mut children = get_children_iter(branch_node);
 
                 match children.next() {
-                    Some(first_child_and_pos) => {
+                    Some((child_addr, child_pos)) => {
                         // Get the first child
-                        let (child_addr, child_pos) = first_child_and_pos;
                         let child = merkle.get_node(child_addr)?;
 
-                        // Push updated parent (branch) onto the stack
+                        // Update this branch's state and put it back on the stack
                         visited_path
                             .push(IterationState::BranchVisitedChildren(node_ref, child_pos));
 
-                        // Push child onto the stack
+                        // Handle this node's first child next iteration
                         node = match child.inner() {
                             NodeType::Branch(_) => IterationState::BranchNew(child),
                             NodeType::Leaf(_) => IterationState::LeafNew(child),
@@ -294,11 +293,11 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
                         }
                     }
                     None => {
-                        // There are no children, so we're done with this node.
-                        let Some(next_parent) = visited_path.pop() else {
+                        // This branch has no children so we're done with this node.
+                        let Some(node_parent) = visited_path.pop() else {
                             return Ok(None);
                         };
-                        node = next_parent;
+                        node = node_parent;
                     }
                 }
             }
@@ -310,16 +309,15 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
                     .filter(|(_, child_pos)| child_pos > &handled_child_pos);
 
                 match children.next() {
-                    Some(next_child_and_pos) => {
+                    Some((child_addr, child_pos)) => {
                         // Get the next child
-                        let (child_addr, child_pos) = next_child_and_pos;
                         let child = merkle.get_node(child_addr)?;
 
-                        // Push updated parent (branch) onto the stack
+                        // Update this branch's state and put it back on the stack
                         visited_path
                             .push(IterationState::BranchVisitedChildren(node_ref, child_pos));
 
-                        // Push child onto the stack
+                        // Handle this node's first child next iteration
                         node = match child.inner() {
                             NodeType::Branch(_) => IterationState::BranchNew(child),
                             NodeType::Leaf(_) => IterationState::LeafNew(child),
@@ -327,7 +325,7 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
                         }
                     }
                     None => {
-                        // There are no more children, so we're done with this node.
+                        // There are no more unhandled children so we're done with this node.
                         let Some(next_parent) = visited_path.pop() else {
                             return Ok(None);
                         };
@@ -338,7 +336,7 @@ fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
             IterationState::ExtensionNew(node_ref) => {
                 let child = node_ref.inner().as_extension().unwrap().chd();
 
-                // Push updated parent (extension) onto the stack
+                // Update this extension node's state and put it back on the stack
                 visited_path.push(IterationState::ExtensionVisitedSelf(node_ref));
 
                 // Push child onto the stack
