@@ -111,25 +111,53 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                         .map(|(index, node_and_pos)| {
                             let (node, pos) = node_and_pos;
                             merkle.get_node(node).map(|node| match node.inner() {
-                                NodeType::Branch(_) => {
+                                NodeType::Branch(_) if index != num_elts - 1 => {
+                                    // This branch node isn't the last one on the path to [key].
+                                    // When we add the next node (this node's child) to
+                                    // [visited_node_path], that will handle all descendants down
+                                    // the [pos] branch, so we can mark that we've visited this
+                                    // node's children up to and including that index.
                                     IterationState::BranchVisitedChildren(node, pos)
                                 }
+                                NodeType::Branch(_)
+                                    if index == num_elts - 1 && key_node.is_some() =>
+                                {
+                                    // This branch node must be [key_node] since we found a node with [key]
+                                    // and this is the last node on the path.
+                                    IterationState::BranchNew(node)
+                                }
+                                NodeType::Branch(_)
+                                    if index == num_elts - 1 && key_node.is_none() =>
+                                {
+                                    // There's no node with [key]. Since the node with [key]
+                                    // isn't below this one, don't visit any of its children.
+                                    IterationState::BranchVisitedChildren(
+                                        node,
+                                        BranchNode::MAX_CHILDREN as u8, // TODO is casting like this OK?
+                                    )
+                                }
+                                NodeType::Branch(_) => unreachable!(), // TODO is this OK?
                                 NodeType::Leaf(_) => {
                                     if key_node.is_some() {
                                         // This must be the last node on the path since it's a leaf.
-                                        // Since we found a node with the key, this must be the node.
+                                        // Since we found a node with the [key], this must be that node.
                                         IterationState::LeafNew(node)
                                     } else {
                                         // TODO what do we do in the else statement?
                                         todo!()
                                     }
                                 }
-                                NodeType::Extension(_) => {
-                                    if index == num_elts - 1 {
-                                        IterationState::ExtensionVisitedSelf(node)
-                                    } else {
-                                        IterationState::ExtensionNew(node)
-                                    }
+                                NodeType::Extension(_) if index == num_elts - 1 => {
+                                    // This extension node is the last one on the path to [key].
+                                    // If it is at [key], then we want to visit its child since
+                                    // the child is after [key].
+                                    IterationState::ExtensionVisitedSelf(node)
+                                }
+                                NodeType::Extension(_) =>
+                                // The extension node's child will be handled by the next iteration
+                                // TODO this is wrong; we don't want to visit the children of this node again.
+                                {
+                                    IterationState::ExtensionNew(node)
                                 }
                             })
                         })
