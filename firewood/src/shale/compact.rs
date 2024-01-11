@@ -567,7 +567,7 @@ impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
             .unwrap_or_default();
 
         #[cfg(feature = "logger")]
-        let len = parent_caches.len();
+        trace!("[{:p}] New cache with {} parents", &obj_cache, parent_caches.len());
 
         let cs: CompactSpace<T, M> = CompactSpace {
             inner: RwLock::new(CompactSpaceInner {
@@ -580,9 +580,6 @@ impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
             obj_cache,
             parent_caches,
         };
-
-        #[cfg(feature = "logger")]
-        trace!("[{:p} New cache with {} parents", &cs, len);
 
         Ok(cs)
     }
@@ -600,7 +597,7 @@ impl From<Box<CompactSpace<Node, StoreRevMut>>> for CompactSpace<Node, StoreRevS
     }
 }
 
-impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> ShaleStore<T>
+impl<T: Storable + Clone + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> ShaleStore<T>
     for CompactSpace<T, M>
 {
     fn put_item(&self, item: T, extra: u64) -> Result<ObjRef<'_, T>, ShaleError> {
@@ -609,7 +606,7 @@ impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> Sh
         let addr = self.inner.write().unwrap().alloc(size)?;
 
         #[cfg(feature = "logger")]
-        trace!("{self:p} New item at {addr} size {size}");
+        trace!("[{:p}] New item at {addr} size {size}", &self.obj_cache);
 
         #[allow(clippy::unwrap_used)]
         let obj = {
@@ -624,14 +621,15 @@ impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> Sh
 
         let cache = &self.obj_cache;
 
-        #[cfg(feature = "logger")]
-        trace!("[{:p}] node {} inserted: {:?}", cache, addr, obj);
 
         let mut obj_ref = ObjRef::new(Some(obj), cache);
 
         // should this use a `?` instead of `unwrap`?
         #[allow(clippy::unwrap_used)]
         obj_ref.write(|_| {}).unwrap();
+
+        #[cfg(feature = "logger")]
+        trace!("[{:p}] node {} inserted: {:?}", cache, addr, obj_ref.inner);
 
         Ok(obj_ref)
     }
@@ -645,6 +643,7 @@ impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> Sh
     }
 
     fn get_item(&self, ptr: DiskAddress) -> Result<ObjRef<'_, T>, ShaleError> {
+        trace!("get_item({ptr:?})");
         #[allow(clippy::unwrap_used)]
         if ptr < DiskAddress::from(CompactSpaceHeader::MSIZE as usize) {
             return Err(ShaleError::InvalidAddressLength {
@@ -665,18 +664,14 @@ impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> Sh
         if let Some(result) = self
             .parent_caches
             .iter()
-            .find_map(|cache| cache.get(ptr).transpose())
+            .find_map(|cache| cache.peek_clone(ptr).transpose())
         {
             // found in the parent cache; insert into this cache, unless it's a ShaleError
             let obj = result?;
-            #[cfg(feature = "logger")]
-            trace!(
-                "[{:p}] node {:?} was in the secondary cache",
-                cache,
-                obj.as_ptr()
-            );
 
-            self.obj_cache.put(obj);
+            #[cfg(feature = "logger")]
+            trace!("[{:p}] node {:?} was in secondary: {:?}", cache, ptr, obj);
+            return Ok(ObjRef::new(Some(obj), cache));
         }
 
         let inner = self.inner.read().expect("poisoned cache");

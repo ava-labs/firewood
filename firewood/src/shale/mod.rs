@@ -2,6 +2,8 @@
 // See the file LICENSE.md for licensing terms.
 
 pub(crate) use disk_address::DiskAddress;
+#[cfg(feature = "logger")]
+use log::trace;
 use std::any::type_name;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Formatter};
@@ -166,7 +168,7 @@ impl<T: Storable> Deref for Obj<T> {
 
 /// User handle that offers read & write access to the stored [ShaleStore] item.
 #[derive(Debug)]
-pub struct ObjRef<'a, T: Storable> {
+pub struct ObjRef<'a, T: Storable + Debug> {
     inner: Option<Obj<T>>,
     cache: &'a ObjCache<T>,
 }
@@ -201,7 +203,7 @@ impl<'a, T: Storable + Debug> Deref for ObjRef<'a, T> {
     }
 }
 
-impl<'a, T: Storable> Drop for ObjRef<'a, T> {
+impl<'a, T: Storable + Debug> Drop for ObjRef<'a, T> {
     fn drop(&mut self) {
         #[allow(clippy::unwrap_used)]
         let mut inner = self.inner.take().unwrap();
@@ -212,7 +214,13 @@ impl<'a, T: Storable> Drop for ObjRef<'a, T> {
                 inner.dirty = None;
             }
             _ => {
+                trace!("[{:p}] drop of unpinned {ptr:?}: {:?}", self.cache, inner);
                 cache.cached.put(ptr, inner);
+                trace!(
+                    "[{:p}] cache.cached now has {} items",
+                    self.cache,
+                    cache.cached.len()
+                )
             }
         }
     }
@@ -418,6 +426,30 @@ impl<T: Storable> Clone for ObjCache<T> {
     }
 }
 
+impl<T: Storable + Clone> ObjCache<T> {
+    fn peek_clone(&self, ptr: DiskAddress) -> Result<Option<Obj<T>>, ShaleError> {
+        #[allow(clippy::unwrap_used)]
+        self.0
+            .write()
+            .expect("poisoned cache")
+            .cached
+            .get(&ptr)
+            .map(|obj| -> Result<Obj<T>, ShaleError> {
+                let sv2 = StoredView::new_from_slice(
+                    obj.value.offset,
+                    obj.value.len_limit,
+                    obj.value.decoded.clone(),
+                    obj.value.get_mem_store(),
+                )?;
+                Ok(Obj {
+                    value: sv2,
+                    dirty: obj.dirty,
+                })
+            })
+            .transpose()
+    }
+}
+
 impl<T: Storable> ObjCache<T> {
     pub fn new(capacity: usize) -> Self {
         Self(Arc::new(RwLock::new(ObjCacheInner {
@@ -437,34 +469,16 @@ impl<T: Storable> ObjCache<T> {
         #[allow(clippy::unwrap_used)]
         let mut inner = self.0.write().unwrap();
 
-        let obj_ref = inner.cached.pop(&ptr).map(|r| {
-            // insert and set to `false` if you can
+        let obj_ref = inner.cached.pop(&ptr);
+        if obj_ref.is_some() {
+            // insert into the pinned map, or set to `false` if already there
             // When using `get` in parallel, one should not `write` to the same address
             inner
                 .pinned
                 .entry(ptr)
                 .and_modify(|is_pinned| *is_pinned = false)
                 .or_insert(false);
-
-            // if we need to re-enable this code, it has to return from the outer function
-            //
-            // return if inner.pinned.insert(ptr, false).is_some() {
-            //     Err(ShaleError::InvalidObj {
-            //         addr: ptr.addr(),
-            //         obj_type: type_name::<T>(),
-            //         error: "address already in use",
-            //     })
-            // } else {
-            //     Ok(Some(ObjRef {
-            //         inner: Some(r),
-            //         cache: Self(self.0.clone()),
-            //         _life: PhantomData,
-            //     }))
-            // };
-
-            // always return instead of the code above
-            r
-        });
+        }
 
         Ok(obj_ref)
     }
