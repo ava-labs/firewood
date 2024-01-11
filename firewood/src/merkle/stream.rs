@@ -174,7 +174,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
             }
 
             IteratorState::Iterating { visited_node_path } => {
-                let next = find_next_result(merkle, visited_node_path)
+                let next = find_next_key_value(merkle, visited_node_path)
                     .map_err(|e| api::Error::InternalError(Box::new(e)))
                     .transpose();
 
@@ -194,34 +194,7 @@ enum IterationState<'a> {
     ExtensionVisited(NodeObjRef<'a>),
 }
 
-enum VisitableNodeObjRef<'a> {
-    New(NodeObjRef<'a>),
-    Visited(NodeObjRef<'a>),
-}
-
-#[derive(Debug)]
-enum VisitableNode<'a> {
-    New(&'a NodeType),
-    Visited(&'a NodeType),
-}
-
-impl<'a> VisitableNodeObjRef<'a> {
-    fn inner(&self) -> VisitableNode<'_> {
-        match self {
-            Self::New(node) => VisitableNode::New(node.inner()),
-            Self::Visited(node) => VisitableNode::Visited(node.inner()),
-        }
-    }
-
-    fn into_node(self) -> NodeObjRef<'a> {
-        match self {
-            Self::New(node) => node,
-            Self::Visited(node) => node,
-        }
-    }
-}
-
-fn find_next_result<'a, S: ShaleStore<Node>, T>(
+fn find_next_key_value<'a, S: ShaleStore<Node>, T>(
     merkle: &'a Merkle<S, T>,
     visited_path: &mut Vec<IterationState<'a>>,
 ) -> Result<Option<(Key, Value)>, super::MerkleError> {
@@ -366,38 +339,6 @@ fn get_children_iter(branch: &BranchNode) -> impl Iterator<Item = (DiskAddress, 
         .into_iter()
         .enumerate()
         .filter_map(|(pos, child_addr)| child_addr.map(|child_addr| (child_addr, pos as u8)))
-}
-
-/// This function is a little complicated because we need to be able to early return from the parent
-/// when we return `false`. `MustUse` forces the caller to check the inner value of `Result::Ok`.
-/// It also replaces `node`
-fn next_node<'a, S, T, Iter>(
-    merkle: &'a Merkle<S, T>,
-    mut children: Iter,
-    parents: &mut Vec<(NodeObjRef<'a>, u8)>,
-    node: &mut VisitableNodeObjRef<'a>,
-    pos: &mut u8,
-) -> Result<MustUse<bool>, super::MerkleError>
-where
-    Iter: Iterator<Item = (DiskAddress, u8)>,
-    S: ShaleStore<Node>,
-{
-    if let Some((child_addr, child_pos)) = children.next() {
-        let child = merkle.get_node(child_addr)?;
-
-        *pos = child_pos;
-        let node = std::mem::replace(node, VisitableNodeObjRef::New(child));
-        parents.push((node.into_node(), *pos));
-    } else {
-        let Some((next_parent, next_pos)) = parents.pop() else {
-            return Ok(false.into());
-        };
-
-        *node = VisitableNodeObjRef::Visited(next_parent);
-        *pos = next_pos;
-    }
-
-    Ok(true.into())
 }
 
 /// create an iterator over the key-nibbles from all parents _excluding_ the sentinal node.
