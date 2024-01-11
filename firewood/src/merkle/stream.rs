@@ -132,7 +132,12 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                         .enumerate()
                         .map(|(index, (node, pos))| {
                             merkle.get_node(node).map(|node| match node.inner() {
-                                NodeType::Branch(_) if index != num_elts - 1 => {
+                                NodeType::Branch(_) if index == num_elts - 1 && key_in_tree => {
+                                    // This branch node must be [key_node] since we found a node with [key]
+                                    // and this is the last node on the path.
+                                    IterationState::BranchNew(node)
+                                }
+                                NodeType::Branch(_) => {
                                     // This branch node isn't the last one on the path to [key].
                                     // When we add the next node (this node's child) to
                                     // [visited_node_path], that will handle all descendants down
@@ -140,20 +145,6 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                     // node's children up to and including that index.
                                     IterationState::BranchVisitedChildren(node, pos)
                                 }
-                                NodeType::Branch(_) if index == num_elts - 1 && key_in_tree => {
-                                    // This branch node must be [key_node] since we found a node with [key]
-                                    // and this is the last node on the path.
-                                    IterationState::BranchNew(node)
-                                }
-                                NodeType::Branch(_) if index == num_elts - 1 && !key_in_tree => {
-                                    // There's no node with [key]. Since the node with [key]
-                                    // isn't below this one, don't visit any of its children.
-                                    IterationState::BranchVisitedChildren(
-                                        node,
-                                        BranchNode::MAX_CHILDREN as u8, // TODO is casting like this OK?
-                                    )
-                                }
-                                NodeType::Branch(_) => unreachable!(), // TODO is this OK?
                                 NodeType::Leaf(_) if key_in_tree => {
                                     // This must be the last node on the path since it's a leaf.
                                     // Since we found a node with the [key], this must be that node.
