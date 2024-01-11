@@ -881,29 +881,3 @@ mod tests {
         assert_eq!(it.nibbles_into_bytes(), vec![]);
     }
 }
-
-/*
-error[E0382]: use of moved value
-   --> firewood/src/merkle/stream.rs:288:36
-    |
-288 |             IterationState::Branch(iter_state) => match iter_state {
-    |                                    ^^^^^^^^^^ value moved here, in previous iteration of loop
-    |
-note: these 3 reinitializations might get skipped
-   --> firewood/src/merkle/stream.rs:285:21
-    |
-285 |                     node = next_parent;
-    |                     ^^^^
-...
-340 |                         node = next_parent;
-    |                         ^^^^
-...
-381 |                         node = next_parent;
-    |                         ^^^^
-    = note: move occurs because value has type `BranchIterationState<'_>`, which does not implement the `Copy` trait
-help: borrow this binding in the pattern to avoid moving the value
-    |
-288 |             IterationState::Branch(ref iter_state) => match iter_state {
-    |                                    +++
-
-*/
