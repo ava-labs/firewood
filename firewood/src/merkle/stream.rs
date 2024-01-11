@@ -110,8 +110,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                     let visited_node_path = visited_node_path
                         .into_iter()
                         .enumerate()
-                        .map(|(index, node_and_pos)| {
-                            let (node, pos) = node_and_pos;
+                        .map(|(index, (node, pos))| {
                             merkle.get_node(node).map(|node| match node.inner() {
                                 NodeType::Branch(_) if index != num_elts - 1 => {
                                     // This branch node isn't the last one on the path to [key].
