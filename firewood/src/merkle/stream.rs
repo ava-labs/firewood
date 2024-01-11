@@ -221,6 +221,9 @@ fn find_next_key_value<'a, S: ShaleStore<Node>, T>(
     Ok(next)
 }
 
+// Returns the next node to visit in a depth-first traversal of the trie
+// where we visit the smallest (leftmost) child of a branch node first,
+// given that we've traversed the nodes in [visited_path] so far.
 fn find_next_node<'a, S: ShaleStore<Node>, T>(
     merkle: &'a Merkle<S, T>,
     visited_path: &mut Vec<IterationState<'a>>,
