@@ -14,23 +14,20 @@ type Key = Box<[u8]>;
 type Value = Vec<u8>;
 
 enum NodeIterationState<'a> {
-    // We haven't returned this node's key-value pair.
+    // We haven't visited this node.
     LeafNew(NodeObjRef<'a>),
-    // We have returned this node's key-value pair.
+    // We have visited this node.
     LeafVisited(),
-    // We haven't returned this node's key-value pair (if any)
-    // or any of its descendants' key-value pairs.
+    // We haven't visited this node or any of its children.
     BranchNew(NodeObjRef<'a>),
-    // We have returned this node's key-value pair (if any)
-    // but not any of its descendants' key-value pairs.
+    // We haven't visited this node but none of its children.
     BranchVisitedSelf(NodeObjRef<'a>),
-    // We have returned this node's key-value pair (if any)
-    // and descendants' key-value pairs for the descendants
-    // below the first [pos] indices.
+    // We have visited this node and all its children
+    // with indices <= the given one.
     BranchVisitedChildren(NodeObjRef<'a>, u8),
-    // TODO write a comment
+    // We haven't visited this node's child.
     ExtensionNew(NodeObjRef<'a>),
-    // We have visited this extension node's descendants.
+    // We have visited this node's child.
     ExtensionVisited(NodeObjRef<'a>),
 }
 
