@@ -137,7 +137,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                     // and this is the last node on the path.
                                     IterationState::BranchNew(node)
                                 }
-                                NodeType::Branch(_) => {
+                                NodeType::Branch(_) if index == num_elts - 1 && !key_in_tree => {
                                     // This branch node isn't the last one on the path to [key].
                                     // When we add the next node (this node's child) to
                                     // [visited_node_path], that will handle all descendants down
@@ -148,7 +148,12 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                     // visit the child at [pos] or [pos] + 1 next. It's possible
                                     // that the child at [pos] isn't a prefix of [key] (i.e. it isn't
                                     // in visited_node_path) but _is_ greater than [key] (i.e. we
-                                    // want to iterate over it).
+                                    // want to iterate over it). If the child at [pos] doesn't exist
+                                    // or has a key < [key], then we want to pass [pos]. If the child
+                                    // at [pos] has a key > [key], then we want to pass [pos] + 1.
+                                    IterationState::BranchVisitedChildren(node, pos)
+                                }
+                                NodeType::Branch(_) => {
                                     IterationState::BranchVisitedChildren(node, pos)
                                 }
                                 NodeType::Leaf(_) if key_in_tree => {
