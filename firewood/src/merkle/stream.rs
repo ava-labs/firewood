@@ -135,22 +135,20 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                     NodeIterationState::BranchNew(node)
                                 }
                                 NodeType::Branch(_) if index == num_elts - 1 && !key_in_tree => {
-                                    // This branch node isn't the last one on the path to [key].
-                                    // When we add the next node (this node's child) to
-                                    // [visited_node_path], that will handle all descendants down
-                                    // the [pos] branch, so we can mark that we've visited this
-                                    // node's children up to and including that index.
-                                    //
                                     // TODO I think we actually need to check whether we want to
                                     // visit the child at [pos] or [pos] + 1 next. It's possible
                                     // that the child at [pos] isn't a prefix of [key] (i.e. it isn't
-                                    // in visited_node_path) but _is_ greater than [key] (i.e. we
-                                    // want to iterate over it). If the child at [pos] doesn't exist
-                                    // or has a key < [key], then we want to pass [pos]. If the child
-                                    // at [pos] has a key > [key], then we want to pass [pos] + 1.
+                                    // in [visited_node_path]) but _is_ greater than [key] (i.e. we
+                                    // want to visit it). If the child at [pos] doesn't exist
+                                    // or has a key < [key], then we want to put [pos] in BranchVisitedChildren.
+                                    // If the child at [pos] has a key > [key], then we want to pass [pos] - 1
+                                    // so that on the first call to [find_next_node], we visit the child at [pos].
                                     NodeIterationState::BranchVisitedChildren(node, pos)
                                 }
                                 NodeType::Branch(_) => {
+                                    // This branch node isn't the last one on the path to [key].
+                                    // When we add the next node (this node's child) to
+                                    // [visited_node_path], that will handle the child at [pos].
                                     NodeIterationState::BranchVisitedChildren(node, pos)
                                 }
                                 NodeType::Leaf(_) if key_in_tree => {
