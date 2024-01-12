@@ -1,6 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use crate::trace;
 use crate::{
     merkle::from_nibbles,
     shale::{disk_address::DiskAddress, CachedStore, ShaleError, ShaleStore, Storable},
@@ -8,7 +9,6 @@ use crate::{
 use bincode::{Error, Options};
 use bitflags::bitflags;
 use enum_as_inner::EnumAsInner;
-use log::debug;
 use serde::{
     de::DeserializeOwned,
     ser::{SerializeSeq, SerializeTuple},
@@ -360,8 +360,7 @@ impl Storable for Node {
                     size: Meta::SIZE as u64,
                 })?;
 
-        #[cfg(feature = "logger")]
-        debug!("[{mem:p}] Deserializing node at {offset}");
+        trace!("[{mem:p}] Deserializing node at {offset}");
 
         let offset = offset + Meta::SIZE;
 
@@ -431,7 +430,7 @@ impl Storable for Node {
     }
 
     fn serialize(&self, to: &mut [u8]) -> Result<(), ShaleError> {
-        debug!("[{self:p}] Serializing node");
+        trace!("[{self:p}] Serializing node");
         let mut cur = Cursor::new(to);
 
         let mut attrs = match self.root_hash.get() {
