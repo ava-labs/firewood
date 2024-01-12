@@ -13,44 +13,22 @@ use std::task::Poll;
 type Key = Box<[u8]>;
 type Value = Vec<u8>;
 
-struct ChildIter<'a> {
-    children: &'a [Option<DiskAddress>],
-    pos: u8,
-}
-
-impl<'a> Iterator for ChildIter<'a> {
-    type Item = DiskAddress;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while self.pos < BranchNode::MAX_CHILDREN as u8 {
-            let child = self.children[self.pos as usize];
-
-            self.pos += 1;
-
-            if let Some(child) = child {
-                return Some(child);
-            }
-        }
-
-        None
-    }
-}
-
-struct NodeIterator<'a> {
+struct NodeIterator<F>
+where
+    F: FnMut() -> Option<DiskAddress>,
+{
     partial_path: PartialPath,
-    children_iter: ChildIter<'a>,
+    children_iter: F,
 }
 
-enum IteratorState<'a> {
+enum IteratorState {
     /// Start iterating at the specified key
     StartAtKey(Key),
     /// Continue iterating after the last node in the `visited_node_path`
-    Iterating {
-        node_iter_stack: Vec<NodeIterator<'a>>,
-    },
+    Iterating { node_iter_stack: Vec<NodeIterator> },
 }
 
-impl IteratorState<'_> {
+impl IteratorState {
     fn new() -> Self {
         Self::StartAtKey(vec![].into_boxed_slice())
     }
@@ -62,7 +40,7 @@ impl IteratorState<'_> {
 
 /// A MerkleKeyValueStream iterates over keys/values for a merkle trie.
 pub struct MerkleKeyValueStream<'a, S, T> {
-    key_state: IteratorState<'a>,
+    key_state: IteratorState,
     merkle_root: DiskAddress,
     merkle: &'a Merkle<S, T>,
 }
@@ -211,14 +189,17 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                             .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
                         // TODO confirm that an extension node's child is always a branch node
-                        let child = child.inner().as_branch().unwrap();
+                        let child_iter = child
+                            .inner()
+                            .as_branch()
+                            .unwrap()
+                            .children
+                            .into_iter()
+                            .filter_map(|addr| addr);
 
                         let child_iter = NodeIterator {
                             partial_path: extension.path.clone(), // TODO is this correct?
-                            children_iter: ChildIter {
-                                children: &child.children.clone(),
-                                pos: 0,
-                            },
+                            children_iter: child_iter,
                         };
 
                         node_iter_stack.push(child_iter);
