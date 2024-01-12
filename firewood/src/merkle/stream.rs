@@ -7,14 +7,14 @@ use crate::{
     v2::api,
 };
 use futures::{stream::FusedStream, Stream};
-use helper_types::{Either, MustUse};
+use helper_types::Either;
 use std::task::Poll;
 type Key = Box<[u8]>;
 type Value = Vec<u8>;
 
 struct NodeIterator {
     key: Box<[u8]>,
-    children_iter: Box<dyn Iterator<Item = DiskAddress> + Send>,
+    children_iter: Box<dyn Iterator<Item = (DiskAddress, u8)> + Send>,
 }
 
 enum IteratorState {
@@ -152,73 +152,89 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                 // self.poll_next(_cx)
             }
-            IteratorState::Iterating { node_iter_stack } => loop {
-                let Some(mut node_iter) = node_iter_stack.pop() else {
-                    return Poll::Ready(None);
-                };
+            IteratorState::Iterating { node_iter_stack } => {
+                loop {
+                    let Some(mut node_iter) = node_iter_stack.pop() else {
+                        return Poll::Ready(None);
+                    };
 
-                let Some(node_addr) = node_iter.children_iter.next() else {
-                    // We visited all this node's descendants.
-                    // Go back to its parent.
-                    continue;
-                };
+                    let Some((node_addr, pos)) = node_iter.children_iter.next() else {
+                        // We visited all this node's descendants.
+                        // Go back to its parent.
+                        continue;
+                    };
 
-                let node = merkle
-                    .get_node(node_addr)
-                    .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+                    let node = merkle
+                        .get_node(node_addr)
+                        .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                let node_key = node_iter.key.clone();
+                    let node_key = node_iter.key.clone();
 
-                node_iter_stack.push(node_iter);
+                    node_iter_stack.push(node_iter);
 
-                match node.inner() {
-                    NodeType::Branch(branch) => {
-                        let children_iter = branch.children.into_iter().filter_map(|addr| addr);
+                    match node.inner() {
+                        NodeType::Branch(branch) => {
+                            let children_iter = branch.children.into_iter().enumerate().filter_map(
+                                |(pos, addr)| {
+                                    if addr.is_some() {
+                                        Some((addr.unwrap(), pos as u8))
+                                    } else {
+                                        None
+                                    }
+                                },
+                            );
 
-                        node_iter_stack.push(NodeIterator {
-                            key: Box::new([]), // TODO get actual key
-                            children_iter: Box::new(children_iter),
-                        });
+                            node_iter_stack.push(NodeIterator {
+                                key: Box::new([]), // TODO get actual key
+                                children_iter: Box::new(children_iter),
+                            });
 
-                        // If there's a value, return it.
-                        if let Some(value) = branch.value.as_ref() {
-                            let key = node_key; // TODO extend with child index
-                            let value = value.to_vec();
-                            return Poll::Ready(Some(Ok((key, value))));
+                            // If there's a value, return it.
+                            if let Some(value) = branch.value.as_ref() {
+                                let mut key = node_key.to_vec();
+                                key.push(pos);
+
+                                let value = value.to_vec();
+                                return Poll::Ready(Some(Ok((key.into_boxed_slice(), value))));
+                            }
                         }
-                    }
-                    NodeType::Leaf(leaf) => {
-                        let key = node_key; // TODO extend with child index
-                        let value = leaf.data.to_vec();
-                        return Poll::Ready(Some(Ok((key, value))));
-                    }
-                    NodeType::Extension(extension) => {
-                        // Follow the extension node to its child.
-                        let child = merkle
-                            .get_node(extension.chd())
-                            .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+                        NodeType::Leaf(leaf) => {
+                            let mut key = node_key.to_vec();
+                            key.push(pos);
+                            let value = leaf.data.to_vec();
+                            return Poll::Ready(Some(Ok((key.into_boxed_slice(), value))));
+                        }
+                        NodeType::Extension(extension) => {
+                            // Follow the extension node to its child.
+                            let child = merkle
+                                .get_node(extension.chd())
+                                .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                        // TODO confirm that an extension node's child is always a branch node
-                        let children_iter = child
-                            .inner()
-                            .as_branch()
-                            .unwrap()
-                            .children
-                            .into_iter()
-                            .filter_map(|addr| addr);
+                            // TODO confirm that an extension node's child is always a branch node
+                            let children_iter = child
+                                .inner()
+                                .as_branch()
+                                .unwrap()
+                                .children
+                                .into_iter()
+                                .enumerate()
+                                .filter_map(|(pos, child_addr)| {
+                                    child_addr.map(|child_addr| (child_addr, pos as u8))
+                                });
 
-                        // TODO I feel like there's a better way to do this
-                        let mut child_key = node_key.to_vec();
-                        // TODO extend with child index
-                        child_key.extend(extension.path.iter());
+                            // TODO I feel like there's a better way to do this
+                            let mut child_key = node_key.to_vec();
+                            child_key.push(pos);
+                            child_key.extend(extension.path.iter());
 
-                        node_iter_stack.push(NodeIterator {
-                            key: child_key.into_boxed_slice(),
-                            children_iter: Box::new(children_iter),
-                        });
-                    }
-                };
-            },
+                            node_iter_stack.push(NodeIterator {
+                                key: child_key.into_boxed_slice(),
+                                children_iter: Box::new(children_iter),
+                            });
+                        }
+                    };
+                }
+            }
         }
     }
 }
