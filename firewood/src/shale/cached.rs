@@ -9,11 +9,12 @@ use std::{
 };
 
 #[cfg(test)]
-pub use crate::shale::plainmem::*;
+pub use crate::shale::plainmem::PlainMem;
 
-// Purely volatile, dynamically allocated vector-based implementation for [CachedStore]. This is similar to
-/// [PlainMem]. The only difference is, when [write] dynamically allocate more space if original space is
-/// not enough.
+// Purely volatile, dynamically allocated vector-based implementation for
+// [CachedStore]. This is similar to PlainMem (in testing). The only
+// difference is, when [write] dynamically allocate more space if original
+// space is not enough.
 #[derive(Debug)]
 pub struct DynamicMem {
     space: Arc<RwLock<Vec<u8>>>,
