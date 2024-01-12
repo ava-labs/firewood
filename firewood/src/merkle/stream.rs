@@ -1,21 +1,44 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::{node::Node, BranchNode, Merkle, NodeObjRef, NodeType};
+use super::{node::Node, BranchNode, Merkle, NodeObjRef, NodeType, PartialPath};
 use crate::{
+    merkle::node,
     shale::{DiskAddress, ShaleStore},
     v2::api,
 };
 use futures::{stream::FusedStream, Stream};
 use helper_types::{Either, MustUse};
-use std::slice::Iter;
 use std::task::Poll;
 type Key = Box<[u8]>;
 type Value = Vec<u8>;
 
+struct ChildIter<'a> {
+    children: &'a [Option<DiskAddress>],
+    pos: u8,
+}
+
+impl<'a> Iterator for ChildIter<'a> {
+    type Item = DiskAddress;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.pos < BranchNode::MAX_CHILDREN as u8 {
+            let child = self.children[self.pos as usize];
+
+            self.pos += 1;
+
+            if let Some(child) = child {
+                return Some(child);
+            }
+        }
+
+        None
+    }
+}
+
 struct NodeIterator<'a> {
-    node: NodeObjRef<'a>,
-    children_iter: Option<Iter<'a, DiskAddress>>,
+    partial_path: PartialPath,
+    children_iter: ChildIter<'a>,
 }
 
 enum IteratorState<'a> {
@@ -155,52 +178,53 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                 // self.poll_next(_cx)
             }
-            IteratorState::Iterating { node_iter_stack } => {
-                loop {
-                    let Some(mut node_iter) = node_iter_stack.pop() else {
-                        return Poll::Ready(None);
-                    };
+            IteratorState::Iterating { node_iter_stack } => loop {
+                let Some(mut node_iter) = node_iter_stack.pop() else {
+                    return Poll::Ready(None);
+                };
 
-                    // Check whether the children iterator is set up.
-                    let mut children_iter = match node_iter.children_iter {
-                        Some(iter) => iter,
-                        None => {
-                            // Make a new children iterator.
-                            match node_iter.node.inner() {
-                                NodeType::Branch(branch) => branch
-                                    .children
-                                    .into_iter()
-                                    .flatten()
-                                    .collect::<Vec<DiskAddress>>()
-                                    .iter(),
-                                NodeType::Leaf(_) => todo!(), // TODO is this unreachable?
-                                NodeType::Extension(extension) => [extension.chd()].iter(),
-                            }
-                        }
-                    };
+                let next_node_addr = node_iter.children_iter.next();
+                node_iter_stack.push(node_iter);
 
-                    // Handle the next child.
-                    let next_child = match children_iter.next() {
-                        Some(child) => child,
-                        None => {
-                            // We've finished iterating over this node's children.
-                            // Go back to the parent node.
-                            continue;
-                        }
-                    };
+                let Some(next_node_addr) = next_node_addr else {
+                    // We visited all this node's descendants.
+                    // Go back to its parent.
+                    continue;
+                };
 
-                    // Get the node for the next child.
-                    let node = merkle
-                        .get_node(*next_child)
-                        .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+                let next_node = merkle
+                    .get_node(next_node_addr)
+                    .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                    match node.inner() {
-                        NodeType::Branch(branch) => {}
-                        NodeType::Leaf(leaf) => return Poll::Ready(Some(Ok((todo!(), todo!())))),
-                        NodeType::Extension(extension) => {}
+                match next_node.inner() {
+                    NodeType::Branch(_) => todo!(),
+                    NodeType::Leaf(leaf) => {
+                        let key: Box<[u8]> = Box::new([]); // TODO return actual key
+                        let value = leaf.data.to_vec();
+
+                        return Poll::Ready(Some(Ok((key, value))));
+                    }
+                    NodeType::Extension(extension) => {
+                        // Follow the extension node to its child.
+                        let child = merkle
+                            .get_node(extension.chd())
+                            .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+
+                        // TODO confirm that an extension node's child is always a branch node
+                        let child = child.inner().as_branch().unwrap();
+
+                        let child_iter = NodeIterator {
+                            partial_path: extension.path.clone(), // TODO is this correct?
+                            children_iter: ChildIter {
+                                children: &child.children.clone(),
+                                pos: 0,
+                            },
+                        };
+
+                        node_iter_stack.push(child_iter);
                     }
                 }
-            }
+            },
         }
     }
 }
