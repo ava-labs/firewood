@@ -533,38 +533,29 @@ fn unset_internal<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySe
     let mut u_ref = merkle.get_node(root).map_err(|_| ProofError::NoSuchNode)?;
     let mut parent = DiskAddress::null();
 
-    let mut fork_left;
-    let mut fork_right;
+    let mut fork_left = Ordering::Equal;
+    let mut fork_right = Ordering::Equal;
 
     let mut index = 0;
     loop {
         match &u_ref.inner() {
+            #[allow(clippy::indexing_slicing)]
             NodeType::Branch(n) => {
                 // If either the key of left proof or right proof doesn't match with
                 // shortnode, stop here and the forkpoint is the shortnode.
-                let cur_key = n.path.clone().into_inner();
+                let path = &*n.path;
 
-                fork_left = if left_chunks.len() - index < cur_key.len() {
-                    #[allow(clippy::indexing_slicing)]
-                    left_chunks[index..].cmp(&cur_key)
-                } else {
-                    #[allow(clippy::indexing_slicing)]
-                    left_chunks[index..index + cur_key.len()].cmp(&cur_key)
-                };
+                if path.len() > 0 {
+                    [fork_left, fork_right] = [&left_chunks[index..], &right_chunks[index..]]
+                        .map(|chunks| chunks.chunks(path.len()).next().unwrap_or_default())
+                        .map(|key| key.cmp(path));
 
-                fork_right = if right_chunks.len() - index < cur_key.len() {
-                    #[allow(clippy::indexing_slicing)]
-                    right_chunks[index..].cmp(&cur_key)
-                } else {
-                    #[allow(clippy::indexing_slicing)]
-                    right_chunks[index..index + cur_key.len()].cmp(&cur_key)
-                };
+                    if !fork_left.is_eq() || !fork_right.is_eq() {
+                        break;
+                    }
 
-                if !fork_left.is_eq() || !fork_right.is_eq() {
-                    break;
+                    index += path.len();
                 }
-
-                index += cur_key.len();
 
                 // If either the node pointed by left proof or right proof is nil,
                 // stop here and the forkpoint is the fullnode.
@@ -650,8 +641,7 @@ fn unset_internal<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySe
             }
 
             let p = u_ref.as_ptr();
-            let cur_key = n.path.clone().into_inner();
-            index += cur_key.len();
+            index += n.path.len();
 
             // Only one proof points to non-existent key.
             if fork_right.is_ne() {
@@ -871,7 +861,8 @@ fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySe
     let p = u_ref.as_ptr();
 
     match &u_ref.inner() {
-        NodeType::Branch(n) => {
+        NodeType::Branch(n) if chunks[index..].starts_with(&n.path) => {
+            let index = index + n.path.len();
             #[allow(clippy::indexing_slicing)]
             let child_index = chunks[index] as usize;
 
@@ -902,17 +893,8 @@ fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySe
             unset_node_ref(merkle, p, node, key, index + 1, remove_left)
         }
 
-        #[allow(clippy::indexing_slicing)]
-        NodeType::Extension(n) if chunks[index..].starts_with(&n.path) => {
-            let node = Some(n.chd());
-            unset_node_ref(merkle, p, node, key, index + n.path.len(), remove_left)
-        }
-
-        NodeType::Extension(n) => {
+        NodeType::Branch(n) => {
             let cur_key = &n.path;
-            let mut p_ref = merkle
-                .get_node(parent)
-                .map_err(|_| ProofError::NoSuchNode)?;
 
             // Find the fork point, it's a non-existent branch.
             //
@@ -935,6 +917,62 @@ fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySe
 
             #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
             if should_unset_entire_branch {
+                let mut p_ref = merkle
+                    .get_node(parent)
+                    .map_err(|_| ProofError::NoSuchNode)?;
+
+                p_ref
+                    .write(|p| match p.inner_mut() {
+                        NodeType::Branch(pp) => {
+                            pp.chd_mut()[chunks[index - 1] as usize] = None;
+                            pp.chd_encoded_mut()[chunks[index - 1] as usize] = None;
+                        }
+                        NodeType::Extension(n) => {
+                            *n.chd_mut() = DiskAddress::null();
+                            *n.chd_encoded_mut() = None;
+                        }
+                        NodeType::Leaf(_) => (),
+                    })
+                    .unwrap();
+            }
+
+            Ok(())
+        }
+
+        #[allow(clippy::indexing_slicing)]
+        NodeType::Extension(n) if chunks[index..].starts_with(&n.path) => {
+            let node = Some(n.chd());
+            unset_node_ref(merkle, p, node, key, index + n.path.len(), remove_left)
+        }
+
+        NodeType::Extension(n) => {
+            let cur_key = &n.path;
+
+            // Find the fork point, it's a non-existent branch.
+            //
+            // for (true, Ordering::Less)
+            // The key of fork shortnode is less than the path
+            // (it belongs to the range), unset the entire
+            // branch. The parent must be a fullnode.
+            //
+            // for (false, Ordering::Greater)
+            // The key of fork shortnode is greater than the
+            // path(it belongs to the range), unset the entrie
+            // branch. The parent must be a fullnode. Otherwise the
+            // key is not part of the range and should remain in the
+            // cached hash.
+            #[allow(clippy::indexing_slicing)]
+            let should_unset_entire_branch = matches!(
+                (remove_left, cur_key.cmp(&chunks[index..])),
+                (true, Ordering::Less) | (false, Ordering::Greater)
+            );
+
+            #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
+            if should_unset_entire_branch {
+                let mut p_ref = merkle
+                    .get_node(parent)
+                    .map_err(|_| ProofError::NoSuchNode)?;
+
                 p_ref
                     .write(|p| {
                         let pp = p.inner_mut().as_branch_mut().expect("not a branch node");

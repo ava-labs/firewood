@@ -200,9 +200,9 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         })
     }
 
-    pub fn root_hash(&self, root: DiskAddress) -> Result<TrieHash, MerkleError> {
+    pub fn root_hash(&self, sentinel: DiskAddress) -> Result<TrieHash, MerkleError> {
         let root = self
-            .get_node(root)?
+            .get_node(sentinel)?
             .inner
             .as_branch()
             .ok_or(MerkleError::NotBranchNode)?
@@ -1396,7 +1396,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         };
 
         for ptr in deleted.into_iter() {
-            self.free_node(dbg!(ptr))?;
+            self.free_node(ptr)?;
         }
 
         Ok(data.map(|data| data.0))
