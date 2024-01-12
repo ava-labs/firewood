@@ -74,7 +74,7 @@ struct PlainMemView {
     mem: PlainMem,
 }
 
-pub(super) struct PlainMemShared(pub PlainMem);
+pub struct PlainMemShared(pub PlainMem);
 
 impl DerefMut for PlainMemShared {
     fn deref_mut(&mut self) -> &mut Self::Target {

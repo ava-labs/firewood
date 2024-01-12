@@ -116,6 +116,7 @@ impl CachedView for DynamicMemView {
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::shale::plainmem::PlainMemShared;
 
     #[test]
     fn test_plain_mem() {
