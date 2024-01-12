@@ -3,34 +3,19 @@
 
 use super::{node::Node, BranchNode, Merkle, NodeObjRef, NodeType, PartialPath};
 use crate::{
-    merkle::node,
+    nibbles::Nibbles,
     shale::{DiskAddress, ShaleStore},
     v2::api,
 };
 use futures::{stream::FusedStream, Stream};
 use helper_types::{Either, MustUse};
-use std::task::Poll;
+use std::{borrow::BorrowMut, task::Poll};
 type Key = Box<[u8]>;
 type Value = Vec<u8>;
 
-struct NodeIterator<I>
-where
-    I: Iterator<Item = DiskAddress>,
-{
-    partial_path: PartialPath,
-    children_iter: I,
-}
-
-impl<I> NodeIterator<I>
-where
-    I: Iterator<Item = DiskAddress>,
-{
-    fn new(partial_path: PartialPath, children_iter: I) -> Self {
-        NodeIterator {
-            partial_path,
-            children_iter,
-        }
-    }
+struct NodeIterator {
+    key: Box<[u8]>,
+    children_iter: Box<dyn Iterator<Item = DiskAddress>>,
 }
 
 enum IteratorState {
@@ -173,10 +158,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                     return Poll::Ready(None);
                 };
 
-                let next_node_addr = node_iter.children_iter.next();
-                node_iter_stack.push(node_iter);
-
-                let Some(next_node_addr) = next_node_addr else {
+                let Some(next_node_addr) = node_iter.children_iter.next() else {
                     // We visited all this node's descendants.
                     // Go back to its parent.
                     continue;
@@ -187,11 +169,18 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
                 match next_node.inner() {
-                    NodeType::Branch(_) => todo!(),
-                    NodeType::Leaf(leaf) => {
-                        let key: Box<[u8]> = Box::new([]); // TODO return actual key
-                        let value = leaf.data.to_vec();
+                    NodeType::Branch(branch) => {
+                        let children_iter = branch.children.into_iter().filter_map(|addr| addr);
 
+                        node_iter_stack.push(NodeIterator {
+                            key: Box::new([]), // TODO get actual key
+                            children_iter: Box::new(children_iter),
+                        });
+                    }
+                    NodeType::Leaf(leaf) => {
+                        let key = node_iter.key.clone();
+                        let value = leaf.data.to_vec();
+                        node_iter_stack.push(node_iter);
                         return Poll::Ready(Some(Ok((key, value))));
                     }
                     NodeType::Extension(extension) => {
@@ -201,7 +190,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                             .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
                         // TODO confirm that an extension node's child is always a branch node
-                        let child_iter = child
+                        let children_iter = child
                             .inner()
                             .as_branch()
                             .unwrap()
@@ -209,14 +198,16 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                             .into_iter()
                             .filter_map(|addr| addr);
 
-                        let child_iter = NodeIterator {
-                            partial_path: extension.path.clone(), // TODO is this correct?
-                            children_iter: child_iter,
-                        };
+                        // TODO I feel like there's a better way to do this
+                        let mut child_key = node_iter.key.to_vec();
+                        child_key.extend(extension.path.iter());
 
-                        node_iter_stack.push(child_iter);
+                        node_iter_stack.push(NodeIterator {
+                            key: child_key.into_boxed_slice(),
+                            children_iter: Box::new(children_iter),
+                        });
                     }
-                }
+                };
             },
         }
     }
