@@ -13,12 +13,24 @@ use std::task::Poll;
 type Key = Box<[u8]>;
 type Value = Vec<u8>;
 
-struct NodeIterator<F>
+struct NodeIterator<I>
 where
-    F: FnMut() -> Option<DiskAddress>,
+    I: Iterator<Item = DiskAddress>,
 {
     partial_path: PartialPath,
-    children_iter: F,
+    children_iter: I,
+}
+
+impl<I> NodeIterator<I>
+where
+    I: Iterator<Item = DiskAddress>,
+{
+    fn new(partial_path: PartialPath, children_iter: I) -> Self {
+        NodeIterator {
+            partial_path,
+            children_iter,
+        }
+    }
 }
 
 enum IteratorState {
