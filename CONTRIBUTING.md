@@ -9,6 +9,7 @@ guidelines for contributing to firewood.
  * [Quick Links](#Quick Links)
  * [Testing](#Testing)
  * [How to submit changes](#How to submit changes)
+ * [Where can I ask for help?](#Where can I ask for help)
 
 # [Quick Links]
 
@@ -36,7 +37,7 @@ so you should expect a response during the week within 24 hours.
 
 Please use the [issue tracker](https://github.com/ava-labs/firewood/issues) for reporting issues.
 
-# [First bugs for Contributors]
+# [First time fixes for contributors]
 
 The [issue tracker](https://github.com/ava-labs/firewood/issues) typically has some issues tagged for first-time contributors. If not,
 please reach out. We hope you work on an easy task before tackling a harder one.
@@ -51,11 +52,7 @@ We generally follow the same rules that `cargo fmt` and `cargo clippy` will repo
 
 By default, we prohibit bare `unwrap` calls and index dereferencing, as there are usually better ways to write this code. In the case where you can't, please use `expect` with a message explaining why it would be a bug, which we currently allow. For more information on our motivation, please read this great article on unwrap: [Using unwrap() in Rust is Okay](https://blog.burntsushi.net/unwrap) by [Andrew Gallant](https://blog.burntsushi.net).
 
-# [Who is involved]
-
-Who is involved? - Open Government's CONTRIBUTING.md has as a name/author, and it might be nice to have a more personal/friendly individual to attact to a project and reach out to with questions. You might list the core contributors and their preferred methods of contact here, or link to a humans.txt file in your root directory (same place as your CONTRIBUTING.md file), which lets people know who they are working. Here is an example of a humans.txt file.
-
-# [Where can I ask for help?]
+# [Where can I ask for help]?
 
 Please reach out on X (formerly twitter) @rkuris for help or questions!
 
