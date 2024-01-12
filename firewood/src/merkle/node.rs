@@ -157,6 +157,7 @@ impl NodeType {
 pub struct Node {
     pub(super) root_hash: OnceLock<TrieHash>,
     encoded: OnceLock<Vec<u8>>,
+    is_encoded_longer_than_hash_len: OnceLock<bool>,
     // lazy_dirty is an atomicbool, but only writers ever set it
     // Therefore, we can always use Relaxed ordering. It's atomic
     // just to ensure Sync + Send.
@@ -173,6 +174,7 @@ impl PartialEq for Node {
         let Node {
             root_hash,
             encoded,
+            is_encoded_longer_than_hash_len: _,
             lazy_dirty: _,
             inner,
         } = self;
@@ -187,6 +189,7 @@ impl Clone for Node {
     fn clone(&self) -> Self {
         Self {
             root_hash: self.root_hash.clone(),
+            is_encoded_longer_than_hash_len: self.is_encoded_longer_than_hash_len.clone(),
             encoded: self.encoded.clone(),
             lazy_dirty: AtomicBool::new(self.is_dirty()),
             inner: self.inner.clone(),
@@ -199,6 +202,7 @@ impl From<NodeType> for Node {
         let mut s = Self {
             root_hash: OnceLock::new(),
             encoded: OnceLock::new(),
+            is_encoded_longer_than_hash_len: OnceLock::new(),
             inner,
             lazy_dirty: AtomicBool::new(false),
         };
@@ -222,6 +226,7 @@ impl Node {
             Self {
                 root_hash: OnceLock::new(),
                 encoded: OnceLock::new(),
+                is_encoded_longer_than_hash_len: OnceLock::new(),
                 inner: NodeType::Branch(
                     BranchNode {
                         // path: vec![].into(),
@@ -249,11 +254,14 @@ impl Node {
     }
 
     fn is_encoded_longer_than_hash_len<S: ShaleStore<Node>>(&self, store: &S) -> bool {
-        self.get_encoded(store).len() >= TRIE_HASH_LEN
+        *self
+            .is_encoded_longer_than_hash_len
+            .get_or_init(|| self.get_encoded(store).len() >= TRIE_HASH_LEN)
     }
 
     pub(super) fn rehash(&mut self) {
         self.encoded = OnceLock::new();
+        self.is_encoded_longer_than_hash_len = OnceLock::new();
         self.root_hash = OnceLock::new();
     }
 
@@ -273,13 +281,25 @@ impl Node {
         &mut self.inner
     }
 
-    pub(super) fn new_from_hash(root_hash: Option<TrieHash>, inner: NodeType) -> Self {
+    pub(super) fn new_from_hash(
+        root_hash: Option<TrieHash>,
+        encoded: Option<Vec<u8>>,
+        is_encoded_longer_than_hash_len: Option<bool>,
+        inner: NodeType,
+    ) -> Self {
         Self {
             root_hash: match root_hash {
                 Some(h) => OnceLock::from(h),
                 None => OnceLock::new(),
             },
-            encoded: OnceLock::new(),
+            encoded: match encoded {
+                Some(e) => OnceLock::from(e),
+                None => OnceLock::new(),
+            },
+            is_encoded_longer_than_hash_len: match is_encoded_longer_than_hash_len {
+                Some(v) => OnceLock::from(v),
+                None => OnceLock::new(),
+            },
             inner,
             lazy_dirty: AtomicBool::new(false),
         }
@@ -294,11 +314,15 @@ impl Node {
     }
 }
 
+const ENCODED_MAX_LEN: usize = TRIE_HASH_LEN;
+
 #[repr(C)]
 struct Meta {
     root_hash: [u8; TRIE_HASH_LEN],
     attrs: NodeAttributes,
-    is_encoded_longer_than_hash_len: Option<bool>,
+    encoded_len: [u8; size_of::<u64>()],
+    encoded: [u8; ENCODED_MAX_LEN],
+    type_id: NodeTypeId,
 }
 
 impl Meta {
@@ -360,24 +384,61 @@ impl Storable for Node {
             None
         };
 
+        let mut start_index = TRIE_HASH_LEN + 1;
+        let end_index = start_index + size_of::<u64>();
         #[allow(clippy::indexing_slicing)]
-        match meta_raw.as_deref()[TRIE_HASH_LEN + 1].try_into()? {
+        let encoded_len = u64::from_le_bytes(
+            meta_raw.as_deref()[start_index..end_index]
+                .try_into()
+                .expect("invalid slice"),
+        );
+
+        start_index = end_index;
+        let mut encoded: Option<Vec<u8>> = None;
+        if encoded_len > 0 {
+            #[allow(clippy::indexing_slicing)]
+            let value: Vec<u8> =
+                meta_raw.as_deref()[start_index..start_index + encoded_len as usize].into();
+            encoded = Some(value);
+        }
+
+        start_index += ENCODED_MAX_LEN;
+        #[allow(clippy::indexing_slicing)]
+        let type_id: NodeTypeId = meta_raw.as_deref()[start_index].try_into()?;
+
+        let is_encoded_longer_than_hash_len =
+            if attrs.contains(NodeAttributes::IS_ENCODED_BIG_VALID) {
+                Some(false)
+            } else if attrs.contains(NodeAttributes::LONG) {
+                Some(true)
+            } else {
+                None
+            };
+
+        match type_id {
             NodeTypeId::Branch => {
                 let inner = NodeType::Branch(Box::new(BranchNode::deserialize(offset, mem)?));
 
-                Ok(Self::new_from_hash(root_hash, inner))
+                Ok(Self::new_from_hash(
+                    root_hash,
+                    encoded,
+                    is_encoded_longer_than_hash_len,
+                    inner,
+                ))
             }
 
             NodeTypeId::Extension => {
                 let inner = NodeType::Extension(ExtNode::deserialize(offset, mem)?);
-                let node = Self::new_from_hash(root_hash, inner);
+                let node =
+                    Self::new_from_hash(root_hash, encoded, is_encoded_longer_than_hash_len, inner);
 
                 Ok(node)
             }
 
             NodeTypeId::Leaf => {
                 let inner = NodeType::Leaf(LeafNode::deserialize(offset, mem)?);
-                let node = Self::new_from_hash(root_hash, inner);
+                let node =
+                    Self::new_from_hash(root_hash, encoded, is_encoded_longer_than_hash_len, inner);
 
                 Ok(node)
             }
@@ -410,8 +471,18 @@ impl Storable for Node {
             }
         };
 
+        let mut encoded_len: u64 = 0;
+        let mut encoded = None;
         if let Some(b) = self.encoded.get() {
             attrs.insert(if b.len() > TRIE_HASH_LEN {
+                NodeAttributes::LONG
+            } else {
+                encoded_len = b.len() as u64;
+                encoded = Some(b);
+                NodeAttributes::IS_ENCODED_BIG_VALID
+            });
+        } else if let Some(b) = self.is_encoded_longer_than_hash_len.get() {
+            attrs.insert(if *b {
                 NodeAttributes::LONG
             } else {
                 NodeAttributes::IS_ENCODED_BIG_VALID
@@ -420,6 +491,15 @@ impl Storable for Node {
 
         #[allow(clippy::unwrap_used)]
         cur.write_all(&[attrs.bits()]).unwrap();
+
+        cur.write_all(&encoded_len.to_le_bytes())?;
+        if let Some(encoded) = encoded {
+            cur.write_all(encoded)?;
+            let remaining_len = ENCODED_MAX_LEN - encoded_len as usize;
+            cur.write_all(&vec![0; remaining_len])?;
+        } else {
+            cur.write_all(&[0; ENCODED_MAX_LEN])?;
+        }
 
         match &self.inner {
             NodeType::Branch(n) => {
@@ -779,11 +859,22 @@ pub(super) mod tests {
         Node::from_leaf(LeafNode::new(PartialPath(path), Data(data)))
     }
 
-    pub fn branch(
+    pub fn leaf_from_hash(
+        root_hash: Option<TrieHash>,
+        encoded: Option<Vec<u8>>,
+        is_encoded_longer_than_hash_len: Option<bool>,
+        path: Vec<u8>,
+        data: Vec<u8>,
+    ) -> Node {
+        let inner = NodeType::Leaf(LeafNode::new(PartialPath(path), Data(data)));
+        Node::new_from_hash(root_hash, encoded, is_encoded_longer_than_hash_len, inner)
+    }
+
+    fn new_branch(
         repeated_disk_address: usize,
         value: Option<Vec<u8>>,
         repeated_encoded_child: Option<Vec<u8>>,
-    ) -> Node {
+    ) -> BranchNode {
         let children: [Option<DiskAddress>; BranchNode::MAX_CHILDREN] = from_fn(|i| {
             if i < BranchNode::MAX_CHILDREN / 2 {
                 DiskAddress::from(repeated_disk_address).into()
@@ -804,12 +895,42 @@ pub(super) mod tests {
             })
             .unwrap_or_default();
 
-        Node::from_branch(BranchNode {
+        BranchNode {
             // path: vec![].into(),
             children,
             value: value.map(Data),
             children_encoded,
-        })
+        }
+    }
+
+    pub fn branch(
+        repeated_disk_address: usize,
+        value: Option<Vec<u8>>,
+        repeated_encoded_child: Option<Vec<u8>>,
+    ) -> Node {
+        Node::from_branch(new_branch(
+            repeated_disk_address,
+            value,
+            repeated_encoded_child,
+        ))
+    }
+
+    pub fn branch_with_hash(
+        root_hash: Option<TrieHash>,
+        encoded: Option<Vec<u8>>,
+        is_encoded_longer_than_hash_len: Option<bool>,
+        repeated_disk_address: usize,
+        value: Option<Vec<u8>>,
+        repeated_encoded_child: Option<Vec<u8>>,
+    ) -> Node {
+        Node::new_from_hash(
+            root_hash,
+            encoded,
+            is_encoded_longer_than_hash_len,
+            NodeType::Branch(
+                new_branch(repeated_disk_address, value, repeated_encoded_child).into(),
+            ),
+        )
     }
 
     pub fn extension(
@@ -824,11 +945,33 @@ pub(super) mod tests {
         }))
     }
 
-    #[test_case(leaf(vec![0x01, 0x02, 0x03], vec![0x04, 0x05]); "leaf_node")]
+    pub fn extension_from_hash(
+        root_hash: Option<TrieHash>,
+        encoded: Option<Vec<u8>>,
+        is_encoded_longer_than_hash_len: Option<bool>,
+        path: Vec<u8>,
+        child_address: DiskAddress,
+        child_encoded: Option<Vec<u8>>,
+    ) -> Node {
+        let inner = NodeType::Extension(ExtNode {
+            path: PartialPath(path),
+            child: child_address,
+            child_encoded,
+        });
+        Node::new_from_hash(root_hash, encoded, is_encoded_longer_than_hash_len, inner)
+    }
+
+    #[test_case(leaf(vec![0x01, 0x02, 0x03], vec![0x04, 0x05]); "leaf node")]
+    #[test_case(leaf_from_hash(None, Some(vec![0x01, 0x02, 0x03]), Some(false), vec![0x01, 0x02, 0x03], vec![0x04, 0x05]); "leaf node with encoded")]
+    #[test_case(leaf_from_hash(Some(TrieHash([0x01; 32])), None, Some(true), vec![0x01, 0x02, 0x03], vec![0x04, 0x05]); "leaf node with hash")]
     #[test_case(extension(vec![0x01, 0x02, 0x03], DiskAddress::from(0x42), None); "extension with child address")]
     #[test_case(extension(vec![0x01, 0x02, 0x03], DiskAddress::null(), vec![0x01, 0x02, 0x03].into()) ; "extension without child address")]
+    #[test_case(extension_from_hash(None, Some(vec![0x01, 0x02, 0x03]), Some(false), vec![0x01, 0x02, 0x03], DiskAddress::from(0x42), None); "extension with encoded")]
+    #[test_case(extension_from_hash(Some(TrieHash([0x01; 32])), None, Some(true), vec![0x01, 0x02, 0x03], DiskAddress::from(0x42), None); "extension with hash")]
     #[test_case(branch(0x0a, b"hello world".to_vec().into(), None); "branch with data")]
     #[test_case(branch(0x0a, None, vec![0x01, 0x02, 0x03].into()); "branch without data")]
+    #[test_case(branch_with_hash(Some(TrieHash([0x01; 32])), None, Some(true), 0x0a, b"hello world".to_vec().into(), None); "branch with hash value")]
+    #[test_case(branch_with_hash(None, Some(vec![0x01, 0x02, 0x03]), Some(false), 0x0a, b"hello world".to_vec().into(), None); "branch with encoded")]
     fn test_encoding(node: Node) {
         let mut bytes = vec![0; node.serialized_len() as usize];
 
