@@ -90,24 +90,45 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                     .get_node(*merkle_root)
                     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                let mut path_to_key = vec![];
+                let mut node_iter_stack: Vec<NodeIterator> = vec![];
+                node_iter_stack.push(NodeIterator {
+                    key: vec![],
+                    children_iter: Box::new(get_children_iter(
+                        root_node.inner().as_branch().unwrap(),
+                    )),
+                });
 
-                let node_at_key = merkle
-                    .get_node_by_key_with_callbacks(
-                        root_node,
-                        &key,
-                        |node_addr, i| path_to_key.push((node_addr, i)),
-                        |_, _| {},
-                    )
-                    .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+                self.key_state = IteratorState::Iterating { node_iter_stack };
 
-                let mut path_to_key = path_to_key
-                    .into_iter()
-                    .map(|(node, pos)| merkle.get_node(node).map(|node| (node, pos)))
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+                self.poll_next(_cx)
 
-                todo!()
+                // let mut path_to_key = vec![];
+
+                // let node_at_key = merkle
+                //     .get_node_by_key_with_callbacks(
+                //         root_node,
+                //         &key,
+                //         |node_addr, i| path_to_key.push((node_addr, i)),
+                //         |_, _| {},
+                //     )
+                //     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+
+                // let mut path_to_key = path_to_key
+                //     .into_iter()
+                //     .map(|(node, pos)| merkle.get_node(node).map(|node| (node, pos)))
+                //     .collect::<Result<Vec<_>, _>>()
+                //     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+
+                // let remaining_key = key.iter();
+
+                // let mut node_iter_stack: Vec<NodeIterator> = vec![];
+
+                // loop {
+                //     let Some((node, pos)) = path_to_key.first() else {
+                //         break;
+                //     };
+                //     path_to_key.remove(0);
+                // }
 
                 // // TODO remove
                 // TODO remove
