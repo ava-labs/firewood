@@ -1,13 +1,17 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::{node::Node, BranchNode, Merkle, NodeType};
+use super::{
+    node::{self, Node},
+    BranchNode, Merkle, NodeType,
+};
 use crate::{
+    merkle::NodeObjRef,
     shale::{DiskAddress, ShaleStore},
     v2::api,
 };
 use futures::{stream::FusedStream, Stream};
-use std::task::Poll;
+use std::{collections::VecDeque, task::Poll};
 type Key = Box<[u8]>;
 type Value = Vec<u8>;
 
@@ -94,116 +98,97 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
         } = &mut *self;
 
         match key_state {
-            IteratorState::StartAtKey(_) => {
+            IteratorState::StartAtKey(key) => {
                 let root_node = merkle
                     .get_node(*merkle_root)
                     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                // TODO implement this branch.
-                // Right now we always start iterating from the root.
-                // We need to populate the initial state of [branch_iter_stack].
                 let mut branch_iter_stack: Vec<BranchIterator> = vec![];
-                branch_iter_stack.push(BranchIterator {
-                    key_nibbles: vec![],
-                    children_iter: Box::new(get_children_iter(
-                        root_node.inner().as_branch().unwrap(),
-                    )),
-                });
 
-                self.key_state = IteratorState::Iterating {
-                    branch_iter_stack: branch_iter_stack,
-                };
+                // TODO remove
+                // branch_iter_stack.push(BranchIterator {
+                //     key_nibbles: vec![],
+                //     children_iter: Box::new(get_children_iter(
+                //         root_node.inner().as_branch().unwrap(),
+                //     )),
+                // });
 
-                self.poll_next(_cx)
+                // (disk address, index) for each node we visit along the path to the node
+                // with [key], where [index] is the next nibble in the key.
+                let mut path_to_key = vec![];
 
-                // TODO remove this code from the old implementation
-                //
-                // let mut path_to_key = vec![];
+                let node_at_key = merkle
+                    .get_node_by_key_with_callbacks(
+                        root_node,
+                        &key,
+                        |node_addr, i| path_to_key.push((node_addr, i)),
+                        |_, _| {},
+                    )
+                    .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                // let node_at_key = merkle
-                //     .get_node_by_key_with_callbacks(
-                //         root_node,
-                //         &key,
-                //         |node_addr, i| path_to_key.push((node_addr, i)),
-                //         |_, _| {},
-                //     )
-                //     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+                let mut path_to_key: VecDeque<(NodeObjRef<'a>, u8)> = path_to_key
+                    .into_iter()
+                    .map(|(node, pos)| merkle.get_node(node).map(|node| (node, pos)))
+                    .collect::<Result<VecDeque<_>, _>>()
+                    .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                // let mut path_to_key = path_to_key
-                //     .into_iter()
-                //     .map(|(node, pos)| merkle.get_node(node).map(|node| (node, pos)))
-                //     .collect::<Result<Vec<_>, _>>()
-                //     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+                let mut key_nibbles_so_far: Vec<u8> = vec![];
 
-                // let remaining_key = key.iter();
+                loop {
+                    let Some((node, pos)) = path_to_key.pop_front() else {
+                        break;
+                    };
 
-                // let mut node_iter_stack: Vec<NodeIterator> = vec![];
+                    match node.inner() {
+                        NodeType::Branch(branch) => {
+                            if path_to_key.len() == 0 {
+                                // TODO is this right?
+                                // This is the last node so there are 2 possibilities:
+                                // 1. This node's child is at the [key]
+                                // 2. There is no node with [key].
 
-                // loop {
-                //     let Some((node, pos)) = path_to_key.first() else {
-                //         break;
-                //     };
-                //     path_to_key.remove(0);
-                // }
+                                if node_at_key.is_none() {
+                                    let children_iter = get_children_iter(branch)
+                                        .filter(move |(_, child_pos)| child_pos > &pos);
 
-                // // traverse the trie along each nibble until we find a node with a value
-                // // TODO: merkle.iter_by_key(key) will simplify this entire code-block.
-                // let (found_node, mut visited_node_path) = {
-                //     let mut visited_node_path = vec![];
+                                    branch_iter_stack.push(BranchIterator {
+                                        key_nibbles: key_nibbles_so_far.clone(),
+                                        children_iter: Box::new(children_iter),
+                                    });
+                                }
+                            }
 
-                //     let found_node = merkle
-                //         .get_node_by_key_with_callbacks(
-                //             root_node,
-                //             &key,
-                //             |node_addr, i| visited_node_path.push((node_addr, i)),
-                //             |_, _| {},
-                //         )
-                //         .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+                            key_nibbles_so_far.push(pos);
+                        }
+                        NodeType::Leaf(_) => (),
+                        NodeType::Extension(extension) => {
+                            // Add the extension node's path to the key nibbles.
+                            key_nibbles_so_far.extend(extension.path.iter());
 
-                //     let mut visited_node_path = visited_node_path
-                //         .into_iter()
-                //         .map(|(node, pos)| merkle.get_node(node).map(|node| (node, pos)))
-                //         .collect::<Result<Vec<_>, _>>()
-                //         .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+                            if path_to_key.len() == 0 {
+                                // This is the last node in the path to the key.
+                                if node_at_key.is_some() {
+                                    // Get the branch node child
+                                    let child = merkle
+                                        .get_node(extension.chd())
+                                        .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                //     let last_visited_node_not_branch = visited_node_path
-                //         .last()
-                //         .map(|(node, _)| {
-                //             matches!(node.inner(), NodeType::Leaf(_) | NodeType::Extension(_))
-                //         })
-                //         .unwrap_or_default();
+                                    let children_iter =
+                                        get_children_iter(child.inner().as_branch().unwrap());
 
-                //     // we only want branch in the visited node-path to start
-                //     if last_visited_node_not_branch {
-                //         visited_node_path.pop();
-                //     }
+                                    branch_iter_stack.push(BranchIterator {
+                                        key_nibbles: key_nibbles_so_far.clone(),
+                                        children_iter: Box::new(children_iter),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
 
-                //     (found_node, visited_node_path)
-                // };
+                self.key_state = IteratorState::Iterating { branch_iter_stack };
 
-                // if let Some(found_node) = found_node {
-                //     let value = match found_node.inner() {
-                //         NodeType::Branch(branch) => branch.value.as_ref(),
-                //         NodeType::Leaf(leaf) => Some(&leaf.data),
-                //         NodeType::Extension(_) => None,
-                //     };
-
-                //     let next_result = value.map(|value| {
-                //         let value = value.to_vec();
-
-                //         Ok((std::mem::take(key), value))
-                //     });
-
-                //     visited_node_path.push((found_node, 0));
-
-                //     self.key_state = IteratorState::Iterating { visited_node_path };
-
-                //     return Poll::Ready(next_result);
-                // }
-
-                // self.key_state = IteratorState::Iterating { visited_node_path };
-
-                // self.poll_next(_cx)
+                return self.poll_next(_cx);
             }
             IteratorState::Iterating { branch_iter_stack } => {
                 loop {
@@ -444,9 +429,14 @@ mod tests {
                 let expected_key = vec![i as u8, j as u8];
                 let expected_value = vec![0x00];
 
+                println!("i: {}, j: {}", i, j);
+
                 assert_eq!(
                     stream.next().await.unwrap().unwrap(),
                     (expected_key.into_boxed_slice(), expected_value),
+                    "i: {}, j: {}",
+                    i,
+                    j,
                 );
             }
         }
