@@ -1,13 +1,12 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::{node::Node, BranchNode, Merkle, NodeObjRef, NodeType};
+use super::{node::Node, BranchNode, Merkle, NodeType};
 use crate::{
     shale::{DiskAddress, ShaleStore},
     v2::api,
 };
 use futures::{stream::FusedStream, Stream};
-use helper_types::Either;
 use std::task::Poll;
 type Key = Box<[u8]>;
 type Value = Vec<u8>;
@@ -85,7 +84,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
         } = &mut *self;
 
         match key_state {
-            IteratorState::StartAtKey(key) => {
+            IteratorState::StartAtKey(_) => {
                 let root_node = merkle
                     .get_node(*merkle_root)
                     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
@@ -219,15 +218,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                             // [children_iter] returns (child_addr, pos)
                             // for every non-empty child in [node] where
                             // [pos] is the child's index in [node.children].
-                            let children_iter = branch.children.into_iter().enumerate().filter_map(
-                                |(pos, addr)| {
-                                    if addr.is_some() {
-                                        Some((addr.unwrap(), pos as u8))
-                                    } else {
-                                        None
-                                    }
-                                },
-                            );
+                            let children_iter = get_children_iter(branch);
 
                             node_iter_stack.push(NodeIterator {
                                 key_nibbles: child_key_nibbles.clone(), // TODO reduce¸cloning
@@ -257,16 +248,8 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                 .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
                             // TODO confirm that an extension node's child is always a branch node
-                            let children_iter = child
-                                .inner()
-                                .as_branch()
-                                .unwrap()
-                                .children
-                                .into_iter()
-                                .enumerate()
-                                .filter_map(|(pos, child_addr)| {
-                                    child_addr.map(|child_addr| (child_addr, pos as u8))
-                                });
+                            let branch = child.inner().as_branch().unwrap();
+                            let branch_iter = get_children_iter(branch);
 
                             // TODO I feel like there's a better way to do this
                             let mut child_key = child_key_nibbles;
@@ -274,7 +257,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                             node_iter_stack.push(NodeIterator {
                                 key_nibbles: child_key,
-                                children_iter: Box::new(children_iter),
+                                children_iter: Box::new(branch_iter),
                             });
                         }
                     };
@@ -284,153 +267,12 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
     }
 }
 
-// TODO remove
-// enum NodeRef<'a> {
-//     New(NodeObjRef<'a>),
-//     Visited(NodeObjRef<'a>),
-// }
-
-// #[derive(Debug)]
-// enum InnerNode<'a> {
-//     New(&'a NodeType),
-//     Visited(&'a NodeType),
-// }
-
-// impl<'a> NodeRef<'a> {
-//     fn inner(&self) -> InnerNode<'_> {
-//         match self {
-//             Self::New(node) => InnerNode::New(node.inner()),
-//             Self::Visited(node) => InnerNode::Visited(node.inner()),
-//         }
-//     }
-
-//     fn into_node(self) -> NodeObjRef<'a> {
-//         match self {
-//             Self::New(node) => node,
-//             Self::Visited(node) => node,
-//         }
-//     }
-// }
-
-// fn find_next_result<'a, S: ShaleStore<Node>, T>(
-//     merkle: &'a Merkle<S, T>,
-//     visited_path: &mut Vec<(NodeObjRef<'a>, u8)>,
-// ) -> Result<Option<(Key, Value)>, super::MerkleError> {
-//     let next = find_next_node_with_data(merkle, visited_path)?.map(|(next_node, value)| {
-//         let partial_path = match next_node.inner() {
-//             NodeType::Leaf(leaf) => leaf.path.iter().copied(),
-//             NodeType::Extension(extension) => extension.path.iter().copied(),
-//             _ => [].iter().copied(),
-//         };
-
-//         let key = key_from_nibble_iter(nibble_iter_from_parents(visited_path).chain(partial_path));
-
-//         visited_path.push((next_node, 0));
-
-//         (key, value)
-//     });
-
-//     Ok(next)
-// }
-
-// fn find_next_node_with_data<'a, S: ShaleStore<Node>, T>(
-//     merkle: &'a Merkle<S, T>,
-//     visited_path: &mut Vec<(NodeObjRef<'a>, u8)>,
-// ) -> Result<Option<(NodeObjRef<'a>, Vec<u8>)>, super::MerkleError> {
-//     use InnerNode::*;
-
-//     let Some((visited_parent, visited_pos)) = visited_path.pop() else {
-//         return Ok(None);
-//     };
-
-//     let mut node = NodeRef::Visited(visited_parent);
-//     let mut pos = visited_pos;
-//     let mut first_loop = true;
-
-//     loop {
-//         match node.inner() {
-//             New(NodeType::Leaf(leaf)) => {
-//                 let value = leaf.data.to_vec();
-//                 return Ok(Some((node.into_node(), value)));
-//             }
-
-//             Visited(NodeType::Leaf(_)) | Visited(NodeType::Extension(_)) => {
-//                 let Some((next_parent, next_pos)) = visited_path.pop() else {
-//                     return Ok(None);
-//                 };
-
-//                 node = NodeRef::Visited(next_parent);
-//                 pos = next_pos;
-//             }
-
-//             New(NodeType::Extension(extension)) => {
-//                 let child = merkle.get_node(extension.chd())?;
-
-//                 pos = 0;
-//                 visited_path.push((node.into_node(), pos));
-
-//                 node = NodeRef::New(child);
-//             }
-
-//             Visited(NodeType::Branch(branch)) => {
-//                 // if the first node that we check is a visited branch, that means that the branch had a value
-//                 // and we need to visit the first child, for all other cases, we need to visit the next child
-//                 let compare_op = if first_loop {
-//                     <u8 as PartialOrd>::ge // >=
-//                 } else {
-//                     <u8 as PartialOrd>::gt
-//                 };
-
-//                 let children = get_children_iter(branch)
-//                     .filter(move |(_, child_pos)| compare_op(child_pos, &pos));
-
-//                 let found_next_node =
-//                     next_node(merkle, children, visited_path, &mut node, &mut pos)?;
-
-//                 if !found_next_node {
-//                     return Ok(None);
-//                 }
-//             }
-
-//             New(NodeType::Branch(branch)) => {
-//                 if let Some(value) = branch.value.as_ref() {
-//                     let value = value.to_vec();
-//                     return Ok(Some((node.into_node(), value)));
-//                 }
-
-//                 let children = get_children_iter(branch);
-
-//                 let found_next_node =
-//                     next_node(merkle, children, visited_path, &mut node, &mut pos)?;
-
-//                 if !found_next_node {
-//                     return Ok(None);
-//                 }
-//             }
-//         }
-
-//         first_loop = false;
-//     }
-// }
-
 fn get_children_iter(branch: &BranchNode) -> impl Iterator<Item = (DiskAddress, u8)> {
     branch
         .children
         .into_iter()
         .enumerate()
         .filter_map(|(pos, child_addr)| child_addr.map(|child_addr| (child_addr, pos as u8)))
-}
-
-/// create an iterator over the key-nibbles from all parents _excluding_ the sentinal node.
-fn nibble_iter_from_parents<'a>(parents: &'a [(NodeObjRef, u8)]) -> impl Iterator<Item = u8> + 'a {
-    parents
-        .iter()
-        .skip(1) // always skip the sentinal node
-        .flat_map(|(parent, child_nibble)| match parent.inner() {
-            NodeType::Branch(_) => Either::Left(std::iter::once(*child_nibble)),
-            NodeType::Extension(extension) => Either::Right(extension.path.iter().copied()),
-            NodeType::Leaf(leaf) => Either::Right(leaf.path.iter().copied()),
-        })
 }
 
 fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
