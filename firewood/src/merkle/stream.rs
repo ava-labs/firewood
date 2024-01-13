@@ -89,6 +89,9 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                     .get_node(*merkle_root)
                     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
+                // TODO implement this code path.
+                // Right now we always start iterating from the root.
+                // We need to populate the initial state of [node_iter_stack].
                 let mut node_iter_stack: Vec<NodeIterator> = vec![];
                 node_iter_stack.push(NodeIterator {
                     key_nibbles: vec![],
