@@ -569,25 +569,29 @@ mod tests {
         let mut merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
 
-        for i in 0..256 {
-            let key = vec![i as u8];
-            let value = vec![0x00];
+        for i in (0..256).rev() {
+            for j in (0..256).rev() {
+                let key = vec![i as u8, j as u8];
+                let value = vec![0x00];
 
-            merkle
-                .insert(key.clone(), value.clone(), root.clone())
-                .unwrap();
+                merkle
+                    .insert(key.clone(), value.clone(), root.clone())
+                    .unwrap();
+            }
         }
 
         let mut stream = merkle.iter(root);
 
         for i in 0..256 {
-            let expected_key = vec![i as u8];
-            let expected_value = vec![0x00];
+            for j in 0..256 {
+                let expected_key = vec![i as u8, j as u8];
+                let expected_value = vec![0x00];
 
-            assert_eq!(
-                stream.next().await.unwrap().unwrap(),
-                (expected_key.into_boxed_slice(), expected_value),
-            );
+                assert_eq!(
+                    stream.next().await.unwrap().unwrap(),
+                    (expected_key.into_boxed_slice(), expected_value),
+                );
+            }
         }
 
         check_stream_is_done(stream).await;
