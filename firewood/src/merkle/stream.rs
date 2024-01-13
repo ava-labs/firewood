@@ -29,7 +29,7 @@ enum IteratorState {
         // We pop an iterator off the stack and call next on it to
         // get the next child node to visit. When an iterator is empty,
         // we pop it off the stack and go back up to its parent.
-        traversal_stack: Vec<BranchIterator>,
+        branch_iter_stack: Vec<BranchIterator>,
     },
 }
 
@@ -52,7 +52,7 @@ pub struct MerkleKeyValueStream<'a, S, T> {
 
 impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleKeyValueStream<'a, S, T> {
     fn is_terminated(&self) -> bool {
-        matches!(&self.key_state, IteratorState::Iterating { traversal_stack } if traversal_stack.is_empty())
+        matches!(&self.key_state, IteratorState::Iterating { branch_iter_stack } if branch_iter_stack.is_empty())
     }
 }
 
@@ -101,9 +101,9 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                 // TODO implement this branch.
                 // Right now we always start iterating from the root.
-                // We need to populate the initial state of [node_iter_stack].
-                let mut node_iter_stack: Vec<BranchIterator> = vec![];
-                node_iter_stack.push(BranchIterator {
+                // We need to populate the initial state of [branch_iter_stack].
+                let mut branch_iter_stack: Vec<BranchIterator> = vec![];
+                branch_iter_stack.push(BranchIterator {
                     key_nibbles: vec![],
                     children_iter: Box::new(get_children_iter(
                         root_node.inner().as_branch().unwrap(),
@@ -111,7 +111,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                 });
 
                 self.key_state = IteratorState::Iterating {
-                    traversal_stack: node_iter_stack,
+                    branch_iter_stack: branch_iter_stack,
                 };
 
                 self.poll_next(_cx)
@@ -205,17 +205,15 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                 // self.poll_next(_cx)
             }
-            IteratorState::Iterating {
-                traversal_stack: node_iter_stack,
-            } => {
+            IteratorState::Iterating { branch_iter_stack } => {
                 loop {
-                    let Some(mut node_iter) = node_iter_stack.pop() else {
+                    let Some(mut branch_iter) = branch_iter_stack.pop() else {
                         return Poll::Ready(None);
                     };
 
                     // [node_addr] is the next node to visit.
                     // It's the child at index [pos] of [node_iter].
-                    let Some((node_addr, pos)) = node_iter.children_iter.next() else {
+                    let Some((node_addr, pos)) = branch_iter.children_iter.next() else {
                         // We visited all this node's descendants.
                         // Go back to its parent.
                         continue;
@@ -225,10 +223,10 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                         .get_node(node_addr)
                         .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                    let mut child_key_nibbles = node_iter.key_nibbles.clone(); // TODO reduce¸cloning
+                    let mut child_key_nibbles = branch_iter.key_nibbles.clone(); // TODO reduce¸cloning
                     child_key_nibbles.push(pos);
 
-                    node_iter_stack.push(node_iter);
+                    branch_iter_stack.push(branch_iter);
 
                     match node.inner() {
                         NodeType::Branch(branch) => {
@@ -237,7 +235,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                             // [pos] is the child's index in [node.children].
                             let children_iter = get_children_iter(branch);
 
-                            node_iter_stack.push(BranchIterator {
+                            branch_iter_stack.push(BranchIterator {
                                 key_nibbles: child_key_nibbles.clone(), // TODO reduce¸cloning
                                 children_iter: Box::new(children_iter),
                             });
@@ -272,7 +270,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                             let mut child_key = child_key_nibbles;
                             child_key.extend(extension.path.iter());
 
-                            node_iter_stack.push(BranchIterator {
+                            branch_iter_stack.push(BranchIterator {
                                 key_nibbles: child_key,
                                 children_iter: Box::new(children_iter),
                             });
