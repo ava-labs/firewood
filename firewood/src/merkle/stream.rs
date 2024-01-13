@@ -11,8 +11,11 @@ use std::task::Poll;
 type Key = Box<[u8]>;
 type Value = Vec<u8>;
 
-struct NodeIterator {
+struct BranchIterator {
+    // The nibbles of the key at this node.
     key_nibbles: Vec<u8>,
+    // Returns the non-empty children of this node
+    // and their positions in the node's children array.
     children_iter: Box<dyn Iterator<Item = (DiskAddress, u8)> + Send>,
 }
 
@@ -20,7 +23,14 @@ enum IteratorState {
     /// Start iterating at the specified key
     StartAtKey(Key),
     /// Continue iterating after the last node in the `visited_node_path`
-    Iterating { node_iter_stack: Vec<NodeIterator> },
+    Iterating {
+        // Each element is an iterator over a branch node we've visited
+        // along our traversal of the key-value pairs in the trie.
+        // We pop an iterator off the stack and call next on it to
+        // get the next child node to visit. When an iterator is empty,
+        // we pop it off the stack and go back up to its parent.
+        traversal_stack: Vec<BranchIterator>,
+    },
 }
 
 impl IteratorState {
@@ -42,7 +52,7 @@ pub struct MerkleKeyValueStream<'a, S, T> {
 
 impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleKeyValueStream<'a, S, T> {
     fn is_terminated(&self) -> bool {
-        matches!(&self.key_state, IteratorState::Iterating { node_iter_stack } if node_iter_stack.is_empty())
+        matches!(&self.key_state, IteratorState::Iterating { traversal_stack } if traversal_stack.is_empty())
     }
 }
 
@@ -89,21 +99,25 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                     .get_node(*merkle_root)
                     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                // TODO implement this code path.
+                // TODO implement this branch.
                 // Right now we always start iterating from the root.
                 // We need to populate the initial state of [node_iter_stack].
-                let mut node_iter_stack: Vec<NodeIterator> = vec![];
-                node_iter_stack.push(NodeIterator {
+                let mut node_iter_stack: Vec<BranchIterator> = vec![];
+                node_iter_stack.push(BranchIterator {
                     key_nibbles: vec![],
                     children_iter: Box::new(get_children_iter(
                         root_node.inner().as_branch().unwrap(),
                     )),
                 });
 
-                self.key_state = IteratorState::Iterating { node_iter_stack };
+                self.key_state = IteratorState::Iterating {
+                    traversal_stack: node_iter_stack,
+                };
 
                 self.poll_next(_cx)
 
+                // TODO remove this code from the old implementation
+                //
                 // let mut path_to_key = vec![];
 
                 // let node_at_key = merkle
@@ -132,8 +146,6 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                 //     path_to_key.remove(0);
                 // }
 
-                // // TODO remove
-                // TODO remove
                 // // traverse the trie along each nibble until we find a node with a value
                 // // TODO: merkle.iter_by_key(key) will simplify this entire code-block.
                 // let (found_node, mut visited_node_path) = {
@@ -193,7 +205,9 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                 // self.poll_next(_cx)
             }
-            IteratorState::Iterating { node_iter_stack } => {
+            IteratorState::Iterating {
+                traversal_stack: node_iter_stack,
+            } => {
                 loop {
                     let Some(mut node_iter) = node_iter_stack.pop() else {
                         return Poll::Ready(None);
@@ -223,7 +237,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                             // [pos] is the child's index in [node.children].
                             let children_iter = get_children_iter(branch);
 
-                            node_iter_stack.push(NodeIterator {
+                            node_iter_stack.push(BranchIterator {
                                 key_nibbles: child_key_nibbles.clone(), // TODO reduce¸cloning
                                 children_iter: Box::new(children_iter),
                             });
@@ -232,7 +246,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                             if let Some(value) = branch.value.as_ref() {
                                 let value = value.to_vec();
                                 return Poll::Ready(Some(Ok((
-                                    key_from_nibble_iter(child_key_nibbles.into_iter().skip(1)),
+                                    key_from_nibble_iter(child_key_nibbles.into_iter().skip(1)), // skip the sentinel node leading 0
                                     value,
                                 ))));
                             }
@@ -240,27 +254,27 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                         NodeType::Leaf(leaf) => {
                             let value = leaf.data.to_vec();
                             return Poll::Ready(Some(Ok((
-                                key_from_nibble_iter(child_key_nibbles.into_iter().skip(1)),
+                                key_from_nibble_iter(child_key_nibbles.into_iter().skip(1)), // skip the sentinel node leading 0
                                 value,
                             ))));
                         }
                         NodeType::Extension(extension) => {
-                            // Follow the extension node to its child.
+                            // Follow the extension node to its child, which is a branch.
+                            // TODO confirm that an extension node's child is always a branch node.
                             let child = merkle
                                 .get_node(extension.chd())
                                 .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                            // TODO confirm that an extension node's child is always a branch node
                             let branch = child.inner().as_branch().unwrap();
-                            let branch_iter = get_children_iter(branch);
+                            let children_iter = get_children_iter(branch);
 
-                            // TODO I feel like there's a better way to do this
+                            // TODO reduce cloning
                             let mut child_key = child_key_nibbles;
                             child_key.extend(extension.path.iter());
 
-                            node_iter_stack.push(NodeIterator {
+                            node_iter_stack.push(BranchIterator {
                                 key_nibbles: child_key,
-                                children_iter: Box::new(branch_iter),
+                                children_iter: Box::new(children_iter),
                             });
                         }
                     };
