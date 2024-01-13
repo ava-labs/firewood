@@ -13,7 +13,7 @@ type Key = Box<[u8]>;
 type Value = Vec<u8>;
 
 struct NodeIterator {
-    key: Vec<u8>,
+    key_nibbles: Vec<u8>,
     children_iter: Box<dyn Iterator<Item = (DiskAddress, u8)> + Send>,
 }
 
@@ -92,7 +92,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                 let mut node_iter_stack: Vec<NodeIterator> = vec![];
                 node_iter_stack.push(NodeIterator {
-                    key: vec![],
+                    key_nibbles: vec![],
                     children_iter: Box::new(get_children_iter(
                         root_node.inner().as_branch().unwrap(),
                     )),
@@ -209,13 +209,16 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                         .get_node(node_addr)
                         .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                    let mut child_key = node_iter.key.clone();
-                    child_key.push(pos);
+                    let mut child_key_nibbles = node_iter.key_nibbles.clone(); // TODO reduce¸cloning
+                    child_key_nibbles.push(pos);
 
                     node_iter_stack.push(node_iter);
 
                     match node.inner() {
                         NodeType::Branch(branch) => {
+                            // [children_iter] returns (child_addr, pos)
+                            // for every non-empty child in [node] where
+                            // [pos] is the child's index in [node.children].
                             let children_iter = branch.children.into_iter().enumerate().filter_map(
                                 |(pos, addr)| {
                                     if addr.is_some() {
@@ -227,7 +230,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                             );
 
                             node_iter_stack.push(NodeIterator {
-                                key: child_key.clone(), // TODO remove cloning
+                                key_nibbles: child_key_nibbles.clone(), // TODO reduce¸cloning
                                 children_iter: Box::new(children_iter),
                             });
 
@@ -235,14 +238,17 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                             if let Some(value) = branch.value.as_ref() {
                                 let value = value.to_vec();
                                 return Poll::Ready(Some(Ok((
-                                    child_key.into_boxed_slice(),
+                                    key_from_nibble_iter(child_key_nibbles.into_iter().skip(1)),
                                     value,
                                 ))));
                             }
                         }
                         NodeType::Leaf(leaf) => {
                             let value = leaf.data.to_vec();
-                            return Poll::Ready(Some(Ok((child_key.into_boxed_slice(), value))));
+                            return Poll::Ready(Some(Ok((
+                                key_from_nibble_iter(child_key_nibbles.into_iter().skip(1)),
+                                value,
+                            ))));
                         }
                         NodeType::Extension(extension) => {
                             // Follow the extension node to its child.
@@ -263,11 +269,11 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                 });
 
                             // TODO I feel like there's a better way to do this
-                            let mut child_key = child_key;
+                            let mut child_key = child_key_nibbles;
                             child_key.extend(extension.path.iter());
 
                             node_iter_stack.push(NodeIterator {
-                                key: child_key,
+                                key_nibbles: child_key,
                                 children_iter: Box::new(children_iter),
                             });
                         }
@@ -415,39 +421,6 @@ fn get_children_iter(branch: &BranchNode) -> impl Iterator<Item = (DiskAddress, 
         .filter_map(|(pos, child_addr)| child_addr.map(|child_addr| (child_addr, pos as u8)))
 }
 
-// TODO remove
-// /// This function is a little complicated because we need to be able to early return from the parent
-// /// when we return `false`. `MustUse` forces the caller to check the inner value of `Result::Ok`.
-// /// It also replaces `node`
-// fn next_node<'a, S, T, Iter>(
-//     merkle: &'a Merkle<S, T>,
-//     mut children: Iter,
-//     parents: &mut Vec<(NodeObjRef<'a>, u8)>,
-//     node: &mut NodeRef<'a>,
-//     pos: &mut u8,
-// ) -> Result<MustUse<bool>, super::MerkleError>
-// where
-//     Iter: Iterator<Item = (DiskAddress, u8)>,
-//     S: ShaleStore<Node>,
-// {
-//     if let Some((child_addr, child_pos)) = children.next() {
-//         let child = merkle.get_node(child_addr)?;
-
-//         *pos = child_pos;
-//         let node = std::mem::replace(node, NodeRef::New(child));
-//         parents.push((node.into_node(), *pos));
-//     } else {
-//         let Some((next_parent, next_pos)) = parents.pop() else {
-//             return Ok(false.into());
-//         };
-
-//         *node = NodeRef::Visited(next_parent);
-//         *pos = next_pos;
-//     }
-
-//     Ok(true.into())
-// }
-
 /// create an iterator over the key-nibbles from all parents _excluding_ the sentinal node.
 fn nibble_iter_from_parents<'a>(parents: &'a [(NodeObjRef, u8)]) -> impl Iterator<Item = u8> + 'a {
     parents
@@ -589,6 +562,35 @@ mod tests {
         let merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
         check_stream_is_done(merkle.iter(root)).await;
+    }
+
+    #[tokio::test]
+    async fn no_start_key() {
+        let mut merkle = create_test_merkle();
+        let root = merkle.init_root().unwrap();
+
+        for i in 0..256 {
+            let key = vec![i as u8];
+            let value = vec![0x00];
+
+            merkle
+                .insert(key.clone(), value.clone(), root.clone())
+                .unwrap();
+        }
+
+        let mut stream = merkle.iter(root);
+
+        for i in 0..256 {
+            let expected_key = vec![i as u8];
+            let expected_value = vec![0x00];
+
+            assert_eq!(
+                stream.next().await.unwrap().unwrap(),
+                (expected_key.into_boxed_slice(), expected_value),
+            );
+        }
+
+        check_stream_is_done(stream).await;
     }
 
     #[tokio::test]
