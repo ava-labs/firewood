@@ -6,7 +6,7 @@
 use criterion::{criterion_group, criterion_main, profiler::Profiler, BatchSize, Criterion};
 use firewood::{
     db::{BatchOp, DbConfig, SharedStore},
-    merkle::{MerkleWithEncoder, TrieHash, TRIE_HASH_LEN},
+    merkle::{Merkle, TrieHash, TRIE_HASH_LEN, Bincode, Node},
     shale::{
         cached::DynamicMem,
         compact::{CompactHeader, CompactSpace},

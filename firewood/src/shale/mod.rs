@@ -2,8 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 pub(crate) use disk_address::DiskAddress;
-#[cfg(feature = "logger")]
-use log::trace;
+use crate::logger::trace;
 use std::any::type_name;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Formatter};
@@ -222,7 +221,7 @@ impl<'a, T: Storable + Debug> Drop for ObjRef<'a, T> {
                     "[{:p}] cache.cached now has {} items",
                     self.cache,
                     cache.cached.len()
-                )
+                );
             }
         }
     }
