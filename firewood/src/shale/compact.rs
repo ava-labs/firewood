@@ -586,7 +586,7 @@ impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> Sh
         #[allow(clippy::unwrap_used)]
         let addr = self.inner.write().unwrap().alloc(size)?;
 
-        trace!("{self:p} New item at {addr} size {size}");
+        trace!("{self:p} put_item at {addr} size {size}");
 
         #[allow(clippy::unwrap_used)]
         let obj = {
