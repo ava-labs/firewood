@@ -13,7 +13,7 @@ use std::io::{Cursor, Write};
 use std::num::NonZeroUsize;
 use std::sync::RwLock;
 
-use crate::trace;
+use crate::logger::trace;
 
 #[derive(Debug)]
 pub struct CompactHeader {

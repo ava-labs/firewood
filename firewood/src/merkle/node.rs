@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::trace;
+use crate::logger::trace;
 use crate::{
     merkle::from_nibbles,
     shale::{disk_address::DiskAddress, CachedStore, ShaleError, ShaleStore, Storable},
