@@ -6,7 +6,7 @@
 // static shortcut
 
 #[cfg(feature = "logger")]
-pub use log::{trace, debug, info, warn, error};
+pub use log::{debug, error, info, trace, warn};
 
 #[cfg(not(feature = "logger"))]
 pub use noop_logger::{debug, error, info, trace, warn};
