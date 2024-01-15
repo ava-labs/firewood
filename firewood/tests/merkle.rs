@@ -138,7 +138,9 @@ fn test_root_hash_reversed_deletions() -> Result<(), DataStoreError> {
         hashes.reverse();
 
         for i in 0..hashes.len() {
+            #[allow(clippy::indexing_slicing)]
             let (new_hash, key, before_removal, after_removal) = &new_hashes[i];
+            #[allow(clippy::indexing_slicing)]
             let (expected_hash, expected_dump) = &hashes[i];
             let key = key.iter().fold(String::new(), |mut s, b| {
                 let _ = write!(s, "{:02x}", b);

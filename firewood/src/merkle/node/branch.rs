@@ -8,6 +8,7 @@ use crate::{
     shale::{DiskAddress, ShaleError, ShaleStore, Storable},
 };
 use bincode::{Error, Options};
+use serde::de::Error as DeError;
 use std::{
     fmt::{Debug, Error as FmtError, Formatter},
     io::{Cursor, Read, Write},
@@ -113,7 +114,10 @@ impl BranchNode {
     pub(super) fn decode(buf: &[u8]) -> Result<Self, Error> {
         let mut items: Vec<Encoded<Vec<u8>>> = bincode::DefaultOptions::new().deserialize(buf)?;
 
-        let path = items.pop().unwrap().decode()?;
+        let path = items
+            .pop()
+            .ok_or(Error::custom("Invalid Branch Node"))?
+            .decode()?;
         let path = Nibbles::<0>::new(&path);
         let (path, _term) = PartialPath::from_nibbles(path.into_iter());
 
@@ -206,12 +210,15 @@ impl BranchNode {
         #[allow(clippy::unwrap_used)]
         let path = from_nibbles(&self.path.encode(false)).collect::<Vec<_>>();
 
-        list[Self::MAX_CHILDREN + 1] =
-            Encoded::Data(bincode::DefaultOptions::new().serialize(&path).unwrap());
+        list[Self::MAX_CHILDREN + 1] = Encoded::Data(
+            bincode::DefaultOptions::new()
+                .serialize(&path)
+                .expect("serializing raw bytes to always succeed"),
+        );
 
         bincode::DefaultOptions::new()
             .serialize(list.as_slice())
-            .unwrap()
+            .expect("serializing `Encoded` to always succeed")
     }
 }
 

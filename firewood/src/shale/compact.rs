@@ -1,10 +1,10 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use crate::logger::trace;
 use crate::merkle::Node;
 use crate::shale::ObjCache;
 use crate::storage::{StoreRevMut, StoreRevShared};
-use crate::logger::trace;
 
 use super::disk_address::DiskAddress;
 use super::{CachedStore, Obj, ObjRef, ShaleError, ShaleStore, Storable, StoredView};

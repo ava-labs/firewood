@@ -545,7 +545,7 @@ fn unset_internal<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySe
                 // shortnode, stop here and the forkpoint is the shortnode.
                 let path = &*n.path;
 
-                if path.len() > 0 {
+                if !path.is_empty() {
                     [fork_left, fork_right] = [&left_chunks[index..], &right_chunks[index..]]
                         .map(|chunks| chunks.chunks(path.len()).next().unwrap_or_default())
                         .map(|key| key.cmp(path));
@@ -860,13 +860,16 @@ fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySe
     let mut u_ref = merkle.get_node(node).map_err(|_| ProofError::NoSuchNode)?;
     let p = u_ref.as_ptr();
 
+    if index >= chunks.len() {
+        return Err(ProofError::InvalidProof);
+    }
+
+    #[allow(clippy::indexing_slicing)]
     match &u_ref.inner() {
         NodeType::Branch(n) if chunks[index..].starts_with(&n.path) => {
             let index = index + n.path.len();
-            #[allow(clippy::indexing_slicing)]
             let child_index = chunks[index] as usize;
 
-            #[allow(clippy::indexing_slicing)]
             let node = n.chd()[child_index];
 
             let iter = if remove_left {

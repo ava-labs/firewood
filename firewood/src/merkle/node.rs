@@ -161,11 +161,11 @@ impl NodeType {
         }
     }
 
-    pub fn data_mut(&mut self) -> &mut Data {
+    pub fn set_data(&mut self, data: Data) {
         match self {
-            NodeType::Branch(u) => u.value.as_mut().unwrap(),
-            NodeType::Leaf(node) => &mut node.data,
-            NodeType::Extension(_) => unreachable!(),
+            NodeType::Branch(u) => u.value = Some(data),
+            NodeType::Leaf(node) => node.data = data,
+            NodeType::Extension(_) => (),
         }
     }
 }
@@ -330,6 +330,16 @@ impl Node {
 
     pub(super) fn set_dirty(&self, is_dirty: bool) {
         self.lazy_dirty.store(is_dirty, Ordering::Relaxed)
+    }
+}
+
+pub(crate) fn write_branch<F: FnOnce(&mut Box<BranchNode>)>(f: F) -> impl FnOnce(&mut Node) {
+    move |node| {
+        let node = node
+            .inner_mut()
+            .as_branch_mut()
+            .expect("must be a branch node");
+        f(node);
     }
 }
 

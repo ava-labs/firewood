@@ -107,7 +107,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                         )
                         .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                    let mut nibbles = Nibbles::<1>::new(&key).into_iter();
+                    let mut nibbles = Nibbles::<1>::new(key).into_iter();
 
                     let visited_node_path = visited_node_path
                         .into_iter()

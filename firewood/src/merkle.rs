@@ -25,6 +25,8 @@ pub use proof::{Proof, ProofError};
 pub use stream::MerkleKeyValueStream;
 pub use trie_hash::{TrieHash, TRIE_HASH_LEN};
 
+use self::node::write_branch;
+
 type NodeObjRef<'a> = shale::ObjRef<'a, Node>;
 type ParentRefs<'a> = Vec<(NodeObjRef<'a>, u8)>;
 type ParentAddresses = Vec<(DiskAddress, u8)>;
@@ -276,6 +278,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             .zip(n_path.iter())
             .position(|(a, b)| a != b);
 
+        #[allow(clippy::indexing_slicing)]
         let new_child_address = if let Some(idx) = split_index {
             // paths diverge
             let new_split_node_path = n_path.split_at(idx + 1).1;
@@ -298,10 +301,8 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
             let mut chd = [None; BranchNode::MAX_CHILDREN];
 
-            #[allow(clippy::indexing_slicing)]
             let last_matching_nibble = matching_path[idx];
-            #[allow(clippy::indexing_slicing)]
-            (chd[last_matching_nibble as usize] = Some(leaf_address));
+            chd[last_matching_nibble as usize] = Some(leaf_address);
 
             let address = match &node_to_split.inner {
                 NodeType::Extension(u) if u.path.len() == 0 => {
@@ -311,8 +312,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                 _ => node_to_split_address,
             };
 
-            #[allow(clippy::indexing_slicing)]
-            (chd[n_path[idx] as usize] = Some(address));
+            chd[n_path[idx] as usize] = Some(address);
 
             let new_branch = Node::from_branch(BranchNode {
                 path: PartialPath(matching_path[..idx].to_vec()),
@@ -516,11 +516,12 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
                     let overlap = Overlap::from(&n.path, &key_remainder);
 
+                    #[allow(clippy::indexing_slicing)]
                     match (overlap.unique_a.len(), overlap.unique_b.len()) {
                         // same node, overwrite the data
                         (0, 0) => {
                             node.write(|node| {
-                                *node.inner.data_mut() = Data(val);
+                                node.inner.set_data(Data(val));
                                 node.rehash();
                             })?;
                         }
@@ -638,6 +639,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                 }
 
                 NodeType::Branch(n) if n.path.len() == 0 => {
+                    #[allow(clippy::indexing_slicing)]
                     match n.children[next_nibble as usize] {
                         Some(c) => (node, c),
                         None => {
@@ -649,15 +651,18 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                                     Data(val),
                                 )))?
                                 .as_ptr();
+
                             // set the current child to point to this leaf
-                            #[allow(clippy::unwrap_used)]
-                            node.write(|u| {
-                                #[allow(clippy::indexing_slicing)]
-                                let uu = u.inner.as_branch_mut().unwrap();
-                                uu.children[next_nibble as usize] = Some(leaf_ptr);
-                                u.rehash();
-                            })
-                            .unwrap();
+                            #[allow(clippy::indexing_slicing)]
+                            node.write(|node| {
+                                node.rehash();
+
+                                let f = write_branch(|branch| {
+                                    branch.children[next_nibble as usize] = Some(leaf_ptr);
+                                });
+
+                                f(node)
+                            })?;
 
                             break None;
                         }
@@ -672,11 +677,12 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
                     let overlap = Overlap::from(&n.path, &key_remainder);
 
+                    #[allow(clippy::indexing_slicing)]
                     match (overlap.unique_a.len(), overlap.unique_b.len()) {
                         // same node, overwrite the data
                         (0, 0) => {
                             node.write(|node| {
-                                *node.inner.data_mut() = Data(val);
+                                node.inner.set_data(Data(val));
                                 node.rehash();
                             })?;
 
@@ -705,11 +711,16 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                                     ));
 
                                     let new_leaf = self.put_node(new_leaf)?.as_ptr();
-                                    node.write(|node| {
-                                        let branch = node.inner.as_branch_mut().unwrap();
-                                        branch.children[next_nibble as usize] = Some(new_leaf);
 
+                                    #[allow(clippy::indexing_slicing)]
+                                    node.write(|node| {
                                         node.rehash();
+
+                                        let f = write_branch(|branch| {
+                                            branch.children[next_nibble as usize] = Some(new_leaf);
+                                        });
+
+                                        f(node)
                                     })?;
 
                                     break None;
@@ -1240,29 +1251,20 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             let (node, mut parents) =
                 self.get_node_and_parents_by_key(self.get_node(root)?, key)?;
 
-            let Some(node) = node else {
+            let Some(mut node) = node else {
                 return Ok(None);
             };
 
             let data = match &node.inner {
-                NodeType::Branch(n) => {
-                    let data = n.value.clone();
+                NodeType::Branch(branch) => {
+                    let data = branch.value.clone();
+                    let children = branch.children;
 
                     if data.is_none() {
                         return Ok(None);
                     }
 
-                    // TODO: fix mutability issue here
-                    let mut node = self.get_node(node.as_ptr())?;
-
-                    node.write(|branch| {
-                        branch.inner.as_branch_mut().unwrap().value = None;
-                    })?;
-
-                    let branch = node.inner.as_branch().unwrap();
-
-                    let children: Vec<_> = branch
-                        .children
+                    let children: Vec<_> = children
                         .iter()
                         .enumerate()
                         .filter_map(|(i, child)| child.map(|child| (i, child)))
@@ -1272,6 +1274,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                     if children.len() == 1 && !parents.is_empty() {
                         let branch_path = &branch.path.0;
 
+                        #[allow(clippy::indexing_slicing)]
                         let (child_index, child) = children[0];
                         let mut child = self.get_node(child)?;
 
@@ -1292,7 +1295,15 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
                         deleted.push(node.as_ptr());
                     } else {
-                        node.write(|node| node.rehash())?
+                        node.write(|node| {
+                            node.rehash();
+
+                            let f = write_branch(|branch| {
+                                branch.value = None;
+                            });
+
+                            f(node)
+                        })?
                     }
 
                     data
@@ -1304,13 +1315,17 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                     // TODO: handle unwrap better
                     deleted.push(node.as_ptr());
 
-                    let (mut parent, child_index) = parents.pop().unwrap();
+                    let (mut parent, child_index) = parents.pop().expect("parents is never empty");
 
-                    parent.write(|parent| {
-                        parent.inner.as_branch_mut().unwrap().children[child_index as usize] = None;
-                    })?;
+                    #[allow(clippy::indexing_slicing)]
+                    parent.write(write_branch(|parent| {
+                        parent.children[child_index as usize] = None;
+                    }))?;
 
-                    let branch = parent.inner.as_branch().unwrap();
+                    let branch = parent
+                        .inner
+                        .as_branch()
+                        .expect("parents are always branch nodes");
 
                     let children: Vec<_> = branch
                         .children
@@ -1324,6 +1339,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                         (1, None, true) => {
                             let parent_path = &branch.path.0;
 
+                            #[allow(clippy::indexing_slicing)]
                             let (child_index, child) = children[0];
                             let child = self.get_node(child)?;
 
@@ -1584,6 +1600,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                         });
                     };
 
+                    #[allow(clippy::indexing_slicing)]
                     match n.children[nib as usize] {
                         Some(c) => c,
                         None => return Ok(None),
@@ -1926,6 +1943,7 @@ impl<'a, T: PartialEq> Overlap<'a, T> {
     fn from(a: &'a [T], b: &'a [T]) -> Self {
         let mut split_index = 0;
 
+        #[allow(clippy::indexing_slicing)]
         for i in 0..std::cmp::min(a.len(), b.len()) {
             if a[i] != b[i] {
                 break;
