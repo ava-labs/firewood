@@ -66,17 +66,12 @@ fn test_root_hash_fuzz_insertions() -> Result<(), DataStoreError> {
         key
     };
 
-    for i in 0..10 {
-        dbg!(i);
+    for _ in 0..10 {
         let mut items = Vec::new();
+
         for _ in 0..10 {
             let val: Vec<u8> = (0..8).map(|_| rng.borrow_mut().gen()).collect();
             items.push((keygen(), val));
-        }
-
-        if i == 6 {
-            eprintln!("{:?}", &items);
-            dbg!("this one breaks");
         }
 
         merkle_build_test(items, 0x1000000, 0x1000000)?;
@@ -190,12 +185,10 @@ fn test_root_hash_random_deletions() -> Result<(), DataStoreError> {
         let mut merkle = new_merkle(0x100000, 0x100000);
 
         for (k, v) in items.iter() {
-            dbg!(&k, &v);
             merkle.insert(k, v.to_vec())?;
         }
 
         for (k, v) in items.iter() {
-            dbg!(k);
             assert_eq!(&*merkle.get(k)?.unwrap(), &v[..]);
             assert_eq!(&*merkle.get_mut(k)?.unwrap().get(), &v[..]);
         }
@@ -212,7 +205,6 @@ fn test_root_hash_random_deletions() -> Result<(), DataStoreError> {
             items.remove(&k);
 
             for (k, v) in items.iter() {
-                dbg!(k);
                 assert_eq!(&*merkle.get(k)?.unwrap(), &v[..]);
                 assert_eq!(&*merkle.get_mut(k)?.unwrap().get(), &v[..]);
             }

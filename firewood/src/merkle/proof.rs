@@ -457,7 +457,7 @@ fn locate_subproof(
                     .iter()
                     .all(|val| key_nibbles.next() == Some(*val));
 
-            if dbg!(does_not_match) {
+            if does_not_match {
                 return Ok((None, Nibbles::<0>::new(&[]).into_iter()));
             }
 
@@ -542,7 +542,7 @@ fn unset_internal<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySe
             #[allow(clippy::indexing_slicing)]
             NodeType::Branch(n) => {
                 // If either the key of left proof or right proof doesn't match with
-                // shortnode, stop here and the forkpoint is the shortnode.
+                // stop here, this is the forkpoint.
                 let path = &*n.path;
 
                 if !path.is_empty() {
@@ -733,7 +733,7 @@ fn unset_internal<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySe
             }
 
             let node = n.chd();
-            let cur_key = n.path.clone().into_inner();
+            let index = n.path.len();
 
             let p = u_ref.as_ptr();
             drop(u_ref);
@@ -746,7 +746,7 @@ fn unset_internal<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySe
                     Some(node),
                     #[allow(clippy::indexing_slicing)]
                     &left_chunks[index..],
-                    cur_key.len(),
+                    index,
                     false,
                 )?;
 
@@ -760,7 +760,7 @@ fn unset_internal<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySe
                     Some(node),
                     #[allow(clippy::indexing_slicing)]
                     &right_chunks[index..],
-                    cur_key.len(),
+                    index,
                     true,
                 )?;
 

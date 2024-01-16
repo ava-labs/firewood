@@ -314,13 +314,6 @@ impl<M: CachedStore> CompactSpaceInner<M> {
         let mut offset = addr - hsize;
         let header_payload_size = {
             let header = self.get_header(DiskAddress::from(offset as usize))?;
-
-            if header.is_freed {
-                dbg!(addr);
-                dbg!(hsize);
-                dbg!(offset);
-            }
-
             assert!(!header.is_freed);
             header.payload_size
         };

@@ -90,7 +90,6 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                     .get_node(*merkle_root)
                     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                // TODO: put this in a better spot
                 let mut check_child_nibble = false;
 
                 // traverse the trie along each nibble until we find a node with a value
@@ -771,7 +770,7 @@ mod tests {
         let mut stream = merkle.iter_from(root, vec![missing].into_boxed_slice());
 
         for key in keys {
-            let next = dbg!(stream.next().await.unwrap().unwrap());
+            let next = stream.next().await.unwrap().unwrap();
 
             assert_eq!(&*next.0, &*next.1);
             assert_eq!(&*next.0, key);
@@ -795,9 +794,7 @@ mod tests {
             merkle.insert(&key, key.clone(), root).unwrap();
         });
 
-        let mut stream = merkle.iter_from(root, vec![start_key].into_boxed_slice());
-
-        dbg!(&stream.next().await);
+        let stream = merkle.iter_from(root, vec![start_key].into_boxed_slice());
 
         check_stream_is_done(stream).await;
     }

@@ -17,6 +17,7 @@ pub mod proof;
 mod stream;
 mod trie_hash;
 
+use node::write_branch;
 pub use node::{
     BinarySerde, Bincode, BranchNode, Data, EncodedNode, EncodedNodeType, ExtNode, LeafNode, Node,
     NodeType, PartialPath,
@@ -24,8 +25,6 @@ pub use node::{
 pub use proof::{Proof, ProofError};
 pub use stream::MerkleKeyValueStream;
 pub use trie_hash::{TrieHash, TRIE_HASH_LEN};
-
-use self::node::write_branch;
 
 type NodeObjRef<'a> = shale::ObjRef<'a, Node>;
 type ParentRefs<'a> = Vec<(NodeObjRef<'a>, u8)>;
@@ -2269,14 +2268,10 @@ mod tests {
             let key = &[key_val];
             let val = &[key_val];
 
-            if key_val == 254 {
-                dbg!("hello");
-            }
-
             let Ok(removed_val) = merkle.remove(key, root) else {
-                dbg!(key_val);
-                panic!();
+                panic!("({key_val}, {key_val}) missing");
             };
+
             assert_eq!(removed_val.as_deref(), val.as_slice().into());
 
             let fetched_val = merkle.get(key, root).unwrap();
