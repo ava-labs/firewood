@@ -667,7 +667,6 @@ impl<T: Storable + Clone + Debug + 'static + PartialEq, M: CachedStore + Send + 
             // found in the parent cache; insert into this cache, unless it's a ShaleError
             let obj = result?;
 
-            #[cfg(feature = "logger")]
             trace!("[{:p}] node {:?} was in secondary: {:?}", cache, ptr, obj);
             return Ok(ObjRef::new(Some(obj), cache));
         }
