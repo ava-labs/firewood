@@ -17,7 +17,6 @@ pub mod proof;
 mod stream;
 mod trie_hash;
 
-use node::write_branch;
 pub use node::{
     BinarySerde, Bincode, BranchNode, Data, EncodedNode, EncodedNodeType, ExtNode, LeafNode, Node,
     NodeType, PartialPath,
@@ -654,13 +653,9 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                             // set the current child to point to this leaf
                             #[allow(clippy::indexing_slicing)]
                             node.write(|node| {
+                                node.as_branch_mut().children[next_nibble as usize] =
+                                    Some(leaf_ptr);
                                 node.rehash();
-
-                                let f = write_branch(|branch| {
-                                    branch.children[next_nibble as usize] = Some(leaf_ptr);
-                                });
-
-                                f(node)
                             })?;
 
                             break None;
@@ -713,13 +708,9 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
                                     #[allow(clippy::indexing_slicing)]
                                     node.write(|node| {
+                                        node.as_branch_mut().children[next_nibble as usize] =
+                                            Some(new_leaf);
                                         node.rehash();
-
-                                        let f = write_branch(|branch| {
-                                            branch.children[next_nibble as usize] = Some(new_leaf);
-                                        });
-
-                                        f(node)
                                     })?;
 
                                     break None;
@@ -1295,13 +1286,8 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                         deleted.push(node.as_ptr());
                     } else {
                         node.write(|node| {
+                            node.as_branch_mut().value = None;
                             node.rehash();
-
-                            let f = write_branch(|branch| {
-                                branch.value = None;
-                            });
-
-                            f(node)
                         })?
                     }
 
@@ -1317,9 +1303,9 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                     let (mut parent, child_index) = parents.pop().expect("parents is never empty");
 
                     #[allow(clippy::indexing_slicing)]
-                    parent.write(write_branch(|parent| {
-                        parent.children[child_index as usize] = None;
-                    }))?;
+                    parent.write(|parent| {
+                        parent.as_branch_mut().children[child_index as usize] = None;
+                    })?;
 
                     let branch = parent
                         .inner

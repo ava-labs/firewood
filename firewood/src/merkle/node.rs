@@ -331,15 +331,11 @@ impl Node {
     pub(super) fn set_dirty(&self, is_dirty: bool) {
         self.lazy_dirty.store(is_dirty, Ordering::Relaxed)
     }
-}
 
-pub(crate) fn write_branch<F: FnOnce(&mut Box<BranchNode>)>(f: F) -> impl FnOnce(&mut Node) {
-    move |node| {
-        let node = node
-            .inner_mut()
+    pub(crate) fn as_branch_mut(&mut self) -> &mut Box<BranchNode> {
+        self.inner_mut()
             .as_branch_mut()
-            .expect("must be a branch node");
-        f(node);
+            .expect("must be a branch node")
     }
 }
 
