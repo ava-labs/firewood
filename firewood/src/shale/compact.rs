@@ -566,7 +566,11 @@ impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
             .unwrap_or_default();
 
         #[cfg(feature = "logger")]
-        trace!("[{:p}] New cache with {} parents", &obj_cache, parent_caches.len());
+        trace!(
+            "[{:p}] New cache with {} parents",
+            &obj_cache,
+            parent_caches.len()
+        );
 
         let cs: CompactSpace<T, M> = CompactSpace {
             inner: RwLock::new(CompactSpaceInner {
@@ -618,7 +622,6 @@ impl<T: Storable + Clone + Debug + 'static + PartialEq, M: CachedStore + Send + 
         };
 
         let cache = &self.obj_cache;
-
 
         let mut obj_ref = ObjRef::new(Some(obj), cache);
 
