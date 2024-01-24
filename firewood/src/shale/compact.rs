@@ -608,7 +608,7 @@ impl<T: Storable + Clone + Debug + 'static + PartialEq, M: CachedStore + Send + 
         #[allow(clippy::unwrap_used)]
         let addr = self.inner.write().unwrap().alloc(size)?;
 
-        trace!("{self:p} put_item at {addr} size {size}");
+        trace!("[{:p}] put_item size {size} at {addr}", &self.obj_cache);
 
         #[allow(clippy::unwrap_used)]
         let obj = {
@@ -629,22 +629,20 @@ impl<T: Storable + Clone + Debug + 'static + PartialEq, M: CachedStore + Send + 
         #[allow(clippy::unwrap_used)]
         obj_ref.write(|_| {}).unwrap();
 
-        #[cfg(feature = "logger")]
-        trace!("[{:p}] node {} inserted: {:?}", cache, addr, obj_ref.inner);
-
         Ok(obj_ref)
     }
 
     #[allow(clippy::unwrap_used)]
     fn free_item(&mut self, ptr: DiskAddress) -> Result<(), ShaleError> {
+        trace!("[{:p}] free_item({ptr:?})", &self.obj_cache);
         let mut inner = self.inner.write().unwrap();
-        self.obj_cache.pop(ptr);
+        //self.obj_cache.pop(ptr);
         #[allow(clippy::unwrap_used)]
         inner.free(ptr.unwrap().get() as u64)
     }
 
     fn get_item(&self, ptr: DiskAddress) -> Result<ObjRef<'_, T>, ShaleError> {
-        trace!("get_item({ptr:?})");
+        trace!("[{:p}] get_item({ptr:?})", &self.obj_cache);
         #[allow(clippy::unwrap_used)]
         if ptr < DiskAddress::from(CompactSpaceHeader::MSIZE as usize) {
             return Err(ShaleError::InvalidAddressLength {
@@ -655,23 +653,27 @@ impl<T: Storable + Clone + Debug + 'static + PartialEq, M: CachedStore + Send + 
 
         let cache = &self.obj_cache;
         if let Some(obj) = cache.get(ptr)? {
-            #[cfg(feature = "logger")]
             trace!("[{:p}] node {:?} was in primary", cache, ptr);
 
             return Ok(ObjRef::new(Some(obj), cache));
         }
 
         // we missed the cache, so check for any parent caches
+        // to disable: #[cfg(never)]
         if let Some(result) = self
             .parent_caches
             .iter()
+            .inspect(|&f| trace!("[{:p}] [looking in secondary {:p}]", cache, f))
             .find_map(|cache| cache.peek_clone(ptr).transpose())
         {
             // found in the parent cache; insert into this cache, unless it's a ShaleError
             let obj = result?;
 
             trace!("[{:p}] node {:?} was in secondary: {:?}", cache, ptr, obj);
-            return Ok(ObjRef::new(Some(obj), cache));
+            let mut inner = cache.0.write().expect("poisoned cache");
+            inner.cached.put(ptr, obj);
+            drop(inner);
+            return Ok(ObjRef::new(Some(cache.get(ptr)?.expect("must be there")), cache));
         }
 
         let inner = self.inner.read().expect("poisoned cache");
@@ -680,7 +682,6 @@ impl<T: Storable + Clone + Debug + 'static + PartialEq, M: CachedStore + Send + 
             .get_header(ptr - CompactHeader::MSIZE as usize)?
             .payload_size;
         let obj = self.obj_cache.put(inner.get_data_ref(ptr, payload_size)?);
-        #[cfg(feature = "logger")]
         trace!(
             "[{:p}] node {:?} was read into cache: {:?}",
             cache,
@@ -693,6 +694,7 @@ impl<T: Storable + Clone + Debug + 'static + PartialEq, M: CachedStore + Send + 
 
     #[allow(clippy::unwrap_used)]
     fn flush_dirty(&self) -> Option<()> {
+        trace!("[{:p}] flush_dirty", &self.obj_cache);
         let mut inner = self.inner.write().unwrap();
         inner.header.flush_dirty();
         // hold the write lock to ensure that both cache and header are flushed in-sync

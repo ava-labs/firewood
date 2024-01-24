@@ -844,6 +844,8 @@ impl Db {
 
         // Calculated the root hash before flushing so it can be persisted.
         let root_hash = rev.kv_root_hash()?;
+        // This appears to cause things to get flushed twice, once here and once when the LRU cache is dropped
+        // on commit
         #[allow(clippy::unwrap_used)]
         rev.flush_dirty().unwrap();
 

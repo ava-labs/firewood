@@ -147,7 +147,7 @@ impl BranchNode {
             match c {
                 Some(c) => {
                     #[allow(clippy::unwrap_used)]
-                    let mut c_ref = store.get_item(*c).unwrap();
+                    let mut c_ref = store.get_item(*c).unwrap_or_else(|_| panic!("Item at {c:?} was not a node"));
 
                     #[allow(clippy::unwrap_used)]
                     if c_ref.is_encoded_longer_than_hash_len::<S>(store) {

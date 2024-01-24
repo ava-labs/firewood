@@ -1051,37 +1051,6 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         Ok(found.map(|e| e.0))
     }
 
-    fn remove_tree_(
-        &self,
-        u: DiskAddress,
-        deleted: &mut Vec<DiskAddress>,
-    ) -> Result<(), MerkleError> {
-        let u_ref = self.get_node(u)?;
-        match &u_ref.inner {
-            NodeType::Branch(n) => {
-                for c in n.children.iter().flatten() {
-                    self.remove_tree_(*c, deleted)?
-                }
-            }
-            NodeType::Leaf(_) => (),
-            NodeType::Extension(n) => self.remove_tree_(n.chd(), deleted)?,
-        }
-        deleted.push(u);
-        Ok(())
-    }
-
-    pub fn remove_tree(&mut self, root: DiskAddress) -> Result<(), MerkleError> {
-        let mut deleted = Vec::new();
-        if root.is_null() {
-            return Ok(());
-        }
-        self.remove_tree_(root, &mut deleted)?;
-        for ptr in deleted.into_iter() {
-            self.free_node(ptr)?;
-        }
-        Ok(())
-    }
-
     fn get_node_by_key<'a, K: AsRef<[u8]>>(
         &'a self,
         node_ref: NodeObjRef<'a>,

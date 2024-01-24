@@ -122,6 +122,8 @@ impl<T: Storable> Obj<T> {
             Some(len) => Some(len),
             None => return Err(ObjWriteError),
         };
+        
+        trace!("obj at {:?} dirty", self.as_ptr());
 
         Ok(())
     }
@@ -137,6 +139,24 @@ impl<T: Storable> Obj<T> {
     }
 
     pub fn flush_dirty(&mut self) {
+        trace!("flushing {:?}", self.as_ptr());
+        if self.as_ptr() == DiskAddress(NonZeroUsize::new(75369)) {
+            backtrace::trace(|frame| {
+                let ip = frame.ip();
+                let symbol_address = frame.symbol_address();
+        
+                // Resolve this instruction pointer to a symbol name
+                backtrace::resolve_frame(frame, |symbol| {
+                    match (symbol.name(), symbol.filename()) {
+                        (Some(name), Some(filename)) => trace!("| {name} at {}", filename.display()),
+                        (_, _) => {},
+                    }
+                });
+        
+                true // keep going to the next frame
+            });
+        
+        }
         // faster than calling `self.dirty.take()` on a `None`
         if self.dirty.is_none() {
             return;
@@ -215,13 +235,13 @@ impl<'a, T: Storable + Debug> Drop for ObjRef<'a, T> {
                 inner.dirty = None;
             }
             _ => {
-                trace!("[{:p}] drop of unpinned {ptr:?}: {:?}", self.cache, inner);
-                cache.cached.put(ptr, inner);
                 trace!(
-                    "[{:p}] cache.cached now has {} items",
+                    "[{:p}] {} objs cached; drop of unpinned {ptr:?}: {inner:?}",
                     self.cache,
-                    cache.cached.len()
+                    cache.cached.len() + 1,
                 );
+
+                cache.cached.put(ptr, inner);
             }
         }
     }
@@ -444,7 +464,7 @@ impl<T: Storable + Clone> ObjCache<T> {
                 )?;
                 Ok(Obj {
                     value: sv2,
-                    dirty: obj.dirty,
+                    dirty: None,
                 })
             })
             .transpose()
@@ -511,6 +531,8 @@ impl<T: Storable> ObjCache<T> {
         for ptr in std::mem::take(&mut inner.dirty) {
             if let Some(r) = inner.cached.peek_mut(&ptr) {
                 r.flush_dirty()
+            } else {
+                trace!("Missing dirty page at {ptr:?}");
             }
         }
         Some(())
