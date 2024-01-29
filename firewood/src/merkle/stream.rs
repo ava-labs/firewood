@@ -1,11 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::{
-    node::{self, Node},
-    BranchNode, Merkle, NodeType,
-};
-use crate::nibbles::Nibbles;
+use super::{node::Node, BranchNode, Merkle, NodeType};
 use crate::{
     merkle::NodeObjRef,
     shale::{DiskAddress, ShaleStore},
@@ -734,7 +730,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_at_key_greater_than_all_others() {
+    async fn start_at_key_greater_than_all_others_leaf() {
+        let key = vec![0x00];
+        let greater_key = vec![0xff];
+        let mut merkle = create_test_merkle();
+        let root = merkle.init_root().unwrap();
+        merkle.insert(key.clone(), key, root).unwrap();
+        let stream = merkle.iter_from(root, greater_key.into_boxed_slice());
+
+        check_stream_is_done(stream).await;
+    }
+
+    #[tokio::test]
+    async fn start_at_key_greater_than_all_others_branch() {
         let greatest = 0xff;
         let children = (0..=0xf)
             .map(|val| (val << 4) + val) // 0x00, 0x11, ... 0xff
