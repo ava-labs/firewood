@@ -4,6 +4,7 @@
 use super::{node::Node, BranchNode, Merkle, NodeType};
 use crate::{
     merkle::NodeObjRef,
+    nibbles::Nibbles,
     shale::{DiskAddress, ShaleStore},
     v2::api,
 };
@@ -183,9 +184,6 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                         }
                         NodeType::Leaf(_) => (),
                         NodeType::Extension(extension) => {
-                            // Add the extension node's path to the key nibbles.
-                            key_nibbles_so_far.extend(extension.path.iter());
-
                             if path_to_key.len() == 0 {
                                 // TODO:
                                 // This is the last node in the path to the key.
@@ -194,20 +192,68 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                 // We need to figure out whether the first iteration of [children_iter]
                                 // should be the child at [pos] or the child at [pos + 1].
 
-                                let child = merkle
-                                    .get_node(extension.chd())
-                                    .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+                                // Figure out if this extension node's child is befpre, at or after [key].
+                                let key_nibbles = Nibbles::<1>::new(key.as_ref()).into_iter();
 
-                                let children_iter =
-                                    get_children_iter(child.inner().as_branch().unwrap());
+                                let mut remaining_key = key_nibbles.skip(key_nibbles_so_far.len());
+                                println!("{:?}", key.iter().skip(key_nibbles_so_far.len()).len());
+                                println!("key len {:?}", key.len());
+                                println!("key {:?}", key);
 
-                                let children_iter =
-                                    children_iter.filter(move |(_, child_pos)| child_pos > &pos);
+                                let mut extension_iter = extension.path.iter();
 
-                                branch_iter_stack.push(BranchIterator {
-                                    key_nibbles: key_nibbles_so_far.clone(),
-                                    children_iter: Box::new(children_iter),
-                                });
+                                while let Some(next_extension_nibble) = extension_iter.next() {
+                                    let next_key_nibble = remaining_key.next();
+
+                                    if next_key_nibble.is_none() {
+                                        // We ran out of nibbles of [key] so
+                                        // the extension node is after [key].
+                                        let child = merkle
+                                            .get_node(extension.chd())
+                                            .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+
+                                        let mut key_nibbles = key_nibbles_so_far.clone();
+                                        key_nibbles.push(*next_extension_nibble);
+                                        key_nibbles.extend(extension_iter);
+                                        let prev_index = key_nibbles.pop().unwrap();
+
+                                        let iter = std::iter::once((extension.chd(), prev_index));
+
+                                        branch_iter_stack.push(BranchIterator {
+                                            key_nibbles: key_nibbles,
+                                            children_iter: Box::new(iter),
+                                        });
+                                        break;
+                                    }
+
+                                    let next_key_nibble = next_key_nibble.unwrap();
+
+                                    if next_extension_nibble < &next_key_nibble {
+                                        // The extension node's child is before [key].
+                                        // Don't visit it.
+                                        break;
+                                    } else if next_extension_nibble > &next_key_nibble {
+                                        // The extension node's child is after [key].
+                                        // Visit it.
+                                        let child = merkle
+                                            .get_node(extension.chd())
+                                            .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+
+                                        let branch = child.inner().as_branch().unwrap();
+
+                                        let children_iter = get_children_iter(branch);
+
+                                        branch_iter_stack.push(BranchIterator {
+                                            key_nibbles: key_nibbles_so_far.clone(),
+                                            children_iter: Box::new(children_iter),
+                                        });
+                                        break;
+                                    }
+                                    key_nibbles_so_far.push(next_key_nibble);
+                                }
+                            } else {
+                                // Add the extension node's path to the key nibbles.
+                                key_nibbles_so_far.extend(extension.path.iter());
                             }
                         }
                     }
@@ -262,6 +308,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                             }
                         }
                         NodeType::Leaf(leaf) => {
+                            child_key_nibbles.extend(leaf.path.iter());
                             let value = leaf.data.to_vec();
                             return Poll::Ready(Some(Ok((
                                 key_from_nibble_iter(child_key_nibbles.into_iter().skip(1)), // skip the sentinel node leading 0
@@ -378,6 +425,8 @@ use super::tests::create_test_merkle;
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
+    use std::vec;
+
     use crate::nibbles::Nibbles;
 
     use super::*;
@@ -441,7 +490,7 @@ mod tests {
         for i in (0..256).rev() {
             for j in (0..256).rev() {
                 let key = vec![i as u8, j as u8];
-                let value = vec![0x00];
+                let value = vec![i as u8, j as u8];
 
                 merkle.insert(key, value, root).unwrap();
             }
@@ -452,7 +501,7 @@ mod tests {
         for i in 0..256 {
             for j in 0..256 {
                 let expected_key = vec![i as u8, j as u8];
-                let expected_value = vec![0x00];
+                let expected_value = vec![i as u8, j as u8];
 
                 assert_eq!(
                     stream.next().await.unwrap().unwrap(),
@@ -465,6 +514,49 @@ mod tests {
         }
 
         check_stream_is_done(stream).await;
+    }
+
+    #[tokio::test]
+    async fn with_start_key() {
+        let mut merkle = create_test_merkle();
+        let root = merkle.init_root().unwrap();
+
+        for i in (0..256).rev() {
+            for j in (0..256).rev() {
+                let key = vec![i as u8, j as u8];
+                let value = vec![i as u8, j as u8];
+
+                merkle.insert(key, value, root).unwrap();
+            }
+        }
+
+        for i in 0..256 {
+            let mut stream = merkle.iter_from(root, vec![i as u8].into_boxed_slice());
+            for j in 0..256 {
+                let expected_key = vec![i as u8, j as u8];
+                let expected_value = vec![i as u8, j as u8];
+                assert_eq!(
+                    stream.next().await.unwrap().unwrap(),
+                    (expected_key.into_boxed_slice(), expected_value),
+                    "i: {}, j: {}",
+                    i,
+                    j,
+                );
+            }
+            if i == 255 {
+                check_stream_is_done(stream).await;
+            } else {
+                assert_eq!(
+                    stream.next().await.unwrap().unwrap(),
+                    (
+                        vec![i as u8 + 1, 0].into_boxed_slice(),
+                        vec![i as u8 + 1, 0]
+                    ),
+                    "i: {}",
+                    i,
+                );
+            }
+        }
     }
 
     #[tokio::test]
