@@ -6,6 +6,7 @@ use crate::shale::{self, disk_address::DiskAddress, ObjWriteError, ShaleError, S
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
 use sha3::Digest;
+use std::ops::Deref;
 use std::{
     cmp::Ordering, collections::HashMap, future::ready, io::Write, iter::once, marker::PhantomData,
     sync::OnceLock,
@@ -28,6 +29,31 @@ pub use trie_hash::{TrieHash, TRIE_HASH_LEN};
 type NodeObjRef<'a> = shale::ObjRef<'a, Node>;
 type ParentRefs<'a> = Vec<(NodeObjRef<'a>, u8)>;
 type ParentAddresses = Vec<(DiskAddress, u8)>;
+
+pub(crate) trait NodeStore {
+    fn get_node(&self, ptr: DiskAddress) -> Result<NodeObjRef, MerkleError>;
+
+    fn put_node(&self, node: Node) -> Result<NodeObjRef, MerkleError>;
+
+    fn free_node(&mut self, ptr: DiskAddress) -> Result<(), MerkleError>;
+}
+
+impl<S: ShaleStore<Node>> NodeStore for S {
+        fn get_node(&self, ptr: DiskAddress) -> Result<NodeObjRef, MerkleError> {
+            self.get_item(ptr).map(|(base, history)| {
+                base.deref().copy_encoded_from(history);
+                base
+        }).map_err(Into::into)
+        }
+    
+        fn put_node(&self, node: Node) -> Result<NodeObjRef, MerkleError> {
+            self.put_item(node, 0).map_err(Into::into)
+        }
+    
+        fn free_node(&mut self, ptr: DiskAddress) -> Result<(), MerkleError> {
+            self.free_item(ptr).map_err(Into::into)
+        }
+}
 
 #[derive(Debug, Error)]
 pub enum MerkleError {
@@ -80,7 +106,7 @@ impl<T> From<Merkle<MutStore, T>> for Merkle<SharedStore, T> {
 
 impl<S: ShaleStore<Node>, T> Merkle<S, T> {
     pub fn get_node(&self, ptr: DiskAddress) -> Result<NodeObjRef, MerkleError> {
-        self.store.get_item(ptr).map_err(Into::into)
+        self.store.get_item(ptr).map(|(base, history)| base).map_err(Into::into)
     }
 
     pub fn put_node(&self, node: Node) -> Result<NodeObjRef, MerkleError> {

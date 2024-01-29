@@ -3,7 +3,7 @@
 
 use crate::{
     merkle::from_nibbles,
-    shale::{disk_address::DiskAddress, CachedStore, ShaleError, ShaleStore, Storable},
+    shale::{disk_address::DiskAddress, CachedStore, ShaleError, ShaleStore, Storable, Obj},
 };
 use bincode::{Error, Options};
 use bitflags::bitflags;
@@ -25,8 +25,8 @@ use std::{
     },
 };
 
-#[cfg(feature = "logger")]
-use log::trace;
+
+use crate::logger::trace;
 
 mod branch;
 mod extension;
@@ -247,6 +247,26 @@ impl Node {
 
     pub(super) fn get_encoded<S: ShaleStore<Node>>(&self, store: &S) -> &[u8] {
         self.encoded.get_or_init(|| self.inner.encode::<S>(store))
+    }
+
+    pub(crate) fn copy_encoded_from(&self, other: Option<Obj<Node>>) {
+        if let Some(other) = other {
+            if self.encoded.get().is_none() {
+                if let Some(v) = other.encoded.get() {
+                    let _ = self.encoded.set(v.to_vec());
+                }
+            }
+            if self.is_encoded_longer_than_hash_len.get().is_none() {
+                if let Some(b) = other.is_encoded_longer_than_hash_len.get() {
+                    let _ = self.is_encoded_longer_than_hash_len.set(*b);
+                }
+            }
+            if self.root_hash.get().is_none() {
+                if let Some(hash) = other.root_hash.get() {
+                    let _ = self.root_hash.set(hash.clone());
+                }
+            }
+        }
     }
 
     pub(super) fn get_root_hash<S: ShaleStore<Node>>(&self, store: &S) -> &TrieHash {

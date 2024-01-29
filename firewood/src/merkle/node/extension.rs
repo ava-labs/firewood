@@ -5,7 +5,7 @@ use bincode::Options;
 
 use super::{Encoded, Node};
 use crate::{
-    merkle::{from_nibbles, to_nibble_array, PartialPath, TRIE_HASH_LEN},
+    merkle::{from_nibbles, to_nibble_array, PartialPath, TRIE_HASH_LEN, NodeStore},
     shale::{DiskAddress, ShaleError::InvalidCacheView, ShaleStore, Storable},
 };
 use std::{
@@ -49,7 +49,7 @@ impl ExtNode {
 
         if !self.child.is_null() {
             #[allow(clippy::unwrap_used)]
-            let mut r = store.get_item(self.child).unwrap();
+            let mut r = store.get_node(self.child).unwrap();
 
             #[allow(clippy::unwrap_used)]
             if r.is_encoded_longer_than_hash_len(store) {

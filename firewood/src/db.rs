@@ -15,6 +15,7 @@ use crate::{
         ZeroStore, PAGE_SIZE_NBIT,
     },
     v2::api::{self, HashKey, KeyType, ValueType},
+    logger::trace,
 };
 use crate::{
     merkle,
@@ -28,8 +29,6 @@ use crate::{
 use async_trait::async_trait;
 use bytemuck::{cast_slice, Pod, Zeroable};
 
-#[cfg(feature = "logger")]
-use log::trace;
 use metered::metered;
 use parking_lot::{Mutex, RwLock};
 use std::{
@@ -783,7 +782,6 @@ impl Db {
 
         let merkle = Merkle::new(Box::new(merkle_space));
 
-        #[cfg(feature = "logger")]
         trace!("[{:p}] New merkle", merkle.get_store());
 
         if db_header_ref.kv_root.is_null() {

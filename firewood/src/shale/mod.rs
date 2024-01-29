@@ -122,7 +122,7 @@ impl<T: Storable> Obj<T> {
             Some(len) => Some(len),
             None => return Err(ObjWriteError),
         };
-        
+
         trace!("obj at {:?} dirty", self.as_ptr());
 
         Ok(())
@@ -144,18 +144,16 @@ impl<T: Storable> Obj<T> {
             backtrace::trace(|frame| {
                 let ip = frame.ip();
                 let symbol_address = frame.symbol_address();
-        
+
                 // Resolve this instruction pointer to a symbol name
                 backtrace::resolve_frame(frame, |symbol| {
-                    match (symbol.name(), symbol.filename()) {
-                        (Some(name), Some(filename)) => trace!("| {name} at {}", filename.display()),
-                        (_, _) => {},
+                    if let (Some(name), Some(filename)) = (symbol.name(), symbol.filename()) {
+                        trace!("| {name} at {}", filename.display());
                     }
                 });
-        
+
                 true // keep going to the next frame
             });
-        
         }
         // faster than calling `self.dirty.take()` on a `None`
         if self.dirty.is_none() {
@@ -251,7 +249,7 @@ impl<'a, T: Storable + Debug> Drop for ObjRef<'a, T> {
 /// items could be retrieved or dropped.
 pub trait ShaleStore<T: Storable + Debug> {
     /// Dereference [DiskAddress] to a unique handle that allows direct access to the item in memory.
-    fn get_item(&'_ self, ptr: DiskAddress) -> Result<ObjRef<'_, T>, ShaleError>;
+    fn get_item(&'_ self, ptr: DiskAddress) -> Result<(ObjRef<'_, T>, Option<Obj<T>>), ShaleError>;
     /// Allocate a new item.
     fn put_item(&'_ self, item: T, extra: u64) -> Result<ObjRef<'_, T>, ShaleError>;
     /// Free an item and recycle its space when applicable.

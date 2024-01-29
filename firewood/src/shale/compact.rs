@@ -565,7 +565,6 @@ impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
             })
             .unwrap_or_default();
 
-        #[cfg(feature = "logger")]
         trace!(
             "[{:p}] New cache with {} parents",
             &obj_cache,
@@ -636,12 +635,12 @@ impl<T: Storable + Clone + Debug + 'static + PartialEq, M: CachedStore + Send + 
     fn free_item(&mut self, ptr: DiskAddress) -> Result<(), ShaleError> {
         trace!("[{:p}] free_item({ptr:?})", &self.obj_cache);
         let mut inner = self.inner.write().unwrap();
-        //self.obj_cache.pop(ptr);
+        self.obj_cache.pop(ptr);
         #[allow(clippy::unwrap_used)]
         inner.free(ptr.unwrap().get() as u64)
     }
 
-    fn get_item(&self, ptr: DiskAddress) -> Result<ObjRef<'_, T>, ShaleError> {
+    fn get_item(&self, ptr: DiskAddress) -> Result<(ObjRef<'_, T>, Option<Obj<T>>), ShaleError> {
         trace!("[{:p}] get_item({ptr:?})", &self.obj_cache);
         #[allow(clippy::unwrap_used)]
         if ptr < DiskAddress::from(CompactSpaceHeader::MSIZE as usize) {
@@ -655,15 +654,17 @@ impl<T: Storable + Clone + Debug + 'static + PartialEq, M: CachedStore + Send + 
         if let Some(obj) = cache.get(ptr)? {
             trace!("[{:p}] node {:?} was in primary", cache, ptr);
 
-            return Ok(ObjRef::new(Some(obj), cache));
+            return Ok((ObjRef::new(Some(obj), cache), None));
         }
 
+        let mut saved: Option<Obj<T>> = None;
         // we missed the cache, so check for any parent caches
-        // to disable: #[cfg(never)]
         if let Some(result) = self
             .parent_caches
             .iter()
-            .inspect(|&f| trace!("[{:p}] [looking in secondary {:p}]", cache, f))
+            .inspect(|&f| {
+                trace!("[{:p}] [looking in secondary {:p}]", cache, f);
+            })
             .find_map(|cache| cache.peek_clone(ptr).transpose())
         {
             // found in the parent cache; insert into this cache, unless it's a ShaleError
@@ -673,7 +674,7 @@ impl<T: Storable + Clone + Debug + 'static + PartialEq, M: CachedStore + Send + 
             let mut inner = cache.0.write().expect("poisoned cache");
             inner.cached.put(ptr, obj);
             drop(inner);
-            return Ok(ObjRef::new(Some(cache.get(ptr)?.expect("must be there")), cache));
+            saved = Some(cache.get(ptr)?.expect("must be there"));
         }
 
         let inner = self.inner.read().expect("poisoned cache");
@@ -689,7 +690,39 @@ impl<T: Storable + Clone + Debug + 'static + PartialEq, M: CachedStore + Send + 
             obj
         );
 
-        Ok(ObjRef::new(Some(obj), cache))
+        if let Some(ref debug_saved) = saved {
+            use std::fmt::Write;
+            let mut left = String::new();
+            let mut right = String::new();
+            write!(left, "{:?}", debug_saved).ok();
+            write!(right, "{:?}", obj).ok();
+            left = left
+                .split("OnceLock(")
+                .enumerate()
+                .map(|(pos, part)| {
+                    if pos == 0 {
+                        part.to_string()
+                    } else {
+                        part.chars().skip_while(|&c| c != ')').collect::<String>()
+                    }
+                })
+                .collect();
+            right = right
+                .split("OnceLock(")
+                .enumerate()
+                .map(|(pos, part)| {
+                    if pos == 0 {
+                        part.to_string()
+                    } else {
+                        part.chars().skip_while(|&c| c != ')').collect::<String>()
+                    }
+                })
+                .collect();
+            println!("{left}\n{right}\n");
+            assert_eq!(left, right);
+        }
+
+        Ok((ObjRef::new(Some(obj), cache), saved))
     }
 
     #[allow(clippy::unwrap_used)]
@@ -707,6 +740,7 @@ impl<T: Storable + Clone + Debug + 'static + PartialEq, M: CachedStore + Send + 
 mod tests {
     use sha3::Digest;
 
+    use crate::merkle::NodeStore;
     use crate::shale::{self, cached::DynamicMem, ObjCache};
 
     use super::*;
@@ -795,7 +829,7 @@ mod tests {
         let obj_ref = space.put_item(Hash(hash), 0).unwrap();
         assert_eq!(obj_ref.as_ptr(), DiskAddress::from(4113));
         // create hash ptr from address and attempt to read dirty write.
-        let hash_ref = space.get_item(DiskAddress::from(4113)).unwrap();
+        let hash_ref = space.get_item(DiskAddress::from(4113)).unwrap().0;
         // read before flush results in zeroed hash
         assert_eq!(hash_ref.as_ref(), ZERO_HASH.as_ref());
         // not cached
@@ -822,7 +856,7 @@ mod tests {
         drop(obj_ref);
         // write is visible
         assert_eq!(
-            space.get_item(DiskAddress::from(4113)).unwrap().as_ref(),
+            space.get_item(DiskAddress::from(4113)).unwrap().0.as_ref(),
             hash
         );
     }
