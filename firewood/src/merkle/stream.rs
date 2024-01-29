@@ -114,7 +114,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                 // with [key], where [index] is the next nibble in the key.
                 let mut path_to_key = vec![];
 
-                let node_at_key = merkle
+                merkle
                     .get_node_by_key_with_callbacks(
                         root_node,
                         &key,
