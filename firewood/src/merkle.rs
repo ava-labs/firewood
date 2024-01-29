@@ -1181,7 +1181,8 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             node_ref = self.get_node(next_ptr)?;
         }
 
-        // when we're done iterating over nibbles, check if the node we're at has a value
+        // We're done iterating over nibbles.
+        // Check if the node we're at has a value.
         let node_ref = match &node_ref.inner {
             NodeType::Branch(n) if n.value.as_ref().is_some() => Some(node_ref),
             NodeType::Leaf(n) if n.path.len() == 0 => Some(node_ref),

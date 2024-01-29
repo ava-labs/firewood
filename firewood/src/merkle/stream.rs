@@ -153,6 +153,23 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                 // We need to figure out whether the first iteration of [children_iter]
                                 // should be the child at [pos] or the child at [pos + 1].
 
+                                // Get the child at [pos], if any.
+                                let child = branch.children[pos as usize]
+                                    .map(|child_addr| merkle.get_node(child_addr))
+                                    .transpose()
+                                    .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+
+                                // If the child doesn't exist, the key isn't in the trie.
+                                if child.is_none() {
+                                    let children_iter = get_children_iter(branch)
+                                        .filter(move |(_, child_pos)| child_pos > &pos);
+
+                                    branch_iter_stack.push(BranchIterator {
+                                        key_nibbles: key_nibbles_so_far.clone(),
+                                        children_iter: Box::new(children_iter),
+                                    });
+                                    break;
+                                }
                                 let children_iter = get_children_iter(branch)
                                     .filter(move |(_, child_pos)| child_pos >= &pos);
 
