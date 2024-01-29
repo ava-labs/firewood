@@ -214,9 +214,9 @@ impl From<NodeType> for Node {
 
 bitflags! {
     struct NodeAttributes: u8 {
-        const ROOT_HASH_VALID      = 0b001;
-        const IS_ENCODED_BIG_VALID = 0b010;
-        const LONG                 = 0b100;
+        const HAS_ROOT_HASH           = 0b001;
+        const ENCODED_LENGTH_IS_KNOWN = 0b010;
+        const ENCODED_IS_LONG         = 0b100;
     }
 }
 
@@ -315,7 +315,7 @@ impl Node {
     }
 }
 
-const ENCODED_MAX_LEN: usize = TRIE_HASH_LEN;
+const ENCODED_MAX_LEN: usize = TRIE_HASH_LEN - 1;
 
 #[repr(C)]
 struct Meta {
@@ -376,7 +376,7 @@ impl Storable for Node {
         #[allow(clippy::indexing_slicing)]
         let attrs = NodeAttributes::from_bits_retain(meta_raw.as_deref()[TRIE_HASH_LEN]);
 
-        let root_hash = if attrs.contains(NodeAttributes::ROOT_HASH_VALID) {
+        let root_hash = if attrs.contains(NodeAttributes::HAS_ROOT_HASH) {
             Some(TrieHash(
                 #[allow(clippy::indexing_slicing)]
                 meta_raw.as_deref()[..TRIE_HASH_LEN]
@@ -409,14 +409,13 @@ impl Storable for Node {
         #[allow(clippy::indexing_slicing)]
         let type_id: NodeTypeId = meta_raw.as_deref()[start_index].try_into()?;
 
-        let is_encoded_longer_than_hash_len =
-            if attrs.contains(NodeAttributes::IS_ENCODED_BIG_VALID) {
-                Some(false)
-            } else if attrs.contains(NodeAttributes::LONG) {
-                Some(true)
-            } else {
-                None
-            };
+        let is_encoded_longer_than_hash_len = if attrs.contains(NodeAttributes::ENCODED_IS_LONG) {
+            Some(true)
+        } else {
+            attrs
+                .contains(NodeAttributes::ENCODED_LENGTH_IS_KNOWN)
+                .then_some(false)
+        };
 
         match type_id {
             NodeTypeId::Branch => {
@@ -467,7 +466,7 @@ impl Storable for Node {
         let mut attrs = match self.root_hash.get() {
             Some(h) => {
                 cur.write_all(&h.0)?;
-                NodeAttributes::ROOT_HASH_VALID
+                NodeAttributes::HAS_ROOT_HASH
             }
             None => {
                 cur.write_all(&[0; 32])?;
@@ -475,31 +474,36 @@ impl Storable for Node {
             }
         };
 
-        let mut encoded_len: u64 = 0;
-        let mut encoded = None;
-        if let Some(b) = self.encoded.get() {
-            attrs.insert(if b.len() > TRIE_HASH_LEN {
-                NodeAttributes::LONG
+        let encoded = if let Some(encoded) = self.encoded.get() {
+            attrs.insert(NodeAttributes::ENCODED_LENGTH_IS_KNOWN);
+
+            if encoded.len() < TRIE_HASH_LEN {
+                Some(encoded)
             } else {
-                encoded_len = b.len() as u64;
-                encoded = Some(b);
-                NodeAttributes::IS_ENCODED_BIG_VALID
-            });
-        } else if let Some(b) = self.is_encoded_longer_than_hash_len.get() {
-            attrs.insert(if *b {
-                NodeAttributes::LONG
-            } else {
-                NodeAttributes::IS_ENCODED_BIG_VALID
-            });
-        }
+                attrs.insert(NodeAttributes::ENCODED_IS_LONG);
+                None
+            }
+        } else {
+            if let Some(&is_longer_than_hash) = self.is_encoded_longer_than_hash_len.get() {
+                attrs.insert(NodeAttributes::ENCODED_LENGTH_IS_KNOWN);
+
+                if is_longer_than_hash {
+                    attrs.insert(NodeAttributes::ENCODED_IS_LONG);
+                }
+            }
+
+            None
+        };
+
+        let encoded_len = encoded.map(Vec::len).unwrap_or(0);
 
         #[allow(clippy::unwrap_used)]
         cur.write_all(&[attrs.bits()]).unwrap();
+        cur.write_all(&(encoded_len as u64).to_le_bytes())?;
 
-        cur.write_all(&encoded_len.to_le_bytes())?;
         if let Some(encoded) = encoded {
             cur.write_all(encoded)?;
-            let remaining_len = ENCODED_MAX_LEN - encoded_len as usize;
+            let remaining_len = ENCODED_MAX_LEN - encoded_len;
             cur.write_all(&vec![0; remaining_len])?;
         } else {
             cur.write_all(&[0; ENCODED_MAX_LEN])?;
