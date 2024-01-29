@@ -690,6 +690,7 @@ impl<T: Storable + Clone + Debug + 'static + PartialEq, M: CachedStore + Send + 
             obj
         );
 
+        #[cfg(never)]
         if let Some(ref debug_saved) = saved {
             use std::fmt::Write;
             let mut left = String::new();
