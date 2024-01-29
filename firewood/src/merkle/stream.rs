@@ -168,15 +168,15 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                         key_nibbles: key_nibbles_so_far.clone(),
                                         children_iter: Box::new(children_iter),
                                     });
-                                    break;
-                                }
-                                let children_iter = get_children_iter(branch)
-                                    .filter(move |(_, child_pos)| child_pos >= &pos);
+                                } else {
+                                    let children_iter = get_children_iter(branch)
+                                        .filter(move |(_, child_pos)| child_pos >= &pos);
 
-                                branch_iter_stack.push(BranchIterator {
-                                    key_nibbles: key_nibbles_so_far.clone(),
-                                    children_iter: Box::new(children_iter),
-                                });
+                                    branch_iter_stack.push(BranchIterator {
+                                        key_nibbles: key_nibbles_so_far.clone(),
+                                        children_iter: Box::new(children_iter),
+                                    });
+                                }
                             }
 
                             key_nibbles_so_far.push(pos);
