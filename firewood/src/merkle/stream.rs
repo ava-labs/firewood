@@ -184,76 +184,69 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                         }
                         NodeType::Leaf(_) => (),
                         NodeType::Extension(extension) => {
-                            if path_to_key.len() == 0 {
-                                // TODO:
-                                // This is the last node in the path to the key.
-                                // That means that either this node's child is at the [key]
-                                // or the [key] is not in the trie.
-                                // We need to figure out whether the first iteration of [children_iter]
-                                // should be the child at [pos] or the child at [pos + 1].
-
-                                // Figure out if this extension node's child is befpre, at or after [key].
-                                let key_nibbles = Nibbles::<1>::new(key.as_ref()).into_iter();
-
-                                let mut remaining_key = key_nibbles.skip(key_nibbles_so_far.len());
-                                println!("{:?}", key.iter().skip(key_nibbles_so_far.len()).len());
-                                println!("key len {:?}", key.len());
-                                println!("key {:?}", key);
-
-                                let mut extension_iter = extension.path.iter();
-
-                                while let Some(next_extension_nibble) = extension_iter.next() {
-                                    let next_key_nibble = remaining_key.next();
-
-                                    if next_key_nibble.is_none() {
-                                        // We ran out of nibbles of [key] so
-                                        // the extension node is after [key].
-                                        let child = merkle
-                                            .get_node(extension.chd())
-                                            .map_err(|e| api::Error::InternalError(Box::new(e)))?;
-
-                                        let mut key_nibbles = key_nibbles_so_far.clone();
-                                        key_nibbles.push(*next_extension_nibble);
-                                        key_nibbles.extend(extension_iter);
-                                        let prev_index = key_nibbles.pop().unwrap();
-
-                                        let iter = std::iter::once((extension.chd(), prev_index));
-
-                                        branch_iter_stack.push(BranchIterator {
-                                            key_nibbles: key_nibbles,
-                                            children_iter: Box::new(iter),
-                                        });
-                                        break;
-                                    }
-
-                                    let next_key_nibble = next_key_nibble.unwrap();
-
-                                    if next_extension_nibble < &next_key_nibble {
-                                        // The extension node's child is before [key].
-                                        // Don't visit it.
-                                        break;
-                                    } else if next_extension_nibble > &next_key_nibble {
-                                        // The extension node's child is after [key].
-                                        // Visit it.
-                                        let child = merkle
-                                            .get_node(extension.chd())
-                                            .map_err(|e| api::Error::InternalError(Box::new(e)))?;
-
-                                        let branch = child.inner().as_branch().unwrap();
-
-                                        let children_iter = get_children_iter(branch);
-
-                                        branch_iter_stack.push(BranchIterator {
-                                            key_nibbles: key_nibbles_so_far.clone(),
-                                            children_iter: Box::new(children_iter),
-                                        });
-                                        break;
-                                    }
-                                    key_nibbles_so_far.push(next_key_nibble);
-                                }
-                            } else {
+                            if path_to_key.len() != 0 {
                                 // Add the extension node's path to the key nibbles.
                                 key_nibbles_so_far.extend(extension.path.iter());
+                                continue;
+                            }
+                            // TODO:
+                            // This is the last node in the path to the key.
+                            // That means that either this node's child is at the [key]
+                            // or the [key] is not in the trie.
+                            // We need to figure out whether the first iteration of [children_iter]
+                            // should be the child at [pos] or the child at [pos + 1].
+
+                            // Figure out if this extension node's child is befpre, at or after [key].
+                            let key_nibbles = Nibbles::<1>::new(key.as_ref()).into_iter();
+
+                            let mut remaining_key = key_nibbles.skip(key_nibbles_so_far.len());
+
+                            let mut extension_iter = extension.path.iter();
+
+                            while let Some(next_extension_nibble) = extension_iter.next() {
+                                let next_key_nibble = remaining_key.next();
+
+                                if next_key_nibble.is_none() {
+                                    // We ran out of nibbles of [key] so
+                                    // the extension node is after [key].
+                                    let mut key_nibbles = key_nibbles_so_far.clone();
+                                    key_nibbles.push(*next_extension_nibble);
+                                    key_nibbles.extend(extension_iter);
+                                    let prev_index = key_nibbles.pop().unwrap();
+
+                                    let iter = std::iter::once((extension.chd(), prev_index));
+
+                                    branch_iter_stack.push(BranchIterator {
+                                        key_nibbles: key_nibbles,
+                                        children_iter: Box::new(iter),
+                                    });
+                                    break;
+                                }
+
+                                let next_key_nibble = next_key_nibble.unwrap();
+
+                                if next_extension_nibble < &next_key_nibble {
+                                    // The extension node's child is before [key].
+                                    // Don't visit it.
+                                    break;
+                                } else if next_extension_nibble > &next_key_nibble {
+                                    // The extension node's child is after [key].
+                                    // Visit it.
+                                    let child = merkle
+                                        .get_node(extension.chd())
+                                        .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+
+                                    let branch = child.inner().as_branch().unwrap();
+
+                                    let children_iter = get_children_iter(branch);
+
+                                    branch_iter_stack.push(BranchIterator {
+                                        key_nibbles: key_nibbles_so_far.clone(),
+                                        children_iter: Box::new(children_iter),
+                                    });
+                                    break;
+                                }
+                                key_nibbles_so_far.push(next_key_nibble);
                             }
                         }
                     }
