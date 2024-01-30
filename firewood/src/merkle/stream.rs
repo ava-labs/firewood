@@ -150,7 +150,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                     match node.inner() {
                         NodeType::Branch(branch) => {
-                            if path_to_key.len() != 0 {
+                            if !path_to_key.is_empty() {
                                 let children_iter = get_children_iter(branch)
                                     .filter(move |(_, child_pos)| child_pos > &pos);
 
@@ -195,7 +195,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                         }
                         NodeType::Leaf(_) => (),
                         NodeType::Extension(extension) => {
-                            if path_to_key.len() != 0 {
+                            if !path_to_key.is_empty() {
                                 // Add the extension node's path to the key nibbles.
                                 key_nibbles_so_far.extend(extension.path.iter());
                                 continue;
@@ -231,7 +231,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                     let iter = std::iter::once((extension.chd(), prev_index));
 
                                     branch_iter_stack.push(BranchIterator {
-                                        key_nibbles: key_nibbles,
+                                        key_nibbles,
                                         children_iter: Box::new(iter),
                                     });
                                     break;
@@ -239,23 +239,25 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                                 let next_key_nibble = next_key_nibble.unwrap();
 
-                                if next_extension_nibble < &next_key_nibble {
-                                    // [extension]'s child is before [key]. Visit it.
-                                    break;
-                                } else if next_extension_nibble > &next_key_nibble {
-                                    // [extension]'s child is after [key]. Visit it.
-                                    let child = merkle
-                                        .get_node(extension.chd())
-                                        .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+                                match next_extension_nibble.cmp(&next_key_nibble) {
+                                    std::cmp::Ordering::Less => break, // [extension]'s child is before [key]. Skip it.
+                                    std::cmp::Ordering::Equal => (),
+                                    std::cmp::Ordering::Greater => {
+                                        // [extension]'s child is after [key]. Visit it.
+                                        let child = merkle
+                                            .get_node(extension.chd())
+                                            .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                                    let branch = child.inner().as_branch().unwrap();
+                                        let branch = child.inner().as_branch().unwrap();
 
-                                    branch_iter_stack.push(BranchIterator {
-                                        key_nibbles: key_nibbles_so_far.clone(),
-                                        children_iter: Box::new(get_children_iter(branch)),
-                                    });
-                                    break;
+                                        branch_iter_stack.push(BranchIterator {
+                                            key_nibbles: key_nibbles_so_far.clone(),
+                                            children_iter: Box::new(get_children_iter(branch)),
+                                        });
+                                        break;
+                                    }
                                 }
+
                                 key_nibbles_so_far.push(next_key_nibble);
                             }
                         }
@@ -264,7 +266,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                 self.key_state = IteratorState::Iterating { branch_iter_stack };
 
-                return self.poll_next(_cx);
+                self.poll_next(_cx)
             }
             IteratorState::Iterating { branch_iter_stack } => {
                 loop {
