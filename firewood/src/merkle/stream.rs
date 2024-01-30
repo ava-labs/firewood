@@ -311,7 +311,11 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                 .get_node(extension.chd())
                                 .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                            let branch = child.inner().as_branch().unwrap();
+                            let Some(branch) = child.inner().as_branch() else {
+                                return Poll::Ready(Some(Err(api::Error::InternalError(
+                                    Box::new(api::Error::InvalidExtensionChild),
+                                ))));
+                            };
                             let children_iter = get_children_iter(branch);
 
                             // TODO reduce cloning
