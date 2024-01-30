@@ -103,6 +103,22 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                 let mut branch_iter_stack: Vec<BranchIterator> = vec![];
 
+                // if key.len() == 0 {
+                //     let root_branch = root_node.inner().as_branch().unwrap();
+                //     let child: DiskAddress = root_branch.children[0].unwrap();
+
+                //     let children_iter = std::iter::once((child, 0));
+
+                //     branch_iter_stack.push(BranchIterator {
+                //         key_nibbles: vec![],
+                //         children_iter: Box::new(children_iter),
+                //     });
+
+                //     self.key_state = IteratorState::Iterating { branch_iter_stack };
+
+                //     return self.poll_next(_cx);
+                // }
+
                 // (disk address, index) for each node we visit along the path to the node
                 // with [key], where [index] is the next nibble in the key.
                 let mut path_to_key = vec![];
@@ -317,9 +333,18 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                             child_key.extend(extension.path.iter());
 
                             branch_iter_stack.push(BranchIterator {
-                                key_nibbles: child_key,
+                                key_nibbles: child_key.clone(),
                                 children_iter: Box::new(children_iter),
                             });
+
+                            // If there's a value, return it.
+                            if let Some(value) = branch.value.as_ref() {
+                                let value = value.to_vec();
+                                return Poll::Ready(Some(Ok((
+                                    key_from_nibble_iter(child_key.into_iter().skip(1)), // skip the sentinel node leading 0
+                                    value,
+                                ))));
+                            }
                         }
                     };
                 }
@@ -349,6 +374,7 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
 mod helper_types {
     use std::ops::Not;
 
+    /// TODO how can we use enums instead of Box<dyn Trait>?
     /// Enums enable stack-based dynamic-dispatch as opposed to heap-based `Box<dyn Trait>`.
     /// This helps us with match arms that return different types that implement the same trait.
     /// It's possible that [rust-lang/rust#63065](https://github.com/rust-lang/rust/issues/63065) will make this unnecessary.
