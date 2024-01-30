@@ -103,8 +103,9 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                 let mut branch_iter_stack: Vec<BranchIterator> = vec![];
 
-                // (disk address, index) for each node we visit along the path to the node
-                // with [key], where [index] is the next nibble in the key.
+                // (disk address, index) for each node we visit along the path to
+                // [key], where [index] is the next nibble in the key after the node
+                // at [disk address].
                 let mut path_to_key = vec![];
 
                 // Populate [path_to_key].
