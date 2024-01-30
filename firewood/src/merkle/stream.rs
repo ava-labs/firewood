@@ -3,7 +3,6 @@
 
 use super::{node::Node, BranchNode, Merkle, NodeType};
 use crate::{
-    merkle::NodeObjRef,
     nibbles::Nibbles,
     shale::{DiskAddress, ShaleStore},
     v2::api,
@@ -119,7 +118,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
                 // Convert (address, index) pairs to (node, index) pairs.
-                let mut path_to_key: VecDeque<(NodeObjRef<'a>, u8)> = path_to_key
+                let mut path_to_key = path_to_key
                     .into_iter()
                     .map(|(node, pos)| merkle.get_node(node).map(|node| (node, pos)))
                     .collect::<Result<VecDeque<_>, _>>()
