@@ -103,17 +103,11 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                 let mut branch_iter_stack: Vec<BranchIterator> = vec![];
 
-                // branch_iter_stack.push(BranchIterator {
-                //     key_nibbles: vec![],
-                //     children_iter: Box::new(get_children_iter(
-                //         root_node.inner().as_branch().unwrap(),
-                //     )),
-                // });
-
                 // (disk address, index) for each node we visit along the path to the node
                 // with [key], where [index] is the next nibble in the key.
                 let mut path_to_key = vec![];
 
+                // Populate [path_to_key].
                 merkle
                     .get_node_by_key_with_callbacks(
                         root_node,
@@ -123,12 +117,14 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                     )
                     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
+                // Convert (address, index) paiors to (node, index) pairs.
                 let mut path_to_key: VecDeque<(NodeObjRef<'a>, u8)> = path_to_key
                     .into_iter()
                     .map(|(node, pos)| merkle.get_node(node).map(|node| (node, pos)))
                     .collect::<Result<VecDeque<_>, _>>()
                     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
+                // Tracks how much of the key has been traversed so far.
                 let mut key_nibbles_so_far: Vec<u8> = vec![];
 
                 loop {
@@ -147,11 +143,10 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                     children_iter: Box::new(children_iter),
                                 });
                             } else {
-                                // TODO:
                                 // This is the last node in the path to the key.
-                                // That means that either this node's child is at the [key]
-                                // or the [key] is not in the trie.
-                                // We need to figure out whether the first iteration of [children_iter]
+                                // That means that either this node's child is at [key]
+                                // or [key] isn't in the trie.
+                                // Figure out whether the first iteration of [children_iter]
                                 // should be the child at [pos] or the child at [pos + 1].
 
                                 // Get the child at [pos], if any.
@@ -189,31 +184,34 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                 key_nibbles_so_far.extend(extension.path.iter());
                                 continue;
                             }
-                            // TODO:
                             // This is the last node in the path to the key.
-                            // That means that either this node's child is at the [key]
-                            // or the [key] is not in the trie.
-                            // We need to figure out whether the first iteration of [children_iter]
+                            // That means that either this node's child is at [key]
+                            // or [key] is not in the trie.
+                            // Figure out whether the first iteration of [children_iter]
                             // should be the child at [pos] or the child at [pos + 1].
 
-                            // Figure out if this extension node's child is befpre, at or after [key].
+                            // Figure out if [extension]'s child is before, at or after [key].
                             let key_nibbles = Nibbles::<1>::new(key.as_ref()).into_iter();
 
+                            // Unmatched portion of [key].
                             let mut remaining_key = key_nibbles.skip(key_nibbles_so_far.len());
 
                             let mut extension_iter = extension.path.iter();
 
                             while let Some(next_extension_nibble) = extension_iter.next() {
+                                // Check whether the next nibble of [extension]'s path
+                                // matches the next nibble of [key].
                                 let next_key_nibble = remaining_key.next();
 
                                 if next_key_nibble.is_none() {
                                     // We ran out of nibbles of [key] so
                                     // the extension node is after [key].
+                                    // We want to iterate over the extension node's child.
                                     let mut key_nibbles = key_nibbles_so_far.clone();
                                     key_nibbles.push(*next_extension_nibble);
                                     key_nibbles.extend(extension_iter);
-                                    let prev_index = key_nibbles.pop().unwrap();
 
+                                    let prev_index = key_nibbles.pop().unwrap();
                                     let iter = std::iter::once((extension.chd(), prev_index));
 
                                     branch_iter_stack.push(BranchIterator {
@@ -226,23 +224,19 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                 let next_key_nibble = next_key_nibble.unwrap();
 
                                 if next_extension_nibble < &next_key_nibble {
-                                    // The extension node's child is before [key].
-                                    // Don't visit it.
+                                    // [extension]'s child is before [key]. Visit it.
                                     break;
                                 } else if next_extension_nibble > &next_key_nibble {
-                                    // The extension node's child is after [key].
-                                    // Visit it.
+                                    // [extension]'s child is after [key]. Visit it.
                                     let child = merkle
                                         .get_node(extension.chd())
                                         .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
                                     let branch = child.inner().as_branch().unwrap();
 
-                                    let children_iter = get_children_iter(branch);
-
                                     branch_iter_stack.push(BranchIterator {
                                         key_nibbles: key_nibbles_so_far.clone(),
-                                        children_iter: Box::new(children_iter),
+                                        children_iter: Box::new(get_children_iter(branch)),
                                     });
                                     break;
                                 }
