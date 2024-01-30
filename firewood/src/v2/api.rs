@@ -85,6 +85,9 @@ pub enum Error {
 
     #[error("Child not found")]
     ChildNotFound,
+
+    #[error("Extension node is at the root; should be branch node")]
+    InvalidPathToExtension,
 }
 
 /// A range proof, consisting of a proof of the first key and the last key,

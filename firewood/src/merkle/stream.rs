@@ -11,7 +11,6 @@ use crate::{
 use futures::{stream::FusedStream, Stream};
 use std::{collections::VecDeque, task::Poll};
 type Key = Box<[u8]>;
-use crate::v2::api::Error::ChildNotFound;
 type Value = Vec<u8>;
 
 struct BranchIterator {
@@ -152,7 +151,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                 let Some(child) = branch.children.get(pos as usize) else {
                                     // This should never happen -- [pos] should never be OOB.
                                     return Poll::Ready(Some(Err(api::Error::InternalError(
-                                        Box::new(ChildNotFound),
+                                        Box::new(api::Error::ChildNotFound),
                                     ))));
                                 };
 
@@ -200,15 +199,17 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                             while let Some(next_extension_nibble) = extension_iter.next() {
                                 // Check whether the next nibble of [extension]'s path
                                 // matches the next nibble of [key].
-                                let next_key_nibble = remaining_key.next();
-
-                                if next_key_nibble.is_none() {
+                                let Some(next_key_nibble) = remaining_key.next() else {
                                     // We ran out of nibbles of [key] so [extension]'s child is after [key].
                                     let mut key_nibbles = matched_key_nibbles.clone();
                                     key_nibbles.push(*next_extension_nibble);
                                     key_nibbles.extend(extension_iter);
 
-                                    let prev_index = key_nibbles.pop().unwrap();
+                                    let Some(prev_index) = key_nibbles.pop() else {
+                                        return Poll::Ready(Some(Err(api::Error::InternalError(
+                                            Box::new(api::Error::InvalidPathToExtension),
+                                        ))));
+                                    };
                                     let iter = std::iter::once((extension.chd(), prev_index));
 
                                     branch_iter_stack.push(BranchIterator {
@@ -216,9 +217,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                         children_iter: Box::new(iter),
                                     });
                                     break;
-                                }
-
-                                let next_key_nibble = next_key_nibble.unwrap();
+                                };
 
                                 match next_extension_nibble.cmp(&next_key_nibble) {
                                     std::cmp::Ordering::Equal => (), // The nibbles match; check the next one.
