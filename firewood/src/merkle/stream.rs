@@ -364,7 +364,7 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
 mod helper_types {
     use std::ops::Not;
 
-    /// TODO how can we use enums instead of Box<dyn Trait>?
+    /// TODO how can we use enums instead of `Box<dyn Trait>`?
     /// Enums enable stack-based dynamic-dispatch as opposed to heap-based `Box<dyn Trait>`.
     /// This helps us with match arms that return different types that implement the same trait.
     /// It's possible that [rust-lang/rust#63065](https://github.com/rust-lang/rust/issues/63065) will make this unnecessary.
