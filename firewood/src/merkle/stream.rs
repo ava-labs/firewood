@@ -14,10 +14,10 @@ type Key = Box<[u8]>;
 type Value = Vec<u8>;
 
 struct BranchIterator {
-    // The nibbles of the key at this node.
+    /// The nibbles of the key at this node.
     key_nibbles: Vec<u8>,
-    // Returns the non-empty children of this node
-    // and their positions in the node's children array.
+    /// Returns the non-empty children of this node
+    /// and their positions in the node's children array.
     children_iter: Box<dyn Iterator<Item = (DiskAddress, u8)> + Send>,
 }
 
@@ -26,11 +26,11 @@ enum IteratorState {
     StartAtKey(Key),
     /// Continue iterating after the last node in the `visited_node_path`
     Iterating {
-        // Each element is an iterator over a branch node we've visited
-        // along our traversal of the key-value pairs in the trie.
-        // We pop an iterator off the stack and call next on it to
-        // get the next child node to visit. When an iterator is empty,
-        // we pop it off the stack and go back up to its parent.
+        /// Each element is an iterator over a branch node we've visited
+        /// along our traversal of the key-value pairs in the trie.
+        /// We pop an iterator off the stack and call next on it to
+        /// get the next child node to visit. When an iterator is empty,
+        /// we pop it off the stack and go back up to its parent.
         branch_iter_stack: Vec<BranchIterator>,
     },
 }
@@ -162,7 +162,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
                                 let comparer = if child.is_none() {
-                                    // The child doesn't exist; we don't need to iterator over this index.
+                                    // The child doesn't exist; we don't need to iterate over [pos].
                                     |a: &u8, b: &u8| a > b
                                 } else {
                                     // The child does exist; the first key to iterate over must be at [pos].
