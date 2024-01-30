@@ -361,52 +361,54 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
     data.into_boxed_slice()
 }
 
-mod helper_types {
-    use std::ops::Not;
+// This code should be either used or removed.
+// TODO how can we use Either instead of `Box<dyn Trait>`?
+// mod helper_types {
+//     use std::ops::Not;
 
-    /// TODO how can we use enums instead of `Box<dyn Trait>`?
-    /// Enums enable stack-based dynamic-dispatch as opposed to heap-based `Box<dyn Trait>`.
-    /// This helps us with match arms that return different types that implement the same trait.
-    /// It's possible that [rust-lang/rust#63065](https://github.com/rust-lang/rust/issues/63065) will make this unnecessary.
-    ///
-    /// And this can be replaced by the `either` crate from crates.io if we ever need more functionality.
-    pub(super) enum Either<T, U> {
-        Left(T),
-        Right(U),
-    }
+//
+//     /// Enums enable stack-based dynamic-dispatch as opposed to heap-based `Box<dyn Trait>`.
+//     /// This helps us with match arms that return different types that implement the same trait.
+//     /// It's possible that [rust-lang/rust#63065](https://github.com/rust-lang/rust/issues/63065) will make this unnecessary.
+//     ///
+//     /// And this can be replaced by the `either` crate from crates.io if we ever need more functionality.
+//     pub(super) enum Either<T, U> {
+//         Left(T),
+//         Right(U),
+//     }
 
-    impl<T, U> Iterator for Either<T, U>
-    where
-        T: Iterator,
-        U: Iterator<Item = T::Item>,
-    {
-        type Item = T::Item;
+//     impl<T, U> Iterator for Either<T, U>
+//     where
+//         T: Iterator,
+//         U: Iterator<Item = T::Item>,
+//     {
+//         type Item = T::Item;
 
-        fn next(&mut self) -> Option<Self::Item> {
-            match self {
-                Self::Left(left) => left.next(),
-                Self::Right(right) => right.next(),
-            }
-        }
-    }
+//         fn next(&mut self) -> Option<Self::Item> {
+//             match self {
+//                 Self::Left(left) => left.next(),
+//                 Self::Right(right) => right.next(),
+//             }
+//         }
+//     }
 
-    #[must_use]
-    pub(super) struct MustUse<T>(T);
+//     #[must_use]
+//     pub(super) struct MustUse<T>(T);
 
-    impl<T> From<T> for MustUse<T> {
-        fn from(t: T) -> Self {
-            Self(t)
-        }
-    }
+//     impl<T> From<T> for MustUse<T> {
+//         fn from(t: T) -> Self {
+//             Self(t)
+//         }
+//     }
 
-    impl<T: Not> Not for MustUse<T> {
-        type Output = T::Output;
+//     impl<T: Not> Not for MustUse<T> {
+//         type Output = T::Output;
 
-        fn not(self) -> Self::Output {
-            self.0.not()
-        }
-    }
-}
+//         fn not(self) -> Self::Output {
+//             self.0.not()
+//         }
+//     }
+// }
 
 // CAUTION: only use with nibble iterators
 trait IntoBytes: Iterator<Item = u8> {
