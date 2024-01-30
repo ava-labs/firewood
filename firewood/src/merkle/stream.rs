@@ -118,7 +118,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                     )
                     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                // Convert (address, index) paiors to (node, index) pairs.
+                // Convert (address, index) pairs to (node, index) pairs.
                 let mut path_to_key: VecDeque<(NodeObjRef<'a>, u8)> = path_to_key
                     .into_iter()
                     .map(|(node, pos)| merkle.get_node(node).map(|node| (node, pos)))
@@ -135,7 +135,11 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                     match node.inner() {
                         NodeType::Branch(branch) => {
+                            // Figure out whether we want to start iterating over this
+                            // node's children at [pos] or [pos + 1].
                             if !path_to_key.is_empty() {
+                                // The next element in [path_to_key] will handle the child at [pos]
+                                // so we can start iterating at [pos + 1].
                                 let children_iter = get_children_iter(branch)
                                     .filter(move |(_, child_pos)| child_pos > &pos);
 
@@ -144,9 +148,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                     children_iter: Box::new(children_iter),
                                 });
                             } else {
-                                // Figure out whether we want to start iterating at [pos] or [pos + 1].
-
-                                // Get the address of the child at [pos], if any.
+                                // Get the child at [pos], if any.
                                 let Some(child) = branch.children.get(pos as usize) else {
                                     // This should never happen -- [pos] should never be OOB.
                                     return Poll::Ready(Some(Err(api::Error::InternalError(
@@ -154,7 +156,6 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                     ))));
                                 };
 
-                                // Convert child from address --> node.
                                 let child = child
                                     .map(|child_addr| merkle.get_node(child_addr))
                                     .transpose()
@@ -164,7 +165,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                     // The child doesn't exist; we don't need to iterator over this index.
                                     |a: &u8, b: &u8| a > b
                                 } else {
-                                    // The child does exist; the first key to iterate over must be at/under [pos].
+                                    // The child does exist; the first key to iterate over must be at [pos].
                                     |a: &u8, b: &u8| a >= b
                                 };
 
@@ -220,8 +221,8 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                 let next_key_nibble = next_key_nibble.unwrap();
 
                                 match next_extension_nibble.cmp(&next_key_nibble) {
+                                    std::cmp::Ordering::Equal => (), // The nibbles match; check the next one.
                                     std::cmp::Ordering::Less => break, // [extension]'s child is before [key]. Skip it.
-                                    std::cmp::Ordering::Equal => (),
                                     std::cmp::Ordering::Greater => {
                                         // [extension]'s child is after [key]. Visit it.
                                         let child = merkle
@@ -294,10 +295,9 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                         }
                         NodeType::Leaf(leaf) => {
                             child_key_nibbles.extend(leaf.path.iter());
-                            let value = leaf.data.to_vec();
                             return Poll::Ready(Some(Ok((
                                 key_from_nibble_iter(child_key_nibbles.into_iter().skip(1)), // skip the sentinel node leading 0
-                                value,
+                                leaf.data.to_vec(),
                             ))));
                         }
                         NodeType::Extension(extension) => {
