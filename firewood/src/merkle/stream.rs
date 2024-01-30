@@ -126,7 +126,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
                 // Tracks how much of the key has been traversed so far.
-                let mut key_nibbles_so_far: Vec<u8> = vec![];
+                let mut matched_key_nibbles: Vec<u8> = vec![];
 
                 loop {
                     let Some((node, pos)) = path_to_key.pop_front() else {
@@ -140,17 +140,13 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                     .filter(move |(_, child_pos)| child_pos > &pos);
 
                                 branch_iter_stack.push(BranchIterator {
-                                    key_nibbles: key_nibbles_so_far.clone(),
+                                    key_nibbles: matched_key_nibbles.clone(),
                                     children_iter: Box::new(children_iter),
                                 });
                             } else {
-                                // This is the last node in the path to the key.
-                                // That means that either this node's child is at [key]
-                                // or [key] isn't in the trie.
-                                // Figure out whether the first iteration of [children_iter]
-                                // should be the child at [pos] or the child at [pos + 1].
+                                // Figure out whether we want to start iterating at [pos] or [pos + 1].
 
-                                // Get the child at [pos], if any.
+                                // Get the address of the child at [pos], if any.
                                 let Some(child) = branch.children.get(pos as usize) else {
                                     // This should never happen -- [pos] should never be OOB.
                                     return Poll::Ready(Some(Err(api::Error::InternalError(
@@ -164,33 +160,30 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                     .transpose()
                                     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                                // If the child doesn't exist, the key isn't in the trie.
-                                if child.is_none() {
-                                    let children_iter = get_children_iter(branch)
-                                        .filter(move |(_, child_pos)| child_pos > &pos);
-
-                                    branch_iter_stack.push(BranchIterator {
-                                        key_nibbles: key_nibbles_so_far.clone(),
-                                        children_iter: Box::new(children_iter),
-                                    });
+                                let comparer = if child.is_none() {
+                                    // The child doesn't exist; we don't need to iterator over this index.
+                                    |a: &u8, b: &u8| a > b
                                 } else {
-                                    let children_iter = get_children_iter(branch)
-                                        .filter(move |(_, child_pos)| child_pos >= &pos);
+                                    // The child does exist; the first key to iterate over must be at/under [pos].
+                                    |a: &u8, b: &u8| a >= b
+                                };
 
-                                    branch_iter_stack.push(BranchIterator {
-                                        key_nibbles: key_nibbles_so_far.clone(),
-                                        children_iter: Box::new(children_iter),
-                                    });
-                                }
+                                let children_iter = get_children_iter(branch)
+                                    .filter(move |(_, child_pos)| comparer(child_pos, &pos));
+
+                                branch_iter_stack.push(BranchIterator {
+                                    key_nibbles: matched_key_nibbles.clone(),
+                                    children_iter: Box::new(children_iter),
+                                });
                             }
 
-                            key_nibbles_so_far.push(pos);
+                            matched_key_nibbles.push(pos);
                         }
                         NodeType::Leaf(_) => (),
                         NodeType::Extension(extension) => {
                             if !path_to_key.is_empty() {
                                 // Add the extension node's path to the key nibbles.
-                                key_nibbles_so_far.extend(extension.path.iter());
+                                matched_key_nibbles.extend(extension.path.iter());
                                 continue;
                             }
                             // This is the last node in the path to the key.
@@ -203,7 +196,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                             let key_nibbles = Nibbles::<1>::new(key.as_ref()).into_iter();
 
                             // Unmatched portion of [key].
-                            let mut remaining_key = key_nibbles.skip(key_nibbles_so_far.len());
+                            let mut remaining_key = key_nibbles.skip(matched_key_nibbles.len());
 
                             let mut extension_iter = extension.path.iter();
 
@@ -216,7 +209,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                     // We ran out of nibbles of [key] so
                                     // the extension node is after [key].
                                     // We want to iterate over the extension node's child.
-                                    let mut key_nibbles = key_nibbles_so_far.clone();
+                                    let mut key_nibbles = matched_key_nibbles.clone();
                                     key_nibbles.push(*next_extension_nibble);
                                     key_nibbles.extend(extension_iter);
 
@@ -244,14 +237,14 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                         let branch = child.inner().as_branch().unwrap();
 
                                         branch_iter_stack.push(BranchIterator {
-                                            key_nibbles: key_nibbles_so_far.clone(),
+                                            key_nibbles: matched_key_nibbles.clone(),
                                             children_iter: Box::new(get_children_iter(branch)),
                                         });
                                         break;
                                     }
                                 }
 
-                                key_nibbles_so_far.push(next_key_nibble);
+                                matched_key_nibbles.push(next_key_nibble);
                             }
                         }
                     }
