@@ -186,13 +186,9 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                 matched_key_nibbles.extend(extension.path.iter());
                                 continue;
                             }
-                            // This is the last node in the path to the key.
-                            // That means that either this node's child is at [key]
-                            // or [key] is not in the trie.
-                            // Figure out whether the first iteration of [children_iter]
-                            // should be the child at [pos] or the child at [pos + 1].
 
-                            // Figure out if [extension]'s child is before, at or after [key].
+                            // Figure out whether we want to start iterating at [pos] or [pos + 1].
+                            // See if [extension]'s child is before, at or after [key].
                             let key_nibbles = Nibbles::<1>::new(key.as_ref()).into_iter();
 
                             // Unmatched portion of [key].
@@ -206,9 +202,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                 let next_key_nibble = remaining_key.next();
 
                                 if next_key_nibble.is_none() {
-                                    // We ran out of nibbles of [key] so
-                                    // the extension node is after [key].
-                                    // We want to iterate over the extension node's child.
+                                    // We ran out of nibbles of [key] so [extension]'s child is after [key].
                                     let mut key_nibbles = matched_key_nibbles.clone();
                                     key_nibbles.push(*next_extension_nibble);
                                     key_nibbles.extend(extension_iter);
