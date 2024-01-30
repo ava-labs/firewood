@@ -127,11 +127,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                 // Tracks how much of the key has been traversed so far.
                 let mut matched_key_nibbles: Vec<u8> = vec![];
 
-                loop {
-                    let Some((node, pos)) = path_to_key.pop_front() else {
-                        break;
-                    };
-
+                while let Some((node, pos)) = path_to_key.pop_front() {
                     match node.inner() {
                         NodeType::Leaf(_) => (),
                         NodeType::Branch(branch) => {
