@@ -334,7 +334,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                         }
                     };
                 }
-                return Poll::Ready(None);
+                Poll::Ready(None)
             }
         }
     }
@@ -493,8 +493,8 @@ mod tests {
         // doesn't just return the keys in insertion order.
         for i in (0..u8::MAX).rev() {
             for j in (0..u8::MAX).rev() {
-                let key = vec![i as u8, j as u8];
-                let value = vec![i as u8, j as u8];
+                let key = vec![i, j];
+                let value = vec![i, j];
 
                 merkle.insert(key, value, root).unwrap();
             }
@@ -504,8 +504,8 @@ mod tests {
 
         for i in 0..u8::MAX {
             for j in 0..u8::MAX {
-                let expected_key = vec![i as u8, j as u8];
-                let expected_value = vec![i as u8, j as u8];
+                let expected_key = vec![i, j];
+                let expected_value = vec![i, j];
 
                 assert_eq!(
                     stream.next().await.unwrap().unwrap(),
@@ -529,18 +529,18 @@ mod tests {
         // doesn't just return the keys in insertion order.
         for i in (0..=u8::MAX).rev() {
             for j in (0..=u8::MAX).rev() {
-                let key = vec![i as u8, j as u8];
-                let value = vec![i as u8, j as u8];
+                let key = vec![i, j];
+                let value = vec![i, j];
 
                 merkle.insert(key, value, root).unwrap();
             }
         }
 
         for i in 0..=u8::MAX {
-            let mut stream = merkle.iter_from(root, vec![i as u8].into_boxed_slice());
+            let mut stream = merkle.iter_from(root, vec![i].into_boxed_slice());
             for j in 0..=u8::MAX {
-                let expected_key = vec![i as u8, j as u8];
-                let expected_value = vec![i as u8, j as u8];
+                let expected_key = vec![i, j];
+                let expected_value = vec![i, j];
                 assert_eq!(
                     stream.next().await.unwrap().unwrap(),
                     (expected_key.into_boxed_slice(), expected_value),
@@ -554,10 +554,7 @@ mod tests {
             } else {
                 assert_eq!(
                     stream.next().await.unwrap().unwrap(),
-                    (
-                        vec![i as u8 + 1, 0].into_boxed_slice(),
-                        vec![i as u8 + 1, 0]
-                    ),
+                    (vec![i + 1, 0].into_boxed_slice(), vec![i + 1, 0]),
                     "i: {}",
                     i,
                 );
