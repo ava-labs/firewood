@@ -82,6 +82,9 @@ pub enum Error {
 
     #[error("Range too small")]
     RangeTooSmall,
+
+    #[error("Child not found")]
+    ChildNotFound,
 }
 
 /// A range proof, consisting of a proof of the first key and the last key,

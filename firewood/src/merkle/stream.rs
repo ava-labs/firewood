@@ -11,6 +11,7 @@ use crate::{
 use futures::{stream::FusedStream, Stream};
 use std::{collections::VecDeque, task::Poll};
 type Key = Box<[u8]>;
+use crate::v2::api::Error::ChildNotFound;
 type Value = Vec<u8>;
 
 struct BranchIterator {
@@ -103,22 +104,6 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                 let mut branch_iter_stack: Vec<BranchIterator> = vec![];
 
-                // if key.len() == 0 {
-                //     let root_branch = root_node.inner().as_branch().unwrap();
-                //     let child: DiskAddress = root_branch.children[0].unwrap();
-
-                //     let children_iter = std::iter::once((child, 0));
-
-                //     branch_iter_stack.push(BranchIterator {
-                //         key_nibbles: vec![],
-                //         children_iter: Box::new(children_iter),
-                //     });
-
-                //     self.key_state = IteratorState::Iterating { branch_iter_stack };
-
-                //     return self.poll_next(_cx);
-                // }
-
                 // (disk address, index) for each node we visit along the path to the node
                 // with [key], where [index] is the next nibble in the key.
                 let mut path_to_key = vec![];
@@ -166,7 +151,15 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                 // should be the child at [pos] or the child at [pos + 1].
 
                                 // Get the child at [pos], if any.
-                                let child = branch.children[pos as usize]
+                                let Some(child) = branch.children.get(pos as usize) else {
+                                    // This should never happen -- [pos] should never be OOB.
+                                    return Poll::Ready(Some(Err(api::Error::InternalError(
+                                        Box::new(ChildNotFound),
+                                    ))));
+                                };
+
+                                // Convert child from address --> node.
+                                let child = child
                                     .map(|child_addr| merkle.get_node(child_addr))
                                     .transpose()
                                     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
