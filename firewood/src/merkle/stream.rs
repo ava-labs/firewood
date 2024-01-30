@@ -133,6 +133,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                     };
 
                     match node.inner() {
+                        NodeType::Leaf(_) => (),
                         NodeType::Branch(branch) => {
                             // Figure out whether we want to start iterating over this
                             // node's children at [pos] or [pos + 1].
@@ -179,7 +180,6 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                             matched_key_nibbles.push(pos);
                         }
-                        NodeType::Leaf(_) => (),
                         NodeType::Extension(extension) => {
                             if !path_to_key.is_empty() {
                                 // Add the extension node's path to the key nibbles.
@@ -255,11 +255,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                 self.poll_next(_cx)
             }
             IteratorState::Iterating { branch_iter_stack } => {
-                loop {
-                    let Some(mut branch_iter) = branch_iter_stack.pop() else {
-                        return Poll::Ready(None);
-                    };
-
+                while let Some(mut branch_iter) = branch_iter_stack.pop() {
                     // [node_addr] is the next node to visit.
                     // It's the child at index [pos] of [node_iter].
                     let Some((node_addr, pos)) = branch_iter.children_iter.next() else {
@@ -338,6 +334,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                         }
                     };
                 }
+                return Poll::Ready(None);
             }
         }
     }
@@ -492,8 +489,10 @@ mod tests {
         let mut merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
 
-        for i in (0..256).rev() {
-            for j in (0..256).rev() {
+        // Insert key-values in reverse order to ensure iterator
+        // doesn't just return the keys in insertion order.
+        for i in (0..u8::MAX).rev() {
+            for j in (0..u8::MAX).rev() {
                 let key = vec![i as u8, j as u8];
                 let value = vec![i as u8, j as u8];
 
@@ -503,8 +502,8 @@ mod tests {
 
         let mut stream = merkle.iter(root);
 
-        for i in 0..256 {
-            for j in 0..256 {
+        for i in 0..u8::MAX {
+            for j in 0..u8::MAX {
                 let expected_key = vec![i as u8, j as u8];
                 let expected_value = vec![i as u8, j as u8];
 
@@ -526,8 +525,10 @@ mod tests {
         let mut merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
 
-        for i in (0..256).rev() {
-            for j in (0..256).rev() {
+        // Insert key-values in reverse order to ensure iterator
+        // doesn't just return the keys in insertion order.
+        for i in (0..=u8::MAX).rev() {
+            for j in (0..=u8::MAX).rev() {
                 let key = vec![i as u8, j as u8];
                 let value = vec![i as u8, j as u8];
 
@@ -535,9 +536,9 @@ mod tests {
             }
         }
 
-        for i in 0..256 {
+        for i in 0..=u8::MAX {
             let mut stream = merkle.iter_from(root, vec![i as u8].into_boxed_slice());
-            for j in 0..256 {
+            for j in 0..=u8::MAX {
                 let expected_key = vec![i as u8, j as u8];
                 let expected_value = vec![i as u8, j as u8];
                 assert_eq!(
@@ -548,7 +549,7 @@ mod tests {
                     j,
                 );
             }
-            if i == 255 {
+            if i == u8::MAX {
                 check_stream_is_done(stream).await;
             } else {
                 assert_eq!(
