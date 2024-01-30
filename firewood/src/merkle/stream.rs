@@ -207,7 +207,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                                     let Some(prev_index) = key_nibbles.pop() else {
                                         return Poll::Ready(Some(Err(api::Error::InternalError(
-                                            Box::new(api::Error::InvalidPathToExtension),
+                                            Box::new(api::Error::ExtensionNodeAtRoot),
                                         ))));
                                     };
                                     let iter = std::iter::once((extension.chd(), prev_index));
@@ -228,7 +228,13 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                             .get_node(extension.chd())
                                             .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                                        let branch = child.inner().as_branch().unwrap();
+                                        let Some(branch) = child.inner().as_branch() else {
+                                            return Poll::Ready(Some(Err(
+                                                api::Error::InternalError(Box::new(
+                                                    api::Error::InvalidExtensionChild,
+                                                )),
+                                            )));
+                                        };
 
                                         branch_iter_stack.push(BranchIterator {
                                             key_nibbles: matched_key_nibbles.clone(),
@@ -301,7 +307,6 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                         }
                         NodeType::Extension(extension) => {
                             // Follow the extension node to its child, which is a branch.
-                            // TODO confirm that an extension node's child is always a branch node.
                             let child = merkle
                                 .get_node(extension.chd())
                                 .map_err(|e| api::Error::InternalError(Box::new(e)))?;
