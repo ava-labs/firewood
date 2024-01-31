@@ -375,8 +375,6 @@ use super::tests::create_test_merkle;
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
-    use std::vec;
-
     use crate::nibbles::Nibbles;
 
     use super::*;
