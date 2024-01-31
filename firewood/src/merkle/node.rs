@@ -216,7 +216,7 @@ bitflags! {
     struct NodeAttributes: u8 {
         const HAS_ROOT_HASH           = 0b001;
         const ENCODED_LENGTH_IS_KNOWN = 0b010;
-        const ENCODED_IS_LONG         = 0b100;
+        const ENCODED_IS_LONG         = 0b110;
     }
 }
 
@@ -409,13 +409,12 @@ impl Storable for Node {
         #[allow(clippy::indexing_slicing)]
         let type_id: NodeTypeId = meta_raw.as_deref()[start_index].try_into()?;
 
-        let is_encoded_longer_than_hash_len = if attrs.contains(NodeAttributes::ENCODED_IS_LONG) {
-            Some(true)
-        } else {
-            attrs
-                .contains(NodeAttributes::ENCODED_LENGTH_IS_KNOWN)
-                .then_some(false)
-        };
+        let is_encoded_longer_than_hash_len =
+            if attrs.contains(NodeAttributes::ENCODED_LENGTH_IS_KNOWN) {
+                attrs.contains(NodeAttributes::ENCODED_IS_LONG).into()
+            } else {
+                None
+            };
 
         match type_id {
             NodeTypeId::Branch => {
@@ -474,28 +473,20 @@ impl Storable for Node {
             }
         };
 
-        let encoded = if let Some(encoded) = self.encoded.get() {
-            attrs.insert(NodeAttributes::ENCODED_LENGTH_IS_KNOWN);
-
-            if encoded.len() < TRIE_HASH_LEN {
-                Some(encoded)
-            } else {
-                attrs.insert(NodeAttributes::ENCODED_IS_LONG);
-                None
-            }
-        } else {
-            if let Some(&is_longer_than_hash) = self.is_encoded_longer_than_hash_len.get() {
-                attrs.insert(NodeAttributes::ENCODED_LENGTH_IS_KNOWN);
-
-                if is_longer_than_hash {
-                    attrs.insert(NodeAttributes::ENCODED_IS_LONG);
-                }
-            }
-
-            None
-        };
+        let encoded = self
+            .encoded
+            .get()
+            .filter(|encoded| encoded.len() < TRIE_HASH_LEN);
 
         let encoded_len = encoded.map(Vec::len).unwrap_or(0);
+
+        if let Some(&is_encoded_longer_than_hash_len) = self.is_encoded_longer_than_hash_len.get() {
+            attrs.insert(if is_encoded_longer_than_hash_len {
+                NodeAttributes::ENCODED_IS_LONG
+            } else {
+                NodeAttributes::ENCODED_LENGTH_IS_KNOWN
+            });
+        }
 
         #[allow(clippy::unwrap_used)]
         cur.write_all(&[attrs.bits()]).unwrap();
