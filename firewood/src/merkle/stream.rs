@@ -150,10 +150,10 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                             let comparer = if child.is_none() {
                                 // The child doesn't exist; we don't need to iterate over [pos].
-                                |a: &u8, b: &u8| a > b
+                                <u8 as PartialOrd>::gt
                             } else {
                                 // The child does exist; the first key to iterate over must be at [pos].
-                                |a: &u8, b: &u8| a >= b
+                                <u8 as PartialOrd>::ge
                             };
 
                             let children_iter = get_children_iter(branch)
