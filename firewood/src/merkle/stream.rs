@@ -130,50 +130,51 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                 while let Some((node, pos)) = path_to_key.pop_front() {
                     match node.inner() {
                         NodeType::Leaf(_) => (),
-                        NodeType::Branch(branch) => {
-                            // Figure out whether we want to start iterating over this
-                            // node's children at [pos] or [pos + 1].
-                            if !path_to_key.is_empty() {
-                                // The next element in [path_to_key] will handle the child at [pos]
-                                // so we can start iterating at [pos + 1].
-                                let children_iter = get_children_iter(branch)
-                                    .filter(move |(_, child_pos)| child_pos > &pos);
+                        NodeType::Branch(branch) if path_to_key.is_empty() => {
+                            // This is the last node in the path to [key].
+                            // Figure out whether to start iterating over this node's
+                            // children at [pos] or [pos + 1].
 
-                                branch_iter_stack.push(BranchIterator {
-                                    key_nibbles: matched_key_nibbles.clone(),
-                                    children_iter: Box::new(children_iter),
-                                });
+                            // Get the child at [pos], if any.
+                            let Some(child) = branch.children.get(pos as usize) else {
+                                // This should never happen -- [pos] should never be OOB.
+                                return Poll::Ready(Some(Err(api::Error::InternalError(
+                                    Box::new(api::Error::ChildNotFound),
+                                ))));
+                            };
+
+                            let child = child
+                                .map(|child_addr| merkle.get_node(child_addr))
+                                .transpose()
+                                .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+
+                            let comparer = if child.is_none() {
+                                // The child doesn't exist; we don't need to iterate over [pos].
+                                |a: &u8, b: &u8| a > b
                             } else {
-                                // Get the child at [pos], if any.
-                                let Some(child) = branch.children.get(pos as usize) else {
-                                    // This should never happen -- [pos] should never be OOB.
-                                    return Poll::Ready(Some(Err(api::Error::InternalError(
-                                        Box::new(api::Error::ChildNotFound),
-                                    ))));
-                                };
+                                // The child does exist; the first key to iterate over must be at [pos].
+                                |a: &u8, b: &u8| a >= b
+                            };
 
-                                let child = child
-                                    .map(|child_addr| merkle.get_node(child_addr))
-                                    .transpose()
-                                    .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+                            let children_iter = get_children_iter(branch)
+                                .filter(move |(_, child_pos)| comparer(child_pos, &pos));
 
-                                let comparer = if child.is_none() {
-                                    // The child doesn't exist; we don't need to iterate over [pos].
-                                    |a: &u8, b: &u8| a > b
-                                } else {
-                                    // The child does exist; the first key to iterate over must be at [pos].
-                                    |a: &u8, b: &u8| a >= b
-                                };
+                            branch_iter_stack.push(BranchIterator {
+                                key_nibbles: matched_key_nibbles.clone(),
+                                children_iter: Box::new(children_iter),
+                            });
+                            matched_key_nibbles.push(pos);
+                        }
+                        NodeType::Branch(branch) => {
+                            // The next element in [path_to_key] will handle the child at [pos]
+                            // so we can start iterating at [pos + 1].
+                            let children_iter = get_children_iter(branch)
+                                .filter(move |(_, child_pos)| child_pos > &pos);
 
-                                let children_iter = get_children_iter(branch)
-                                    .filter(move |(_, child_pos)| comparer(child_pos, &pos));
-
-                                branch_iter_stack.push(BranchIterator {
-                                    key_nibbles: matched_key_nibbles.clone(),
-                                    children_iter: Box::new(children_iter),
-                                });
-                            }
-
+                            branch_iter_stack.push(BranchIterator {
+                                key_nibbles: matched_key_nibbles.clone(),
+                                children_iter: Box::new(children_iter),
+                            });
                             matched_key_nibbles.push(pos);
                         }
                         NodeType::Extension(extension) => {
@@ -353,55 +354,6 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
 
     data.into_boxed_slice()
 }
-
-// This code should be either used or removed.
-// TODO how can we use Either instead of `Box<dyn Trait>`?
-// mod helper_types {
-//     use std::ops::Not;
-
-//
-//     /// Enums enable stack-based dynamic-dispatch as opposed to heap-based `Box<dyn Trait>`.
-//     /// This helps us with match arms that return different types that implement the same trait.
-//     /// It's possible that [rust-lang/rust#63065](https://github.com/rust-lang/rust/issues/63065) will make this unnecessary.
-//     ///
-//     /// And this can be replaced by the `either` crate from crates.io if we ever need more functionality.
-//     pub(super) enum Either<T, U> {
-//         Left(T),
-//         Right(U),
-//     }
-
-//     impl<T, U> Iterator for Either<T, U>
-//     where
-//         T: Iterator,
-//         U: Iterator<Item = T::Item>,
-//     {
-//         type Item = T::Item;
-
-//         fn next(&mut self) -> Option<Self::Item> {
-//             match self {
-//                 Self::Left(left) => left.next(),
-//                 Self::Right(right) => right.next(),
-//             }
-//         }
-//     }
-
-//     #[must_use]
-//     pub(super) struct MustUse<T>(T);
-
-//     impl<T> From<T> for MustUse<T> {
-//         fn from(t: T) -> Self {
-//             Self(t)
-//         }
-//     }
-
-//     impl<T: Not> Not for MustUse<T> {
-//         type Output = T::Output;
-
-//         fn not(self) -> Self::Output {
-//             self.0.not()
-//         }
-//     }
-// }
 
 // CAUTION: only use with nibble iterators
 trait IntoBytes: Iterator<Item = u8> {
