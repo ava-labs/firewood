@@ -217,10 +217,12 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                 };
 
                                 match next_extension_nibble.cmp(&next_key_nibble) {
-                                    std::cmp::Ordering::Equal => (), // The nibbles match; check the next one.
-                                    std::cmp::Ordering::Less => break, // [extension]'s child is before [key]. Skip it.
+                                    // The nibbles match; check the next one.
+                                    std::cmp::Ordering::Equal => (),
+                                    // [extension]'s child is before [key]. Skip it.
+                                    std::cmp::Ordering::Less => break,
+                                    // [extension]'s child is after [key]. Visit it.
                                     std::cmp::Ordering::Greater => {
-                                        // [extension]'s child is after [key]. Visit it.
                                         let child = merkle
                                             .get_node(extension.chd())
                                             .map_err(|e| api::Error::InternalError(Box::new(e)))?;
