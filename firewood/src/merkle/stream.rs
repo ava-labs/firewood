@@ -177,15 +177,11 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                             });
                             matched_key_nibbles.push(pos);
                         }
-                        NodeType::Extension(extension) => {
-                            if !path_to_key.is_empty() {
-                                // Add the extension node's path to the key nibbles.
-                                matched_key_nibbles.extend(extension.path.iter());
-                                continue;
-                            }
-
-                            // Figure out whether we want to start iterating at [pos] or [pos + 1].
-                            // See if [extension]'s child is before, at or after [key].
+                        NodeType::Extension(extension) if path_to_key.is_empty() => {
+                            // Figure out whether we want to start iterating over the children
+                            // of [extension.child] at [pos] or [pos + 1].
+                            // Note that an extension node's child is always a branch node.
+                            // See if [extension]'s child is before, at, or after [key].
                             let key_nibbles = Nibbles::<1>::new(key.as_ref()).into_iter();
 
                             // Unmatched portion of [key].
@@ -198,6 +194,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                 // matches the next nibble of [key].
                                 let Some(next_key_nibble) = remaining_key.next() else {
                                     // We ran out of nibbles of [key] so [extension]'s child is after [key].
+                                    // We want to visit all children of [extension]'s child.
                                     let mut key_nibbles = matched_key_nibbles.clone();
                                     key_nibbles.push(*next_extension_nibble);
                                     key_nibbles.extend(extension_iter);
@@ -245,6 +242,10 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                                 matched_key_nibbles.push(next_key_nibble);
                             }
+                        }
+                        NodeType::Extension(extension) => {
+                            // Add the extension node's path to the matched key nibbles.
+                            matched_key_nibbles.extend(extension.path.iter());
                         }
                     }
                 }
