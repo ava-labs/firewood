@@ -8,7 +8,7 @@ use crate::{
     v2::api,
 };
 use futures::{stream::FusedStream, Stream};
-use std::{collections::VecDeque, task::Poll};
+use std::task::Poll;
 type Key = Box<[u8]>;
 type Value = Vec<u8>;
 
@@ -117,20 +117,31 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                     )
                     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                // Convert (address, index) pairs to (node, index) pairs.
-                let mut path_to_key = path_to_key
-                    .into_iter()
-                    .map(|(node, pos)| merkle.get_node(node).map(|node| (node, pos)))
-                    .collect::<Result<VecDeque<_>, _>>()
-                    .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+                // Get each node in [path_to_key]. Mark the last node as being the last
+                // so we can use that information in the while loop below.
+                let mut path_to_key =
+                    path_to_key
+                        .into_iter()
+                        .rev()
+                        .enumerate()
+                        .rev()
+                        .map(|(i, (node, pos))| {
+                            merkle.get_node(node).map(|node| (i == 0, (node, pos)))
+                        });
 
-                // Tracks how much of the key has been traversed so far.
                 let mut matched_key_nibbles = vec![];
 
-                while let Some((node, pos)) = path_to_key.pop_front() {
+                while let Some(result) = path_to_key.next() {
+                    let (is_last, (node, pos)) = match result {
+                        Ok(result) => result,
+                        Err(e) => {
+                            return Poll::Ready(Some(Err(api::Error::InternalError(Box::new(e)))))
+                        }
+                    };
+
                     match node.inner() {
                         NodeType::Leaf(_) => (),
-                        NodeType::Branch(branch) if path_to_key.is_empty() => {
+                        NodeType::Branch(branch) if is_last => {
                             // This is the last node in the path to [key].
                             // Figure out whether to start iterating over this node's
                             // children at [pos] or [pos + 1].
@@ -177,7 +188,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                             });
                             matched_key_nibbles.push(pos);
                         }
-                        NodeType::Extension(extension) if path_to_key.is_empty() => {
+                        NodeType::Extension(extension) if is_last => {
                             // Figure out whether we want to start iterating over the children
                             // of [extension.child] at [pos] or [pos + 1].
                             // Note that an extension node's child is always a branch node.
