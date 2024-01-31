@@ -125,7 +125,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
                 // Tracks how much of the key has been traversed so far.
-                let mut matched_key_nibbles: Vec<u8> = vec![];
+                let mut matched_key_nibbles = vec![];
 
                 while let Some((node, pos)) = path_to_key.pop_front() {
                     match node.inner() {
