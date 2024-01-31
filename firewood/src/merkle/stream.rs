@@ -119,7 +119,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                 // Get each node in [path_to_key]. Mark the last node as being the last
                 // so we can use that information in the while loop below.
-                let mut path_to_key =
+                let path_to_key =
                     path_to_key
                         .into_iter()
                         .rev()
@@ -131,7 +131,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                 let mut matched_key_nibbles = vec![];
 
-                while let Some(result) = path_to_key.next() {
+                for result in path_to_key {
                     let (is_last, (node, pos)) = match result {
                         Ok(result) => result,
                         Err(e) => {
