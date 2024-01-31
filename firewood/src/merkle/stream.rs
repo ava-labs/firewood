@@ -8,7 +8,12 @@ use crate::{
     v2::api,
 };
 use futures::{stream::FusedStream, Stream};
-use std::{collections::VecDeque, task::Poll};
+use std::{
+    array::IntoIter,
+    collections::VecDeque,
+    iter::{Enumerate, FilterMap},
+    task::Poll,
+};
 type Key = Box<[u8]>;
 type Value = Vec<u8>;
 
@@ -17,7 +22,33 @@ struct BranchIterator {
     key_nibbles: Vec<u8>,
     /// Returns the non-empty children of this node
     /// and their positions in the node's children array.
-    children_iter: Box<dyn Iterator<Item = (DiskAddress, u8)> + Send>,
+    children_iter: FilteredIterator,
+}
+
+struct FilteredIterator {
+    iter: PathIter,
+    pos: u8,
+    op: fn(&u8, &u8) -> bool,
+}
+
+impl Iterator for FilteredIterator {
+    type Item = <PathIter as Iterator>::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for (child, pos) in self.iter.by_ref() {
+            if (self.op)(&pos, &self.pos) {
+                return Some((child, pos));
+            }
+        }
+
+        None
+    }
+}
+
+impl FilteredIterator {
+    fn new(iter: PathIter, pos: u8, op: fn(&u8, &u8) -> bool) -> Self {
+        Self { iter, pos, op }
+    }
 }
 
 enum IteratorState {
@@ -136,12 +167,16 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                             if !path_to_key.is_empty() {
                                 // The next element in [path_to_key] will handle the child at [pos]
                                 // so we can start iterating at [pos + 1].
-                                let children_iter = get_children_iter(branch)
-                                    .filter(move |(_, child_pos)| child_pos > &pos);
+                                let children_iter = get_children_iter(branch);
+                                let children_iter = FilteredIterator::new(
+                                    children_iter,
+                                    pos,
+                                    <u8 as PartialOrd>::gt,
+                                );
 
                                 branch_iter_stack.push(BranchIterator {
                                     key_nibbles: matched_key_nibbles.clone(),
-                                    children_iter: Box::new(children_iter),
+                                    children_iter,
                                 });
                             } else {
                                 // Get the child at [pos], if any.
@@ -159,18 +194,19 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                                 let comparer = if child.is_none() {
                                     // The child doesn't exist; we don't need to iterate over [pos].
-                                    |a: &u8, b: &u8| a > b
+                                    <u8 as PartialOrd>::gt
                                 } else {
                                     // The child does exist; the first key to iterate over must be at [pos].
-                                    |a: &u8, b: &u8| a >= b
+                                    <u8 as PartialOrd>::ge
                                 };
 
-                                let children_iter = get_children_iter(branch)
-                                    .filter(move |(_, child_pos)| comparer(child_pos, &pos));
+                                let children_iter = get_children_iter(branch);
+                                let children_iter =
+                                    FilteredIterator::new(children_iter, pos, comparer);
 
                                 branch_iter_stack.push(BranchIterator {
                                     key_nibbles: matched_key_nibbles.clone(),
-                                    children_iter: Box::new(children_iter),
+                                    children_iter,
                                 });
                             }
 
@@ -195,6 +231,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                             while let Some(next_extension_nibble) = extension_iter.next() {
                                 // Check whether the next nibble of [extension]'s path
                                 // matches the next nibble of [key].
+                                #[allow(clippy::indexing_slicing)]
                                 let Some(next_key_nibble) = remaining_key.next() else {
                                     // We ran out of nibbles of [key] so [extension]'s child is after [key].
                                     let mut key_nibbles = matched_key_nibbles.clone();
@@ -206,12 +243,26 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                             Box::new(api::Error::ExtensionNodeAtRoot),
                                         ))));
                                     };
-                                    let iter = std::iter::once((extension.chd(), prev_index));
+
+                                    let mut branch = BranchNode {
+                                        children: [None; 16],
+                                        value: None,
+                                        children_encoded: std::array::from_fn(|_| None),
+                                    };
+
+                                    branch.children[prev_index as usize] = Some(extension.chd());
+
+                                    let children_iter = FilteredIterator::new(
+                                        get_children_iter(&branch),
+                                        pos,
+                                        |_, _| true,
+                                    );
 
                                     branch_iter_stack.push(BranchIterator {
                                         key_nibbles,
-                                        children_iter: Box::new(iter),
+                                        children_iter,
                                     });
+
                                     break;
                                 };
 
@@ -232,9 +283,15 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                             )));
                                         };
 
+                                        let children_iter = FilteredIterator::new(
+                                            get_children_iter(branch),
+                                            0,
+                                            |_, _| true,
+                                        );
+
                                         branch_iter_stack.push(BranchIterator {
                                             key_nibbles: matched_key_nibbles.clone(),
-                                            children_iter: Box::new(get_children_iter(branch)),
+                                            children_iter,
                                         });
                                         break;
                                     }
@@ -275,10 +332,12 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                             // for every non-empty child in [node] where
                             // [pos] is the child's index in [node.children].
                             let children_iter = get_children_iter(branch);
+                            let children_iter =
+                                FilteredIterator::new(children_iter, 0, |_, _| true);
 
                             branch_iter_stack.push(BranchIterator {
                                 key_nibbles: child_key_nibbles.clone(), // TODO reduce¸cloning
-                                children_iter: Box::new(children_iter),
+                                children_iter,
                             });
 
                             // If there's a value, return it.
@@ -309,6 +368,8 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                 ))));
                             };
                             let children_iter = get_children_iter(branch);
+                            let children_iter =
+                                FilteredIterator::new(children_iter, 0, |_, _| true);
 
                             // TODO reduce cloning
                             let mut child_key = child_key_nibbles;
@@ -316,7 +377,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
                             branch_iter_stack.push(BranchIterator {
                                 key_nibbles: child_key.clone(),
-                                children_iter: Box::new(children_iter),
+                                children_iter,
                             });
 
                             // If there's a value, return it.
@@ -336,12 +397,21 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
     }
 }
 
-fn get_children_iter(branch: &BranchNode) -> impl Iterator<Item = (DiskAddress, u8)> {
+fn put_pos_in_option((pos, child_addr): (usize, Option<DiskAddress>)) -> Option<(DiskAddress, u8)> {
+    child_addr.map(|child_addr| (child_addr, pos as u8))
+}
+
+type PathIter = FilterMap<
+    Enumerate<IntoIter<Option<DiskAddress>, 16>>,
+    fn((usize, std::option::Option<DiskAddress>)) -> Option<(DiskAddress, u8)>,
+>;
+
+fn get_children_iter(branch: &BranchNode) -> PathIter {
     branch
         .children
         .into_iter()
         .enumerate()
-        .filter_map(|(pos, child_addr)| child_addr.map(|child_addr| (child_addr, pos as u8)))
+        .filter_map(put_pos_in_option)
 }
 
 fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
