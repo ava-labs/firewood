@@ -52,11 +52,12 @@ pub struct MerkleKeyValueStream<'a, S, T> {
     merkle: &'a Merkle<S, T>,
 }
 
-// Returns the initial state for
-fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
-    merkle: &'a Merkle<S, T>,
+/// Returns the state of an iterator over [merkle], which has the given
+/// [root_node], after it's been initialized. Iteration starts at [key].
+fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
+    merkle: &Merkle<S, T>,
     root_node: DiskAddress,
-    key: &Box<[u8]>,
+    key: &[u8],
 ) -> Result<IteratorState, api::Error> {
     let root_node = merkle
         .get_node(root_node)
@@ -73,7 +74,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
     merkle
         .get_node_by_key_with_callbacks(
             root_node,
-            &key,
+            key,
             |node_addr, i| path_to_key.push((node_addr, i)),
             |_, _| {},
         )
@@ -90,8 +91,8 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
 
     let mut matched_key_nibbles = vec![];
 
-    for result in path_to_key {
-        let (is_last, (node, pos)) = match result {
+    for node in path_to_key {
+        let (is_last, (node, pos)) = match node {
             Ok(result) => result,
             Err(e) => return Err(api::Error::InternalError(Box::new(e))),
         };
@@ -150,7 +151,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                 // of [extension.child] at [pos] or [pos + 1].
                 // Note that an extension node's child is always a branch node.
                 // See if [extension]'s child is before, at, or after [key].
-                let key_nibbles = Nibbles::<1>::new(key.as_ref()).into_iter();
+                let key_nibbles = Nibbles::<1>::new(key).into_iter();
 
                 // Unmatched portion of [key].
                 let mut remaining_key = key_nibbles.skip(matched_key_nibbles.len());
