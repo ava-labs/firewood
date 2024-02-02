@@ -14,6 +14,8 @@ use thiserror::Error;
 pub mod cached;
 pub mod compact;
 pub mod disk_address;
+#[cfg(test)]
+pub mod plainmem;
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -28,6 +30,8 @@ pub enum ShaleError {
     InvalidAddressLength { expected: DiskAddress, found: u64 },
     #[error("invalid node type")]
     InvalidNodeType,
+    #[error("invalid node metadata")]
+    InvalidNodeMeta,
     #[error("failed to create view: offset: {offset:?} size: {size:?}")]
     InvalidCacheView { offset: usize, size: u64 },
     #[error("io error: {0}")]
