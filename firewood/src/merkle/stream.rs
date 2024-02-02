@@ -466,8 +466,8 @@ mod tests {
 
         // Test with no start key
         let mut stream = merkle.iter(root);
-        for i in 0..u8::MAX {
-            for j in 0..u8::MAX {
+        for i in 0..=u8::MAX {
+            for j in 0..=u8::MAX {
                 let expected_key = vec![i, j];
                 let expected_value = vec![i, j];
 
