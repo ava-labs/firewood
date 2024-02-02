@@ -51,6 +51,173 @@ pub struct MerkleKeyValueStream<'a, S, T> {
     merkle: &'a Merkle<S, T>,
 }
 
+// Returns the initial state for
+fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
+    merkle: &'a Merkle<S, T>,
+    root_node: DiskAddress,
+    key: &mut Box<[u8]>,
+) -> Result<IteratorState, api::Error> {
+    let root_node = merkle
+        .get_node(root_node)
+        .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+
+    let mut branch_iter_stack: Vec<BranchIterator> = vec![];
+
+    // (disk address, index) for each node we visit along the path to
+    // [key], where [index] is the next nibble in the key after the node
+    // at [disk address].
+    let mut path_to_key = vec![];
+
+    // Populate [path_to_key].
+    merkle
+        .get_node_by_key_with_callbacks(
+            root_node,
+            &key,
+            |node_addr, i| path_to_key.push((node_addr, i)),
+            |_, _| {},
+        )
+        .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+
+    // Get each node in [path_to_key]. Mark the last node as being the last
+    // so we can use that information in the while loop below.
+    let path_to_key = path_to_key
+        .into_iter()
+        .rev()
+        .enumerate()
+        .rev()
+        .map(|(i, (node, pos))| merkle.get_node(node).map(|node| (i == 0, (node, pos))));
+
+    let mut matched_key_nibbles = vec![];
+
+    for result in path_to_key {
+        let (is_last, (node, pos)) = match result {
+            Ok(result) => result,
+            Err(e) => return Err(api::Error::InternalError(Box::new(e))),
+        };
+
+        match node.inner() {
+            NodeType::Leaf(_) => (),
+            NodeType::Branch(branch) if is_last => {
+                // This is the last node in the path to [key].
+                // Figure out whether to start iterating over this node's
+                // children at [pos] or [pos + 1].
+
+                // Get the child at [pos], if any.
+                let Some(child) = branch.children.get(pos as usize) else {
+                    // This should never happen -- [pos] should never be OOB.
+                    return Err(api::Error::InternalError(Box::new(
+                        api::Error::ChildNotFound,
+                    )));
+                };
+
+                let child = child
+                    .map(|child_addr| merkle.get_node(child_addr))
+                    .transpose()
+                    .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+
+                let comparer = if child.is_none() {
+                    // The child doesn't exist; we don't need to iterate over [pos].
+                    <u8 as PartialOrd>::gt
+                } else {
+                    // The child does exist; the first key to iterate over must be at [pos].
+                    <u8 as PartialOrd>::ge
+                };
+
+                let children_iter = get_children_iter(branch)
+                    .filter(move |(_, child_pos)| comparer(child_pos, &pos));
+
+                branch_iter_stack.push(BranchIterator {
+                    key_nibbles: matched_key_nibbles.clone(),
+                    children_iter: Box::new(children_iter),
+                });
+                matched_key_nibbles.push(pos);
+            }
+            NodeType::Branch(branch) => {
+                // The next element in [path_to_key] will handle the child at [pos]
+                // so we can start iterating at [pos + 1].
+                let children_iter =
+                    get_children_iter(branch).filter(move |(_, child_pos)| child_pos > &pos);
+
+                branch_iter_stack.push(BranchIterator {
+                    key_nibbles: matched_key_nibbles.clone(),
+                    children_iter: Box::new(children_iter),
+                });
+                matched_key_nibbles.push(pos);
+            }
+            NodeType::Extension(extension) if is_last => {
+                // Figure out whether we want to start iterating over the children
+                // of [extension.child] at [pos] or [pos + 1].
+                // Note that an extension node's child is always a branch node.
+                // See if [extension]'s child is before, at, or after [key].
+                let key_nibbles = Nibbles::<1>::new(key.as_ref()).into_iter();
+
+                // Unmatched portion of [key].
+                let mut remaining_key = key_nibbles.skip(matched_key_nibbles.len());
+
+                let mut extension_iter = extension.path.iter();
+
+                while let Some(next_extension_nibble) = extension_iter.next() {
+                    // Check whether the next nibble of [extension]'s path
+                    // matches the next nibble of [key].
+                    let Some(next_key_nibble) = remaining_key.next() else {
+                        // We ran out of nibbles of [key] so [extension]'s child is after [key].
+                        // We want to visit all children of [extension]'s child.
+                        let mut key_nibbles = matched_key_nibbles.clone();
+                        key_nibbles.push(*next_extension_nibble);
+                        key_nibbles.extend(extension_iter);
+
+                        let Some(prev_index) = key_nibbles.pop() else {
+                            return Err(api::Error::InternalError(Box::new(
+                                api::Error::ExtensionNodeAtRoot,
+                            )));
+                        };
+                        let iter = std::iter::once((extension.chd(), prev_index));
+
+                        branch_iter_stack.push(BranchIterator {
+                            key_nibbles,
+                            children_iter: Box::new(iter),
+                        });
+                        break;
+                    };
+
+                    match next_extension_nibble.cmp(&next_key_nibble) {
+                        // The nibbles match; check the next one.
+                        std::cmp::Ordering::Equal => (),
+                        // [extension]'s child is before [key]. Skip it.
+                        std::cmp::Ordering::Less => break,
+                        // [extension]'s child is after [key]. Visit it.
+                        std::cmp::Ordering::Greater => {
+                            let child = merkle
+                                .get_node(extension.chd())
+                                .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+
+                            let Some(branch) = child.inner().as_branch() else {
+                                return Err(api::Error::InternalError(Box::new(
+                                    api::Error::InvalidExtensionChild,
+                                )));
+                            };
+
+                            branch_iter_stack.push(BranchIterator {
+                                key_nibbles: matched_key_nibbles.clone(),
+                                children_iter: Box::new(get_children_iter(branch)),
+                            });
+                            break;
+                        }
+                    }
+
+                    matched_key_nibbles.push(next_key_nibble);
+                }
+            }
+            NodeType::Extension(extension) => {
+                // Add the extension node's path to the matched key nibbles.
+                matched_key_nibbles.extend(extension.path.iter());
+            }
+        }
+    }
+
+    Ok(IteratorState::Iterating { branch_iter_stack })
+}
+
 impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleKeyValueStream<'a, S, T> {
     fn is_terminated(&self) -> bool {
         matches!(&self.key_state, IteratorState::Iterating { branch_iter_stack } if branch_iter_stack.is_empty())
@@ -96,172 +263,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
         match key_state {
             IteratorState::StartAtKey(key) => {
-                let root_node = merkle
-                    .get_node(*merkle_root)
-                    .map_err(|e| api::Error::InternalError(Box::new(e)))?;
-
-                let mut branch_iter_stack: Vec<BranchIterator> = vec![];
-
-                // (disk address, index) for each node we visit along the path to
-                // [key], where [index] is the next nibble in the key after the node
-                // at [disk address].
-                let mut path_to_key = vec![];
-
-                // Populate [path_to_key].
-                merkle
-                    .get_node_by_key_with_callbacks(
-                        root_node,
-                        &key,
-                        |node_addr, i| path_to_key.push((node_addr, i)),
-                        |_, _| {},
-                    )
-                    .map_err(|e| api::Error::InternalError(Box::new(e)))?;
-
-                // Get each node in [path_to_key]. Mark the last node as being the last
-                // so we can use that information in the while loop below.
-                let path_to_key =
-                    path_to_key
-                        .into_iter()
-                        .rev()
-                        .enumerate()
-                        .rev()
-                        .map(|(i, (node, pos))| {
-                            merkle.get_node(node).map(|node| (i == 0, (node, pos)))
-                        });
-
-                let mut matched_key_nibbles = vec![];
-
-                for result in path_to_key {
-                    let (is_last, (node, pos)) = match result {
-                        Ok(result) => result,
-                        Err(e) => {
-                            return Poll::Ready(Some(Err(api::Error::InternalError(Box::new(e)))))
-                        }
-                    };
-
-                    match node.inner() {
-                        NodeType::Leaf(_) => (),
-                        NodeType::Branch(branch) if is_last => {
-                            // This is the last node in the path to [key].
-                            // Figure out whether to start iterating over this node's
-                            // children at [pos] or [pos + 1].
-
-                            // Get the child at [pos], if any.
-                            let Some(child) = branch.children.get(pos as usize) else {
-                                // This should never happen -- [pos] should never be OOB.
-                                return Poll::Ready(Some(Err(api::Error::InternalError(
-                                    Box::new(api::Error::ChildNotFound),
-                                ))));
-                            };
-
-                            let child = child
-                                .map(|child_addr| merkle.get_node(child_addr))
-                                .transpose()
-                                .map_err(|e| api::Error::InternalError(Box::new(e)))?;
-
-                            let comparer = if child.is_none() {
-                                // The child doesn't exist; we don't need to iterate over [pos].
-                                <u8 as PartialOrd>::gt
-                            } else {
-                                // The child does exist; the first key to iterate over must be at [pos].
-                                <u8 as PartialOrd>::ge
-                            };
-
-                            let children_iter = get_children_iter(branch)
-                                .filter(move |(_, child_pos)| comparer(child_pos, &pos));
-
-                            branch_iter_stack.push(BranchIterator {
-                                key_nibbles: matched_key_nibbles.clone(),
-                                children_iter: Box::new(children_iter),
-                            });
-                            matched_key_nibbles.push(pos);
-                        }
-                        NodeType::Branch(branch) => {
-                            // The next element in [path_to_key] will handle the child at [pos]
-                            // so we can start iterating at [pos + 1].
-                            let children_iter = get_children_iter(branch)
-                                .filter(move |(_, child_pos)| child_pos > &pos);
-
-                            branch_iter_stack.push(BranchIterator {
-                                key_nibbles: matched_key_nibbles.clone(),
-                                children_iter: Box::new(children_iter),
-                            });
-                            matched_key_nibbles.push(pos);
-                        }
-                        NodeType::Extension(extension) if is_last => {
-                            // Figure out whether we want to start iterating over the children
-                            // of [extension.child] at [pos] or [pos + 1].
-                            // Note that an extension node's child is always a branch node.
-                            // See if [extension]'s child is before, at, or after [key].
-                            let key_nibbles = Nibbles::<1>::new(key.as_ref()).into_iter();
-
-                            // Unmatched portion of [key].
-                            let mut remaining_key = key_nibbles.skip(matched_key_nibbles.len());
-
-                            let mut extension_iter = extension.path.iter();
-
-                            while let Some(next_extension_nibble) = extension_iter.next() {
-                                // Check whether the next nibble of [extension]'s path
-                                // matches the next nibble of [key].
-                                let Some(next_key_nibble) = remaining_key.next() else {
-                                    // We ran out of nibbles of [key] so [extension]'s child is after [key].
-                                    // We want to visit all children of [extension]'s child.
-                                    let mut key_nibbles = matched_key_nibbles.clone();
-                                    key_nibbles.push(*next_extension_nibble);
-                                    key_nibbles.extend(extension_iter);
-
-                                    let Some(prev_index) = key_nibbles.pop() else {
-                                        return Poll::Ready(Some(Err(api::Error::InternalError(
-                                            Box::new(api::Error::ExtensionNodeAtRoot),
-                                        ))));
-                                    };
-                                    let iter = std::iter::once((extension.chd(), prev_index));
-
-                                    branch_iter_stack.push(BranchIterator {
-                                        key_nibbles,
-                                        children_iter: Box::new(iter),
-                                    });
-                                    break;
-                                };
-
-                                match next_extension_nibble.cmp(&next_key_nibble) {
-                                    // The nibbles match; check the next one.
-                                    std::cmp::Ordering::Equal => (),
-                                    // [extension]'s child is before [key]. Skip it.
-                                    std::cmp::Ordering::Less => break,
-                                    // [extension]'s child is after [key]. Visit it.
-                                    std::cmp::Ordering::Greater => {
-                                        let child = merkle
-                                            .get_node(extension.chd())
-                                            .map_err(|e| api::Error::InternalError(Box::new(e)))?;
-
-                                        let Some(branch) = child.inner().as_branch() else {
-                                            return Poll::Ready(Some(Err(
-                                                api::Error::InternalError(Box::new(
-                                                    api::Error::InvalidExtensionChild,
-                                                )),
-                                            )));
-                                        };
-
-                                        branch_iter_stack.push(BranchIterator {
-                                            key_nibbles: matched_key_nibbles.clone(),
-                                            children_iter: Box::new(get_children_iter(branch)),
-                                        });
-                                        break;
-                                    }
-                                }
-
-                                matched_key_nibbles.push(next_key_nibble);
-                            }
-                        }
-                        NodeType::Extension(extension) => {
-                            // Add the extension node's path to the matched key nibbles.
-                            matched_key_nibbles.extend(extension.path.iter());
-                        }
-                    }
-                }
-
-                self.key_state = IteratorState::Iterating { branch_iter_stack };
+                self.key_state = get_iterator_intial_state(merkle, *merkle_root, key)?;
 
                 self.poll_next(_cx)
             }
