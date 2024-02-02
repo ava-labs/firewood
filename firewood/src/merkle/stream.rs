@@ -170,7 +170,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
 
                         let Some(prev_index) = key_nibbles.pop() else {
                             return Err(api::Error::InternalError(Box::new(
-                                api::Error::ExtensionNodeAtRoot,
+                                api::Error::SentinelNodeIsExtension,
                             )));
                         };
                         let iter = std::iter::once((extension.chd(), prev_index));

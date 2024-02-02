@@ -86,8 +86,8 @@ pub enum Error {
     #[error("Child not found")]
     ChildNotFound,
 
-    #[error("Extension node is at the root; should be branch node")]
-    ExtensionNodeAtRoot,
+    #[error("Sentinel node is an extension node; should be a branch node")]
+    SentinelNodeIsExtension,
 
     #[error("Extension node has non-branch child")]
     InvalidExtensionChild,
