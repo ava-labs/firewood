@@ -449,14 +449,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_start_key() {
+    async fn table_test() {
         let mut merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
 
         // Insert key-values in reverse order to ensure iterator
         // doesn't just return the keys in insertion order.
-        for i in (0..u8::MAX).rev() {
-            for j in (0..u8::MAX).rev() {
+        for i in (0..=u8::MAX).rev() {
+            for j in (0..=u8::MAX).rev() {
                 let key = vec![i, j];
                 let value = vec![i, j];
 
@@ -481,24 +481,8 @@ mod tests {
             }
         }
         check_stream_is_done(stream).await;
-    }
 
-    #[tokio::test]
-    async fn with_start_key() {
-        let mut merkle = create_test_merkle();
-        let root = merkle.init_root().unwrap();
-
-        // Insert key-values in reverse order to ensure iterator
-        // doesn't just return the keys in insertion order.
-        for i in (0..=u8::MAX).rev() {
-            for j in (0..=u8::MAX).rev() {
-                let key = vec![i, j];
-                let value = vec![i, j];
-
-                merkle.insert(key, value, root).unwrap();
-            }
-        }
-
+        // Test with start key
         for i in 0..=u8::MAX {
             let mut stream = merkle.iter_from(root, vec![i].into_boxed_slice());
             for j in 0..=u8::MAX {
