@@ -12,19 +12,20 @@ use std::task::Poll;
 type Key = Box<[u8]>;
 type Value = Vec<u8>;
 
+/// Represents an ongoing iteration over a branch node's children.
 struct BranchIterator {
-    /// The nibbles of the key at this node.
+    /// The nibbles of the key at this branch node.
     key_nibbles: Vec<u8>,
-    /// Returns the non-empty children of this node
-    /// and their positions in the node's children array.
+    /// Returns the non-empty children of this node and their positions
+    /// in the node's children array .
     children_iter: Box<dyn Iterator<Item = (DiskAddress, u8)> + Send>,
 }
 
 enum IteratorState {
-    /// Start iterating at the specified key
-    StartAtKey(Key),
-    /// Continue iterating after the last node in the `visited_node_path`
-    Iterating {
+    /// The iterator state is lazily initialized when poll_next is called
+    /// for the first time. The iteration start key is stored here.
+    Uninitialized(Key),
+    Initialized {
         /// Each element is an iterator over a branch node we've visited
         /// along our traversal of the key-value pairs in the trie.
         /// We pop an iterator off the stack and call next on it to
@@ -36,11 +37,11 @@ enum IteratorState {
 
 impl IteratorState {
     fn new() -> Self {
-        Self::StartAtKey(vec![].into_boxed_slice())
+        Self::Uninitialized(vec![].into_boxed_slice())
     }
 
     fn with_key(key: Key) -> Self {
-        Self::StartAtKey(key)
+        Self::Uninitialized(key)
     }
 }
 
@@ -215,12 +216,12 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
         }
     }
 
-    Ok(IteratorState::Iterating { branch_iter_stack })
+    Ok(IteratorState::Initialized { branch_iter_stack })
 }
 
 impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleKeyValueStream<'a, S, T> {
     fn is_terminated(&self) -> bool {
-        matches!(&self.key_state, IteratorState::Iterating { branch_iter_stack } if branch_iter_stack.is_empty())
+        matches!(&self.key_state, IteratorState::Initialized { branch_iter_stack } if branch_iter_stack.is_empty())
     }
 }
 
@@ -262,12 +263,12 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
         } = &mut *self;
 
         match key_state {
-            IteratorState::StartAtKey(key) => {
+            IteratorState::Uninitialized(key) => {
                 self.key_state = get_iterator_intial_state(merkle, *merkle_root, key)?;
 
                 self.poll_next(_cx)
             }
-            IteratorState::Iterating { branch_iter_stack } => {
+            IteratorState::Initialized { branch_iter_stack } => {
                 while let Some(mut branch_iter) = branch_iter_stack.pop() {
                     // [node_addr] is the next node to visit.
                     // It's the child at index [pos] of [node_iter].
