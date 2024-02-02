@@ -56,7 +56,7 @@ pub struct MerkleKeyValueStream<'a, S, T> {
 fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
     merkle: &'a Merkle<S, T>,
     root_node: DiskAddress,
-    key: &mut Box<[u8]>,
+    key: &Box<[u8]>,
 ) -> Result<IteratorState, api::Error> {
     let root_node = merkle
         .get_node(root_node)
