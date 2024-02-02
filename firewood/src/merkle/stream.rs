@@ -52,8 +52,8 @@ pub struct MerkleKeyValueStream<'a, S, T> {
     merkle: &'a Merkle<S, T>,
 }
 
-/// Returns the state of an iterator over [merkle], which has the given
-/// [root_node], after it's been initialized. Iteration starts at [key].
+/// Returns the state of an iterator over merkle, which has the given
+/// root_node, after it's been initialized. Iteration starts at the given key.
 fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
     merkle: &Merkle<S, T>,
     root_node: DiskAddress,
@@ -464,8 +464,22 @@ mod tests {
             }
         }
 
-        let mut stream = merkle.iter(root);
+        // let mut merkle = create_test_merkle();
+        // let root = merkle.init_root().unwrap();
 
+        // // Insert key-values in reverse order to ensure iterator
+        // // doesn't just return the keys in insertion order.
+        // for i in (0..=u8::MAX).rev() {
+        //     for j in (0..=u8::MAX).rev() {
+        //         let key = vec![i, j];
+        //         let value = vec![i, j];
+
+        //         merkle.insert(key, value, root).unwrap();
+        //     }
+        // }
+
+        // Test with no start key
+        let mut stream = merkle.iter(root);
         for i in 0..u8::MAX {
             for j in 0..u8::MAX {
                 let expected_key = vec![i, j];
@@ -480,8 +494,33 @@ mod tests {
                 );
             }
         }
-
         check_stream_is_done(stream).await;
+
+        // Test with start key
+        for i in 0..=u8::MAX {
+            let mut stream = merkle.iter_from(root, vec![i].into_boxed_slice());
+            for j in 0..=u8::MAX {
+                let expected_key = vec![i, j];
+                let expected_value = vec![i, j];
+                assert_eq!(
+                    stream.next().await.unwrap().unwrap(),
+                    (expected_key.into_boxed_slice(), expected_value),
+                    "i: {}, j: {}",
+                    i,
+                    j,
+                );
+            }
+            if i == u8::MAX {
+                check_stream_is_done(stream).await;
+            } else {
+                assert_eq!(
+                    stream.next().await.unwrap().unwrap(),
+                    (vec![i + 1, 0].into_boxed_slice(), vec![i + 1, 0]),
+                    "i: {}",
+                    i,
+                );
+            }
+        }
     }
 
     #[tokio::test]
