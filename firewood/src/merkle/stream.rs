@@ -216,7 +216,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                 let key: Box<[u8]> = matched_key_nibbles.clone().into_boxed_slice();
                 branch_iter_stack.push(BranchIterator {
                     visited: true,
-                    address: DiskAddress::from(0), // TODO put actual value instead of dummy
+                    address: node_addr,
                     key: key.clone(),
                     children_iter: Box::new(get_children_iter2(key, n, nib as usize + 1)),
                 });
@@ -238,22 +238,42 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
 
                 match child.inner() {
                     NodeType::Branch(branch) => {
-                        let child_is_prefix = // TODO rename? Could actual be > key
-                            branch
-                                .path
-                                .iter()
-                                .copied()
-                                .map(Some)
-                                .all(|next_child_nibble| {
-                                    match (next_child_nibble, key_nibbles.next()) {
-                                        (Some(n), Some(k)) =>  n >= k,
-                                        (Some(_), None) => false,
-                                        _ => false,
-                                    }
+                        for next_branch_nibble in branch.path.iter().copied() {
+                            let Some(next_key_nibble) = key_nibbles.next() else {
+                                // Ran out of [key] nibbles so [child] is after [key]
+                                branch_iter_stack.push(BranchIterator {
+                                    visited: false,
+                                    address: child_addr,
+                                    key: matched_key_nibbles.clone().into_boxed_slice(),
+                                    children_iter: Box::new(get_children_iter2(
+                                        matched_key_nibbles.clone().into_boxed_slice(),
+                                        branch,
+                                        0,
+                                    )),
                                 });
 
-                        if !child_is_prefix {
-                            return Ok(IteratorState2::Initialized { branch_iter_stack });
+                                return Ok(IteratorState2::Initialized { branch_iter_stack });
+                            };
+
+                            if next_branch_nibble > next_key_nibble {
+                                // The branch's key and the key diverged, and the
+                                // branch is greater, so we can stop here.
+                                branch_iter_stack.push(BranchIterator {
+                                    visited: false,
+                                    address: child_addr,
+                                    key: matched_key_nibbles.clone().into_boxed_slice(),
+                                    children_iter: Box::new(get_children_iter2(
+                                        matched_key_nibbles.clone().into_boxed_slice(),
+                                        branch,
+                                        0,
+                                    )),
+                                });
+
+                                return Ok(IteratorState2::Initialized { branch_iter_stack });
+                            } else if next_branch_nibble < next_key_nibble {
+                                // [child] is before [key]
+                                return Ok(IteratorState2::Initialized { branch_iter_stack });
+                            }
                         }
 
                         matched_key_nibbles.extend(branch.path.iter().copied());
@@ -290,9 +310,10 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                 node_addr = child_addr;
             }
             NodeType::Leaf(_) => {
+                // TODO fix
                 return Ok(IteratorState2::Initialized { branch_iter_stack });
             }
-            NodeType::Extension(n) => {
+            NodeType::Extension(_) => {
                 panic!("extension nodes shouldn't exist")
             }
         };
