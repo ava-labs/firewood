@@ -82,6 +82,15 @@ pub enum Error {
 
     #[error("Range too small")]
     RangeTooSmall,
+
+    #[error("Child not found")]
+    ChildNotFound,
+
+    #[error("Sentinel node is an extension node; should be a branch node")]
+    SentinelNodeIsExtension,
+
+    #[error("Extension node has non-branch child")]
+    InvalidExtensionChild,
 }
 
 /// A range proof, consisting of a proof of the first key and the last key,
