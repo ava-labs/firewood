@@ -19,11 +19,12 @@ type Value = Vec<u8>;
 /// Represents an ongoing iteration over a branch node's children.
 struct BranchIterator {
     visited: bool,
+    address: DiskAddress,
     /// The nibbles of the key at this branch node.
-    key_nibbles: Vec<u8>,
+    key: Box<[u8]>,
     /// Returns the non-empty children of this node and their positions
     /// in the node's children array .
-    children_iter: Box<dyn Iterator<Item = (DiskAddress, u8)> + Send>,
+    children_iter: Box<dyn Iterator<Item = (DiskAddress, Box<[u8]>)> + Send>,
 }
 
 enum IteratorState2 {
@@ -103,66 +104,44 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
             }
             IteratorState2::Initialized { branch_iter_stack } => {
                 while let Some(mut branch_iter) = branch_iter_stack.pop() {
-                    // [node_addr] is the next node to visit.
-                    // It's the child at index [pos] of [node_iter].
-                    let Some((node_addr, pos)) = branch_iter.children_iter.next() else {
+                    if !branch_iter.visited {
+                        branch_iter.visited = true;
+                        branch_iter_stack.push(branch_iter);
+
+                        let node = merkle
+                            .get_node(branch_iter.address)
+                            .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+
+                        return Poll::Ready(Some(Ok(node)));
+                    }
+
+                    let Some((child_addr, child_key)) = branch_iter.children_iter.next() else {
                         // We visited all this node's descendants.
                         // Go back to its parent.
                         continue;
                     };
 
-                    let node = merkle
-                        .get_node(node_addr)
-                        .map_err(|e| api::Error::InternalError(Box::new(e)))?;
-
-                    let mut child_key_nibbles = branch_iter.key_nibbles.clone(); // TODO reduce¸cloning
-                    child_key_nibbles.push(pos);
-
                     branch_iter_stack.push(branch_iter);
 
-                    match node.inner() {
+                    let child = merkle
+                        .get_node(child_addr)
+                        .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+
+                    match child.inner() {
                         NodeType::Branch(branch) => {
-                            // [children_iter] returns (child_addr, pos)
-                            // for every non-empty child in [node] where
-                            // [pos] is the child's index in [node.children].
-                            let children_iter = get_children_iter(branch);
-
                             branch_iter_stack.push(BranchIterator {
-                                visited: false,                         // TODO
-                                key_nibbles: child_key_nibbles.clone(), // TODO reduce¸cloning
-                                children_iter: Box::new(children_iter),
+                                visited: false,
+                                address: child_addr,
+                                key: child_key,
+                                children_iter: Box::new(get_children_iter2(child_key, branch, 0)),
                             });
-
-                            return Poll::Ready(Some(Ok(node)));
+                            return self.poll_next(_cx);
                         }
                         NodeType::Leaf(leaf) => {
-                            child_key_nibbles.extend(leaf.path.iter());
-                            return Poll::Ready(Some(Ok(node)));
+                            return Poll::Ready(Some(Ok(child)));
                         }
                         NodeType::Extension(extension) => {
-                            // Follow the extension node to its child, which is a branch.
-                            let child = merkle
-                                .get_node(extension.chd())
-                                .map_err(|e| api::Error::InternalError(Box::new(e)))?;
-
-                            let Some(branch) = child.inner().as_branch() else {
-                                return Poll::Ready(Some(Err(api::Error::InternalError(
-                                    Box::new(api::Error::InvalidExtensionChild),
-                                ))));
-                            };
-                            let children_iter = get_children_iter(branch);
-
-                            // TODO reduce cloning
-                            let mut child_key = child_key_nibbles;
-                            child_key.extend(extension.path.iter());
-
-                            branch_iter_stack.push(BranchIterator {
-                                visited: false, // TODO
-                                key_nibbles: child_key.clone(),
-                                children_iter: Box::new(children_iter),
-                            });
-
-                            return Poll::Ready(Some(Ok(node)));
+                            panic!("extension nodes shouldn't exist")
                         }
                     };
                 }
@@ -184,6 +163,8 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
         .get_node(root_node)
         .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
+    let mut node_addr = root_node;
+
     let mut branch_iter_stack: Vec<BranchIterator> = vec![];
 
     // Invariant: [matched_key_nibbles] is the key of [node] at the start
@@ -199,38 +180,24 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
             // [node] is at [key].
             match &node.inner {
                 NodeType::Branch(branch) => {
+                    let key = matched_key_nibbles.clone().into_boxed_slice();
                     branch_iter_stack.push(BranchIterator {
-                        visited: false, // TODO
-                        key_nibbles: matched_key_nibbles.clone(),
-                        children_iter: Box::new(get_children_iter(branch)),
+                        visited: false,
+                        address: DiskAddress::from(0), // TODO put actual value instead of dummy
+                        key,
+                        children_iter: Box::new(get_children_iter2(key, branch, 0)),
                     });
                 }
                 NodeType::Leaf(_) => {
                     branch_iter_stack.push(BranchIterator {
-                        visited: false, // TODO
-                        key_nibbles: matched_key_nibbles.clone(),
+                        visited: false,                // TODO
+                        address: DiskAddress::from(0), // TODO put actual value instead of dummy
+                        key: matched_key_nibbles.clone().into_boxed_slice(),
                         children_iter: Box::new(std::iter::empty()),
                     })
                 }
                 NodeType::Extension(extension) => {
-                    // TODO can this happen?
-                    let child = merkle
-                        .get_node(extension.chd())
-                        .map_err(|e| api::Error::InternalError(Box::new(e)))?;
-
-                    let Some(branch) = child.inner().as_branch() else {
-                        return Err(api::Error::InternalError(Box::new(
-                            api::Error::InvalidExtensionChild,
-                        )));
-                    };
-
-                    let children_iter = get_children_iter(branch);
-
-                    branch_iter_stack.push(BranchIterator {
-                        visited: false, // TODO
-                        key_nibbles: matched_key_nibbles.clone(),
-                        children_iter: Box::new(children_iter),
-                    })
+                    panic!("extension nodes shouldn't exist")
                 }
             }
 
@@ -245,12 +212,12 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                     Some(c) => c,
                     None => {
                         // Start iterating over [node] at [nib + 1].
+                        let key = matched_key_nibbles.clone().into_boxed_slice();
                         branch_iter_stack.push(BranchIterator {
                             visited: true,
-                            key_nibbles: matched_key_nibbles.clone(),
-                            children_iter: Box::new(
-                                get_children_iter(n).filter(move |(_, pos)| pos > &nib),
-                            ),
+                            address: DiskAddress::from(0), // TODO put actual value instead of dummy
+                            key,
+                            children_iter: Box::new(get_children_iter2(key, n, nib as usize + 1)),
                         });
 
                         return Ok(IteratorState2::Initialized { branch_iter_stack });
@@ -258,12 +225,12 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                 };
 
                 // Start iterating over [node] at [nib + 1].
+                let key: Box<[u8]> = matched_key_nibbles.clone().into_boxed_slice();
                 branch_iter_stack.push(BranchIterator {
-                    visited: false, // TODO
-                    key_nibbles: matched_key_nibbles.clone(),
-                    children_iter: Box::new(
-                        get_children_iter(n).filter(move |(_, pos)| pos > &nib),
-                    ),
+                    visited: false,                // TODO
+                    address: DiskAddress::from(0), // TODO put actual value instead of dummy
+                    key,
+                    children_iter: Box::new(get_children_iter2(key, n, nib as usize + 1)),
                 });
 
                 matched_key_nibbles.push(nib);
@@ -282,9 +249,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                                 .map(Some)
                                 .all(|next_child_nibble| {
                                     match (next_child_nibble, key_nibbles.next()) {
-                                        (Some(n), Some(k)) => {
-                                            n == k || (n > k && key_nibbles.is_empty())
-                                        }
+                                        (Some(n), Some(k)) =>  n >= k,
                                         (Some(_), None) => false,
                                         _ => false,
                                     }
@@ -319,21 +284,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                         matched_key_nibbles.extend(leaf.path.iter().copied());
                     }
                     NodeType::Extension(extension) => {
-                        // We assume the extension node's child (which must be a branch)
-                        // has no partial path.
-                        let child_is_prefix = extension.path.iter().copied().map(Some).all(
-                            |next_child_nibble| match (next_child_nibble, key_nibbles.next()) {
-                                (Some(n), Some(k)) => n == k || (n > k && key_nibbles.is_empty()),
-                                (Some(_), None) => false,
-                                _ => false,
-                            },
-                        );
-
-                        if !child_is_prefix {
-                            return Ok(IteratorState2::Initialized { branch_iter_stack });
-                        }
-
-                        matched_key_nibbles.extend(extension.path.iter().copied());
+                        panic!("extension nodes shouldn't exist")
                     }
                 }
 
@@ -344,118 +295,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                 return Ok(IteratorState2::Initialized { branch_iter_stack });
             }
             NodeType::Extension(n) => {
-                // We assume the extension node's child (which must be a branch)
-                // has no partial path.
-                let branch_child = merkle
-                    .get_node(n.chd())
-                    .map_err(|e| api::Error::InternalError(Box::new(e)))?;
-
-                let Some(branch_child) = branch_child.inner().as_branch() else {
-                    return Err(api::Error::InternalError(Box::new(
-                        api::Error::InvalidExtensionChild,
-                    )));
-                };
-
-                // TODO remove start copy paste
-                // Figure out if the child is a prefix of [key].
-                #[allow(clippy::indexing_slicing)]
-                let child = match branch_child.children[nib as usize] {
-                    Some(c) => c,
-                    None => {
-                        branch_iter_stack.push(BranchIterator {
-                            visited: true,
-                            key_nibbles: matched_key_nibbles.clone(),
-                            children_iter: Box::new(
-                                get_children_iter(branch_child).filter(move |(_, pos)| pos > &nib),
-                            ),
-                        });
-
-                        return Ok(IteratorState2::Initialized { branch_iter_stack });
-                    }
-                };
-
-                branch_iter_stack.push(BranchIterator {
-                    visited: false, // TODO
-                    key_nibbles: matched_key_nibbles.clone(),
-                    children_iter: Box::new(
-                        get_children_iter(&branch_child).filter(move |(_, pos)| pos > &nib),
-                    ),
-                });
-
-                matched_key_nibbles.push(nib);
-
-                let child = merkle
-                    .get_node(child)
-                    .map_err(|e| api::Error::InternalError(Box::new(e)))?;
-
-                match child.inner() {
-                    NodeType::Branch(branch) => {
-                        let child_is_prefix = // TODO rename? Could actual be > key
-                            branch
-                                .path
-                                .iter()
-                                .copied()
-                                .map(Some)
-                                .all(|next_child_nibble| {
-                                    match (next_child_nibble, key_nibbles.next()) {
-                                        (Some(n), Some(k)) => {
-                                            n == k || (n > k && key_nibbles.is_empty())
-                                        }
-                                        (Some(_), None) => false,
-                                        _ => false,
-                                    }
-                                });
-
-                        if !child_is_prefix {
-                            return Ok(IteratorState2::Initialized { branch_iter_stack });
-                        }
-
-                        matched_key_nibbles.extend(branch.path.iter().copied());
-                    }
-                    NodeType::Leaf(leaf) => {
-                        let child_is_prefix =
-                            leaf.path
-                                .iter()
-                                .copied()
-                                .map(Some)
-                                .all(|next_child_nibble| {
-                                    match (next_child_nibble, key_nibbles.next()) {
-                                        (Some(n), Some(k)) => {
-                                            n == k || (n > k && key_nibbles.is_empty())
-                                        }
-                                        (Some(_), None) => false,
-                                        _ => false,
-                                    }
-                                });
-
-                        if !child_is_prefix {
-                            return Ok(IteratorState2::Initialized { branch_iter_stack });
-                        }
-
-                        matched_key_nibbles.extend(leaf.path.iter().copied());
-                    }
-                    NodeType::Extension(extension) => {
-                        // We assume the extension node's child (which must be a branch)
-                        // has no partial path.
-                        let child_is_prefix = extension.path.iter().copied().map(Some).all(
-                            |next_child_nibble| match (next_child_nibble, key_nibbles.next()) {
-                                (Some(n), Some(k)) => n == k || (n > k && key_nibbles.is_empty()),
-                                (Some(_), None) => false,
-                                _ => false,
-                            },
-                        );
-
-                        if !child_is_prefix {
-                            return Ok(IteratorState2::Initialized { branch_iter_stack });
-                        }
-
-                        matched_key_nibbles.extend(extension.path.iter().copied());
-                    }
-                }
-
-                // [child] is a prefix of [key].
-                node = child;
-                // TODO remove end copy paste
+                panic!("extension nodes shouldn't exist")
             }
         };
     }
@@ -796,7 +636,25 @@ fn get_children_iter(branch: &BranchNode) -> impl Iterator<Item = (DiskAddress, 
         .children
         .into_iter()
         .enumerate()
-        .filter_map(|(pos, child_addr)| child_addr.map(|child_addr| (child_addr, pos as u8)))
+        .filter_map(move |(pos, child_addr)| child_addr.map(|child_addr| (child_addr, pos as u8)))
+}
+
+fn get_children_iter2(
+    key: Box<[u8]>,
+    branch: &BranchNode,
+    start_index: usize,
+) -> impl Iterator<Item = (DiskAddress, Box<[u8]>)> {
+    branch
+        .children
+        .into_iter()
+        .enumerate()
+        .filter(move |(pos, _)| pos >= &start_index)
+        .filter_map(move |(pos, child_addr)| {
+            child_addr.map(|child_addr| {
+                let child_key: Box<[u8]> = key.iter().cloned().chain(once(pos as u8)).collect();
+                (child_addr, child_key)
+            })
+        })
 }
 
 /// This function is a little complicated because we need to be able to early return from the parent
