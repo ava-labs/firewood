@@ -196,14 +196,13 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
 
     loop {
         let Some(nib) = key_nibbles.next() else {
+            // [node] is at [key].
             match &node.inner {
                 NodeType::Branch(branch) => {
-                    let children_iter = get_children_iter(branch);
-
                     branch_iter_stack.push(BranchIterator {
                         visited: false, // TODO
                         key_nibbles: matched_key_nibbles.clone(),
-                        children_iter: Box::new(children_iter),
+                        children_iter: Box::new(get_children_iter(branch)),
                     });
                 }
                 NodeType::Leaf(_) => {
@@ -213,7 +212,26 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                         children_iter: Box::new(std::iter::empty()),
                     })
                 }
-                NodeType::Extension(_) => todo!(),
+                NodeType::Extension(extension) => {
+                    // TODO can this happen?
+                    let child = merkle
+                        .get_node(extension.chd())
+                        .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+
+                    let Some(branch) = child.inner().as_branch() else {
+                        return Err(api::Error::InternalError(Box::new(
+                            api::Error::InvalidExtensionChild,
+                        )));
+                    };
+
+                    let children_iter = get_children_iter(branch);
+
+                    branch_iter_stack.push(BranchIterator {
+                        visited: false, // TODO
+                        key_nibbles: matched_key_nibbles.clone(),
+                        children_iter: Box::new(children_iter),
+                    })
+                }
             }
 
             break Ok(IteratorState2::Initialized { branch_iter_stack });
@@ -228,7 +246,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                     None => {
                         // Start iterating over [node] at [nib + 1].
                         branch_iter_stack.push(BranchIterator {
-                            visited: false, // TODO
+                            visited: true,
                             key_nibbles: matched_key_nibbles.clone(),
                             children_iter: Box::new(
                                 get_children_iter(n).filter(move |(_, pos)| pos > &nib),
@@ -238,6 +256,16 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                         return Ok(IteratorState2::Initialized { branch_iter_stack });
                     }
                 };
+
+                // Start iterating over [node] at [nib + 1].
+                branch_iter_stack.push(BranchIterator {
+                    visited: false, // TODO
+                    key_nibbles: matched_key_nibbles.clone(),
+                    children_iter: Box::new(
+                        get_children_iter(n).filter(move |(_, pos)| pos > &nib),
+                    ),
+                });
+
                 matched_key_nibbles.push(nib);
 
                 let child = merkle
@@ -246,281 +274,191 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
 
                 match child.inner() {
                     NodeType::Branch(branch) => {
-                        let child_path_iter = branch.path.iter().copied();
-
-                        let child_is_prefix = child_path_iter
-                            .map(Some)
-                            .all(|next_child_nibble| next_child_nibble == key_nibbles.next());
+                        let child_is_prefix = // TODO rename? Could actual be > key
+                            branch
+                                .path
+                                .iter()
+                                .copied()
+                                .map(Some)
+                                .all(|next_child_nibble| {
+                                    match (next_child_nibble, key_nibbles.next()) {
+                                        (Some(n), Some(k)) => {
+                                            n == k || (n > k && key_nibbles.is_empty())
+                                        }
+                                        (Some(_), None) => false,
+                                        _ => false,
+                                    }
+                                });
 
                         if !child_is_prefix {
-                            // Start iterating over [node] at [nib + 1].
-                            branch_iter_stack.push(BranchIterator {
-                                visited: false, // TODO
-                                key_nibbles: matched_key_nibbles.clone(),
-                                children_iter: Box::new(
-                                    get_children_iter(n).filter(move |(_, pos)| pos > &nib),
-                                ),
-                            });
-
-                            matched_key_nibbles.extend(branch.path.iter().copied());
-
                             return Ok(IteratorState2::Initialized { branch_iter_stack });
                         }
 
-                        // Start iterating over [node] at [nib].
+                        matched_key_nibbles.extend(branch.path.iter().copied());
                     }
                     NodeType::Leaf(leaf) => {
-                        let mut child_path_iter = leaf.path.iter().copied();
+                        let child_is_prefix =
+                            leaf.path
+                                .iter()
+                                .copied()
+                                .map(Some)
+                                .all(|next_child_nibble| {
+                                    match (next_child_nibble, key_nibbles.next()) {
+                                        (Some(n), Some(k)) => {
+                                            n == k || (n > k && key_nibbles.is_empty())
+                                        }
+                                        (Some(_), None) => false,
+                                        _ => false,
+                                    }
+                                });
 
-                        let path_matches = child_path_iter
-                            .map(Some)
-                            .all(|n_path_nibble| key_nibbles.next() == n_path_nibble);
-
-                        if !path_matches {
-                            // Start iterating over [node] at [nib + 1].
-                            branch_iter_stack.push(BranchIterator {
-                                visited: false, // TODO
-                                key_nibbles: vec![nib],
-                                children_iter: Box::new(
-                                    get_children_iter(n).filter(move |(_, pos)| pos > &nib),
-                                ),
-                            });
-
+                        if !child_is_prefix {
                             return Ok(IteratorState2::Initialized { branch_iter_stack });
                         }
 
-                        // Start iterating over [node] at [nib].
-                        branch_iter_stack.push(BranchIterator {
-                            visited: false, // TODO
-                            key_nibbles: vec![nib],
-                            children_iter: Box::new(
-                                get_children_iter(n).filter(move |(_, pos)| pos >= &nib),
-                            ),
-                        });
-
-                        return Ok(IteratorState2::Initialized { branch_iter_stack });
+                        matched_key_nibbles.extend(leaf.path.iter().copied());
                     }
                     NodeType::Extension(extension) => {
-                        let child_path_iter = extension.path.iter().copied();
+                        // We assume the extension node's child (which must be a branch)
+                        // has no partial path.
+                        let child_is_prefix = extension.path.iter().copied().map(Some).all(
+                            |next_child_nibble| match (next_child_nibble, key_nibbles.next()) {
+                                (Some(n), Some(k)) => n == k || (n > k && key_nibbles.is_empty()),
+                                (Some(_), None) => false,
+                                _ => false,
+                            },
+                        );
 
-                        let path_matches = child_path_iter
-                            .map(Some)
-                            .all(|n_path_nibble| key_nibbles.next() == n_path_nibble);
-
-                        if !path_matches {
-                            // Start iterating over [node] at [nib + 1].
-                            branch_iter_stack.push(BranchIterator {
-                                visited: false, // TODO
-                                key_nibbles: vec![nib],
-                                children_iter: Box::new(
-                                    get_children_iter(n).filter(move |(_, pos)| pos > &nib),
-                                ),
-                            });
-
+                        if !child_is_prefix {
                             return Ok(IteratorState2::Initialized { branch_iter_stack });
                         }
 
-                        // Start iterating over [node] at [nib].
-                        branch_iter_stack.push(BranchIterator {
-                            visited: false, // TODO
-                            key_nibbles: vec![nib],
-                            children_iter: Box::new(
-                                get_children_iter(n).filter(move |(_, pos)| pos >= &nib),
-                            ),
-                        });
+                        matched_key_nibbles.extend(extension.path.iter().copied());
                     }
                 }
 
                 // [child] is a prefix of [key].
                 node = child;
             }
-            NodeType::Leaf(n) => {
+            NodeType::Leaf(_) => {
                 return Ok(IteratorState2::Initialized { branch_iter_stack });
             }
             NodeType::Extension(n) => {
-                //
+                // We assume the extension node's child (which must be a branch)
+                // has no partial path.
+                let branch_child = merkle
+                    .get_node(n.chd())
+                    .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                let mut n_path_iter = n.path.iter().copied();
+                let Some(branch_child) = branch_child.inner().as_branch() else {
+                    return Err(api::Error::InternalError(Box::new(
+                        api::Error::InvalidExtensionChild,
+                    )));
+                };
 
-                if n_path_iter.next() != Some(nib) {
-                    return Ok(IteratorState2::Initialized { branch_iter_stack });
+                // TODO remove start copy paste
+                // Figure out if the child is a prefix of [key].
+                #[allow(clippy::indexing_slicing)]
+                let child = match branch_child.children[nib as usize] {
+                    Some(c) => c,
+                    None => {
+                        branch_iter_stack.push(BranchIterator {
+                            visited: true,
+                            key_nibbles: matched_key_nibbles.clone(),
+                            children_iter: Box::new(
+                                get_children_iter(branch_child).filter(move |(_, pos)| pos > &nib),
+                            ),
+                        });
+
+                        return Ok(IteratorState2::Initialized { branch_iter_stack });
+                    }
+                };
+
+                branch_iter_stack.push(BranchIterator {
+                    visited: false, // TODO
+                    key_nibbles: matched_key_nibbles.clone(),
+                    children_iter: Box::new(
+                        get_children_iter(&branch_child).filter(move |(_, pos)| pos > &nib),
+                    ),
+                });
+
+                matched_key_nibbles.push(nib);
+
+                let child = merkle
+                    .get_node(child)
+                    .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+
+                match child.inner() {
+                    NodeType::Branch(branch) => {
+                        let child_is_prefix = // TODO rename? Could actual be > key
+                            branch
+                                .path
+                                .iter()
+                                .copied()
+                                .map(Some)
+                                .all(|next_child_nibble| {
+                                    match (next_child_nibble, key_nibbles.next()) {
+                                        (Some(n), Some(k)) => {
+                                            n == k || (n > k && key_nibbles.is_empty())
+                                        }
+                                        (Some(_), None) => false,
+                                        _ => false,
+                                    }
+                                });
+
+                        if !child_is_prefix {
+                            return Ok(IteratorState2::Initialized { branch_iter_stack });
+                        }
+
+                        matched_key_nibbles.extend(branch.path.iter().copied());
+                    }
+                    NodeType::Leaf(leaf) => {
+                        let child_is_prefix =
+                            leaf.path
+                                .iter()
+                                .copied()
+                                .map(Some)
+                                .all(|next_child_nibble| {
+                                    match (next_child_nibble, key_nibbles.next()) {
+                                        (Some(n), Some(k)) => {
+                                            n == k || (n > k && key_nibbles.is_empty())
+                                        }
+                                        (Some(_), None) => false,
+                                        _ => false,
+                                    }
+                                });
+
+                        if !child_is_prefix {
+                            return Ok(IteratorState2::Initialized { branch_iter_stack });
+                        }
+
+                        matched_key_nibbles.extend(leaf.path.iter().copied());
+                    }
+                    NodeType::Extension(extension) => {
+                        // We assume the extension node's child (which must be a branch)
+                        // has no partial path.
+                        let child_is_prefix = extension.path.iter().copied().map(Some).all(
+                            |next_child_nibble| match (next_child_nibble, key_nibbles.next()) {
+                                (Some(n), Some(k)) => n == k || (n > k && key_nibbles.is_empty()),
+                                (Some(_), None) => false,
+                                _ => false,
+                            },
+                        );
+
+                        if !child_is_prefix {
+                            return Ok(IteratorState2::Initialized { branch_iter_stack });
+                        }
+
+                        matched_key_nibbles.extend(extension.path.iter().copied());
+                    }
                 }
 
-                let path_matches = n_path_iter
-                    .map(Some)
-                    .all(|n_path_nibble| key_nibbles.next() == n_path_nibble);
-
-                if !path_matches {
-                    return Ok(IteratorState2::Initialized { branch_iter_stack });
-                }
-
-                todo!();
-                // n.chd()
+                // [child] is a prefix of [key].
+                node = child;
+                // TODO remove end copy paste
             }
         };
     }
-
-    // when we're done iterating over nibbles, check if the node we're at has a value
-    // let node_ref = match &node.inner {
-    //     NodeType::Branch(n) if n.value.as_ref().is_some() && n.path.is_empty() => Some(node),
-    //     NodeType::Leaf(n) if n.path.len() == 0 => Some(node),
-    //     _ => None,
-    // };
-
-    // Ok(IteratorState2::Initialized {
-    //     branch_iter_stack,
-    // })
-
-    // TODO remove start of original implementation
-    // Populate [path_to_key].
-    //     merkle
-    //         .get_node_by_key_with_callbacks(
-    //             root_node,
-    //             key,
-    //             |node_addr, i| path_to_key.push((node_addr, i)),
-    //             |_, _| {},
-    //         )
-    //         .map_err(|e| api::Error::InternalError(Box::new(e)))?;
-
-    //     // Get each node in [path_to_key]. Mark the last node as being the last
-    //     // so we can use that information in the while loop below.
-    //     let path_to_key = path_to_key
-    //         .into_iter()
-    //         .rev()
-    //         .enumerate()
-    //         .rev()
-    //         .map(|(i, (node, pos))| merkle.get_node(node).map(|node| (i == 0, (node, pos))));
-
-    //     let mut matched_key_nibbles = vec![];
-
-    //     for node in path_to_key {
-    //         let (is_last, (node, pos)) = match node {
-    //             Ok(result) => result,
-    //             Err(e) => return Err(api::Error::InternalError(Box::new(e))),
-    //         };
-
-    //         match node.inner() {
-    //             NodeType::Leaf(_) => (),
-    //             NodeType::Branch(branch) if is_last => {
-    //                 // This is the last node in the path to [key].
-    //                 // Figure out whether to start iterating over this node's
-    //                 // children at [pos] or [pos + 1].
-
-    //                 // Get the child at [pos], if any.
-    //                 let Some(child) = branch.children.get(pos as usize) else {
-    //                     // This should never happen -- [pos] should never be OOB.
-    //                     return Err(api::Error::InternalError(Box::new(
-    //                         api::Error::ChildNotFound,
-    //                     )));
-    //                 };
-
-    //                 let child = child
-    //                     .map(|child_addr| merkle.get_node(child_addr))
-    //                     .transpose()
-    //                     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
-
-    //                 let comparer = if child.is_none() {
-    //                     // The child doesn't exist; we don't need to iterate over [pos].
-    //                     <u8 as PartialOrd>::gt
-    //                 } else {
-    //                     // The child does exist; the first key to iterate over must be at [pos].
-    //                     <u8 as PartialOrd>::ge
-    //                 };
-
-    //                 let children_iter = get_children_iter(branch)
-    //                     .filter(move |(_, child_pos)| comparer(child_pos, &pos));
-
-    //                 branch_iter_stack.push(BranchIterator {
-    //                     key_nibbles: matched_key_nibbles.clone(),
-    //                     children_iter: Box::new(children_iter),
-    //                 });
-    //                 matched_key_nibbles.push(pos);
-    //             }
-    //             NodeType::Branch(branch) => {
-    //                 // The next element in [path_to_key] will handle the child at [pos]
-    //                 // so we can start iterating at [pos + 1].
-    //                 let children_iter =
-    //                     get_children_iter(branch).filter(move |(_, child_pos)| child_pos > &pos);
-
-    //                 branch_iter_stack.push(BranchIterator {
-    //                     key_nibbles: matched_key_nibbles.clone(),
-    //                     children_iter: Box::new(children_iter),
-    //                 });
-    //                 matched_key_nibbles.push(pos);
-    //             }
-    //             NodeType::Extension(extension) if is_last => {
-    //                 // Figure out whether we want to start iterating over the children
-    //                 // of [extension.child] at [pos] or [pos + 1].
-    //                 // Note that an extension node's child is always a branch node.
-    //                 // See if [extension]'s child is before, at, or after [key].
-    //                 let key_nibbles = Nibbles::<1>::new(key).into_iter();
-
-    //                 // Unmatched portion of [key].
-    //                 let mut remaining_key = key_nibbles.skip(matched_key_nibbles.len());
-
-    //                 let mut extension_iter = extension.path.iter();
-
-    //                 while let Some(next_extension_nibble) = extension_iter.next() {
-    //                     // Check whether the next nibble of [extension]'s path
-    //                     // matches the next nibble of [key].
-    //                     let Some(next_key_nibble) = remaining_key.next() else {
-    //                         // We ran out of nibbles of [key] so [extension]'s child is after [key].
-    //                         // We want to visit all children of [extension]'s child.
-    //                         let mut key_nibbles = matched_key_nibbles.clone();
-    //                         key_nibbles.push(*next_extension_nibble);
-    //                         key_nibbles.extend(extension_iter);
-
-    //                         let Some(prev_index) = key_nibbles.pop() else {
-    //                             return Err(api::Error::InternalError(Box::new(
-    //                                 api::Error::SentinelNodeIsExtension,
-    //                             )));
-    //                         };
-    //                         let iter = std::iter::once((extension.chd(), prev_index));
-
-    //                         branch_iter_stack.push(BranchIterator {
-    //                             key_nibbles,
-    //                             children_iter: Box::new(iter),
-    //                         });
-    //                         break;
-    //                     };
-
-    //                     match next_extension_nibble.cmp(&next_key_nibble) {
-    //                         // The nibbles match; check the next one.
-    //                         std::cmp::Ordering::Equal => (),
-    //                         // [extension]'s child is before [key]. Skip it.
-    //                         std::cmp::Ordering::Less => break,
-    //                         // [extension]'s child is after [key]. Visit it.
-    //                         std::cmp::Ordering::Greater => {
-    //                             let child = merkle
-    //                                 .get_node(extension.chd())
-    //                                 .map_err(|e| api::Error::InternalError(Box::new(e)))?;
-
-    //                             let Some(branch) = child.inner().as_branch() else {
-    //                                 return Err(api::Error::InternalError(Box::new(
-    //                                     api::Error::InvalidExtensionChild,
-    //                                 )));
-    //                             };
-
-    //                             branch_iter_stack.push(BranchIterator {
-    //                                 key_nibbles: matched_key_nibbles.clone(),
-    //                                 children_iter: Box::new(get_children_iter(branch)),
-    //                             });
-    //                             break;
-    //                         }
-    //                     }
-
-    //                     matched_key_nibbles.push(next_key_nibble);
-    //                 }
-    //             }
-    //             NodeType::Extension(extension) => {
-    //                 // Add the extension node's path to the matched key nibbles.
-    //                 matched_key_nibbles.extend(extension.path.iter());
-    //             }
-    //         }
-    //     }
-
-    //     Ok(IteratorState2::Initialized { branch_iter_stack })
-    // End original implementation TODO remove
 }
 
 enum IteratorState<'a> {
