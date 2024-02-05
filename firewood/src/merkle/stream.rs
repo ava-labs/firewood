@@ -79,14 +79,14 @@ impl<'a, S, T> MerkleNodeStream<'a, S, T> {
 }
 
 impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S, T> {
-    type Item = Result<(Key, Value), api::Error>;
+    type Item = Result<NodeObjRef<'a>, api::Error>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        // destructuring is necessary here because we need mutable access to `key_state`
-        // at the same time as immutable access to `merkle`
+        // destructuring is necessary here because we need mutable access to [state]
+        // at the same time as immutable access to [merkle]
         let Self {
             state,
             merkle_root,
@@ -96,7 +96,6 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
         match state {
             IteratorState2::Uninitialized(key) => {
                 self.state = get_iterator_intial_state(merkle, *merkle_root, key)?;
-
                 self.poll_next(_cx)
             }
             IteratorState2::Initialized { branch_iter_stack } => {
@@ -130,21 +129,11 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                                 children_iter: Box::new(children_iter),
                             });
 
-                            // If there's a value, return it.
-                            if let Some(value) = branch.value.as_ref() {
-                                let value = value.to_vec();
-                                return Poll::Ready(Some(Ok((
-                                    key_from_nibble_iter(child_key_nibbles.into_iter().skip(1)), // skip the sentinel node leading 0
-                                    value,
-                                ))));
-                            }
+                            return Poll::Ready(Some(Ok(node)));
                         }
                         NodeType::Leaf(leaf) => {
                             child_key_nibbles.extend(leaf.path.iter());
-                            return Poll::Ready(Some(Ok((
-                                key_from_nibble_iter(child_key_nibbles.into_iter().skip(1)), // skip the sentinel node leading 0
-                                leaf.data.to_vec(),
-                            ))));
+                            return Poll::Ready(Some(Ok(node)));
                         }
                         NodeType::Extension(extension) => {
                             // Follow the extension node to its child, which is a branch.
@@ -168,14 +157,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                                 children_iter: Box::new(children_iter),
                             });
 
-                            // If there's a value, return it.
-                            if let Some(value) = branch.value.as_ref() {
-                                let value = value.to_vec();
-                                return Poll::Ready(Some(Ok((
-                                    key_from_nibble_iter(child_key.into_iter().skip(1)), // skip the sentinel node leading 0
-                                    value,
-                                ))));
-                            }
+                            return Poll::Ready(Some(Ok(node)));
                         }
                     };
                 }
