@@ -8,7 +8,7 @@ use crate::{
     v2::api,
 };
 use bitflags::iter;
-use futures::{stream::FusedStream, Stream};
+use futures::{stream::FusedStream, AsyncReadExt, Stream};
 use helper_types::{Either, MustUse};
 use std::iter::once;
 use std::task::Poll;
@@ -184,6 +184,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
         Nibbles::<1>::new(key.as_ref()).into_iter();
 
     loop {
+        // [nib] is the first nibble after [matched_key_nibbles].
         let Some(nib) = key_nibbles.next() else {
             // [node] is at [key].
             match &node.inner {
@@ -207,7 +208,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                 }
             }
 
-            break Ok(IteratorState2::Initialized { branch_iter_stack });
+            return Ok(IteratorState2::Initialized { branch_iter_stack });
         };
 
         match &node.inner {
@@ -241,15 +242,16 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                         for next_branch_nibble in branch.path.iter().copied() {
                             let Some(next_key_nibble) = key_nibbles.next() else {
                                 // Ran out of [key] nibbles so [child] is after [key]
+                                let key: Box<[u8]> = matched_key_nibbles
+                                    .iter()
+                                    .copied()
+                                    .chain(branch.path.iter().copied())
+                                    .collect();
                                 branch_iter_stack.push(BranchIterator {
                                     visited: false,
                                     address: child_addr,
-                                    key: matched_key_nibbles.clone().into_boxed_slice(),
-                                    children_iter: Box::new(get_children_iter2(
-                                        matched_key_nibbles.clone().into_boxed_slice(),
-                                        branch,
-                                        0,
-                                    )),
+                                    key: key.clone(),
+                                    children_iter: Box::new(get_children_iter2(key, branch, 0)),
                                 });
 
                                 return Ok(IteratorState2::Initialized { branch_iter_stack });
@@ -258,15 +260,17 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                             if next_branch_nibble > next_key_nibble {
                                 // The branch's key and the key diverged, and the
                                 // branch is greater, so we can stop here.
+                                let key: Box<[u8]> = matched_key_nibbles
+                                    .iter()
+                                    .copied()
+                                    .chain(branch.path.iter().copied())
+                                    .collect();
+
                                 branch_iter_stack.push(BranchIterator {
                                     visited: false,
                                     address: child_addr,
-                                    key: matched_key_nibbles.clone().into_boxed_slice(),
-                                    children_iter: Box::new(get_children_iter2(
-                                        matched_key_nibbles.clone().into_boxed_slice(),
-                                        branch,
-                                        0,
-                                    )),
+                                    key: key.clone(),
+                                    children_iter: Box::new(get_children_iter2(key, branch, 0)),
                                 });
 
                                 return Ok(IteratorState2::Initialized { branch_iter_stack });
@@ -275,27 +279,35 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                                 return Ok(IteratorState2::Initialized { branch_iter_stack });
                             }
                         }
-
-                        matched_key_nibbles.extend(branch.path.iter().copied());
                     }
                     NodeType::Leaf(leaf) => {
-                        let child_is_prefix =
-                            leaf.path
-                                .iter()
-                                .copied()
-                                .map(Some)
-                                .all(|next_child_nibble| {
-                                    match (next_child_nibble, key_nibbles.next()) {
-                                        (Some(n), Some(k)) => {
-                                            n == k || (n > k && key_nibbles.is_empty())
-                                        }
-                                        (Some(_), None) => false,
-                                        _ => false,
-                                    }
+                        for next_branch_nibble in leaf.path.iter().copied() {
+                            let Some(next_key_nibble) = key_nibbles.next() else {
+                                // Ran out of [key] nibbles so [child] is after [key]
+                                branch_iter_stack.push(BranchIterator {
+                                    visited: false,
+                                    address: child_addr,
+                                    key: matched_key_nibbles.clone().into_boxed_slice(),
+                                    children_iter: Box::new(std::iter::empty()),
                                 });
 
-                        if !child_is_prefix {
-                            return Ok(IteratorState2::Initialized { branch_iter_stack });
+                                return Ok(IteratorState2::Initialized { branch_iter_stack });
+                            };
+
+                            if next_branch_nibble > next_key_nibble {
+                                // The leaf's key and the key diverged, and the
+                                // leaf is greater, so we can stop here.
+                                branch_iter_stack.push(BranchIterator {
+                                    visited: false,
+                                    address: child_addr,
+                                    key: matched_key_nibbles.clone().into_boxed_slice(),
+                                    children_iter: Box::new(std::iter::empty()),
+                                });
+                                return Ok(IteratorState2::Initialized { branch_iter_stack });
+                            } else if next_branch_nibble < next_key_nibble {
+                                // [child] is before [key]
+                                return Ok(IteratorState2::Initialized { branch_iter_stack });
+                            }
                         }
 
                         matched_key_nibbles.extend(leaf.path.iter().copied());
@@ -309,8 +321,40 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                 node = child;
                 node_addr = child_addr;
             }
-            NodeType::Leaf(_) => {
-                // TODO fix
+            NodeType::Leaf(leaf) => {
+                for next_leaf_nibble in leaf.path.iter().copied() {
+                    match key_nibbles.next() {
+                        Some(next_key_nibble) if next_leaf_nibble > next_key_nibble => {
+                            {
+                                // The leaf's key > [key], so we can stop here.
+                                branch_iter_stack.push(BranchIterator {
+                                    visited: false,
+                                    address: node_addr,
+                                    key: matched_key_nibbles
+                                        .iter()
+                                        .copied()
+                                        .chain(leaf.path.iter().copied())
+                                        .collect(),
+                                    children_iter: Box::new(std::iter::empty()),
+                                });
+                                return Ok(IteratorState2::Initialized { branch_iter_stack });
+                            }
+                        }
+                        Some(next_key_nibble) if next_leaf_nibble < next_key_nibble => break,
+                        Some(_) => {}
+                        None => {
+                            // Ran out of [key] nibbles so [leaf] is after [key]
+                            branch_iter_stack.push(BranchIterator {
+                                visited: false,
+                                address: node_addr,
+                                key: matched_key_nibbles.clone().into_boxed_slice(),
+                                children_iter: Box::new(std::iter::empty()),
+                            });
+                            return Ok(IteratorState2::Initialized { branch_iter_stack });
+                        }
+                    }
+                }
+
                 return Ok(IteratorState2::Initialized { branch_iter_stack });
             }
             NodeType::Extension(_) => {
