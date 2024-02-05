@@ -300,7 +300,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
 
                         matched_key_nibbles.extend(leaf.path.iter().copied());
                     }
-                    NodeType::Extension(extension) => {
+                    NodeType::Extension(_) => {
                         panic!("extension nodes shouldn't exist")
                     }
                 }
