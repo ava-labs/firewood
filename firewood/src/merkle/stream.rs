@@ -106,11 +106,12 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                 while let Some(mut branch_iter) = branch_iter_stack.pop() {
                     if !branch_iter.visited {
                         branch_iter.visited = true;
-                        branch_iter_stack.push(branch_iter);
 
                         let node = merkle
                             .get_node(branch_iter.address)
                             .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+
+                        branch_iter_stack.push(branch_iter);
 
                         return Poll::Ready(Some(Ok(node)));
                     }
@@ -123,6 +124,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
 
                     branch_iter_stack.push(branch_iter);
 
+                    // Get the next node.
                     let child = merkle
                         .get_node(child_addr)
                         .map_err(|e| api::Error::InternalError(Box::new(e)))?;
@@ -132,15 +134,21 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                             branch_iter_stack.push(BranchIterator {
                                 visited: false,
                                 address: child_addr,
-                                key: child_key,
+                                key: child_key.clone(),
                                 children_iter: Box::new(get_children_iter2(child_key, branch, 0)),
                             });
                             return self.poll_next(_cx);
                         }
-                        NodeType::Leaf(leaf) => {
-                            return Poll::Ready(Some(Ok(child)));
+                        NodeType::Leaf(_) => {
+                            branch_iter_stack.push(BranchIterator {
+                                visited: false,
+                                address: child_addr,
+                                key: child_key.clone(),
+                                children_iter: Box::new(std::iter::empty()),
+                            });
+                            return self.poll_next(_cx);
                         }
-                        NodeType::Extension(extension) => {
+                        NodeType::Extension(_) => {
                             panic!("extension nodes shouldn't exist")
                         }
                     };
@@ -183,20 +191,18 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                     let key = matched_key_nibbles.clone().into_boxed_slice();
                     branch_iter_stack.push(BranchIterator {
                         visited: false,
-                        address: DiskAddress::from(0), // TODO put actual value instead of dummy
-                        key,
+                        address: node_addr,
+                        key: key.clone(),
                         children_iter: Box::new(get_children_iter2(key, branch, 0)),
                     });
                 }
-                NodeType::Leaf(_) => {
-                    branch_iter_stack.push(BranchIterator {
-                        visited: false,                // TODO
-                        address: DiskAddress::from(0), // TODO put actual value instead of dummy
-                        key: matched_key_nibbles.clone().into_boxed_slice(),
-                        children_iter: Box::new(std::iter::empty()),
-                    })
-                }
-                NodeType::Extension(extension) => {
+                NodeType::Leaf(_) => branch_iter_stack.push(BranchIterator {
+                    visited: false,
+                    address: node_addr,
+                    key: matched_key_nibbles.clone().into_boxed_slice(),
+                    children_iter: Box::new(std::iter::empty()),
+                }),
+                NodeType::Extension(_) => {
                     panic!("extension nodes shouldn't exist")
                 }
             }
@@ -206,37 +212,28 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
 
         match &node.inner {
             NodeType::Branch(n) => {
+                // Start iterating over [node] at [nib + 1].
+                let key: Box<[u8]> = matched_key_nibbles.clone().into_boxed_slice();
+                branch_iter_stack.push(BranchIterator {
+                    visited: true,
+                    address: DiskAddress::from(0), // TODO put actual value instead of dummy
+                    key: key.clone(),
+                    children_iter: Box::new(get_children_iter2(key, n, nib as usize + 1)),
+                });
+
                 // Figure out if the child is a prefix of [key].
                 #[allow(clippy::indexing_slicing)]
-                let child = match n.children[nib as usize] {
+                let child_addr = match n.children[nib as usize] {
                     Some(c) => c,
                     None => {
-                        // Start iterating over [node] at [nib + 1].
-                        let key = matched_key_nibbles.clone().into_boxed_slice();
-                        branch_iter_stack.push(BranchIterator {
-                            visited: true,
-                            address: DiskAddress::from(0), // TODO put actual value instead of dummy
-                            key,
-                            children_iter: Box::new(get_children_iter2(key, n, nib as usize + 1)),
-                        });
-
                         return Ok(IteratorState2::Initialized { branch_iter_stack });
                     }
                 };
 
-                // Start iterating over [node] at [nib + 1].
-                let key: Box<[u8]> = matched_key_nibbles.clone().into_boxed_slice();
-                branch_iter_stack.push(BranchIterator {
-                    visited: false,                // TODO
-                    address: DiskAddress::from(0), // TODO put actual value instead of dummy
-                    key,
-                    children_iter: Box::new(get_children_iter2(key, n, nib as usize + 1)),
-                });
-
                 matched_key_nibbles.push(nib);
 
                 let child = merkle
-                    .get_node(child)
+                    .get_node(child_addr)
                     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
                 match child.inner() {
@@ -290,6 +287,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
 
                 // [child] is a prefix of [key].
                 node = child;
+                node_addr = child_addr;
             }
             NodeType::Leaf(_) => {
                 return Ok(IteratorState2::Initialized { branch_iter_stack });
