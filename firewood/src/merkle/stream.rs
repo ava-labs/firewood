@@ -62,20 +62,16 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleNodeStream<
 
 impl<'a, S, T> MerkleNodeStream<'a, S, T> {
     pub(super) fn new(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress) -> Self {
-        let state = IteratorState2::new();
-
         Self {
-            state,
+            state: IteratorState2::new(),
             merkle_root,
             merkle,
         }
     }
 
     pub(super) fn from_key(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress, key: Key) -> Self {
-        let state = IteratorState2::with_key(key);
-
         Self {
-            state,
+            state: IteratorState2::with_key(key),
             merkle_root,
             merkle,
         }
