@@ -39,20 +39,22 @@ pub(crate) trait NodeStore {
 }
 
 impl<S: ShaleStore<Node>> NodeStore for S {
-        fn get_node(&self, ptr: DiskAddress) -> Result<NodeObjRef, MerkleError> {
-            self.get_item(ptr).map(|(base, history)| {
+    fn get_node(&self, ptr: DiskAddress) -> Result<NodeObjRef, MerkleError> {
+        self.get_item(ptr)
+            .map(|(base, history)| {
                 base.deref().copy_encoded_from(history);
                 base
-        }).map_err(Into::into)
-        }
-    
-        fn put_node(&self, node: Node) -> Result<NodeObjRef, MerkleError> {
-            self.put_item(node, 0).map_err(Into::into)
-        }
-    
-        fn free_node(&mut self, ptr: DiskAddress) -> Result<(), MerkleError> {
-            self.free_item(ptr).map_err(Into::into)
-        }
+            })
+            .map_err(Into::into)
+    }
+
+    fn put_node(&self, node: Node) -> Result<NodeObjRef, MerkleError> {
+        self.put_item(node, 0).map_err(Into::into)
+    }
+
+    fn free_node(&mut self, ptr: DiskAddress) -> Result<(), MerkleError> {
+        self.free_item(ptr).map_err(Into::into)
+    }
 }
 
 #[derive(Debug, Error)]
@@ -106,7 +108,10 @@ impl<T> From<Merkle<MutStore, T>> for Merkle<SharedStore, T> {
 
 impl<S: ShaleStore<Node>, T> Merkle<S, T> {
     pub fn get_node(&self, ptr: DiskAddress) -> Result<NodeObjRef, MerkleError> {
-        self.store.get_item(ptr).map(|(base, history)| base).map_err(Into::into)
+        self.store
+            .get_item(ptr)
+            .map(|(base, history)| base)
+            .map_err(Into::into)
     }
 
     pub fn put_node(&self, node: Node) -> Result<NodeObjRef, MerkleError> {

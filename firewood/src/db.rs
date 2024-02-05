@@ -8,6 +8,7 @@ pub use crate::{
 };
 use crate::{
     file,
+    logger::trace,
     merkle::{Bincode, Merkle, MerkleError, Node, Proof, ProofError, TrieHash, TRIE_HASH_LEN},
     storage::{
         buffer::{DiskBuffer, DiskBufferRequester},
@@ -15,7 +16,6 @@ use crate::{
         ZeroStore, PAGE_SIZE_NBIT,
     },
     v2::api::{self, HashKey, KeyType, ValueType},
-    logger::trace,
 };
 use crate::{
     merkle,

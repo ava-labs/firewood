@@ -3,7 +3,7 @@
 
 use crate::{
     merkle::from_nibbles,
-    shale::{disk_address::DiskAddress, CachedStore, ShaleError, ShaleStore, Storable, Obj},
+    shale::{disk_address::DiskAddress, CachedStore, Obj, ShaleError, ShaleStore, Storable},
 };
 use bincode::{Error, Options};
 use bitflags::bitflags;
@@ -24,7 +24,6 @@ use std::{
         OnceLock,
     },
 };
-
 
 use crate::logger::trace;
 

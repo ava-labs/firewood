@@ -5,7 +5,7 @@ use bincode::Options;
 
 use super::{Encoded, Node};
 use crate::{
-    merkle::{from_nibbles, to_nibble_array, PartialPath, TRIE_HASH_LEN, NodeStore},
+    merkle::{from_nibbles, to_nibble_array, NodeStore, PartialPath, TRIE_HASH_LEN},
     shale::{DiskAddress, ShaleError::InvalidCacheView, ShaleStore, Storable},
 };
 use std::{
