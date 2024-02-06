@@ -7,7 +7,7 @@ use crate::{
     shale::{DiskAddress, ShaleStore},
     v2::api,
 };
-use futures::{stream::FusedStream, Stream};
+use futures::{stream::FusedStream, Stream, StreamExt};
 use helper_types::{Either, MustUse};
 use std::iter::once;
 use std::task::Poll;
@@ -446,7 +446,21 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream2<
                 self.state = MerkleKeyValueStreamState::Initialized { iter };
                 self.poll_next(_cx)
             }
-            MerkleKeyValueStreamState::Initialized { iter } => todo!(),
+            MerkleKeyValueStreamState::Initialized { iter } => match iter.poll_next_unpin(_cx) {
+                Poll::Ready(node) => match node {
+                    Some(node) => {
+                        let node = node?;
+
+                        match node.inner() {
+                            NodeType::Branch(branch) => todo!(),
+                            NodeType::Leaf(_) => todo!(),
+                            NodeType::Extension(_) => todo!(),
+                        }
+                    }
+                    None => Poll::Ready(None),
+                },
+                Poll::Pending => Poll::Pending,
+            },
         }
     }
 }
