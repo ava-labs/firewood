@@ -246,90 +246,50 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                     .get_node(child_addr)
                     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                match child.inner() {
-                    NodeType::Branch(branch) => {
-                        for next_branch_nibble in branch.path.iter().copied() {
-                            let Some(next_key_nibble) = key_nibbles.next() else {
-                                // Ran out of [key] nibbles so [child] is after [key]
-                                let key: Box<[u8]> = matched_key_nibbles
-                                    .iter()
-                                    .copied()
-                                    .chain(branch.path.iter().copied())
-                                    .collect();
-                                branch_iter_stack.push(BranchIterator::Unvisited {
-                                    address: child_addr,
-                                    key: key.clone(),
-                                });
-
-                                return Ok(MerkleNodeStreamState::Initialized {
-                                    branch_iter_stack,
-                                });
-                            };
-
-                            if next_branch_nibble > next_key_nibble {
-                                // The branch's key and the key diverged, and the
-                                // branch is greater, so we can stop here.
-                                let key: Box<[u8]> = matched_key_nibbles
-                                    .iter()
-                                    .copied()
-                                    .chain(branch.path.iter().copied())
-                                    .collect();
-
-                                branch_iter_stack.push(BranchIterator::Unvisited {
-                                    address: child_addr,
-                                    key: key.clone(),
-                                });
-
-                                return Ok(MerkleNodeStreamState::Initialized {
-                                    branch_iter_stack,
-                                });
-                            } else if next_branch_nibble < next_key_nibble {
-                                // [child] is before [key]
-                                return Ok(MerkleNodeStreamState::Initialized {
-                                    branch_iter_stack,
-                                });
-                            }
-                        }
-                        matched_key_nibbles.extend(branch.path.iter().copied());
-                    }
-                    NodeType::Leaf(leaf) => {
-                        for next_branch_nibble in leaf.path.iter().copied() {
-                            let Some(next_key_nibble) = key_nibbles.next() else {
-                                // Ran out of [key] nibbles so [child] is after [key]
-                                branch_iter_stack.push(BranchIterator::Unvisited {
-                                    address: child_addr,
-                                    key: matched_key_nibbles.clone().into_boxed_slice(),
-                                });
-
-                                return Ok(MerkleNodeStreamState::Initialized {
-                                    branch_iter_stack,
-                                });
-                            };
-
-                            if next_branch_nibble > next_key_nibble {
-                                // The leaf's key and the key diverged, and the
-                                // leaf is greater, so we can stop here.
-                                branch_iter_stack.push(BranchIterator::Unvisited {
-                                    address: child_addr,
-                                    key: matched_key_nibbles.clone().into_boxed_slice(),
-                                });
-                                return Ok(MerkleNodeStreamState::Initialized {
-                                    branch_iter_stack,
-                                });
-                            } else if next_branch_nibble < next_key_nibble {
-                                // [child] is before [key]
-                                return Ok(MerkleNodeStreamState::Initialized {
-                                    branch_iter_stack,
-                                });
-                            }
-                        }
-
-                        matched_key_nibbles.extend(leaf.path.iter().copied());
-                    }
+                let partial_key = match child.inner() {
+                    NodeType::Branch(branch) => &branch.path,
+                    NodeType::Leaf(leaf) => &leaf.path,
                     NodeType::Extension(_) => {
                         panic!("extension nodes shouldn't exist")
                     }
+                };
+
+                for next_partial_key_nibble in partial_key.iter().copied() {
+                    let Some(next_key_nibble) = key_nibbles.next() else {
+                        // Ran out of [key] nibbles so [child] is after [key]
+                        branch_iter_stack.push(BranchIterator::Unvisited {
+                            address: child_addr,
+                            key: matched_key_nibbles
+                                .clone()
+                                .iter()
+                                .copied()
+                                .chain(partial_key.iter().copied())
+                                .collect(),
+                        });
+
+                        return Ok(MerkleNodeStreamState::Initialized { branch_iter_stack });
+                    };
+
+                    if next_partial_key_nibble > next_key_nibble {
+                        // The leaf's key and the key diverged, and the
+                        // leaf is greater, so we can stop here.
+                        branch_iter_stack.push(BranchIterator::Unvisited {
+                            address: child_addr,
+                            key: matched_key_nibbles
+                                .clone()
+                                .iter()
+                                .copied()
+                                .chain(partial_key.iter().copied())
+                                .collect(),
+                        });
+                        return Ok(MerkleNodeStreamState::Initialized { branch_iter_stack });
+                    } else if next_partial_key_nibble < next_key_nibble {
+                        // [child] is before [key]
+                        return Ok(MerkleNodeStreamState::Initialized { branch_iter_stack });
+                    }
                 }
+
+                matched_key_nibbles.extend(partial_key.iter().copied());
 
                 // [child] is a prefix of [key].
                 node = child;
