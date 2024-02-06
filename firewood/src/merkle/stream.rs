@@ -123,7 +123,6 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                         continue;
                     };
 
-                    // TODO: add the branch/leaf partial path to key
                     let mut child_key: Vec<u8> =
                         branch_iter.key.iter().copied().chain(once(pos)).collect();
 
