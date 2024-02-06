@@ -7,8 +7,7 @@ use crate::{
     shale::{DiskAddress, ShaleStore},
     v2::api,
 };
-use bitflags::iter;
-use futures::{stream::FusedStream, AsyncReadExt, Stream};
+use futures::{stream::FusedStream, Stream};
 use helper_types::{Either, MustUse};
 use std::iter::once;
 use std::task::Poll;
@@ -27,7 +26,7 @@ struct BranchIterator {
     children_iter: Box<dyn Iterator<Item = (DiskAddress, Box<[u8]>)> + Send>,
 }
 
-enum IteratorState2 {
+enum MerkleNodeStreamState {
     /// The iterator state is lazily initialized when poll_next is called
     /// for the first time. The iteration start key is stored here.
     Uninitialized(Key),
@@ -41,7 +40,7 @@ enum IteratorState2 {
     },
 }
 
-impl IteratorState2 {
+impl MerkleNodeStreamState {
     fn new() -> Self {
         Self::Uninitialized(vec![].into_boxed_slice())
     }
@@ -53,21 +52,21 @@ impl IteratorState2 {
 
 /// A MerkleKeyValueStream iterates over keys/values for a merkle trie.
 pub struct MerkleNodeStream<'a, S, T> {
-    state: IteratorState2,
+    state: MerkleNodeStreamState,
     merkle_root: DiskAddress,
     merkle: &'a Merkle<S, T>,
 }
 
 impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleNodeStream<'a, S, T> {
     fn is_terminated(&self) -> bool {
-        matches!(&self.state, IteratorState2::Initialized { branch_iter_stack } if branch_iter_stack.is_empty())
+        matches!(&self.state, MerkleNodeStreamState::Initialized { branch_iter_stack } if branch_iter_stack.is_empty())
     }
 }
 
 impl<'a, S, T> MerkleNodeStream<'a, S, T> {
     pub(super) fn new(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress) -> Self {
         Self {
-            state: IteratorState2::new(),
+            state: MerkleNodeStreamState::new(),
             merkle_root,
             merkle,
         }
@@ -75,7 +74,7 @@ impl<'a, S, T> MerkleNodeStream<'a, S, T> {
 
     pub(super) fn from_key(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress, key: Key) -> Self {
         Self {
-            state: IteratorState2::with_key(key),
+            state: MerkleNodeStreamState::with_key(key),
             merkle_root,
             merkle,
         }
@@ -98,11 +97,11 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
         } = &mut *self;
 
         match state {
-            IteratorState2::Uninitialized(key) => {
+            MerkleNodeStreamState::Uninitialized(key) => {
                 self.state = get_iterator_intial_state(merkle, *merkle_root, key)?;
                 self.poll_next(_cx)
             }
-            IteratorState2::Initialized { branch_iter_stack } => {
+            MerkleNodeStreamState::Initialized { branch_iter_stack } => {
                 while let Some(mut branch_iter) = branch_iter_stack.pop() {
                     if !branch_iter.visited {
                         branch_iter.visited = true;
@@ -165,7 +164,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
     merkle: &Merkle<S, T>,
     root_node: DiskAddress,
     key: &[u8],
-) -> Result<IteratorState2, api::Error> {
+) -> Result<MerkleNodeStreamState, api::Error> {
     // Invariant: [node]'s key is a prefix of [key].
     let mut node = merkle
         .get_node(root_node)
@@ -208,7 +207,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                 }
             }
 
-            return Ok(IteratorState2::Initialized { branch_iter_stack });
+            return Ok(MerkleNodeStreamState::Initialized { branch_iter_stack });
         };
 
         match &node.inner {
@@ -227,7 +226,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                 let child_addr = match n.children[nib as usize] {
                     Some(c) => c,
                     None => {
-                        return Ok(IteratorState2::Initialized { branch_iter_stack });
+                        return Ok(MerkleNodeStreamState::Initialized { branch_iter_stack });
                     }
                 };
 
@@ -254,7 +253,9 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                                     children_iter: Box::new(get_children_iter2(key, branch, 0)),
                                 });
 
-                                return Ok(IteratorState2::Initialized { branch_iter_stack });
+                                return Ok(MerkleNodeStreamState::Initialized {
+                                    branch_iter_stack,
+                                });
                             };
 
                             if next_branch_nibble > next_key_nibble {
@@ -273,10 +274,14 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                                     children_iter: Box::new(get_children_iter2(key, branch, 0)),
                                 });
 
-                                return Ok(IteratorState2::Initialized { branch_iter_stack });
+                                return Ok(MerkleNodeStreamState::Initialized {
+                                    branch_iter_stack,
+                                });
                             } else if next_branch_nibble < next_key_nibble {
                                 // [child] is before [key]
-                                return Ok(IteratorState2::Initialized { branch_iter_stack });
+                                return Ok(MerkleNodeStreamState::Initialized {
+                                    branch_iter_stack,
+                                });
                             }
                         }
                     }
@@ -291,7 +296,9 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                                     children_iter: Box::new(std::iter::empty()),
                                 });
 
-                                return Ok(IteratorState2::Initialized { branch_iter_stack });
+                                return Ok(MerkleNodeStreamState::Initialized {
+                                    branch_iter_stack,
+                                });
                             };
 
                             if next_branch_nibble > next_key_nibble {
@@ -303,10 +310,14 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                                     key: matched_key_nibbles.clone().into_boxed_slice(),
                                     children_iter: Box::new(std::iter::empty()),
                                 });
-                                return Ok(IteratorState2::Initialized { branch_iter_stack });
+                                return Ok(MerkleNodeStreamState::Initialized {
+                                    branch_iter_stack,
+                                });
                             } else if next_branch_nibble < next_key_nibble {
                                 // [child] is before [key]
-                                return Ok(IteratorState2::Initialized { branch_iter_stack });
+                                return Ok(MerkleNodeStreamState::Initialized {
+                                    branch_iter_stack,
+                                });
                             }
                         }
 
@@ -337,7 +348,9 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                                         .collect(),
                                     children_iter: Box::new(std::iter::empty()),
                                 });
-                                return Ok(IteratorState2::Initialized { branch_iter_stack });
+                                return Ok(MerkleNodeStreamState::Initialized {
+                                    branch_iter_stack,
+                                });
                             }
                         }
                         Some(next_key_nibble) if next_leaf_nibble < next_key_nibble => break,
@@ -350,18 +363,23 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                                 key: matched_key_nibbles.clone().into_boxed_slice(),
                                 children_iter: Box::new(std::iter::empty()),
                             });
-                            return Ok(IteratorState2::Initialized { branch_iter_stack });
+                            return Ok(MerkleNodeStreamState::Initialized { branch_iter_stack });
                         }
                     }
                 }
 
-                return Ok(IteratorState2::Initialized { branch_iter_stack });
+                return Ok(MerkleNodeStreamState::Initialized { branch_iter_stack });
             }
             NodeType::Extension(_) => {
                 panic!("extension nodes shouldn't exist")
             }
         };
     }
+}
+
+enum MerkleKeyValueStreamState<'a, S, T> {
+    Uninitialized(Key),
+    Initialized { iter: MerkleNodeStream<'a, S, T> },
 }
 
 enum IteratorState<'a> {
