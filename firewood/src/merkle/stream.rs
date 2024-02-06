@@ -136,7 +136,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                                 visited: false,
                                 address: child_addr,
                                 key: child_key.clone(),
-                                children_iter: Box::new(get_children_iter2(child_key, branch, 0)),
+                                children_iter: Box::new(get_children_iter(child_key, branch, 0)),
                             });
                             return self.poll_next(_cx);
                         }
@@ -195,7 +195,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                         visited: false,
                         address: node_addr,
                         key: key.clone(),
-                        children_iter: Box::new(get_children_iter2(key, branch, 0)),
+                        children_iter: Box::new(get_children_iter(key, branch, 0)),
                     });
                 }
                 NodeType::Leaf(_) => branch_iter_stack.push(BranchIterator {
@@ -220,7 +220,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                     visited: true,
                     address: node_addr,
                     key: key.clone(),
-                    children_iter: Box::new(get_children_iter2(key, n, nib as usize + 1)),
+                    children_iter: Box::new(get_children_iter(key, n, nib as usize + 1)),
                 });
 
                 // Figure out if the child is a prefix of [key].
@@ -252,7 +252,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                                     visited: false,
                                     address: child_addr,
                                     key: key.clone(),
-                                    children_iter: Box::new(get_children_iter2(key, branch, 0)),
+                                    children_iter: Box::new(get_children_iter(key, branch, 0)),
                                 });
 
                                 return Ok(MerkleNodeStreamState::Initialized {
@@ -273,7 +273,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                                     visited: false,
                                     address: child_addr,
                                     key: key.clone(),
-                                    children_iter: Box::new(get_children_iter2(key, branch, 0)),
+                                    children_iter: Box::new(get_children_iter(key, branch, 0)),
                                 });
 
                                 return Ok(MerkleNodeStreamState::Initialized {
@@ -450,7 +450,6 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream2<
                 Poll::Ready(node) => match node {
                     Some(key_and_node) => {
                         let (key, node) = key_and_node?;
-
                         let key = key_from_nibble_iter(key.iter().copied());
 
                         match node.inner() {
@@ -477,201 +476,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream2<
     }
 }
 
-// enum IteratorState<'a> {
-//     /// Start iterating at the specified key
-//     StartAtKey(Key),
-//     /// Continue iterating after the last node in the `visited_node_path`
-//     Iterating {
-//         check_child_nibble: bool,
-//         visited_node_path: Vec<(NodeObjRef<'a>, u8)>,
-//     },
-// }
-
-// impl IteratorState<'_> {
-//     fn new() -> Self {
-//         Self::StartAtKey(vec![].into_boxed_slice())
-//     }
-
-//     fn with_key(key: Key) -> Self {
-//         Self::StartAtKey(key)
-//     }
-// }
-
-// /// A MerkleKeyValueStream iterates over keys/values for a merkle trie.
-// pub struct MerkleKeyValueStream<'a, S, T> {
-//     key_state: IteratorState<'a>,
-//     merkle_root: DiskAddress,
-//     merkle: &'a Merkle<S, T>,
-// }
-
-// impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleKeyValueStream<'a, S, T> {
-//     fn is_terminated(&self) -> bool {
-//         matches!(&self.key_state, IteratorState::Iterating { visited_node_path, .. } if visited_node_path.is_empty())
-//     }
-// }
-
-// impl<'a, S, T> MerkleKeyValueStream<'a, S, T> {
-//     pub(super) fn new(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress) -> Self {
-//         let key_state = IteratorState::new();
-
-//         Self {
-//             merkle,
-//             key_state,
-//             merkle_root,
-//         }
-//     }
-
-//     pub(super) fn from_key(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress, key: Key) -> Self {
-//         let key_state = IteratorState::with_key(key);
-
-//         Self {
-//             merkle,
-//             key_state,
-//             merkle_root,
-//         }
-//     }
-// }
-
-// impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'a, S, T> {
-//     type Item = Result<(Key, Value), api::Error>;
-
-//     fn poll_next(
-//         mut self: std::pin::Pin<&mut Self>,
-//         _cx: &mut std::task::Context<'_>,
-//     ) -> Poll<Option<Self::Item>> {
-//         // destructuring is necessary here because we need mutable access to `key_state`
-//         // at the same time as immutable access to `merkle`
-//         let Self {
-//             key_state,
-//             merkle_root,
-//             merkle,
-//         } = &mut *self;
-
-//         match key_state {
-//             IteratorState::StartAtKey(key) => {
-//                 let root_node = merkle
-//                     .get_node(*merkle_root)
-//                     .map_err(|e| api::Error::InternalError(Box::new(e)))?;
-
-//                 let mut check_child_nibble = false;
-
-//                 // traverse the trie along each nibble until we find a node with a value
-//                 // TODO: merkle.iter_by_key(key) will simplify this entire code-block.
-//                 let (found_node, mut visited_node_path) = {
-//                     let mut visited_node_path = vec![];
-
-//                     let found_node = merkle
-//                         .get_node_by_key_with_callbacks(
-//                             root_node,
-//                             &key,
-//                             |node_addr, _| visited_node_path.push(node_addr),
-//                             |_, _| {},
-//                         )
-//                         .map_err(|e| api::Error::InternalError(Box::new(e)))?;
-
-//                     let mut nibbles = Nibbles::<1>::new(key).into_iter();
-
-//                     let visited_node_path = visited_node_path
-//                         .into_iter()
-//                         .map(|node| merkle.get_node(node))
-//                         .map(|node_result| {
-//                             let nibbles = &mut nibbles;
-
-//                             node_result
-//                                 .map(|node| match node.inner() {
-//                                     NodeType::Branch(branch) => {
-//                                         let mut partial_path_iter = branch.path.iter();
-//                                         let next_nibble = nibbles
-//                                             .map(|nibble| (Some(nibble), partial_path_iter.next()))
-//                                             .find(|(a, b)| a.as_ref() != *b);
-
-//                                         match next_nibble {
-//                                             // this case will be hit by all but the last nodes
-//                                             // unless there is a deviation between the key and the path
-//                                             None | Some((None, _)) => None,
-
-//                                             Some((Some(key_nibble), Some(path_nibble))) => {
-//                                                 check_child_nibble = key_nibble < *path_nibble;
-//                                                 None
-//                                             }
-
-//                                             // path is subset of the key
-//                                             Some((Some(nibble), None)) => {
-//                                                 check_child_nibble = true;
-//                                                 Some((node, nibble))
-//                                             }
-//                                         }
-//                                     }
-//                                     NodeType::Leaf(_) => Some((node, 0)),
-//                                     NodeType::Extension(_) => Some((node, 0)),
-//                                 })
-//                                 .transpose()
-//                         })
-//                         .take_while(|node| node.is_some())
-//                         .flatten()
-//                         .collect::<Result<Vec<_>, _>>()
-//                         .map_err(|e| api::Error::InternalError(Box::new(e)))?;
-
-//                     (found_node, visited_node_path)
-//                 };
-
-//                 if let Some(found_node) = found_node {
-//                     let value = match found_node.inner() {
-//                         NodeType::Branch(branch) => {
-//                             check_child_nibble = true;
-//                             branch.value.as_ref()
-//                         }
-//                         NodeType::Leaf(leaf) => Some(&leaf.data),
-//                         NodeType::Extension(_) => None,
-//                     };
-
-//                     let next_result = value.map(|value| {
-//                         let value = value.to_vec();
-
-//                         Ok((std::mem::take(key), value))
-//                     });
-
-//                     visited_node_path.push((found_node, 0));
-
-//                     self.key_state = IteratorState::Iterating {
-//                         check_child_nibble,
-//                         visited_node_path,
-//                     };
-
-//                     return Poll::Ready(next_result);
-//                 }
-
-//                 let found_key = nibble_iter_from_parents(&visited_node_path);
-//                 let found_key = key_from_nibble_iter(found_key);
-
-//                 if found_key > *key {
-//                     check_child_nibble = false;
-//                     visited_node_path.pop();
-//                 }
-
-//                 self.key_state = IteratorState::Iterating {
-//                     check_child_nibble,
-//                     visited_node_path,
-//                 };
-
-//                 self.poll_next(_cx)
-//             }
-
-//             IteratorState::Iterating {
-//                 check_child_nibble,
-//                 visited_node_path,
-//             } => {
-//                 let next = find_next_result(merkle, visited_node_path, check_child_nibble)
-//                     .map_err(|e| api::Error::InternalError(Box::new(e)))
-//                     .transpose();
-
-//                 Poll::Ready(next)
-//             }
-//         }
-//     }
-// }
-
-fn get_children_iter2(
+fn get_children_iter(
     key: Box<[u8]>,
     branch: &BranchNode,
     start_index: usize,
