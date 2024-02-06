@@ -10,14 +10,12 @@ use crate::shale::CachedStore;
 use crate::{
     merkle::{TrieHash, TRIE_HASH_LEN},
     storage::{buffer::BufferWrite, AshRecord, StoreRevMut},
-    v2::api::{self, KeyType, ValueType},
+    v2::api::{self, Batch, BatchOp, KeyType, ValueType},
 };
 use async_trait::async_trait;
 use parking_lot::{Mutex, RwLock};
 use std::{io::ErrorKind, sync::Arc};
 use tokio::task::block_in_place;
-
-pub use crate::v2::api::{Batch, BatchOp};
 
 /// An atomic batch of changes proposed against the latest committed revision,
 /// or any existing [Proposal]. Multiple proposals can be created against the
@@ -222,7 +220,7 @@ impl Proposal {
         // revisions.base_revision.kv_dump(&mut io::stdout().lock())?;
 
         // update the rolling window of root hashes
-        revisions.root_hashes.push_front(hash.clone());
+        revisions.root_hashes.push_front(hash);
         if revisions.root_hashes.len() > max_revisions {
             revisions
                 .root_hashes

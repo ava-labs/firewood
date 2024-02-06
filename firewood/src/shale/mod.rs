@@ -31,6 +31,8 @@ pub enum ShaleError {
     InvalidAddressLength { expected: DiskAddress, found: u64 },
     #[error("invalid node type")]
     InvalidNodeType,
+    #[error("invalid node metadata")]
+    InvalidNodeMeta,
     #[error("failed to create view: offset: {offset:?} size: {size:?}")]
     InvalidCacheView { offset: usize, size: u64 },
     #[error("io error: {0}")]
@@ -341,6 +343,7 @@ impl<T: Storable + 'static> StoredView<T> {
     #[inline(always)]
     fn new<U: CachedStore>(offset: usize, len_limit: u64, space: &U) -> Result<Self, ShaleError> {
         let decoded = T::deserialize(offset, space)?;
+
         Ok(Self {
             offset,
             decoded,

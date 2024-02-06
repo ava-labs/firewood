@@ -2,10 +2,15 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::db::SharedStore;
-use crate::merkle::{BinarySerde, Bincode, Merkle, Node, Proof, ProofError, Ref, RefMut, TrieHash};
-use crate::shale::{
-    self, cached::DynamicMem, compact::CompactSpace, disk_address::DiskAddress, CachedStore,
-    ShaleStore, StoredView,
+use crate::{
+    merkle::{
+        proof::{Proof, ProofError},
+        BinarySerde, Bincode, Merkle, Node, Ref, RefMut, TrieHash,
+    },
+    shale::{
+        self, cached::DynamicMem, compact::CompactSpace, disk_address::DiskAddress, CachedStore,
+        ShaleStore, StoredView,
+    },
 };
 use std::num::NonZeroUsize;
 use thiserror::Error;
