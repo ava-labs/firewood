@@ -382,6 +382,57 @@ enum MerkleKeyValueStreamState<'a, S, T> {
     Initialized { iter: MerkleNodeStream<'a, S, T> },
 }
 
+impl<'a, S, T> MerkleKeyValueStreamState<'a, S, T> {
+    fn new() -> Self {
+        Self::Uninitialized(vec![].into_boxed_slice())
+    }
+
+    fn with_key(key: Key) -> Self {
+        Self::Uninitialized(key)
+    }
+}
+
+pub struct MerkleKeyValueStream2<'a, S, T> {
+    state: MerkleKeyValueStreamState<'a, S, T>,
+    merkle_root: DiskAddress,
+    merkle: &'a Merkle<S, T>,
+}
+
+impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleKeyValueStream2<'a, S, T> {
+    fn is_terminated(&self) -> bool {
+        matches!(&self.state, MerkleKeyValueStreamState::Initialized { iter } if iter.is_terminated())
+    }
+}
+
+impl<'a, S, T> MerkleKeyValueStream2<'a, S, T> {
+    pub(super) fn new(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress) -> Self {
+        Self {
+            state: MerkleKeyValueStreamState::new(),
+            merkle_root,
+            merkle,
+        }
+    }
+
+    pub(super) fn from_key(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress, key: Key) -> Self {
+        Self {
+            state: MerkleKeyValueStreamState::with_key(key),
+            merkle_root,
+            merkle,
+        }
+    }
+}
+
+impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream2<'a, S, T> {
+    type Item = Result<(Key, Value), api::Error>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        todo!("implement")
+    }
+}
+
 enum IteratorState<'a> {
     /// Start iterating at the specified key
     StartAtKey(Key),
