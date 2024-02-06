@@ -205,6 +205,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
         // [nib] is the first nibble after [matched_key_nibbles].
         let Some(nib) = key_nibbles.next() else {
             // The invariant tells us [node] is a prefix of [key].
+            // There is no more [key] left so [node] must be at [key].
             match &node.inner {
                 NodeType::Branch(_) | NodeType::Leaf(_) => {
                     branch_iter_stack.push(BranchIterator::Unvisited {
