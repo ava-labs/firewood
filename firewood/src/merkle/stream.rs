@@ -84,7 +84,7 @@ impl<'a, S, T> MerkleNodeStream<'a, S, T> {
 trait ShaleStoreNode: ShaleStore<Node> + Send + Sync {}
 
 impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S, T> {
-    type Item = Result<NodeObjRef<'a>, api::Error>;
+    type Item = Result<(Key, NodeObjRef<'a>), api::Error>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
@@ -112,9 +112,10 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                             .get_node(branch_iter.address)
                             .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
+                        let key = branch_iter.key.clone();
                         branch_iter_stack.push(branch_iter);
 
-                        return Poll::Ready(Some(Ok(node)));
+                        return Poll::Ready(Some(Ok((key, node))));
                     }
 
                     let Some((child_addr, child_key)) = branch_iter.children_iter.next() else {
@@ -448,13 +449,23 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream2<
             }
             MerkleKeyValueStreamState::Initialized { iter } => match iter.poll_next_unpin(_cx) {
                 Poll::Ready(node) => match node {
-                    Some(node) => {
-                        let node = node?;
+                    Some(key_and_node) => {
+                        let (key, node) = key_and_node?;
 
                         match node.inner() {
-                            NodeType::Branch(branch) => todo!(),
-                            NodeType::Leaf(_) => todo!(),
-                            NodeType::Extension(_) => todo!(),
+                            NodeType::Branch(branch) => {
+                                let Some(value) = branch.value.as_ref() else {
+                                    return self.poll_next(_cx);
+                                };
+
+                                let value = value.to_vec();
+                                return Poll::Ready(Some(Ok((key, value))));
+                            }
+                            NodeType::Leaf(leaf) => {
+                                let value = leaf.data.to_vec();
+                                return Poll::Ready(Some(Ok((key, value))));
+                            }
+                            NodeType::Extension(_) => panic!("extension nodes shouldn't exist"),
                         }
                     }
                     None => Poll::Ready(None),
