@@ -405,8 +405,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream2<
             }
             MerkleKeyValueStreamState::Initialized { iter } => match iter.poll_next_unpin(_cx) {
                 Poll::Ready(node) => match node {
-                    Some(key_and_node) => {
-                        let (key, node) = key_and_node?;
+                    Some(Ok((key, node))) => {
                         let key = key_from_nibble_iter(key.iter().copied().skip(1));
 
                         match node.inner() {
@@ -425,6 +424,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream2<
                             NodeType::Extension(_) => panic!("extension nodes shouldn't exist"),
                         }
                     }
+                    Some(Err(e)) => Poll::Ready(Some(Err(e))),
                     None => Poll::Ready(None),
                 },
                 Poll::Pending => Poll::Pending,
