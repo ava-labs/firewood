@@ -81,6 +81,8 @@ impl<'a, S, T> MerkleNodeStream<'a, S, T> {
     }
 }
 
+trait ShaleStoreNode: ShaleStore<Node> + Send + Sync {}
+
 impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S, T> {
     type Item = Result<NodeObjRef<'a>, api::Error>;
 
@@ -429,7 +431,23 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream2<
         mut self: std::pin::Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        todo!("implement")
+        // destructuring is necessary here because we need mutable access to `key_state`
+        // at the same time as immutable access to `merkle`
+        let Self {
+            state,
+            merkle_root,
+            merkle,
+        } = &mut *self;
+
+        match state {
+            MerkleKeyValueStreamState::Uninitialized(key) => {
+                // TODO how to not clone here?
+                let iter = MerkleNodeStream::from_key(merkle, merkle_root.clone(), key.clone());
+                self.state = MerkleKeyValueStreamState::Initialized { iter };
+                self.poll_next(_cx)
+            }
+            MerkleKeyValueStreamState::Initialized { iter } => todo!(),
+        }
     }
 }
 
