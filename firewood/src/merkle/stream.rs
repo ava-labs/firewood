@@ -213,19 +213,19 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
         };
 
         match &node.inner {
-            NodeType::Branch(n) => {
+            NodeType::Branch(branch) => {
                 // Start iterating over [node] at [nib + 1].
                 let key: Box<[u8]> = matched_key_nibbles.clone().into_boxed_slice();
                 branch_iter_stack.push(BranchIterator {
                     visited: true,
                     address: node_addr,
                     key: key.clone(),
-                    children_iter: Box::new(get_children_iter(key, n, nib as usize + 1)),
+                    children_iter: Box::new(get_children_iter(key, branch, nib as usize + 1)),
                 });
 
                 // Figure out if the child is a prefix of [key].
                 #[allow(clippy::indexing_slicing)]
-                let child_addr = match n.children[nib as usize] {
+                let child_addr = match branch.children[nib as usize] {
                     Some(c) => c,
                     None => {
                         return Ok(MerkleNodeStreamState::Initialized { branch_iter_stack });
@@ -286,6 +286,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                                 });
                             }
                         }
+                        matched_key_nibbles.extend(branch.path.iter().copied());
                     }
                     NodeType::Leaf(leaf) => {
                         for next_branch_nibble in leaf.path.iter().copied() {
