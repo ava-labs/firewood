@@ -22,7 +22,7 @@ pub use node::{
     NodeType, PartialPath,
 };
 pub use proof::{Proof, ProofError};
-pub use stream::MerkleKeyValueStream;
+pub use stream::MerkleKeyValueStream2;
 pub use trie_hash::{TrieHash, TRIE_HASH_LEN};
 
 type NodeObjRef<'a> = shale::ObjRef<'a, Node>;
@@ -1715,16 +1715,16 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         self.store.flush_dirty()
     }
 
-    pub(crate) fn iter(&self, root: DiskAddress) -> MerkleKeyValueStream<'_, S, T> {
-        MerkleKeyValueStream::new(self, root)
+    pub(crate) fn iter(&self, root: DiskAddress) -> MerkleKeyValueStream2<'_, S, T> {
+        MerkleKeyValueStream2::new(self, root)
     }
 
     pub(crate) fn iter_from(
         &self,
         root: DiskAddress,
         key: Box<[u8]>,
-    ) -> MerkleKeyValueStream<'_, S, T> {
-        MerkleKeyValueStream::from_key(self, root, key)
+    ) -> MerkleKeyValueStream2<'_, S, T> {
+        MerkleKeyValueStream2::from_key(self, root, key)
     }
 
     pub(super) async fn range_proof<K: api::KeyType + Send + Sync>(

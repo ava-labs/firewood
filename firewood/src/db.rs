@@ -319,14 +319,14 @@ impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
 }
 
 impl<S: ShaleStore<Node> + Send + Sync> DbRev<S> {
-    pub fn stream(&self) -> merkle::MerkleKeyValueStream<'_, S, Bincode> {
+    pub fn stream(&self) -> merkle::MerkleKeyValueStream2<'_, S, Bincode> {
         self.merkle.iter(self.header.kv_root)
     }
 
     pub fn stream_from(
         &self,
         start_key: Box<[u8]>,
-    ) -> merkle::MerkleKeyValueStream<'_, S, Bincode> {
+    ) -> merkle::MerkleKeyValueStream2<'_, S, Bincode> {
         self.merkle.iter_from(self.header.kv_root, start_key)
     }
 
