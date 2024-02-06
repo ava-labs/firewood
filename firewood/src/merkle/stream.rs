@@ -450,7 +450,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream2<
                 Poll::Ready(node) => match node {
                     Some(key_and_node) => {
                         let (key, node) = key_and_node?;
-                        let key = key_from_nibble_iter(key.iter().copied());
+                        let key = key_from_nibble_iter(key.iter().copied().skip(1));
 
                         match node.inner() {
                             NodeType::Branch(branch) => {
