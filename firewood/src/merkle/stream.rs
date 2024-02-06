@@ -126,8 +126,6 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                                 NodeType::Extension(_) => panic!("extension nodes shouldn't exist"),
                             }
 
-                            // branch_iter_stack.push(branch_iter);
-
                             return Poll::Ready(Some(Ok((key, node))));
                         }
                         BranchIterator::Visited {
@@ -198,7 +196,6 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
 
     // Invariant: [matched_key_nibbles] is the key of [node] at the start
     // of each loop iteration.
-    // TODO enforce
     let mut matched_key_nibbles = vec![];
 
     let mut key_nibbles: crate::nibbles::NibblesIterator<'_, 1> =
@@ -207,19 +204,14 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
     loop {
         // [nib] is the first nibble after [matched_key_nibbles].
         let Some(nib) = key_nibbles.next() else {
-            // [node] is at [key].
+            // The invariant tells us [node] is a prefix of [key].
             match &node.inner {
-                NodeType::Branch(branch) => {
-                    let key = matched_key_nibbles.clone().into_boxed_slice();
+                NodeType::Branch(_) | NodeType::Leaf(_) => {
                     branch_iter_stack.push(BranchIterator::Unvisited {
                         address: node_addr,
-                        key: key.clone(),
+                        key: matched_key_nibbles.clone().into_boxed_slice(),
                     });
                 }
-                NodeType::Leaf(_) => branch_iter_stack.push(BranchIterator::Unvisited {
-                    address: node_addr,
-                    key: matched_key_nibbles.clone().into_boxed_slice(),
-                }),
                 NodeType::Extension(_) => {
                     panic!("extension nodes shouldn't exist")
                 }
@@ -231,15 +223,15 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
         match &node.inner {
             NodeType::Branch(branch) => {
                 // Start iterating over [node] at [nib + 1].
-                let key: Box<[u8]> = matched_key_nibbles.clone().into_boxed_slice();
                 branch_iter_stack.push(BranchIterator::Visited {
-                    key: key.clone(),
+                    key: matched_key_nibbles.clone().into_boxed_slice(),
                     children_iter: Box::new(
                         get_children_iter(branch).filter(move |(_, pos)| *pos >= nib + 1),
                     ),
                 });
 
                 // Figure out if the child is a prefix of [key].
+                // (i.e. if we should iterate over this loop again)
                 #[allow(clippy::indexing_slicing)]
                 let child_addr = match branch.children[nib as usize] {
                     Some(c) => c,
