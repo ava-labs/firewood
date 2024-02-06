@@ -15,14 +15,19 @@ type Key = Box<[u8]>;
 type Value = Vec<u8>;
 
 /// Represents an ongoing iteration over a branch node's children.
-struct BranchIterator {
-    visited: bool,
-    address: DiskAddress,
-    /// The nibbles of the key at this branch node.
-    key: Box<[u8]>,
-    /// Returns the non-empty children of this node and their positions
-    /// in the node's children array .
-    children_iter: Box<dyn Iterator<Item = (DiskAddress, u8)> + Send>,
+enum BranchIterator {
+    Unvisited {
+        address: DiskAddress,
+        /// The nibbles of the key at this branch node.
+        key: Box<[u8]>,
+    },
+    Visited {
+        /// The nibbles of the key at this branch node.
+        key: Box<[u8]>,
+        /// Returns the non-empty children of this node and their positions
+        /// in the node's children array .
+        children_iter: Box<dyn Iterator<Item = (DiskAddress, u8)> + Send>,
+    },
 }
 
 enum MerkleNodeStreamState {
@@ -104,61 +109,70 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
             }
             MerkleNodeStreamState::Initialized { branch_iter_stack } => {
                 while let Some(mut branch_iter) = branch_iter_stack.pop() {
-                    if !branch_iter.visited {
-                        // We haven't returned this node yet.
-                        branch_iter.visited = true;
+                    match branch_iter {
+                        BranchIterator::Unvisited { address, key } => {
+                            let node = merkle
+                                .get_node(address)
+                                .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                        let node = merkle
-                            .get_node(branch_iter.address)
-                            .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+                            match node.inner() {
+                                NodeType::Branch(branch) => {
+                                    branch_iter_stack.push(BranchIterator::Visited {
+                                        key: key.clone(),
+                                        children_iter: Box::new(get_children_iter(branch)),
+                                    });
+                                }
+                                NodeType::Leaf(_) => {}
+                                NodeType::Extension(_) => panic!("extension nodes shouldn't exist"),
+                            }
 
-                        let key = branch_iter.key.clone();
-                        branch_iter_stack.push(branch_iter);
+                            // branch_iter_stack.push(branch_iter);
 
-                        return Poll::Ready(Some(Ok((key, node))));
+                            return Poll::Ready(Some(Ok((key, node))));
+                        }
+                        BranchIterator::Visited {
+                            ref key,
+                            ref mut children_iter,
+                        } => {
+                            // We returned this node already. Visit its next child.
+                            let Some((child_addr, pos)) = children_iter.next() else {
+                                // We visited all this node's descendants. Go back to its parent.
+                                continue;
+                            };
+
+                            let mut child_key: Vec<u8> =
+                                key.iter().copied().chain(once(pos)).collect();
+
+                            branch_iter_stack.push(branch_iter);
+
+                            // Get the next node.
+                            let child = merkle
+                                .get_node(child_addr)
+                                .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+
+                            match child.inner() {
+                                NodeType::Branch(branch) => {
+                                    child_key.extend(branch.path.iter().copied());
+                                    branch_iter_stack.push(BranchIterator::Unvisited {
+                                        address: child_addr,
+                                        key: child_key.into_boxed_slice(),
+                                    });
+                                    return self.poll_next(_cx);
+                                }
+                                NodeType::Leaf(leaf) => {
+                                    child_key.extend(leaf.path.iter().copied());
+                                    branch_iter_stack.push(BranchIterator::Unvisited {
+                                        address: child_addr,
+                                        key: child_key.into_boxed_slice(),
+                                    });
+                                    return self.poll_next(_cx);
+                                }
+                                NodeType::Extension(_) => {
+                                    panic!("extension nodes shouldn't exist")
+                                }
+                            };
+                        }
                     }
-
-                    // We returned this node already. Visit its next child.
-                    let Some((child_addr, pos)) = branch_iter.children_iter.next() else {
-                        // We visited all this node's descendants. Go back to its parent.
-                        continue;
-                    };
-
-                    let mut child_key: Vec<u8> =
-                        branch_iter.key.iter().copied().chain(once(pos)).collect();
-
-                    branch_iter_stack.push(branch_iter);
-
-                    // Get the next node.
-                    let child = merkle
-                        .get_node(child_addr)
-                        .map_err(|e| api::Error::InternalError(Box::new(e)))?;
-
-                    match child.inner() {
-                        NodeType::Branch(branch) => {
-                            child_key.extend(branch.path.iter().copied());
-                            branch_iter_stack.push(BranchIterator {
-                                visited: false,
-                                address: child_addr,
-                                key: child_key.into_boxed_slice(),
-                                children_iter: Box::new(get_children_iter(branch)),
-                            });
-                            return self.poll_next(_cx);
-                        }
-                        NodeType::Leaf(leaf) => {
-                            child_key.extend(leaf.path.iter().copied());
-                            branch_iter_stack.push(BranchIterator {
-                                visited: false,
-                                address: child_addr,
-                                key: child_key.into_boxed_slice(),
-                                children_iter: Box::new(std::iter::empty()),
-                            });
-                            return self.poll_next(_cx);
-                        }
-                        NodeType::Extension(_) => {
-                            panic!("extension nodes shouldn't exist")
-                        }
-                    };
                 }
                 Poll::Ready(None)
             }
@@ -197,18 +211,14 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
             match &node.inner {
                 NodeType::Branch(branch) => {
                     let key = matched_key_nibbles.clone().into_boxed_slice();
-                    branch_iter_stack.push(BranchIterator {
-                        visited: false,
+                    branch_iter_stack.push(BranchIterator::Unvisited {
                         address: node_addr,
                         key: key.clone(),
-                        children_iter: Box::new(get_children_iter(branch)),
                     });
                 }
-                NodeType::Leaf(_) => branch_iter_stack.push(BranchIterator {
-                    visited: false,
+                NodeType::Leaf(_) => branch_iter_stack.push(BranchIterator::Unvisited {
                     address: node_addr,
                     key: matched_key_nibbles.clone().into_boxed_slice(),
-                    children_iter: Box::new(std::iter::empty()),
                 }),
                 NodeType::Extension(_) => {
                     panic!("extension nodes shouldn't exist")
@@ -222,9 +232,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
             NodeType::Branch(branch) => {
                 // Start iterating over [node] at [nib + 1].
                 let key: Box<[u8]> = matched_key_nibbles.clone().into_boxed_slice();
-                branch_iter_stack.push(BranchIterator {
-                    visited: true,
-                    address: node_addr,
+                branch_iter_stack.push(BranchIterator::Visited {
                     key: key.clone(),
                     children_iter: Box::new(
                         get_children_iter(branch).filter(move |(_, pos)| *pos >= nib + 1),
@@ -256,11 +264,9 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                                     .copied()
                                     .chain(branch.path.iter().copied())
                                     .collect();
-                                branch_iter_stack.push(BranchIterator {
-                                    visited: false,
+                                branch_iter_stack.push(BranchIterator::Unvisited {
                                     address: child_addr,
                                     key: key.clone(),
-                                    children_iter: Box::new(get_children_iter(branch)),
                                 });
 
                                 return Ok(MerkleNodeStreamState::Initialized {
@@ -277,11 +283,9 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                                     .chain(branch.path.iter().copied())
                                     .collect();
 
-                                branch_iter_stack.push(BranchIterator {
-                                    visited: false,
+                                branch_iter_stack.push(BranchIterator::Unvisited {
                                     address: child_addr,
                                     key: key.clone(),
-                                    children_iter: Box::new(get_children_iter(branch)),
                                 });
 
                                 return Ok(MerkleNodeStreamState::Initialized {
@@ -300,11 +304,9 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                         for next_branch_nibble in leaf.path.iter().copied() {
                             let Some(next_key_nibble) = key_nibbles.next() else {
                                 // Ran out of [key] nibbles so [child] is after [key]
-                                branch_iter_stack.push(BranchIterator {
-                                    visited: false,
+                                branch_iter_stack.push(BranchIterator::Unvisited {
                                     address: child_addr,
                                     key: matched_key_nibbles.clone().into_boxed_slice(),
-                                    children_iter: Box::new(std::iter::empty()),
                                 });
 
                                 return Ok(MerkleNodeStreamState::Initialized {
@@ -315,11 +317,9 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                             if next_branch_nibble > next_key_nibble {
                                 // The leaf's key and the key diverged, and the
                                 // leaf is greater, so we can stop here.
-                                branch_iter_stack.push(BranchIterator {
-                                    visited: false,
+                                branch_iter_stack.push(BranchIterator::Unvisited {
                                     address: child_addr,
                                     key: matched_key_nibbles.clone().into_boxed_slice(),
-                                    children_iter: Box::new(std::iter::empty()),
                                 });
                                 return Ok(MerkleNodeStreamState::Initialized {
                                     branch_iter_stack,
@@ -349,15 +349,13 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                         Some(next_key_nibble) if next_leaf_nibble > next_key_nibble => {
                             {
                                 // The leaf's key > [key], so we can stop here.
-                                branch_iter_stack.push(BranchIterator {
-                                    visited: false,
+                                branch_iter_stack.push(BranchIterator::Unvisited {
                                     address: node_addr,
                                     key: matched_key_nibbles
                                         .iter()
                                         .copied()
                                         .chain(leaf.path.iter().copied())
                                         .collect(),
-                                    children_iter: Box::new(std::iter::empty()),
                                 });
                                 return Ok(MerkleNodeStreamState::Initialized {
                                     branch_iter_stack,
@@ -368,11 +366,9 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                         Some(_) => {}
                         None => {
                             // Ran out of [key] nibbles so [leaf] is after [key]
-                            branch_iter_stack.push(BranchIterator {
-                                visited: false,
+                            branch_iter_stack.push(BranchIterator::Unvisited {
                                 address: node_addr,
                                 key: matched_key_nibbles.clone().into_boxed_slice(),
-                                children_iter: Box::new(std::iter::empty()),
                             });
                             return Ok(MerkleNodeStreamState::Initialized { branch_iter_stack });
                         }
