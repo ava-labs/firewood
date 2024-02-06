@@ -105,6 +105,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
             MerkleNodeStreamState::Initialized { branch_iter_stack } => {
                 while let Some(mut branch_iter) = branch_iter_stack.pop() {
                     if !branch_iter.visited {
+                        // We haven't returned this node yet.
                         branch_iter.visited = true;
 
                         let node = merkle
@@ -117,9 +118,9 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                         return Poll::Ready(Some(Ok((key, node))));
                     }
 
+                    // We returned this node already. Visit its next child.
                     let Some((child_addr, pos)) = branch_iter.children_iter.next() else {
-                        // We visited all this node's descendants.
-                        // Go back to its parent.
+                        // We visited all this node's descendants. Go back to its parent.
                         continue;
                     };
 
@@ -489,7 +490,7 @@ fn get_children_iter(branch: &BranchNode) -> impl Iterator<Item = (DiskAddress, 
         .children
         .into_iter()
         .enumerate()
-        .filter_map(move |(pos, child_addr)| child_addr.map(|child_addr| (child_addr, pos as u8)))
+        .filter_map(|(pos, child_addr)| child_addr.map(|child_addr| (child_addr, pos as u8)))
 }
 
 fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
