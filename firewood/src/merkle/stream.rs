@@ -263,7 +263,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                 };
 
                 let (comparison, new_unmatched_key_nibbles) =
-                    is_prefix(partial_key.iter(), unmatched_key_nibbles);
+                    compare_partial_path(partial_key.iter(), unmatched_key_nibbles);
                 unmatched_key_nibbles = new_unmatched_key_nibbles;
 
                 match comparison {
@@ -296,7 +296,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                 }
             }
             NodeType::Leaf(leaf) => {
-                let (comparison, _) = is_prefix(leaf.path.iter(), unmatched_key_nibbles);
+                let (comparison, _) = compare_partial_path(leaf.path.iter(), unmatched_key_nibbles);
 
                 match comparison {
                     Ordering::Less | Ordering::Equal => {}
@@ -436,7 +436,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 /// * [Ordering::Greater] if the node is after the key.
 /// The second returned element is the unmatched portion of the key after the
 /// partial path has been matched.
-fn is_prefix<'a, I1, I2>(
+fn compare_partial_path<'a, I1, I2>(
     partial_path_iter: I1,
     mut unmatched_key_nibbles_iter: I2,
 ) -> (Ordering, I2)
