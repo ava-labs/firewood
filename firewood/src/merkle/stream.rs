@@ -282,8 +282,8 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                     };
 
                     if next_partial_key_nibble > &next_key_nibble {
-                        // The leaf's key and the key diverged, and the
-                        // leaf is greater, so we can stop here.
+                        // [node]'s partial key and the remaining key diverged.
+                        // [node] is after [key]. Visit and return [node] first.
                         branch_iter_stack.push(BranchIterator::Unvisited {
                             address: child_addr,
                             key: matched_key_nibbles
@@ -295,7 +295,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                         });
                         return Ok(MerkleNodeStreamState::Initialized { branch_iter_stack });
                     } else if next_partial_key_nibble < &next_key_nibble {
-                        // [child] is before [key]
+                        // [node] is before [key]
                         return Ok(MerkleNodeStreamState::Initialized { branch_iter_stack });
                     }
                 }
@@ -307,9 +307,9 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                 node_addr = child_addr;
             }
             NodeType::Leaf(leaf) => {
-                for next_leaf_nibble in leaf.path.iter().copied() {
+                for next_leaf_nibble in leaf.path.iter() {
                     match unmatched_key_nibbles.next() {
-                        Some(next_key_nibble) if next_leaf_nibble > next_key_nibble => {
+                        Some(next_key_nibble) if next_leaf_nibble > &next_key_nibble => {
                             {
                                 // The leaf's key > [key], so we can stop here.
                                 branch_iter_stack.push(BranchIterator::Unvisited {
@@ -325,7 +325,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                                 });
                             }
                         }
-                        Some(next_key_nibble) if next_leaf_nibble < next_key_nibble => break,
+                        Some(next_key_nibble) if next_leaf_nibble < &next_key_nibble => break,
                         Some(_) => {}
                         None => {
                             // Ran out of [key] nibbles so [leaf] is after [key]
