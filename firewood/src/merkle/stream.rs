@@ -8,8 +8,8 @@ use crate::{
     v2::api,
 };
 use futures::{stream::FusedStream, Stream, StreamExt};
-use std::iter::once;
 use std::task::Poll;
+use std::{cmp::Ordering, iter::once};
 
 type Key = Box<[u8]>;
 type Value = Vec<u8>;
@@ -268,9 +268,23 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                     }
                 };
 
-                for next_partial_key_nibble in partial_key.iter() {
-                    let Some(next_key_nibble) = unmatched_key_nibbles.next() else {
-                        // Ran out of [key] nibbles so [child] is after [key]
+                let (comparison, new_unmatched_key_nibbles) =
+                    is_prefix(partial_key.iter(), unmatched_key_nibbles);
+                unmatched_key_nibbles = new_unmatched_key_nibbles;
+
+                match comparison {
+                    Ordering::Less => {
+                        // [child] is before [key].
+                        return Ok(MerkleNodeStreamState::Initialized { iter_stack });
+                    }
+                    Ordering::Equal => {
+                        // [child] is a prefix of [key].
+                        matched_key_nibbles.extend(partial_key.iter().copied());
+                        node = child;
+                        node_addr = child_addr;
+                    }
+                    Ordering::Greater => {
+                        // [child] is after [key].
                         iter_stack.push(IterationNode::Unvisited {
                             address: child_addr,
                             // TODO is there a way to just drain [partial_key]
@@ -286,32 +300,8 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                         });
 
                         return Ok(MerkleNodeStreamState::Initialized { iter_stack });
-                    };
-
-                    if next_partial_key_nibble > &next_key_nibble {
-                        // [node]'s partial key and the remaining key diverged.
-                        // [node] is after [key]. Visit and return [node] first.
-                        iter_stack.push(IterationNode::Unvisited {
-                            address: child_addr,
-                            key: matched_key_nibbles
-                                .clone()
-                                .iter()
-                                .copied()
-                                .chain(partial_key.iter().copied())
-                                .collect(),
-                        });
-                        return Ok(MerkleNodeStreamState::Initialized { iter_stack });
-                    } else if next_partial_key_nibble < &next_key_nibble {
-                        // [node] is before [key]
-                        return Ok(MerkleNodeStreamState::Initialized { iter_stack });
                     }
                 }
-
-                matched_key_nibbles.extend(partial_key.iter().copied());
-
-                // [child] is a prefix of [key].
-                node = child;
-                node_addr = child_addr;
             }
             NodeType::Leaf(leaf) => {
                 for next_leaf_nibble in leaf.path.iter() {
@@ -454,6 +444,37 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
             }
         }
     }
+}
+
+/// Takes in an iterator over a node's partial path and an iterator over the
+/// unmatched portion of a key.
+/// The first returned element is:
+/// * [Ordering::Less] if the node is before the key.
+/// * [Ordering::Equal] if the node is a prefix of the key.
+/// * [Ordering::Greater] if the node is after the key.
+/// The second returned element is the unmatched portion of the key after the
+/// partial path has been matched.
+fn is_prefix<'a, I1, I2>(
+    partial_path_iter: I1,
+    mut unmatched_key_nibbles_iter: I2,
+) -> (Ordering, I2)
+where
+    I1: Iterator<Item = &'a u8>,
+    I2: Iterator<Item = u8>,
+{
+    for next_partial_path_nibble in partial_path_iter {
+        let Some(next_key_nibble) = unmatched_key_nibbles_iter.next() else {
+            return (Ordering::Greater, unmatched_key_nibbles_iter);
+        };
+
+        match next_partial_path_nibble.cmp(&next_key_nibble) {
+            Ordering::Less => return (Ordering::Less, unmatched_key_nibbles_iter),
+            Ordering::Greater => return (Ordering::Greater, unmatched_key_nibbles_iter),
+            Ordering::Equal => {}
+        }
+    }
+
+    return (Ordering::Equal, unmatched_key_nibbles_iter);
 }
 
 /// Returns an iterator that returns (child_addr, pos) for each non-empty child of [branch],
