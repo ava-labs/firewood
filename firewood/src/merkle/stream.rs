@@ -456,6 +456,8 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
     }
 }
 
+/// Returns an iterator that returns (child_addr, pos) for each non-empty child of [branch],
+/// where [pos] is the position of the child in [branch]'s children array.
 fn get_children_iter(branch: &BranchNode) -> impl Iterator<Item = (DiskAddress, u8)> {
     branch
         .children
