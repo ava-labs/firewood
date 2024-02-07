@@ -164,10 +164,6 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                             // There may be more children of this node to visit.
                             iter_stack.push(iter_node);
 
-                            let child = merkle
-                                .get_node(child_addr)
-                                .map_err(|e| api::Error::InternalError(Box::new(e)))?;
-
                             iter_stack.push(IterationNode::Unvisited {
                                 key: child_key,
                                 node: child,
