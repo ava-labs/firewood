@@ -111,7 +111,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                 while let Some(mut branch_iter) = branch_iter_stack.pop() {
                     match branch_iter {
                         BranchIterator::Unvisited { address, key } => {
-                            // We haven't returned this node yet
+                            // We haven't returned this node yet.
                             let node = merkle
                                 .get_node(address)
                                 .map_err(|e| api::Error::InternalError(Box::new(e)))?;
@@ -134,45 +134,40 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                             ref key,
                             ref mut children_iter,
                         } => {
-                            // We returned this node already. Visit its next child.
+                            // We returned [node] already. Visit its next child.
                             let Some((child_addr, pos)) = children_iter.next() else {
                                 // We visited all this node's descendants. Go back to its parent.
                                 continue;
                             };
 
-                            let mut child_key: Vec<u8> =
-                                key.iter().copied().chain(once(pos)).collect();
+                            let key = key.clone();
 
-                            // There may be more children of this node to visit
-
+                            // There may be more children of this node to visit.
                             branch_iter_stack.push(branch_iter);
 
-                            // Get the next node.
+                            // Visit the child next.
                             let child = merkle
                                 .get_node(child_addr)
                                 .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-                            match child.inner() {
-                                NodeType::Branch(branch) => {
-                                    child_key.extend(branch.path.iter().copied());
-                                    branch_iter_stack.push(BranchIterator::Unvisited {
-                                        address: child_addr,
-                                        key: child_key.into_boxed_slice(),
-                                    });
-                                    return self.poll_next(_cx);
-                                }
-                                NodeType::Leaf(leaf) => {
-                                    child_key.extend(leaf.path.iter().copied());
-                                    branch_iter_stack.push(BranchIterator::Unvisited {
-                                        address: child_addr,
-                                        key: child_key.into_boxed_slice(),
-                                    });
-                                    return self.poll_next(_cx);
-                                }
+                            let partial_path = match child.inner() {
+                                NodeType::Branch(branch) => branch.path.iter().copied(),
+                                NodeType::Leaf(leaf) => leaf.path.iter().copied(),
                                 NodeType::Extension(_) => {
                                     panic!("extension nodes shouldn't exist")
                                 }
                             };
+
+                            branch_iter_stack.push(BranchIterator::Unvisited {
+                                address: child_addr,
+                                key: key
+                                    .iter()
+                                    .copied()
+                                    .chain(once(pos))
+                                    .chain(partial_path)
+                                    .collect(),
+                            });
+                            return self.poll_next(_cx);
                         }
                     }
                 }
@@ -182,8 +177,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
     }
 }
 
-/// Returns the state of an iterator over merkle, which has the given
-/// root_node, after it's been initialized. Iteration starts at the given key.
+// TODO comment
 fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
     merkle: &Merkle<S, T>,
     root_node: DiskAddress,
@@ -194,22 +188,25 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
         .get_node(root_node)
         .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
+    // Invariant: This is [node]'s address at the start
+    // of each loop iteration.
     let mut node_addr = root_node;
-
-    let mut branch_iter_stack: Vec<BranchIterator> = vec![];
 
     // Invariant: [matched_key_nibbles] is the key of [node] at the start
     // of each loop iteration.
     let mut matched_key_nibbles = vec![];
 
-    let mut key_nibbles: crate::nibbles::NibblesIterator<'_, 1> =
+    let mut unmatched_key_nibbles: crate::nibbles::NibblesIterator<'_, 1> =
         Nibbles::<1>::new(key.as_ref()).into_iter();
+
+    let mut branch_iter_stack: Vec<BranchIterator> = vec![];
 
     loop {
         // [nib] is the first nibble after [matched_key_nibbles].
-        let Some(nib) = key_nibbles.next() else {
+        let Some(nib) = unmatched_key_nibbles.next() else {
             // The invariant tells us [node] is a prefix of [key].
             // There is no more [key] left so [node] must be at [key].
+            // Visit and return [node] first.
             match &node.inner {
                 NodeType::Branch(_) | NodeType::Leaf(_) => {
                     branch_iter_stack.push(BranchIterator::Unvisited {
@@ -227,20 +224,25 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
 
         match &node.inner {
             NodeType::Branch(branch) => {
-                // Start iterating over [node] at [nib + 1].
+                // The next nibble in [key] is [nib],
+                // so all children of [node] with a position > [nib]
+                // should be visited since they are after [key].
                 branch_iter_stack.push(BranchIterator::Visited {
                     key: matched_key_nibbles.clone().into_boxed_slice(),
                     children_iter: Box::new(
-                        get_children_iter(branch).filter(move |(_, pos)| *pos >= nib + 1),
+                        get_children_iter(branch).filter(move |(_, pos)| *pos > nib),
                     ),
                 });
 
                 // Figure out if the child is a prefix of [key].
-                // (i.e. if we should iterate over this loop again)
+                // (i.e. if we should run this loop body again)
                 #[allow(clippy::indexing_slicing)]
                 let child_addr = match branch.children[nib as usize] {
                     Some(c) => c,
                     None => {
+                        // There is no child at [nib].
+                        // We'll visit [node]'s first child at index > [nib]
+                        // first (if it exists).
                         return Ok(MerkleNodeStreamState::Initialized { branch_iter_stack });
                     }
                 };
@@ -260,7 +262,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                 };
 
                 for next_partial_key_nibble in partial_key.iter().copied() {
-                    let Some(next_key_nibble) = key_nibbles.next() else {
+                    let Some(next_key_nibble) = unmatched_key_nibbles.next() else {
                         // Ran out of [key] nibbles so [child] is after [key]
                         branch_iter_stack.push(BranchIterator::Unvisited {
                             address: child_addr,
@@ -302,7 +304,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
             }
             NodeType::Leaf(leaf) => {
                 for next_leaf_nibble in leaf.path.iter().copied() {
-                    match key_nibbles.next() {
+                    match unmatched_key_nibbles.next() {
                         Some(next_key_nibble) if next_leaf_nibble > next_key_nibble => {
                             {
                                 // The leaf's key > [key], so we can stop here.
