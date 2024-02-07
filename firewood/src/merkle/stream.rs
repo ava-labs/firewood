@@ -231,14 +231,11 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                 // Figure out if the child at `next_unmatched_key_nibble` is a prefix of `key`.
                 // (i.e. if we should run this loop body again)
                 #[allow(clippy::indexing_slicing)]
-                let child_addr = match branch.children[next_unmatched_key_nibble as usize] {
-                    Some(c) => c,
-                    None => {
-                        // There is no child at `next_unmatched_key_nibble`.
-                        // We'll visit `node`'s first child at index > `next_unmatched_key_nibble`
-                        // first (if it exists).
-                        return Ok(NodeStreamState::Iterating { iter_stack });
-                    }
+                let Some(child_addr) = branch.children[next_unmatched_key_nibble as usize] else {
+                    // There is no child at `nib`.
+                    // We'll visit `node`'s first child at index > `nib`
+                    // first (if it exists).
+                    return Ok(NodeStreamState::Iterating { iter_stack });
                 };
 
                 matched_key_nibbles.push(next_unmatched_key_nibble);
