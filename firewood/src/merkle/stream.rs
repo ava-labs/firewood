@@ -304,35 +304,22 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                 }
             }
             NodeType::Leaf(leaf) => {
-                for next_leaf_nibble in leaf.path.iter() {
-                    match unmatched_key_nibbles.next() {
-                        Some(next_key_nibble) if next_leaf_nibble > &next_key_nibble => {
-                            {
-                                // The leaf's key > [key], so we can stop here.
-                                iter_stack.push(IterationNode::Unvisited {
-                                    address: node_addr,
-                                    key: matched_key_nibbles
-                                        .iter()
-                                        .copied()
-                                        .chain(leaf.path.iter().copied())
-                                        .collect(),
-                                });
-                                return Ok(MerkleNodeStreamState::Initialized { iter_stack });
-                            }
-                        }
-                        Some(next_key_nibble) if next_leaf_nibble < &next_key_nibble => break,
-                        Some(_) => {}
-                        None => {
-                            // Ran out of [key] nibbles so [leaf] is after [key]
-                            iter_stack.push(IterationNode::Unvisited {
-                                address: node_addr,
-                                key: matched_key_nibbles.clone().into_boxed_slice(),
-                            });
-                            return Ok(MerkleNodeStreamState::Initialized { iter_stack });
-                        }
+                let (comparison, _) = is_prefix(leaf.path.iter(), unmatched_key_nibbles);
+
+                match comparison {
+                    Ordering::Less | Ordering::Equal => {}
+                    Ordering::Greater => {
+                        // The leaf's key > [key], so we can stop here.
+                        iter_stack.push(IterationNode::Unvisited {
+                            address: node_addr,
+                            key: matched_key_nibbles
+                                .iter()
+                                .copied()
+                                .chain(leaf.path.iter().copied())
+                                .collect(),
+                        });
                     }
                 }
-
                 return Ok(MerkleNodeStreamState::Initialized { iter_stack });
             }
             NodeType::Extension(_) => {
