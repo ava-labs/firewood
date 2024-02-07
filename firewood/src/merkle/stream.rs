@@ -279,10 +279,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                             .copied()
                             .chain(partial_key.iter().copied())
                             .collect();
-                        iter_stack.push(IterationNode::Unvisited {
-                            key: key,
-                            node: child,
-                        });
+                        iter_stack.push(IterationNode::Unvisited { key, node: child });
 
                         return Ok(MerkleNodeStreamState::Initialized { iter_stack });
                     }
