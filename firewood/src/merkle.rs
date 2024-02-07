@@ -25,6 +25,8 @@ pub use proof::{Proof, ProofError};
 pub use stream::MerkleKeyValueStream;
 pub use trie_hash::{TrieHash, TRIE_HASH_LEN};
 
+use self::stream::MerkleNodeStream;
+
 type NodeObjRef<'a> = shale::ObjRef<'a, Node>;
 type ParentRefs<'a> = Vec<(NodeObjRef<'a>, u8)>;
 type ParentAddresses = Vec<(DiskAddress, u8)>;
@@ -1715,16 +1717,30 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         self.store.flush_dirty()
     }
 
-    pub(crate) fn iter(&self, root: DiskAddress) -> MerkleKeyValueStream<'_, S, T> {
+    pub(crate) fn key_value_iter(&self, root: DiskAddress) -> MerkleKeyValueStream<'_, S, T> {
         MerkleKeyValueStream::new(self, root)
     }
 
-    pub(crate) fn iter_from(
+    pub(crate) fn key_value_iter_from(
         &self,
         root: DiskAddress,
         key: Box<[u8]>,
     ) -> MerkleKeyValueStream<'_, S, T> {
         MerkleKeyValueStream::from_key(self, root, key)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn node_iter(&self, root: DiskAddress) -> MerkleNodeStream<'_, S, T> {
+        MerkleNodeStream::new(self, root)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn node_iter_from(
+        &self,
+        root: DiskAddress,
+        key: Box<[u8]>,
+    ) -> MerkleNodeStream<'_, S, T> {
+        MerkleNodeStream::from_key(self, root, key)
     }
 
     pub(super) async fn range_proof<K: api::KeyType + Send + Sync>(
@@ -1750,8 +1766,8 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
         let mut stream = match first_key {
             // TODO: fix the call-site to force the caller to do the allocation
-            Some(key) => self.iter_from(root, key.as_ref().to_vec().into_boxed_slice()),
-            None => self.iter(root),
+            Some(key) => self.key_value_iter_from(root, key.as_ref().to_vec().into_boxed_slice()),
+            None => self.key_value_iter(root),
         };
 
         // fetch the first key from the stream
