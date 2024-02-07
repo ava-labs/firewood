@@ -266,6 +266,10 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                         // Ran out of [key] nibbles so [child] is after [key]
                         branch_iter_stack.push(BranchIterator::Unvisited {
                             address: child_addr,
+                            // TODO is there a way to just drain [partial_key]
+                            // into [matched_key_nibbles]? Then we could append
+                            // each matched nibble as we go instead of using
+                            // extend.
                             key: matched_key_nibbles
                                 .clone()
                                 .iter()
