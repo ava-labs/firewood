@@ -182,7 +182,8 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
     }
 }
 
-// TODO comment
+/// Returns the initial state for an iterator over the given `merkle` with root `root_node`
+/// which starts at `key`.
 fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
     merkle: &'a Merkle<S, T>,
     root_node: DiskAddress,
