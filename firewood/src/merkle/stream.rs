@@ -14,18 +14,21 @@ use std::task::Poll;
 type Key = Box<[u8]>;
 type Value = Vec<u8>;
 
-/// Represents an ongoing iteration over a branch node's children.
-enum BranchIterator {
+/// Represents an ongoing iteration over a node and its children.
+enum IterationNode {
+    // This node has not been returned yet.
     Unvisited {
-        address: DiskAddress,
-        /// The nibbles of the key at this branch node.
+        /// The key (as nibbles) of this node.
         key: Key,
+        // The address of the node.
+        address: DiskAddress,
     },
+    // This node has been returned. Track which child to visit next.
     Visited {
-        /// The nibbles of the key at this branch node.
+        /// The key (as nibbles) of this node.
         key: Key,
         /// Returns the non-empty children of this node and their positions
-        /// in the node's children array .
+        /// in the node's children array.
         children_iter: Box<dyn Iterator<Item = (DiskAddress, u8)> + Send>,
     },
 }
@@ -35,12 +38,12 @@ enum MerkleNodeStreamState {
     /// for the first time. The iteration start key is stored here.
     Uninitialized(Key),
     Initialized {
-        /// Each element is an iterator over a branch node we've visited
-        /// along our traversal of the key-value pairs in the trie.
-        /// We pop an iterator off the stack and call next on it to
-        /// get the next child node to visit. When an iterator is empty,
-        /// we pop it off the stack and go back up to its parent.
-        branch_iter_stack: Vec<BranchIterator>,
+        /// Each element is a node that will be visited (i.e. returned)
+        /// or has been visited but has unvisited children.
+        /// On each call to poll_next we pop the next element.
+        /// If it's unvisited, we visit it.
+        /// If it's visited, we push its next child onto this stack.
+        iter_stack: Vec<IterationNode>,
     },
 }
 
@@ -54,7 +57,8 @@ impl MerkleNodeStreamState {
     }
 }
 
-/// A MerkleKeyValueStream iterates over keys/values for a merkle trie.
+/// Iterates over the nodes in [merkle], whose root is [merkle_root],
+/// in order of ascending key. For each, returns the key and the node.
 pub struct MerkleNodeStream<'a, S, T> {
     state: MerkleNodeStreamState,
     merkle_root: DiskAddress,
@@ -63,11 +67,12 @@ pub struct MerkleNodeStream<'a, S, T> {
 
 impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleNodeStream<'a, S, T> {
     fn is_terminated(&self) -> bool {
-        matches!(&self.state, MerkleNodeStreamState::Initialized { branch_iter_stack } if branch_iter_stack.is_empty())
+        matches!(&self.state, MerkleNodeStreamState::Initialized { iter_stack } if iter_stack.is_empty())
     }
 }
 
 impl<'a, S, T> MerkleNodeStream<'a, S, T> {
+    /// Returns a new iterator that will iterate over all the nodes in [merkle].
     pub(super) fn new(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress) -> Self {
         Self {
             state: MerkleNodeStreamState::new(),
@@ -76,6 +81,8 @@ impl<'a, S, T> MerkleNodeStream<'a, S, T> {
         }
     }
 
+    /// Returns a new iterator that will iterate over all the nodes in [merkle]
+    /// with keys greater than or equal to [key].
     pub(super) fn from_key(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress, key: Key) -> Self {
         Self {
             state: MerkleNodeStreamState::with_key(key),
@@ -84,8 +91,6 @@ impl<'a, S, T> MerkleNodeStream<'a, S, T> {
         }
     }
 }
-
-trait ShaleStoreNode: ShaleStore<Node> + Send + Sync {}
 
 impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S, T> {
     type Item = Result<(Key, NodeObjRef<'a>), api::Error>;
@@ -107,10 +112,12 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                 self.state = get_iterator_intial_state(merkle, *merkle_root, key)?;
                 self.poll_next(_cx)
             }
-            MerkleNodeStreamState::Initialized { branch_iter_stack } => {
+            MerkleNodeStreamState::Initialized {
+                iter_stack: branch_iter_stack,
+            } => {
                 while let Some(mut branch_iter) = branch_iter_stack.pop() {
                     match branch_iter {
-                        BranchIterator::Unvisited { address, key } => {
+                        IterationNode::Unvisited { address, key } => {
                             // We haven't returned this node yet.
                             let node = merkle
                                 .get_node(address)
@@ -119,7 +126,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                             match node.inner() {
                                 NodeType::Branch(branch) => {
                                     // [node] is a branch node. Visit its children next.
-                                    branch_iter_stack.push(BranchIterator::Visited {
+                                    branch_iter_stack.push(IterationNode::Visited {
                                         key: key.clone(),
                                         children_iter: Box::new(get_children_iter(branch)),
                                     });
@@ -130,7 +137,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
 
                             return Poll::Ready(Some(Ok((key, node))));
                         }
-                        BranchIterator::Visited {
+                        IterationNode::Visited {
                             ref key,
                             ref mut children_iter,
                         } => {
@@ -158,7 +165,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                                 }
                             };
 
-                            branch_iter_stack.push(BranchIterator::Unvisited {
+                            branch_iter_stack.push(IterationNode::Unvisited {
                                 address: child_addr,
                                 key: key
                                     .iter()
@@ -199,17 +206,16 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
     let mut unmatched_key_nibbles: crate::nibbles::NibblesIterator<'_, 1> =
         Nibbles::<1>::new(key.as_ref()).into_iter();
 
-    let mut branch_iter_stack: Vec<BranchIterator> = vec![];
+    let mut iter_stack: Vec<IterationNode> = vec![];
 
     loop {
-        // [nib] is the first nibble after [matched_key_nibbles].
         let Some(nib) = unmatched_key_nibbles.next() else {
             // The invariant tells us [node] is a prefix of [key].
             // There is no more [key] left so [node] must be at [key].
             // Visit and return [node] first.
             match &node.inner {
                 NodeType::Branch(_) | NodeType::Leaf(_) => {
-                    branch_iter_stack.push(BranchIterator::Unvisited {
+                    iter_stack.push(IterationNode::Unvisited {
                         address: node_addr,
                         key: matched_key_nibbles.clone().into_boxed_slice(),
                     });
@@ -219,22 +225,23 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                 }
             }
 
-            return Ok(MerkleNodeStreamState::Initialized { branch_iter_stack });
+            return Ok(MerkleNodeStreamState::Initialized { iter_stack });
         };
+        // [nib] is the first nibble after [matched_key_nibbles].
 
         match &node.inner {
             NodeType::Branch(branch) => {
                 // The next nibble in [key] is [nib],
                 // so all children of [node] with a position > [nib]
                 // should be visited since they are after [key].
-                branch_iter_stack.push(BranchIterator::Visited {
+                iter_stack.push(IterationNode::Visited {
                     key: matched_key_nibbles.clone().into_boxed_slice(),
                     children_iter: Box::new(
                         get_children_iter(branch).filter(move |(_, pos)| *pos > nib),
                     ),
                 });
 
-                // Figure out if the child is a prefix of [key].
+                // Figure out if the child at [nib] is a prefix of [key].
                 // (i.e. if we should run this loop body again)
                 #[allow(clippy::indexing_slicing)]
                 let child_addr = match branch.children[nib as usize] {
@@ -243,7 +250,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                         // There is no child at [nib].
                         // We'll visit [node]'s first child at index > [nib]
                         // first (if it exists).
-                        return Ok(MerkleNodeStreamState::Initialized { branch_iter_stack });
+                        return Ok(MerkleNodeStreamState::Initialized { iter_stack });
                     }
                 };
 
@@ -264,7 +271,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                 for next_partial_key_nibble in partial_key.iter() {
                     let Some(next_key_nibble) = unmatched_key_nibbles.next() else {
                         // Ran out of [key] nibbles so [child] is after [key]
-                        branch_iter_stack.push(BranchIterator::Unvisited {
+                        iter_stack.push(IterationNode::Unvisited {
                             address: child_addr,
                             // TODO is there a way to just drain [partial_key]
                             // into [matched_key_nibbles]? Then we could append
@@ -278,13 +285,13 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                                 .collect(),
                         });
 
-                        return Ok(MerkleNodeStreamState::Initialized { branch_iter_stack });
+                        return Ok(MerkleNodeStreamState::Initialized { iter_stack });
                     };
 
                     if next_partial_key_nibble > &next_key_nibble {
                         // [node]'s partial key and the remaining key diverged.
                         // [node] is after [key]. Visit and return [node] first.
-                        branch_iter_stack.push(BranchIterator::Unvisited {
+                        iter_stack.push(IterationNode::Unvisited {
                             address: child_addr,
                             key: matched_key_nibbles
                                 .clone()
@@ -293,10 +300,10 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                                 .chain(partial_key.iter().copied())
                                 .collect(),
                         });
-                        return Ok(MerkleNodeStreamState::Initialized { branch_iter_stack });
+                        return Ok(MerkleNodeStreamState::Initialized { iter_stack });
                     } else if next_partial_key_nibble < &next_key_nibble {
                         // [node] is before [key]
-                        return Ok(MerkleNodeStreamState::Initialized { branch_iter_stack });
+                        return Ok(MerkleNodeStreamState::Initialized { iter_stack });
                     }
                 }
 
@@ -312,7 +319,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                         Some(next_key_nibble) if next_leaf_nibble > &next_key_nibble => {
                             {
                                 // The leaf's key > [key], so we can stop here.
-                                branch_iter_stack.push(BranchIterator::Unvisited {
+                                iter_stack.push(IterationNode::Unvisited {
                                     address: node_addr,
                                     key: matched_key_nibbles
                                         .iter()
@@ -320,25 +327,23 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                                         .chain(leaf.path.iter().copied())
                                         .collect(),
                                 });
-                                return Ok(MerkleNodeStreamState::Initialized {
-                                    branch_iter_stack,
-                                });
+                                return Ok(MerkleNodeStreamState::Initialized { iter_stack });
                             }
                         }
                         Some(next_key_nibble) if next_leaf_nibble < &next_key_nibble => break,
                         Some(_) => {}
                         None => {
                             // Ran out of [key] nibbles so [leaf] is after [key]
-                            branch_iter_stack.push(BranchIterator::Unvisited {
+                            iter_stack.push(IterationNode::Unvisited {
                                 address: node_addr,
                                 key: matched_key_nibbles.clone().into_boxed_slice(),
                             });
-                            return Ok(MerkleNodeStreamState::Initialized { branch_iter_stack });
+                            return Ok(MerkleNodeStreamState::Initialized { iter_stack });
                         }
                     }
                 }
 
-                return Ok(MerkleNodeStreamState::Initialized { branch_iter_stack });
+                return Ok(MerkleNodeStreamState::Initialized { iter_stack });
             }
             NodeType::Extension(_) => {
                 panic!("extension nodes shouldn't exist")
@@ -349,32 +354,37 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
 
 enum MerkleKeyValueStreamState<'a, S, T> {
     Uninitialized(Key),
-    Initialized { iter: MerkleNodeStream<'a, S, T> },
+    Initialized {
+        node_iter: MerkleNodeStream<'a, S, T>,
+    },
 }
 
 impl<'a, S, T> MerkleKeyValueStreamState<'a, S, T> {
+    /// Returns a new iterator that will iterate over all the key-value pairs in [merkle].
     fn new() -> Self {
         Self::Uninitialized(vec![].into_boxed_slice())
     }
 
+    /// Returns a new iterator that will iterate over all the key-value pairs in [merkle]
+    /// with keys greater than or equal to [key].
     fn with_key(key: Key) -> Self {
         Self::Uninitialized(key)
     }
 }
 
-pub struct MerkleKeyValueStream2<'a, S, T> {
+pub struct MerkleKeyValueStream<'a, S, T> {
     state: MerkleKeyValueStreamState<'a, S, T>,
     merkle_root: DiskAddress,
     merkle: &'a Merkle<S, T>,
 }
 
-impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleKeyValueStream2<'a, S, T> {
+impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleKeyValueStream<'a, S, T> {
     fn is_terminated(&self) -> bool {
-        matches!(&self.state, MerkleKeyValueStreamState::Initialized { iter } if iter.is_terminated())
+        matches!(&self.state, MerkleKeyValueStreamState::Initialized { node_iter } if node_iter.is_terminated())
     }
 }
 
-impl<'a, S, T> MerkleKeyValueStream2<'a, S, T> {
+impl<'a, S, T> MerkleKeyValueStream<'a, S, T> {
     pub(super) fn new(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress) -> Self {
         Self {
             state: MerkleKeyValueStreamState::new(),
@@ -392,7 +402,7 @@ impl<'a, S, T> MerkleKeyValueStream2<'a, S, T> {
     }
 }
 
-impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream2<'a, S, T> {
+impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'a, S, T> {
     type Item = Result<(Key, Value), api::Error>;
 
     fn poll_next(
@@ -411,35 +421,37 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream2<
             MerkleKeyValueStreamState::Uninitialized(key) => {
                 // TODO how to not clone here?
                 let iter = MerkleNodeStream::from_key(merkle, merkle_root.clone(), key.clone());
-                self.state = MerkleKeyValueStreamState::Initialized { iter };
+                self.state = MerkleKeyValueStreamState::Initialized { node_iter: iter };
                 self.poll_next(_cx)
             }
-            MerkleKeyValueStreamState::Initialized { iter } => match iter.poll_next_unpin(_cx) {
-                Poll::Ready(node) => match node {
-                    Some(Ok((key, node))) => {
-                        let key = key_from_nibble_iter(key.iter().copied().skip(1));
+            MerkleKeyValueStreamState::Initialized { node_iter: iter } => {
+                match iter.poll_next_unpin(_cx) {
+                    Poll::Ready(node) => match node {
+                        Some(Ok((key, node))) => {
+                            let key = key_from_nibble_iter(key.iter().copied().skip(1));
 
-                        match node.inner() {
-                            NodeType::Branch(branch) => {
-                                let Some(value) = branch.value.as_ref() else {
-                                    return self.poll_next(_cx);
-                                };
+                            match node.inner() {
+                                NodeType::Branch(branch) => {
+                                    let Some(value) = branch.value.as_ref() else {
+                                        return self.poll_next(_cx);
+                                    };
 
-                                let value = value.to_vec();
-                                return Poll::Ready(Some(Ok((key, value))));
+                                    let value = value.to_vec();
+                                    return Poll::Ready(Some(Ok((key, value))));
+                                }
+                                NodeType::Leaf(leaf) => {
+                                    let value = leaf.data.to_vec();
+                                    return Poll::Ready(Some(Ok((key, value))));
+                                }
+                                NodeType::Extension(_) => panic!("extension nodes shouldn't exist"),
                             }
-                            NodeType::Leaf(leaf) => {
-                                let value = leaf.data.to_vec();
-                                return Poll::Ready(Some(Ok((key, value))));
-                            }
-                            NodeType::Extension(_) => panic!("extension nodes shouldn't exist"),
                         }
-                    }
-                    Some(Err(e)) => Poll::Ready(Some(Err(e))),
-                    None => Poll::Ready(None),
-                },
-                Poll::Pending => Poll::Pending,
-            },
+                        Some(Err(e)) => Poll::Ready(Some(Err(e))),
+                        None => Poll::Ready(None),
+                    },
+                    Poll::Pending => Poll::Pending,
+                }
+            }
         }
     }
 }
