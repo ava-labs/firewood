@@ -261,7 +261,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                     }
                 };
 
-                for next_partial_key_nibble in partial_key.iter().copied() {
+                for next_partial_key_nibble in partial_key.iter() {
                     let Some(next_key_nibble) = unmatched_key_nibbles.next() else {
                         // Ran out of [key] nibbles so [child] is after [key]
                         branch_iter_stack.push(BranchIterator::Unvisited {
@@ -277,7 +277,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                         return Ok(MerkleNodeStreamState::Initialized { branch_iter_stack });
                     };
 
-                    if next_partial_key_nibble > next_key_nibble {
+                    if next_partial_key_nibble > &next_key_nibble {
                         // The leaf's key and the key diverged, and the
                         // leaf is greater, so we can stop here.
                         branch_iter_stack.push(BranchIterator::Unvisited {
@@ -290,7 +290,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                                 .collect(),
                         });
                         return Ok(MerkleNodeStreamState::Initialized { branch_iter_stack });
-                    } else if next_partial_key_nibble < next_key_nibble {
+                    } else if next_partial_key_nibble < &next_key_nibble {
                         // [child] is before [key]
                         return Ok(MerkleNodeStreamState::Initialized { branch_iter_stack });
                     }
