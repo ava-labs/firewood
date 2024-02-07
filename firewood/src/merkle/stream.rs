@@ -511,7 +511,7 @@ mod tests {
     use test_case::test_case;
 
     #[tokio::test]
-    async fn iterate_empty() {
+    async fn key_value_iterate_empty() {
         let merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
         let stream = merkle.key_value_iter_from(root, b"x".to_vec().into_boxed_slice());
@@ -523,7 +523,7 @@ mod tests {
     #[test_case(Some(&[128u8]); "Starting in middle")]
     #[test_case(Some(&[u8::MAX]); "Starting at last key")]
     #[tokio::test]
-    async fn iterate_many(start: Option<&[u8]>) {
+    async fn key_value_iterate_many(start: Option<&[u8]>) {
         let mut merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
 
@@ -553,14 +553,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fused_empty() {
+    async fn key_value_fused_empty() {
         let merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
         check_stream_is_done(merkle.key_value_iter(root)).await;
     }
 
     #[tokio::test]
-    async fn table_test() {
+    async fn key_value_table_test() {
         let mut merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
 
@@ -621,7 +621,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fused_full() {
+    async fn key_value_fused_full() {
         let mut merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
 
@@ -652,7 +652,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn root_with_empty_data() {
+    async fn key_value_root_with_empty_data() {
         let mut merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
 
@@ -667,7 +667,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_branch_and_leaf() {
+    async fn key_value_get_branch_and_leaf() {
         let mut merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
 
@@ -706,7 +706,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_at_key_not_in_trie() {
+    async fn key_value_start_at_key_not_in_trie() {
         let mut merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
 
@@ -745,7 +745,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_at_key_on_branch_with_no_value() {
+    async fn key_value_start_at_key_on_branch_with_no_value() {
         let sibling_path = 0x00;
         let branch_path = 0x0f;
         let children = 0..=0x0f;
@@ -787,7 +787,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_at_key_on_branch_with_value() {
+    async fn key_value_start_at_key_on_branch_with_value() {
         let sibling_path = 0x00;
         let branch_path = 0x0f;
         let branch_key = vec![branch_path];
@@ -836,7 +836,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_at_key_on_extension() {
+    async fn key_value_start_at_key_on_extension() {
         let missing = 0x0a;
         let children = (0..=0x0f).filter(|x| *x != missing);
         let mut merkle = create_test_merkle();
@@ -867,7 +867,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_at_key_overlapping_with_extension_but_greater() {
+    async fn key_value_start_at_key_overlapping_with_extension_but_greater() {
         let start_key = 0x0a;
         let shared_path = 0x09;
         // 0x0900, 0x0901, ... 0x0a0f
@@ -887,7 +887,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_at_key_overlapping_with_extension_but_smaller() {
+    async fn key_value_start_at_key_overlapping_with_extension_but_smaller() {
         let start_key = 0x00;
         let shared_path = 0x09;
         // 0x0900, 0x0901, ... 0x0a0f
@@ -917,7 +917,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_at_key_between_siblings() {
+    async fn key_value_start_at_key_between_siblings() {
         let missing = 0xaa;
         let children = (0..=0xf)
             .map(|val| (val << 4) + val) // 0x00, 0x11, ... 0xff
@@ -950,7 +950,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_at_key_greater_than_all_others_leaf() {
+    async fn key_value_start_at_key_greater_than_all_others_leaf() {
         let key = vec![0x00];
         let greater_key = vec![0xff];
         let mut merkle = create_test_merkle();
@@ -962,7 +962,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_at_key_greater_than_all_others_branch() {
+    async fn key_value_start_at_key_greater_than_all_others_branch() {
         let greatest = 0xff;
         let children = (0..=0xf)
             .map(|val| (val << 4) + val) // 0x00, 0x11, ... 0xff
