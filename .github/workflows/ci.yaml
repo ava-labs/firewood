@@ -104,7 +104,7 @@ jobs:
       - name: Cargo Edit
         run: cargo install cargo-edit
       - name: Cargo upgrade
-        run: cargo upgrade --locked || echo "::warning file=Cargo.toml,line=1,col=1::dependencies are out of date"
+        run: cargo upgrade --locked
 
   test:
     needs: build
