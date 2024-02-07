@@ -101,8 +101,8 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
         mut self: std::pin::Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        // destructuring is necessary here because we need mutable access to [state]
-        // at the same time as immutable access to [merkle]
+        // destructuring is necessary here because we need mutable access to `state`
+        // at the same time as immutable access to `merkle`.
         let Self {
             state,
             merkle_root,
@@ -125,7 +125,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
 
                             match node.inner() {
                                 NodeType::Branch(branch) => {
-                                    // [node] is a branch node. Visit its children next.
+                                    // `node` is a branch node. Visit its children next.
                                     iter_stack.push(IterationNode::Visited {
                                         key: key.clone(),
                                         children_iter: Box::new(get_children_iter(branch)),
@@ -141,7 +141,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                             ref key,
                             ref mut children_iter,
                         } => {
-                            // We returned [node] already. Visit its next child.
+                            // We returned `node` already. Visit its next child.
                             let Some((child_addr, pos)) = children_iter.next() else {
                                 // We visited all this node's descendants. Go back to its parent.
                                 continue;
@@ -190,16 +190,16 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
     root_node: DiskAddress,
     key: &[u8],
 ) -> Result<MerkleNodeStreamState, api::Error> {
-    // Invariant: [node]'s key is a prefix of [key].
+    // Invariant: `node`'s key is a prefix of `key`.
     let mut node = merkle
         .get_node(root_node)
         .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-    // Invariant: This is [node]'s address at the start
+    // Invariant: This is `node`'s address at the start
     // of each loop iteration.
     let mut node_addr = root_node;
 
-    // Invariant: [matched_key_nibbles] is the key of [node] at the start
+    // Invariant: [matched_key_nibbles] is the key of `node` at the start
     // of each loop iteration.
     let mut matched_key_nibbles = vec![];
 
@@ -209,9 +209,9 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
 
     loop {
         let Some(nib) = unmatched_key_nibbles.next() else {
-            // The invariant tells us [node] is a prefix of [key].
-            // There is no more [key] left so [node] must be at [key].
-            // Visit and return [node] first.
+            // The invariant tells us `node` is a prefix of `key`.
+            // There is no more `key` left so `node` must be at `key`.
+            // Visit and return `node` first.
             match &node.inner {
                 NodeType::Branch(_) | NodeType::Leaf(_) => {
                     iter_stack.push(IterationNode::Unvisited {
@@ -226,13 +226,13 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
 
             return Ok(MerkleNodeStreamState::Initialized { iter_stack });
         };
-        // [nib] is the first nibble after [matched_key_nibbles].
+        // `nib` is the first nibble after [matched_key_nibbles].
 
         match &node.inner {
             NodeType::Branch(branch) => {
-                // The next nibble in [key] is [nib],
-                // so all children of [node] with a position > [nib]
-                // should be visited since they are after [key].
+                // The next nibble in `key` is `nib`,
+                // so all children of `node` with a position > `nib`
+                // should be visited since they are after `key`.
                 iter_stack.push(IterationNode::Visited {
                     key: matched_key_nibbles.clone().into_boxed_slice(),
                     children_iter: Box::new(
@@ -240,14 +240,14 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                     ),
                 });
 
-                // Figure out if the child at [nib] is a prefix of [key].
+                // Figure out if the child at `nib` is a prefix of `key`.
                 // (i.e. if we should run this loop body again)
                 #[allow(clippy::indexing_slicing)]
                 let child_addr = match branch.children[nib as usize] {
                     Some(c) => c,
                     None => {
-                        // There is no child at [nib].
-                        // We'll visit [node]'s first child at index > [nib]
+                        // There is no child at `nib`.
+                        // We'll visit `node`'s first child at index > `nib`
                         // first (if it exists).
                         return Ok(MerkleNodeStreamState::Initialized { iter_stack });
                     }
@@ -273,21 +273,21 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
 
                 match comparison {
                     Ordering::Less => {
-                        // [child] is before [key].
+                        // `child` is before `key`.
                         return Ok(MerkleNodeStreamState::Initialized { iter_stack });
                     }
                     Ordering::Equal => {
-                        // [child] is a prefix of [key].
+                        // `child` is a prefix of `key`.
                         matched_key_nibbles.extend(partial_key.iter().copied());
                         node = child;
                         node_addr = child_addr;
                     }
                     Ordering::Greater => {
-                        // [child] is after [key].
+                        // `child` is after `key`.
                         iter_stack.push(IterationNode::Unvisited {
                             address: child_addr,
-                            // TODO is there a way to just drain [partial_key]
-                            // into [matched_key_nibbles]? Then we could append
+                            // TODO is there a way to just drain `partial_key`
+                            // into `matched_key_nibbles`? Then we could append
                             // each matched nibble as we go instead of using
                             // extend.
                             key: matched_key_nibbles
@@ -307,7 +307,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                 match comparison {
                     Ordering::Less | Ordering::Equal => {}
                     Ordering::Greater => {
-                        // The leaf's key > [key], so we can stop here.
+                        // The leaf's key > `key`, so we can stop here.
                         iter_stack.push(IterationNode::Unvisited {
                             address: node_addr,
                             key: matched_key_nibbles
