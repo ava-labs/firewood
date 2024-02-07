@@ -139,67 +139,69 @@ impl DiskBuffer {
         })
     }
 
-    #[tokio::main(flavor = "current_thread")]
-    pub async fn run(self) {
-        let mut inbound = self.inbound;
-        let aiomgr = Rc::new(self.aiomgr);
-        let cfg = self.cfg;
-        let wal_cfg = self.wal_cfg;
+    // #[tokio::main(flavor = "current_thread")]
+    pub fn run(self) {
+        tokio_uring::start(async {
+            let mut inbound = self.inbound;
+            let aiomgr = Rc::new(self.aiomgr);
+            let cfg = self.cfg;
+            let wal_cfg = self.wal_cfg;
 
-        let pending_writes = Rc::new(RefCell::new(HashMap::new()));
-        let file_pools = Rc::new(RefCell::new(std::array::from_fn(|_| None)));
-        let local_pool = tokio::task::LocalSet::new();
+            let pending_writes = Rc::new(RefCell::new(HashMap::new()));
+            let file_pools = Rc::new(RefCell::new(std::array::from_fn(|_| None)));
+            let local_pool = tokio::task::LocalSet::new();
 
-        let max = WalQueueMax {
-            batch: cfg.wal_max_batch,
-            revisions: wal_cfg.max_revisions,
-            pending: cfg.max_pending,
-        };
+            let max = WalQueueMax {
+                batch: cfg.wal_max_batch,
+                revisions: wal_cfg.max_revisions,
+                pending: cfg.max_pending,
+            };
 
-        let (wal_in, writes) = mpsc::channel(cfg.wal_max_buffered);
+            let (wal_in, writes) = mpsc::channel(cfg.wal_max_buffered);
 
-        let mut writes = Some(writes);
-        let mut wal = None;
+            let mut writes = Some(writes);
+            let mut wal = None;
 
-        let notifier = Rc::new(Notify::new());
+            let notifier = Rc::new(Notify::new());
 
-        local_pool
-            // everything needs to be moved into this future in order to be properly dropped
-            .run_until(async move {
-                loop {
-                    // can't hold the borrowed `pending_writes` across the .await point inside the if-statement
-                    let pending_len = pending_writes.borrow().len();
+            local_pool
+                // everything needs to be moved into this future in order to be properly dropped
+                .run_until(async move {
+                    loop {
+                        // can't hold the borrowed `pending_writes` across the .await point inside the if-statement
+                        let pending_len = pending_writes.borrow().len();
 
-                    if pending_len >= cfg.max_pending {
-                        notifier.notified().await;
+                        if pending_len >= cfg.max_pending {
+                            notifier.notified().await;
+                        }
+
+                        // process the the request
+                        #[allow(clippy::unwrap_used)]
+                        let process_result = process(
+                            pending_writes.clone(),
+                            notifier.clone(),
+                            file_pools.clone(),
+                            aiomgr.clone(),
+                            &mut wal,
+                            &wal_cfg,
+                            inbound.recv().await.unwrap(),
+                            max,
+                            wal_in.clone(),
+                            &mut writes,
+                        )
+                        .await;
+
+                        // stop handling new requests and exit the loop
+                        if !process_result {
+                            break;
+                        }
                     }
+                })
+                .await;
 
-                    // process the the request
-                    #[allow(clippy::unwrap_used)]
-                    let process_result = process(
-                        pending_writes.clone(),
-                        notifier.clone(),
-                        file_pools.clone(),
-                        aiomgr.clone(),
-                        &mut wal,
-                        &wal_cfg,
-                        inbound.recv().await.unwrap(),
-                        max,
-                        wal_in.clone(),
-                        &mut writes,
-                    )
-                    .await;
-
-                    // stop handling new requests and exit the loop
-                    if !process_result {
-                        break;
-                    }
-                }
-            })
-            .await;
-
-        // when finished process all requests, wait for any pending-futures to complete
-        local_pool.await;
+            // when finished process all requests, wait for any pending-futures to complete
+            local_pool.await;
+        })
     }
 }
 
