@@ -379,6 +379,8 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                         Some(Ok((key, node))) => match node.inner() {
                             NodeType::Branch(branch) => {
                                 let Some(value) = branch.value.as_ref() else {
+                                    // This node doesn't have a value to return.
+                                    // Continue to the next node.
                                     return self.poll_next(_cx);
                                 };
 
