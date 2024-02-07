@@ -15,13 +15,12 @@ type Key = Box<[u8]>;
 type Value = Vec<u8>;
 
 /// Represents an ongoing iteration over a node and its children.
-enum IterationNode {
+enum IterationNode<'a> {
     // This node has not been returned yet.
     Unvisited {
         /// The key (as nibbles) of this node.
         key: Key,
-        // The address of the node.
-        address: DiskAddress,
+        node: NodeObjRef<'a>,
     },
     // This node has been returned. Track which child to visit next.
     Visited {
@@ -33,7 +32,7 @@ enum IterationNode {
     },
 }
 
-enum MerkleNodeStreamState {
+enum MerkleNodeStreamState<'a> {
     /// The iterator state is lazily initialized when poll_next is called
     /// for the first time. The iteration start key is stored here.
     Uninitialized(Key),
@@ -43,11 +42,11 @@ enum MerkleNodeStreamState {
         /// On each call to poll_next we pop the next element.
         /// If it's unvisited, we visit it.
         /// If it's visited, we push its next child onto this stack.
-        iter_stack: Vec<IterationNode>,
+        iter_stack: Vec<IterationNode<'a>>,
     },
 }
 
-impl MerkleNodeStreamState {
+impl MerkleNodeStreamState<'_> {
     #[allow(dead_code)] // TODO should we remove this function?
     fn new() -> Self {
         Self::Uninitialized(vec![].into_boxed_slice())
@@ -61,7 +60,7 @@ impl MerkleNodeStreamState {
 /// Iterates over the nodes in `merkle, whose root is `merkle_root,
 /// in order of ascending key. For each, returns the key and the node.
 pub struct MerkleNodeStream<'a, S, T> {
-    state: MerkleNodeStreamState,
+    state: MerkleNodeStreamState<'a>,
     merkle_root: DiskAddress,
     merkle: &'a Merkle<S, T>,
 }
@@ -117,12 +116,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
             MerkleNodeStreamState::Initialized { iter_stack } => {
                 while let Some(mut iter_node) = iter_stack.pop() {
                     match iter_node {
-                        IterationNode::Unvisited { address, key } => {
-                            // We haven't returned this node yet.
-                            let node = merkle
-                                .get_node(address)
-                                .map_err(|e| api::Error::InternalError(Box::new(e)))?;
-
+                        IterationNode::Unvisited { key, node } => {
                             match node.inner() {
                                 NodeType::Branch(branch) => {
                                     // `node` is a branch node. Visit its children next.
@@ -165,14 +159,18 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                                 }
                             };
 
+                            let child = merkle
+                                .get_node(child_addr)
+                                .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+
                             iter_stack.push(IterationNode::Unvisited {
-                                address: child_addr,
                                 key: key
                                     .iter()
                                     .copied()
                                     .chain(once(pos))
                                     .chain(partial_path)
                                     .collect(),
+                                node: child,
                             });
                             return self.poll_next(_cx);
                         }
@@ -185,11 +183,11 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
 }
 
 // TODO comment
-fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
-    merkle: &Merkle<S, T>,
+fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
+    merkle: &'a Merkle<S, T>,
     root_node: DiskAddress,
     key: &[u8],
-) -> Result<MerkleNodeStreamState, api::Error> {
+) -> Result<MerkleNodeStreamState<'a>, api::Error> {
     // Invariant: `node`'s key is a prefix of `key`.
     let mut node = merkle
         .get_node(root_node)
@@ -215,8 +213,8 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
             match &node.inner {
                 NodeType::Branch(_) | NodeType::Leaf(_) => {
                     iter_stack.push(IterationNode::Unvisited {
-                        address: node_addr,
                         key: matched_key_nibbles.clone().into_boxed_slice(),
+                        node,
                     });
                 }
                 NodeType::Extension(_) => {
@@ -283,9 +281,11 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                         node_addr = child_addr;
                     }
                     Ordering::Greater => {
+                        let child = merkle
+                            .get_node(child_addr)
+                            .map_err(|e| api::Error::InternalError(Box::new(e)))?;
                         // `child` is after `key`.
                         iter_stack.push(IterationNode::Unvisited {
-                            address: child_addr,
                             // TODO is there a way to just drain `partial_key`
                             // into `matched_key_nibbles`? Then we could append
                             // each matched nibble as we go instead of using
@@ -295,6 +295,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                                 .copied()
                                 .chain(partial_key.iter().copied())
                                 .collect(),
+                            node: child,
                         });
 
                         return Ok(MerkleNodeStreamState::Initialized { iter_stack });
@@ -307,14 +308,17 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                 match comparison {
                     Ordering::Less | Ordering::Equal => {}
                     Ordering::Greater => {
+                        let node = merkle
+                            .get_node(node_addr)
+                            .map_err(|e| api::Error::InternalError(Box::new(e)))?;
                         // The leaf's key > `key`, so we can stop here.
                         iter_stack.push(IterationNode::Unvisited {
-                            address: node_addr,
                             key: matched_key_nibbles
                                 .iter()
                                 .copied()
                                 .chain(leaf.path.iter().copied())
                                 .collect(),
+                            node,
                         });
                     }
                 }
