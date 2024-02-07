@@ -114,11 +114,9 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                 self.state = get_iterator_intial_state(merkle, *merkle_root, key)?;
                 self.poll_next(_cx)
             }
-            MerkleNodeStreamState::Initialized {
-                iter_stack: branch_iter_stack,
-            } => {
-                while let Some(mut branch_iter) = branch_iter_stack.pop() {
-                    match branch_iter {
+            MerkleNodeStreamState::Initialized { iter_stack } => {
+                while let Some(mut iter_node) = iter_stack.pop() {
+                    match iter_node {
                         IterationNode::Unvisited { address, key } => {
                             // We haven't returned this node yet.
                             let node = merkle
@@ -128,7 +126,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                             match node.inner() {
                                 NodeType::Branch(branch) => {
                                     // [node] is a branch node. Visit its children next.
-                                    branch_iter_stack.push(IterationNode::Visited {
+                                    iter_stack.push(IterationNode::Visited {
                                         key: key.clone(),
                                         children_iter: Box::new(get_children_iter(branch)),
                                     });
@@ -152,7 +150,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                             let key = key.clone();
 
                             // There may be more children of this node to visit.
-                            branch_iter_stack.push(branch_iter);
+                            iter_stack.push(iter_node);
 
                             // Visit the child next.
                             let child = merkle
@@ -167,7 +165,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                                 }
                             };
 
-                            branch_iter_stack.push(IterationNode::Unvisited {
+                            iter_stack.push(IterationNode::Unvisited {
                                 address: child_addr,
                                 key: key
                                     .iter()
