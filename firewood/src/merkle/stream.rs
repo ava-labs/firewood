@@ -152,6 +152,8 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                                 }
                             };
 
+                            // The child's key is its parent's key, followed by the child's index,
+                            // followed by the child's partial path (if any).
                             let child_key: Box<[u8]> = key
                                 .iter()
                                 .copied()
