@@ -190,10 +190,6 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
         .get_node(root_node)
         .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
-    // Invariant: This is `node`'s address at the start
-    // of each loop iteration.
-    let mut node_addr = root_node;
-
     // Invariant: [matched_key_nibbles] is the key of `node` at the start
     // of each loop iteration.
     let mut matched_key_nibbles = vec![];
@@ -275,7 +271,6 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                         // `child` is a prefix of `key`.
                         matched_key_nibbles.extend(partial_key.iter().copied());
                         node = child;
-                        node_addr = child_addr;
                     }
                     Ordering::Greater => {
                         // `child` is after `key`.
@@ -299,9 +294,6 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                 match comparison {
                     Ordering::Less | Ordering::Equal => {}
                     Ordering::Greater => {
-                        let node = merkle
-                            .get_node(node_addr)
-                            .map_err(|e| api::Error::InternalError(Box::new(e)))?;
                         // The leaf's key > `key`, so we can stop here.
                         iter_stack.push(IterationNode::Unvisited {
                             key: matched_key_nibbles
