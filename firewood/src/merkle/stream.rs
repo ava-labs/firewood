@@ -32,7 +32,7 @@ enum IterationNode<'a> {
     },
 }
 
-enum MerkleNodeStreamState<'a> {
+enum NodeStreamState<'a> {
     /// The iterator state is lazily initialized when poll_next is called
     /// for the first time. The iteration start key is stored here.
     Uninitialized(Key),
@@ -46,7 +46,7 @@ enum MerkleNodeStreamState<'a> {
     },
 }
 
-impl MerkleNodeStreamState<'_> {
+impl NodeStreamState<'_> {
     fn new() -> Self {
         Self::Uninitialized(vec![].into_boxed_slice())
     }
@@ -60,14 +60,14 @@ impl MerkleNodeStreamState<'_> {
 /// in order of ascending key. For each, returns the key and the node.
 /// Note that the returned key is the raw key, not the key as nibbles.
 pub struct MerkleNodeStream<'a, S, T> {
-    state: MerkleNodeStreamState<'a>,
+    state: NodeStreamState<'a>,
     merkle_root: DiskAddress,
     merkle: &'a Merkle<S, T>,
 }
 
 impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleNodeStream<'a, S, T> {
     fn is_terminated(&self) -> bool {
-        matches!(&self.state, MerkleNodeStreamState::Initialized { iter_stack } if iter_stack.is_empty())
+        matches!(&self.state, NodeStreamState::Initialized { iter_stack } if iter_stack.is_empty())
     }
 }
 
@@ -75,7 +75,7 @@ impl<'a, S, T> MerkleNodeStream<'a, S, T> {
     /// Returns a new iterator that will iterate over all the nodes in `merkle`.
     pub(super) fn new(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress) -> Self {
         Self {
-            state: MerkleNodeStreamState::new(),
+            state: NodeStreamState::new(),
             merkle_root,
             merkle,
         }
@@ -85,7 +85,7 @@ impl<'a, S, T> MerkleNodeStream<'a, S, T> {
     /// with keys greater than or equal to `key`.
     pub(super) fn from_key(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress, key: Key) -> Self {
         Self {
-            state: MerkleNodeStreamState::with_key(key),
+            state: NodeStreamState::with_key(key),
             merkle_root,
             merkle,
         }
@@ -108,11 +108,11 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
         } = &mut *self;
 
         match state {
-            MerkleNodeStreamState::Uninitialized(key) => {
+            NodeStreamState::Uninitialized(key) => {
                 self.state = get_iterator_intial_state(merkle, *merkle_root, key)?;
                 self.poll_next(_cx)
             }
-            MerkleNodeStreamState::Initialized { iter_stack } => {
+            NodeStreamState::Initialized { iter_stack } => {
                 while let Some(mut iter_node) = iter_stack.pop() {
                     match iter_node {
                         IterationNode::Unvisited { key, node } => {
@@ -184,7 +184,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
     merkle: &'a Merkle<S, T>,
     root_node: DiskAddress,
     key: &[u8],
-) -> Result<MerkleNodeStreamState<'a>, api::Error> {
+) -> Result<NodeStreamState<'a>, api::Error> {
     // Invariant: `node`'s key is a prefix of `key`.
     let mut node = merkle
         .get_node(root_node)
@@ -215,7 +215,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                 }
             }
 
-            return Ok(MerkleNodeStreamState::Initialized { iter_stack });
+            return Ok(NodeStreamState::Initialized { iter_stack });
         };
         // `nib` is the first nibble after [matched_key_nibbles].
 
@@ -240,7 +240,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                         // There is no child at `nib`.
                         // We'll visit `node`'s first child at index > `nib`
                         // first (if it exists).
-                        return Ok(MerkleNodeStreamState::Initialized { iter_stack });
+                        return Ok(NodeStreamState::Initialized { iter_stack });
                     }
                 };
 
@@ -265,7 +265,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                 match comparison {
                     Ordering::Less => {
                         // `child` is before `key`.
-                        return Ok(MerkleNodeStreamState::Initialized { iter_stack });
+                        return Ok(NodeStreamState::Initialized { iter_stack });
                     }
                     Ordering::Equal => {
                         // `child` is a prefix of `key`.
@@ -281,7 +281,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                             .collect();
                         iter_stack.push(IterationNode::Unvisited { key, node: child });
 
-                        return Ok(MerkleNodeStreamState::Initialized { iter_stack });
+                        return Ok(NodeStreamState::Initialized { iter_stack });
                     }
                 }
             }
@@ -299,7 +299,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                         node,
                     });
                 }
-                return Ok(MerkleNodeStreamState::Initialized { iter_stack });
+                return Ok(NodeStreamState::Initialized { iter_stack });
             }
             NodeType::Extension(_) => {
                 panic!("extension nodes shouldn't exist")
