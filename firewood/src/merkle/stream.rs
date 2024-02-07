@@ -542,6 +542,140 @@ mod tests {
         check_stream_is_done(stream).await;
     }
 
+    #[tokio::test]
+    async fn node_iterator() {
+        let mut merkle = create_test_merkle();
+
+        let root = merkle.init_root().unwrap();
+
+        merkle
+            .insert(vec![0x00, 0x00, 0x00], vec![0x00, 0x00, 0x00], root)
+            .unwrap();
+        merkle
+            .insert(
+                vec![0x00, 0x00, 0x00, 0x01],
+                vec![0x00, 0x00, 0x00, 0x01],
+                root,
+            )
+            .unwrap();
+        merkle
+            .insert(
+                vec![0x00, 0x00, 0x00, 0xFF],
+                vec![0x00, 0x00, 0x00, 0xFF],
+                root,
+            )
+            .unwrap();
+        merkle
+            .insert(vec![0x00, 0xD0, 0xD0], vec![0x00, 0xD0, 0xD0], root)
+            .unwrap();
+        merkle
+            .insert(vec![0x00, 0xFF], vec![0x00, 0xFF], root)
+            .unwrap();
+
+        // Tree should be:
+        //     sentinel
+        //        | 0
+        //        00 <-- branch with no value
+        //     0/  D|   \F
+        //    00   0D0   F <-- leaf with no partial path
+        //  0/ \F
+        //  1   F
+        //
+        // Note the 0000 branch has no value and the F0F0
+        // The number next to each branch is the position of the child in the branch's children array.
+
+        // Test cases for when the iterator has no start key
+        {
+            let mut stream = merkle.node_iter(root);
+
+            // Covers case of branch with no value
+            let (key, node) = stream.next().await.unwrap().unwrap();
+            assert_eq!(key, vec![0x00].into_boxed_slice());
+            let node = node.inner().as_branch().unwrap();
+            assert!(node.value.is_none());
+            assert_eq!(node.path.to_vec(), vec![0x00, 0x00]);
+
+            // Covers case of branch with value
+            let (key, node) = stream.next().await.unwrap().unwrap();
+            assert_eq!(key, vec![0x00, 0x00, 0x00].into_boxed_slice());
+            let node = node.inner().as_branch().unwrap();
+            assert_eq!(node.value.clone().unwrap().to_vec(), vec![0x00, 0x00, 0x00]);
+            assert_eq!(node.path.to_vec(), vec![0x00, 0x00, 0x00]);
+
+            // Covers case of leaf with partial path
+            let (key, node) = stream.next().await.unwrap().unwrap();
+            assert_eq!(key, vec![0x00, 0x00, 0x00, 0x01].into_boxed_slice());
+            let node = node.inner().as_leaf().unwrap();
+            assert_eq!(node.clone().data.to_vec(), vec![0x00, 0x00, 0x00, 0x01]);
+            assert_eq!(node.path.to_vec(), vec![0x01]);
+
+            let (key, node) = stream.next().await.unwrap().unwrap();
+            assert_eq!(key, vec![0x00, 0x00, 0x00, 0xFF].into_boxed_slice());
+            let node = node.inner().as_leaf().unwrap();
+            assert_eq!(node.clone().data.to_vec(), vec![0x00, 0x00, 0x00, 0xFF]);
+            assert_eq!(node.path.to_vec(), vec![0x0F]);
+
+            let (key, node) = stream.next().await.unwrap().unwrap();
+            assert_eq!(key, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
+            let node = node.inner().as_leaf().unwrap();
+            assert_eq!(node.clone().data.to_vec(), vec![0x00, 0xD0, 0xD0]);
+            assert_eq!(node.path.to_vec(), vec![0x00, 0x0D, 0x00]); // 0x0D00 becomes 0xDO
+
+            // Covers case of leaf with no partial path
+            let (key, node) = stream.next().await.unwrap().unwrap();
+            assert_eq!(key, vec![0x00, 0xFF].into_boxed_slice());
+            let node = node.inner().as_leaf().unwrap();
+            assert_eq!(node.clone().data.to_vec(), vec![0x00, 0xFF]);
+            assert_eq!(node.path.to_vec(), vec![0x0F]);
+
+            check_stream_is_done(stream).await;
+        }
+
+        // Test cases for when the iterator has a start key which is between nodes
+        {
+            let mut stream = merkle.node_iter_from(root, vec![0x00, 0x00, 0x01].into_boxed_slice());
+
+            let (key, node) = stream.next().await.unwrap().unwrap();
+            assert_eq!(key, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
+            assert_eq!(
+                node.inner().as_leaf().unwrap().clone().data.to_vec(),
+                vec![0x00, 0xD0, 0xD0]
+            );
+
+            // Covers case of leaf with no partial path
+            let (key, node) = stream.next().await.unwrap().unwrap();
+            assert_eq!(key, vec![0x00, 0xFF].into_boxed_slice());
+            assert_eq!(
+                node.inner().as_leaf().unwrap().clone().data.to_vec(),
+                vec![0x00, 0xFF]
+            );
+
+            check_stream_is_done(stream).await;
+        }
+
+        // Test cases for when the iterator has a start key which is on a node
+        {
+            let mut stream = merkle.node_iter_from(root, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
+
+            let (key, node) = stream.next().await.unwrap().unwrap();
+            assert_eq!(key, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
+            assert_eq!(
+                node.inner().as_leaf().unwrap().clone().data.to_vec(),
+                vec![0x00, 0xD0, 0xD0]
+            );
+
+            // Covers case of leaf with no partial path
+            let (key, node) = stream.next().await.unwrap().unwrap();
+            assert_eq!(key, vec![0x00, 0xFF].into_boxed_slice());
+            assert_eq!(
+                node.inner().as_leaf().unwrap().clone().data.to_vec(),
+                vec![0x00, 0xFF]
+            );
+
+            check_stream_is_done(stream).await;
+        }
+    }
+
     #[test_case(Some(&[u8::MIN]); "Starting at first key")]
     #[test_case(None; "No start specified")]
     #[test_case(Some(&[128u8]); "Starting in middle")]
