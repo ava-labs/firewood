@@ -58,6 +58,7 @@ impl MerkleNodeStreamState<'_> {
 
 /// Iterates over the nodes in `merkle, whose root is `merkle_root,
 /// in order of ascending key. For each, returns the key and the node.
+/// Note that the returned key is the raw key, not the key as nibbles.
 pub struct MerkleNodeStream<'a, S, T> {
     state: MerkleNodeStreamState<'a>,
     merkle_root: DiskAddress,
@@ -127,6 +128,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                                 NodeType::Extension(_) => panic!("extension nodes shouldn't exist"),
                             }
 
+                            let key = key_from_nibble_iter(key.iter().copied().skip(1));
                             return Poll::Ready(Some(Ok((key, node))));
                         }
                         IterationNode::Visited {
@@ -404,25 +406,21 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
             MerkleKeyValueStreamState::Initialized { node_iter: iter } => {
                 match iter.poll_next_unpin(_cx) {
                     Poll::Ready(node) => match node {
-                        Some(Ok((key, node))) => {
-                            let key = key_from_nibble_iter(key.iter().copied().skip(1));
+                        Some(Ok((key, node))) => match node.inner() {
+                            NodeType::Branch(branch) => {
+                                let Some(value) = branch.value.as_ref() else {
+                                    return self.poll_next(_cx);
+                                };
 
-                            match node.inner() {
-                                NodeType::Branch(branch) => {
-                                    let Some(value) = branch.value.as_ref() else {
-                                        return self.poll_next(_cx);
-                                    };
-
-                                    let value = value.to_vec();
-                                    Poll::Ready(Some(Ok((key, value))))
-                                }
-                                NodeType::Leaf(leaf) => {
-                                    let value = leaf.data.to_vec();
-                                    Poll::Ready(Some(Ok((key, value))))
-                                }
-                                NodeType::Extension(_) => panic!("extension nodes shouldn't exist"),
+                                let value = value.to_vec();
+                                Poll::Ready(Some(Ok((key, value))))
                             }
-                        }
+                            NodeType::Leaf(leaf) => {
+                                let value = leaf.data.to_vec();
+                                Poll::Ready(Some(Ok((key, value))))
+                            }
+                            NodeType::Extension(_) => panic!("extension nodes shouldn't exist"),
+                        },
                         Some(Err(e)) => Poll::Ready(Some(Err(e))),
                         None => Poll::Ready(None),
                     },
@@ -515,6 +513,32 @@ mod tests {
         let merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
         let stream = merkle.key_value_iter_from(root, b"x".to_vec().into_boxed_slice());
+        check_stream_is_done(stream).await;
+    }
+
+    #[tokio::test]
+    async fn node_iterate_empty() {
+        let merkle = create_test_merkle();
+        let root = merkle.init_root().unwrap();
+        let stream = merkle.node_iter(root);
+        check_stream_is_done(stream).await;
+    }
+
+    #[tokio::test]
+    async fn node_iterate_root_only() {
+        let mut merkle = create_test_merkle();
+
+        let root = merkle.init_root().unwrap();
+
+        merkle.insert(vec![0x00], vec![0x00], root).unwrap();
+
+        let mut stream = merkle.node_iter(root);
+
+        let (key, node) = stream.next().await.unwrap().unwrap();
+
+        assert_eq!(key, vec![0x00].into_boxed_slice());
+        assert_eq!(node.inner().as_leaf().unwrap().data.to_vec(), vec![0x00]);
+
         check_stream_is_done(stream).await;
     }
 
