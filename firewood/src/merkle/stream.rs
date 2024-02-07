@@ -382,7 +382,6 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
         match state {
             MerkleKeyValueStreamState::Uninitialized(key) => {
-                // TODO how to not clone here?
                 let iter = MerkleNodeStream::from_key(merkle, *merkle_root, key.clone());
                 self.state = MerkleKeyValueStreamState::Initialized { node_iter: iter };
                 self.poll_next(_cx)
