@@ -279,9 +279,6 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                     }
                     Ordering::Greater => {
                         // `child` is after `key`.
-                        let child = merkle
-                            .get_node(child_addr)
-                            .map_err(|e| api::Error::InternalError(Box::new(e)))?;
                         iter_stack.push(IterationNode::Unvisited {
                             key: matched_key_nibbles
                                 .iter()
