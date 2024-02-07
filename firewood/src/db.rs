@@ -328,7 +328,7 @@ impl<S: ShaleStore<Node> + Send + Sync> DbRev<S> {
         start_key: Box<[u8]>,
     ) -> merkle::MerkleKeyValueStream<'_, S, Bincode> {
         self.merkle
-            .key_value_iter_from(self.header.kv_root, start_key)
+            .key_value_iter_from_key(self.header.kv_root, start_key)
     }
 
     fn flush_dirty(&mut self) -> Option<()> {

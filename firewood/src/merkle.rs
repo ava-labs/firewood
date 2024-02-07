@@ -1721,7 +1721,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         MerkleKeyValueStream::new(self, root)
     }
 
-    pub(crate) fn key_value_iter_from(
+    pub(crate) fn key_value_iter_from_key(
         &self,
         root: DiskAddress,
         key: Box<[u8]>,
@@ -1766,7 +1766,9 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
         let mut stream = match first_key {
             // TODO: fix the call-site to force the caller to do the allocation
-            Some(key) => self.key_value_iter_from(root, key.as_ref().to_vec().into_boxed_slice()),
+            Some(key) => {
+                self.key_value_iter_from_key(root, key.as_ref().to_vec().into_boxed_slice())
+            }
             None => self.key_value_iter(root),
         };
 

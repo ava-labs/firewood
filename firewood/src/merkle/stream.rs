@@ -492,7 +492,7 @@ mod tests {
     async fn key_value_iterate_empty() {
         let merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
-        let stream = merkle.key_value_iter_from(root, b"x".to_vec().into_boxed_slice());
+        let stream = merkle.key_value_iter_from_key(root, b"x".to_vec().into_boxed_slice());
         check_stream_is_done(stream).await;
     }
 
@@ -671,7 +671,7 @@ mod tests {
         }
 
         let mut stream = match start {
-            Some(start) => merkle.key_value_iter_from(root, start.to_vec().into_boxed_slice()),
+            Some(start) => merkle.key_value_iter_from_key(root, start.to_vec().into_boxed_slice()),
             None => merkle.key_value_iter(root),
         };
 
@@ -733,7 +733,7 @@ mod tests {
 
         // Test with start key
         for i in 0..=u8::MAX {
-            let mut stream = merkle.key_value_iter_from(root, vec![i].into_boxed_slice());
+            let mut stream = merkle.key_value_iter_from_key(root, vec![i].into_boxed_slice());
             for j in 0..=u8::MAX {
                 let expected_key = vec![i, j];
                 let expected_value = vec![i, j];
@@ -865,7 +865,8 @@ mod tests {
             merkle.insert(key, key.to_vec(), root).unwrap();
         }
 
-        let mut stream = merkle.key_value_iter_from(root, vec![intermediate].into_boxed_slice());
+        let mut stream =
+            merkle.key_value_iter_from_key(root, vec![intermediate].into_boxed_slice());
 
         let first_expected = key_values[1].as_slice();
         let first = stream.next().await.unwrap().unwrap();
@@ -912,7 +913,7 @@ mod tests {
         let start = keys.iter().position(|key| key[0] == branch_path).unwrap();
         let keys = &keys[start..];
 
-        let mut stream = merkle.key_value_iter_from(root, vec![branch_path].into_boxed_slice());
+        let mut stream = merkle.key_value_iter_from_key(root, vec![branch_path].into_boxed_slice());
 
         for key in keys {
             let next = stream.next().await.unwrap().unwrap();
@@ -961,7 +962,7 @@ mod tests {
         let start = keys.iter().position(|key| key == &branch_key).unwrap();
         let keys = &keys[start..];
 
-        let mut stream = merkle.key_value_iter_from(root, branch_key.into_boxed_slice());
+        let mut stream = merkle.key_value_iter_from_key(root, branch_key.into_boxed_slice());
 
         for key in keys {
             let next = stream.next().await.unwrap().unwrap();
@@ -992,7 +993,7 @@ mod tests {
 
         let keys = &keys[(missing as usize)..];
 
-        let mut stream = merkle.key_value_iter_from(root, vec![missing].into_boxed_slice());
+        let mut stream = merkle.key_value_iter_from_key(root, vec![missing].into_boxed_slice());
 
         for key in keys {
             let next = stream.next().await.unwrap().unwrap();
@@ -1019,7 +1020,7 @@ mod tests {
             merkle.insert(&key, key.clone(), root).unwrap();
         });
 
-        let stream = merkle.key_value_iter_from(root, vec![start_key].into_boxed_slice());
+        let stream = merkle.key_value_iter_from_key(root, vec![start_key].into_boxed_slice());
 
         check_stream_is_done(stream).await;
     }
@@ -1042,7 +1043,7 @@ mod tests {
             })
             .collect();
 
-        let mut stream = merkle.key_value_iter_from(root, vec![start_key].into_boxed_slice());
+        let mut stream = merkle.key_value_iter_from_key(root, vec![start_key].into_boxed_slice());
 
         for key in keys {
             let next = stream.next().await.unwrap().unwrap();
@@ -1075,7 +1076,7 @@ mod tests {
 
         let keys = &keys[((missing >> 4) as usize)..];
 
-        let mut stream = merkle.key_value_iter_from(root, vec![missing].into_boxed_slice());
+        let mut stream = merkle.key_value_iter_from_key(root, vec![missing].into_boxed_slice());
 
         for key in keys {
             let next = stream.next().await.unwrap().unwrap();
@@ -1094,7 +1095,7 @@ mod tests {
         let mut merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
         merkle.insert(key.clone(), key, root).unwrap();
-        let stream = merkle.key_value_iter_from(root, greater_key.into_boxed_slice());
+        let stream = merkle.key_value_iter_from_key(root, greater_key.into_boxed_slice());
 
         check_stream_is_done(stream).await;
     }
@@ -1120,7 +1121,7 @@ mod tests {
 
         let keys = &keys[((greatest >> 4) as usize)..];
 
-        let mut stream = merkle.key_value_iter_from(root, vec![greatest].into_boxed_slice());
+        let mut stream = merkle.key_value_iter_from_key(root, vec![greatest].into_boxed_slice());
 
         for key in keys {
             let next = stream.next().await.unwrap().unwrap();
