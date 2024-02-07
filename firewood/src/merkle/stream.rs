@@ -141,11 +141,6 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                                 continue;
                             };
 
-                            let key = key.clone();
-
-                            // There may be more children of this node to visit.
-                            iter_stack.push(iter_node);
-
                             // Visit the child next.
                             let child = merkle
                                 .get_node(child_addr)
@@ -159,17 +154,22 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                                 }
                             };
 
+                            let child_key: Box<[u8]> = key
+                                .iter()
+                                .copied()
+                                .chain(once(pos))
+                                .chain(partial_path)
+                                .collect();
+
+                            // There may be more children of this node to visit.
+                            iter_stack.push(iter_node);
+
                             let child = merkle
                                 .get_node(child_addr)
                                 .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
                             iter_stack.push(IterationNode::Unvisited {
-                                key: key
-                                    .iter()
-                                    .copied()
-                                    .chain(once(pos))
-                                    .chain(partial_path)
-                                    .collect(),
+                                key: child_key,
                                 node: child,
                             });
                             return self.poll_next(_cx);
