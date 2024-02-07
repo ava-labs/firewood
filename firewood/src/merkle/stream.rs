@@ -292,7 +292,6 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
                             // each matched nibble as we go instead of using
                             // extend.
                             key: matched_key_nibbles
-                                .clone()
                                 .iter()
                                 .copied()
                                 .chain(partial_key.iter().copied())
@@ -330,7 +329,11 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
 }
 
 enum MerkleKeyValueStreamState<'a, S, T> {
+    /// The iterator state is lazily initialized when poll_next is called
+    /// for the first time. The iteration start key is stored here.
     Uninitialized(Key),
+    /// The iterator works by iterating over the nodes in the merkle trie
+    /// and returning the key-value pairs for nodes that have values.
     Initialized {
         node_iter: MerkleNodeStream<'a, S, T>,
     },
@@ -397,7 +400,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
         match state {
             MerkleKeyValueStreamState::Uninitialized(key) => {
                 // TODO how to not clone here?
-                let iter = MerkleNodeStream::from_key(merkle, merkle_root.clone(), key.clone());
+                let iter = MerkleNodeStream::from_key(merkle, *merkle_root, key.clone());
                 self.state = MerkleKeyValueStreamState::Initialized { node_iter: iter };
                 self.poll_next(_cx)
             }
