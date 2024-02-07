@@ -58,7 +58,7 @@ impl MerkleNodeStreamState {
     }
 }
 
-/// Iterates over the nodes in [merkle], whose root is [merkle_root],
+/// Iterates over the nodes in `merkle, whose root is `merkle_root,
 /// in order of ascending key. For each, returns the key and the node.
 pub struct MerkleNodeStream<'a, S, T> {
     state: MerkleNodeStreamState,
@@ -73,7 +73,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleNodeStream<
 }
 
 impl<'a, S, T> MerkleNodeStream<'a, S, T> {
-    /// Returns a new iterator that will iterate over all the nodes in [merkle].
+    /// Returns a new iterator that will iterate over all the nodes in `merkle`.
     #[allow(dead_code)] // TODO should we remove this function?
     pub(super) fn new(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress) -> Self {
         Self {
@@ -83,8 +83,8 @@ impl<'a, S, T> MerkleNodeStream<'a, S, T> {
         }
     }
 
-    /// Returns a new iterator that will iterate over all the nodes in [merkle]
-    /// with keys greater than or equal to [key].
+    /// Returns a new iterator that will iterate over all the nodes in `merkle`
+    /// with keys greater than or equal to `key`.
     pub(super) fn from_key(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress, key: Key) -> Self {
         Self {
             state: MerkleNodeStreamState::with_key(key),
@@ -339,14 +339,14 @@ enum MerkleKeyValueStreamState<'a, S, T> {
 }
 
 impl<'a, S, T> MerkleKeyValueStreamState<'a, S, T> {
-    /// Returns a new iterator that will iterate over all the key-value pairs in [merkle].
+    /// Returns a new iterator that will iterate over all the key-value pairs in `merkle`.
     #[allow(dead_code)] // TODO should we remove this function?
     fn new() -> Self {
         Self::Uninitialized(vec![].into_boxed_slice())
     }
 
-    /// Returns a new iterator that will iterate over all the key-value pairs in [merkle]
-    /// with keys greater than or equal to [key].
+    /// Returns a new iterator that will iterate over all the key-value pairs in `merkle`
+    /// with keys greater than or equal to `key`.
     fn with_key(key: Key) -> Self {
         Self::Uninitialized(key)
     }
@@ -467,8 +467,8 @@ where
     (Ordering::Equal, unmatched_key_nibbles_iter)
 }
 
-/// Returns an iterator that returns (child_addr, pos) for each non-empty child of [branch],
-/// where [pos] is the position of the child in [branch]'s children array.
+/// Returns an iterator that returns (child_addr, pos) for each non-empty child of `branch`,
+/// where `pos` is the position of the child in `branch`'s children array.
 fn get_children_iter(branch: &BranchNode) -> impl Iterator<Item = (DiskAddress, u8)> {
     branch
         .children
