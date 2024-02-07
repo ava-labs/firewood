@@ -140,9 +140,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                                 continue;
                             };
 
-                            let child = merkle
-                                .get_node(child_addr)
-                                .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+                            let child = merkle.get_node(child_addr)?;
 
                             let partial_path = match child.inner() {
                                 NodeType::Branch(branch) => branch.path.iter().copied(),
@@ -186,9 +184,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
     key: &[u8],
 ) -> Result<NodeStreamState<'a>, api::Error> {
     // Invariant: `node`'s key is a prefix of `key`.
-    let mut node = merkle
-        .get_node(root_node)
-        .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+    let mut node = merkle.get_node(root_node)?;
 
     // Invariant: [matched_key_nibbles] is the key of `node` at the start
     // of each loop iteration.
@@ -247,9 +243,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
 
                 matched_key_nibbles.push(next_unmatched_key_nibble);
 
-                let child = merkle
-                    .get_node(child_addr)
-                    .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+                let child = merkle.get_node(child_addr)?;
 
                 let partial_key = match child.inner() {
                     NodeType::Branch(branch) => &branch.path,
