@@ -111,12 +111,14 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                 while let Some(mut branch_iter) = branch_iter_stack.pop() {
                     match branch_iter {
                         BranchIterator::Unvisited { address, key } => {
+                            // We haven't returned this node yet
                             let node = merkle
                                 .get_node(address)
                                 .map_err(|e| api::Error::InternalError(Box::new(e)))?;
 
                             match node.inner() {
                                 NodeType::Branch(branch) => {
+                                    // [node] is a branch node. Visit its children next.
                                     branch_iter_stack.push(BranchIterator::Visited {
                                         key: key.clone(),
                                         children_iter: Box::new(get_children_iter(branch)),
@@ -140,6 +142,8 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
 
                             let mut child_key: Vec<u8> =
                                 key.iter().copied().chain(once(pos)).collect();
+
+                            // There may be more children of this node to visit
 
                             branch_iter_stack.push(branch_iter);
 
