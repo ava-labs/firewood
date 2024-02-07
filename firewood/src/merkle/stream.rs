@@ -56,9 +56,6 @@ impl NodeStreamState<'_> {
     }
 }
 
-/// Iterates over the nodes in `merkle, whose root is `merkle_root,
-/// in order of ascending key. For each, returns the key and the node.
-/// Note that the returned key is the raw key, not the key as nibbles.
 pub struct MerkleNodeStream<'a, S, T> {
     state: NodeStreamState<'a>,
     merkle_root: DiskAddress,
