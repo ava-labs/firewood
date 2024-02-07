@@ -48,6 +48,7 @@ enum MerkleNodeStreamState {
 }
 
 impl MerkleNodeStreamState {
+    #[allow(dead_code)] // TODO should we remove this function?
     fn new() -> Self {
         Self::Uninitialized(vec![].into_boxed_slice())
     }
@@ -73,6 +74,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleNodeStream<
 
 impl<'a, S, T> MerkleNodeStream<'a, S, T> {
     /// Returns a new iterator that will iterate over all the nodes in [merkle].
+    #[allow(dead_code)] // TODO should we remove this function?
     pub(super) fn new(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress) -> Self {
         Self {
             state: MerkleNodeStreamState::new(),
@@ -203,8 +205,7 @@ fn get_iterator_intial_state<S: ShaleStore<Node> + Send + Sync, T>(
     // of each loop iteration.
     let mut matched_key_nibbles = vec![];
 
-    let mut unmatched_key_nibbles: crate::nibbles::NibblesIterator<'_, 1> =
-        Nibbles::<1>::new(key.as_ref()).into_iter();
+    let mut unmatched_key_nibbles = Nibbles::<1>::new(key).into_iter();
 
     let mut iter_stack: Vec<IterationNode> = vec![];
 
@@ -341,6 +342,7 @@ enum MerkleKeyValueStreamState<'a, S, T> {
 
 impl<'a, S, T> MerkleKeyValueStreamState<'a, S, T> {
     /// Returns a new iterator that will iterate over all the key-value pairs in [merkle].
+    #[allow(dead_code)] // TODO should we remove this function?
     fn new() -> Self {
         Self::Uninitialized(vec![].into_boxed_slice())
     }
@@ -417,11 +419,11 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                     };
 
                                     let value = value.to_vec();
-                                    return Poll::Ready(Some(Ok((key, value))));
+                                    Poll::Ready(Some(Ok((key, value))))
                                 }
                                 NodeType::Leaf(leaf) => {
                                     let value = leaf.data.to_vec();
-                                    return Poll::Ready(Some(Ok((key, value))));
+                                    Poll::Ready(Some(Ok((key, value))))
                                 }
                                 NodeType::Extension(_) => panic!("extension nodes shouldn't exist"),
                             }
@@ -464,7 +466,7 @@ where
         }
     }
 
-    return (Ordering::Equal, unmatched_key_nibbles_iter);
+    (Ordering::Equal, unmatched_key_nibbles_iter)
 }
 
 /// Returns an iterator that returns (child_addr, pos) for each non-empty child of [branch],
