@@ -35,8 +35,8 @@ enum IterationNode<'a> {
 enum NodeStreamState<'a> {
     /// The iterator state is lazily initialized when poll_next is called
     /// for the first time. The iteration start key is stored here.
-    Uninitialized(Key),
-    Initialized {
+    StartFromKey(Key),
+    Iterating {
         /// Each element is a node that will be visited (i.e. returned)
         /// or has been visited but has unvisited children.
         /// On each call to poll_next we pop the next element.
@@ -48,11 +48,11 @@ enum NodeStreamState<'a> {
 
 impl NodeStreamState<'_> {
     fn new() -> Self {
-        Self::Uninitialized(vec![].into_boxed_slice())
+        Self::StartFromKey(vec![].into_boxed_slice())
     }
 
     fn with_key(key: Key) -> Self {
-        Self::Uninitialized(key)
+        Self::StartFromKey(key)
     }
 }
 
@@ -67,7 +67,7 @@ pub struct MerkleNodeStream<'a, S, T> {
 
 impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleNodeStream<'a, S, T> {
     fn is_terminated(&self) -> bool {
-        matches!(&self.state, NodeStreamState::Initialized { iter_stack } if iter_stack.is_empty())
+        matches!(&self.state, NodeStreamState::Iterating { iter_stack } if iter_stack.is_empty())
     }
 }
 
@@ -108,11 +108,11 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
         } = &mut *self;
 
         match state {
-            NodeStreamState::Uninitialized(key) => {
+            NodeStreamState::StartFromKey(key) => {
                 self.state = get_iterator_intial_state(merkle, *merkle_root, key)?;
                 self.poll_next(_cx)
             }
-            NodeStreamState::Initialized { iter_stack } => {
+            NodeStreamState::Iterating { iter_stack } => {
                 while let Some(mut iter_node) = iter_stack.pop() {
                     match iter_node {
                         IterationNode::Unvisited { key, node } => {
@@ -215,7 +215,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                 }
             }
 
-            return Ok(NodeStreamState::Initialized { iter_stack });
+            return Ok(NodeStreamState::Iterating { iter_stack });
         };
         // `nib` is the first nibble after [matched_key_nibbles].
 
@@ -240,7 +240,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                         // There is no child at `nib`.
                         // We'll visit `node`'s first child at index > `nib`
                         // first (if it exists).
-                        return Ok(NodeStreamState::Initialized { iter_stack });
+                        return Ok(NodeStreamState::Iterating { iter_stack });
                     }
                 };
 
@@ -265,7 +265,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                 match comparison {
                     Ordering::Less => {
                         // `child` is before `key`.
-                        return Ok(NodeStreamState::Initialized { iter_stack });
+                        return Ok(NodeStreamState::Iterating { iter_stack });
                     }
                     Ordering::Equal => {
                         // `child` is a prefix of `key`.
@@ -281,7 +281,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                             .collect();
                         iter_stack.push(IterationNode::Unvisited { key, node: child });
 
-                        return Ok(NodeStreamState::Initialized { iter_stack });
+                        return Ok(NodeStreamState::Iterating { iter_stack });
                     }
                 }
             }
@@ -299,7 +299,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                         node,
                     });
                 }
-                return Ok(NodeStreamState::Initialized { iter_stack });
+                return Ok(NodeStreamState::Iterating { iter_stack });
             }
             NodeType::Extension(_) => {
                 panic!("extension nodes shouldn't exist")
