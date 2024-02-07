@@ -197,6 +197,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
     let mut iter_stack: Vec<IterationNode> = vec![];
 
     loop {
+        // `next_unmatched_key_nibble` is the first nibble after `matched_key_nibbles`.
         let Some(next_unmatched_key_nibble) = unmatched_key_nibbles.next() else {
             // The invariant tells us `node` is a prefix of `key`.
             // There is no more `key` left so `node` must be at `key`.
@@ -215,12 +216,11 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
 
             return Ok(NodeStreamState::Iterating { iter_stack });
         };
-        // `nib` is the first nibble after [matched_key_nibbles].
 
         match &node.inner {
             NodeType::Branch(branch) => {
-                // The next nibble in `key` is `nib`,
-                // so all children of `node` with a position > `nib`
+                // The next nibble in `key` is `next_unmatched_key_nibble`,
+                // so all children of `node` with a position > `next_unmatched_key_nibble`
                 // should be visited since they are after `key`.
                 iter_stack.push(IterationNode::Visited {
                     key: matched_key_nibbles.clone().into_boxed_slice(),
@@ -230,14 +230,14 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                     ),
                 });
 
-                // Figure out if the child at `nib` is a prefix of `key`.
+                // Figure out if the child at `next_unmatched_key_nibble` is a prefix of `key`.
                 // (i.e. if we should run this loop body again)
                 #[allow(clippy::indexing_slicing)]
                 let child_addr = match branch.children[next_unmatched_key_nibble as usize] {
                     Some(c) => c,
                     None => {
-                        // There is no child at `nib`.
-                        // We'll visit `node`'s first child at index > `nib`
+                        // There is no child at `next_unmatched_key_nibble`.
+                        // We'll visit `node`'s first child at index > `next_unmatched_key_nibble`
                         // first (if it exists).
                         return Ok(NodeStreamState::Iterating { iter_stack });
                     }
