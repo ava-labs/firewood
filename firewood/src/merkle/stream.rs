@@ -19,11 +19,11 @@ enum BranchIterator {
     Unvisited {
         address: DiskAddress,
         /// The nibbles of the key at this branch node.
-        key: Box<[u8]>,
+        key: Key,
     },
     Visited {
         /// The nibbles of the key at this branch node.
-        key: Box<[u8]>,
+        key: Key,
         /// Returns the non-empty children of this node and their positions
         /// in the node's children array .
         children_iter: Box<dyn Iterator<Item = (DiskAddress, u8)> + Send>,
