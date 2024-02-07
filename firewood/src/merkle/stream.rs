@@ -197,7 +197,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
     let mut iter_stack: Vec<IterationNode> = vec![];
 
     loop {
-        let Some(nib) = unmatched_key_nibbles.next() else {
+        let Some(next_unmatched_key_nibble) = unmatched_key_nibbles.next() else {
             // The invariant tells us `node` is a prefix of `key`.
             // There is no more `key` left so `node` must be at `key`.
             // Visit and return `node` first.
@@ -225,14 +225,15 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                 iter_stack.push(IterationNode::Visited {
                     key: matched_key_nibbles.clone().into_boxed_slice(),
                     children_iter: Box::new(
-                        get_children_iter(branch).filter(move |(_, pos)| *pos > nib),
+                        get_children_iter(branch)
+                            .filter(move |(_, pos)| *pos > next_unmatched_key_nibble),
                     ),
                 });
 
                 // Figure out if the child at `nib` is a prefix of `key`.
                 // (i.e. if we should run this loop body again)
                 #[allow(clippy::indexing_slicing)]
-                let child_addr = match branch.children[nib as usize] {
+                let child_addr = match branch.children[next_unmatched_key_nibble as usize] {
                     Some(c) => c,
                     None => {
                         // There is no child at `nib`.
@@ -242,7 +243,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                     }
                 };
 
-                matched_key_nibbles.push(nib);
+                matched_key_nibbles.push(next_unmatched_key_nibble);
 
                 let child = merkle
                     .get_node(child_addr)
