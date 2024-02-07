@@ -289,21 +289,18 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                 }
             }
             NodeType::Leaf(leaf) => {
-                let (comparison, _) = compare_partial_path(leaf.path.iter(), unmatched_key_nibbles);
-
-                match comparison {
-                    Ordering::Less | Ordering::Equal => {}
-                    Ordering::Greater => {
-                        // The leaf's key > `key`, so we can stop here.
-                        iter_stack.push(IterationNode::Unvisited {
-                            key: matched_key_nibbles
-                                .iter()
-                                .copied()
-                                .chain(leaf.path.iter().copied())
-                                .collect(),
-                            node,
-                        });
-                    }
+                if compare_partial_path(leaf.path.iter(), unmatched_key_nibbles).0
+                    == Ordering::Greater
+                {
+                    // The leaf's key > `key`, so we can stop here.
+                    iter_stack.push(IterationNode::Unvisited {
+                        key: matched_key_nibbles
+                            .iter()
+                            .copied()
+                            .chain(leaf.path.iter().copied())
+                            .collect(),
+                        node,
+                    });
                 }
                 return Ok(MerkleNodeStreamState::Initialized { iter_stack });
             }
