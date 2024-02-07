@@ -225,7 +225,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                 // so all children of `node` with a position > `next_unmatched_key_nibble`
                 // should be visited since they are after `key`.
                 iter_stack.push(IterationNode::Visited {
-                    key: matched_key_nibbles.clone().into_boxed_slice(),
+                    key: matched_key_nibbles.iter().copied().collect(),
                     children_iter: Box::new(
                         get_children_iter(branch)
                             .filter(move |(_, pos)| *pos > next_unmatched_key_nibble),
