@@ -322,7 +322,7 @@ enum MerkleKeyValueStreamState<'a, S, T> {
 impl<'a, S, T> MerkleKeyValueStreamState<'a, S, T> {
     /// Returns a new iterator that will iterate over all the key-value pairs in `merkle`.
     fn new() -> Self {
-        Self::Uninitialized(vec![].into_boxed_slice())
+        Self::Uninitialized(Box::new([]))
     }
 
     /// Returns a new iterator that will iterate over all the key-value pairs in `merkle`
