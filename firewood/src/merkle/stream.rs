@@ -16,13 +16,13 @@ type Value = Vec<u8>;
 
 /// Represents an ongoing iteration over a node and its children.
 enum IterationNode<'a> {
-    // This node has not been returned yet.
+    /// This node has not been returned yet.
     Unvisited {
         /// The key (as nibbles) of this node.
         key: Key,
         node: NodeObjRef<'a>,
     },
-    // This node has been returned. Track which child to visit next.
+    /// This node has been returned. Track which child to visit next.
     Visited {
         /// The key (as nibbles) of this node.
         key: Key,
