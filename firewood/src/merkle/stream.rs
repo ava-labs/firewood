@@ -279,12 +279,13 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                     }
                     Ordering::Greater => {
                         // `child` is after `key`.
+                        let key = matched_key_nibbles
+                            .iter()
+                            .copied()
+                            .chain(partial_key.iter().copied())
+                            .collect();
                         iter_stack.push(IterationNode::Unvisited {
-                            key: matched_key_nibbles
-                                .iter()
-                                .copied()
-                                .chain(partial_key.iter().copied())
-                                .collect(),
+                            key: key,
                             node: child,
                         });
 
