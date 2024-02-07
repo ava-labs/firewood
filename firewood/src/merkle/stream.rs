@@ -474,27 +474,6 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
     data.into_boxed_slice()
 }
 
-mod helper_types {
-    use std::ops::Not;
-
-    #[must_use]
-    pub(super) struct MustUse<T>(T);
-
-    impl<T> From<T> for MustUse<T> {
-        fn from(t: T) -> Self {
-            Self(t)
-        }
-    }
-
-    impl<T: Not> Not for MustUse<T> {
-        type Output = T::Output;
-
-        fn not(self) -> Self::Output {
-            self.0.not()
-        }
-    }
-}
-
 // CAUTION: only use with nibble iterators
 trait IntoBytes: Iterator<Item = u8> {
     fn nibbles_into_bytes(&mut self) -> Vec<u8> {
