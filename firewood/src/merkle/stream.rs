@@ -60,6 +60,8 @@ pub struct MerkleNodeStream<'a, S, T> {
 
 impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleNodeStream<'a, S, T> {
     fn is_terminated(&self) -> bool {
+        // The top of `iter_stack` is the next node to return.
+        // If `iter_stack` is empty, there are no more nodes to visit.
         matches!(&self.state, NodeStreamState::Iterating { iter_stack } if iter_stack.is_empty())
     }
 }
