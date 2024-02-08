@@ -25,8 +25,6 @@ pub use proof::{Proof, ProofError};
 pub use stream::MerkleKeyValueStream;
 pub use trie_hash::{TrieHash, TRIE_HASH_LEN};
 
-use self::stream::MerkleNodeStream;
-
 type NodeObjRef<'a> = shale::ObjRef<'a, Node>;
 type ParentRefs<'a> = Vec<(NodeObjRef<'a>, u8)>;
 type ParentAddresses = Vec<(DiskAddress, u8)>;
@@ -1727,20 +1725,6 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         key: Box<[u8]>,
     ) -> MerkleKeyValueStream<'_, S, T> {
         MerkleKeyValueStream::from_key(self, root, key)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn node_iter(&self, root: DiskAddress) -> MerkleNodeStream<'_, S, T> {
-        MerkleNodeStream::new(self, root)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn node_iter_from(
-        &self,
-        root: DiskAddress,
-        key: Box<[u8]>,
-    ) -> MerkleNodeStream<'_, S, T> {
-        MerkleNodeStream::from_key(self, root, key)
     }
 
     pub(super) async fn range_proof<K: api::KeyType + Send + Sync>(

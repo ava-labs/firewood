@@ -47,11 +47,7 @@ enum NodeStreamState<'a> {
 }
 
 impl NodeStreamState<'_> {
-    fn new() -> Self {
-        Self::StartFromKey(vec![].into_boxed_slice())
-    }
-
-    fn with_key(key: Key) -> Self {
+    fn new(key: Key) -> Self {
         Self::StartFromKey(key)
     }
 }
@@ -69,20 +65,11 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleNodeStream<
 }
 
 impl<'a, S, T> MerkleNodeStream<'a, S, T> {
-    /// Returns a new iterator that will iterate over all the nodes in `merkle`.
-    pub(super) fn new(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress) -> Self {
-        Self {
-            state: NodeStreamState::new(),
-            merkle_root,
-            merkle,
-        }
-    }
-
     /// Returns a new iterator that will iterate over all the nodes in `merkle`
     /// with keys greater than or equal to `key`.
-    pub(super) fn from_key(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress, key: Key) -> Self {
+    pub(super) fn new(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress, key: Key) -> Self {
         Self {
-            state: NodeStreamState::with_key(key),
+            state: NodeStreamState::new(key),
             merkle_root,
             merkle,
         }
@@ -369,7 +356,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
         match state {
             MerkleKeyValueStreamState::Uninitialized(key) => {
-                let iter = MerkleNodeStream::from_key(merkle, *merkle_root, key.clone());
+                let iter = MerkleNodeStream::new(merkle, *merkle_root, key.clone());
                 self.state = MerkleKeyValueStreamState::Initialized { node_iter: iter };
                 self.poll_next(_cx)
             }
@@ -485,6 +472,20 @@ mod tests {
     use super::*;
     use futures::StreamExt;
     use test_case::test_case;
+
+    impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
+        pub(crate) fn node_iter(&self, root: DiskAddress) -> MerkleNodeStream<'_, S, T> {
+            MerkleNodeStream::new(self, root, Box::new([]))
+        }
+
+        pub(crate) fn node_iter_from(
+            &self,
+            root: DiskAddress,
+            key: Box<[u8]>,
+        ) -> MerkleNodeStream<'_, S, T> {
+            MerkleNodeStream::new(self, root, key)
+        }
+    }
 
     #[tokio::test]
     async fn key_value_iterate_empty() {
