@@ -9,7 +9,6 @@ use firewood::{
 use futures_util::StreamExt;
 use log;
 use std::borrow::Cow;
-use std::num::ParseIntError;
 
 #[derive(Debug, Args)]
 pub struct Options {
@@ -60,12 +59,6 @@ fn u8_to_string(data: &[u8]) -> Cow<'_, str> {
     String::from_utf8_lossy(data)
 }
 
-fn key_parser(s: &str) -> Result<Box<[u8]>, ParseIntError> {
-    let mut result = Vec::with_capacity(s.len() / 2);
-    let mut iter = s.chars().peekable();
-    while iter.peek().is_some() {
-        let chunk = iter.by_ref().take(2).collect::<String>();
-        result.push(u8::from_str_radix(&chunk, 16)?);
-    }
-    Ok(result.into_boxed_slice())
+fn key_parser(s: &str) -> Result<Box<[u8]>, std::io::Error> {
+    return Ok(Box::from(s.as_bytes()));
 }
