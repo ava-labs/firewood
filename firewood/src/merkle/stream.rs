@@ -192,7 +192,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
             match &node.inner {
                 NodeType::Branch(_) | NodeType::Leaf(_) => {
                     iter_stack.push(IterationNode::Unvisited {
-                        key: matched_key_nibbles.clone().into_boxed_slice(),
+                        key: Box::from(matched_key_nibbles),
                         node,
                     });
                 }
@@ -257,8 +257,8 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                         // `child` is after `key`.
                         let key = matched_key_nibbles
                             .iter()
+                            .chain(partial_key.iter())
                             .copied()
-                            .chain(partial_key.iter().copied())
                             .collect();
                         iter_stack.push(IterationNode::Unvisited { key, node: child });
 
