@@ -28,7 +28,7 @@ enum IterationNode<'a> {
         key: Key,
         /// Returns the non-empty children of this node and their positions
         /// in the node's children array.
-        children_iter: Box<dyn Iterator<Item = (DiskAddress, u8)> + Send>,
+        children_iter: Box<dyn Iterator<Item = (u8, DiskAddress)> + Send>,
     },
 }
 
@@ -126,7 +126,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                             ref mut children_iter,
                         } => {
                             // We returned `node` already. Visit its next child.
-                            let Some((child_addr, pos)) = children_iter.next() else {
+                            let Some((pos, child_addr)) = children_iter.next() else {
                                 // We visited all this node's descendants. Go back to its parent.
                                 continue;
                             };
@@ -215,7 +215,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                     key: matched_key_nibbles.iter().copied().collect(),
                     children_iter: Box::new(
                         as_enumerated_children_iter(branch)
-                            .filter(move |(_, pos)| *pos > next_unmatched_key_nibble),
+                            .filter(move |(pos, _)| *pos > next_unmatched_key_nibble),
                     ),
                 });
 
@@ -427,14 +427,14 @@ where
     (Ordering::Equal, unmatched_key_nibbles_iter)
 }
 
-/// Returns an iterator that returns (child_addr, pos) for each non-empty child of `branch`,
+/// Returns an iterator that returns (`pos`,`child_addr`) for each non-empty child of `branch`,
 /// where `pos` is the position of the child in `branch`'s children array.
-fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (DiskAddress, u8)> {
+fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (u8, DiskAddress)> {
     branch
         .children
         .into_iter()
         .enumerate()
-        .filter_map(|(pos, child_addr)| child_addr.map(|child_addr| (child_addr, pos as u8)))
+        .filter_map(|(pos, child_addr)| child_addr.map(|child_addr| (pos as u8, child_addr)))
 }
 
 fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
