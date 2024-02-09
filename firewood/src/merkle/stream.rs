@@ -107,7 +107,9 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                                     // `node` is a branch node. Visit its children next.
                                     iter_stack.push(IterationNode::Visited {
                                         key: key.clone(),
-                                        children_iter: Box::new(get_children_iter(branch)),
+                                        children_iter: Box::new(as_enumerated_children_iter(
+                                            branch,
+                                        )),
                                     });
                                 }
                                 NodeType::Leaf(_) => {}
@@ -212,7 +214,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                 iter_stack.push(IterationNode::Visited {
                     key: matched_key_nibbles.iter().copied().collect(),
                     children_iter: Box::new(
-                        get_children_iter(branch)
+                        as_enumerated_children_iter(branch)
                             .filter(move |(_, pos)| *pos > next_unmatched_key_nibble),
                     ),
                 });
@@ -427,7 +429,7 @@ where
 
 /// Returns an iterator that returns (child_addr, pos) for each non-empty child of `branch`,
 /// where `pos` is the position of the child in `branch`'s children array.
-fn get_children_iter(branch: &BranchNode) -> impl Iterator<Item = (DiskAddress, u8)> {
+fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (DiskAddress, u8)> {
     branch
         .children
         .into_iter()
