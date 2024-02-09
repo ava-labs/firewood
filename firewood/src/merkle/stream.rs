@@ -275,8 +275,8 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                     // `child` is after `key`.
                     let key = matched_key_nibbles
                         .iter()
+                        .chain(leaf.path.iter())
                         .copied()
-                        .chain(leaf.path.iter().copied())
                         .collect();
                     iter_stack.push(IterationNode::Unvisited { key, node });
                 }
