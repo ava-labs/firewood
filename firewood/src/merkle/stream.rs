@@ -445,20 +445,6 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
     data.into_boxed_slice()
 }
 
-// CAUTION: only use with nibble iterators
-trait IntoBytes: Iterator<Item = u8> {
-    fn nibbles_into_bytes(&mut self) -> Vec<u8> {
-        let mut data = Vec::with_capacity(self.size_hint().0 / 2);
-
-        while let (Some(hi), Some(lo)) = (self.next(), self.next()) {
-            data.push((hi << 4) + lo);
-        }
-
-        data
-    }
-}
-impl<T: Iterator<Item = u8>> IntoBytes for T {}
-
 #[cfg(test)]
 use super::tests::create_test_merkle;
 
@@ -467,7 +453,6 @@ use super::tests::create_test_merkle;
 mod tests {
     use crate::{
         merkle::Bincode,
-        nibbles::Nibbles,
         shale::{cached::DynamicMem, compact::CompactSpace},
     };
 
@@ -1154,22 +1139,5 @@ mod tests {
     {
         assert!(stream.next().await.is_none());
         assert!(stream.is_terminated());
-    }
-
-    #[test]
-    fn remaining_bytes() {
-        let data = &[1];
-        let nib: Nibbles<'_, 0> = Nibbles::<0>::new(data);
-        let mut it = nib.into_iter();
-        assert_eq!(it.nibbles_into_bytes(), data.to_vec());
-    }
-
-    #[test]
-    fn remaining_bytes_off() {
-        let data = &[1];
-        let nib: Nibbles<'_, 0> = Nibbles::<0>::new(data);
-        let mut it = nib.into_iter();
-        it.next();
-        assert_eq!(it.nibbles_into_bytes(), vec![]);
     }
 }
