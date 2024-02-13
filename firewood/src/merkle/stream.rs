@@ -469,8 +469,8 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for PathIterator<'a, S, T>
 
                 let node_key: Box<[u8]> = matched_key
                     .iter()
+                    .chain(partial_path.iter())
                     .copied()
-                    .chain(partial_path.iter().copied())
                     .collect();
 
                 let unmatched_key: NibblesIterator<'_, 0> =
@@ -502,11 +502,11 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for PathIterator<'a, S, T>
                                 unmatched_key: unmatched_key.collect(),
                                 address: child,
                             };
-                            return Poll::Ready(Some(Ok((node_key, node))));
+                            Poll::Ready(Some(Ok((node_key, node))))
                         }
                         NodeType::Leaf(_) => {
                             self.state = PathIteratorState::Exhausted;
-                            return Poll::Ready(Some(Ok((node_key, node))));
+                            Poll::Ready(Some(Ok((node_key, node))))
                         }
                         NodeType::Extension(_) => unreachable!(),
                     },
