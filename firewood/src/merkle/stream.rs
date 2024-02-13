@@ -3,7 +3,7 @@
 
 use super::{node::Node, BranchNode, Merkle, NodeObjRef, NodeType};
 use crate::{
-    nibbles::Nibbles,
+    nibbles::{Nibbles, NibblesIterator},
     shale::{DiskAddress, ShaleStore},
     v2::api,
 };
@@ -392,6 +392,127 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                     Poll::Pending => Poll::Pending,
                 }
             }
+        }
+    }
+}
+
+enum PathIteratorState {
+    New(Key),
+    Iterating {
+        matched_key: Vec<u8>,
+        unmatched_key: Vec<u8>,
+        address: DiskAddress,
+    },
+    Exhausted,
+}
+
+pub struct PathIterator<'a, S, T> {
+    state: PathIteratorState,
+    merkle: &'a Merkle<S, T>,
+    merkle_root: DiskAddress,
+}
+
+impl<'a, S: ShaleStore<Node> + Send + Sync, T> PathIterator<'a, S, T> {
+    pub(super) fn new(key: Key, merkle: &'a Merkle<S, T>, merkle_root: DiskAddress) -> Self {
+        Self {
+            state: PathIteratorState::New(key),
+            merkle,
+            merkle_root,
+        }
+    }
+}
+
+impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for PathIterator<'a, S, T> {
+    type Item = Result<(Key, NodeObjRef<'a>), api::Error>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        // destructuring is necessary here because we need mutable access to `state`
+        // at the same time as immutable access to `merkle`.
+        let Self {
+            state,
+            merkle_root,
+            merkle,
+        } = &mut *self;
+
+        match state {
+            PathIteratorState::New(key) => {
+                let sentinel_node = merkle.get_node(*merkle_root)?;
+                let sentinel_node = match sentinel_node.inner() {
+                    NodeType::Branch(branch) => branch,
+                    _ => unreachable!("sentinel node is not a branch"), // TODO how to handle this?
+                };
+                let root = sentinel_node.children[0].unwrap(); // TODO how to handle this?
+
+                self.state = PathIteratorState::Iterating {
+                    matched_key: vec![],
+                    unmatched_key: key.to_vec(),
+                    address: root,
+                };
+
+                self.poll_next(_cx)
+            }
+            PathIteratorState::Iterating {
+                matched_key,
+                unmatched_key,
+                address,
+            } => {
+                let node = merkle.get_node(*address)?;
+
+                let partial_path = match node.inner() {
+                    NodeType::Branch(branch) => &branch.path,
+                    NodeType::Leaf(leaf) => &leaf.path,
+                    _ => unreachable!("root node is not a branch"), // TODO how to handle this?
+                };
+
+                let node_key: Box<[u8]> = matched_key
+                    .iter()
+                    .copied()
+                    .chain(partial_path.iter().copied())
+                    .collect();
+
+                let unmatched_key: NibblesIterator<'_, 0> =
+                    Nibbles::new(&unmatched_key).into_iter();
+
+                let (comparison, mut unmatched_key) =
+                    compare_partial_path(partial_path.iter(), unmatched_key);
+
+                match comparison {
+                    Ordering::Less | Ordering::Greater => {
+                        self.state = PathIteratorState::Exhausted;
+                        Poll::Ready(Some(Ok((node_key, node))))
+                    }
+                    Ordering::Equal => match node.inner() {
+                        NodeType::Branch(branch) => {
+                            let Some(next_unmatched_key_nibble) = unmatched_key.next() else {
+                                self.state = PathIteratorState::Exhausted;
+                                return Poll::Ready(Some(Ok((node_key, node))));
+                            };
+
+                            let Some(child) = branch.children[next_unmatched_key_nibble as usize]
+                            else {
+                                self.state = PathIteratorState::Exhausted;
+                                return Poll::Ready(Some(Ok((node_key, node))));
+                            };
+
+                            self.state = PathIteratorState::Iterating {
+                                matched_key: node_key.to_vec(),
+                                unmatched_key: unmatched_key.collect(),
+                                address: child,
+                            };
+                            return Poll::Ready(Some(Ok((node_key, node))));
+                        }
+                        NodeType::Leaf(_) => {
+                            self.state = PathIteratorState::Exhausted;
+                            return Poll::Ready(Some(Ok((node_key, node))));
+                        }
+                        NodeType::Extension(_) => unreachable!(),
+                    },
+                }
+            }
+            PathIteratorState::Exhausted => Poll::Ready(None),
         }
     }
 }
