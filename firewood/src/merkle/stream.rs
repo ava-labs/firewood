@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::{node::Node, BranchNode, Merkle, NodeObjRef, NodeType};
+use super::{node::Node, BranchNode, Merkle, MerkleError, NodeObjRef, NodeType};
 use crate::{
     nibbles::{Nibbles, NibblesIterator},
     shale::{DiskAddress, ShaleStore},
@@ -422,13 +422,10 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> PathIterator<'a, S, T> {
     }
 }
 
-impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for PathIterator<'a, S, T> {
-    type Item = Result<(Key, NodeObjRef<'a>), api::Error>;
+impl<'a, S: ShaleStore<Node> + Send + Sync, T> Iterator for PathIterator<'a, S, T> {
+    type Item = Result<(Key, NodeObjRef<'a>), MerkleError>;
 
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
+    fn next(&mut self) -> Option<Self::Item> {
         // destructuring is necessary here because we need mutable access to `state`
         // at the same time as immutable access to `merkle`.
         let Self {
@@ -439,7 +436,10 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for PathIterator<'a, S, T>
 
         match state {
             PathIteratorState::New(key) => {
-                let sentinel_node = merkle.get_node(*merkle_root)?;
+                let sentinel_node = match merkle.get_node(*merkle_root) {
+                    Ok(node) => node,
+                    Err(e) => return Some(Err(e)),
+                };
                 let sentinel_node = match sentinel_node.inner() {
                     NodeType::Branch(branch) => branch,
                     _ => unreachable!("sentinel node is not a branch"), // TODO how to handle this?
@@ -452,14 +452,17 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for PathIterator<'a, S, T>
                     address: root,
                 };
 
-                self.poll_next(_cx)
+                self.next()
             }
             PathIteratorState::Iterating {
                 matched_key,
                 unmatched_key,
                 address,
             } => {
-                let node = merkle.get_node(*address)?;
+                let node = match merkle.get_node(*address) {
+                    Ok(node) => node,
+                    Err(e) => return Some(Err(e)),
+                };
 
                 let partial_path = match node.inner() {
                     NodeType::Branch(branch) => &branch.path,
@@ -481,19 +484,19 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for PathIterator<'a, S, T>
                 match comparison {
                     Ordering::Less | Ordering::Greater => {
                         self.state = PathIteratorState::Exhausted;
-                        Poll::Ready(Some(Ok((node_key, node))))
+                        Some(Ok((node_key, node)))
                     }
                     Ordering::Equal => match node.inner() {
                         NodeType::Branch(branch) => {
                             let Some(next_unmatched_key_nibble) = unmatched_key.next() else {
                                 self.state = PathIteratorState::Exhausted;
-                                return Poll::Ready(Some(Ok((node_key, node))));
+                                return Some(Ok((node_key, node)));
                             };
 
                             #[allow(clippy::indexing_slicing)]
                             let Some(child) = branch.children[next_unmatched_key_nibble as usize] else {
                                 self.state = PathIteratorState::Exhausted;
-                                return Poll::Ready(Some(Ok((node_key, node))));
+                                return Some(Ok((node_key, node)));
                             };
 
                             self.state = PathIteratorState::Iterating {
@@ -501,17 +504,17 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for PathIterator<'a, S, T>
                                 unmatched_key: unmatched_key.collect(),
                                 address: child,
                             };
-                            Poll::Ready(Some(Ok((node_key, node))))
+                            Some(Ok((node_key, node)))
                         }
                         NodeType::Leaf(_) => {
                             self.state = PathIteratorState::Exhausted;
-                            Poll::Ready(Some(Ok((node_key, node))))
+                            Some(Ok((node_key, node)))
                         }
                         NodeType::Extension(_) => unreachable!(),
                     },
                 }
             }
-            PathIteratorState::Exhausted => Poll::Ready(None),
+            PathIteratorState::Exhausted => None,
         }
     }
 }

@@ -25,6 +25,8 @@ pub use proof::{Proof, ProofError};
 pub use stream::MerkleKeyValueStream;
 pub use trie_hash::{TrieHash, TRIE_HASH_LEN};
 
+use self::stream::PathIterator;
+
 type NodeObjRef<'a> = shale::ObjRef<'a, Node>;
 type ParentRefs<'a> = Vec<(NodeObjRef<'a>, u8)>;
 type ParentAddresses = Vec<(DiskAddress, u8)>;
@@ -1671,23 +1673,31 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             return Ok(Proof(proofs));
         }
 
-        let root_node = self.get_node(root)?;
-
         let mut nodes = Vec::new();
 
-        let node = self.get_node_by_key_with_callbacks(
-            root_node,
-            key,
-            |node, _| nodes.push(node),
-            |_, _| {},
-        )?;
-
-        if let Some(node) = node {
-            nodes.push(node.as_ptr());
+        let path_iterator = PathIterator::new(Box::from(key.as_ref()), self, root);
+        for result in path_iterator {
+            match result {
+                Ok((_, node)) => {
+                    nodes.push(node.as_ptr());
+                }
+                Err(e) => return Err(e),
+            }
         }
 
+        // let node = self.get_node_by_key_with_callbacks(
+        //     root_node,
+        //     key,
+        //     |node, _| nodes.push(node),
+        //     |_, _| {},
+        // )?;
+
+        // if let Some(node) = node {
+        //     nodes.push(node.as_ptr());
+        // }
+
         // Get the hashes of the nodes.
-        for node in nodes.into_iter().skip(1) {
+        for node in nodes.into_iter() {
             let node = self.get_node(node)?;
             let encoded = <&[u8]>::clone(&node.get_encoded::<S>(self.store.as_ref()));
             let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(encoded).into();
