@@ -473,8 +473,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for PathIterator<'a, S, T>
                     .copied()
                     .collect();
 
-                let unmatched_key: NibblesIterator<'_, 0> =
-                    Nibbles::new(&unmatched_key).into_iter();
+                let unmatched_key: NibblesIterator<'_, 0> = Nibbles::new(unmatched_key).into_iter();
 
                 let (comparison, mut unmatched_key) =
                     compare_partial_path(partial_path.iter(), unmatched_key);
@@ -491,8 +490,8 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for PathIterator<'a, S, T>
                                 return Poll::Ready(Some(Ok((node_key, node))));
                             };
 
-                            let Some(child) = branch.children[next_unmatched_key_nibble as usize]
-                            else {
+                            #[allow(clippy::indexing_slicing)]
+                            let Some(child) = branch.children[next_unmatched_key_nibble as usize] else {
                                 self.state = PathIteratorState::Exhausted;
                                 return Poll::Ready(Some(Ok((node_key, node))));
                             };
