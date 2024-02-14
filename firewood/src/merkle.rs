@@ -1675,28 +1675,29 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
         let mut nodes = Vec::new();
 
-        let path_iterator = PathIterator::new(key.as_ref(), self, root);
-        for result in path_iterator {
-            match result {
-                Ok((node_key, node)) => {
-                    if node_key.starts_with(key.as_ref()) {
-                        nodes.push(node.as_ptr());
-                    }
-                }
-                Err(e) => return Err(e),
-            }
-        }
-
-        // let node = self.get_node_by_key_with_callbacks(
-        //     root_node,
-        //     key,
-        //     |node, _| nodes.push(node),
-        //     |_, _| {},
-        // )?;
-
-        // if let Some(node) = node {
-        //     nodes.push(node.as_ptr());
+        // let path_iterator = PathIterator::new(key.as_ref(), self, root);
+        // for result in path_iterator {
+        //     match result {
+        //         Ok((node_key, node)) => {
+        //             if node_key.starts_with(key.as_ref()) && node_key.len() <= key.as_ref().len() {
+        //                 nodes.push(node.as_ptr());
+        //             }
+        //         }
+        //         Err(e) => return Err(e),
+        //     }
         // }
+
+        let root_node = self.get_node(root)?;
+        let node = self.get_node_by_key_with_callbacks(
+            root_node,
+            key,
+            |node, _| nodes.push(node),
+            |_, _| {},
+        )?;
+
+        if let Some(node) = node {
+            nodes.push(node.as_ptr());
+        }
 
         // Get the hashes of the nodes.
         for node in nodes.into_iter() {

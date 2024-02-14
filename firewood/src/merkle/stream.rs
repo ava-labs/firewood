@@ -446,13 +446,15 @@ impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> Iterator for PathIterator<'a,
                     Ok(node) => node,
                     Err(e) => return Some(Err(e)),
                 };
-                let sentinel_node = match sentinel_node.inner() {
-                    NodeType::Branch(branch) => branch,
-                    _ => unreachable!("sentinel node is not a branch"), // TODO how to handle this?
-                };
-
-                let Some(root) = sentinel_node.children[0] else {
-                    return None;
+                let root = match sentinel_node.inner() {
+                    NodeType::Branch(branch) => match branch.children[0] {
+                        Some(root) => root,
+                        None => {
+                            self.state = PathIteratorState::Exhausted;
+                            return Some(Ok((Box::new([]), sentinel_node)));
+                        }
+                    },
+                    _ => unreachable!("sentinel node is not a branch"),
                 };
 
                 self.state = PathIteratorState::Iterating {
@@ -461,7 +463,7 @@ impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> Iterator for PathIterator<'a,
                     address: root,
                 };
 
-                self.next()
+                Some(Ok((Box::new([]), sentinel_node)))
             }
             PathIteratorState::Iterating {
                 matched_key,
