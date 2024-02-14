@@ -396,24 +396,30 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
     }
 }
 
-enum PathIteratorState {
-    New(Key),
+enum PathIteratorState<'a> {
+    // TODO should we have a New state? Or should the new constructor
+    // do the setup logic and set the state to Iterating?
+    New(&'a [u8]),
     Iterating {
+        // The key, as nibbles, of the node at [address], without the
+        // node's partial path (if any) at the end.
+        // Invariant: This node's parent's key is a prefix of the
+        // key we're seeking.
         matched_key: Vec<u8>,
-        unmatched_key: Vec<u8>,
+        unmatched_key: NibblesIterator<'a, 0>,
         address: DiskAddress,
     },
     Exhausted,
 }
 
-pub struct PathIterator<'a, S, T> {
-    state: PathIteratorState,
+pub struct PathIterator<'a, 'b, S, T> {
+    state: PathIteratorState<'b>,
     merkle: &'a Merkle<S, T>,
     merkle_root: DiskAddress,
 }
 
-impl<'a, S: ShaleStore<Node> + Send + Sync, T> PathIterator<'a, S, T> {
-    pub(super) fn new(key: Key, merkle: &'a Merkle<S, T>, merkle_root: DiskAddress) -> Self {
+impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> PathIterator<'a, 'b, S, T> {
+    pub(super) fn new(key: &'b [u8], merkle: &'a Merkle<S, T>, merkle_root: DiskAddress) -> Self {
         Self {
             state: PathIteratorState::New(key),
             merkle,
@@ -422,7 +428,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> PathIterator<'a, S, T> {
     }
 }
 
-impl<'a, S: ShaleStore<Node> + Send + Sync, T> Iterator for PathIterator<'a, S, T> {
+impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> Iterator for PathIterator<'a, 'b, S, T> {
     type Item = Result<(Key, NodeObjRef<'a>), MerkleError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -444,11 +450,14 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Iterator for PathIterator<'a, S, 
                     NodeType::Branch(branch) => branch,
                     _ => unreachable!("sentinel node is not a branch"), // TODO how to handle this?
                 };
-                let root = sentinel_node.children[0].unwrap(); // TODO how to handle this?
+
+                let Some(root) = sentinel_node.children[0] else {
+                    return None;
+                };
 
                 self.state = PathIteratorState::Iterating {
                     matched_key: vec![],
-                    unmatched_key: key.to_vec(),
+                    unmatched_key: Nibbles::new(key).into_iter(),
                     address: root,
                 };
 
@@ -476,9 +485,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Iterator for PathIterator<'a, S, 
                     .copied()
                     .collect();
 
-                let unmatched_key: NibblesIterator<'_, 0> = Nibbles::new(unmatched_key).into_iter();
-
-                let (comparison, mut unmatched_key) =
+                let (comparison, unmatched_key) =
                     compare_partial_path(partial_path.iter(), unmatched_key);
 
                 match comparison {
@@ -489,21 +496,27 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Iterator for PathIterator<'a, S, 
                     Ordering::Equal => match node.inner() {
                         NodeType::Branch(branch) => {
                             let Some(next_unmatched_key_nibble) = unmatched_key.next() else {
+                                // There's no more key to match. We're done.
                                 self.state = PathIteratorState::Exhausted;
                                 return Some(Ok((node_key, node)));
                             };
 
                             #[allow(clippy::indexing_slicing)]
                             let Some(child) = branch.children[next_unmatched_key_nibble as usize] else {
+                                // There's no child at the index of the
+                                // next nibble in the key. The node we're
+                                // seeking isn't in the trie.
                                 self.state = PathIteratorState::Exhausted;
                                 return Some(Ok((node_key, node)));
                             };
 
-                            self.state = PathIteratorState::Iterating {
-                                matched_key: node_key.to_vec(),
-                                unmatched_key: unmatched_key.collect(),
-                                address: child,
-                            };
+                            *matched_key = node_key
+                                .iter()
+                                .chain(once(&next_unmatched_key_nibble))
+                                .copied()
+                                .collect();
+                            *address = child;
+
                             Some(Ok((node_key, node)))
                         }
                         NodeType::Leaf(_) => {
@@ -597,6 +610,232 @@ mod tests {
         ) -> MerkleNodeStream<'_, S, T> {
             MerkleNodeStream::new(self, root, key)
         }
+    }
+
+    #[tokio::test]
+    async fn path_iterate_empty_merkle_empty_key() {
+        let merkle = create_test_merkle();
+        let root = merkle.init_root().unwrap();
+        let mut stream = PathIterator::new(&[], &merkle, root);
+        assert!(stream.next().is_none());
+    }
+
+    #[tokio::test]
+    async fn path_iterate_empty_merkle_non_empty_key() {
+        let merkle = create_test_merkle();
+        let root = merkle.init_root().unwrap();
+        let mut stream = PathIterator::new(&[1], &merkle, root);
+        assert!(stream.next().is_none());
+    }
+
+    #[tokio::test]
+    async fn path_iterate_singleton_merkle_empty_key() {
+        let mut merkle = create_test_merkle();
+        let root = merkle.init_root().unwrap();
+
+        merkle.insert(vec![0x13, 0x37], vec![0x42], root).unwrap();
+
+        let mut stream = PathIterator::new(&[], &merkle, root);
+        let (key, node) = match stream.next() {
+            Some(Ok((key, node))) => (key, node),
+            Some(Err(_)) => panic!("TODO how to handle this?"),
+            None => panic!("TODO how to handle this?"),
+        };
+
+        assert_eq!(key, vec![0x01, 0x03, 0x03, 0x07].into_boxed_slice());
+        assert_eq!(node.inner().as_leaf().unwrap().data, vec![0x42].into());
+
+        assert!(stream.next().is_none());
+    }
+
+    // TODO can we combine this with the test above?
+    #[tokio::test]
+    async fn path_iterate_singleton_merkle_non_empty_key_prefix() {
+        let mut merkle = create_test_merkle();
+        let root = merkle.init_root().unwrap();
+
+        merkle.insert(vec![0x13, 0x37], vec![0x42], root).unwrap();
+
+        let mut stream = PathIterator::new(&[0x13], &merkle, root);
+        let (key, node) = match stream.next() {
+            Some(Ok((key, node))) => (key, node),
+            Some(Err(_)) => panic!("TODO how to handle this?"),
+            None => panic!("TODO how to handle this?"),
+        };
+
+        assert_eq!(key, vec![0x01, 0x03, 0x03, 0x07].into_boxed_slice());
+        assert_eq!(node.inner().as_leaf().unwrap().data, vec![0x42].into());
+
+        assert!(stream.next().is_none());
+    }
+
+    #[tokio::test]
+    async fn path_iterate_non_singleton_merkle_seek_leaf() {
+        let (merkle, root) = created_populated_merkle();
+
+        let key = &[0x00, 0x00, 0x00, 0xFF];
+        let mut stream = PathIterator::new(key, &merkle, root);
+
+        let (key, node) = match stream.next() {
+            Some(Ok((key, node))) => (key, node),
+            Some(Err(_)) => panic!("TODO how to handle this?"),
+            None => panic!("TODO how to handle this?"),
+        };
+        assert_eq!(key, vec![0x00, 0x00].into_boxed_slice());
+        assert!(node.inner().as_branch().unwrap().value.is_none());
+
+        let (key, node) = match stream.next() {
+            Some(Ok((key, node))) => (key, node),
+            Some(Err(_)) => panic!("TODO how to handle this?"),
+            None => panic!("TODO how to handle this?"),
+        };
+        assert_eq!(
+            key,
+            vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00].into_boxed_slice()
+        );
+        assert_eq!(
+            node.inner().as_branch().unwrap().value,
+            Some(vec![0x00, 0x00, 0x00].into()),
+        );
+
+        let (key, node) = match stream.next() {
+            Some(Ok((key, node))) => (key, node),
+            Some(Err(_)) => panic!("TODO how to handle this?"),
+            None => panic!("TODO how to handle this?"),
+        };
+        assert_eq!(
+            key,
+            vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x0F].into_boxed_slice()
+        );
+        assert_eq!(
+            node.inner().as_leaf().unwrap().data,
+            vec![0x00, 0x00, 0x00, 0x0FF].into(),
+        );
+
+        assert!(stream.next().is_none());
+    }
+
+    #[tokio::test]
+    async fn path_iterate_non_singleton_merkle_seek_past_leaf() {
+        let (merkle, root) = created_populated_merkle();
+
+        let key = &[0x00, 0x00, 0x00, 0xFF, 0x00];
+        let mut stream = PathIterator::new(key, &merkle, root);
+
+        let (key, node) = match stream.next() {
+            Some(Ok((key, node))) => (key, node),
+            Some(Err(_)) => panic!("TODO how to handle this?"),
+            None => panic!("TODO how to handle this?"),
+        };
+        assert_eq!(key, vec![0x00, 0x00].into_boxed_slice());
+        assert!(node.inner().as_branch().unwrap().value.is_none());
+
+        let (key, node) = match stream.next() {
+            Some(Ok((key, node))) => (key, node),
+            Some(Err(_)) => panic!("TODO how to handle this?"),
+            None => panic!("TODO how to handle this?"),
+        };
+        assert_eq!(
+            key,
+            vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00].into_boxed_slice()
+        );
+        assert_eq!(
+            node.inner().as_branch().unwrap().value,
+            Some(vec![0x00, 0x00, 0x00].into()),
+        );
+
+        let (key, node) = match stream.next() {
+            Some(Ok((key, node))) => (key, node),
+            Some(Err(_)) => panic!("TODO how to handle this?"),
+            None => panic!("TODO how to handle this?"),
+        };
+        assert_eq!(
+            key,
+            vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x0F].into_boxed_slice()
+        );
+        assert_eq!(
+            node.inner().as_leaf().unwrap().data,
+            vec![0x00, 0x00, 0x00, 0x0FF].into(),
+        );
+
+        assert!(stream.next().is_none());
+    }
+
+    #[tokio::test]
+    async fn path_iterate_non_singleton_merkle_seek_alternative_leaf() {
+        let (merkle, root) = created_populated_merkle();
+
+        let key = &[0x00, 0x00, 0x00, 0xFE];
+        let mut stream = PathIterator::new(key, &merkle, root);
+
+        let (key, node) = match stream.next() {
+            Some(Ok((key, node))) => (key, node),
+            Some(Err(_)) => panic!("TODO how to handle this?"),
+            None => panic!("TODO how to handle this?"),
+        };
+        assert_eq!(key, vec![0x00, 0x00].into_boxed_slice());
+        assert!(node.inner().as_branch().unwrap().value.is_none());
+
+        let (key, node) = match stream.next() {
+            Some(Ok((key, node))) => (key, node),
+            Some(Err(_)) => panic!("TODO how to handle this?"),
+            None => panic!("TODO how to handle this?"),
+        };
+        assert_eq!(
+            key,
+            vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00].into_boxed_slice()
+        );
+        assert_eq!(
+            node.inner().as_branch().unwrap().value,
+            Some(vec![0x00, 0x00, 0x00].into()),
+        );
+
+        let (key, node) = match stream.next() {
+            Some(Ok((key, node))) => (key, node),
+            Some(Err(_)) => panic!("TODO how to handle this?"),
+            None => panic!("TODO how to handle this?"),
+        };
+        assert_eq!(
+            key,
+            vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x0F].into_boxed_slice()
+        );
+        assert_eq!(
+            node.inner().as_leaf().unwrap().data,
+            vec![0x00, 0x00, 0x00, 0x0FF].into(),
+        );
+
+        assert!(stream.next().is_none());
+    }
+    #[tokio::test]
+    async fn path_iterate_non_singleton_merkle_seek_branch() {
+        let (merkle, root) = created_populated_merkle();
+
+        let key = &[0x00, 0x00, 0x00];
+        let mut stream = PathIterator::new(key, &merkle, root);
+
+        let (key, node) = match stream.next() {
+            Some(Ok((key, node))) => (key, node),
+            Some(Err(_)) => panic!("TODO how to handle this?"),
+            None => panic!("TODO how to handle this?"),
+        };
+        assert_eq!(key, vec![0x00, 0x00].into_boxed_slice());
+        assert!(node.inner().as_branch().unwrap().value.is_none());
+
+        let (key, node) = match stream.next() {
+            Some(Ok((key, node))) => (key, node),
+            Some(Err(_)) => panic!("TODO how to handle this?"),
+            None => panic!("TODO how to handle this?"),
+        };
+        assert_eq!(
+            key,
+            vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00].into_boxed_slice()
+        );
+        assert_eq!(
+            node.inner().as_branch().unwrap().value,
+            Some(vec![0x00, 0x00, 0x00].into()),
+        );
+
+        assert!(stream.next().is_none());
     }
 
     #[tokio::test]

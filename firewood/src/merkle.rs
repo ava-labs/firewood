@@ -1675,11 +1675,13 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
         let mut nodes = Vec::new();
 
-        let path_iterator = PathIterator::new(Box::from(key.as_ref()), self, root);
+        let path_iterator = PathIterator::new(key.as_ref(), self, root);
         for result in path_iterator {
             match result {
-                Ok((_, node)) => {
-                    nodes.push(node.as_ptr());
+                Ok((node_key, node)) => {
+                    if node_key.starts_with(key.as_ref()) {
+                        nodes.push(node.as_ptr());
+                    }
                 }
                 Err(e) => return Err(e),
             }
