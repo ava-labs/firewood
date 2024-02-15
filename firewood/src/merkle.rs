@@ -1678,9 +1678,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         let nodes: Vec<DiskAddress> = path_iterator
             .map(|result| match result {
                 Ok((_, node)) => Ok(node.as_ptr()),
-                Err(e) => {
-                    return Err(e);
-                }
+                Err(e) => Err(e),
             })
             .collect::<Result<Vec<DiskAddress>, MerkleError>>()?;
 

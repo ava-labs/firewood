@@ -419,7 +419,12 @@ pub struct PathIterator<'a, 'b, S, T> {
 }
 
 impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> PathIterator<'a, 'b, S, T> {
-    pub(super) fn new(key: &'b [u8], merkle: &'a Merkle<S, T>, merkle_root: DiskAddress) -> Self {
+    pub(super) const fn new(
+        // TODO danlaine: Why did clippy tell me to make this const? Why is this const?
+        key: &'b [u8],
+        merkle: &'a Merkle<S, T>,
+        merkle_root: DiskAddress,
+    ) -> Self {
         Self {
             state: PathIteratorState::New(key),
             merkle,
