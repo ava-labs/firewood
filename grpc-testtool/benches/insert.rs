@@ -4,7 +4,8 @@
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use rand::{distributions::Alphanumeric, Rng, SeedableRng};
 use std::{
-    borrow::BorrowMut as _, cell::RefCell, env, fs::remove_dir_all, net::TcpStream, os::unix::process::CommandExt, path::PathBuf, thread::sleep, time::Duration
+    borrow::BorrowMut as _, cell::RefCell, env, fs::remove_dir_all, net::TcpStream,
+    os::unix::process::CommandExt, path::PathBuf, thread::sleep, time::Duration,
 };
 
 use rpc::rpcdb::{self, PutRequest, WriteBatchRequest};
@@ -78,11 +79,11 @@ fn reset_everything() {
 }
 
 /// Poll a function until it returns true
-/// 
+///
 /// Pass in a message and a closure to execute. Panics if it times out.
-/// 
+///
 /// # Arguments
-/// 
+///
 /// * `msg` - The message to render if it panics
 /// * `t` - The test closure
 fn retry<TEST: Fn() -> bool>(msg: &str, t: TEST) {
@@ -117,12 +118,12 @@ fn process_server_pids() -> Vec<u32> {
 }
 
 /// Finds the first process-server on the path, or in some predefined locations
-/// 
+///
 /// If the process-server isn't on the path, look for it in a target directory
 /// As a last resort, we check the parent in case you're running from the
 /// grpc-testtool directory
 fn process_server_path() -> Option<PathBuf> {
-    // 
+    //
     const OTHER_PLACES_TO_LOOK: &str = ":target/release:../target/release:.";
 
     env::var_os("PATH").and_then(|mut paths| {
@@ -142,7 +143,6 @@ fn process_server_path() -> Option<PathBuf> {
 
 /// The actual insert benchmark
 fn insert<const BATCHSIZE: usize>(criterion: &mut Criterion) {
-
     // We don't want to keep reconnecting to the DatabaseClient while running this
     // benchmark, so we stash it here. We can't initialize it here because we need
     // to do this in an async context.
