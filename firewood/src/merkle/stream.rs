@@ -813,6 +813,7 @@ mod tests {
 
         assert!(stream.next().is_none());
     }
+
     #[tokio::test]
     async fn path_iterate_non_singleton_merkle_seek_branch() {
         let (merkle, root) = created_populated_merkle();
