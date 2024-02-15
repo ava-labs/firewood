@@ -1673,7 +1673,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             return Ok(Proof(proofs));
         }
 
-        let path_iterator = PathIterator::new(key.as_ref(), self, root);
+        let path_iterator = PathIterator::new(key.as_ref(), self, root)?;
 
         let nodes: Vec<DiskAddress> = path_iterator
             .map(|result| match result {

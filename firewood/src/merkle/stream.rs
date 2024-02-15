@@ -397,9 +397,6 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 }
 
 enum PathIteratorState<'a> {
-    // TODO should we have a New state? Or should the new constructor
-    // do the setup logic and set the state to Iterating?
-    New(&'a [u8]),
     Iterating {
         // The key, as nibbles, of the node at [address], without the
         // node's partial path (if any) at the end.
@@ -415,21 +412,37 @@ enum PathIteratorState<'a> {
 pub struct PathIterator<'a, 'b, S, T> {
     state: PathIteratorState<'b>,
     merkle: &'a Merkle<S, T>,
-    merkle_root: DiskAddress,
 }
 
 impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> PathIterator<'a, 'b, S, T> {
-    pub(super) const fn new(
-        // TODO danlaine: Why did clippy tell me to make this const? Why is this const?
+    pub(super) fn new(
         key: &'b [u8],
         merkle: &'a Merkle<S, T>,
         merkle_root: DiskAddress,
-    ) -> Self {
-        Self {
-            state: PathIteratorState::New(key),
+    ) -> Result<Self, MerkleError> {
+        let sentinel_node = merkle.get_node(merkle_root)?;
+
+        let root = match sentinel_node.inner() {
+            NodeType::Branch(branch) => match branch.children[0] {
+                Some(root) => root,
+                None => {
+                    return Ok(Self {
+                        state: PathIteratorState::Exhausted,
+                        merkle,
+                    })
+                }
+            },
+            _ => unreachable!("sentinel node is not a branch"),
+        };
+
+        Ok(Self {
             merkle,
-            merkle_root,
-        }
+            state: PathIteratorState::Iterating {
+                matched_key: vec![],
+                unmatched_key: Nibbles::new(key).into_iter(),
+                address: root,
+            },
+        })
     }
 }
 
@@ -439,38 +452,9 @@ impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> Iterator for PathIterator<'a,
     fn next(&mut self) -> Option<Self::Item> {
         // destructuring is necessary here because we need mutable access to `state`
         // at the same time as immutable access to `merkle`.
-        let Self {
-            state,
-            merkle_root,
-            merkle,
-        } = &mut *self;
+        let Self { state, merkle } = &mut *self;
 
         match state {
-            PathIteratorState::New(key) => {
-                let sentinel_node = match merkle.get_node(*merkle_root) {
-                    Ok(node) => node,
-                    Err(e) => return Some(Err(e)),
-                };
-
-                let root = match sentinel_node.inner() {
-                    NodeType::Branch(branch) => match branch.children[0] {
-                        Some(root) => root,
-                        None => {
-                            self.state = PathIteratorState::Exhausted;
-                            return None;
-                        }
-                    },
-                    _ => unreachable!("sentinel node is not a branch"),
-                };
-
-                self.state = PathIteratorState::Iterating {
-                    matched_key: vec![],
-                    unmatched_key: Nibbles::new(key).into_iter(),
-                    address: root,
-                };
-
-                self.next()
-            }
             PathIteratorState::Iterating {
                 matched_key,
                 unmatched_key,
@@ -624,7 +608,7 @@ mod tests {
     async fn path_iterate_empty_merkle_empty_key() {
         let merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
-        let mut stream = PathIterator::new(&[], &merkle, root);
+        let mut stream = PathIterator::new(&[], &merkle, root).unwrap();
         assert!(stream.next().is_none());
     }
 
@@ -632,7 +616,7 @@ mod tests {
     async fn path_iterate_empty_merkle_non_empty_key() {
         let merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
-        let mut stream = PathIterator::new(&[1], &merkle, root);
+        let mut stream = PathIterator::new(&[1], &merkle, root).unwrap();
         assert!(stream.next().is_none());
     }
 
@@ -643,7 +627,7 @@ mod tests {
 
         merkle.insert(vec![0x13, 0x37], vec![0x42], root).unwrap();
 
-        let mut stream = PathIterator::new(&[], &merkle, root);
+        let mut stream = PathIterator::new(&[], &merkle, root).unwrap();
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
             Some(Err(_)) => panic!("TODO how to handle this?"),
@@ -664,7 +648,7 @@ mod tests {
 
         merkle.insert(vec![0x13, 0x37], vec![0x42], root).unwrap();
 
-        let mut stream = PathIterator::new(&[0x13], &merkle, root);
+        let mut stream = PathIterator::new(&[0x13], &merkle, root).unwrap();
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
             Some(Err(_)) => panic!("TODO how to handle this?"),
@@ -682,7 +666,7 @@ mod tests {
         let (merkle, root) = created_populated_merkle();
 
         let key = &[0x00, 0x00, 0x00, 0xFF];
-        let mut stream = PathIterator::new(key, &merkle, root);
+        let mut stream = PathIterator::new(key, &merkle, root).unwrap();
 
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
@@ -728,7 +712,7 @@ mod tests {
         let (merkle, root) = created_populated_merkle();
 
         let key = &[0x00, 0x00, 0x00, 0xFF, 0x00];
-        let mut stream = PathIterator::new(key, &merkle, root);
+        let mut stream = PathIterator::new(key, &merkle, root).unwrap();
 
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
@@ -774,7 +758,7 @@ mod tests {
         let (merkle, root) = created_populated_merkle();
 
         let key = &[0x00, 0x00, 0x00, 0xFE];
-        let mut stream = PathIterator::new(key, &merkle, root);
+        let mut stream = PathIterator::new(key, &merkle, root).unwrap();
 
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
@@ -820,7 +804,7 @@ mod tests {
         let (merkle, root) = created_populated_merkle();
 
         let key = &[0x00, 0x00, 0x00];
-        let mut stream = PathIterator::new(key, &merkle, root);
+        let mut stream = PathIterator::new(key, &merkle, root).unwrap();
 
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
