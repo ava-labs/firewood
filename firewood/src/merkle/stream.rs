@@ -400,8 +400,8 @@ enum PathIteratorState<'a> {
     Iterating {
         // The key, as nibbles, of the node at [address], without the
         // node's partial path (if any) at the end.
-        // Invariant: This node's parent's key is a prefix of the
-        // key we're seeking.
+        // Invariant: If this node has a parent, the parent's key is a
+        // prefix of the key we're seeking.
         matched_key: Vec<u8>,
         unmatched_key: NibblesIterator<'a, 0>,
         address: DiskAddress,
