@@ -1673,31 +1673,36 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             return Ok(Proof(proofs));
         }
 
-        let mut nodes = Vec::new();
+        let path_iterator = PathIterator::new(key.as_ref(), self, root);
 
-        // let path_iterator = PathIterator::new(key.as_ref(), self, root);
-        // for result in path_iterator {
-        //     match result {
-        //         Ok((node_key, node)) => {
-        //             if node_key.starts_with(key.as_ref()) && node_key.len() <= key.as_ref().len() {
-        //                 nodes.push(node.as_ptr());
-        //             }
-        //         }
-        //         Err(e) => return Err(e),
-        //     }
+        let nodes: Vec<DiskAddress> = path_iterator
+            .filter_map(|result| match result {
+                Ok((node_key, node))
+                    if node_key.starts_with(key.as_ref())
+                        && node_key.len() <= key.as_ref().len() =>
+                {
+                    Some(Ok(node.as_ptr()))
+                }
+                Ok(_) => None,
+                Err(e) => {
+                    return Some(Err(e));
+                }
+            })
+            .collect::<Result<Vec<DiskAddress>, MerkleError>>()?;
+
+        // let mut nodes = Vec::new();
+
+        // let root_node = self.get_node(root)?;
+        // let node = self.get_node_by_key_with_callbacks(
+        //     root_node,
+        //     key,
+        //     |node, _| nodes.push(node),
+        //     |_, _| {},
+        // )?;
+
+        // if let Some(node) = node {
+        //     nodes.push(node.as_ptr());
         // }
-
-        let root_node = self.get_node(root)?;
-        let node = self.get_node_by_key_with_callbacks(
-            root_node,
-            key,
-            |node, _| nodes.push(node),
-            |_, _| {},
-        )?;
-
-        if let Some(node) = node {
-            nodes.push(node.as_ptr());
-        }
 
         // Get the hashes of the nodes.
         for node in nodes.into_iter() {

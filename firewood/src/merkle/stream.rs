@@ -451,7 +451,7 @@ impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> Iterator for PathIterator<'a,
                         Some(root) => root,
                         None => {
                             self.state = PathIteratorState::Exhausted;
-                            return Some(Ok((Box::new([]), sentinel_node)));
+                            return None;
                         }
                     },
                     _ => unreachable!("sentinel node is not a branch"),
@@ -463,7 +463,7 @@ impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> Iterator for PathIterator<'a,
                     address: root,
                 };
 
-                Some(Ok((Box::new([]), sentinel_node)))
+                self.next()
             }
             PathIteratorState::Iterating {
                 matched_key,
