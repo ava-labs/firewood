@@ -610,51 +610,29 @@ mod tests {
         }
     }
 
+    #[test_case(&[]; "empty key")]
+    #[test_case(&[1]; "non-empty key")]
     #[tokio::test]
-    async fn path_iterate_empty_merkle_empty_key() {
+    async fn path_iterate_empty_merkle_empty_key(key: &[u8]) {
         let merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
-        let mut stream = PathIterator::new(&[], &merkle, root).unwrap();
+        let mut stream = PathIterator::new(key, &merkle, root).unwrap();
         assert!(stream.next().is_none());
     }
 
+    #[test_case(&[]; "empty key")]
+    #[test_case(&[13]; "prefix of singleton key")]
+    #[test_case(&[13, 37]; "match singleton key")]
+    #[test_case(&[13, 37,1]; "suffix of singleton key")]
+    #[test_case(&[255]; "no key nibbles match singleton key")]
     #[tokio::test]
-    async fn path_iterate_empty_merkle_non_empty_key() {
-        let merkle = create_test_merkle();
-        let root = merkle.init_root().unwrap();
-        let mut stream = PathIterator::new(&[1], &merkle, root).unwrap();
-        assert!(stream.next().is_none());
-    }
-
-    #[tokio::test]
-    async fn path_iterate_singleton_merkle_empty_key() {
+    async fn path_iterate_singleton_merkle(key: &[u8]) {
         let mut merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
 
         merkle.insert(vec![0x13, 0x37], vec![0x42], root).unwrap();
 
-        let mut stream = PathIterator::new(&[], &merkle, root).unwrap();
-        let (key, node) = match stream.next() {
-            Some(Ok((key, node))) => (key, node),
-            Some(Err(_)) => panic!("TODO how to handle this?"),
-            None => panic!("TODO how to handle this?"),
-        };
-
-        assert_eq!(key, vec![0x01, 0x03, 0x03, 0x07].into_boxed_slice());
-        assert_eq!(node.inner().as_leaf().unwrap().data, vec![0x42].into());
-
-        assert!(stream.next().is_none());
-    }
-
-    // TODO can we combine this with the test above?
-    #[tokio::test]
-    async fn path_iterate_singleton_merkle_non_empty_key_prefix() {
-        let mut merkle = create_test_merkle();
-        let root = merkle.init_root().unwrap();
-
-        merkle.insert(vec![0x13, 0x37], vec![0x42], root).unwrap();
-
-        let mut stream = PathIterator::new(&[0x13], &merkle, root).unwrap();
+        let mut stream = PathIterator::new(key, &merkle, root).unwrap();
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
             Some(Err(_)) => panic!("TODO how to handle this?"),
