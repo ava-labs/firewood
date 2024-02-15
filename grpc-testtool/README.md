@@ -25,5 +25,5 @@ To test the release version of firewood, just run `RUST_MIN_STACK=7000000 cargo 
 run it again, it will give you a report showing how much it sped up or slowed down.
 
 If you want to run this against merkledb, first build the process-server following the instructions in
-the merkledb-tester directory, then modify your PATH so that `process-server` from the merkledb
-executable is found first, then run `cargo bench`.
+the [merkledb-tester](https://github.com/ava-labs/merkledb-tester) directory, then modify your PATH so
+that `process-server` from the merkledbexecutable is found first, then run `cargo bench`.

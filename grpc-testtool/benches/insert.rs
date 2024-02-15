@@ -40,19 +40,22 @@ const MERKLEDB_OPTIONAL_CONFIGURATIONS: &str = r#"
 "#;
 
 /// Clean up anything that might be left from prior runs
-fn reset_everything() {
+fn stop_everything() -> Result<(), std::io::Error> {
     // kill all process servers
-    Command::new("killall")
-        .arg("process-server")
-        .output()
-        .expect("killall should work");
+    Command::new("killall").arg("process-server").output()?;
 
     // wait for them to die
-    retry("process server pids", || process_server_pids().is_empty());
+    retry("process-server wouldn't die", || {
+        process_server_pids().is_empty()
+    });
 
-    // remove test directory
-    remove_dir_all(TESTDIR).ok();
+    // remove test directory, ignoring any errors
+    let _ = remove_dir_all(TESTDIR);
 
+    Ok(())
+}
+fn reset_everything() -> Result<(), std::io::Error> {
+    stop_everything()?;
     // find the process server
     let process_server = process_server_path().expect("Can't find process-server on path");
     eprintln!("Using process-server {}", process_server.display());
@@ -73,9 +76,11 @@ fn reset_everything() {
     });
 
     // wait for it to accept connections
-    retry("accept", || {
+    retry("couldn't connect to process-server", || {
         TcpStream::connect(format!("localhost:{TESTPORT}")).is_ok()
     });
+
+    Ok(())
 }
 
 /// Poll a function until it returns true
@@ -121,9 +126,8 @@ fn process_server_pids() -> Vec<u32> {
 ///
 /// If the process-server isn't on the path, look for it in a target directory
 /// As a last resort, we check the parent in case you're running from the
-/// grpc-testtool directory
+/// grpc-testtool directory, or in the current directory
 fn process_server_path() -> Option<PathBuf> {
-    //
     const OTHER_PLACES_TO_LOOK: &str = ":target/release:../target/release:.";
 
     env::var_os("PATH").and_then(|mut paths| {
@@ -142,7 +146,9 @@ fn process_server_path() -> Option<PathBuf> {
 }
 
 /// The actual insert benchmark
-fn insert<const BATCHSIZE: usize>(criterion: &mut Criterion) {
+fn insert<const BATCHSIZE: usize, const KEYLEN: usize, const DATALEN: usize>(
+    criterion: &mut Criterion,
+) {
     // We don't want to keep reconnecting to the DatabaseClient while running this
     // benchmark, so we stash it here. We can't initialize it here because we need
     // to do this in an async context.
@@ -154,7 +160,7 @@ fn insert<const BATCHSIZE: usize>(criterion: &mut Criterion) {
 
     // clean up anything that was running before, and make sure we have an empty directory
     // to run the tests in
-    reset_everything();
+    reset_everything().expect("unable to reset everything");
 
     // We want a consistent seed, but we need different values for each batch, so we
     // reseed each time we compute more data from the next seed value upwards
@@ -164,9 +170,6 @@ fn insert<const BATCHSIZE: usize>(criterion: &mut Criterion) {
         BenchmarkId::new("insert", BATCHSIZE),
         &BATCHSIZE,
         |b, &s| {
-            const KEYLEN: usize = 32;
-            const DATALEN: usize = 32;
-
             b.to_async(&runtime).iter_batched(
                 || async {
                     let client: &Result<
@@ -224,12 +227,14 @@ fn insert<const BATCHSIZE: usize>(criterion: &mut Criterion) {
             )
         },
     );
+
+    stop_everything().expect("unable to stop the process server");
 }
 
 criterion_group! {
     name = benches;
     config = Criterion::default().sample_size(20);
-    targets = insert::<1>, insert::<20>, insert::<10000>
+    targets = insert::<1, 32, 32>, insert::<20, 32, 32>, insert::<10000, 32, 32>
 }
 
 criterion_main!(benches);
