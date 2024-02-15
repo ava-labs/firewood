@@ -645,103 +645,13 @@ mod tests {
         assert!(stream.next().is_none());
     }
 
+    #[test_case(&[0x00, 0x00, 0x00, 0xFF]; "leaf key")]
+    #[test_case(&[0x00, 0x00, 0x00, 0xF3]; "leaf sibling key")]
+    #[test_case(&[0x00, 0x00, 0x00, 0xFF, 0x01]; "past leaf key")]
     #[tokio::test]
-    async fn path_iterate_non_singleton_merkle_seek_leaf() {
+    async fn path_iterate_non_singleton_merkle_seek_leaf(key: &[u8]) {
         let (merkle, root) = created_populated_merkle();
 
-        let key = &[0x00, 0x00, 0x00, 0xFF];
-        let mut stream = PathIterator::new(key, &merkle, root).unwrap();
-
-        let (key, node) = match stream.next() {
-            Some(Ok((key, node))) => (key, node),
-            Some(Err(_)) => panic!("TODO how to handle this?"),
-            None => panic!("TODO how to handle this?"),
-        };
-        assert_eq!(key, vec![0x00, 0x00].into_boxed_slice());
-        assert!(node.inner().as_branch().unwrap().value.is_none());
-
-        let (key, node) = match stream.next() {
-            Some(Ok((key, node))) => (key, node),
-            Some(Err(_)) => panic!("TODO how to handle this?"),
-            None => panic!("TODO how to handle this?"),
-        };
-        assert_eq!(
-            key,
-            vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00].into_boxed_slice()
-        );
-        assert_eq!(
-            node.inner().as_branch().unwrap().value,
-            Some(vec![0x00, 0x00, 0x00].into()),
-        );
-
-        let (key, node) = match stream.next() {
-            Some(Ok((key, node))) => (key, node),
-            Some(Err(_)) => panic!("TODO how to handle this?"),
-            None => panic!("TODO how to handle this?"),
-        };
-        assert_eq!(
-            key,
-            vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x0F].into_boxed_slice()
-        );
-        assert_eq!(
-            node.inner().as_leaf().unwrap().data,
-            vec![0x00, 0x00, 0x00, 0x0FF].into(),
-        );
-
-        assert!(stream.next().is_none());
-    }
-
-    #[tokio::test]
-    async fn path_iterate_non_singleton_merkle_seek_past_leaf() {
-        let (merkle, root) = created_populated_merkle();
-
-        let key = &[0x00, 0x00, 0x00, 0xFF, 0x00];
-        let mut stream = PathIterator::new(key, &merkle, root).unwrap();
-
-        let (key, node) = match stream.next() {
-            Some(Ok((key, node))) => (key, node),
-            Some(Err(_)) => panic!("TODO how to handle this?"),
-            None => panic!("TODO how to handle this?"),
-        };
-        assert_eq!(key, vec![0x00, 0x00].into_boxed_slice());
-        assert!(node.inner().as_branch().unwrap().value.is_none());
-
-        let (key, node) = match stream.next() {
-            Some(Ok((key, node))) => (key, node),
-            Some(Err(_)) => panic!("TODO how to handle this?"),
-            None => panic!("TODO how to handle this?"),
-        };
-        assert_eq!(
-            key,
-            vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00].into_boxed_slice()
-        );
-        assert_eq!(
-            node.inner().as_branch().unwrap().value,
-            Some(vec![0x00, 0x00, 0x00].into()),
-        );
-
-        let (key, node) = match stream.next() {
-            Some(Ok((key, node))) => (key, node),
-            Some(Err(_)) => panic!("TODO how to handle this?"),
-            None => panic!("TODO how to handle this?"),
-        };
-        assert_eq!(
-            key,
-            vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x0F].into_boxed_slice()
-        );
-        assert_eq!(
-            node.inner().as_leaf().unwrap().data,
-            vec![0x00, 0x00, 0x00, 0x0FF].into(),
-        );
-
-        assert!(stream.next().is_none());
-    }
-
-    #[tokio::test]
-    async fn path_iterate_non_singleton_merkle_seek_alternative_leaf() {
-        let (merkle, root) = created_populated_merkle();
-
-        let key = &[0x00, 0x00, 0x00, 0xFE];
         let mut stream = PathIterator::new(key, &merkle, root).unwrap();
 
         let (key, node) = match stream.next() {
