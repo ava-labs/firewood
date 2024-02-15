@@ -398,10 +398,12 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
 enum PathIteratorState<'a> {
     Iterating {
-        // The key, as nibbles, of the node at [address], without the
-        // node's partial path (if any) at the end.
-        // Invariant: If this node has a parent, the parent's key is a
-        // prefix of the key we're seeking.
+        /// The key, as nibbles, of the node at [address], without the
+        /// node's partial path (if any) at the end.
+        /// Invariant: If this node has a parent, the parent's key is a
+        /// prefix of the key we're seeking.
+        /// Note the node at [address] may not have a key which is a
+        /// prefix of the key we're seeking.
         matched_key: Vec<u8>,
         unmatched_key: NibblesIterator<'a, 0>,
         address: DiskAddress,
@@ -409,6 +411,11 @@ enum PathIteratorState<'a> {
     Exhausted,
 }
 
+/// Iterates over all nodes on the path to a given key starting from the root.
+/// If the key isn't in the trie, the final returned node is either the node with the
+/// longest prefix of the key or the node that is where the key would be inserted if
+/// it were in the trie. Note this means the final returned node may not be a prefix
+/// of the key we're seeking.
 pub struct PathIterator<'a, 'b, S, T> {
     state: PathIteratorState<'b>,
     merkle: &'a Merkle<S, T>,
@@ -496,9 +503,8 @@ impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> Iterator for PathIterator<'a,
 
                             #[allow(clippy::indexing_slicing)]
                             let Some(child) = branch.children[next_unmatched_key_nibble as usize] else {
-                                // There's no child at the index of the
-                                // next nibble in the key. The node we're
-                                // seeking isn't in the trie.
+                                // There's no child at the index of the next nibble in the key.
+                                // The node we're seeking isn't in the trie.
                                 self.state = PathIteratorState::Exhausted;
                                 return Some(Ok((node_key, node)));
                             };
