@@ -451,6 +451,7 @@ impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> Iterator for PathIterator<'a,
                     Ok(node) => node,
                     Err(e) => return Some(Err(e)),
                 };
+
                 let root = match sentinel_node.inner() {
                     NodeType::Branch(branch) => match branch.children[0] {
                         Some(root) => root,
