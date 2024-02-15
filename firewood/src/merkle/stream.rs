@@ -455,6 +455,7 @@ impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> Iterator for PathIterator<'a,
         let Self { state, merkle } = &mut *self;
 
         match state {
+            PathIteratorState::Exhausted => None,
             PathIteratorState::Iterating {
                 matched_key,
                 unmatched_key,
@@ -519,7 +520,6 @@ impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> Iterator for PathIterator<'a,
                     },
                 }
             }
-            PathIteratorState::Exhausted => None,
         }
     }
 }
