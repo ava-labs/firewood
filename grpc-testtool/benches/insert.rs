@@ -159,7 +159,9 @@ fn insert<const BATCHSIZE: usize, const KEYLEN: usize, const DATALEN: usize>(
     // reseed each time we compute more data from the next seed value upwards
     let seed = RefCell::new(0);
 
-    let client = runtime.block_on(DatabaseClient::connect(TESTURI)).expect("connection succeeded");
+    let client = runtime
+        .block_on(DatabaseClient::connect(TESTURI))
+        .expect("connection succeeded");
 
     criterion.bench_with_input(
         BenchmarkId::new("insert", BATCHSIZE),
