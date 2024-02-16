@@ -420,9 +420,9 @@ pub struct PathIterator<'a, 'b, S, T> {
 
 impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> PathIterator<'a, 'b, S, T> {
     pub(super) fn new(
-        key: &'b [u8],
         merkle: &'a Merkle<S, T>,
         merkle_root: DiskAddress,
+        key: &'b [u8],
     ) -> Result<Self, MerkleError> {
         let sentinel_node = merkle.get_node(merkle_root)?;
 

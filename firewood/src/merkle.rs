@@ -1719,7 +1719,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         root: DiskAddress,
         key: &'b [u8],
     ) -> Result<PathIterator<'_, 'b, S, T>, MerkleError> {
-        PathIterator::new(key, self, root)
+        PathIterator::new(self, root, key)
     }
 
     pub(crate) fn key_value_iter(&self, root: DiskAddress) -> MerkleKeyValueStream<'_, S, T> {
