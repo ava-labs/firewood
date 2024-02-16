@@ -399,7 +399,7 @@ enum PathIteratorState<'a> {
         /// node's partial path (if any) at the end.
         /// Invariant: If this node has a parent, the parent's key is a
         /// prefix of the key we're seeking.
-        /// Note the node at [address] may not have a key which is a
+        /// Note the node at `address` may not have a key which is a
         /// prefix of the key we're seeking.
         matched_key: Vec<u8>,
         unmatched_key: NibblesIterator<'a, 0>,
