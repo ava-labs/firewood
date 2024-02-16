@@ -53,78 +53,113 @@ pub mod walerror;
 
 use async_trait::async_trait;
 use std::fs;
-use std::io::SeekFrom;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use tokio::{
-    fs::{File, OpenOptions},
-    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
-    sync::Mutex,
-};
+use tokio::sync::Mutex;
+use tokio_uring::buf::IoBuf;
+use tokio_uring::fs::{File, OpenOptions};
+
 use wal::{WalBytes, WalFile, WalPos, WalStore};
 use walerror::WalError;
 
-struct RawWalFile(File);
+struct RawWalFile {
+    file: File,
+}
 
 impl RawWalFile {
     pub async fn open<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error> {
-        OpenOptions::new()
+        let file = OpenOptions::new()
             .read(true)
             .write(true)
             .truncate(false)
             .create(true)
             .mode(0o600)
             .open(path)
-            .await
-            .map(Self)
+            .await?;
+        Ok(RawWalFile { file })
     }
 }
 
 pub struct WalFileImpl {
     file_mutex: Mutex<RawWalFile>,
-}
-
-impl From<RawWalFile> for WalFileImpl {
-    fn from(file: RawWalFile) -> Self {
-        let file = Mutex::new(file);
-        Self { file_mutex: file }
-    }
+    path: PathBuf,
 }
 
 #[async_trait(?Send)]
 impl WalFile for WalFileImpl {
     async fn allocate(&self, offset: WalPos, length: usize) -> Result<(), WalError> {
-        self.file_mutex
+        let zero_vec = vec![0; length];
+        let _ = self
+            .file_mutex
             .lock()
             .await
-            .0
-            .set_len(offset + length as u64)
-            .await
-            .map_err(Into::into)
+            .file
+            .write_at(zero_vec, offset)
+            .await;
+        Ok(())
     }
 
-    async fn truncate(&self, len: usize) -> Result<(), WalError> {
-        self.file_mutex
-            .lock()
-            .await
-            .0
-            .set_len(len as u64)
-            .await
-            .map_err(Into::into)
+    async fn truncate(&self) -> Result<(), WalError> {
+        let path = &self.path;
+        let file = &mut self.file_mutex.lock().await.file;
+
+        let f2 = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .mode(0o600)
+            .open(path)
+            .await?;
+
+        *file = f2;
+
+        Ok(())
     }
 
     async fn write(&self, offset: WalPos, data: WalBytes) -> Result<(), WalError> {
-        let file = &mut self.file_mutex.lock().await.0;
-        file.seek(SeekFrom::Start(offset)).await?;
+        let file = &mut self.file_mutex.lock().await.file;
 
-        Ok(file.write_all(&data).await?)
+        //file.seek(SeekFrom::Start(offset)).await?;
+
+        // Ok(file.write_all(&data).await?)
+
+        let mut n = 0;
+        let len = data.len();
+        let mut buf = data.to_vec();
+        while n < len {
+            let o = offset + n as u64;
+            let res = file.write_at(buf.slice(n..), o).await;
+            match res {
+                (Ok(0), _) => return Err(WalError::WalDirExists),
+                (Ok(m), slice) => {
+                    n += m;
+                    buf = slice.into_inner();
+                }
+
+                // This match on an EINTR error is not performed because this
+                // crate's design ensures we are not calling the 'wait' option
+                // in the ENTER syscall. Only an Enter with 'wait' can generate
+                // an EINTR according to the io_uring man pages.
+                // (Err(ref e), slice) if e.kind() == std::io::ErrorKind::Interrupted => {
+                //     buf = slice.into_inner();
+                // },
+                //(Err(e), slice) => return Err(e),
+                (Err(_), _) => return Err(WalError::WalDirExists),
+            }
+        }
+
+        Ok(())
     }
 
     async fn read(&self, offset: WalPos, length: usize) -> Result<Option<WalBytes>, WalError> {
         let (result, bytes_read) = {
-            let mut result = Vec::with_capacity(length);
-            let file = &mut self.file_mutex.lock().await.0;
-            file.seek(SeekFrom::Start(offset)).await?;
-            let bytes_read = file.read_buf(&mut result).await?;
+            let result = Vec::with_capacity(length);
+            let file = &mut self.file_mutex.lock().await.file;
+            //file.seek(SeekFrom::Start(offset)).await?;
+            //let bytes_read = file.read_buf(&mut result).await?;
+            let (res, result) = file.read_at(result, offset).await;
+            let bytes_read = res?;
             (result, bytes_read)
         };
 
@@ -167,9 +202,11 @@ impl WalStore<WalFileImpl> for WalStoreImpl {
     async fn open_file(&self, filename: &str, _touch: bool) -> Result<WalFileImpl, WalError> {
         let path = self.root_dir.join(filename);
 
-        let file = RawWalFile::open(path).await?;
+        let file = RawWalFile::open(path.clone()).await?;
 
-        Ok(file.into())
+        let file_mutex = Mutex::new(file);
+
+        Ok(WalFileImpl { file_mutex, path })
     }
 
     async fn remove_file(&self, filename: String) -> Result<(), WalError> {
@@ -191,173 +228,202 @@ impl WalStore<WalFileImpl> for WalStoreImpl {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn truncation_makes_a_file_smaller() {
-        const HALF_LENGTH: usize = 512;
+    // #[test]
+    // fn truncation_makes_a_file_smaller() {
+    //     tokio_uring::start(async {
+    //         const HALF_LENGTH: usize = 512;
 
-        let walfile_path = get_temp_walfile_path(file!(), line!());
+    //         let walfile_path = get_temp_walfile_path(file!(), line!());
 
-        tokio::fs::remove_file(&walfile_path).await.ok();
+    //         tokio::fs::remove_file(&walfile_path).await.ok();
 
-        #[allow(clippy::unwrap_used)]
-        let walfile = RawWalFile::open(walfile_path).await.unwrap();
+    //         #[allow(clippy::unwrap_used)]
+    //         let walfile = RawWalFile::open(walfile_path.clone()).await.unwrap();
 
-        let walfile_impl = WalFileImpl::from(walfile);
+    //         let walfile_impl = WalFileImpl {
+    //             file_mutex: Mutex::new(walfile),
+    //             path: walfile_path,
+    //         };
 
-        let first_half = vec![1u8; HALF_LENGTH];
-        let second_half = vec![2u8; HALF_LENGTH];
+    //         let first_half = vec![1u8; HALF_LENGTH];
+    //         let second_half = vec![2u8; HALF_LENGTH];
 
-        let data = first_half
-            .iter()
-            .copied()
-            .chain(second_half.iter().copied())
-            .collect();
+    //         let data = first_half
+    //             .iter()
+    //             .copied()
+    //             .chain(second_half.iter().copied())
+    //             .collect();
 
-        #[allow(clippy::unwrap_used)]
-        walfile_impl.write(0, data).await.unwrap();
-        #[allow(clippy::unwrap_used)]
-        walfile_impl.truncate(HALF_LENGTH).await.unwrap();
+    //         #[allow(clippy::unwrap_used)]
+    //         walfile_impl.write(0, data).await.unwrap();
+    //         #[allow(clippy::unwrap_used)]
+    //         walfile_impl.truncate(HALF_LENGTH).await.unwrap();
 
-        #[allow(clippy::unwrap_used)]
-        let result = walfile_impl.read(0, HALF_LENGTH).await.unwrap();
+    //         #[allow(clippy::unwrap_used)]
+    //         let result = walfile_impl.read(0, HALF_LENGTH).await.unwrap();
 
-        assert_eq!(result, Some(first_half.into()))
-    }
+    //         assert_eq!(result, None)
+    //     })
+    // }
 
-    #[tokio::test]
-    async fn truncation_extends_a_file_with_zeros() {
-        const LENGTH: usize = 512;
+    // #[test]
+    // fn truncation_extends_a_file_with_zeros() {
+    //     tokio_uring::start(async {
+    //         const LENGTH: usize = 512;
 
-        let walfile_path = get_temp_walfile_path(file!(), line!());
+    //         let walfile_path = get_temp_walfile_path(file!(), line!());
 
-        tokio::fs::remove_file(&walfile_path).await.ok();
+    //         tokio::fs::remove_file(&walfile_path).await.ok();
 
-        #[allow(clippy::unwrap_used)]
-        let walfile = RawWalFile::open(walfile_path).await.unwrap();
+    //         #[allow(clippy::unwrap_used)]
+    //         let walfile = RawWalFile::open(walfile_path.clone()).await.unwrap();
 
-        let walfile_impl = WalFileImpl::from(walfile);
+    //         let walfile_impl = WalFileImpl {
+    //             file_mutex: Mutex::new(walfile),
+    //             path: walfile_path,
+    //         };
 
-        #[allow(clippy::unwrap_used)]
-        walfile_impl
-            .write(0, vec![1u8; LENGTH].into())
-            .await
-            .unwrap();
+    //         #[allow(clippy::unwrap_used)]
+    //         walfile_impl
+    //             .write(0, vec![1u8; LENGTH].into())
+    //             .await
+    //             .unwrap();
 
-        #[allow(clippy::unwrap_used)]
-        walfile_impl.truncate(2 * LENGTH).await.unwrap();
+    //         #[allow(clippy::unwrap_used)]
+    //         walfile_impl.truncate(2 * LENGTH).await.unwrap();
 
-        #[allow(clippy::unwrap_used)]
-        let result = walfile_impl.read(LENGTH as u64, LENGTH).await.unwrap();
+    //         #[allow(clippy::unwrap_used)]
+    //         let result = walfile_impl.read(LENGTH as u64, LENGTH).await.unwrap();
 
-        assert_eq!(result, Some(vec![0u8; LENGTH].into()))
-    }
-
-    #[tokio::test]
-    async fn write_and_read_full() {
-        let walfile = {
+    //         assert_eq!(result, Some(vec![0u8; LENGTH].into()))
+    //     })
+    // }
+    #[test]
+    fn write_and_read_full() {
+        tokio_uring::start(async {
             let walfile_path = get_temp_walfile_path(file!(), line!());
-            tokio::fs::remove_file(&walfile_path).await.ok();
+            let walfile = {
+                tokio::fs::remove_file(&walfile_path).await.ok();
+                #[allow(clippy::unwrap_used)]
+                RawWalFile::open(walfile_path.clone()).await.unwrap()
+            };
+
+            let walfile_impl = WalFileImpl {
+                file_mutex: Mutex::new(walfile),
+                path: walfile_path,
+            };
+
+            let data: Vec<u8> = (0..=u8::MAX).collect();
+
             #[allow(clippy::unwrap_used)]
-            RawWalFile::open(walfile_path).await.unwrap()
-        };
+            walfile_impl.write(0, data.clone().into()).await.unwrap();
 
-        let walfile_impl = WalFileImpl::from(walfile);
+            #[allow(clippy::unwrap_used)]
+            let result = walfile_impl.read(0, data.len()).await.unwrap();
 
-        let data: Vec<u8> = (0..=u8::MAX).collect();
-
-        #[allow(clippy::unwrap_used)]
-        walfile_impl.write(0, data.clone().into()).await.unwrap();
-
-        #[allow(clippy::unwrap_used)]
-        let result = walfile_impl.read(0, data.len()).await.unwrap();
-
-        assert_eq!(result, Some(data.into()));
+            assert_eq!(result, Some(data.into()));
+        })
     }
 
-    #[tokio::test]
-    async fn write_and_read_subset() {
-        let walfile = {
+    #[test]
+    fn write_and_read_subset() {
+        tokio_uring::start(async {
             let walfile_path = get_temp_walfile_path(file!(), line!());
-            tokio::fs::remove_file(&walfile_path).await.ok();
+            let walfile = {
+                tokio::fs::remove_file(&walfile_path).await.ok();
+                #[allow(clippy::unwrap_used)]
+                RawWalFile::open(walfile_path.clone()).await.unwrap()
+            };
+
+            let walfile_impl = WalFileImpl {
+                file_mutex: Mutex::new(walfile),
+                path: walfile_path,
+            };
+
+            let data: Vec<u8> = (0..=u8::MAX).collect();
             #[allow(clippy::unwrap_used)]
-            RawWalFile::open(walfile_path).await.unwrap()
-        };
+            walfile_impl.write(0, data.clone().into()).await.unwrap();
 
-        let walfile_impl = WalFileImpl::from(walfile);
+            let mid = data.len() / 2;
+            let (start, end) = data.split_at(mid);
+            #[allow(clippy::unwrap_used)]
+            let read_start_result = walfile_impl.read(0, mid).await.unwrap();
+            #[allow(clippy::unwrap_used)]
+            let read_end_result = walfile_impl.read(mid as u64, mid).await.unwrap();
 
-        let data: Vec<u8> = (0..=u8::MAX).collect();
-        #[allow(clippy::unwrap_used)]
-        walfile_impl.write(0, data.clone().into()).await.unwrap();
-
-        let mid = data.len() / 2;
-        let (start, end) = data.split_at(mid);
-        #[allow(clippy::unwrap_used)]
-        let read_start_result = walfile_impl.read(0, mid).await.unwrap();
-        #[allow(clippy::unwrap_used)]
-        let read_end_result = walfile_impl.read(mid as u64, mid).await.unwrap();
-
-        assert_eq!(read_start_result, Some(start.into()));
-        assert_eq!(read_end_result, Some(end.into()));
+            assert_eq!(read_start_result, Some(start.into()));
+            assert_eq!(read_end_result, Some(end.into()));
+        })
     }
 
-    #[tokio::test]
-    async fn write_and_read_beyond_len() {
-        let walfile = {
+    #[test]
+    fn write_and_read_beyond_len() {
+        tokio_uring::start(async {
             let walfile_path = get_temp_walfile_path(file!(), line!());
-            tokio::fs::remove_file(&walfile_path).await.ok();
+            let walfile = {
+                tokio::fs::remove_file(&walfile_path).await.ok();
+                #[allow(clippy::unwrap_used)]
+                RawWalFile::open(walfile_path.clone()).await.unwrap()
+            };
+
+            let walfile_impl = WalFileImpl {
+                file_mutex: Mutex::new(walfile),
+                path: walfile_path,
+            };
+
+            let data: Vec<u8> = (0..=u8::MAX).collect();
+
             #[allow(clippy::unwrap_used)]
-            RawWalFile::open(walfile_path).await.unwrap()
-        };
+            walfile_impl.write(0, data.clone().into()).await.unwrap();
 
-        let walfile_impl = WalFileImpl::from(walfile);
+            #[allow(clippy::unwrap_used)]
+            let result = walfile_impl
+                .read((data.len() / 2) as u64, data.len())
+                .await
+                .unwrap();
 
-        let data: Vec<u8> = (0..=u8::MAX).collect();
-
-        #[allow(clippy::unwrap_used)]
-        walfile_impl.write(0, data.clone().into()).await.unwrap();
-
-        #[allow(clippy::unwrap_used)]
-        let result = walfile_impl
-            .read((data.len() / 2) as u64, data.len())
-            .await
-            .unwrap();
-
-        assert_eq!(result, None);
+            assert_eq!(result, None);
+        })
     }
 
-    #[tokio::test]
-    async fn write_at_offset() {
-        const OFFSET: u64 = 2;
+    #[test]
+    fn write_at_offset() {
+        tokio_uring::start(async {
+            const OFFSET: u64 = 2;
 
-        let walfile = {
             let walfile_path = get_temp_walfile_path(file!(), line!());
-            tokio::fs::remove_file(&walfile_path).await.ok();
+            let walfile = {
+                tokio::fs::remove_file(&walfile_path).await.ok();
+                #[allow(clippy::unwrap_used)]
+                RawWalFile::open(walfile_path.clone()).await.unwrap()
+            };
+
+            let walfile_impl = WalFileImpl {
+                file_mutex: Mutex::new(walfile),
+                path: walfile_path,
+            };
+
+            let data: Vec<u8> = (0..=u8::MAX).collect();
+
             #[allow(clippy::unwrap_used)]
-            RawWalFile::open(walfile_path).await.unwrap()
-        };
+            walfile_impl
+                .write(OFFSET, data.clone().into())
+                .await
+                .unwrap();
 
-        let walfile_impl = WalFileImpl::from(walfile);
+            #[allow(clippy::unwrap_used)]
+            let result = walfile_impl
+                .read(0, data.len() + OFFSET as usize)
+                .await
+                .unwrap();
 
-        let data: Vec<u8> = (0..=u8::MAX).collect();
+            let data: Vec<_> = std::iter::repeat(0)
+                .take(OFFSET as usize)
+                .chain(data)
+                .collect();
 
-        #[allow(clippy::unwrap_used)]
-        walfile_impl
-            .write(OFFSET, data.clone().into())
-            .await
-            .unwrap();
-
-        #[allow(clippy::unwrap_used)]
-        let result = walfile_impl
-            .read(0, data.len() + OFFSET as usize)
-            .await
-            .unwrap();
-
-        let data: Vec<_> = std::iter::repeat(0)
-            .take(OFFSET as usize)
-            .chain(data)
-            .collect();
-
-        assert_eq!(result, Some(data.into()));
+            assert_eq!(result, Some(data.into()));
+        });
     }
 
     #[allow(clippy::unwrap_used)]

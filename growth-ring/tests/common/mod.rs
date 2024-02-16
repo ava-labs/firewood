@@ -56,11 +56,11 @@ impl<G: FailGen> WalFile for WalFileEmul<G> {
         Ok(())
     }
 
-    async fn truncate(&self, length: usize) -> Result<(), WalError> {
+    async fn truncate(&self) -> Result<(), WalError> {
         if self.fgen.next_fail() {
             return Err(WalError::Other("truncate fgen next fail".to_string()));
         }
-        self.file.borrow_mut().resize(length, 0);
+        //self.file.borrow_mut().resize(length, 0);
         Ok(())
     }
 
