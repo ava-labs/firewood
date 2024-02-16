@@ -43,7 +43,7 @@ pub enum ProposalBase {
 }
 
 #[async_trait]
-impl crate::v2::api::Proposal for Proposal {
+impl api::Proposal for Proposal {
     type Proposal = Proposal;
 
     #[allow(clippy::unwrap_used)]

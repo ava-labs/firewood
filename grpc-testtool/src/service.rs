@@ -5,7 +5,9 @@ use firewood::db::{Db, DbConfig};
 use firewood::storage::WalConfig;
 use firewood::v2::{api::Db as _, api::Error};
 
+use std::fmt::Debug;
 use std::path::Path;
+use std::sync::atomic::AtomicU32;
 use std::{
     collections::HashMap,
     ops::Deref,
@@ -45,6 +47,35 @@ impl<T> IntoStatusResultExt<T> for Result<T, Error> {
 pub struct Database {
     db: Db,
     iterators: Arc<Mutex<Iterators>>,
+    views: Arc<Mutex<Views>>,
+}
+#[derive(Default, Debug)]
+struct Views {
+    map: HashMap<u32, View>,
+    next_id: AtomicU32,
+}
+
+impl Views {
+    fn insert(&mut self, view: View) -> u32 {
+        let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        self.map.insert(next_id, view);
+        next_id
+    }
+}
+
+enum View {
+    Historical(Arc<<firewood::db::Db as firewood::v2::api::Db>::Historical>),
+    Proposal(Arc<<firewood::db::Db as firewood::v2::api::Db>::Proposal>),
+}
+
+// TODO: We manually implement Debug since Proposal does not, but probably should
+impl Debug for View {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Historical(arg0) => f.debug_tuple("Historical").field(arg0).finish(),
+            Self::Proposal(_arg0) => f.debug_tuple("Proposal").finish(),
+        }
+    }
 }
 
 impl Database {
@@ -63,6 +94,7 @@ impl Database {
         Ok(Self {
             db,
             iterators: Default::default(),
+            views: Default::default(),
         })
     }
 }
