@@ -1679,10 +1679,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         let path_iterator = self.path_iter(root, key.as_ref())?;
 
         let nodes: Vec<DiskAddress> = path_iterator
-            .map(|result| match result {
-                Ok((_, node)) => Ok(node.as_ptr()),
-                Err(e) => Err(e),
-            })
+            .map(|result| result.map(|(_, node)| node.as_ptr()))
             .collect::<Result<Vec<DiskAddress>, MerkleError>>()?;
 
         // Get the hashes of the nodes.
