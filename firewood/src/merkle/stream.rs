@@ -633,8 +633,8 @@ mod tests {
         let mut stream = merkle.path_iter(sentinel_node, key);
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
-            Some(Err(_)) => panic!("TODO how to handle this?"),
-            None => panic!("TODO how to handle this?"),
+            Some(Err(e)) => panic!("{:?}", e),
+            None => panic!("unexpected end of iterator"),
         };
 
         assert_eq!(key, vec![0x01, 0x03, 0x03, 0x07].into_boxed_slice());
@@ -656,16 +656,16 @@ mod tests {
 
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
-            Some(Err(_)) => panic!("TODO how to handle this?"),
-            None => panic!("TODO how to handle this?"),
+            Some(Err(e)) => panic!("{:?}", e),
+            None => panic!("unexpected end of iterator"),
         };
         assert_eq!(key, vec![0x00, 0x00].into_boxed_slice());
         assert!(node.inner().as_branch().unwrap().value.is_none());
 
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
-            Some(Err(_)) => panic!("TODO how to handle this?"),
-            None => panic!("TODO how to handle this?"),
+            Some(Err(e)) => panic!("{:?}", e),
+            None => panic!("unexpected end of iterator"),
         };
         assert_eq!(
             key,
@@ -678,8 +678,8 @@ mod tests {
 
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
-            Some(Err(_)) => panic!("TODO how to handle this?"),
-            None => panic!("TODO how to handle this?"),
+            Some(Err(e)) => panic!("{:?}", e),
+            None => panic!("unexpected end of iterator"),
         };
         assert_eq!(
             key,
@@ -704,16 +704,16 @@ mod tests {
 
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
-            Some(Err(_)) => panic!("TODO how to handle this?"),
-            None => panic!("TODO how to handle this?"),
+            Some(Err(e)) => panic!("{:?}", e),
+            None => panic!("unexpected end of iterator"),
         };
         assert_eq!(key, vec![0x00, 0x00].into_boxed_slice());
         assert!(node.inner().as_branch().unwrap().value.is_none());
 
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
-            Some(Err(_)) => panic!("TODO how to handle this?"),
-            None => panic!("TODO how to handle this?"),
+            Some(Err(e)) => panic!("{:?}", e),
+            None => panic!("unexpected end of iterator"),
         };
         assert_eq!(
             key,
