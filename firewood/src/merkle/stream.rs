@@ -409,10 +409,16 @@ enum PathIteratorState<'a> {
 }
 
 /// Iterates over all nodes on the path to a given key starting from the root.
-/// If the key isn't in the trie, the final returned node is either the node with the
-/// longest prefix of the key or the node that is where the key would be inserted if
-/// it were in the trie. Note this means the final returned node may not be a prefix
-/// of the key we're seeking.
+/// All nodes are branch nodes except possibly the last, which may be a leaf.
+/// If the key is in the trie, the last node is the one at the given key.
+/// Otherwise, the last node proves the non-existence of the key.
+/// Specifically, if during the traversal, we encounter:
+/// * A branch node with no child at the index of the next nibble in the key,
+///   then the branch node proves the non-existence of the key.
+/// * A node (either branch or leaf) whose partial path doesn't match the
+///   remaining unmatched key, the node proves the non-existence of the key.
+/// Note that thi means that the last node's key isn't necessarily a prefix of
+/// the key we're traversing to.
 pub struct PathIterator<'a, 'b, S, T> {
     state: PathIteratorState<'b>,
     merkle: &'a Merkle<S, T>,
