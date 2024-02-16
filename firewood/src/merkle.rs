@@ -1676,23 +1676,16 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             return Ok(Proof(proofs));
         }
 
-        let root_node = self.get_node(root)?;
+        let sentinel_node = self.get_node(root)?;
 
-        let mut nodes = Vec::new();
+        let path_iterator = self.path_iter(sentinel_node, key.as_ref());
 
-        let node = self.get_node_by_key_with_callbacks(
-            root_node,
-            key,
-            |node, _| nodes.push(node),
-            |_, _| {},
-        )?;
-
-        if let Some(node) = node {
-            nodes.push(node.as_ptr());
-        }
+        let nodes: Vec<DiskAddress> = path_iterator
+            .map(|result| result.map(|(_, node)| node.as_ptr()))
+            .collect::<Result<Vec<DiskAddress>, MerkleError>>()?;
 
         // Get the hashes of the nodes.
-        for node in nodes.into_iter().skip(1) {
+        for node in nodes.into_iter() {
             let node = self.get_node(node)?;
             let encoded = <&[u8]>::clone(&node.get_encoded::<S>(self.store.as_ref()));
             let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(encoded).into();
