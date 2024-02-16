@@ -199,8 +199,8 @@ pub trait WalFile {
     async fn write(&self, offset: WalPos, data: WalBytes) -> Result<(), WalError>;
     /// Read data with offset. Return `Ok(None)` when it reaches EOF.
     async fn read(&self, offset: WalPos, length: usize) -> Result<Option<WalBytes>, WalError>;
-    /// Truncate a file to a specified length.
-    async fn truncate(&self, length: usize) -> Result<(), WalError>;
+    /// Truncate a file to 0 length.
+    async fn truncate(&self) -> Result<(), WalError>;
 }
 
 #[async_trait(?Send)]
@@ -262,7 +262,9 @@ impl<F: WalFile + 'static, S: WalStore<F>> WalFilePool<F, S> {
         cache_size: NonZeroUsize,
     ) -> Result<Self, WalError> {
         let header_file = store.open_file("HEAD", true).await?;
-        header_file.truncate(HEADER_SIZE).await?;
+        header_file.truncate().await?;
+        header_file.write(0, vec![0; HEADER_SIZE].into()).await?;
+
         Ok(WalFilePool {
             store,
             header_file,
@@ -277,12 +279,9 @@ impl<F: WalFile + 'static, S: WalStore<F>> WalFilePool<F, S> {
     }
 
     async fn read_header(&self) -> Result<Header, WalError> {
-        let bytes = self
-            .header_file
-            .read(0, HEADER_SIZE)
-            .await?
-            .ok_or(WalError::Other("EOF".to_string()))?;
-        let slice = cast_slice::<_, Header>(&bytes);
+        let bytes = self.header_file.read(0, HEADER_SIZE).await?;
+        let b = bytes.ok_or(WalError::Other("EOF".to_string()))?;
+        let slice = cast_slice::<_, Header>(&b);
         slice
             .first()
             .copied()
@@ -1312,7 +1311,7 @@ impl WalLoader {
                 }
             }
             if !skip_remove {
-                f.truncate(0).await?;
+                //f.truncate(0).await?;
                 file_pool.store.remove_file(fname).await?;
             }
         }
