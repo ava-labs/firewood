@@ -486,6 +486,11 @@ impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> Iterator for PathIterator<'a,
                         Some(Ok((node_key, node)))
                     }
                     Ordering::Equal => match node.inner() {
+                        NodeType::Extension(_) => unreachable!(),
+                        NodeType::Leaf(_) => {
+                            self.state = PathIteratorState::Exhausted;
+                            Some(Ok((node_key, node)))
+                        }
                         NodeType::Branch(branch) => {
                             let Some(next_unmatched_key_nibble) = unmatched_key.next() else {
                                 // There's no more key to match. We're done.
@@ -507,11 +512,6 @@ impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> Iterator for PathIterator<'a,
 
                             Some(Ok((node_key, node)))
                         }
-                        NodeType::Leaf(_) => {
-                            self.state = PathIteratorState::Exhausted;
-                            Some(Ok((node_key, node)))
-                        }
-                        NodeType::Extension(_) => unreachable!(),
                     },
                 }
             }
