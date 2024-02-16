@@ -1676,7 +1676,9 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             return Ok(Proof(proofs));
         }
 
-        let path_iterator = self.path_iter(root, key.as_ref())?;
+        let sentinel_node = self.get_node(root)?;
+
+        let path_iterator = self.path_iter(sentinel_node, key.as_ref());
 
         let nodes: Vec<DiskAddress> = path_iterator
             .map(|result| result.map(|(_, node)| node.as_ptr()))
@@ -1711,12 +1713,12 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         self.store.flush_dirty()
     }
 
-    pub fn path_iter<'b>(
-        &self,
-        root: DiskAddress,
+    pub fn path_iter<'a, 'b>(
+        &'a self,
+        sentinel_node: NodeObjRef<'a>,
         key: &'b [u8],
-    ) -> Result<PathIterator<'_, 'b, S, T>, MerkleError> {
-        PathIterator::new(self, root, key)
+    ) -> PathIterator<'_, 'b, S, T> {
+        PathIterator::new(self, sentinel_node, key)
     }
 
     pub(crate) fn key_value_iter(&self, root: DiskAddress) -> MerkleKeyValueStream<'_, S, T> {

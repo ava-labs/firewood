@@ -421,32 +421,30 @@ pub struct PathIterator<'a, 'b, S, T> {
 impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> PathIterator<'a, 'b, S, T> {
     pub(super) fn new(
         merkle: &'a Merkle<S, T>,
-        merkle_root: DiskAddress,
+        sentinel_node: NodeObjRef<'a>,
         key: &'b [u8],
-    ) -> Result<Self, MerkleError> {
-        let sentinel_node = merkle.get_node(merkle_root)?;
-
+    ) -> Self {
         let root = match sentinel_node.inner() {
             NodeType::Branch(branch) => match branch.children[0] {
                 Some(root) => root,
                 None => {
-                    return Ok(Self {
+                    return Self {
                         state: PathIteratorState::Exhausted,
                         merkle,
-                    })
+                    }
                 }
             },
             _ => unreachable!("sentinel node is not a branch"),
         };
 
-        Ok(Self {
+        Self {
             merkle,
             state: PathIteratorState::Iterating {
                 matched_key: vec![],
                 unmatched_key: Nibbles::new(key).into_iter(),
                 address: root,
             },
-        })
+        }
     }
 }
 
@@ -607,7 +605,8 @@ mod tests {
     async fn path_iterate_empty_merkle_empty_key(key: &[u8]) {
         let merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
-        let mut stream = merkle.path_iter(root, key).unwrap();
+        let sentinel_node = merkle.get_node(root).unwrap();
+        let mut stream = merkle.path_iter(sentinel_node, key);
         assert!(stream.next().is_none());
     }
 
@@ -623,7 +622,9 @@ mod tests {
 
         merkle.insert(vec![0x13, 0x37], vec![0x42], root).unwrap();
 
-        let mut stream = merkle.path_iter(root, key).unwrap();
+        let sentinel_node = merkle.get_node(root).unwrap();
+
+        let mut stream = merkle.path_iter(sentinel_node, key);
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
             Some(Err(_)) => panic!("TODO how to handle this?"),
@@ -643,7 +644,9 @@ mod tests {
     async fn path_iterate_non_singleton_merkle_seek_leaf(key: &[u8]) {
         let (merkle, root) = created_populated_merkle();
 
-        let mut stream = merkle.path_iter(root, key).unwrap();
+        let sentinel_node = merkle.get_node(root).unwrap();
+
+        let mut stream = merkle.path_iter(sentinel_node, key);
 
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
@@ -689,7 +692,9 @@ mod tests {
         let (merkle, root) = created_populated_merkle();
 
         let key = &[0x00, 0x00, 0x00];
-        let mut stream = merkle.path_iter(root, key).unwrap();
+
+        let sentinel_node = merkle.get_node(root).unwrap();
+        let mut stream = merkle.path_iter(sentinel_node, key);
 
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
