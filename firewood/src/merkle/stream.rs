@@ -476,7 +476,7 @@ impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> Iterator for PathIterator<'a,
                 let partial_path = match node.inner() {
                     NodeType::Branch(branch) => &branch.path,
                     NodeType::Leaf(leaf) => &leaf.path,
-                    _ => unreachable!("root node is not a branch"), // TODO how to handle this?
+                    _ => unreachable!("extension nodes shouldn't exist"),
                 };
 
                 let node_key: Box<[u8]> = matched_key
