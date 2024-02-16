@@ -25,14 +25,9 @@ pub use proof::{Proof, ProofError};
 pub use stream::MerkleKeyValueStream;
 pub use trie_hash::{TrieHash, TRIE_HASH_LEN};
 
-use self::stream::PathIterator;
-
 type NodeObjRef<'a> = shale::ObjRef<'a, Node>;
 type ParentRefs<'a> = Vec<(NodeObjRef<'a>, u8)>;
 type ParentAddresses = Vec<(DiskAddress, u8)>;
-
-type Key = Box<[u8]>;
-type Value = Vec<u8>;
 
 #[derive(Debug, Error)]
 pub enum MerkleError {
@@ -1676,16 +1671,23 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             return Ok(Proof(proofs));
         }
 
-        let sentinel_node = self.get_node(root)?;
+        let root_node = self.get_node(root)?;
 
-        let path_iterator = self.path_iter(sentinel_node, key.as_ref());
+        let mut nodes = Vec::new();
 
-        let nodes: Vec<DiskAddress> = path_iterator
-            .map(|result| result.map(|(_, node)| node.as_ptr()))
-            .collect::<Result<Vec<DiskAddress>, MerkleError>>()?;
+        let node = self.get_node_by_key_with_callbacks(
+            root_node,
+            key,
+            |node, _| nodes.push(node),
+            |_, _| {},
+        )?;
+
+        if let Some(node) = node {
+            nodes.push(node.as_ptr());
+        }
 
         // Get the hashes of the nodes.
-        for node in nodes.into_iter() {
+        for node in nodes.into_iter().skip(1) {
             let node = self.get_node(node)?;
             let encoded = <&[u8]>::clone(&node.get_encoded::<S>(self.store.as_ref()));
             let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(encoded).into();
@@ -1713,19 +1715,11 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         self.store.flush_dirty()
     }
 
-    pub fn path_iter<'a, 'b>(
-        &'a self,
-        sentinel_node: NodeObjRef<'a>,
-        key: &'b [u8],
-    ) -> PathIterator<'_, 'b, S, T> {
-        PathIterator::new(self, sentinel_node, key)
-    }
-
-    pub(crate) fn key_value_iter(&self, root: DiskAddress) -> MerkleKeyValueStream<'_, S, T> {
+    pub(crate) fn iter(&self, root: DiskAddress) -> MerkleKeyValueStream<'_, S, T> {
         MerkleKeyValueStream::new(self, root)
     }
 
-    pub(crate) fn key_value_iter_from_key(
+    pub(crate) fn iter_from(
         &self,
         root: DiskAddress,
         key: Box<[u8]>,
@@ -1756,10 +1750,8 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
         let mut stream = match first_key {
             // TODO: fix the call-site to force the caller to do the allocation
-            Some(key) => {
-                self.key_value_iter_from_key(root, key.as_ref().to_vec().into_boxed_slice())
-            }
-            None => self.key_value_iter(root),
+            Some(key) => self.iter_from(root, key.as_ref().to_vec().into_boxed_slice()),
+            None => self.iter(root),
         };
 
         // fetch the first key from the stream
