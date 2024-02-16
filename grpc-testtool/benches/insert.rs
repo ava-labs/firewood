@@ -13,8 +13,6 @@ pub use rpc::service::Database as DatabaseService;
 
 use rpcdb::database_client::DatabaseClient;
 
-use async_once_cell::OnceCell;
-
 use std::process::Command;
 
 /// The directory where the database will be created
@@ -149,11 +147,6 @@ fn process_server_path() -> Option<PathBuf> {
 fn insert<const BATCHSIZE: usize, const KEYLEN: usize, const DATALEN: usize>(
     criterion: &mut Criterion,
 ) {
-    // We don't want to keep reconnecting to the DatabaseClient while running this
-    // benchmark, so we stash it here. We can't initialize it here because we need
-    // to do this in an async context.
-    let client = OnceCell::new();
-
     // we save the tokio runtime because the client is only valid from within the
     // same runtime
     let runtime = tokio::runtime::Runtime::new().expect("tokio startup");
@@ -166,18 +159,14 @@ fn insert<const BATCHSIZE: usize, const KEYLEN: usize, const DATALEN: usize>(
     // reseed each time we compute more data from the next seed value upwards
     let seed = RefCell::new(0);
 
+    let client = runtime.block_on(DatabaseClient::connect(TESTURI)).expect("connection succeeded");
+
     criterion.bench_with_input(
         BenchmarkId::new("insert", BATCHSIZE),
         &BATCHSIZE,
         |b, &s| {
             b.to_async(&runtime).iter_batched(
-                || async {
-                    let client: &Result<
-                        DatabaseClient<tonic::transport::channel::Channel>,
-                        tonic::transport::Error,
-                    > = client.get_or_init(DatabaseClient::connect(TESTURI)).await;
-                    let client = client.as_ref().expect("connection succeeded");
-
+                || {
                     // seed a new random number generator to generate data
                     // each time we call this, we increase the seed by 1
                     // this gives us different but consistently different random data
@@ -215,8 +204,7 @@ fn insert<const BATCHSIZE: usize, const KEYLEN: usize, const DATALEN: usize>(
                     (client.clone(), req)
                 },
                 // this part is actually timed
-                |wbr| async {
-                    let (mut client, req) = wbr.await;
+                |(mut client, req)| async move {
                     client
                         .write_batch(req)
                         .await
