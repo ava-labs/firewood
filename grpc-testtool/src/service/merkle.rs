@@ -123,10 +123,10 @@ impl MerkleServiceTrait for super::Database {
         todo!()
     }
 
-    async fn view_release(
-        &self,
-        _req: Request<ViewReleaseRequest>,
-    ) -> Result<Response<()>, Status> {
-        todo!()
+    async fn view_release(&self, req: Request<ViewReleaseRequest>) -> Result<Response<()>, Status> {
+        let mut views = self.views.lock().await;
+        // we don't care if this works :/
+        views.delete(req.into_inner().view_id);
+        Ok(Response::new(()))
     }
 }

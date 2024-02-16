@@ -61,6 +61,10 @@ impl Views {
         self.map.insert(next_id, view);
         next_id
     }
+
+    fn delete(&mut self, view_id: u32) -> Option<View> {
+        self.map.remove(&view_id)
+    }
 }
 
 enum View {
