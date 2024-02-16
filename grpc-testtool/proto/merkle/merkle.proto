@@ -41,8 +41,7 @@ message NewViewRequest {
 }
 
 message NewViewResponse {
-  // If not given, the parent view is the current database revision.
-  optional uint32 view_id = 1;
+  uint32 view_id = 1;
 }
 
 message ViewHasRequest {
