@@ -19,6 +19,7 @@ use tonic::Status;
 
 pub mod database;
 pub mod db;
+pub mod merkle;
 pub mod process;
 
 trait IntoStatusResultExt<T> {

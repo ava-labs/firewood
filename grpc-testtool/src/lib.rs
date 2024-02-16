@@ -16,6 +16,11 @@ pub mod process_server {
     tonic::include_proto!("process");
 }
 
+pub mod merkle {
+    #![allow(clippy::unwrap_used, clippy::missing_const_for_fn)]
+    tonic::include_proto!("merkle");
+}
+
 pub mod service;
 
 pub use service::Database as DatabaseService;
