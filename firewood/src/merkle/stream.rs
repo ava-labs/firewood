@@ -174,7 +174,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
     // Invariant: `node`'s key is a prefix of `key`.
     let mut node = merkle.get_node(root_node)?;
 
-    // Invariant: [matched_key_nibbles] is the key of `node` at the start
+    // Invariant: `matched_key_nibbles` is the key of `node` at the start
     // of each loop iteration.
     let mut matched_key_nibbles = vec![];
 
@@ -395,7 +395,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
 
 enum PathIteratorState<'a> {
     Iterating {
-        /// The key, as nibbles, of the node at [address], without the
+        /// The key, as nibbles, of the node at `address`, without the
         /// node's partial path (if any) at the end.
         /// Invariant: If this node has a parent, the parent's key is a
         /// prefix of the key we're seeking.
