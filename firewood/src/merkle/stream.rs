@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::{node::Node, BranchNode, Merkle, MerkleError, NodeObjRef, NodeType};
+use super::{node::Node, BranchNode, Key, Merkle, MerkleError, NodeObjRef, NodeType, Value};
 use crate::{
     nibbles::{Nibbles, NibblesIterator},
     shale::{DiskAddress, ShaleStore},
@@ -10,9 +10,6 @@ use crate::{
 use futures::{stream::FusedStream, Stream, StreamExt};
 use std::task::Poll;
 use std::{cmp::Ordering, iter::once};
-
-type Key = Box<[u8]>;
-type Value = Vec<u8>;
 
 /// Represents an ongoing iteration over a node and its children.
 enum IterationNode<'a> {

@@ -31,6 +31,9 @@ type NodeObjRef<'a> = shale::ObjRef<'a, Node>;
 type ParentRefs<'a> = Vec<(NodeObjRef<'a>, u8)>;
 type ParentAddresses = Vec<(DiskAddress, u8)>;
 
+type Key = Box<[u8]>;
+type Value = Vec<u8>;
+
 #[derive(Debug, Error)]
 pub enum MerkleError {
     #[error("merkle datastore error: {0:?}")]
@@ -1673,7 +1676,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             return Ok(Proof(proofs));
         }
 
-        let path_iterator = PathIterator::new(key.as_ref(), self, root)?;
+        let path_iterator = self.path_iter_by_key(root, key.as_ref())?;
 
         let nodes: Vec<DiskAddress> = path_iterator
             .map(|result| match result {
@@ -1709,6 +1712,14 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
     pub fn flush_dirty(&self) -> Option<()> {
         self.store.flush_dirty()
+    }
+
+    pub fn path_iter_by_key<'b>(
+        &self,
+        root: DiskAddress,
+        key: &'b [u8],
+    ) -> Result<PathIterator<'_, 'b, S, T>, MerkleError> {
+        PathIterator::new(key, self, root)
     }
 
     pub(crate) fn key_value_iter(&self, root: DiskAddress) -> MerkleKeyValueStream<'_, S, T> {
