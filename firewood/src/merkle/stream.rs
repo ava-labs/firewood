@@ -607,7 +607,7 @@ mod tests {
     async fn path_iterate_empty_merkle_empty_key(key: &[u8]) {
         let merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
-        let mut stream = PathIterator::new(key, &merkle, root).unwrap();
+        let mut stream = merkle.path_iter(root, key).unwrap();
         assert!(stream.next().is_none());
     }
 
@@ -623,7 +623,7 @@ mod tests {
 
         merkle.insert(vec![0x13, 0x37], vec![0x42], root).unwrap();
 
-        let mut stream = PathIterator::new(key, &merkle, root).unwrap();
+        let mut stream = merkle.path_iter(root, key).unwrap();
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
             Some(Err(_)) => panic!("TODO how to handle this?"),
@@ -643,7 +643,7 @@ mod tests {
     async fn path_iterate_non_singleton_merkle_seek_leaf(key: &[u8]) {
         let (merkle, root) = created_populated_merkle();
 
-        let mut stream = PathIterator::new(key, &merkle, root).unwrap();
+        let mut stream = merkle.path_iter(root, key).unwrap();
 
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
@@ -689,7 +689,7 @@ mod tests {
         let (merkle, root) = created_populated_merkle();
 
         let key = &[0x00, 0x00, 0x00];
-        let mut stream = PathIterator::new(key, &merkle, root).unwrap();
+        let mut stream = merkle.path_iter(root, key).unwrap();
 
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
