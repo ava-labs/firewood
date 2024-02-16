@@ -479,14 +479,11 @@ impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> Iterator for PathIterator<'a,
                     _ => unreachable!("extension nodes shouldn't exist"),
                 };
 
-                let node_key: Box<[u8]> = matched_key
-                    .iter()
-                    .chain(partial_path.iter())
-                    .copied()
-                    .collect();
-
                 let (comparison, unmatched_key) =
                     compare_partial_path(partial_path.iter(), unmatched_key);
+
+                matched_key.extend(partial_path.iter());
+                let node_key = matched_key.clone().into_boxed_slice();
 
                 match comparison {
                     Ordering::Less | Ordering::Greater => {
@@ -509,11 +506,8 @@ impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> Iterator for PathIterator<'a,
                                 return Some(Ok((node_key, node)));
                             };
 
-                            *matched_key = node_key
-                                .iter()
-                                .chain(once(&next_unmatched_key_nibble))
-                                .copied()
-                                .collect();
+                            matched_key.push(next_unmatched_key_nibble);
+
                             *address = child;
 
                             Some(Ok((node_key, node)))
