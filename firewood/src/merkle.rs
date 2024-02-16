@@ -1676,7 +1676,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             return Ok(Proof(proofs));
         }
 
-        let path_iterator = self.path_iter_by_key(root, key.as_ref())?;
+        let path_iterator = self.path_iter(root, key.as_ref())?;
 
         let nodes: Vec<DiskAddress> = path_iterator
             .map(|result| match result {
@@ -1714,7 +1714,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         self.store.flush_dirty()
     }
 
-    pub fn path_iter_by_key<'b>(
+    pub fn path_iter<'b>(
         &self,
         root: DiskAddress,
         key: &'b [u8],
