@@ -1504,7 +1504,21 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         node_ref: NodeObjRef<'a>,
         key: K,
     ) -> Result<Option<NodeObjRef<'a>>, MerkleError> {
-        self.get_node_by_key_with_callbacks(node_ref, key, |_, _| {}, |_, _| {})
+        let key = key.as_ref();
+        let path_iter = self.path_iter(node_ref, key);
+
+        match path_iter.last() {
+            Some(Ok((node_key, node))) => {
+                let key_nibbles = Nibbles::<0>::new(key).into_iter();
+                if key_nibbles.eq(node_key.iter().copied()) {
+                    Ok(Some(node))
+                } else {
+                    Ok(None)
+                }
+            }
+            None => Ok(None),
+            Some(Err(e)) => Err(e),
+        }
     }
 
     fn get_node_and_parents_by_key<'a, K: AsRef<[u8]>>(
