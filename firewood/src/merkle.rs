@@ -1508,6 +1508,8 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         let path_iter = self.path_iter(node_ref, key);
 
         match path_iter.last() {
+            None => Ok(None),
+            Some(Err(e)) => Err(e),
             Some(Ok((node_key, node))) => {
                 let key_nibbles = Nibbles::<0>::new(key).into_iter();
                 if key_nibbles.eq(node_key.iter().copied()) {
@@ -1516,8 +1518,6 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                     Ok(None)
                 }
             }
-            None => Ok(None),
-            Some(Err(e)) => Err(e),
         }
     }
 
@@ -1692,15 +1692,14 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
         let sentinel_node = self.get_node(root)?;
 
-        let path_iterator = self.path_iter(sentinel_node, key.as_ref());
+        let path_iter = self.path_iter(sentinel_node, key.as_ref());
 
-        let nodes: Vec<DiskAddress> = path_iterator
-            .map(|result| result.map(|(_, node)| node.as_ptr()))
-            .collect::<Result<Vec<DiskAddress>, MerkleError>>()?;
+        let nodes = path_iter
+            .map(|result| result.map(|(_, node)| node))
+            .collect::<Result<Vec<NodeObjRef>, MerkleError>>()?;
 
         // Get the hashes of the nodes.
         for node in nodes.into_iter() {
-            let node = self.get_node(node)?;
             let encoded = <&[u8]>::clone(&node.get_encoded::<S>(self.store.as_ref()));
             let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(encoded).into();
             proofs.insert(hash, encoded.to_vec());
