@@ -4,6 +4,8 @@ package merkle;
 
 import "google/protobuf/empty.proto";
 
+// Methods on this service return status code NOT_FOUND if a requested
+// view, iterator or root hash is not found.
 service Merkle {
   rpc NewProposal(NewProposalRequest) returns (NewProposalResponse);
   rpc ProposalCommit(ProposalCommitRequest) returns (google.protobuf.Empty);
@@ -14,6 +16,7 @@ service Merkle {
   rpc ViewHas(ViewHasRequest) returns (ViewHasResponse);
   rpc ViewGet(ViewGetRequest) returns (ViewGetResponse);
   rpc ViewNewIteratorWithStartAndPrefix(ViewNewIteratorWithStartAndPrefixRequest) returns (ViewNewIteratorWithStartAndPrefixResponse);
+  // Returns status code NOT_FOUND when the iterator is done.
   rpc IteratorNext(IteratorNextRequest) returns (IteratorNextResponse);
   rpc IteratorError(IteratorErrorRequest) returns (google.protobuf.Empty);
   // Iterator can't be used (even to check error) after release.
