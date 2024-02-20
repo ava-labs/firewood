@@ -21,10 +21,7 @@ message NewProposalRequest {
   // If not given, the parent view is the current database revision.
   optional uint32 parent_view_id = 1;
   repeated PutRequest puts = 2;
-<<<<<<< HEAD
-=======
   // The keys being deleted.
->>>>>>> main
   repeated bytes deletes = 3;
 }
 
