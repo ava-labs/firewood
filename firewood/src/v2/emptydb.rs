@@ -88,7 +88,10 @@ pub struct EmptyStreamer;
 impl Stream for EmptyStreamer {
     type Item = Result<(Box<[u8]>, Vec<u8>), Error>;
 
-    fn poll_next(self: std::pin::Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
         std::task::Poll::Ready(None)
     }
 }

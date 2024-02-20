@@ -302,7 +302,6 @@ impl api::DbView for Proposal {
         todo!();
     }
 
-
     #[allow(refining_impl_trait)]
     async fn iter<K: KeyType, V>(
         &self,

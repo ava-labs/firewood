@@ -327,7 +327,9 @@ impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
     ) -> Result<MerkleKeyValueStream<S, Bincode>, api::Error> {
         Ok(match first_key {
             None => self.merkle.key_value_iter(self.header.kv_root),
-            Some(key) => self.merkle.key_value_iter_from_key(self.header.kv_root, key.as_ref().into()),
+            Some(key) => self
+                .merkle
+                .key_value_iter_from_key(self.header.kv_root, key.as_ref().into()),
         })
     }
 }

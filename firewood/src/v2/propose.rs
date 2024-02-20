@@ -5,7 +5,11 @@ use std::{collections::BTreeMap, fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
 
-use crate::{merkle::{Bincode, MerkleKeyValueStream, Node, Proof}, shale::{cached::DynamicMem, compact::CompactSpace}, v2::api};
+use crate::{
+    merkle::{Bincode, MerkleKeyValueStream, Node, Proof},
+    shale::{cached::DynamicMem, compact::CompactSpace},
+    v2::api,
+};
 
 use super::api::{KeyType, ValueType};
 

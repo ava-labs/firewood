@@ -175,8 +175,7 @@ pub trait DbView {
     async fn iter<K: KeyType, V: ValueType>(
         &self,
         first_key: Option<K>,
-    )
-        -> Result<impl Stream<Item = Result<(Box<[u8]>, Vec<u8>), Error>>, Error>;
+    ) -> Result<impl Stream<Item = Result<(Box<[u8]>, Vec<u8>), Error>>, Error>;
 }
 
 /// A proposal for a new revision of the database.
