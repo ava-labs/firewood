@@ -144,13 +144,13 @@ impl<T: Storable> Obj<T> {
         trace!("flushing {:?}", self.as_ptr());
         if self.as_ptr() == DiskAddress(NonZeroUsize::new(75369)) {
             backtrace::trace(|frame| {
-                let ip = frame.ip();
-                let symbol_address = frame.symbol_address();
+                let _ip = frame.ip();
+                let _symbol_address = frame.symbol_address();
 
                 // Resolve this instruction pointer to a symbol name
                 backtrace::resolve_frame(frame, |symbol| {
-                    if let (Some(name), Some(filename)) = (symbol.name(), symbol.filename()) {
-                        trace!("| {name} at {}", filename.display());
+                    if let (Some(_name), Some(_filename)) = (symbol.name(), symbol.filename()) {
+                        trace!("| {_name} at {}", _filename.display());
                     }
                 });
 

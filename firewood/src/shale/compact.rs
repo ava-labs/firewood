@@ -664,8 +664,8 @@ impl<T: Storable + Clone + Debug + 'static + PartialEq, M: CachedStore + Send + 
         if let Some(result) = self
             .parent_caches
             .iter()
-            .inspect(|&f| {
-                trace!("[{:p}] [looking in secondary {:p}]", cache, f);
+            .inspect(|&_f| {
+                trace!("[{:p}] [looking in secondary {:p}]", cache, _f);
             })
             .find_map(|cache| cache.peek_clone(ptr).transpose())
         {

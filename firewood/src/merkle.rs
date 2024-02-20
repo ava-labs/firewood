@@ -115,7 +115,7 @@ impl<S: ShaleStore<Node>, T> Merkle<S, T> {
     pub fn get_node(&self, ptr: DiskAddress) -> Result<NodeObjRef, MerkleError> {
         self.store
             .get_item(ptr)
-            .map(|(base, history)| base)
+            .map(|(base, _history)| base)
             .map_err(Into::into)
     }
 
