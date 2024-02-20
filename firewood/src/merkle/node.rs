@@ -279,7 +279,7 @@ impl Node {
             }
             if self.root_hash.get().is_none() {
                 if let Some(hash) = other.root_hash.get() {
-                    let _ = self.root_hash.set(hash.clone());
+                    let _ = self.root_hash.set(*hash);
                 }
             }
         }

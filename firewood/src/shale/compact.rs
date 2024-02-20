@@ -743,7 +743,6 @@ impl<T: Storable + Clone + Debug + 'static + PartialEq, M: CachedStore + Send + 
 mod tests {
     use sha3::Digest;
 
-    use crate::merkle::NodeStore;
     use crate::shale::{self, cached::DynamicMem, ObjCache};
 
     use super::*;
