@@ -7,6 +7,7 @@ use super::{
 };
 use crate::merkle::Proof;
 use async_trait::async_trait;
+use futures::Stream;
 use std::sync::Arc;
 
 /// An EmptyDb is a simple implementation of api::Db
@@ -74,6 +75,21 @@ impl DbView for HistoricalImpl {
         _limit: Option<usize>,
     ) -> Result<Option<RangeProof<Vec<u8>, Vec<u8>>>, Error> {
         Ok(None)
+    }
+
+    #[allow(refining_impl_trait)]
+    async fn iter<K: KeyType, V>(&self, _first_key: Option<K>) -> Result<EmptyStreamer, Error> {
+        todo!()
+    }
+}
+
+pub struct EmptyStreamer;
+
+impl Stream for EmptyStreamer {
+    type Item = Result<(Box<[u8]>, Vec<u8>), Error>;
+
+    fn poll_next(self: std::pin::Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
+        std::task::Poll::Ready(None)
     }
 }
 

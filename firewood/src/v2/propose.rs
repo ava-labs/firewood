@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
 
-use crate::{merkle::Proof, v2::api};
+use crate::{merkle::{Bincode, MerkleKeyValueStream, Node, Proof}, shale::{cached::DynamicMem, compact::CompactSpace}, v2::api};
 
 use super::api::{KeyType, ValueType};
 
@@ -135,6 +135,14 @@ impl<T: api::DbView + Send + Sync> api::DbView for Proposal<T> {
         _limit: Option<usize>,
     ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>>>, api::Error> {
         todo!();
+    }
+
+    #[allow(refining_impl_trait)]
+    async fn iter<K: KeyType, V>(
+        &self,
+        _first_key: Option<K>,
+    ) -> Result<MerkleKeyValueStream<CompactSpace<Node, DynamicMem>, Bincode>, api::Error> {
+        todo!()
     }
 }
 

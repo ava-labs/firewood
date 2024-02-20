@@ -4,6 +4,7 @@
 use crate::merkle::MerkleError;
 pub use crate::merkle::Proof;
 use async_trait::async_trait;
+use futures::Stream;
 use std::{fmt::Debug, sync::Arc};
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
@@ -170,6 +171,12 @@ pub trait DbView {
         last_key: Option<K>,
         limit: Option<usize>,
     ) -> Result<Option<RangeProof<Vec<u8>, Vec<u8>>>, Error>;
+
+    async fn iter<K: KeyType, V: ValueType>(
+        &self,
+        first_key: Option<K>,
+    )
+        -> Result<impl Stream<Item = Result<(Box<[u8]>, Vec<u8>), Error>>, Error>;
 }
 
 /// A proposal for a new revision of the database.

@@ -5,7 +5,9 @@ use super::{
     get_sub_universe_from_deltas, Db, DbConfig, DbError, DbHeader, DbInner, DbRev, DbRevInner,
     MutStore, SharedStore, Universe, MERKLE_META_SPACE, MERKLE_PAYLOAD_SPACE, ROOT_HASH_SPACE,
 };
-use crate::merkle::Proof;
+use crate::merkle::{Bincode, MerkleKeyValueStream, Node, Proof};
+use crate::shale::cached::DynamicMem;
+use crate::shale::compact::CompactSpace;
 use crate::shale::CachedStore;
 use crate::{
     merkle::{TrieHash, TRIE_HASH_LEN},
@@ -298,5 +300,14 @@ impl api::DbView for Proposal {
         K: api::KeyType,
     {
         todo!();
+    }
+
+
+    #[allow(refining_impl_trait)]
+    async fn iter<K: KeyType, V>(
+        &self,
+        _first_key: Option<K>,
+    ) -> Result<MerkleKeyValueStream<CompactSpace<Node, DynamicMem>, Bincode>, api::Error> {
+        todo!()
     }
 }

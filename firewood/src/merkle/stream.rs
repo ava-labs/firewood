@@ -323,7 +323,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleKeyValueStr
 }
 
 impl<'a, S, T> MerkleKeyValueStream<'a, S, T> {
-    pub(super) fn new(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress) -> Self {
+    pub(crate) fn new(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress) -> Self {
         Self {
             state: MerkleKeyValueStreamState::new(),
             merkle_root,

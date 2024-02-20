@@ -8,7 +8,10 @@ pub use crate::{
 };
 use crate::{
     file,
-    merkle::{Bincode, Merkle, MerkleError, Node, Proof, ProofError, TrieHash, TRIE_HASH_LEN},
+    merkle::{
+        Bincode, Merkle, MerkleError, MerkleKeyValueStream, Node, Proof, ProofError, TrieHash,
+        TRIE_HASH_LEN,
+    },
     storage::{
         buffer::{DiskBuffer, DiskBufferRequester},
         CachedSpace, MemStoreR, SpaceWrite, StoreConfig, StoreDelta, StoreRevMut, StoreRevShared,
@@ -315,6 +318,17 @@ impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
             .range_proof(self.header.kv_root, first_key, last_key, limit)
             .await
             .map_err(|e| api::Error::InternalError(Box::new(e)))
+    }
+
+    #[allow(refining_impl_trait)]
+    async fn iter<K: KeyType, V>(
+        &self,
+        first_key: Option<K>,
+    ) -> Result<MerkleKeyValueStream<S, Bincode>, api::Error> {
+        Ok(match first_key {
+            None => self.merkle.key_value_iter(self.header.kv_root),
+            Some(key) => self.merkle.key_value_iter_from_key(self.header.kv_root, key.as_ref().into()),
+        })
     }
 }
 
