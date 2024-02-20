@@ -5,6 +5,7 @@
 use std::fmt::Debug;
 use std::ops::IndexMut;
 use std::os::fd::{AsFd, AsRawFd};
+use std::os::raw::c_void;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -13,13 +14,14 @@ use std::{cell::RefCell, collections::HashMap};
 use super::{AshRecord, FilePool, Page, StoreDelta, StoreError, WalConfig, PAGE_SIZE_NBIT};
 use crate::shale::SpaceId;
 use crate::storage::DeltaPage;
-use aiofut::{AioBuilder, AioError, AioManager};
+use aiofut::AioError;
 use futures::future::join_all;
 use growthring::{
     wal::{RecoverPolicy, WalLoader, WalWriter},
     walerror::WalError,
     WalFileImpl, WalStoreImpl,
 };
+use nix::libc::pwrite;
 use tokio::task::block_in_place;
 use tokio::{
     sync::{
@@ -112,7 +114,6 @@ impl Notifiers {
 /// and managing the persistence of pages.
 pub struct DiskBuffer {
     inbound: mpsc::UnboundedReceiver<BufferCmd>,
-    aiomgr: AioManager,
     cfg: DiskBufferConfig,
     wal_cfg: WalConfig,
 }
@@ -124,17 +125,9 @@ impl DiskBuffer {
         cfg: &DiskBufferConfig,
         wal: &WalConfig,
     ) -> Result<Self, AioError> {
-        let aiomgr = AioBuilder::default()
-            .max_events(cfg.max_aio_requests)
-            .max_nwait(cfg.max_aio_response)
-            .max_nbatched(cfg.max_aio_submit)
-            .build()
-            .map_err(|_| AioError::OtherError)?;
-
         Ok(Self {
             cfg: cfg.clone(),
             inbound,
-            aiomgr,
             wal_cfg: wal.clone(),
         })
     }
@@ -142,7 +135,6 @@ impl DiskBuffer {
     #[tokio::main(flavor = "current_thread")]
     pub async fn run(self) {
         let mut inbound = self.inbound;
-        let aiomgr = Rc::new(self.aiomgr);
         let cfg = self.cfg;
         let wal_cfg = self.wal_cfg;
 
@@ -180,7 +172,6 @@ impl DiskBuffer {
                         pending_writes.clone(),
                         notifier.clone(),
                         file_pools.clone(),
-                        aiomgr.clone(),
                         &mut wal,
                         &wal_cfg,
                         inbound.recv().await.unwrap(),
@@ -215,7 +206,6 @@ fn schedule_write(
     pending: Rc<RefCell<HashMap<(SpaceId, u64), PendingPage>>>,
     fc_notifier: Rc<Notify>,
     file_pools: Rc<RefCell<[Option<Arc<FilePool>>; 255]>>,
-    aiomgr: Rc<AioManager>,
     max: WalQueueMax,
     page_key: (SpaceId, u64),
 ) {
@@ -225,7 +215,7 @@ fn schedule_write(
         let pending = pending.borrow();
         #[allow(clippy::unwrap_used)]
         let p = pending.get(&page_key).unwrap();
-        let offset = page_key.1 << PAGE_SIZE_NBIT;
+        let offset: u64 = page_key.1 << PAGE_SIZE_NBIT;
         let fid = offset >> p.file_nbit;
         let fmask = (1 << p.file_nbit) - 1;
         #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
@@ -234,19 +224,26 @@ fn schedule_write(
             .unwrap()
             .get_file(fid)
             .unwrap();
-        aiomgr.write(
-            file.as_raw_fd(),
-            offset & fmask,
-            p.staging_data.clone(),
-            None,
-        )
+        let writeme = p.staging_data.clone();
+        let offset: i64 = (offset & fmask)
+            .try_into()
+            .expect("can't have more than 2^63 bytes in a virtual file");
+        tokio::task::spawn_blocking(move || unsafe {
+            let _written = pwrite(
+                file.as_raw_fd(),
+                writeme.as_ptr() as *const c_void,
+                writeme.len(),
+                offset,
+            );
+            Ok::<_, ()>(())
+        })
     };
 
     let task = {
         async move {
-            let (res, _) = fut.await;
+            let res = fut.await;
             #[allow(clippy::unwrap_used)]
-            res.unwrap();
+            res.expect("fixme 1").expect("fixme 2");
 
             let pending_len = pending.borrow().len();
 
@@ -277,7 +274,7 @@ fn schedule_write(
             };
 
             if write_again {
-                schedule_write(pending, fc_notifier, file_pools, aiomgr, max, page_key);
+                schedule_write(pending, fc_notifier, file_pools, max, page_key);
             }
         }
     };
@@ -347,7 +344,6 @@ async fn run_wal_queue(
     file_pools: Rc<RefCell<[Option<Arc<FilePool>>; 255]>>,
     mut writes: mpsc::Receiver<(BufferWrites, AshRecord)>,
     fc_notifier: Rc<Notify>,
-    aiomgr: Rc<AioManager>,
 ) {
     use std::collections::hash_map::Entry::*;
 
@@ -422,7 +418,6 @@ async fn run_wal_queue(
                         pending.clone(),
                         fc_notifier.clone(),
                         file_pools.clone(),
-                        aiomgr.clone(),
                         max,
                         page_key,
                     );
@@ -464,7 +459,6 @@ async fn process(
     pending: Rc<RefCell<HashMap<(SpaceId, u64), PendingPage>>>,
     fc_notifier: Rc<Notify>,
     file_pools: Rc<RefCell<[Option<Arc<FilePool>>; 255]>>,
-    aiomgr: Rc<AioManager>,
     wal: &mut Option<Rc<Mutex<WalWriter<WalFileImpl, WalStoreImpl>>>>,
     wal_cfg: &WalConfig,
     req: BufferCmd,
@@ -508,7 +502,6 @@ async fn process(
                 file_pools.clone(),
                 writes,
                 fc_notifier,
-                aiomgr,
             );
 
             task::spawn_local(task);
