@@ -2,7 +2,7 @@ use crate::db::{MutStore, SharedStore};
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 use crate::nibbles::Nibbles;
-use crate::shale::{self, disk_address::DiskAddress, ObjWriteError, ShaleError, ShaleStore};
+use crate::shale::{self, disk_address::DiskAddress, ObjWriteSizeError, ShaleError, ShaleStore};
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
 use sha3::Digest;
@@ -49,7 +49,7 @@ pub enum MerkleError {
     #[error("removing internal node references failed")]
     UnsetInternal,
     #[error("error updating nodes: {0}")]
-    WriteError(#[from] ObjWriteError),
+    WriteError(#[from] ObjWriteSizeError),
     #[error("merkle serde error: {0}")]
     BinarySerdeError(String),
 }
@@ -523,7 +523,11 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                     match (overlap.unique_a.len(), overlap.unique_b.len()) {
                         // same node, overwrite the data
                         (0, 0) => {
-                            self.update_node_data((&mut parents, &mut deleted), node, Data(val))?;
+                            self.update_data_and_move_node_if_larger(
+                                (&mut parents, &mut deleted),
+                                node,
+                                Data(val),
+                            )?;
                         }
 
                         // new node is a child of the old node
@@ -569,7 +573,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                             let new_branch_path = overlap.shared.to_vec();
 
                             let old_leaf = self
-                                .update_node_path(
+                                .update_path_and_move_node_if_larger(
                                     (&mut parents, &mut deleted),
                                     node,
                                     PartialPath(old_leaf_path.to_vec()),
@@ -606,7 +610,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                             let new_branch_path = overlap.shared.to_vec();
 
                             let old_leaf = self
-                                .update_node_path(
+                                .update_path_and_move_node_if_larger(
                                     (&mut parents, &mut deleted),
                                     node,
                                     PartialPath(old_leaf_path.to_vec()),
@@ -679,7 +683,11 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                     match (overlap.unique_a.len(), overlap.unique_b.len()) {
                         // same node, overwrite the data
                         (0, 0) => {
-                            self.update_node_data((&mut parents, &mut deleted), node, Data(val))?;
+                            self.update_data_and_move_node_if_larger(
+                                (&mut parents, &mut deleted),
+                                node,
+                                Data(val),
+                            )?;
                             break None;
                         }
 
@@ -728,7 +736,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                             let new_branch_path = overlap.shared.to_vec();
 
                             let old_branch = self
-                                .update_node_path(
+                                .update_path_and_move_node_if_larger(
                                     (&mut parents, &mut deleted),
                                     node,
                                     PartialPath(old_branch_path.to_vec()),
@@ -767,7 +775,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                             let new_branch_path = overlap.shared.to_vec();
 
                             let old_branch = self
-                                .update_node_path(
+                                .update_path_and_move_node_if_larger(
                                     (&mut parents, &mut deleted),
                                     node,
                                     PartialPath(old_branch_path.to_vec()),
@@ -1470,7 +1478,9 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         }))
     }
 
-    fn update_node_path<'a>(
+    /// Try to update the [NodeObjRef]'s path in-place. If the update fails because the node can no longer fit at its old address,
+    /// then the old address is marked for deletion and the [Node] (with its update) is inserted at a new address.
+    fn update_path_and_move_node_if_larger<'a>(
         &'a self,
         (parents, to_delete): (&mut [(NodeObjRef, u8)], &mut Vec<DiskAddress>),
         mut node: NodeObjRef<'a>,
@@ -1481,10 +1491,12 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             node.rehash();
         });
 
-        self.insert_new_node_on_write_failure((parents, to_delete), node, write_result)
+        self.move_node_if_write_failed((parents, to_delete), node, write_result)
     }
 
-    fn update_node_data<'a>(
+    /// Try to update the [NodeObjRef]'s data/value in-place. If the update fails because the node can no longer fit at its old address,
+    /// then the old address is marked for deletion and the [Node] (with its update) is inserted at a new address.
+    fn update_data_and_move_node_if_larger<'a>(
         &'a self,
         (parents, to_delete): (&mut [(NodeObjRef, u8)], &mut Vec<DiskAddress>),
         mut node: NodeObjRef<'a>,
@@ -1495,16 +1507,17 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             node.rehash();
         });
 
-        self.insert_new_node_on_write_failure((parents, to_delete), node, write_result)
+        self.move_node_if_write_failed((parents, to_delete), node, write_result)
     }
 
-    fn insert_new_node_on_write_failure<'a>(
+    /// Checks if the `write_result` is an [ObjWriteSizeError]. If it is, then the `node` is moved to a new address and the old address is marked for deletion.
+    fn move_node_if_write_failed<'a>(
         &'a self,
         (parents, deleted): (&mut [(NodeObjRef, u8)], &mut Vec<DiskAddress>),
         mut node: NodeObjRef<'a>,
-        write_result: Result<(), ObjWriteError>,
+        write_result: Result<(), ObjWriteSizeError>,
     ) -> Result<NodeObjRef<'a>, MerkleError> {
-        if write_result.is_err() {
+        if let Err(ObjWriteSizeError) = write_result {
             let old_node_address = node.as_ptr();
             node = self.put_node(node.into_inner())?;
             deleted.push(old_node_address);
