@@ -81,7 +81,7 @@ message IteratorNextRequest {
 }
 
 message IteratorNextResponse {
-  repeated PutRequest data = 1;
+  PutRequest data = 1;
 }
 
 message IteratorErrorRequest {
