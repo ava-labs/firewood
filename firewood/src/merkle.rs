@@ -25,9 +25,14 @@ pub use proof::{Proof, ProofError};
 pub use stream::MerkleKeyValueStream;
 pub use trie_hash::{TrieHash, TRIE_HASH_LEN};
 
+use self::stream::PathIterator;
+
 type NodeObjRef<'a> = shale::ObjRef<'a, Node>;
 type ParentRefs<'a> = Vec<(NodeObjRef<'a>, u8)>;
 type ParentAddresses = Vec<(DiskAddress, u8)>;
+
+type Key = Box<[u8]>;
+type Value = Vec<u8>;
 
 #[derive(Debug, Error)]
 pub enum MerkleError {
@@ -923,309 +928,6 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         Ok((parents.into_iter().rev().map(|(node, _)| node), deleted))
     }
 
-    #[allow(clippy::unwrap_used)]
-    fn after_remove_leaf(
-        &self,
-        parents: &mut ParentRefs,
-        deleted: &mut Vec<DiskAddress>,
-    ) -> Result<(), MerkleError> {
-        let (b_chd, val) = {
-            let (mut b_ref, b_idx) = parents.pop().unwrap();
-            // the immediate parent of a leaf must be a branch
-            #[allow(clippy::unwrap_used)]
-            b_ref
-                .write(|b| {
-                    #[allow(clippy::indexing_slicing)]
-                    (b.inner.as_branch_mut().unwrap().children[b_idx as usize] = None);
-                    b.rehash()
-                })
-                .unwrap();
-            #[allow(clippy::unwrap_used)]
-            let b_inner = b_ref.inner.as_branch().unwrap();
-            let (b_chd, has_chd) = b_inner.single_child();
-            if (has_chd && (b_chd.is_none() || b_inner.value.is_some())) || parents.is_empty() {
-                return Ok(());
-            }
-            deleted.push(b_ref.as_ptr());
-            (b_chd, b_inner.value.clone())
-        };
-        #[allow(clippy::unwrap_used)]
-        let (mut p_ref, p_idx) = parents.pop().unwrap();
-        let p_ptr = p_ref.as_ptr();
-        if let Some(val) = val {
-            match &p_ref.inner {
-                NodeType::Branch(_) => {
-                    // from: [p: Branch] -> [b (v)]x -> [Leaf]x
-                    // to: [p: Branch] -> [Leaf (v)]
-                    let leaf = self
-                        .put_node(Node::from_leaf(LeafNode::new(PartialPath(Vec::new()), val)))?
-                        .as_ptr();
-                    #[allow(clippy::unwrap_used)]
-                    p_ref
-                        .write(|p| {
-                            #[allow(clippy::indexing_slicing)]
-                            (p.inner.as_branch_mut().unwrap().children[p_idx as usize] =
-                                Some(leaf));
-                            p.rehash()
-                        })
-                        .unwrap();
-                }
-                NodeType::Extension(n) => {
-                    // from: P -> [p: Ext]x -> [b (v)]x -> [leaf]x
-                    // to: P -> [Leaf (v)]
-                    let leaf = self
-                        .put_node(Node::from_leaf(LeafNode::new(
-                            PartialPath(n.path.clone().into_inner()),
-                            val,
-                        )))?
-                        .as_ptr();
-                    deleted.push(p_ptr);
-                    set_parent(leaf, parents);
-                }
-                _ => unreachable!(),
-            }
-        } else {
-            #[allow(clippy::unwrap_used)]
-            let (c_ptr, idx) = b_chd.unwrap();
-            let mut c_ref = self.get_node(c_ptr)?;
-            match &c_ref.inner {
-                NodeType::Branch(_) => {
-                    drop(c_ref);
-                    match &p_ref.inner {
-                        NodeType::Branch(_) => {
-                            //                            ____[Branch]
-                            //                           /
-                            // from: [p: Branch] -> [b]x*
-                            //                           \____[Leaf]x
-                            // to: [p: Branch] -> [Ext] -> [Branch]
-                            let ext = self
-                                .put_node(Node::from(NodeType::Extension(ExtNode {
-                                    path: PartialPath(vec![idx]),
-                                    child: c_ptr,
-                                    child_encoded: None,
-                                })))?
-                                .as_ptr();
-                            set_parent(ext, &mut [(p_ref, p_idx)]);
-                        }
-                        NodeType::Extension(_) => {
-                            //                         ____[Branch]
-                            //                        /
-                            // from: [p: Ext] -> [b]x*
-                            //                        \____[Leaf]x
-                            // to: [p: Ext] -> [Branch]
-                            write_node!(
-                                self,
-                                p_ref,
-                                |p| {
-                                    let pp = p.inner.as_extension_mut().unwrap();
-                                    pp.path.0.push(idx);
-                                    *pp.chd_mut() = c_ptr;
-                                    p.rehash();
-                                },
-                                parents,
-                                deleted
-                            );
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-                NodeType::Leaf(_) | NodeType::Extension(_) => {
-                    match &p_ref.inner {
-                        NodeType::Branch(_) => {
-                            //                            ____[Leaf/Ext]
-                            //                           /
-                            // from: [p: Branch] -> [b]x*
-                            //                           \____[Leaf]x
-                            // to: [p: Branch] -> [Leaf/Ext]
-                            let write_result = c_ref.write(|c| {
-                                let partial_path = match &mut c.inner {
-                                    NodeType::Leaf(n) => &mut n.path,
-                                    NodeType::Extension(n) => &mut n.path,
-                                    _ => unreachable!(),
-                                };
-
-                                partial_path.0.insert(0, idx);
-                                c.rehash()
-                            });
-
-                            let c_ptr = if write_result.is_err() {
-                                deleted.push(c_ptr);
-                                self.put_node(c_ref.clone())?.as_ptr()
-                            } else {
-                                c_ptr
-                            };
-
-                            drop(c_ref);
-
-                            #[allow(clippy::unwrap_used)]
-                            p_ref
-                                .write(|p| {
-                                    #[allow(clippy::indexing_slicing)]
-                                    (p.inner.as_branch_mut().unwrap().children[p_idx as usize] =
-                                        Some(c_ptr));
-                                    p.rehash()
-                                })
-                                .unwrap();
-                        }
-                        NodeType::Extension(n) => {
-                            //                               ____[Leaf/Ext]
-                            //                              /
-                            // from: P -> [p: Ext]x -> [b]x*
-                            //                              \____[Leaf]x
-                            // to: P -> [p: Leaf/Ext]
-                            deleted.push(p_ptr);
-
-                            let write_failed = write_node!(
-                                self,
-                                c_ref,
-                                |c| {
-                                    let mut path = n.path.clone().into_inner();
-                                    path.push(idx);
-                                    let path0 = match &mut c.inner {
-                                        NodeType::Leaf(n) => &mut n.path,
-                                        NodeType::Extension(n) => &mut n.path,
-                                        _ => unreachable!(),
-                                    };
-                                    path.extend(&**path0);
-                                    *path0 = PartialPath(path);
-                                    c.rehash()
-                                },
-                                parents,
-                                deleted
-                            );
-
-                            if !write_failed {
-                                drop(c_ref);
-                                set_parent(c_ptr, parents);
-                            }
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn after_remove_branch(
-        &self,
-        (c_ptr, idx): (DiskAddress, u8),
-        parents: &mut ParentRefs,
-        deleted: &mut Vec<DiskAddress>,
-    ) -> Result<(), MerkleError> {
-        // [b] -> [u] -> [c]
-        #[allow(clippy::unwrap_used)]
-        let (mut b_ref, b_idx) = parents.pop().unwrap();
-        #[allow(clippy::unwrap_used)]
-        let mut c_ref = self.get_node(c_ptr).unwrap();
-        match &c_ref.inner {
-            NodeType::Branch(_) => {
-                drop(c_ref);
-                let mut err = None;
-                write_node!(
-                    self,
-                    b_ref,
-                    |b| {
-                        if let Err(e) = (|| {
-                            match &mut b.inner {
-                                NodeType::Branch(n) => {
-                                    // from: [Branch] -> [Branch]x -> [Branch]
-                                    // to: [Branch] -> [Ext] -> [Branch]
-                                    #[allow(clippy::indexing_slicing)]
-                                    (n.children[b_idx as usize] = Some(
-                                        self.put_node(Node::from(NodeType::Extension(ExtNode {
-                                            path: PartialPath(vec![idx]),
-                                            child: c_ptr,
-                                            child_encoded: None,
-                                        })))?
-                                        .as_ptr(),
-                                    ));
-                                }
-                                NodeType::Extension(n) => {
-                                    // from: [Ext] -> [Branch]x -> [Branch]
-                                    // to: [Ext] -> [Branch]
-                                    n.path.0.push(idx);
-                                    *n.chd_mut() = c_ptr
-                                }
-                                _ => unreachable!(),
-                            }
-                            b.rehash();
-                            Ok(())
-                        })() {
-                            err = Some(Err(e))
-                        }
-                    },
-                    parents,
-                    deleted
-                );
-                if let Some(e) = err {
-                    return e;
-                }
-            }
-            NodeType::Leaf(_) | NodeType::Extension(_) => match &b_ref.inner {
-                NodeType::Branch(_) => {
-                    // from: [Branch] -> [Branch]x -> [Leaf/Ext]
-                    // to: [Branch] -> [Leaf/Ext]
-                    let write_result = c_ref.write(|c| {
-                        match &mut c.inner {
-                            NodeType::Leaf(n) => &mut n.path,
-                            NodeType::Extension(n) => &mut n.path,
-                            _ => unreachable!(),
-                        }
-                        .0
-                        .insert(0, idx);
-                        c.rehash()
-                    });
-                    if write_result.is_err() {
-                        deleted.push(c_ptr);
-                        self.put_node(c_ref.clone())?.as_ptr()
-                    } else {
-                        c_ptr
-                    };
-                    drop(c_ref);
-                    #[allow(clippy::unwrap_used)]
-                    b_ref
-                        .write(|b| {
-                            #[allow(clippy::indexing_slicing)]
-                            (b.inner.as_branch_mut().unwrap().children[b_idx as usize] =
-                                Some(c_ptr));
-                            b.rehash()
-                        })
-                        .unwrap();
-                }
-                NodeType::Extension(n) => {
-                    // from: P -> [Ext] -> [Branch]x -> [Leaf/Ext]
-                    // to: P -> [Leaf/Ext]
-                    let write_result = c_ref.write(|c| {
-                        let mut path = n.path.clone().into_inner();
-                        path.push(idx);
-                        let path0 = match &mut c.inner {
-                            NodeType::Leaf(n) => &mut n.path,
-                            NodeType::Extension(n) => &mut n.path,
-                            _ => unreachable!(),
-                        };
-                        path.extend(&**path0);
-                        *path0 = PartialPath(path);
-                        c.rehash()
-                    });
-
-                    let c_ptr = if write_result.is_err() {
-                        deleted.push(c_ptr);
-                        self.put_node(c_ref.clone())?.as_ptr()
-                    } else {
-                        c_ptr
-                    };
-
-                    deleted.push(b_ref.as_ptr());
-                    drop(c_ref);
-                    set_parent(c_ptr, parents);
-                }
-                _ => unreachable!(),
-            },
-        }
-        Ok(())
-    }
-
     pub fn remove<K: AsRef<[u8]>>(
         &mut self,
         key: K,
@@ -1403,66 +1105,6 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         Ok(data.map(|data| data.0))
     }
 
-    pub fn remove_old<K: AsRef<[u8]>>(
-        &mut self,
-        key: K,
-        root: DiskAddress,
-    ) -> Result<Option<Vec<u8>>, MerkleError> {
-        if root.is_null() {
-            return Ok(None);
-        }
-
-        let (found, parents, deleted) = {
-            let (node_ref, mut parents) =
-                self.get_node_and_parents_by_key(self.get_node(root)?, key)?;
-
-            let Some(mut node_ref) = node_ref else {
-                return Ok(None);
-            };
-            let mut deleted = Vec::new();
-            let mut found = None;
-
-            match &node_ref.inner {
-                NodeType::Branch(n) => {
-                    let (c_chd, _) = n.single_child();
-
-                    #[allow(clippy::unwrap_used)]
-                    node_ref
-                        .write(|u| {
-                            found = u.inner.as_branch_mut().unwrap().value.take();
-                            u.rehash()
-                        })
-                        .unwrap();
-
-                    if let Some((c_ptr, idx)) = c_chd {
-                        deleted.push(node_ref.as_ptr());
-                        self.after_remove_branch((c_ptr, idx), &mut parents, &mut deleted)?
-                    }
-                }
-
-                NodeType::Leaf(n) => {
-                    found = Some(n.data.clone());
-                    deleted.push(node_ref.as_ptr());
-                    self.after_remove_leaf(&mut parents, &mut deleted)?
-                }
-                _ => (),
-            };
-
-            (found, parents, deleted)
-        };
-
-        #[allow(clippy::unwrap_used)]
-        for (mut r, _) in parents.into_iter().rev() {
-            r.write(|u| u.rehash()).unwrap();
-        }
-
-        for ptr in deleted.into_iter() {
-            self.free_node(ptr)?;
-        }
-
-        Ok(found.map(|e| e.0))
-    }
-
     fn remove_tree_(
         &self,
         u: DiskAddress,
@@ -1499,7 +1141,21 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         node_ref: NodeObjRef<'a>,
         key: K,
     ) -> Result<Option<NodeObjRef<'a>>, MerkleError> {
-        self.get_node_by_key_with_callbacks(node_ref, key, |_, _| {}, |_, _| {})
+        let key = key.as_ref();
+        let path_iter = self.path_iter(node_ref, key);
+
+        match path_iter.last() {
+            None => Ok(None),
+            Some(Err(e)) => Err(e),
+            Some(Ok((node_key, node))) => {
+                let key_nibbles = Nibbles::<0>::new(key).into_iter();
+                if key_nibbles.eq(node_key.iter().copied()) {
+                    Ok(Some(node))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
     }
 
     fn get_node_and_parents_by_key<'a, K: AsRef<[u8]>>(
@@ -1671,24 +1327,16 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             return Ok(Proof(proofs));
         }
 
-        let root_node = self.get_node(root)?;
+        let sentinel_node = self.get_node(root)?;
 
-        let mut nodes = Vec::new();
+        let path_iter = self.path_iter(sentinel_node, key.as_ref());
 
-        let node = self.get_node_by_key_with_callbacks(
-            root_node,
-            key,
-            |node, _| nodes.push(node),
-            |_, _| {},
-        )?;
-
-        if let Some(node) = node {
-            nodes.push(node.as_ptr());
-        }
+        let nodes = path_iter
+            .map(|result| result.map(|(_, node)| node))
+            .collect::<Result<Vec<NodeObjRef>, MerkleError>>()?;
 
         // Get the hashes of the nodes.
-        for node in nodes.into_iter().skip(1) {
-            let node = self.get_node(node)?;
+        for node in nodes.into_iter() {
             let encoded = <&[u8]>::clone(&node.get_encoded::<S>(self.store.as_ref()));
             let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(encoded).into();
             proofs.insert(hash, encoded.to_vec());
@@ -1713,6 +1361,14 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
     pub fn flush_dirty(&self) -> Option<()> {
         self.store.flush_dirty()
+    }
+
+    pub fn path_iter<'a, 'b>(
+        &'a self,
+        sentinel_node: NodeObjRef<'a>,
+        key: &'b [u8],
+    ) -> PathIterator<'_, 'b, S, T> {
+        PathIterator::new(self, sentinel_node, key)
     }
 
     pub(crate) fn key_value_iter(&self, root: DiskAddress) -> MerkleKeyValueStream<'_, S, T> {
