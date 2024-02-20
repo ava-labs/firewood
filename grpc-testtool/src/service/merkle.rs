@@ -4,7 +4,7 @@ use crate::merkle::{
     merkle_server::Merkle as MerkleServiceTrait, NewProposalRequest, NewProposalResponse,
     NewViewRequest, NewViewResponse, ProposalCommitRequest, ProposalCommitResponse, ViewGetRequest,
     ViewGetResponse, ViewHasRequest, ViewHasResponse, ViewNewIteratorWithStartAndPrefixRequest,
-    ViewNewIteratorWithStartAndPrefixResponse, ViewReleaseRequest,
+    ViewNewIteratorWithStartAndPrefixResponse, ViewReleaseRequest, CommitError
 };
 use firewood::{
     db::{BatchOp, Proposal},
@@ -13,13 +13,6 @@ use firewood::{
 use tonic::{async_trait, Request, Response, Status};
 
 use super::{IntoStatusResultExt, View};
-
-//#[prost(uint32, optional, tag = "1")]
-//pub parent_view_id: ::core::option::Option<u32>,
-//#[prost(message, repeated, tag = "2")]
-//pub puts: ::prost::alloc::vec::Vec<PutRequest>,
-//#[prost(bytes = "vec", repeated, tag = "3")]
-//pub deletes: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
 
 #[async_trait]
 impl MerkleServiceTrait for super::Database {
@@ -54,11 +47,11 @@ impl MerkleServiceTrait for super::Database {
             Some(parent_id) => {
                 let view = views.map.get(&parent_id);
                 match view {
-                    None => return Err(Status::invalid_argument("invalid view id")),
+                    None => return Err(Status::invalid_argument(CommitError::ErrorInvalid)),
                     Some(View::Proposal(parent)) => {
                         firewood::v2::api::Proposal::propose(parent.clone(), data).await
                     }
-                    Some(_) => return Err(Status::invalid_argument("non-proposal id")),
+                    Some(_) => return Err(Status::invalid_argument(CommitError::ErrorNonProposalId)),
                 }
             }
         }
@@ -80,9 +73,9 @@ impl MerkleServiceTrait for super::Database {
         let mut views = self.views.lock().await;
 
         match views.map.remove(&req.into_inner().proposal_id) {
-            None => return Err(Status::invalid_argument("invalid view id")),
+            None => return Err(Status::invalid_argument(CommitError::ErrorClosedCommit)),
             Some(View::Proposal(proposal)) => proposal.commit(),
-            Some(_) => return Err(Status::invalid_argument("non-proposal id")),
+            Some(_) => return Err(Status::invalid_argument(CommitError::ErrorNonProposalId)),
         }
         .await
         .into_status_result()?;

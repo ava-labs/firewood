@@ -19,6 +19,12 @@ pub mod process_server {
 pub mod merkle {
     #![allow(clippy::unwrap_used, clippy::missing_const_for_fn)]
     tonic::include_proto!("merkle");
+
+    impl From<CommitError> for String {
+        fn from(e: CommitError) -> String {
+            e.as_str_name().into()
+        }
+    }
 }
 
 pub mod service;
