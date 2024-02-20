@@ -2359,4 +2359,130 @@ mod tests {
 
         assert_eq!(verified.as_deref(), Some(key1.as_slice()));
     }
+
+    #[test]
+    fn update_leaf_with_larger_path() -> Result<(), MerkleError> {
+        let path = vec![0x00];
+        let data = vec![0x00];
+
+        let double_path = path
+            .clone()
+            .into_iter()
+            .chain(path.clone())
+            .collect::<Vec<_>>();
+
+        let node = Node::from_leaf(LeafNode {
+            path: PartialPath::from(path),
+            data: Data(data.clone()),
+        });
+
+        check_node_update(node, double_path, data)
+    }
+
+    #[test]
+    fn update_leaf_with_larger_data() -> Result<(), MerkleError> {
+        let path = vec![0x00];
+        let data = vec![0x00];
+
+        let double_data = data
+            .clone()
+            .into_iter()
+            .chain(data.clone())
+            .collect::<Vec<_>>();
+
+        let node = Node::from_leaf(LeafNode {
+            path: PartialPath::from(path.clone()),
+            data: Data(data),
+        });
+
+        check_node_update(node, path, double_data)
+    }
+
+    #[test]
+    fn update_branch_with_larger_path() -> Result<(), MerkleError> {
+        let path = vec![0x00];
+        let data = vec![0x00];
+
+        let double_path = path
+            .clone()
+            .into_iter()
+            .chain(path.clone())
+            .collect::<Vec<_>>();
+
+        let node = Node::from_branch(BranchNode {
+            path: PartialPath::from(path.clone()),
+            children: Default::default(),
+            value: Some(Data(data.clone())),
+            children_encoded: Default::default(),
+        });
+
+        check_node_update(node, double_path, data)
+    }
+
+    #[test]
+    fn update_branch_with_larger_data() -> Result<(), MerkleError> {
+        let path = vec![0x00];
+        let data = vec![0x00];
+
+        let double_data = data
+            .clone()
+            .into_iter()
+            .chain(data.clone())
+            .collect::<Vec<_>>();
+
+        let node = Node::from_branch(BranchNode {
+            path: PartialPath::from(path.clone()),
+            children: Default::default(),
+            value: Some(Data(data)),
+            children_encoded: Default::default(),
+        });
+
+        check_node_update(node, path, double_data)
+    }
+
+    fn check_node_update(
+        node: Node,
+        new_path: Vec<u8>,
+        new_data: Vec<u8>,
+    ) -> Result<(), MerkleError> {
+        let merkle = create_test_merkle();
+        let root = merkle.init_root()?;
+        let root = merkle.get_node(root)?;
+
+        let mut node_ref = merkle.put_node(node)?;
+        let addr = node_ref.as_ptr();
+
+        // make sure that doubling the path length will fail on a normal write
+        let write_result = node_ref.write(|node| {
+            node.inner_mut().set_path(PartialPath(new_path.clone()));
+            node.inner_mut().set_data(Data(new_data.clone()));
+            node.rehash();
+        });
+
+        assert!(matches!(write_result, Err(ObjWriteSizeError)));
+
+        let mut to_delete = vec![];
+        // could be any branch node, convenient to use the root.
+        let mut parents = vec![(root, 0)];
+
+        let node = merkle.update_path_and_move_node_if_larger(
+            (&mut parents, &mut to_delete),
+            node_ref,
+            PartialPath(new_path.clone()),
+        )?;
+
+        assert_ne!(node.as_ptr(), addr);
+        assert_eq!(&to_delete[0], &addr);
+
+        let (path, data) = match node.inner() {
+            NodeType::Leaf(leaf) => (&leaf.path, Some(&leaf.data)),
+            NodeType::Branch(branch) => (&branch.path, branch.value.as_ref()),
+            _ => unreachable!(),
+        };
+
+        assert_eq!(path, &PartialPath(new_path));
+        assert_eq!(data, Some(&Data(new_data)));
+
+        Ok(())
+    }
 }

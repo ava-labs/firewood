@@ -230,7 +230,6 @@ impl<'a, T: Storable + Debug> Deref for ObjRef<'a, T> {
 
 impl<'a, T: Storable> Drop for ObjRef<'a, T> {
     fn drop(&mut self) {
-        #[allow(clippy::unwrap_used)]
         if let Some(mut inner) = self.inner.take() {
             let ptr = inner.as_ptr();
             let mut cache = self.cache.lock();
