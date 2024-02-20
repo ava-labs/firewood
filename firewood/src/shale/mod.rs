@@ -44,7 +44,7 @@ pub enum ShaleError {
 // this could probably included with ShaleError,
 // but keeping it separate for now as Obj/ObjRef might change in the near future
 #[derive(Debug, Error)]
-#[error("write error")]
+#[error("object cannot be written in the space provided")]
 pub struct ObjWriteSizeError;
 
 pub type SpaceId = u8;
