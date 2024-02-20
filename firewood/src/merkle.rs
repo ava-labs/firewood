@@ -523,10 +523,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                     match (overlap.unique_a.len(), overlap.unique_b.len()) {
                         // same node, overwrite the data
                         (0, 0) => {
-                            node.write(|node| {
-                                node.inner.set_data(Data(val));
-                                node.rehash();
-                            })?;
+                            self.update_node_data((&mut parents, &mut deleted), node, Data(val))?;
                         }
 
                         // new node is a child of the old node
@@ -571,12 +568,13 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
                             let new_branch_path = overlap.shared.to_vec();
 
-                            node.write(move |old_leaf| {
-                                *old_leaf.inner.path_mut() = PartialPath(old_leaf_path.to_vec());
-                                old_leaf.rehash();
-                            })?;
-
-                            let old_leaf = node.as_ptr();
+                            let old_leaf = self
+                                .update_node_path(
+                                    (&mut parents, &mut deleted),
+                                    node,
+                                    PartialPath(old_leaf_path.to_vec()),
+                                )?
+                                .as_ptr();
 
                             let mut new_branch = BranchNode {
                                 path: PartialPath(new_branch_path),
@@ -607,17 +605,18 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
                             let new_branch_path = overlap.shared.to_vec();
 
-                            node.write(move |old_leaf| {
-                                *old_leaf.inner.path_mut() = PartialPath(old_leaf_path.to_vec());
-                                old_leaf.rehash();
-                            })?;
+                            let old_leaf = self
+                                .update_node_path(
+                                    (&mut parents, &mut deleted),
+                                    node,
+                                    PartialPath(old_leaf_path.to_vec()),
+                                )?
+                                .as_ptr();
 
                             let new_leaf = Node::from_leaf(LeafNode::new(
                                 PartialPath(new_leaf_path),
                                 Data(val),
                             ));
-
-                            let old_leaf = node.as_ptr();
 
                             let new_leaf = self.put_node(new_leaf)?.as_ptr();
 
@@ -680,11 +679,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                     match (overlap.unique_a.len(), overlap.unique_b.len()) {
                         // same node, overwrite the data
                         (0, 0) => {
-                            node.write(|node| {
-                                node.inner.set_data(Data(val));
-                                node.rehash();
-                            })?;
-
+                            self.update_node_data((&mut parents, &mut deleted), node, Data(val))?;
                             break None;
                         }
 
@@ -732,13 +727,13 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
                             let new_branch_path = overlap.shared.to_vec();
 
-                            node.write(move |old_branch| {
-                                *old_branch.inner.path_mut() =
-                                    PartialPath(old_branch_path.to_vec());
-                                old_branch.rehash();
-                            })?;
-
-                            let old_branch = node.as_ptr();
+                            let old_branch = self
+                                .update_node_path(
+                                    (&mut parents, &mut deleted),
+                                    node,
+                                    PartialPath(old_branch_path.to_vec()),
+                                )?
+                                .as_ptr();
 
                             let mut new_branch = BranchNode {
                                 path: PartialPath(new_branch_path),
@@ -771,18 +766,18 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
                             let new_branch_path = overlap.shared.to_vec();
 
-                            node.write(move |old_branch| {
-                                *old_branch.inner.path_mut() =
-                                    PartialPath(old_branch_path.to_vec());
-                                old_branch.rehash();
-                            })?;
+                            let old_branch = self
+                                .update_node_path(
+                                    (&mut parents, &mut deleted),
+                                    node,
+                                    PartialPath(old_branch_path.to_vec()),
+                                )?
+                                .as_ptr();
 
                             let new_leaf = Node::from_leaf(LeafNode::new(
                                 PartialPath(new_leaf_path),
                                 Data(val),
                             ));
-
-                            let old_branch = node.as_ptr();
 
                             let new_leaf = self.put_node(new_leaf)?.as_ptr();
 
@@ -1473,6 +1468,51 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             middle,
             last_key_proof,
         }))
+    }
+
+    fn update_node_path<'a>(
+        &'a self,
+        (parents, to_delete): (&mut [(NodeObjRef, u8)], &mut Vec<DiskAddress>),
+        mut node: NodeObjRef<'a>,
+        path: PartialPath,
+    ) -> Result<NodeObjRef<'a>, MerkleError> {
+        let write_result = node.write(|node| {
+            node.inner_mut().set_path(path);
+            node.rehash();
+        });
+
+        self.insert_new_node_on_write_failure((parents, to_delete), node, write_result)
+    }
+
+    fn update_node_data<'a>(
+        &'a self,
+        (parents, to_delete): (&mut [(NodeObjRef, u8)], &mut Vec<DiskAddress>),
+        mut node: NodeObjRef<'a>,
+        data: Data,
+    ) -> Result<NodeObjRef, MerkleError> {
+        let write_result = node.write(|node| {
+            node.inner_mut().set_data(data);
+            node.rehash();
+        });
+
+        self.insert_new_node_on_write_failure((parents, to_delete), node, write_result)
+    }
+
+    fn insert_new_node_on_write_failure<'a>(
+        &'a self,
+        (parents, deleted): (&mut [(NodeObjRef, u8)], &mut Vec<DiskAddress>),
+        mut node: NodeObjRef<'a>,
+        write_result: Result<(), ObjWriteError>,
+    ) -> Result<NodeObjRef<'a>, MerkleError> {
+        if write_result.is_err() {
+            let old_node_address = node.as_ptr();
+            node = self.put_node(node.into_inner())?;
+            deleted.push(old_node_address);
+
+            set_parent(node.as_ptr(), parents);
+        }
+
+        Ok(node)
     }
 }
 
