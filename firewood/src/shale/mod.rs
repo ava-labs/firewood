@@ -184,12 +184,15 @@ impl<T: Storable> Deref for Obj<T> {
 /// User handle that offers read & write access to the stored [ShaleStore] item.
 #[derive(Debug)]
 pub struct ObjRef<'a, T: Storable> {
+    /// WARNING:
+    /// [`Self::inner`] should only be `None` when calling `into_inner` and `drop`.
     inner: Option<Obj<T>>,
     cache: &'a ObjCache<T>,
 }
 
 impl<'a, T: Storable + Debug> ObjRef<'a, T> {
-    const fn new(inner: Option<Obj<T>>, cache: &'a ObjCache<T>) -> Self {
+    const fn new(inner: Obj<T>, cache: &'a ObjCache<T>) -> Self {
+        let inner = Some(inner);
         Self { inner, cache }
     }
 
