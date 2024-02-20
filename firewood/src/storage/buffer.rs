@@ -33,7 +33,6 @@ use typed_builder::TypedBuilder;
 
 type BufferWrites = Box<[BufferWrite]>;
 
-
 #[derive(Debug)]
 pub enum BufferCmd {
     /// Initialize the Wal.
