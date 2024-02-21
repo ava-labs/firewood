@@ -246,6 +246,9 @@ impl<'a, T: Storable> Drop for ObjRef<'a, T> {
         match cache.pinned.remove(&ptr) {
             Some(true) => {
                 self.inner.dirty = None;
+                // SAFETY: self.inner will have completed it's destructor
+                // so it must not be referenced after this line, and it isn't
+                unsafe { ManuallyDrop::drop(&mut self.inner) };
             }
             _ => {
                 // SAFETY: safe because self.inner is not referenced after this line
