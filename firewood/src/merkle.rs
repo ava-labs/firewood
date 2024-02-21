@@ -5,7 +5,7 @@ use crate::nibbles::Nibbles;
 use crate::shale::{self, disk_address::DiskAddress, ObjWriteSizeError, ShaleError, ShaleStore};
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
-use sha3::Digest;
+use sha3::{Digest, Keccak256};
 use std::{
     collections::HashMap, future::ready, io::Write, iter::once, marker::PhantomData, sync::OnceLock,
 };
@@ -216,7 +216,9 @@ where
             .children[0];
         Ok(if let Some(root) = root {
             let mut node = self.get_node(root)?;
-            let res = *node.get_root_hash::<S>(self.store.as_ref());
+            //let res = *node.get_root_hash::<S>(self.store.as_ref());
+            let res = self.encode(&node)?;
+            let res = TrieHash(Keccak256::digest(res).into());
             #[allow(clippy::unwrap_used)]
             if node.is_dirty() {
                 node.write(|_| {}).unwrap();
@@ -228,15 +230,20 @@ where
         })
     }
 
+    fn to_hash(&self, node: &NodeObjRef) -> Result<TrieHash, MerkleError> {
+        let res = self.encode(node)?;
+        Ok(TrieHash(Keccak256::digest(&res).into()))
+    }
+
     fn dump_(&self, u: DiskAddress, w: &mut dyn Write) -> Result<(), MerkleError> {
         let u_ref = self.get_node(u)?;
 
         let hash = match u_ref.root_hash.get() {
-            Some(h) => h,
-            None => u_ref.get_root_hash::<S>(self.store.as_ref()),
+            Some(h) => *h,
+            None => self.to_hash(&u_ref)?,
         };
 
-        write!(w, "{u:?} => {}: ", hex::encode(**hash))?;
+        write!(w, "{u:?} => {}: ", hex::encode(*hash))?;
 
         match &u_ref.inner {
             NodeType::Branch(n) => {
@@ -1072,7 +1079,7 @@ where
         for node in nodes.into_iter() {
             // let encoded = <&[u8]>::clone(&node.get_encoded::<S>(self.store.as_ref()));
             let encoded = self.encode(&node)?;
-            let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(encoded).into();
+            let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(encoded.clone()).into();
             proofs.insert(hash, encoded.to_vec());
         }
         Ok(Proof(proofs))

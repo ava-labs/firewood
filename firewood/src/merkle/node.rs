@@ -4,7 +4,7 @@
 use crate::{
     logger::trace,
     merkle::from_nibbles,
-    shale::{disk_address::DiskAddress, CachedStore, ShaleError, ShaleStore, Storable},
+    shale::{disk_address::DiskAddress, CachedStore, ShaleError, Storable},
 };
 use bincode::{Error, Options};
 use bitflags::bitflags;

@@ -1,11 +1,11 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::{Data, Encoded, Node};
+use super::{Data, Encoded};
 use crate::{
-    merkle::{from_nibbles, to_nibble_array, PartialPath, TRIE_HASH_LEN},
+    merkle::{from_nibbles, to_nibble_array, PartialPath},
     nibbles::Nibbles,
-    shale::{DiskAddress, ShaleError, ShaleStore, Storable},
+    shale::{DiskAddress, ShaleError, Storable},
 };
 use bincode::{Error, Options};
 use serde::de::Error as DeError;
