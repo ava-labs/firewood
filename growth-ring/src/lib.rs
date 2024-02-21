@@ -126,7 +126,7 @@ impl WalFile for WalFileImpl {
 
         let mut n = 0;
         let len = data.len();
-        let mut buf = data.to_vec();
+        let mut buf = data;
         while n < len {
             let o = offset + n as u64;
             let res = file.write_at(buf.slice(n..), o).await;
@@ -164,8 +164,7 @@ impl WalFile for WalFileImpl {
         };
 
         let result = Some(result)
-            .filter(|_| bytes_read == length)
-            .map(Vec::into_boxed_slice);
+            .filter(|_| bytes_read == length);
 
         Ok(result)
     }

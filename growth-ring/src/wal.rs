@@ -47,7 +47,7 @@ struct WalRingBlob {
 }
 
 type WalFileId = u64;
-pub type WalBytes = Box<[u8]>;
+pub type WalBytes = Vec<u8>;
 pub type WalPos = u64;
 
 // convert XXXXXX.log into number from the XXXXXX (in hex)
@@ -511,7 +511,7 @@ impl<F: WalFile + 'static, S: WalStore<F>> WalWriter<F, S> {
         WalWriter {
             state,
             file_pool,
-            block_buffer: b.into_boxed_slice(),
+            block_buffer: b,
             block_size,
             msize,
         }
@@ -633,8 +633,7 @@ impl<F: WalFile + 'static, S: WalStore<F>> WalWriter<F, S> {
                     writes.push((
                         self.state.next,
                         self.block_buffer[bbuff_start as usize..]
-                            .to_vec()
-                            .into_boxed_slice(),
+                            .to_vec(),
                     ));
                     self.state.next += (self.block_size - bbuff_start) as u64;
                     bbuff_start = 0;
@@ -648,8 +647,7 @@ impl<F: WalFile + 'static, S: WalStore<F>> WalWriter<F, S> {
             writes.push((
                 self.state.next,
                 self.block_buffer[bbuff_start as usize..bbuff_cur as usize]
-                    .to_vec()
-                    .into_boxed_slice(),
+                    .to_vec(),
             ));
 
             self.state.next += (bbuff_cur - bbuff_start) as u64;
@@ -1180,7 +1178,7 @@ impl WalLoader {
                                     ps = &mut ps[c.len()..];
                                 }
                                 _yield!((
-                                    payload.into_boxed_slice(),
+                                    payload,
                                     WalRingId {
                                         start: ringid_start,
                                         end: (fid << file_nbit) + v.off,
