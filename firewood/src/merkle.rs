@@ -1570,18 +1570,6 @@ mod tests {
     use shale::{cached::DynamicMem, compact::CompactSpace, CachedStore};
     use test_case::test_case;
 
-    fn extension(
-        path: Vec<u8>,
-        child_address: DiskAddress,
-        child_encoded: Option<Vec<u8>>,
-    ) -> Node {
-        Node::from(NodeType::Extension(ExtNode {
-            path: PartialPath(path),
-            child: child_address,
-            child_encoded,
-        }))
-    }
-
     fn leaf(path: Vec<u8>, data: Vec<u8>) -> Node {
         Node::from_leaf(LeafNode::new(PartialPath(path), Data(data)))
     }
@@ -1689,7 +1677,6 @@ mod tests {
     #[test_case(branch(b"", b"value", vec![1, 2, 3].into()); "branch with value and children")]
     #[test_case(branch(&[2], b"", vec![1, 2, 3].into()); "branch with path and children")]
     #[test_case(branch(&[2], b"value", vec![1, 2, 3].into()); "branch with path value and children")]
-    #[test_case(extension(vec![1, 2, 3], DiskAddress::null(), vec![4, 5].into()) ; "extension without child address")]
     fn encode(node: Node) {
         let merkle = create_test_merkle();
 
