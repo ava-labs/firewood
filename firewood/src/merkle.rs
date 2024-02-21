@@ -109,8 +109,6 @@ where
         }
     }
 
-    // TODO: use `encode` / `decode` instead of `node.encode` / `node.decode` after extention node removal.
-    #[allow(dead_code)]
     fn encode(&self, node: &NodeObjRef) -> Result<Vec<u8>, MerkleError> {
         let encoded = match node.inner() {
             NodeType::Leaf(n) => EncodedNode::new(EncodedNodeType::Leaf(n.clone())),
