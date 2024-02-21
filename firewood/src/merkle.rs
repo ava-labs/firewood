@@ -108,65 +108,6 @@ where
             phantom: PhantomData,
         }
     }
-
-    // TODO: use `encode` / `decode` instead of `node.encode` / `node.decode` after extention node removal.
-    #[allow(dead_code)]
-    fn encode(&self, node: &NodeObjRef) -> Result<Vec<u8>, MerkleError> {
-        let encoded = match node.inner() {
-            NodeType::Leaf(n) => EncodedNode::new(EncodedNodeType::Leaf(n.clone())),
-
-            NodeType::Branch(n) => {
-                let path = n.path.clone();
-
-                // pair up DiskAddresses with encoded children and pick the right one
-                let encoded_children = n.chd().iter().zip(n.children_encoded.iter());
-                let children = encoded_children
-                    .map(|(child_addr, encoded_child)| {
-                        child_addr
-                            // if there's a child disk address here, get the encoded bytes
-                            .map(|addr| self.get_node(addr).and_then(|node| self.encode(&node)))
-                            // or look for the pre-fetched bytes
-                            .or_else(|| encoded_child.as_ref().map(|child| Ok(child.to_vec())))
-                            .transpose()
-                    })
-                    .collect::<Result<Vec<Option<Vec<u8>>>, MerkleError>>()?
-                    .try_into()
-                    .expect("MAX_CHILDREN will always be yielded");
-
-                EncodedNode::new(EncodedNodeType::Branch {
-                    path,
-                    children,
-                    value: n.value.clone(),
-                })
-            }
-        };
-
-        Bincode::serialize(&encoded).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))
-    }
-
-    #[allow(dead_code)]
-    fn decode(&self, buf: &'de [u8]) -> Result<NodeType, MerkleError> {
-        let encoded: EncodedNode<T> =
-            T::deserialize(buf).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))?;
-
-        match encoded.node {
-            EncodedNodeType::Leaf(leaf) => Ok(NodeType::Leaf(leaf)),
-            EncodedNodeType::Branch {
-                path,
-                children,
-                value,
-            } => {
-                let path = PartialPath::decode(&path).0;
-                let value = value.map(|v| v.0);
-                let branch = NodeType::Branch(
-                    BranchNode::new(path, [None; BranchNode::MAX_CHILDREN], value, *children)
-                        .into(),
-                );
-
-                Ok(branch)
-            }
-        }
-    }
 }
 
 impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
@@ -1389,7 +1330,6 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::merkle::node::PlainCodec;
     use shale::{cached::DynamicMem, compact::CompactSpace, CachedStore};
     use test_case::test_case;
 
@@ -1509,30 +1449,6 @@ mod tests {
         let new_node_encoded = new_node.get_encoded(merkle.store.as_ref());
 
         assert_eq!(encoded, new_node_encoded);
-    }
-
-    #[test_case(Bincode::new(), leaf(Vec::new(), Vec::new()) ; "empty leaf encoding with Bincode")]
-    #[test_case(Bincode::new(), leaf(vec![1, 2, 3], vec![4, 5]) ; "leaf encoding with Bincode")]
-    #[test_case(Bincode::new(), branch(b"", b"value", vec![1, 2, 3].into()) ; "branch with chd with Bincode")]
-    #[test_case(Bincode::new(), branch(b"", b"value", None); "branch without chd with Bincode")]
-    #[test_case(Bincode::new(), branch_without_data(b"", None); "branch without value and chd with Bincode")]
-    #[test_case(PlainCodec::new(), leaf(Vec::new(), Vec::new()) ; "empty leaf encoding with PlainCodec")]
-    #[test_case(PlainCodec::new(), leaf(vec![1, 2, 3], vec![4, 5]) ; "leaf encoding with PlainCodec")]
-    #[test_case(PlainCodec::new(), branch(b"", b"value", vec![1, 2, 3].into()) ; "branch with chd with PlainCodec")]
-    #[test_case(PlainCodec::new(), branch(b"", b"value", Some(Vec::new())); "branch with empty chd with PlainCodec")]
-    #[test_case(PlainCodec::new(), branch(b"", b"", vec![1, 2, 3].into()); "branch with empty value with PlainCodec")]
-    fn node_encode_decode<T>(_codec: T, node: Node)
-    where
-        T: BinarySerde,
-        for<'de> EncodedNode<T>: serde::Serialize + serde::Deserialize<'de>,
-    {
-        let merkle = create_generic_test_merkle::<T>();
-        let node_ref = merkle.put_node(node.clone()).unwrap();
-
-        let encoded = merkle.encode(&node_ref).unwrap();
-        let new_node = Node::from(merkle.decode(encoded.as_ref()).unwrap());
-
-        assert_eq!(node, new_node);
     }
 
     #[test]
