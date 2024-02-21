@@ -231,7 +231,7 @@ where
 
     fn to_hash(&self, node: &NodeObjRef) -> Result<TrieHash, MerkleError> {
         let res = self.encode(node)?;
-        Ok(TrieHash(Keccak256::digest(&res).into()))
+        Ok(TrieHash(Keccak256::digest(res).into()))
     }
 
     fn dump_(&self, u: DiskAddress, w: &mut dyn Write) -> Result<(), MerkleError> {
