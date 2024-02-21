@@ -2191,7 +2191,6 @@ mod tests {
         let (path, data) = match node.inner() {
             NodeType::Leaf(leaf) => (&leaf.path, Some(&leaf.data)),
             NodeType::Branch(branch) => (&branch.path, branch.value.as_ref()),
-            _ => unreachable!(),
         };
 
         assert_eq!(path, &PartialPath(new_path));

@@ -897,11 +897,6 @@ mod tests {
             value: Some(Data(vec![1, 2, 3])),
             children_encoded: std::array::from_fn(|_| Some(vec![1])),
         }));
-        let extension = NodeType::Extension(ExtNode {
-            path: PartialPath(vec![1, 2, 3]),
-            child: DiskAddress::from(1),
-            child_encoded: Some(vec![1, 2, 3]),
-        });
 
         let root_hash = root_hash.into().map(TrieHash);
         let encoded = encoded.into();
@@ -921,15 +916,6 @@ mod tests {
             encoded.clone(),
             is_encoded_longer_than_hash_len,
             branch,
-        );
-
-        check_node_encoding(node);
-
-        let node = Node::new_from_hash(
-            root_hash,
-            encoded.clone(),
-            is_encoded_longer_than_hash_len,
-            extension,
         );
 
         check_node_encoding(node);
