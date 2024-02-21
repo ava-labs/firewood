@@ -1244,7 +1244,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
     ) -> Result<NodeObjRef<'a>, MerkleError> {
         if let Err(ObjWriteSizeError) = write_result {
             let old_node_address = node.as_ptr();
-            node = self.put_node(node.clone())?;
+            node = self.put_node(node.into_inner())?;
             deleted.push(old_node_address);
 
             set_parent(node.as_ptr(), parents);
@@ -2032,7 +2032,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn single_key_proof_with_one_node() {
         let mut merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
@@ -2071,7 +2070,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn update_leaf_with_larger_path() -> Result<(), MerkleError> {
         let path = vec![0x00];
         let data = vec![0x00];
@@ -2091,7 +2089,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn update_leaf_with_larger_data() -> Result<(), MerkleError> {
         let path = vec![0x00];
         let data = vec![0x00];
@@ -2111,7 +2108,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn update_branch_with_larger_path() -> Result<(), MerkleError> {
         let path = vec![0x00];
         let data = vec![0x00];
@@ -2133,7 +2129,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn update_branch_with_larger_data() -> Result<(), MerkleError> {
         let path = vec![0x00];
         let data = vec![0x00];
