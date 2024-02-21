@@ -459,7 +459,6 @@ impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> Iterator for PathIterator<'a,
                 let partial_path = match node.inner() {
                     NodeType::Branch(branch) => &branch.path,
                     NodeType::Leaf(leaf) => &leaf.path,
-                    _ => unreachable!("extension nodes shouldn't exist"),
                 };
 
                 let (comparison, unmatched_key) =

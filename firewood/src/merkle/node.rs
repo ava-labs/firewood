@@ -117,22 +117,13 @@ impl NodeType {
 
                 let decoded_key_nibbles = Nibbles::<0>::new(&decoded_key);
 
-                let (cur_key_path, term) =
-                    PartialPath::from_nibbles(decoded_key_nibbles.into_iter());
+                let cur_key_path = PartialPath::from_nibbles(decoded_key_nibbles.into_iter()).0;
 
                 let cur_key = cur_key_path.into_inner();
                 #[allow(clippy::unwrap_used)]
                 let data: Vec<u8> = items.next().unwrap().decode()?;
 
-                if term {
-                    Ok(NodeType::Leaf(LeafNode::new(cur_key, data)))
-                } else {
-                    Ok(NodeType::Extension(ExtNode {
-                        path: PartialPath(cur_key),
-                        child: DiskAddress::null(),
-                        child_encoded: Some(data),
-                    }))
-                }
+                Ok(NodeType::Leaf(LeafNode::new(cur_key, data)))
             }
             // TODO: add path
             BranchNode::MSIZE => Ok(NodeType::Branch(BranchNode::decode(buf)?.into())),

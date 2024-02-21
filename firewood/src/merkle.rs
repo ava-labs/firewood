@@ -7,8 +7,7 @@ use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
 use sha3::Digest;
 use std::{
-    cmp::Ordering, collections::HashMap, future::ready, io::Write, iter::once, marker::PhantomData,
-    sync::OnceLock,
+    collections::HashMap, future::ready, io::Write, iter::once, marker::PhantomData, sync::OnceLock,
 };
 use thiserror::Error;
 
@@ -255,180 +254,6 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             self.dump_(root, w)?;
         };
         Ok(())
-    }
-
-    // TODO: replace `split` with a `split_at` function. Handle the logic for matching paths in `insert` instead.
-    #[allow(clippy::too_many_arguments)]
-    fn split<'a>(
-        &'a self,
-        mut node_to_split: NodeObjRef<'a>,
-        parents: &mut [(NodeObjRef<'a>, u8)],
-        insert_path: &[u8],
-        n_path: Vec<u8>,
-        n_value: Option<Data>,
-        val: Vec<u8>,
-        deleted: &mut Vec<DiskAddress>,
-    ) -> Result<Option<(NodeObjRef<'a>, Vec<u8>)>, MerkleError> {
-        let node_to_split_address = node_to_split.as_ptr();
-        let split_index = insert_path
-            .iter()
-            .zip(n_path.iter())
-            .position(|(a, b)| a != b);
-
-        #[allow(clippy::indexing_slicing)]
-        let new_child_address = if let Some(idx) = split_index {
-            // paths diverge
-            let new_split_node_path = n_path.split_at(idx + 1).1;
-            let (matching_path, new_node_path) = insert_path.split_at(idx + 1);
-
-            node_to_split.write(|node| {
-                // TODO: handle unwrap better
-                let path = node.inner.path_mut();
-
-                *path = PartialPath(new_split_node_path.to_vec());
-
-                node.rehash();
-            })?;
-
-            let new_node = Node::from_leaf(LeafNode::new(
-                PartialPath(new_node_path.to_vec()),
-                Data(val),
-            ));
-            let leaf_address = self.put_node(new_node)?.as_ptr();
-
-            let mut chd = [None; BranchNode::MAX_CHILDREN];
-
-            let last_matching_nibble = matching_path[idx];
-            chd[last_matching_nibble as usize] = Some(leaf_address);
-
-            let address = match &node_to_split.inner {
-                // TODO fix
-                // NodeType::Extension(u) if u.path.len() == 0 => {
-                //     deleted.push(node_to_split_address);
-                //     u.chd()
-                // }
-                _ => node_to_split_address,
-            };
-
-            chd[n_path[idx] as usize] = Some(address);
-
-            let new_branch = Node::from_branch(BranchNode {
-                path: PartialPath(matching_path[..idx].to_vec()),
-                children: chd,
-                value: None,
-                children_encoded: Default::default(),
-            });
-
-            self.put_node(new_branch)?.as_ptr()
-        } else {
-            // paths do not diverge
-            let (leaf_address, prefix, idx, value) =
-                match (insert_path.len().cmp(&n_path.len()), n_value) {
-                    // no node-value means this is an extension node and we can therefore continue walking the tree
-                    (Ordering::Greater, None) => return Ok(Some((node_to_split, val))),
-
-                    // if the paths are equal, we overwrite the data
-                    (Ordering::Equal, _) => {
-                        let mut result = Ok(None);
-
-                        write_node!(
-                            self,
-                            node_to_split,
-                            |u| {
-                                match &mut u.inner {
-                                    NodeType::Leaf(u) => u.data = Data(val),
-                                    NodeType::Branch(u) => {
-                                        u.value = Some(Data(val));
-                                    }
-                                }
-
-                                u.rehash();
-                            },
-                            parents,
-                            deleted
-                        );
-
-                        return result;
-                    }
-
-                    // if the node-path is greater than the insert path
-                    (Ordering::Less, _) => {
-                        // key path is a prefix of the path to u
-                        #[allow(clippy::unwrap_used)]
-                        node_to_split
-                            .write(|u| {
-                                // TODO: handle unwraps better
-                                let path = u.inner.path_mut();
-                                #[allow(clippy::indexing_slicing)]
-                                (*path = PartialPath(n_path[insert_path.len() + 1..].to_vec()));
-
-                                u.rehash();
-                            })
-                            .unwrap();
-
-                        let leaf_address = match &node_to_split.inner {
-                            // TODO: handle BranchNode case
-                            // TODO fix
-                            // NodeType::Extension(u) if u.path.len() == 0 => {
-                            //     deleted.push(node_to_split_address);
-                            //     u.chd()
-                            // }
-                            _ => node_to_split_address,
-                        };
-
-                        #[allow(clippy::indexing_slicing)]
-                        (
-                            leaf_address,
-                            insert_path,
-                            n_path[insert_path.len()] as usize,
-                            Data(val).into(),
-                        )
-                    }
-                    // insert path is greather than the path of the leaf
-                    (Ordering::Greater, Some(n_value)) => {
-                        let leaf = Node::from_leaf(LeafNode::new(
-                            #[allow(clippy::indexing_slicing)]
-                            PartialPath(insert_path[n_path.len() + 1..].to_vec()),
-                            Data(val),
-                        ));
-
-                        let leaf_address = self.put_node(leaf)?.as_ptr();
-
-                        deleted.push(node_to_split_address);
-
-                        #[allow(clippy::indexing_slicing)]
-                        (
-                            leaf_address,
-                            n_path.as_slice(),
-                            insert_path[n_path.len()] as usize,
-                            n_value.into(),
-                        )
-                    }
-                };
-
-            // [parent] (-> [ExtNode]) -> [branch with v] -> [Leaf]
-            let mut children = [None; BranchNode::MAX_CHILDREN];
-
-            #[allow(clippy::indexing_slicing)]
-            (children[idx] = leaf_address.into());
-
-            self.put_node(Node::from_branch(BranchNode {
-                path: PartialPath(prefix.to_vec()),
-                children,
-                value,
-                children_encoded: Default::default(),
-            }))?
-            .as_ptr()
-        };
-
-        // observation:
-        // - leaf/extension node can only be the child of a branch node
-        // - branch node can only be the child of a branch/extension node
-        // ^^^ I think a leaf can end up being the child of an extension node
-        // ^^^ maybe just on delete though? I'm not sure, removing extension-nodes anyway
-        set_parent(new_child_address, parents);
-
-        Ok(None)
     }
 
     pub fn insert<K: AsRef<[u8]>>(
@@ -1460,7 +1285,6 @@ impl<'a> std::ops::Deref for Ref<'a> {
         match &self.0.inner {
             NodeType::Branch(n) => n.value.as_ref().unwrap(),
             NodeType::Leaf(n) => &n.data,
-            _ => unreachable!(),
         }
     }
 }
@@ -1498,7 +1322,6 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> RefMut<'a, S, T> {
                     modify(match &mut u.inner {
                         NodeType::Branch(n) => &mut n.value.as_mut().unwrap().0,
                         NodeType::Leaf(n) => &mut n.data.0,
-                        _ => unreachable!(),
                     });
                     u.rehash()
                 },
