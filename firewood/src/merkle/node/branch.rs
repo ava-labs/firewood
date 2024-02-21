@@ -3,7 +3,7 @@
 
 use super::{Data, Encoded, Node};
 use crate::{
-    merkle::{from_nibbles, to_nibble_array, PartialPath, TRIE_HASH_LEN},
+    merkle::{from_nibbles, to_nibble_array, NodeStore, PartialPath, TRIE_HASH_LEN},
     nibbles::Nibbles,
     shale::{DiskAddress, ShaleError, ShaleStore, Storable},
 };
@@ -137,7 +137,9 @@ impl BranchNode {
             match c {
                 Some(c) => {
                     #[allow(clippy::unwrap_used)]
-                    let mut c_ref = store.get_item(*c).unwrap();
+                    let mut c_ref = store
+                        .get_node(*c)
+                        .unwrap_or_else(|_| panic!("Item at {c:?} was not a node"));
 
                     #[allow(clippy::unwrap_used)]
                     if c_ref.is_encoded_longer_than_hash_len::<S>(store) {

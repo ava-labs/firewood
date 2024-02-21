@@ -5,7 +5,7 @@
 
 use criterion::{criterion_group, criterion_main, profiler::Profiler, BatchSize, Criterion};
 use firewood::{
-    db::{BatchOp, DbConfig},
+    db::{BatchOp, DbConfig, SharedStore},
     merkle::{Bincode, Merkle, Node, TrieHash, TRIE_HASH_LEN},
     shale::{
         cached::DynamicMem,
@@ -110,6 +110,7 @@ fn bench_merkle<const N: usize>(criterion: &mut Criterion) {
                         ObjCache::new(1 << 20),
                         4096,
                         4096,
+                        None::<&SharedStore>,
                     )
                     .unwrap();
 

@@ -1,6 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use std::fmt::Debug;
 use std::hash::Hash;
 use std::mem::size_of;
 use std::num::NonZeroUsize;
@@ -12,8 +13,14 @@ use crate::shale::{CachedStore, ShaleError, Storable};
 
 /// The virtual disk address of an object
 #[repr(transparent)]
-#[derive(Debug, Copy, Clone, Eq, Hash, Ord, PartialOrd, PartialEq, Pod, Zeroable)]
+#[derive(Copy, Clone, Eq, Hash, Ord, PartialOrd, PartialEq, Pod, Zeroable)]
 pub struct DiskAddress(pub Option<NonZeroUsize>);
+
+impl Debug for DiskAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("DiskAddress({:?})", self.0))
+    }
+}
 
 impl Deref for DiskAddress {
     type Target = Option<NonZeroUsize>;

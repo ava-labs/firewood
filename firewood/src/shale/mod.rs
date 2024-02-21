@@ -1,6 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use crate::logger::trace;
 pub(crate) use disk_address::DiskAddress;
 use std::any::type_name;
 use std::collections::{HashMap, HashSet};
@@ -124,6 +125,8 @@ impl<T: Storable> Obj<T> {
             None => return Err(ObjWriteSizeError),
         };
 
+        trace!("obj at {:?} dirty", self.as_ptr());
+
         Ok(())
     }
 
@@ -138,6 +141,22 @@ impl<T: Storable> Obj<T> {
     }
 
     pub fn flush_dirty(&mut self) {
+        trace!("flushing {:?}", self.as_ptr());
+        if self.as_ptr() == DiskAddress(NonZeroUsize::new(75369)) {
+            backtrace::trace(|frame| {
+                let _ip = frame.ip();
+                let _symbol_address = frame.symbol_address();
+
+                // Resolve this instruction pointer to a symbol name
+                backtrace::resolve_frame(frame, |symbol| {
+                    if let (Some(_name), Some(_filename)) = (symbol.name(), symbol.filename()) {
+                        trace!("| {_name} at {}", _filename.display());
+                    }
+                });
+
+                true // keep going to the next frame
+            });
+        }
         // faster than calling `self.dirty.take()` on a `None`
         if self.dirty.is_none() {
             return;
@@ -170,7 +189,7 @@ impl<T: Storable> Deref for Obj<T> {
 
 /// User handle that offers read & write access to the stored [ShaleStore] item.
 #[derive(Debug)]
-pub struct ObjRef<'a, T: Storable> {
+pub struct ObjRef<'a, T: Storable + Debug> {
     inner: Option<Obj<T>>,
     cache: &'a ObjCache<T>,
 }
@@ -205,7 +224,7 @@ impl<'a, T: Storable + Debug> Deref for ObjRef<'a, T> {
     }
 }
 
-impl<'a, T: Storable> Drop for ObjRef<'a, T> {
+impl<'a, T: Storable + Debug> Drop for ObjRef<'a, T> {
     fn drop(&mut self) {
         #[allow(clippy::unwrap_used)]
         let mut inner = self.inner.take().unwrap();
@@ -216,6 +235,12 @@ impl<'a, T: Storable> Drop for ObjRef<'a, T> {
                 inner.dirty = None;
             }
             _ => {
+                trace!(
+                    "[{:p}] {} objs cached; drop of unpinned {ptr:?}: {inner:?}",
+                    self.cache,
+                    cache.cached.len() + 1,
+                );
+
                 cache.cached.put(ptr, inner);
             }
         }
@@ -226,7 +251,7 @@ impl<'a, T: Storable> Drop for ObjRef<'a, T> {
 /// items could be retrieved or dropped.
 pub trait ShaleStore<T: Storable + Debug> {
     /// Dereference [DiskAddress] to a unique handle that allows direct access to the item in memory.
-    fn get_item(&'_ self, ptr: DiskAddress) -> Result<ObjRef<'_, T>, ShaleError>;
+    fn get_item(&'_ self, ptr: DiskAddress) -> Result<(ObjRef<'_, T>, Option<Obj<T>>), ShaleError>;
     /// Allocate a new item.
     fn put_item(&'_ self, item: T, extra: u64) -> Result<ObjRef<'_, T>, ShaleError>;
     /// Free an item and recycle its space when applicable.
@@ -416,6 +441,37 @@ pub struct ObjCacheInner<T: Storable> {
 #[derive(Debug)]
 pub struct ObjCache<T: Storable>(Arc<RwLock<ObjCacheInner<T>>>);
 
+// Since T is not Clone, we can't derive Clone here, so we do it by hand
+impl<T: Storable> Clone for ObjCache<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<T: Storable + Clone> ObjCache<T> {
+    fn peek_clone(&self, ptr: DiskAddress) -> Result<Option<Obj<T>>, ShaleError> {
+        #[allow(clippy::unwrap_used)]
+        self.0
+            .write()
+            .expect("poisoned cache")
+            .cached
+            .get(&ptr)
+            .map(|obj| -> Result<Obj<T>, ShaleError> {
+                let sv2 = StoredView::new_from_slice(
+                    obj.value.offset,
+                    obj.value.len_limit,
+                    obj.value.decoded.clone(),
+                    obj.value.get_mem_store(),
+                )?;
+                Ok(Obj {
+                    value: sv2,
+                    dirty: None,
+                })
+            })
+            .transpose()
+    }
+}
+
 impl<T: Storable> ObjCache<T> {
     pub fn new(capacity: usize) -> Self {
         Self(Arc::new(RwLock::new(ObjCacheInner {
@@ -435,34 +491,16 @@ impl<T: Storable> ObjCache<T> {
         #[allow(clippy::unwrap_used)]
         let mut inner = self.0.write().unwrap();
 
-        let obj_ref = inner.cached.pop(&ptr).map(|r| {
-            // insert and set to `false` if you can
+        let obj_ref = inner.cached.pop(&ptr);
+        if obj_ref.is_some() {
+            // insert into the pinned map, or set to `false` if already there
             // When using `get` in parallel, one should not `write` to the same address
             inner
                 .pinned
                 .entry(ptr)
                 .and_modify(|is_pinned| *is_pinned = false)
                 .or_insert(false);
-
-            // if we need to re-enable this code, it has to return from the outer function
-            //
-            // return if inner.pinned.insert(ptr, false).is_some() {
-            //     Err(ShaleError::InvalidObj {
-            //         addr: ptr.addr(),
-            //         obj_type: type_name::<T>(),
-            //         error: "address already in use",
-            //     })
-            // } else {
-            //     Ok(Some(ObjRef {
-            //         inner: Some(r),
-            //         cache: Self(self.0.clone()),
-            //         _life: PhantomData,
-            //     }))
-            // };
-
-            // always return instead of the code above
-            r
-        });
+        }
 
         Ok(obj_ref)
     }
@@ -494,6 +532,8 @@ impl<T: Storable> ObjCache<T> {
         for ptr in std::mem::take(&mut inner.dirty) {
             if let Some(r) = inner.cached.peek_mut(&ptr) {
                 r.flush_dirty()
+            } else {
+                trace!("Missing dirty page at {ptr:?}");
             }
         }
         Some(())

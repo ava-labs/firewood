@@ -544,18 +544,36 @@ impl<M: CachedStore> CompactSpaceInner<M> {
 pub struct CompactSpace<T: Storable, M> {
     inner: RwLock<CompactSpaceInner<M>>,
     obj_cache: ObjCache<T>,
+    parent_caches: Box<[ObjCache<T>]>,
 }
 
 impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
-    pub fn new(
+    pub fn new<P: CachedStore>(
         meta_space: M,
         compact_space: M,
         header: Obj<CompactSpaceHeader>,
         obj_cache: super::ObjCache<T>,
         alloc_max_walk: u64,
         regn_nbit: u64,
+        parent: Option<&CompactSpace<T, P>>,
     ) -> Result<Self, ShaleError> {
-        let cs = CompactSpace {
+        let parent_caches = parent
+            .map(|parent| {
+                std::iter::once(&parent.obj_cache)
+                    .chain(parent.parent_caches.iter())
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice()
+            })
+            .unwrap_or_default();
+
+        trace!(
+            "[{:p}] New cache with {} parents",
+            &obj_cache,
+            parent_caches.len()
+        );
+
+        let cs: CompactSpace<T, M> = CompactSpace {
             inner: RwLock::new(CompactSpaceInner {
                 meta_space,
                 compact_space,
@@ -564,7 +582,9 @@ impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
                 regn_nbit,
             }),
             obj_cache,
+            parent_caches,
         };
+
         Ok(cs)
     }
 }
@@ -576,11 +596,12 @@ impl From<Box<CompactSpace<Node, StoreRevMut>>> for CompactSpace<Node, StoreRevS
         CompactSpace {
             inner: RwLock::new(inner.into()),
             obj_cache: value.obj_cache,
+            parent_caches: [].into(),
         }
     }
 }
 
-impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> ShaleStore<T>
+impl<T: Storable + Clone + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> ShaleStore<T>
     for CompactSpace<T, M>
 {
     fn put_item(&self, item: T, extra: u64) -> Result<ObjRef<'_, T>, ShaleError> {
@@ -588,7 +609,7 @@ impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> Sh
         #[allow(clippy::unwrap_used)]
         let addr = self.inner.write().unwrap().alloc(size)?;
 
-        trace!("{self:p} put_item at {addr} size {size}");
+        trace!("[{:p}] put_item size {size} at {addr}", &self.obj_cache);
 
         #[allow(clippy::unwrap_used)]
         let obj = {
@@ -614,23 +635,15 @@ impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> Sh
 
     #[allow(clippy::unwrap_used)]
     fn free_item(&mut self, ptr: DiskAddress) -> Result<(), ShaleError> {
+        trace!("[{:p}] free_item({ptr:?})", &self.obj_cache);
         let mut inner = self.inner.write().unwrap();
         self.obj_cache.pop(ptr);
         #[allow(clippy::unwrap_used)]
         inner.free(ptr.unwrap().get() as u64)
     }
 
-    fn get_item(&self, ptr: DiskAddress) -> Result<ObjRef<'_, T>, ShaleError> {
-        let obj = self.obj_cache.get(ptr)?;
-
-        #[allow(clippy::unwrap_used)]
-        let inner = self.inner.read().unwrap();
-        let cache = &self.obj_cache;
-
-        if let Some(obj) = obj {
-            return Ok(ObjRef::new(Some(obj), cache));
-        }
-
+    fn get_item(&self, ptr: DiskAddress) -> Result<(ObjRef<'_, T>, Option<Obj<T>>), ShaleError> {
+        trace!("[{:p}] get_item({ptr:?})", &self.obj_cache);
         #[allow(clippy::unwrap_used)]
         if ptr < DiskAddress::from(CompactSpaceHeader::MSIZE as usize) {
             return Err(ShaleError::InvalidAddressLength {
@@ -639,17 +652,85 @@ impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> Sh
             });
         }
 
+        let cache = &self.obj_cache;
+        if let Some(obj) = cache.get(ptr)? {
+            trace!("[{:p}] node {:?} was in primary", cache, ptr);
+
+            return Ok((ObjRef::new(Some(obj), cache), None));
+        }
+
+        let mut saved: Option<Obj<T>> = None;
+        // we missed the cache, so check for any parent caches
+        if let Some(result) = self
+            .parent_caches
+            .iter()
+            .inspect(|&_f| {
+                trace!("[{:p}] [looking in secondary {:p}]", cache, _f);
+            })
+            .find_map(|cache| cache.peek_clone(ptr).transpose())
+        {
+            // found in the parent cache; insert into this cache, unless it's a ShaleError
+            let obj = result?;
+
+            trace!("[{:p}] node {:?} was in secondary: {:?}", cache, ptr, obj);
+            let mut inner = cache.0.write().expect("poisoned cache");
+            inner.cached.put(ptr, obj);
+            drop(inner);
+            saved = Some(cache.get(ptr)?.expect("must be there"));
+        }
+
+        let inner = self.inner.read().expect("poisoned cache");
+
         let payload_size = inner
             .get_header(ptr - CompactHeader::MSIZE as usize)?
             .payload_size;
         let obj = self.obj_cache.put(inner.get_data_ref(ptr, payload_size)?);
-        let cache = &self.obj_cache;
+        trace!(
+            "[{:p}] node {:?} was read into cache: {:?}",
+            cache,
+            ptr,
+            obj
+        );
 
-        Ok(ObjRef::new(Some(obj), cache))
+        #[cfg(never)]
+        if let Some(ref debug_saved) = saved {
+            use std::fmt::Write;
+            let mut left = String::new();
+            let mut right = String::new();
+            write!(left, "{:?}", debug_saved).ok();
+            write!(right, "{:?}", obj).ok();
+            left = left
+                .split("OnceLock(")
+                .enumerate()
+                .map(|(pos, part)| {
+                    if pos == 0 {
+                        part.to_string()
+                    } else {
+                        part.chars().skip_while(|&c| c != ')').collect::<String>()
+                    }
+                })
+                .collect();
+            right = right
+                .split("OnceLock(")
+                .enumerate()
+                .map(|(pos, part)| {
+                    if pos == 0 {
+                        part.to_string()
+                    } else {
+                        part.chars().skip_while(|&c| c != ')').collect::<String>()
+                    }
+                })
+                .collect();
+            // println!("{left}\n{right}\n");
+            assert_eq!(left, right);
+        }
+
+        Ok((ObjRef::new(Some(obj), cache), saved))
     }
 
     #[allow(clippy::unwrap_used)]
     fn flush_dirty(&self) -> Option<()> {
+        trace!("[{:p}] flush_dirty", &self.obj_cache);
         let mut inner = self.inner.write().unwrap();
         inner.header.flush_dirty();
         // hold the write lock to ensure that both cache and header are flushed in-sync
@@ -733,8 +814,16 @@ mod tests {
         let mem_payload = DynamicMem::new(compact_size.get() as u64, 0x1);
 
         let cache: ObjCache<Hash> = ObjCache::new(1);
-        let space =
-            CompactSpace::new(mem_meta, mem_payload, compact_header, cache, 10, 16).unwrap();
+        let space = CompactSpace::new(
+            mem_meta,
+            mem_payload,
+            compact_header,
+            cache,
+            10,
+            16,
+            None::<&CompactSpace<tests::Hash, DynamicMem>>,
+        )
+        .unwrap();
 
         // initial write
         let data = b"hello world";
@@ -742,7 +831,7 @@ mod tests {
         let obj_ref = space.put_item(Hash(hash), 0).unwrap();
         assert_eq!(obj_ref.as_ptr(), DiskAddress::from(4113));
         // create hash ptr from address and attempt to read dirty write.
-        let hash_ref = space.get_item(DiskAddress::from(4113)).unwrap();
+        let hash_ref = space.get_item(DiskAddress::from(4113)).unwrap().0;
         // read before flush results in zeroed hash
         assert_eq!(hash_ref.as_ref(), ZERO_HASH.as_ref());
         // not cached
@@ -769,7 +858,7 @@ mod tests {
         drop(obj_ref);
         // write is visible
         assert_eq!(
-            space.get_item(DiskAddress::from(4113)).unwrap().as_ref(),
+            space.get_item(DiskAddress::from(4113)).unwrap().0.as_ref(),
             hash
         );
     }

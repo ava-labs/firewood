@@ -6,6 +6,7 @@ use crate::shale::{self, disk_address::DiskAddress, ObjWriteSizeError, ShaleErro
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
 use sha3::Digest;
+use std::ops::Deref;
 use std::{
     cmp::Ordering, collections::HashMap, future::ready, io::Write, iter::once, marker::PhantomData,
     sync::OnceLock,
@@ -33,6 +34,33 @@ type ParentAddresses = Vec<(DiskAddress, u8)>;
 
 type Key = Box<[u8]>;
 type Value = Vec<u8>;
+
+pub(crate) trait NodeStore {
+    fn get_node(&self, ptr: DiskAddress) -> Result<NodeObjRef, MerkleError>;
+
+    fn put_node(&self, node: Node) -> Result<NodeObjRef, MerkleError>;
+
+    fn free_node(&mut self, ptr: DiskAddress) -> Result<(), MerkleError>;
+}
+
+impl<S: ShaleStore<Node>> NodeStore for S {
+    fn get_node(&self, ptr: DiskAddress) -> Result<NodeObjRef, MerkleError> {
+        self.get_item(ptr)
+            .map(|(base, history)| {
+                base.deref().copy_encoded_from(history);
+                base
+            })
+            .map_err(Into::into)
+    }
+
+    fn put_node(&self, node: Node) -> Result<NodeObjRef, MerkleError> {
+        self.put_item(node, 0).map_err(Into::into)
+    }
+
+    fn free_node(&mut self, ptr: DiskAddress) -> Result<(), MerkleError> {
+        self.free_item(ptr).map_err(Into::into)
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum MerkleError {
@@ -85,7 +113,10 @@ impl<T> From<Merkle<MutStore, T>> for Merkle<SharedStore, T> {
 
 impl<S: ShaleStore<Node>, T> Merkle<S, T> {
     pub fn get_node(&self, ptr: DiskAddress) -> Result<NodeObjRef, MerkleError> {
-        self.store.get_item(ptr).map_err(Into::into)
+        self.store
+            .get_item(ptr)
+            .map(|(base, _history)| base)
+            .map_err(Into::into)
     }
 
     pub fn put_node(&self, node: Node) -> Result<NodeObjRef, MerkleError> {
@@ -1721,9 +1752,16 @@ mod tests {
         let mem_payload = DynamicMem::new(0x10000, 0x1);
 
         let cache = shale::ObjCache::new(1);
-        let space =
-            shale::compact::CompactSpace::new(mem_meta, mem_payload, compact_header, cache, 10, 16)
-                .expect("CompactSpace init fail");
+        let space = shale::compact::CompactSpace::new(
+            mem_meta,
+            mem_payload,
+            compact_header,
+            cache,
+            10,
+            16,
+            None::<&SharedStore>,
+        )
+        .expect("CompactSpace init fail");
 
         let store = Box::new(space);
         Merkle::new(store)

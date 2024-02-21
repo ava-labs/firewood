@@ -1,6 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use crate::db::SharedStore;
 use crate::{
     merkle::{
         proof::{Proof, ProofError},
@@ -147,9 +148,16 @@ pub fn new_merkle(
     let mem_payload = DynamicMem::new(compact_size, 0x1);
 
     let cache = shale::ObjCache::new(1);
-    let space =
-        shale::compact::CompactSpace::new(mem_meta, mem_payload, compact_header, cache, 10, 16)
-            .expect("CompactSpace init fail");
+    let space = shale::compact::CompactSpace::new(
+        mem_meta,
+        mem_payload,
+        compact_header,
+        cache,
+        10,
+        16,
+        None::<&SharedStore>,
+    )
+    .expect("CompactSpace init fail");
 
     let merkle = Merkle::new(Box::new(space));
     #[allow(clippy::unwrap_used)]

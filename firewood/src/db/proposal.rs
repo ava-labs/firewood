@@ -86,6 +86,7 @@ impl Proposal {
             cfg.payload_regn_nbit,
             cfg.payload_max_walk,
             &cfg.rev,
+            None::<&SharedStore>,
         )?;
         data.into_iter().try_for_each(|op| -> Result<(), DbError> {
             match op {
@@ -169,6 +170,8 @@ impl Proposal {
                 }
             }
         };
+        // force the ObjCache to disk
+        rev.merkle.flush_dirty();
 
         // clear the staging layer and apply changes to the CachedSpace
         let (merkle_payload_redo, merkle_payload_wal) = store.merkle.payload.delta();
@@ -214,6 +217,7 @@ impl Proposal {
         }
 
         revisions.base_revision = Arc::new(rev.into());
+        // revisions.base_revision.kv_dump(&mut io::stdout().lock())?;
 
         // update the rolling window of root hashes
         revisions.root_hashes.push_front(hash);
