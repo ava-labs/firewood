@@ -19,7 +19,7 @@ use crate::{
     merkle_util::{new_merkle, DataStoreError, MerkleSetup},
 };
 
-use super::{BinarySerde, NodeObjRef};
+use super::{BinarySerde, EncodedNode, NodeObjRef};
 
 #[derive(Debug, Error)]
 pub enum ProofError {
@@ -260,13 +260,19 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     /// necessary nodes will be resolved and leave the remaining as hashnode.
     ///
     /// The given edge proof is allowed to be an existent or non-existent proof.
-    fn proof_to_path<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySerde>(
+    fn proof_to_path<'de, K, S, T>(
         &self,
         key: K,
         root_hash: HashKey,
         merkle_setup: &mut MerkleSetup<S, T>,
         allow_non_existent_node: bool,
-    ) -> Result<Option<Vec<u8>>, ProofError> {
+    ) -> Result<Option<Vec<u8>>, ProofError>
+    where
+        K: AsRef<[u8]>,
+        S: ShaleStore<Node> + Send + Sync,
+        T: BinarySerde,
+        EncodedNode<T>: serde::Serialize + serde::Deserialize<'de>,
+    {
         // Start with the sentinel root
         let sentinel = merkle_setup.get_sentinel_address();
         let merkle = merkle_setup.get_merkle_mut();
@@ -472,11 +478,17 @@ fn generate_subproof(encoded: &[u8]) -> Result<SubProof, ProofError> {
 //
 // The return value indicates if the fork point is root node. If so, unset the
 // entire trie.
-fn unset_internal<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySerde>(
+fn unset_internal<'de, K, S, T>(
     merkle_setup: &mut MerkleSetup<S, T>,
     left: K,
     right: K,
-) -> Result<bool, ProofError> {
+) -> Result<bool, ProofError>
+where
+    K: AsRef<[u8]>,
+    S: ShaleStore<Node> + Send + Sync,
+    T: BinarySerde,
+    EncodedNode<T>: serde::Serialize + serde::Deserialize<'de>,
+{
     // Add the sentinel root
     let mut left_chunks = vec![0];
     left_chunks.extend(left.as_ref().iter().copied().flat_map(to_nibble_array));

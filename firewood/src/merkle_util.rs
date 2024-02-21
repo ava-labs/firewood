@@ -4,7 +4,7 @@
 use crate::{
     merkle::{
         proof::{Proof, ProofError},
-        BinarySerde, Bincode, Merkle, Node, Ref, RefMut, TrieHash,
+        BinarySerde, Bincode, EncodedNode, Merkle, Node, Ref, RefMut, TrieHash,
     },
     shale::{
         self, cached::DynamicMem, compact::CompactSpace, disk_address::DiskAddress, CachedStore,
@@ -41,7 +41,12 @@ pub struct MerkleSetup<S, T> {
     merkle: Merkle<S, T>,
 }
 
-impl<S: ShaleStore<Node> + Send + Sync, T: BinarySerde> MerkleSetup<S, T> {
+impl<'de, S, T> MerkleSetup<S, T>
+where
+    S: ShaleStore<Node> + Send + Sync,
+    T: BinarySerde,
+    EncodedNode<T>: serde::Serialize + serde::Deserialize<'de>,
+{
     pub fn insert<K: AsRef<[u8]>>(&mut self, key: K, val: Vec<u8>) -> Result<(), DataStoreError> {
         self.merkle
             .insert(key, val, self.root)
