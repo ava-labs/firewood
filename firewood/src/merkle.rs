@@ -82,6 +82,15 @@ impl<T> From<Merkle<MutStore, T>> for Merkle<SharedStore, T> {
     }
 }
 
+impl<S, T> Merkle<S, T> {
+    pub fn new(store: Box<S>) -> Self {
+        Self {
+            store,
+            phantom: PhantomData,
+        }
+    }
+}
+
 impl<S: ShaleStore<Node>, T> Merkle<S, T> {
     pub fn get_node(&self, ptr: DiskAddress) -> Result<NodeObjRef, MerkleError> {
         self.store.get_item(ptr).map_err(Into::into)
@@ -93,20 +102,6 @@ impl<S: ShaleStore<Node>, T> Merkle<S, T> {
 
     fn free_node(&mut self, ptr: DiskAddress) -> Result<(), MerkleError> {
         self.store.free_item(ptr).map_err(Into::into)
-    }
-}
-
-impl<'de, S, T> Merkle<S, T>
-where
-    S: ShaleStore<Node> + Send + Sync,
-    T: BinarySerde,
-    EncodedNode<T>: serde::Serialize + serde::Deserialize<'de>,
-{
-    pub fn new(store: Box<S>) -> Self {
-        Self {
-            store,
-            phantom: PhantomData,
-        }
     }
 }
 
