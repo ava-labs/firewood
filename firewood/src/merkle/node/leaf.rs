@@ -46,19 +46,6 @@ impl LeafNode {
     pub const fn data(&self) -> &Data {
         &self.data
     }
-
-    // pub(super) fn encode(&self) -> Vec<u8> {
-    //     #[allow(clippy::unwrap_used)]
-    //     bincode::DefaultOptions::new()
-    //         .serialize(
-    //             [
-    //                 Encoded::Raw(from_nibbles(&self.path.encode(true)).collect()),
-    //                 Encoded::Raw(self.data.to_vec()),
-    //             ]
-    //             .as_slice(),
-    //         )
-    //         .unwrap()
-    // }
 }
 
 #[derive(Clone, Copy, Pod, Zeroable)]

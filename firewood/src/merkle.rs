@@ -216,9 +216,8 @@ where
             .children[0];
         Ok(if let Some(root) = root {
             let mut node = self.get_node(root)?;
-            //let res = *node.get_root_hash::<S>(self.store.as_ref());
-            let res = self.encode(&node)?;
-            let res = TrieHash(Keccak256::digest(res).into());
+            let node_encoded = self.encode(&node)?;
+            let res = TrieHash(Keccak256::digest(node_encoded).into());
             #[allow(clippy::unwrap_used)]
             if node.is_dirty() {
                 node.write(|_| {}).unwrap();
@@ -1077,7 +1076,6 @@ where
 
         // Get the hashes of the nodes.
         for node in nodes.into_iter() {
-            // let encoded = <&[u8]>::clone(&node.get_encoded::<S>(self.store.as_ref()));
             let encoded = self.encode(&node)?;
             let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(encoded.clone()).into();
             proofs.insert(hash, encoded.to_vec());
@@ -1499,31 +1497,6 @@ mod tests {
             children_encoded,
         })
     }
-
-    // TODO remove/replace
-    // #[test_case(leaf(Vec::new(), Vec::new()) ; "empty leaf encoding")]
-    // #[test_case(leaf(vec![1, 2, 3], vec![4, 5]) ; "leaf encoding")]
-    // #[test_case(branch(b"", b"value", vec![1, 2, 3].into()) ; "branch with chd")]
-    // #[test_case(branch(b"", b"value", None); "branch without chd")]
-    // #[test_case(branch_without_data(b"", None); "branch without value and chd")]
-    // #[test_case(branch(b"", b"", None); "branch without path value or children")]
-    // #[test_case(branch(b"", b"value", None) ; "branch with value")]
-    // #[test_case(branch(&[2], b"", None); "branch with path")]
-    // #[test_case(branch(b"", b"", vec![1, 2, 3].into()); "branch with children")]
-    // #[test_case(branch(&[2], b"value", None); "branch with path and value")]
-    // #[test_case(branch(b"", b"value", vec![1, 2, 3].into()); "branch with value and children")]
-    // #[test_case(branch(&[2], b"", vec![1, 2, 3].into()); "branch with path and children")]
-    // #[test_case(branch(&[2], b"value", vec![1, 2, 3].into()); "branch with path value and children")]
-    // fn encode(node: Node) {
-    //     let merkle = create_test_merkle();
-
-    //     let node_ref = merkle.put_node(node).unwrap();
-    //     let encoded = node_ref.get_encoded(merkle.store.as_ref());
-    //     let new_node = Node::from(NodeType::decode(encoded).unwrap());
-    //     let new_node_encoded = new_node.get_encoded(merkle.store.as_ref());
-
-    //     assert_eq!(encoded, new_node_encoded);
-    // }
 
     #[test_case(Bincode::new(), leaf(Vec::new(), Vec::new()) ; "empty leaf encoding with Bincode")]
     #[test_case(Bincode::new(), leaf(vec![1, 2, 3], vec![4, 5]) ; "leaf encoding with Bincode")]

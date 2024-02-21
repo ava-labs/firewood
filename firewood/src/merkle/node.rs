@@ -133,14 +133,6 @@ impl NodeType {
         }
     }
 
-    // TODO remove
-    // pub fn encode<S: ShaleStore<Node>>(&self, store: &S) -> Vec<u8> {
-    //     match &self {
-    //         NodeType::Leaf(n) => n.encode(),
-    //         NodeType::Branch(n) => n.encode(store),
-    //     }
-    // }
-
     pub fn path_mut(&mut self) -> &mut PartialPath {
         match self {
             NodeType::Branch(u) => &mut u.path,
@@ -253,23 +245,6 @@ impl Node {
             .serialized_len()
         })
     }
-
-    // pub(super) fn get_encoded<S: ShaleStore<Node>>(&self, store: &S) -> &[u8] {
-    //     self.encoded.get_or_init(|| self.inner.encode::<S>(store))
-    // }
-
-    // pub(super) fn get_root_hash<S: ShaleStore<Node>>(&self, store: &S) -> &TrieHash {
-    //     self.root_hash.get_or_init(|| {
-    //         self.set_dirty(true);
-    //         TrieHash(Keccak256::digest(self.get_encoded::<S>(store)).into())
-    //     })
-    // }
-
-    // fn is_encoded_longer_than_hash_len<S: ShaleStore<Node>>(&self, store: &S) -> bool {
-    //     *self
-    //         .is_encoded_longer_than_hash_len
-    //         .get_or_init(|| self.get_encoded(store).len() >= TRIE_HASH_LEN)
-    // }
 
     pub(super) fn rehash(&mut self) {
         self.encoded = OnceLock::new();
