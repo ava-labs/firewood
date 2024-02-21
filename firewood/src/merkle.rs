@@ -18,8 +18,8 @@ mod stream;
 mod trie_hash;
 
 pub use node::{
-    BinarySerde, Bincode, BranchNode, Data, EncodedNode, EncodedNodeType, ExtNode, LeafNode, Node,
-    NodeType, PartialPath,
+    BinarySerde, Bincode, BranchNode, Data, EncodedNode, EncodedNodeType, LeafNode, Node, NodeType,
+    PartialPath,
 };
 pub use proof::{Proof, ProofError};
 pub use stream::MerkleKeyValueStream;
@@ -140,8 +140,6 @@ where
                     value: n.value.clone(),
                 })
             }
-
-            NodeType::Extension(_) => todo!(),
         };
 
         Bincode::serialize(&encoded).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))
@@ -245,10 +243,6 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             }
             #[allow(clippy::unwrap_used)]
             NodeType::Leaf(n) => writeln!(w, "{n:?}").unwrap(),
-            NodeType::Extension(n) => {
-                writeln!(w, "{n:?}")?;
-                self.dump_(n.chd(), w)?
-            }
         }
 
         Ok(())
@@ -308,10 +302,11 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             chd[last_matching_nibble as usize] = Some(leaf_address);
 
             let address = match &node_to_split.inner {
-                NodeType::Extension(u) if u.path.len() == 0 => {
-                    deleted.push(node_to_split_address);
-                    u.chd()
-                }
+                // TODO fix
+                // NodeType::Extension(u) if u.path.len() == 0 => {
+                //     deleted.push(node_to_split_address);
+                //     u.chd()
+                // }
                 _ => node_to_split_address,
             };
 
@@ -342,35 +337,6 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                             |u| {
                                 match &mut u.inner {
                                     NodeType::Leaf(u) => u.data = Data(val),
-                                    NodeType::Extension(u) => {
-                                        #[allow(clippy::unwrap_used)]
-                                        let write_result =
-                                            self.get_node(u.chd()).and_then(|mut b_ref| {
-                                                b_ref
-                                                    .write(|b| {
-                                                        let branch =
-                                                            b.inner.as_branch_mut().unwrap();
-                                                        branch.value = Some(Data(val));
-
-                                                        b.rehash()
-                                                    })
-                                                    // if writing fails, delete the child?
-                                                    .or_else(|_| {
-                                                        let node = self.put_node(b_ref.clone())?;
-
-                                                        let child = u.chd_mut();
-                                                        *child = node.as_ptr();
-
-                                                        deleted.push(b_ref.as_ptr());
-
-                                                        Ok(())
-                                                    })
-                                            });
-
-                                        if let Err(e) = write_result {
-                                            result = Err(e);
-                                        }
-                                    }
                                     NodeType::Branch(u) => {
                                         u.value = Some(Data(val));
                                     }
@@ -402,10 +368,11 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
                         let leaf_address = match &node_to_split.inner {
                             // TODO: handle BranchNode case
-                            NodeType::Extension(u) if u.path.len() == 0 => {
-                                deleted.push(node_to_split_address);
-                                u.chd()
-                            }
+                            // TODO fix
+                            // NodeType::Extension(u) if u.path.len() == 0 => {
+                            //     deleted.push(node_to_split_address);
+                            //     u.chd()
+                            // }
                             _ => node_to_split_address,
                         };
 
@@ -486,7 +453,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
     fn insert_and_return_updates<K: AsRef<[u8]>>(
         &self,
         key: K,
-        mut val: Vec<u8>,
+        val: Vec<u8>,
         root: DiskAddress,
     ) -> Result<(impl Iterator<Item = NodeObjRef>, Vec<DiskAddress>), MerkleError> {
         // as we split a node, we need to track deleted nodes and parents
@@ -808,39 +775,6 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                         }
                     }
                 }
-
-                NodeType::Extension(n) => {
-                    let n_path = n.path.to_vec();
-                    let n_ptr = n.chd();
-                    let rem_path = once(next_nibble)
-                        .chain(key_nibbles.clone())
-                        .collect::<Vec<_>>();
-                    let n_path_len = n_path.len();
-
-                    if let Some((node, v)) = self.split(
-                        node,
-                        &mut parents,
-                        &rem_path,
-                        n_path,
-                        None,
-                        val,
-                        &mut deleted,
-                    )? {
-                        (0..n_path_len).skip(1).for_each(|_| {
-                            key_nibbles.next();
-                        });
-
-                        // we couldn't split this, so we
-                        // skip n_path items and follow the
-                        // extension node's next pointer
-                        val = v;
-
-                        (node, n_ptr)
-                    } else {
-                        // successfully inserted
-                        break None;
-                    }
-                }
             };
 
             // push another parent, and follow the next pointer
@@ -876,19 +810,6 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
                                     Some((idx, true, None, val))
                                 }
-                            }
-                            NodeType::Extension(n) => {
-                                #[allow(clippy::indexing_slicing)]
-                                let idx = n.path[0];
-                                let more = if n.path.len() > 1 {
-                                    #[allow(clippy::indexing_slicing)]
-                                    (n.path = PartialPath(n.path[1..].to_vec()));
-                                    true
-                                } else {
-                                    false
-                                };
-
-                                Some((idx, more, Some(n.chd()), val))
                             }
                         };
 
@@ -1062,7 +983,6 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
                                     Node::from_leaf(child)
                                 }
-                                NodeType::Extension(_) => todo!(),
                             };
 
                             let child = self.put_node(new_child)?.as_ptr();
@@ -1090,8 +1010,6 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
 
                     data
                 }
-
-                NodeType::Extension(_) => todo!(),
             };
 
             for (mut parent, _) in parents {
@@ -1121,7 +1039,6 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                 }
             }
             NodeType::Leaf(_) => (),
-            NodeType::Extension(n) => self.remove_tree_(n.chd(), deleted)?,
         }
         deleted.push(u);
         Ok(())
@@ -1258,23 +1175,6 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
                     };
 
                     return Ok(node_ref);
-                }
-                NodeType::Extension(n) => {
-                    let mut n_path_iter = n.path.iter().copied();
-
-                    if n_path_iter.next() != Some(nib) {
-                        return Ok(None);
-                    }
-
-                    let path_matches = n_path_iter
-                        .map(Some)
-                        .all(|n_path_nibble| key_nibbles.next() == n_path_nibble);
-
-                    if !path_matches {
-                        return Ok(None);
-                    }
-
-                    n.chd()
                 }
             };
 
@@ -1538,7 +1438,6 @@ fn set_parent(new_chd: DiskAddress, parents: &mut [(NodeObjRef, u8)]) {
             match &mut p.inner {
                 #[allow(clippy::indexing_slicing)]
                 NodeType::Branch(pp) => pp.children[*idx as usize] = Some(new_chd),
-                NodeType::Extension(pp) => *pp.chd_mut() = new_chd,
                 _ => unreachable!(),
             }
             p.rehash();
