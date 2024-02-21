@@ -95,39 +95,40 @@ impl BranchNode {
         &mut self.children_encoded
     }
 
-    pub(super) fn decode(buf: &[u8]) -> Result<Self, Error> {
-        let mut items: Vec<Encoded<Vec<u8>>> = bincode::DefaultOptions::new().deserialize(buf)?;
+    // TODO remove
+    // pub(super) fn decode(buf: &[u8]) -> Result<Self, Error> {
+    //     let mut items: Vec<Encoded<Vec<u8>>> = bincode::DefaultOptions::new().deserialize(buf)?;
 
-        let path = items
-            .pop()
-            .ok_or(Error::custom("Invalid Branch Node"))?
-            .decode()?;
-        let path = Nibbles::<0>::new(&path);
-        let (path, _term) = PartialPath::from_nibbles(path.into_iter());
+    //     let path = items
+    //         .pop()
+    //         .ok_or(Error::custom("Invalid Branch Node"))?
+    //         .decode()?;
+    //     let path = Nibbles::<0>::new(&path);
+    //     let (path, _term) = PartialPath::from_nibbles(path.into_iter());
 
-        // we've already validated the size, that's why we can safely unwrap
-        #[allow(clippy::unwrap_used)]
-        let data = items.pop().unwrap().decode()?;
-        // Extract the value of the branch node and set to None if it's an empty Vec
-        let value = Some(data).filter(|data| !data.is_empty());
+    //     // we've already validated the size, that's why we can safely unwrap
+    //     #[allow(clippy::unwrap_used)]
+    //     let data = items.pop().unwrap().decode()?;
+    //     // Extract the value of the branch node and set to None if it's an empty Vec
+    //     let value = Some(data).filter(|data| !data.is_empty());
 
-        // encode all children.
-        let mut chd_encoded: [Option<Vec<u8>>; Self::MAX_CHILDREN] = Default::default();
+    //     // encode all children.
+    //     let mut chd_encoded: [Option<Vec<u8>>; Self::MAX_CHILDREN] = Default::default();
 
-        // we popped the last element, so their should only be NBRANCH items left
-        for (i, chd) in items.into_iter().enumerate() {
-            let data = chd.decode()?;
-            #[allow(clippy::indexing_slicing)]
-            (chd_encoded[i] = Some(data).filter(|data| !data.is_empty()));
-        }
+    //     // we popped the last element, so their should only be NBRANCH items left
+    //     for (i, chd) in items.into_iter().enumerate() {
+    //         let data = chd.decode()?;
+    //         #[allow(clippy::indexing_slicing)]
+    //         (chd_encoded[i] = Some(data).filter(|data| !data.is_empty()));
+    //     }
 
-        Ok(BranchNode::new(
-            path,
-            [None; Self::MAX_CHILDREN],
-            value,
-            chd_encoded,
-        ))
-    }
+    //     Ok(BranchNode::new(
+    //         path,
+    //         [None; Self::MAX_CHILDREN],
+    //         value,
+    //         chd_encoded,
+    //     ))
+    // }
 }
 
 impl Storable for BranchNode {

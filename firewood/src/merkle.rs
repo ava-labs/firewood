@@ -3,7 +3,7 @@ use crate::db::{MutStore, SharedStore};
 // See the file LICENSE.md for licensing terms.
 use crate::nibbles::Nibbles;
 use crate::shale::{self, disk_address::DiskAddress, ObjWriteSizeError, ShaleError, ShaleStore};
-use crate::v2::api;
+use crate::v2::api::{self, HashKey};
 use futures::{StreamExt, TryStreamExt};
 use sha3::{Digest, Keccak256};
 use std::{
@@ -24,6 +24,7 @@ pub use proof::{Proof, ProofError};
 pub use stream::MerkleKeyValueStream;
 pub use trie_hash::{TrieHash, TRIE_HASH_LEN};
 
+use self::proof::{locate_subproof, SubProof};
 use self::stream::PathIterator;
 
 type NodeObjRef<'a> = shale::ObjRef<'a, Node>;
@@ -1048,6 +1049,42 @@ where
         Ok(ptr.map(|ptr| RefMut::new(ptr, parents, self)))
     }
 
+    /// verify_proof checks merkle proofs. The given proof must contain the value for
+    /// key in a trie with the given root hash. VerifyProof returns an error if the
+    /// proof contains invalid trie nodes or the wrong value.
+    ///
+    /// The generic N represents the storage for the node data
+    pub fn verify_proof<K: AsRef<[u8]>, N: AsRef<[u8]> + Send>(
+        &self,
+        proof: &'de Proof<N>,
+        key: K,
+        root_hash: HashKey,
+    ) -> Result<Option<Vec<u8>>, ProofError> {
+        let mut key_nibbles = Nibbles::<0>::new(key.as_ref()).into_iter();
+
+        let mut cur_hash = root_hash;
+        let proofs_map = &proof.0;
+
+        loop {
+            let cur_proof = proofs_map
+                .get(&cur_hash)
+                .ok_or(ProofError::ProofNodeMissing)?;
+
+            let node = self.decode(cur_proof.as_ref())?;
+            // TODO: I think this will currently fail if the key is &[];
+            let (sub_proof, traversed_nibbles) = locate_subproof(key_nibbles, node)?;
+            key_nibbles = traversed_nibbles;
+
+            cur_hash = match sub_proof {
+                // Return when reaching the end of the key.
+                Some(SubProof::Data(value)) if key_nibbles.is_empty() => return Ok(Some(value)),
+                // The trie doesn't contain the key.
+                Some(SubProof::Hash(hash)) => hash,
+                _ => return Ok(None),
+            };
+        }
+    }
+
     /// Constructs a merkle proof for key. The result contains all encoded nodes
     /// on the path to the value at key. The value itself is also included in the
     /// last node and can be retrieved by verifying the proof.
@@ -1784,7 +1821,8 @@ mod tests {
         let verified = {
             let key = key1;
             let proof = merkle.prove(key, root).unwrap();
-            proof.verify(key, root_hash.0).unwrap()
+            merkle.verify_proof(&proof, key, root_hash.0).unwrap()
+            // proof.verify(key, root_hash.0).unwrap()
         };
 
         assert_eq!(verified, Some(value1.to_vec()));
@@ -1792,7 +1830,8 @@ mod tests {
         let verified = {
             let key = key2;
             let proof = merkle.prove(key, root).unwrap();
-            proof.verify(key, root_hash.0).unwrap()
+            merkle.verify_proof(&proof, key, root_hash.0).unwrap()
+            // proof.verify(key, root_hash.0).unwrap()
         };
 
         assert_eq!(verified, Some(value2.to_vec()));
@@ -2028,7 +2067,8 @@ mod tests {
 
         let proof = merkle.prove(key, root).unwrap();
 
-        let verified = proof.verify(key, root_hash.0).unwrap();
+        // let verified = proof.verify(key, root_hash.0).unwrap();
+        let verified = merkle.verify_proof(&proof, key, root_hash.0).unwrap();
 
         assert_eq!(verified, Some(value.to_vec()));
     }
@@ -2048,7 +2088,8 @@ mod tests {
 
         let verified = {
             let proof = merkle.prove(key1, root).unwrap();
-            proof.verify(key1, root_hash.0).unwrap()
+            merkle.verify_proof(&proof, key1, root_hash.0).unwrap()
+            // proof.verify(key1, root_hash.0).unwrap()
         };
 
         assert_eq!(verified.as_deref(), Some(key1.as_slice()));

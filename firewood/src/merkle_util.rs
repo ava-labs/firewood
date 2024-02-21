@@ -108,8 +108,7 @@ where
         proof: &Proof<N>,
     ) -> Result<Option<Vec<u8>>, DataStoreError> {
         let hash: [u8; 32] = *self.root_hash()?;
-        proof
-            .verify(key, hash)
+        self.verify_proof(key, proof)
             .map_err(|_err| DataStoreError::ProofVerificationError)
     }
 

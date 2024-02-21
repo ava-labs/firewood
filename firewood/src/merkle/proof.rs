@@ -101,7 +101,7 @@ pub struct Proof<N>(pub HashMap<HashKey, N>);
 /// the `SubProof` should be the `Value` variant.
 
 #[derive(Debug)]
-enum SubProof {
+pub(crate) enum SubProof {
     Data(Vec<u8>),
     Hash(HashKey),
 }
@@ -112,35 +112,35 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     /// proof contains invalid trie nodes or the wrong value.
     ///
     /// The generic N represents the storage for the node data
-    pub fn verify<K: AsRef<[u8]>>(
-        &self,
-        key: K,
-        root_hash: HashKey,
-    ) -> Result<Option<Vec<u8>>, ProofError> {
-        let mut key_nibbles = Nibbles::<0>::new(key.as_ref()).into_iter();
+    // pub fn verify<K: AsRef<[u8]>>(
+    //     &self,
+    //     key: K,
+    //     root_hash: HashKey,
+    // ) -> Result<Option<Vec<u8>>, ProofError> {
+    //     let mut key_nibbles = Nibbles::<0>::new(key.as_ref()).into_iter();
 
-        let mut cur_hash = root_hash;
-        let proofs_map = &self.0;
+    //     let mut cur_hash = root_hash;
+    //     let proofs_map = &self.0;
 
-        loop {
-            let cur_proof = proofs_map
-                .get(&cur_hash)
-                .ok_or(ProofError::ProofNodeMissing)?;
+    //     loop {
+    //         let cur_proof = proofs_map
+    //             .get(&cur_hash)
+    //             .ok_or(ProofError::ProofNodeMissing)?;
 
-            let node = NodeType::decode(cur_proof.as_ref())?;
-            // TODO: I think this will currently fail if the key is &[];
-            let (sub_proof, traversed_nibbles) = locate_subproof(key_nibbles, node)?;
-            key_nibbles = traversed_nibbles;
+    //         let node = NodeType::decode(cur_proof.as_ref())?;
+    //         // TODO: I think this will currently fail if the key is &[];
+    //         let (sub_proof, traversed_nibbles) = locate_subproof(key_nibbles, node)?;
+    //         key_nibbles = traversed_nibbles;
 
-            cur_hash = match sub_proof {
-                // Return when reaching the end of the key.
-                Some(SubProof::Data(value)) if key_nibbles.is_empty() => return Ok(Some(value)),
-                // The trie doesn't contain the key.
-                Some(SubProof::Hash(hash)) => hash,
-                _ => return Ok(None),
-            };
-        }
-    }
+    //         cur_hash = match sub_proof {
+    //             // Return when reaching the end of the key.
+    //             Some(SubProof::Data(value)) if key_nibbles.is_empty() => return Ok(Some(value)),
+    //             // The trie doesn't contain the key.
+    //             Some(SubProof::Hash(hash)) => hash,
+    //             _ => return Ok(None),
+    //         };
+    //     }
+    // }
 
     pub fn extend(&mut self, other: Proof<N>) {
         self.0.extend(other.0)
@@ -375,20 +375,27 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     }
 }
 
-fn decode_subproof<'a, S: ShaleStore<Node>, T, N: AsRef<[u8]>>(
+// fn decode_subproof<'a, 'de, S: ShaleStore<Node>, T, N: AsRef<[u8]>>(
+fn decode_subproof<'a, S, T, N>(
     merkle: &'a Merkle<S, T>,
-    proofs_map: &HashMap<HashKey, N>,
+    proofs_map: &'a HashMap<HashKey, N>,
     child_hash: &HashKey,
-) -> Result<NodeObjRef<'a>, ProofError> {
+) -> Result<NodeObjRef<'a>, ProofError>
+where
+    S: ShaleStore<Node> + Send + Sync,
+    T: BinarySerde,
+    EncodedNode<T>: serde::Serialize + serde::Deserialize<'a>,
+    N: AsRef<[u8]>,
+{
     let child_proof = proofs_map
         .get(child_hash)
         .ok_or(ProofError::ProofNodeMissing)?;
-    let child_node = NodeType::decode(child_proof.as_ref())?;
+    let child_node = merkle.decode(child_proof.as_ref())?;
     let node = merkle.put_node(Node::from(child_node))?;
     Ok(node)
 }
 
-fn locate_subproof(
+pub(crate) fn locate_subproof(
     mut key_nibbles: NibblesIterator<'_, 0>,
     node: NodeType,
 ) -> Result<(Option<SubProof>, NibblesIterator<'_, 0>), ProofError> {
