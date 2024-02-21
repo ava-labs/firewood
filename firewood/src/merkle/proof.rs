@@ -646,14 +646,13 @@ fn unset_internal<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySe
             #[allow(clippy::unwrap_used)]
             if fork_left.is_ne() && fork_right.is_ne() {
                 p_ref
-                    .write(|p| match p.inner_mut() {
-                        NodeType::Branch(n) => {
+                    .write(|p| {
+                        if let NodeType::Branch(n) = p.inner_mut() {
                             #[allow(clippy::indexing_slicing)]
                             (n.chd_mut()[left_chunks[index - 1] as usize] = None);
                             #[allow(clippy::indexing_slicing)]
                             (n.chd_encoded_mut()[left_chunks[index - 1] as usize] = None);
                         }
-                        _ => {}
                     })
                     .unwrap();
             } else if fork_right.is_ne() {
@@ -820,15 +819,14 @@ fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySe
                 }
             } else {
                 p_ref
-                    .write(|p| match p.inner_mut() {
-                        NodeType::Branch(n) => {
+                    .write(|p| {
+                        if let NodeType::Branch(n) = p.inner_mut() {
                             #[allow(clippy::indexing_slicing)]
                             let index = chunks[index - 1] as usize;
 
                             n.chd_mut()[index] = None;
                             n.chd_encoded_mut()[index] = None;
                         }
-                        _ => {}
                     })
                     .expect("node write failure");
             }
