@@ -11,6 +11,8 @@ use std::sync::{Arc, RwLock, RwLockWriteGuard};
 
 use thiserror::Error;
 
+use crate::merkle::{LeafNode, Node, PartialPath};
+
 pub mod cached;
 pub mod compact;
 pub mod disk_address;
@@ -42,8 +44,8 @@ pub enum ShaleError {
 // this could probably included with ShaleError,
 // but keeping it separate for now as Obj/ObjRef might change in the near future
 #[derive(Debug, Error)]
-#[error("write error")]
-pub struct ObjWriteError;
+#[error("object cannot be written in the space provided")]
+pub struct ObjWriteSizeError;
 
 pub type SpaceId = u8;
 pub const INVALID_SPACE_ID: SpaceId = 0xff;
@@ -115,13 +117,13 @@ impl<T: Storable> Obj<T> {
 
     /// Write to the underlying object. Returns `Ok(())` on success.
     #[inline]
-    pub fn write(&mut self, modify: impl FnOnce(&mut T)) -> Result<(), ObjWriteError> {
+    pub fn write(&mut self, modify: impl FnOnce(&mut T)) -> Result<(), ObjWriteSizeError> {
         modify(self.value.write());
 
         // if `estimate_mem_image` gives overflow, the object will not be written
         self.dirty = match self.value.estimate_mem_image() {
             Some(len) => Some(len),
-            None => return Err(ObjWriteError),
+            None => return Err(ObjWriteSizeError),
         };
 
         Ok(())
@@ -155,6 +157,17 @@ impl<T: Storable> Obj<T> {
     }
 }
 
+impl Obj<Node> {
+    pub fn into_inner(mut self) -> Node {
+        let empty_node = LeafNode {
+            path: PartialPath(Vec::new()),
+            data: Vec::new().into(),
+        };
+
+        std::mem::replace(&mut self.value.decoded, Node::from_leaf(empty_node))
+    }
+}
+
 impl<T: Storable> Drop for Obj<T> {
     fn drop(&mut self) {
         self.flush_dirty()
@@ -171,17 +184,20 @@ impl<T: Storable> Deref for Obj<T> {
 /// User handle that offers read & write access to the stored [ShaleStore] item.
 #[derive(Debug)]
 pub struct ObjRef<'a, T: Storable> {
+    /// WARNING:
+    /// [`Self::inner`] should only be `None` when calling `into_inner` and `drop`.
     inner: Option<Obj<T>>,
     cache: &'a ObjCache<T>,
 }
 
 impl<'a, T: Storable + Debug> ObjRef<'a, T> {
-    const fn new(inner: Option<Obj<T>>, cache: &'a ObjCache<T>) -> Self {
+    const fn new(inner: Obj<T>, cache: &'a ObjCache<T>) -> Self {
+        let inner = Some(inner);
         Self { inner, cache }
     }
 
     #[inline]
-    pub fn write(&mut self, modify: impl FnOnce(&mut T)) -> Result<(), ObjWriteError> {
+    pub fn write(&mut self, modify: impl FnOnce(&mut T)) -> Result<(), ObjWriteSizeError> {
         #[allow(clippy::unwrap_used)]
         let inner = self.inner.as_mut().unwrap();
         inner.write(modify)?;
@@ -196,6 +212,16 @@ impl<'a, T: Storable + Debug> ObjRef<'a, T> {
     }
 }
 
+impl<'a> ObjRef<'a, Node> {
+    /// #Panics: if inner is not set
+    pub fn into_inner(mut self) -> Node {
+        self.inner
+            .take()
+            .expect("inner should already be set")
+            .into_inner()
+    }
+}
+
 impl<'a, T: Storable + Debug> Deref for ObjRef<'a, T> {
     type Target = Obj<T>;
     fn deref(&self) -> &Obj<T> {
@@ -207,16 +233,16 @@ impl<'a, T: Storable + Debug> Deref for ObjRef<'a, T> {
 
 impl<'a, T: Storable> Drop for ObjRef<'a, T> {
     fn drop(&mut self) {
-        #[allow(clippy::unwrap_used)]
-        let mut inner = self.inner.take().unwrap();
-        let ptr = inner.as_ptr();
-        let mut cache = self.cache.lock();
-        match cache.pinned.remove(&ptr) {
-            Some(true) => {
-                inner.dirty = None;
-            }
-            _ => {
-                cache.cached.put(ptr, inner);
+        if let Some(mut inner) = self.inner.take() {
+            let ptr = inner.as_ptr();
+            let mut cache = self.cache.lock();
+            match cache.pinned.remove(&ptr) {
+                Some(true) => {
+                    inner.dirty = None;
+                }
+                _ => {
+                    cache.cached.put(ptr, inner);
+                }
             }
         }
     }
