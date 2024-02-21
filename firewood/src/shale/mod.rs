@@ -11,8 +11,6 @@ use std::sync::{Arc, RwLock, RwLockWriteGuard};
 
 use thiserror::Error;
 
-use crate::merkle::{LeafNode, Node, PartialPath};
-
 pub mod cached;
 pub mod compact;
 pub mod disk_address;
@@ -157,17 +155,6 @@ impl<T: Storable> Obj<T> {
     }
 }
 
-impl Obj<Node> {
-    pub fn into_inner(mut self) -> Node {
-        let empty_node = LeafNode {
-            path: PartialPath(Vec::new()),
-            data: Vec::new().into(),
-        };
-
-        std::mem::replace(&mut self.value.decoded, Node::from_leaf(empty_node))
-    }
-}
-
 impl<T: Storable> Drop for Obj<T> {
     fn drop(&mut self) {
         self.flush_dirty()
@@ -184,15 +171,12 @@ impl<T: Storable> Deref for Obj<T> {
 /// User handle that offers read & write access to the stored [ShaleStore] item.
 #[derive(Debug)]
 pub struct ObjRef<'a, T: Storable> {
-    /// WARNING:
-    /// [`Self::inner`] should only be `None` when calling `into_inner` and `drop`.
     inner: Option<Obj<T>>,
     cache: &'a ObjCache<T>,
 }
 
 impl<'a, T: Storable + Debug> ObjRef<'a, T> {
-    const fn new(inner: Obj<T>, cache: &'a ObjCache<T>) -> Self {
-        let inner = Some(inner);
+    const fn new(inner: Option<Obj<T>>, cache: &'a ObjCache<T>) -> Self {
         Self { inner, cache }
     }
 
@@ -212,16 +196,6 @@ impl<'a, T: Storable + Debug> ObjRef<'a, T> {
     }
 }
 
-impl<'a> ObjRef<'a, Node> {
-    /// #Panics: if inner is not set
-    pub fn into_inner(mut self) -> Node {
-        self.inner
-            .take()
-            .expect("inner should already be set")
-            .into_inner()
-    }
-}
-
 impl<'a, T: Storable + Debug> Deref for ObjRef<'a, T> {
     type Target = Obj<T>;
     fn deref(&self) -> &Obj<T> {
@@ -233,16 +207,16 @@ impl<'a, T: Storable + Debug> Deref for ObjRef<'a, T> {
 
 impl<'a, T: Storable> Drop for ObjRef<'a, T> {
     fn drop(&mut self) {
-        if let Some(mut inner) = self.inner.take() {
-            let ptr = inner.as_ptr();
-            let mut cache = self.cache.lock();
-            match cache.pinned.remove(&ptr) {
-                Some(true) => {
-                    inner.dirty = None;
-                }
-                _ => {
-                    cache.cached.put(ptr, inner);
-                }
+        #[allow(clippy::unwrap_used)]
+        let mut inner = self.inner.take().unwrap();
+        let ptr = inner.as_ptr();
+        let mut cache = self.cache.lock();
+        match cache.pinned.remove(&ptr) {
+            Some(true) => {
+                inner.dirty = None;
+            }
+            _ => {
+                cache.cached.put(ptr, inner);
             }
         }
     }
