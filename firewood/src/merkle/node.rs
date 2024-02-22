@@ -105,35 +105,6 @@ pub enum NodeType {
 }
 
 impl NodeType {
-    // TODO remove
-    // pub fn decode(buf: &[u8]) -> Result<NodeType, Error> {
-    //     let items: Vec<Encoded<Vec<u8>>> = bincode::DefaultOptions::new().deserialize(buf)?;
-
-    //     match items.len() {
-    //         LEAF_NODE_SIZE => {
-    //             let mut items = items.into_iter();
-
-    //             #[allow(clippy::unwrap_used)]
-    //             let decoded_key: Vec<u8> = items.next().unwrap().decode()?;
-
-    //             let decoded_key_nibbles = Nibbles::<0>::new(&decoded_key);
-
-    //             let cur_key_path = PartialPath::from_nibbles(decoded_key_nibbles.into_iter()).0;
-
-    //             let cur_key = cur_key_path.into_inner();
-    //             #[allow(clippy::unwrap_used)]
-    //             let data: Vec<u8> = items.next().unwrap().decode()?;
-
-    //             Ok(NodeType::Leaf(LeafNode::new(cur_key, data)))
-    //         }
-    //         // TODO: add path
-    //         BranchNode::MSIZE => Ok(NodeType::Branch(BranchNode::decode(buf)?.into())),
-    //         size => Err(Box::new(bincode::ErrorKind::Custom(format!(
-    //             "invalid size: {size}"
-    //         )))),
-    //     }
-    // }
-
     pub fn path_mut(&mut self) -> &mut PartialPath {
         match self {
             NodeType::Branch(u) => &mut u.path,

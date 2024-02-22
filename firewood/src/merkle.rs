@@ -1813,7 +1813,6 @@ mod tests {
             let key = key1;
             let proof = merkle.prove(key, root).unwrap();
             merkle.verify_proof(&proof, key, root_hash.0).unwrap()
-            // proof.verify(key, root_hash.0).unwrap()
         };
 
         assert_eq!(verified, Some(value1.to_vec()));
@@ -1822,7 +1821,6 @@ mod tests {
             let key = key2;
             let proof = merkle.prove(key, root).unwrap();
             merkle.verify_proof(&proof, key, root_hash.0).unwrap()
-            // proof.verify(key, root_hash.0).unwrap()
         };
 
         assert_eq!(verified, Some(value2.to_vec()));
@@ -2058,7 +2056,6 @@ mod tests {
 
         let proof = merkle.prove(key, root).unwrap();
 
-        // let verified = proof.verify(key, root_hash.0).unwrap();
         let verified = merkle.verify_proof(&proof, key, root_hash.0).unwrap();
 
         assert_eq!(verified, Some(value.to_vec()));
@@ -2080,7 +2077,6 @@ mod tests {
         let verified = {
             let proof = merkle.prove(key1, root).unwrap();
             merkle.verify_proof(&proof, key1, root_hash.0).unwrap()
-            // proof.verify(key1, root_hash.0).unwrap()
         };
 
         assert_eq!(verified.as_deref(), Some(key1.as_slice()));
