@@ -143,7 +143,6 @@ where
         Bincode::serialize(&encoded).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))
     }
 
-    #[allow(dead_code)]
     fn decode(&self, buf: &'de [u8]) -> Result<NodeType, MerkleError> {
         let encoded: EncodedNode<T> =
             T::deserialize(buf).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))?;

@@ -260,7 +260,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     /// necessary nodes will be resolved and leave the remaining as hashnode.
     ///
     /// The given edge proof is allowed to be an existent or non-existent proof.
-    fn proof_to_path<'de, K, S, T>(
+    fn proof_to_path<K, S, T>(
         &self,
         key: K,
         root_hash: HashKey,
@@ -271,7 +271,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
         K: AsRef<[u8]>,
         S: ShaleStore<Node> + Send + Sync,
         T: BinarySerde,
-        EncodedNode<T>: serde::Serialize + serde::Deserialize<'de>,
+        EncodedNode<T>: serde::Serialize + for<'de> serde::Deserialize<'de>,
     {
         // Start with the sentinel root
         let sentinel = merkle_setup.get_sentinel_address();
@@ -375,16 +375,15 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     }
 }
 
-// fn decode_subproof<'a, 'de, S: ShaleStore<Node>, T, N: AsRef<[u8]>>(
 fn decode_subproof<'a, S, T, N>(
     merkle: &'a Merkle<S, T>,
-    proofs_map: &'a HashMap<HashKey, N>,
+    proofs_map: &HashMap<HashKey, N>,
     child_hash: &HashKey,
 ) -> Result<NodeObjRef<'a>, ProofError>
 where
     S: ShaleStore<Node> + Send + Sync,
     T: BinarySerde,
-    EncodedNode<T>: serde::Serialize + serde::Deserialize<'a>,
+    EncodedNode<T>: serde::Serialize + for<'de> serde::Deserialize<'de>,
     N: AsRef<[u8]>,
 {
     let child_proof = proofs_map
