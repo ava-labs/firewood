@@ -1809,12 +1809,12 @@ mod tests {
         let value2 = b"2";
         merkle.insert(key2, value2.to_vec(), root).unwrap();
 
-        let root_hash = merkle.root_hash(root).unwrap();
+        let root_hash = merkle.root_hash(root).unwrap().0;
 
         let verified = {
             let key = key1;
             let proof = merkle.prove(key, root).unwrap();
-            merkle.verify_proof(&proof, key, root_hash.0).unwrap()
+            merkle.verify_proof(&proof, key, root_hash).unwrap()
         };
 
         assert_eq!(verified, Some(value1.to_vec()));
@@ -1822,7 +1822,7 @@ mod tests {
         let verified = {
             let key = key2;
             let proof = merkle.prove(key, root).unwrap();
-            merkle.verify_proof(&proof, key, root_hash.0).unwrap()
+            merkle.verify_proof(&proof, key, root_hash).unwrap()
         };
 
         assert_eq!(verified, Some(value2.to_vec()));
