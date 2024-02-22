@@ -175,9 +175,8 @@ bitflags! {
     #[derive(Debug, Default, Clone, Copy, Pod, Zeroable)]
     #[repr(transparent)]
     struct NodeAttributes: u8 {
-        const HAS_ROOT_HASH           = 0b001;
-        const ENCODED_LENGTH_IS_KNOWN = 0b010;
-        const ENCODED_IS_LONG         = 0b110;
+        const ENCODED_LENGTH_IS_KNOWN           = 0b001;
+        const ENCODED_IS_LONG = 0b010;
     }
 }
 
@@ -372,8 +371,6 @@ impl Storable for Node {
         trace!("[{self:p}] Serializing node");
         let mut cursor = Cursor::new(to);
 
-        let mut attrs = NodeAttributes::HAS_ROOT_HASH;
-
         let encoded = self
             .encoded
             .get()
@@ -381,6 +378,7 @@ impl Storable for Node {
 
         let encoded_len = encoded.map(Vec::len).unwrap_or(0) as u64;
 
+        let mut attrs = NodeAttributes::empty();
         if let Some(&is_encoded_longer_than_hash_len) = self.is_encoded_longer_than_hash_len.get() {
             attrs.insert(if is_encoded_longer_than_hash_len {
                 NodeAttributes::ENCODED_IS_LONG
