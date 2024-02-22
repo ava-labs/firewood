@@ -83,13 +83,6 @@ impl Default for Encoded<Vec<u8>> {
 }
 
 impl<T: DeserializeOwned + AsRef<[u8]>> Encoded<T> {
-    pub fn decode(self) -> Result<T, bincode::Error> {
-        match self {
-            Encoded::Raw(raw) => Ok(raw),
-            Encoded::Data(data) => bincode::DefaultOptions::new().deserialize(data.as_ref()),
-        }
-    }
-
     pub fn deserialize<De: BinarySerde>(self) -> Result<T, De::DeserializeError> {
         match self {
             Encoded::Raw(raw) => Ok(raw),
