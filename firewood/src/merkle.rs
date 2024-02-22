@@ -216,10 +216,12 @@ where
             let mut node = self.get_node(root)?;
             let res = self.to_hash(&node)?;
             #[allow(clippy::unwrap_used)]
-            if node.is_dirty() {
-                node.write(|_| {}).unwrap();
-                node.set_dirty(false);
-            }
+            // if node.is_dirty() {
+            //     node.write(|_| {}).unwrap();
+            //     node.set_dirty(false);
+            // }
+            // TODO only write if dirty, or remove notion of dirty
+            node.write(|_| {}).unwrap();
             res
         } else {
             *Self::empty_root()

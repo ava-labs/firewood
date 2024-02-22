@@ -247,9 +247,10 @@ impl Node {
         self.lazy_dirty.load(Ordering::Relaxed)
     }
 
-    pub(super) fn set_dirty(&self, is_dirty: bool) {
-        self.lazy_dirty.store(is_dirty, Ordering::Relaxed)
-    }
+    // TODO use or remove
+    // pub(super) fn set_dirty(&self, is_dirty: bool) {
+    //     self.lazy_dirty.store(is_dirty, Ordering::Relaxed)
+    // }
 
     pub(crate) fn as_branch_mut(&mut self) -> &mut Box<BranchNode> {
         self.inner_mut()
