@@ -6,7 +6,7 @@ use crate::{
     merkle::from_nibbles,
     shale::{disk_address::DiskAddress, CachedStore, ShaleError, Storable},
 };
-use bincode::{Error, Options};
+use bincode::Options;
 use bitflags::bitflags;
 use bytemuck::{CheckedBitPattern, NoUninit, Pod, Zeroable};
 use enum_as_inner::EnumAsInner;

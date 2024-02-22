@@ -484,7 +484,7 @@ fn generate_subproof(encoded: &[u8]) -> Result<SubProof, ProofError> {
 //
 // The return value indicates if the fork point is root node. If so, unset the
 // entire trie.
-fn unset_internal<'de, K, S, T>(
+fn unset_internal<K, S, T>(
     merkle_setup: &mut MerkleSetup<S, T>,
     left: K,
     right: K,
@@ -493,7 +493,7 @@ where
     K: AsRef<[u8]>,
     S: ShaleStore<Node> + Send + Sync,
     T: BinarySerde,
-    EncodedNode<T>: serde::Serialize + serde::Deserialize<'de>,
+    EncodedNode<T>: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
     // Add the sentinel root
     let mut left_chunks = vec![0];

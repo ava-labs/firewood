@@ -1,14 +1,11 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::{Data, Encoded};
+use super::Data;
 use crate::{
     merkle::{from_nibbles, to_nibble_array, PartialPath},
-    nibbles::Nibbles,
     shale::{DiskAddress, ShaleError, Storable},
 };
-use bincode::{Error, Options};
-use serde::de::Error as DeError;
 use std::{
     fmt::{Debug, Error as FmtError, Formatter},
     io::{Cursor, Read, Write},

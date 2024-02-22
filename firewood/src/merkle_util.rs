@@ -41,11 +41,11 @@ pub struct MerkleSetup<S, T> {
     merkle: Merkle<S, T>,
 }
 
-impl<'de, S, T> MerkleSetup<S, T>
+impl<S, T> MerkleSetup<S, T>
 where
     S: ShaleStore<Node> + Send + Sync,
     T: BinarySerde,
-    EncodedNode<T>: serde::Serialize + serde::Deserialize<'de>,
+    EncodedNode<T>: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
     pub fn insert<K: AsRef<[u8]>>(&mut self, key: K, val: Vec<u8>) -> Result<(), DataStoreError> {
         self.merkle
@@ -108,7 +108,8 @@ where
         proof: &Proof<N>,
     ) -> Result<Option<Vec<u8>>, DataStoreError> {
         let hash: [u8; 32] = *self.root_hash()?;
-        self.verify_proof(key, proof)
+        self.merkle
+            .verify_proof(proof, key, hash)
             .map_err(|_err| DataStoreError::ProofVerificationError)
     }
 

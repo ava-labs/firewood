@@ -167,11 +167,11 @@ where
     }
 }
 
-impl<'de, S, T> Merkle<S, T>
+impl<S, T> Merkle<S, T>
 where
     S: ShaleStore<Node> + Send + Sync,
     T: BinarySerde,
-    EncodedNode<T>: serde::Serialize + serde::Deserialize<'de>,
+    EncodedNode<T>: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
     pub fn init_root(&self) -> Result<DiskAddress, MerkleError> {
         self.store
@@ -1055,7 +1055,7 @@ where
     /// The generic N represents the storage for the node data
     pub fn verify_proof<K: AsRef<[u8]>, N: AsRef<[u8]> + Send>(
         &self,
-        proof: &'de Proof<N>,
+        proof: &Proof<N>,
         key: K,
         root_hash: HashKey,
     ) -> Result<Option<Vec<u8>>, ProofError> {
