@@ -214,8 +214,7 @@ where
             .children[0];
         Ok(if let Some(root) = root {
             let mut node = self.get_node(root)?;
-            let node_encoded = self.encode(&node)?;
-            let res = TrieHash(Keccak256::digest(node_encoded).into());
+            let res = self.to_hash(&node)?;
             #[allow(clippy::unwrap_used)]
             if node.is_dirty() {
                 node.write(|_| {}).unwrap();
@@ -234,13 +233,6 @@ where
 
     fn dump_(&self, u: DiskAddress, w: &mut dyn Write) -> Result<(), MerkleError> {
         let u_ref = self.get_node(u)?;
-
-        let hash = match u_ref.root_hash.get() {
-            Some(h) => *h,
-            None => self.to_hash(&u_ref)?,
-        };
-
-        write!(w, "{u:?} => {}: ", hex::encode(*hash))?;
 
         match &u_ref.inner {
             NodeType::Branch(n) => {

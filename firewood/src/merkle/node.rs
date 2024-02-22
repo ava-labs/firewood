@@ -37,7 +37,7 @@ pub use partial_path::PartialPath;
 
 use crate::nibbles::Nibbles;
 
-use super::{TrieHash, TRIE_HASH_LEN};
+use super::TRIE_HASH_LEN;
 
 bitflags! {
     // should only ever be the size of a nibble
@@ -158,7 +158,6 @@ impl NodeType {
 
 #[derive(Debug)]
 pub struct Node {
-    pub(super) root_hash: OnceLock<TrieHash>,
     encoded: OnceLock<Vec<u8>>,
     is_encoded_longer_than_hash_len: OnceLock<bool>,
     // lazy_dirty is an atomicbool, but only writers ever set it
@@ -175,23 +174,18 @@ impl PartialEq for Node {
         let is_dirty = self.is_dirty();
 
         let Node {
-            root_hash,
             encoded,
             is_encoded_longer_than_hash_len: _,
             lazy_dirty: _,
             inner,
         } = self;
-        *root_hash == other.root_hash
-            && *encoded == other.encoded
-            && is_dirty == other.is_dirty()
-            && *inner == other.inner
+        *encoded == other.encoded && is_dirty == other.is_dirty() && *inner == other.inner
     }
 }
 
 impl Clone for Node {
     fn clone(&self) -> Self {
         Self {
-            root_hash: self.root_hash.clone(),
             is_encoded_longer_than_hash_len: self.is_encoded_longer_than_hash_len.clone(),
             encoded: self.encoded.clone(),
             lazy_dirty: AtomicBool::new(self.is_dirty()),
@@ -203,7 +197,6 @@ impl Clone for Node {
 impl From<NodeType> for Node {
     fn from(inner: NodeType) -> Self {
         let mut s = Self {
-            root_hash: OnceLock::new(),
             encoded: OnceLock::new(),
             is_encoded_longer_than_hash_len: OnceLock::new(),
             inner,
@@ -229,7 +222,6 @@ impl Node {
         let max_size: OnceLock<u64> = OnceLock::new();
         *max_size.get_or_init(|| {
             Self {
-                root_hash: OnceLock::new(),
                 encoded: OnceLock::new(),
                 is_encoded_longer_than_hash_len: OnceLock::new(),
                 inner: NodeType::Branch(
@@ -250,7 +242,6 @@ impl Node {
     pub(super) fn rehash(&mut self) {
         self.encoded = OnceLock::new();
         self.is_encoded_longer_than_hash_len = OnceLock::new();
-        self.root_hash = OnceLock::new();
     }
 
     pub fn from_branch<B: Into<Box<BranchNode>>>(node: B) -> Self {
@@ -270,16 +261,11 @@ impl Node {
     }
 
     pub(super) fn new_from_hash(
-        root_hash: Option<TrieHash>,
         encoded: Option<Vec<u8>>,
         is_encoded_longer_than_hash_len: Option<bool>,
         inner: NodeType,
     ) -> Self {
         Self {
-            root_hash: match root_hash {
-                Some(h) => OnceLock::from(h),
-                None => OnceLock::new(),
-            },
             encoded: match encoded.filter(|encoded| !encoded.is_empty()) {
                 Some(e) => OnceLock::from(e),
                 None => OnceLock::new(),
@@ -311,7 +297,6 @@ impl Node {
 #[derive(Clone, Copy, CheckedBitPattern, NoUninit)]
 #[repr(C, packed)]
 struct Meta {
-    root_hash: [u8; TRIE_HASH_LEN],
     attrs: NodeAttributes,
     encoded_len: u64,
     encoded: [u8; TRIE_HASH_LEN],
@@ -367,7 +352,6 @@ impl Storable for Node {
             .map_err(|_| ShaleError::InvalidNodeMeta)?;
 
         let Meta {
-            root_hash,
             attrs,
             encoded_len,
             encoded,
@@ -377,12 +361,6 @@ impl Storable for Node {
         trace!("[{mem:p}] Deserializing node at {offset}");
 
         let offset = offset + Meta::SIZE;
-
-        let root_hash = if attrs.contains(NodeAttributes::HAS_ROOT_HASH) {
-            Some(TrieHash(root_hash))
-        } else {
-            None
-        };
 
         let encoded = if encoded_len > 0 {
             Some(encoded.iter().take(encoded_len as usize).copied().collect())
@@ -402,7 +380,6 @@ impl Storable for Node {
                 let inner = NodeType::Branch(Box::new(BranchNode::deserialize(offset, mem)?));
 
                 Ok(Self::new_from_hash(
-                    root_hash,
                     encoded,
                     is_encoded_longer_than_hash_len,
                     inner,
@@ -411,8 +388,7 @@ impl Storable for Node {
 
             NodeTypeId::Leaf => {
                 let inner = NodeType::Leaf(LeafNode::deserialize(offset, mem)?);
-                let node =
-                    Self::new_from_hash(root_hash, encoded, is_encoded_longer_than_hash_len, inner);
+                let node = Self::new_from_hash(encoded, is_encoded_longer_than_hash_len, inner);
 
                 Ok(node)
             }
@@ -431,10 +407,7 @@ impl Storable for Node {
         trace!("[{self:p}] Serializing node");
         let mut cursor = Cursor::new(to);
 
-        let (mut attrs, root_hash) = match self.root_hash.get() {
-            Some(hash) => (NodeAttributes::HAS_ROOT_HASH, hash.0),
-            None => Default::default(),
-        };
+        let mut attrs = NodeAttributes::HAS_ROOT_HASH;
 
         let encoded = self
             .encoded
@@ -459,7 +432,6 @@ impl Storable for Node {
         let type_id = NodeTypeId::from(&self.inner);
 
         let meta = Meta {
-            root_hash,
             attrs,
             encoded_len,
             encoded,
@@ -858,12 +830,10 @@ mod tests {
     use test_case::test_matrix;
 
     #[test_matrix(
-        [Nil, [0x00; TRIE_HASH_LEN]],
         [Nil, vec![], vec![0x01], (0..TRIE_HASH_LEN as u8).collect::<Vec<_>>(), (0..33).collect::<Vec<_>>()],
         [Nil, false, true]
     )]
     fn cached_node_data(
-        root_hash: impl Into<Option<[u8; TRIE_HASH_LEN]>>,
         encoded: impl Into<Option<Vec<u8>>>,
         is_encoded_longer_than_hash_len: impl Into<Option<bool>>,
     ) {
@@ -875,25 +845,14 @@ mod tests {
             children_encoded: std::array::from_fn(|_| Some(vec![1])),
         }));
 
-        let root_hash = root_hash.into().map(TrieHash);
         let encoded = encoded.into();
         let is_encoded_longer_than_hash_len = is_encoded_longer_than_hash_len.into();
 
-        let node = Node::new_from_hash(
-            root_hash,
-            encoded.clone(),
-            is_encoded_longer_than_hash_len,
-            leaf,
-        );
+        let node = Node::new_from_hash(encoded.clone(), is_encoded_longer_than_hash_len, leaf);
 
         check_node_encoding(node);
 
-        let node = Node::new_from_hash(
-            root_hash,
-            encoded.clone(),
-            is_encoded_longer_than_hash_len,
-            branch,
-        );
+        let node = Node::new_from_hash(encoded.clone(), is_encoded_longer_than_hash_len, branch);
 
         check_node_encoding(node);
     }
