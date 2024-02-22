@@ -154,7 +154,7 @@ where
                 children,
                 value,
             } => {
-                let path = PartialPath::decode(&path).0;
+                // let path = PartialPath::decode(&path).0;
                 let value = value.map(|v| v.0);
                 let branch = NodeType::Branch(
                     BranchNode::new(path, [None; BranchNode::MAX_CHILDREN], value, *children)
@@ -1795,6 +1795,44 @@ mod tests {
         assert_eq!(rangeproof.first_key_proof.0, rangeproof.last_key_proof.0);
         assert_eq!(rangeproof.middle.len(), 1);
     }
+
+    /*
+        running 1 test
+    thread 'merkle::tests::shared_path_proof' panicked at firewood/src/merkle.rs:1820:9:
+    assertion `left == right` failed
+      left: None
+     right: Some([49])
+    stack backtrace:
+       0: rust_begin_unwind
+                 at /rustc/82e1608dfa6e0b5569232559e3d385fea5a93112/library/std/src/panicking.rs:645:5
+       1: core::panicking::panic_fmt
+                 at /rustc/82e1608dfa6e0b5569232559e3d385fea5a93112/library/core/src/panicking.rs:72:14
+       2: core::panicking::assert_failed_inner
+       3: core::panicking::assert_failed
+                 at /rustc/82e1608dfa6e0b5569232559e3d385fea5a93112/library/core/src/panicking.rs:279:5
+       4: firewood::merkle::tests::shared_path_proof
+                 at ./src/merkle.rs:1820:9
+       5: firewood::merkle::tests::shared_path_proof::{{closure}}
+                 at ./src/merkle.rs:1800:27
+       6: core::ops::function::FnOnce::call_once
+                 at /rustc/82e1608dfa6e0b5569232559e3d385fea5a93112/library/core/src/ops/function.rs:250:5
+       7: core::ops::function::FnOnce::call_once
+                 at /rustc/82e1608dfa6e0b5569232559e3d385fea5a93112/library/core/src/ops/function.rs:250:5
+    note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+    test merkle::tests::shared_path_proof ... FAILED
+
+    failures:
+
+    failures:
+        merkle::tests::shared_path_proof
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 309 filtered out; finished in 0.03s
+
+    error: test failed, to rerun pass `-p firewood --lib`
+
+     *  The terminal process "cargo 'test', '--package', 'firewood', '--lib', '--', 'merkle::tests::shared_path_proof', '--exact', '--nocapture'" terminated with exit code: 101.
+     *  Terminal will be reused by tasks, press any key to close it.
+     *  */
 
     #[test]
     fn shared_path_proof() {
