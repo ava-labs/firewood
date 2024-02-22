@@ -31,7 +31,8 @@ fn recover(payload: WalBytes, ringid: WalRingId) -> Result<(), WalError> {
     Ok(())
 }
 
-fn main() -> Result<(), WalError> {
+#[tokio::main]
+async fn main() -> Result<(), WalError> {
     let wal_dir = "./wal_demo1";
     let mut rng = rand::rngs::StdRng::seed_from_u64(0);
     let mut loader = WalLoader::new();
