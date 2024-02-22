@@ -263,7 +263,7 @@ impl<F: WalFile + 'static, S: WalStore<F>> WalFilePool<F, S> {
     ) -> Result<Self, WalError> {
         let header_file = store.open_file("HEAD", true).await?;
         header_file.truncate().await?;
-        header_file.write(0, vec![0; HEADER_SIZE].into()).await?;
+        header_file.write(0, vec![0; HEADER_SIZE]).await?;
 
         Ok(WalFilePool {
             store,
@@ -632,8 +632,7 @@ impl<F: WalFile + 'static, S: WalStore<F>> WalWriter<F, S> {
                     #[allow(clippy::indexing_slicing)]
                     writes.push((
                         self.state.next,
-                        self.block_buffer[bbuff_start as usize..]
-                            .to_vec(),
+                        self.block_buffer[bbuff_start as usize..].to_vec(),
                     ));
                     self.state.next += (self.block_size - bbuff_start) as u64;
                     bbuff_start = 0;
@@ -646,8 +645,7 @@ impl<F: WalFile + 'static, S: WalStore<F>> WalWriter<F, S> {
             #[allow(clippy::indexing_slicing)]
             writes.push((
                 self.state.next,
-                self.block_buffer[bbuff_start as usize..bbuff_cur as usize]
-                    .to_vec(),
+                self.block_buffer[bbuff_start as usize..bbuff_cur as usize].to_vec(),
             ));
 
             self.state.next += (bbuff_cur - bbuff_start) as u64;
@@ -816,7 +814,7 @@ impl<F: WalFile + 'static, S: WalStore<F>> WalWriter<F, S> {
                                 acc.extend(v.iter());
                                 acc
                             });
-                            records.push(acc.into());
+                            records.push(acc);
                         } else {
                             unreachable!()
                         }

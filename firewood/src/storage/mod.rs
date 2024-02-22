@@ -85,7 +85,7 @@ pub struct AshRecord(pub HashMap<SpaceId, Ash>);
 impl growthring::wal::Record for AshRecord {
     fn serialize(&self) -> growthring::wal::WalBytes {
         #[allow(clippy::unwrap_used)]
-        bincode::serialize(self).unwrap().into()
+        bincode::serialize(self).unwrap()
     }
 }
 

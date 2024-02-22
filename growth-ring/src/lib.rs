@@ -163,8 +163,7 @@ impl WalFile for WalFileImpl {
             (result, bytes_read)
         };
 
-        let result = Some(result)
-            .filter(|_| bytes_read == length);
+        let result = Some(result).filter(|_| bytes_read == length);
 
         Ok(result)
     }
