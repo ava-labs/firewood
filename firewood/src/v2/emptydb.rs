@@ -181,7 +181,7 @@ mod tests {
     async fn empty_streamer_start_at() -> Result<(), Error> {
         let emptydb = EmptyDb {};
         let rev = emptydb.revision(ROOT_HASH).await?;
-        let mut iter = rev.iner_from(b"ignored").await?;
+        let mut iter = rev.iter_from(b"ignored").await?;
         assert!(iter.next().await.is_none());
         Ok(())
     }
