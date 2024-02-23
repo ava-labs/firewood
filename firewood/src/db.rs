@@ -321,7 +321,7 @@ impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
     }
 
     #[allow(refining_impl_trait)]
-    async fn iter<K: KeyType, V>(
+    async fn iter_option<K: KeyType>(
         &self,
         first_key: Option<K>,
     ) -> Result<MerkleKeyValueStream<S, Bincode>, api::Error> {

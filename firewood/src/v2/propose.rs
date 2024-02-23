@@ -142,7 +142,7 @@ impl<T: api::DbView + Send + Sync> api::DbView for Proposal<T> {
     }
 
     #[allow(refining_impl_trait)]
-    async fn iter<K: KeyType, V>(
+    async fn iter_option<K: KeyType>(
         &self,
         _first_key: Option<K>,
     ) -> Result<MerkleKeyValueStream<CompactSpace<Node, DynamicMem>, Bincode>, api::Error> {

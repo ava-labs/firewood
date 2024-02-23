@@ -9,6 +9,7 @@ use crate::merkle::{Bincode, MerkleKeyValueStream, Node, Proof};
 use crate::shale::cached::DynamicMem;
 use crate::shale::compact::CompactSpace;
 use crate::shale::CachedStore;
+use crate::storage;
 use crate::{
     merkle::{TrieHash, TRIE_HASH_LEN},
     storage::{buffer::BufferWrite, AshRecord, StoreRevMut},
@@ -303,10 +304,16 @@ impl api::DbView for Proposal {
     }
 
     #[allow(refining_impl_trait)]
-    async fn iter<K: KeyType, V>(
+    async fn iter_option<K: KeyType>(
         &self,
-        _first_key: Option<K>,
-    ) -> Result<MerkleKeyValueStream<CompactSpace<Node, DynamicMem>, Bincode>, api::Error> {
-        todo!()
+        first_key: Option<K>,
+    ) -> Result<MerkleKeyValueStream<CompactSpace<Node, storage::StoreRevMut>, Bincode>, api::Error>
+    {
+        let rev = self.get_revision();
+        let iter = match first_key {
+            None => rev.stream(),
+            Some(first_key) => rev.stream_from(first_key.as_ref().into()),
+        };
+        Ok(iter)
     }
 }

@@ -4,7 +4,7 @@
 use crate::merkle::MerkleError;
 pub use crate::merkle::Proof;
 use async_trait::async_trait;
-use futures::Stream;
+use futures::{Future, Stream};
 use std::{fmt::Debug, sync::Arc};
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
@@ -172,10 +172,40 @@ pub trait DbView {
         limit: Option<usize>,
     ) -> Result<Option<RangeProof<Vec<u8>, Vec<u8>>>, Error>;
 
-    async fn iter<K: KeyType, V: ValueType>(
+    /// Obtain a stream over the keys/values of this view, using an optional starting point
+    ///
+    /// # Arguments
+    ///
+    /// * `first_key` - If None, start at the lowest key
+    ///
+    /// # Note
+    ///
+    /// If you always want to start at the beginning, [iter] is easier to use
+    /// If you always provide a key, [iter_from] is easier to use
+    ///
+    async fn iter_option<K: KeyType>(
         &self,
         first_key: Option<K>,
     ) -> Result<impl Stream<Item = Result<(Box<[u8]>, Vec<u8>), Error>>, Error>;
+
+    /// Obtain a stream over the keys/values of this view, starting from the beginning
+    fn iter(
+        &self,
+    ) -> impl Future<Output = Result<impl Stream<Item = Result<(Box<[u8]>, Vec<u8>), Error>>, Error>>
+           + Send {
+        // impl Stream<Item = Result<(Box<[u8]>, Vec<u8>), Error>>  {
+        self.iter_option(Option::<Box<[u8]>>::None)
+    }
+
+    /// Obtain a stream over the key/values, starting at a specific key
+    fn iner_from<K: KeyType + 'static>(
+        &self,
+        first_key: K,
+    ) -> impl Future<Output = Result<impl Stream<Item = Result<(Box<[u8]>, Vec<u8>), Error>>, Error>>
+           + Send {
+        // impl Stream<Item = Result<(Box<[u8]>, Vec<u8>), Error>>  {
+        self.iter_option(Some(first_key))
+    }
 }
 
 /// A proposal for a new revision of the database.

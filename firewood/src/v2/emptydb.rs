@@ -78,8 +78,8 @@ impl DbView for HistoricalImpl {
     }
 
     #[allow(refining_impl_trait)]
-    async fn iter<K: KeyType, V>(&self, _first_key: Option<K>) -> Result<EmptyStreamer, Error> {
-        todo!()
+    async fn iter_option<K: KeyType>(&self, _first_key: Option<K>) -> Result<EmptyStreamer, Error> {
+        Ok(EmptyStreamer {})
     }
 }
 
@@ -99,6 +99,8 @@ impl Stream for EmptyStreamer {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use futures::StreamExt;
+
     use super::*;
     use crate::v2::api::{BatchOp, Proposal};
 
@@ -163,6 +165,24 @@ mod tests {
         // now consume proposal1 and proposal2
         proposal2.commit().await?;
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn empty_streamer() -> Result<(), Error> {
+        let emptydb = EmptyDb {};
+        let rev = emptydb.revision(ROOT_HASH).await?;
+        let mut iter = rev.iter().await?;
+        assert!(iter.next().await.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn empty_streamer_start_at() -> Result<(), Error> {
+        let emptydb = EmptyDb {};
+        let rev = emptydb.revision(ROOT_HASH).await?;
+        let mut iter = rev.iner_from(b"ignored").await?;
+        assert!(iter.next().await.is_none());
         Ok(())
     }
 }
