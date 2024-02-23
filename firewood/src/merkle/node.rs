@@ -637,9 +637,6 @@ impl Serialize for EncodedNode<Bincode> {
         match &self.node {
             EncodedNodeType::Leaf(n) => {
                 let list = [
-                    // Take path as nibbles (each byte in the Vec is a nibble)
-                    // Prepend the flags byte and maybe a padding byte if odd length
-                    // Convert that from nibbles to "consolidated" bytes
                     Encoded::Raw(from_nibbles(&n.path.encode(true)).collect()),
                     Encoded::Raw(n.data.to_vec()),
                 ];
