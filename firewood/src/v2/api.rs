@@ -180,8 +180,8 @@ pub trait DbView {
     ///
     /// # Note
     ///
-    /// If you always want to start at the beginning, [iter] is easier to use
-    /// If you always provide a key, [iter_from] is easier to use
+    /// If you always want to start at the beginning, [DbView::iter] is easier to use
+    /// If you always provide a key, [DbView::iter_from] is easier to use
     ///
     async fn iter_option<K: KeyType>(
         &self,
@@ -198,7 +198,7 @@ pub trait DbView {
     }
 
     /// Obtain a stream over the key/values, starting at a specific key
-    fn iner_from<K: KeyType + 'static>(
+    fn iter_from<K: KeyType + 'static>(
         &self,
         first_key: K,
     ) -> impl Future<Output = Result<impl Stream<Item = Result<(Box<[u8]>, Vec<u8>), Error>>, Error>>
