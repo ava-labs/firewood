@@ -637,6 +637,9 @@ impl Serialize for EncodedNode<Bincode> {
         match &self.node {
             EncodedNodeType::Leaf(n) => {
                 let list = [
+                    // Take path as nibbles (each byte in the Vec is a nibble)
+                    // Prepend the flags byte and maybe a padding byte if odd length
+                    // Convert that from nibbles to "consolidated" bytes
                     Encoded::Raw(from_nibbles(&n.path.encode(true)).collect()),
                     Encoded::Raw(n.data.to_vec()),
                 ];
@@ -679,10 +682,9 @@ impl Serialize for EncodedNode<Bincode> {
                     Encoded::default()
                 };
 
-                let serialized_path = Bincode::serialize(&path.encode(false))
-                    .map_err(|e| S::Error::custom(format!("bincode error: {e}")))?;
+                let serialized_path = from_nibbles(&path.encode(true)).collect();
 
-                list[BranchNode::MAX_CHILDREN + 1] = Encoded::Data(serialized_path);
+                list[BranchNode::MAX_CHILDREN + 1] = Encoded::Raw(serialized_path);
 
                 let mut seq = serializer.serialize_seq(Some(list.len()))?;
 
