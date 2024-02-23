@@ -6,7 +6,6 @@ use super::{
     MutStore, SharedStore, Universe, MERKLE_META_SPACE, MERKLE_PAYLOAD_SPACE, ROOT_HASH_SPACE,
 };
 use crate::merkle::{Bincode, MerkleKeyValueStream, Node, Proof};
-use crate::shale::cached::DynamicMem;
 use crate::shale::compact::CompactSpace;
 use crate::shale::CachedStore;
 use crate::storage;
