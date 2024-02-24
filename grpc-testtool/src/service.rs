@@ -2,11 +2,13 @@
 // See the file LICENSE.md for licensing terms.
 
 use firewood::db::{Db, DbConfig};
+use firewood::merkle::MerkleKeyValueStream;
 use firewood::storage::WalConfig;
 use firewood::v2::{api::Db as _, api::Error};
 
 use std::fmt::Debug;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::atomic::AtomicU32;
 use std::{
     collections::HashMap,
@@ -65,7 +67,13 @@ impl Views {
     fn delete(&mut self, view_id: u32) -> Option<View> {
         self.map.remove(&view_id)
     }
+
+    fn get(&self, view_id: u32) -> Option<&View> {
+        self.map.get(&view_id)
+    }
 }
+
+use futures::Stream;
 
 enum View {
     Historical(Arc<<firewood::db::Db as firewood::v2::api::Db>::Historical>),
@@ -118,28 +126,35 @@ impl Database {
     }
 }
 
-// TODO: implement Iterator
-#[derive(Debug)]
-struct Iter;
+trait DebugStream: Stream + Debug + Send {}
+
+impl<S: Send + Sync + Debug + firewood::shale::ShaleStore<firewood::merkle::Node>, T: Send + Sync + Debug> DebugStream for MerkleKeyValueStream<'_, S, T> {}
+type Iter = dyn DebugStream<Item = Result<(Box<[u8]>, Vec<u8>), firewood::v2::api::Error>>;
+
+type IteratorID = u64;
 
 #[derive(Default, Debug)]
 struct Iterators {
-    map: HashMap<u64, Iter>,
+    map: HashMap<IteratorID, Pin<Box<Iter>>>,
     next_id: AtomicU64,
 }
 
 impl Iterators {
-    fn insert(&mut self, iter: Iter) -> u64 {
+    fn insert(&mut self, iter: Pin<Box<Iter>>) -> IteratorID {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         self.map.insert(id, iter);
         id
     }
 
-    fn _get(&self, id: u64) -> Option<&Iter> {
+    fn get(&self, id: IteratorID) -> Option<&Pin<Box<Iter>>> {
         self.map.get(&id)
     }
 
-    fn remove(&mut self, id: u64) {
+    fn get_mut(&mut self, id: IteratorID) -> Option<&mut Pin<Box<Iter>>> {
+        self.map.get_mut(&id)
+    }
+
+    fn remove(&mut self, id: IteratorID) {
         self.map.remove(&id);
     }
 }

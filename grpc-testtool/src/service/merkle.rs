@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
 use crate::merkle::{
-    merkle_server::Merkle as MerkleServiceTrait, NewProposalRequest, NewProposalResponse,
-    NewViewRequest, NewViewResponse, ProposalCommitRequest, ProposalCommitResponse, ViewGetRequest,
+    merkle_server::Merkle as MerkleServiceTrait, IteratorErrorRequest, IteratorNextRequest,
+    IteratorNextResponse, IteratorReleaseRequest, NewProposalRequest, NewProposalResponse,
+    NewViewRequest, NewViewResponse, ProposalCommitRequest, PutRequest, ViewGetRequest,
     ViewGetResponse, ViewHasRequest, ViewHasResponse, ViewNewIteratorWithStartAndPrefixRequest,
-    ViewNewIteratorWithStartAndPrefixResponse, ViewReleaseRequest, CommitError
+    ViewNewIteratorWithStartAndPrefixResponse, ViewReleaseRequest,
 };
 use firewood::{
     db::{BatchOp, Proposal},
@@ -13,6 +14,8 @@ use firewood::{
 use tonic::{async_trait, Request, Response, Status};
 
 use super::{IntoStatusResultExt, View};
+
+use futures::StreamExt;
 
 #[async_trait]
 impl MerkleServiceTrait for super::Database {
@@ -42,57 +45,64 @@ impl MerkleServiceTrait for super::Database {
         // the proposal depends on the parent_view_id. If it's None, then we propose on the db itself
         // Otherwise, we're provided a base proposal to base it off of, so go fetch that
         // proposal from the views
-        let proposal = match req.parent_view_id {
+        let proposal = match req.parent_id {
             None => self.db.propose(data).await,
             Some(parent_id) => {
                 let view = views.map.get(&parent_id);
                 match view {
-                    None => return Err(Status::invalid_argument(CommitError::ErrorInvalid)),
+                    None => return Err(Status::not_found(format!("ID {parent_id} not found"))),
                     Some(View::Proposal(parent)) => {
                         firewood::v2::api::Proposal::propose(parent.clone(), data).await
                     }
-                    Some(_) => return Err(Status::invalid_argument(CommitError::ErrorNonProposalId)),
+                    Some(_) => {
+                        return Err(Status::invalid_argument(format!(
+                            "ID {parent_id} is not a commitable proposal"
+                        )))
+                    }
                 }
             }
         }
         .into_status_result()?;
 
         // compute the next view id
-        let view_id = views.insert(View::Proposal(Arc::new(proposal)));
+        let id = views.insert(View::Proposal(Arc::new(proposal)));
 
-        let resp = Response::new(NewProposalResponse {
-            proposal_id: view_id,
-        });
+        let resp = Response::new(NewProposalResponse { id });
         Ok(resp)
     }
 
     async fn proposal_commit(
         &self,
         req: Request<ProposalCommitRequest>,
-    ) -> Result<Response<ProposalCommitResponse>, Status> {
+    ) -> Result<Response<()>, Status> {
         let mut views = self.views.lock().await;
+        let id = req.into_inner().id;
 
-        match views.map.remove(&req.into_inner().proposal_id) {
-            None => return Err(Status::invalid_argument(CommitError::ErrorClosedCommit)),
+        match views.map.remove(&id) {
+            None => return Err(Status::not_found(format!("id {id} not found"))),
             Some(View::Proposal(proposal)) => proposal.commit(),
-            Some(_) => return Err(Status::invalid_argument(CommitError::ErrorNonProposalId)),
+            Some(_) => {
+                return Err(Status::invalid_argument(format!(
+                    "id {id} is not a commitable proposal"
+                )))
+            }
         }
         .await
         .into_status_result()?;
-        Ok(Response::new(ProposalCommitResponse { err: 0 }))
+        Ok(Response::new(()))
     }
 
     async fn new_view(
         &self,
         req: Request<NewViewRequest>,
     ) -> Result<Response<NewViewResponse>, Status> {
-        let hash = std::convert::TryInto::<[u8; 32]>::try_into(req.into_inner().root_id)
+        let hash = std::convert::TryInto::<[u8; 32]>::try_into(req.into_inner().root_hash)
             .map_err(|_| api::Error::InvalidProposal) // TODO: better error here?
             .into_status_result()?;
         let mut views = self.views.lock().await;
         let view = self.db.revision(hash).await.into_status_result()?;
-        let view_id = views.insert(View::Historical(view));
-        Ok(Response::new(NewViewResponse { view_id }))
+        let id = views.insert(View::Historical(view));
+        Ok(Response::new(NewViewResponse { id }))
     }
 
     async fn view_has(
@@ -111,15 +121,66 @@ impl MerkleServiceTrait for super::Database {
 
     async fn view_new_iterator_with_start_and_prefix(
         &self,
-        _req: Request<ViewNewIteratorWithStartAndPrefixRequest>,
+        req: Request<ViewNewIteratorWithStartAndPrefixRequest>,
     ) -> Result<Response<ViewNewIteratorWithStartAndPrefixResponse>, Status> {
-        todo!()
+        let req = req.into_inner();
+        let id = req.id;
+        let key = req.start;
+        let views = self
+            .views
+            .lock()
+            .await;
+        let iter = views
+            .get(id as u32)
+            .ok_or_else(|| Status::not_found("id {id} not found"));
+        let iter = iter
+            .map(|view| match view {
+                View::Historical(historical) => historical.stream_from(key.into_boxed_slice()),
+                View::Proposal(_proposal) => todo!(), // proposal.stream_from(key),
+            })?;
+        let mut iterators = self.iterators.lock().await;
+        let id = iterators.insert(Box::pin(iter));
+        Ok(Response::new(ViewNewIteratorWithStartAndPrefixResponse { id }))
     }
 
     async fn view_release(&self, req: Request<ViewReleaseRequest>) -> Result<Response<()>, Status> {
         let mut views = self.views.lock().await;
         // we don't care if this works :/
-        views.delete(req.into_inner().view_id);
+        views.delete(req.into_inner().id);
         Ok(Response::new(()))
+    }
+
+    async fn iterator_next(
+        &self,
+        req: Request<IteratorNextRequest>,
+    ) -> Result<Response<IteratorNextResponse>, Status> {
+        let id = req.into_inner().id;
+        let mut iterators = self.iterators.lock().await;
+        let view = iterators
+            .get_mut(id)
+            .ok_or_else(|| Status::not_found(format!("iterator {id} not found")))?;
+
+        let (key, value) = view
+            .next()
+            .await
+            .ok_or_else(|| Status::out_of_range(format!("iterator {id} at end")))?
+            .into_status_result()?;
+        Ok(Response::new(IteratorNextResponse {
+            data: Some(PutRequest { key: key.to_vec(), value }),
+        }))
+    }
+
+    async fn iterator_release(
+        &self,
+        _req: Request<IteratorReleaseRequest>,
+    ) -> Result<Response<()>, Status> {
+        todo!()
+    }
+
+    async fn iterator_error(
+        &self,
+        _req: Request<IteratorErrorRequest>,
+    ) -> Result<Response<()>, Status> {
+        todo!()
     }
 }
