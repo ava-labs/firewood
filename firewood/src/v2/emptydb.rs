@@ -56,6 +56,8 @@ impl Db for EmptyDb {
 
 #[async_trait]
 impl DbView for HistoricalImpl {
+    type Stream<'a> = EmptyStreamer;
+
     async fn root_hash(&self) -> Result<HashKey, Error> {
         Ok(ROOT_HASH)
     }
@@ -77,8 +79,7 @@ impl DbView for HistoricalImpl {
         Ok(None)
     }
 
-    #[allow(refining_impl_trait)]
-    async fn iter_option<K: KeyType>(&self, _first_key: Option<K>) -> Result<EmptyStreamer, Error> {
+    fn iter_option<K: KeyType>(&self, _first_key: Option<K>) -> Result<EmptyStreamer, Error> {
         Ok(EmptyStreamer {})
     }
 }
@@ -172,7 +173,7 @@ mod tests {
     async fn empty_streamer() -> Result<(), Error> {
         let emptydb = EmptyDb {};
         let rev = emptydb.revision(ROOT_HASH).await?;
-        let mut iter = rev.iter().await?;
+        let mut iter = rev.iter()?;
         assert!(iter.next().await.is_none());
         Ok(())
     }
@@ -181,7 +182,7 @@ mod tests {
     async fn empty_streamer_start_at() -> Result<(), Error> {
         let emptydb = EmptyDb {};
         let rev = emptydb.revision(ROOT_HASH).await?;
-        let mut iter = rev.iter_from(b"ignored").await?;
+        let mut iter = rev.iter_from(b"ignored")?;
         assert!(iter.next().await.is_none());
         Ok(())
     }

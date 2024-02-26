@@ -283,6 +283,8 @@ pub struct DbRev<S> {
 
 #[async_trait]
 impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
+    type Stream<'a> = MerkleKeyValueStream<'a, S, Bincode> where Self: 'a;
+
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         self.merkle
             .root_hash(self.header.kv_root)
@@ -320,11 +322,10 @@ impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
             .map_err(|e| api::Error::InternalError(Box::new(e)))
     }
 
-    #[allow(refining_impl_trait)]
-    async fn iter_option<K: KeyType>(
+    fn iter_option<K: KeyType>(
         &self,
         first_key: Option<K>,
-    ) -> Result<MerkleKeyValueStream<S, Bincode>, api::Error> {
+    ) -> Result<Self::Stream<'_>, api::Error> {
         Ok(match first_key {
             None => self.merkle.key_value_iter(self.header.kv_root),
             Some(key) => self

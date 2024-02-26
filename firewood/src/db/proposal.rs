@@ -266,6 +266,8 @@ impl Proposal {
 
 #[async_trait]
 impl api::DbView for Proposal {
+    type Stream<'a> = MerkleKeyValueStream<'a, CompactSpace<Node, storage::StoreRevMut>, Bincode>;
+
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         self.get_revision()
             .kv_root_hash()
@@ -302,12 +304,10 @@ impl api::DbView for Proposal {
         todo!();
     }
 
-    #[allow(refining_impl_trait)]
-    async fn iter_option<K: KeyType>(
+    fn iter_option<K: KeyType>(
         &self,
         first_key: Option<K>,
-    ) -> Result<MerkleKeyValueStream<CompactSpace<Node, storage::StoreRevMut>, Bincode>, api::Error>
-    {
+    ) -> Result<Self::Stream<'_>, api::Error> {
         let rev = self.get_revision();
         let iter = match first_key {
             None => rev.stream(),

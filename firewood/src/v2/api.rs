@@ -4,7 +4,7 @@
 use crate::merkle::MerkleError;
 pub use crate::merkle::Proof;
 use async_trait::async_trait;
-use futures::{Future, Stream};
+use futures::Stream;
 use std::{fmt::Debug, sync::Arc};
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
@@ -148,6 +148,10 @@ pub trait Db {
 /// A [Proposal] requires implementing DbView
 #[async_trait]
 pub trait DbView {
+    type Stream<'a>: Stream<Item = Result<(Box<[u8]>, Vec<u8>), Error>>
+    where
+        Self: 'a;
+
     /// Get the root hash for the current DbView
     async fn root_hash(&self) -> Result<HashKey, Error>;
 
@@ -183,26 +187,15 @@ pub trait DbView {
     /// If you always want to start at the beginning, [DbView::iter] is easier to use
     /// If you always provide a key, [DbView::iter_from] is easier to use
     ///
-    async fn iter_option<K: KeyType>(
-        &self,
-        first_key: Option<K>,
-    ) -> Result<impl Stream<Item = Result<(Box<[u8]>, Vec<u8>), Error>>, Error>;
+    fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Stream<'_>, Error>;
 
     /// Obtain a stream over the keys/values of this view, starting from the beginning
-    fn iter(
-        &self,
-    ) -> impl Future<Output = Result<impl Stream<Item = Result<(Box<[u8]>, Vec<u8>), Error>>, Error>>
-           + Send {
-        // impl Stream<Item = Result<(Box<[u8]>, Vec<u8>), Error>>  {
+    fn iter(&self) -> Result<Self::Stream<'_>, Error> {
         self.iter_option(Option::<Box<[u8]>>::None)
     }
 
     /// Obtain a stream over the key/values, starting at a specific key
-    fn iter_from<K: KeyType + 'static>(
-        &self,
-        first_key: K,
-    ) -> impl Future<Output = Result<impl Stream<Item = Result<(Box<[u8]>, Vec<u8>), Error>>, Error>>
-           + Send {
+    fn iter_from<K: KeyType + 'static>(&self, first_key: K) -> Result<Self::Stream<'_>, Error> {
         self.iter_option(Some(first_key))
     }
 }

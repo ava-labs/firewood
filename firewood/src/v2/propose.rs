@@ -105,6 +105,8 @@ impl<T> Proposal<T> {
 
 #[async_trait]
 impl<T: api::DbView + Send + Sync> api::DbView for Proposal<T> {
+    type Stream<'a> = MerkleKeyValueStream<'a, CompactSpace<Node, DynamicMem>, Bincode> where T: 'a;
+
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         todo!();
     }
@@ -141,11 +143,10 @@ impl<T: api::DbView + Send + Sync> api::DbView for Proposal<T> {
         todo!();
     }
 
-    #[allow(refining_impl_trait)]
-    async fn iter_option<K: KeyType>(
+    fn iter_option<K: KeyType>(
         &self,
         _first_key: Option<K>,
-    ) -> Result<MerkleKeyValueStream<CompactSpace<Node, DynamicMem>, Bincode>, api::Error> {
+    ) -> Result<Self::Stream<'_>, api::Error> {
         todo!()
     }
 }
