@@ -523,6 +523,7 @@ impl<T> EncodedNode<T> {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub enum EncodedNodeType {
     Leaf(LeafNode),
     Branch {
@@ -953,27 +954,8 @@ mod tests {
 
         let deserialized_node: EncodedNode<Bincode> = Bincode::deserialize(&node_bytes)?;
 
-        let (expected_path, expected_children, expected_value) = match node.node {
-            EncodedNodeType::Branch {
-                path,
-                children,
-                value,
-            } => (path, children, value),
-            _ => panic!("expected branch node"),
-        };
+        assert_eq!(&node.node, &deserialized_node.node);
 
-        let (got_path, got_children, got_value) = match deserialized_node.node {
-            EncodedNodeType::Branch {
-                path,
-                children,
-                value,
-            } => (path, children, value),
-            _ => panic!("expected branch node"),
-        };
-
-        assert_eq!(expected_path, got_path);
-        assert_eq!(expected_children, got_children);
-        assert_eq!(expected_value, got_value);
         Ok(())
     }
 
