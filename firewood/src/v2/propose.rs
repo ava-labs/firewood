@@ -4,10 +4,10 @@
 use std::{collections::BTreeMap, fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
+use futures::stream::{empty, Empty};
 
 use crate::{
-    merkle::{Bincode, MerkleKeyValueStream, Node, Proof},
-    shale::{cached::DynamicMem, compact::CompactSpace},
+    merkle::Proof,
     v2::api,
 };
 
@@ -105,7 +105,7 @@ impl<T> Proposal<T> {
 
 #[async_trait]
 impl<T: api::DbView + Send + Sync> api::DbView for Proposal<T> {
-    type Stream<'a> = MerkleKeyValueStream<'a, CompactSpace<Node, DynamicMem>, Bincode> where T: 'a;
+    type Stream<'a> = Empty<Result<(Box<[u8]>, Vec<u8>), api::Error>> where T: 'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         todo!();
@@ -147,7 +147,7 @@ impl<T: api::DbView + Send + Sync> api::DbView for Proposal<T> {
         &self,
         _first_key: Option<K>,
     ) -> Result<Self::Stream<'_>, api::Error> {
-        todo!()
+        Ok(empty())
     }
 }
 
