@@ -5,7 +5,7 @@
 use self::buffer::DiskBufferRequester;
 use crate::file::File;
 use crate::shale::{self, CachedStore, CachedView, SendSyncDerefMut, SpaceId};
-use nix::fcntl::{flock, FlockArg};
+use nix::fcntl::{Flock, FlockArg};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -13,7 +13,7 @@ use std::{
     fmt::{self, Debug},
     num::NonZeroUsize,
     ops::{Deref, DerefMut},
-    os::fd::{AsFd, AsRawFd},
+    os::fd::AsFd,
     path::PathBuf,
     sync::Arc,
 };
@@ -905,8 +905,9 @@ impl FilePool {
             file_nbit,
             rootdir: rootdir.to_path_buf(),
         };
-        let f0 = s.get_file(0)?;
-        if flock(f0.as_raw_fd(), FlockArg::LockExclusiveNonblock).is_err() {
+        let f0 = std::sync::Arc::<File>::into_inner(s.get_file(0)?)
+            .expect("new file, should only be one reference");
+        if Flock::lock(f0, FlockArg::LockExclusiveNonblock).is_err() {
             return Err(StoreError::Init("the store is busy".into()));
         }
         Ok(s)
@@ -930,14 +931,6 @@ impl FilePool {
 
     const fn get_file_nbit(&self) -> u64 {
         self.file_nbit
-    }
-}
-
-impl Drop for FilePool {
-    fn drop(&mut self) {
-        #[allow(clippy::unwrap_used)]
-        let f0 = self.get_file(0).unwrap();
-        flock(f0.as_raw_fd(), FlockArg::UnlockNonblock).ok();
     }
 }
 
