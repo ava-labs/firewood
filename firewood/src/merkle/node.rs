@@ -947,7 +947,7 @@ mod tests {
         let node: EncodedNode<Bincode> = EncodedNode::new(EncodedNodeType::Branch {
             path: PartialPath(path_nibbles.to_vec()),
             children: Default::default(),
-            value: Some(Data(vec![1, 2, 3])),
+            value: Some(Data(vec![1, 2, 3, 4])),
         });
 
         let bincode = Bincode::new();
