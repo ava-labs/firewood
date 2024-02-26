@@ -16,10 +16,10 @@ use crate::nibbles::NibblesIterator;
 use crate::{
     db::DbError,
     merkle::{to_nibble_array, Merkle, MerkleError, Node, NodeType},
-    merkle_util::{new_in_memory_merkle, DataStoreError, InMemoryMerkle},
+    merkle_util::{DataStoreError, InMemoryMerkle},
 };
 
-use super::{BinarySerde, NodeObjRef};
+use super::{BinarySerde, EncodedNode, NodeObjRef};
 
 #[derive(Debug, Error)]
 pub enum ProofError {
@@ -146,14 +146,20 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
         self.0.extend(other.0)
     }
 
-    pub fn verify_range_proof<K: AsRef<[u8]>, V: AsRef<[u8]>>(
+    pub fn verify_range_proof<K, V, T>(
         &self,
         root_hash: HashKey,
         first_key: K,
         last_key: K,
         keys: Vec<K>,
         vals: Vec<V>,
-    ) -> Result<bool, ProofError> {
+    ) -> Result<bool, ProofError>
+    where
+        K: AsRef<[u8]>,
+        V: AsRef<[u8]>,
+        T: BinarySerde,
+        EncodedNode<T>: serde::Serialize + serde::de::DeserializeOwned,
+    {
         if keys.len() != vals.len() {
             return Err(ProofError::InconsistentProofData);
         }
@@ -165,7 +171,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
         }
 
         // Use in-memory merkle
-        let mut in_mem_merkle = new_in_memory_merkle(0x10000, 0x10000);
+        let mut in_mem_merkle = InMemoryMerkle::new(0x10000, 0x10000);
 
         // Special case, there is no edge proof at all. The given range is expected
         // to be the whole leaf-set in the trie.
@@ -238,7 +244,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
 
         // If the fork point is the root, the trie should be empty, start with a new one.
         if fork_at_root {
-            in_mem_merkle = new_in_memory_merkle(0x100000, 0x100000);
+            in_mem_merkle = InMemoryMerkle::new(0x100000, 0x100000);
         }
 
         for (key, val) in keys.iter().zip(vals.iter()) {
@@ -260,13 +266,18 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     /// necessary nodes will be resolved and leave the remaining as hashnode.
     ///
     /// The given edge proof is allowed to be an existent or non-existent proof.
-    fn proof_to_path<K: AsRef<[u8]>, T: BinarySerde>(
+    fn proof_to_path<K, T>(
         &self,
         key: K,
         root_hash: HashKey,
         in_mem_merkle: &mut InMemoryMerkle<T>,
         allow_non_existent_node: bool,
-    ) -> Result<Option<Vec<u8>>, ProofError> {
+    ) -> Result<Option<Vec<u8>>, ProofError>
+    where
+        K: AsRef<[u8]>,
+        T: BinarySerde,
+        EncodedNode<T>: serde::Serialize + serde::de::DeserializeOwned,
+    {
         // Start with the sentinel root
         let sentinel = in_mem_merkle.get_sentinel_address();
         let merkle = in_mem_merkle.get_merkle_mut();
@@ -472,11 +483,16 @@ fn generate_subproof(encoded: &[u8]) -> Result<SubProof, ProofError> {
 //
 // The return value indicates if the fork point is root node. If so, unset the
 // entire trie.
-fn unset_internal<K: AsRef<[u8]>, T: BinarySerde>(
+fn unset_internal<K, T>(
     in_mem_merkle: &mut InMemoryMerkle<T>,
     left: K,
     right: K,
-) -> Result<bool, ProofError> {
+) -> Result<bool, ProofError>
+where
+    K: AsRef<[u8]>,
+    T: BinarySerde,
+    EncodedNode<T>: serde::Serialize + serde::de::DeserializeOwned,
+{
     // Add the sentinel root
     let mut left_chunks = vec![0];
     left_chunks.extend(left.as_ref().iter().copied().flat_map(to_nibble_array));
