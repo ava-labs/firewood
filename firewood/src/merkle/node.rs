@@ -943,7 +943,7 @@ mod tests {
     #[test_case(&[0x0F,0x0F])]
     #[test_case(&[0x0F,0x01,0x0F])]
 
-    fn encoded_node_branch_node_bincode_serialize(path_nibbles: &[u8]) {
+    fn encoded_node_branch_node_bincode_serialize(path_nibbles: &[u8]) -> Result<(), Error> {
         let node: EncodedNode<Bincode> = EncodedNode::new(EncodedNodeType::Branch {
             path: PartialPath(path_nibbles.to_vec()),
             children: Default::default(),
@@ -952,10 +952,9 @@ mod tests {
 
         let bincode = Bincode::new();
 
-        let node_bytes = bincode.serialize_impl(&node).unwrap();
+        let node_bytes = bincode.serialize_impl(&node)?;
 
-        let deserialized_node: EncodedNode<Bincode> =
-            bincode.deserialize_impl(&node_bytes).unwrap();
+        let deserialized_node: EncodedNode<Bincode> = bincode.deserialize_impl(&node_bytes)?;
 
         let (expected_path, expected_children, expected_value) = match node.node {
             EncodedNodeType::Branch {
@@ -978,6 +977,7 @@ mod tests {
         assert_eq!(expected_path, got_path);
         assert_eq!(expected_children, got_children);
         assert_eq!(expected_value, got_value);
+        Ok(())
     }
 
     #[test_matrix(
