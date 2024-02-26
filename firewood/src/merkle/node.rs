@@ -877,8 +877,7 @@ mod tests {
     use super::*;
     use crate::shale::cached::PlainMem;
     use std::iter::repeat;
-    use test_case::test_case;
-    use test_case::test_matrix;
+    use test_case::{test_case, test_matrix};
 
     #[test_matrix(
         [Nil, [0x00; TRIE_HASH_LEN]],
