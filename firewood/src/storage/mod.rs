@@ -905,10 +905,10 @@ impl FilePool {
             file_nbit,
             rootdir: rootdir.to_path_buf(),
         };
-        let f0 = std::sync::Arc::<File>::into_inner(s.get_file(0)?)
-            .expect("new file, should only be one reference");
-        if Flock::lock(f0, FlockArg::LockExclusiveNonblock).is_err() {
-            return Err(StoreError::Init("the store is busy".into()));
+        let f0 = s.get_file(0)?;
+        if let Some(inner) = Arc::<File>::into_inner(f0) {
+            // first open of this file, acquire the lock
+            Flock::lock(inner, FlockArg::LockExclusiveNonblock).map_err(|_| StoreError::Init("the store is busy".into()))?;
         }
         Ok(s)
     }
