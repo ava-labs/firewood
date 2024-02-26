@@ -943,17 +943,15 @@ mod tests {
     #[test_case(&[0x0F,0x01,0x0F])]
 
     fn encoded_branch_node_bincode_serialize(path_nibbles: &[u8]) -> Result<(), Error> {
-        let node: EncodedNode<Bincode> = EncodedNode::new(EncodedNodeType::Branch {
+        let node = EncodedNode::<Bincode>::new(EncodedNodeType::Branch {
             path: PartialPath(path_nibbles.to_vec()),
             children: Default::default(),
             value: Some(Data(vec![1, 2, 3, 4])),
         });
 
-        let bincode = Bincode::new();
+        let node_bytes = Bincode::serialize(&node)?;
 
-        let node_bytes = bincode.serialize_impl(&node)?;
-
-        let deserialized_node: EncodedNode<Bincode> = bincode.deserialize_impl(&node_bytes)?;
+        let deserialized_node: EncodedNode<Bincode> = Bincode::deserialize(&node_bytes)?;
 
         let (expected_path, expected_children, expected_value) = match node.node {
             EncodedNodeType::Branch {
