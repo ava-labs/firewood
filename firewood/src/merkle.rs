@@ -1104,7 +1104,7 @@ where
         // Get the hashes of the nodes.
         for node in nodes.into_iter() {
             let encoded = self.encode(&node)?;
-            let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(encoded.clone()).into();
+            let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(&encoded).into();
             proofs.insert(hash, encoded.to_vec());
         }
         Ok(Proof(proofs))
