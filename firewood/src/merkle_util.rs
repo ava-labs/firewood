@@ -36,12 +36,12 @@ pub enum DataStoreError {
     ProofEmptyKeyValuesError,
 }
 
-pub struct MerkleSetup<S, T> {
+pub struct InMemoryMerkle<S, T> {
     root: DiskAddress,
     merkle: Merkle<S, T>,
 }
 
-impl<S: ShaleStore<Node> + Send + Sync, T: BinarySerde> MerkleSetup<S, T> {
+impl<S: ShaleStore<Node> + Send + Sync, T: BinarySerde> InMemoryMerkle<S, T> {
     pub fn insert<K: AsRef<[u8]>>(&mut self, key: K, val: Vec<u8>) -> Result<(), DataStoreError> {
         self.merkle
             .insert(key, val, self.root)
@@ -121,10 +121,10 @@ impl<S: ShaleStore<Node> + Send + Sync, T: BinarySerde> MerkleSetup<S, T> {
     }
 }
 
-pub fn new_merkle(
+pub fn new_in_memory_merkle(
     meta_size: u64,
     compact_size: u64,
-) -> MerkleSetup<CompactSpace<Node, DynamicMem>, Bincode> {
+) -> InMemoryMerkle<CompactSpace<Node, DynamicMem>, Bincode> {
     const RESERVED: usize = 0x1000;
     assert!(meta_size as usize > RESERVED);
     assert!(compact_size as usize > RESERVED);
@@ -155,5 +155,5 @@ pub fn new_merkle(
     #[allow(clippy::unwrap_used)]
     let root = merkle.init_root().unwrap();
 
-    MerkleSetup { root, merkle }
+    InMemoryMerkle { root, merkle }
 }

@@ -3,7 +3,7 @@
 
 use firewood::{
     merkle::{Bincode, Node, Proof, ProofError},
-    merkle_util::{new_merkle, DataStoreError, MerkleSetup},
+    merkle_util::{new_in_memory_merkle, DataStoreError, InMemoryMerkle},
     // TODO: we should not be using shale from an integration test
     shale::{cached::DynamicMem, compact::CompactSpace},
 };
@@ -19,8 +19,8 @@ fn merkle_build_test<
     items: Vec<(K, V)>,
     meta_size: u64,
     compact_size: u64,
-) -> Result<MerkleSetup<Store, Bincode>, DataStoreError> {
-    let mut merkle = new_merkle(meta_size, compact_size);
+) -> Result<InMemoryMerkle<Store, Bincode>, DataStoreError> {
+    let mut merkle = new_in_memory_merkle(meta_size, compact_size);
     for (k, v) in items.iter() {
         merkle.insert(k, v.as_ref().to_vec())?;
     }
@@ -113,7 +113,7 @@ fn test_root_hash_reversed_deletions() -> Result<(), DataStoreError> {
 
         items.sort();
 
-        let mut merkle = new_merkle(0x100000, 0x100000);
+        let mut merkle = new_in_memory_merkle(0x100000, 0x100000);
 
         let mut hashes = Vec::new();
 
@@ -182,7 +182,7 @@ fn test_root_hash_random_deletions() -> Result<(), DataStoreError> {
         let mut items_ordered: Vec<_> = items.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         items_ordered.sort();
         items_ordered.shuffle(&mut *rng.borrow_mut());
-        let mut merkle = new_merkle(0x100000, 0x100000);
+        let mut merkle = new_in_memory_merkle(0x100000, 0x100000);
 
         for (k, v) in items.iter() {
             merkle.insert(k, v.to_vec())?;
