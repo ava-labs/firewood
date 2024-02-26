@@ -877,6 +877,7 @@ mod tests {
     use super::*;
     use crate::shale::cached::PlainMem;
     use std::iter::repeat;
+    use test_case::test_case;
     use test_case::test_matrix;
 
     #[test_matrix(
@@ -931,6 +932,52 @@ mod tests {
         ));
 
         check_node_encoding(node);
+    }
+
+    #[test_case(&[])]
+    #[test_case(&[0x00])]
+    #[test_case(&[0x0F])]
+    #[test_case(&[0x00, 0x00])]
+    #[test_case(&[0x01, 0x02])]
+    #[test_case(&[0x00,0x0F])]
+    #[test_case(&[0x0F,0x0F])]
+    #[test_case(&[0x0F,0x01,0x0F])]
+
+    fn encoded_node_branch_node_bincode_serialize(path_nibbles: &[u8]) {
+        let node: EncodedNode<Bincode> = EncodedNode::new(EncodedNodeType::Branch {
+            path: PartialPath(path_nibbles.to_vec()),
+            children: Default::default(),
+            value: Some(Data(vec![1, 2, 3])),
+        });
+
+        let bincode = Bincode::new();
+
+        let node_bytes = bincode.serialize_impl(&node).unwrap();
+
+        let deserialized_node: EncodedNode<Bincode> =
+            bincode.deserialize_impl(&node_bytes).unwrap();
+
+        let (expected_path, expected_children, expected_value) = match node.node {
+            EncodedNodeType::Branch {
+                path,
+                children,
+                value,
+            } => (path, children, value),
+            _ => panic!("expected branch node"),
+        };
+
+        let (got_path, got_children, got_value) = match deserialized_node.node {
+            EncodedNodeType::Branch {
+                path,
+                children,
+                value,
+            } => (path, children, value),
+            _ => panic!("expected branch node"),
+        };
+
+        assert_eq!(expected_path, got_path);
+        assert_eq!(expected_children, got_children);
+        assert_eq!(expected_value, got_value);
     }
 
     #[test_matrix(
