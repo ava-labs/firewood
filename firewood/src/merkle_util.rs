@@ -36,9 +36,11 @@ pub enum DataStoreError {
     ProofEmptyKeyValuesError,
 }
 
+type InMemoryStore = CompactSpace<Node, DynamicMem>;
+
 pub struct InMemoryMerkle<T> {
     root: DiskAddress,
-    merkle: Merkle<CompactSpace<Node, DynamicMem>, T>,
+    merkle: Merkle<InMemoryStore, T>,
 }
 
 impl<T: BinarySerde> InMemoryMerkle<T> {
@@ -63,7 +65,7 @@ impl<T: BinarySerde> InMemoryMerkle<T> {
     pub fn get_mut<K: AsRef<[u8]>>(
         &mut self,
         key: K,
-    ) -> Result<Option<RefMut<CompactSpace<Node, DynamicMem>, T>>, DataStoreError> {
+    ) -> Result<Option<RefMut<InMemoryStore, T>>, DataStoreError> {
         self.merkle
             .get_mut(key, self.root)
             .map_err(|_err| DataStoreError::GetError)
@@ -73,7 +75,7 @@ impl<T: BinarySerde> InMemoryMerkle<T> {
         self.root
     }
 
-    pub fn get_merkle_mut(&mut self) -> &mut Merkle<CompactSpace<Node, DynamicMem>, T> {
+    pub fn get_merkle_mut(&mut self) -> &mut Merkle<InMemoryStore, T> {
         &mut self.merkle
     }
 
