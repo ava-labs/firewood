@@ -942,7 +942,6 @@ mod tests {
     #[test_case(&[0x00,0x0F])]
     #[test_case(&[0x0F,0x0F])]
     #[test_case(&[0x0F,0x01,0x0F])]
-
     fn encoded_branch_node_bincode_serialize(path_nibbles: &[u8]) -> Result<(), Error> {
         let node = EncodedNode::<Bincode>::new(EncodedNodeType::Branch {
             path: PartialPath(path_nibbles.to_vec()),
