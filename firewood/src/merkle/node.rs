@@ -935,7 +935,14 @@ mod tests {
         check_node_encoding(node);
     }
 
-    #[test_case(&[]; "empty key")]
+    #[test_case(&[])]
+    #[test_case(&[0x00])]
+    #[test_case(&[0x00, 0x00])]
+    #[test_case(&[0x00,0xFF])]
+    #[test_case(&[0xFF,0x00])]
+    #[test_case(&[0xFF,0xFF])]
+    #[test_case(&[0xF0,0x0F])]
+
     fn encoded_node_branch_node_bincode_serialize(path: &[u8]) {
         let node: EncodedNode<Bincode> = EncodedNode::new(EncodedNodeType::Branch {
             path: PartialPath(path.to_vec()),
