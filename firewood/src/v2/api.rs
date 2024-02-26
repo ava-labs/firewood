@@ -203,7 +203,6 @@ pub trait DbView {
         first_key: K,
     ) -> impl Future<Output = Result<impl Stream<Item = Result<(Box<[u8]>, Vec<u8>), Error>>, Error>>
            + Send {
-        // impl Stream<Item = Result<(Box<[u8]>, Vec<u8>), Error>>  {
         self.iter_option(Some(first_key))
     }
 }
