@@ -8,7 +8,7 @@ use crate::{
     },
     shale::{
         self, cached::DynamicMem, compact::CompactSpace, disk_address::DiskAddress, CachedStore,
-        ShaleStore, StoredView,
+        StoredView,
     },
 };
 use std::num::NonZeroUsize;
@@ -36,12 +36,12 @@ pub enum DataStoreError {
     ProofEmptyKeyValuesError,
 }
 
-pub struct InMemoryMerkle<S, T> {
+pub struct InMemoryMerkle<T> {
     root: DiskAddress,
-    merkle: Merkle<S, T>,
+    merkle: Merkle<CompactSpace<Node, DynamicMem>, T>,
 }
 
-impl<S: ShaleStore<Node> + Send + Sync, T: BinarySerde> InMemoryMerkle<S, T> {
+impl<T: BinarySerde> InMemoryMerkle<T> {
     pub fn insert<K: AsRef<[u8]>>(&mut self, key: K, val: Vec<u8>) -> Result<(), DataStoreError> {
         self.merkle
             .insert(key, val, self.root)
@@ -63,7 +63,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T: BinarySerde> InMemoryMerkle<S, T> {
     pub fn get_mut<K: AsRef<[u8]>>(
         &mut self,
         key: K,
-    ) -> Result<Option<RefMut<S, T>>, DataStoreError> {
+    ) -> Result<Option<RefMut<CompactSpace<Node, DynamicMem>, T>>, DataStoreError> {
         self.merkle
             .get_mut(key, self.root)
             .map_err(|_err| DataStoreError::GetError)
@@ -73,7 +73,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T: BinarySerde> InMemoryMerkle<S, T> {
         self.root
     }
 
-    pub fn get_merkle_mut(&mut self) -> &mut Merkle<S, T> {
+    pub fn get_merkle_mut(&mut self) -> &mut Merkle<CompactSpace<Node, DynamicMem>, T> {
         &mut self.merkle
     }
 
@@ -121,10 +121,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T: BinarySerde> InMemoryMerkle<S, T> {
     }
 }
 
-pub fn new_in_memory_merkle(
-    meta_size: u64,
-    compact_size: u64,
-) -> InMemoryMerkle<CompactSpace<Node, DynamicMem>, Bincode> {
+pub fn new_in_memory_merkle(meta_size: u64, compact_size: u64) -> InMemoryMerkle<Bincode> {
     const RESERVED: usize = 0x1000;
     assert!(meta_size as usize > RESERVED);
     assert!(compact_size as usize > RESERVED);

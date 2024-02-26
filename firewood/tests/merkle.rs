@@ -2,15 +2,11 @@
 // See the file LICENSE.md for licensing terms.
 
 use firewood::{
-    merkle::{Bincode, Node, Proof, ProofError},
+    merkle::{Bincode, Proof, ProofError},
     merkle_util::{new_in_memory_merkle, DataStoreError, InMemoryMerkle},
-    // TODO: we should not be using shale from an integration test
-    shale::{cached::DynamicMem, compact::CompactSpace},
 };
 use rand::Rng;
 use std::{collections::HashMap, fmt::Write};
-
-type Store = CompactSpace<Node, DynamicMem>;
 
 fn merkle_build_test<
     K: AsRef<[u8]> + std::cmp::Ord + Clone + std::fmt::Debug,
@@ -19,7 +15,7 @@ fn merkle_build_test<
     items: Vec<(K, V)>,
     meta_size: u64,
     compact_size: u64,
-) -> Result<InMemoryMerkle<Store, Bincode>, DataStoreError> {
+) -> Result<InMemoryMerkle<Bincode>, DataStoreError> {
     let mut merkle = new_in_memory_merkle(meta_size, compact_size);
     for (k, v) in items.iter() {
         merkle.insert(k, v.as_ref().to_vec())?;

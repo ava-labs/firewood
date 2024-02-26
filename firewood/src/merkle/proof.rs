@@ -260,11 +260,11 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     /// necessary nodes will be resolved and leave the remaining as hashnode.
     ///
     /// The given edge proof is allowed to be an existent or non-existent proof.
-    fn proof_to_path<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySerde>(
+    fn proof_to_path<K: AsRef<[u8]>, T: BinarySerde>(
         &self,
         key: K,
         root_hash: HashKey,
-        in_mem_merkle: &mut InMemoryMerkle<S, T>,
+        in_mem_merkle: &mut InMemoryMerkle<T>,
         allow_non_existent_node: bool,
     ) -> Result<Option<Vec<u8>>, ProofError> {
         // Start with the sentinel root
@@ -472,8 +472,8 @@ fn generate_subproof(encoded: &[u8]) -> Result<SubProof, ProofError> {
 //
 // The return value indicates if the fork point is root node. If so, unset the
 // entire trie.
-fn unset_internal<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySerde>(
-    in_mem_merkle: &mut InMemoryMerkle<S, T>,
+fn unset_internal<K: AsRef<[u8]>, T: BinarySerde>(
+    in_mem_merkle: &mut InMemoryMerkle<T>,
     left: K,
     right: K,
 ) -> Result<bool, ProofError> {
