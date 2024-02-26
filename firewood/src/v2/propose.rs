@@ -6,10 +6,7 @@ use std::{collections::BTreeMap, fmt::Debug, sync::Arc};
 use async_trait::async_trait;
 use futures::stream::{empty, Empty};
 
-use crate::{
-    merkle::Proof,
-    v2::api,
-};
+use crate::{merkle::Proof, v2::api};
 
 use super::api::{KeyType, ValueType};
 
