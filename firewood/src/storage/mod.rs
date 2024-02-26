@@ -908,7 +908,8 @@ impl FilePool {
         let f0 = s.get_file(0)?;
         if let Some(inner) = Arc::<File>::into_inner(f0) {
             // first open of this file, acquire the lock
-            Flock::lock(inner, FlockArg::LockExclusiveNonblock).map_err(|_| StoreError::Init("the store is busy".into()))?;
+            Flock::lock(inner, FlockArg::LockExclusiveNonblock)
+                .map_err(|_| StoreError::Init("the store is busy".into()))?;
         }
         Ok(s)
     }
