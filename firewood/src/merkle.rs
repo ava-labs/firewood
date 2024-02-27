@@ -216,7 +216,7 @@ where
             .children[0];
         Ok(if let Some(root) = root {
             let mut node = self.get_node(root)?;
-            let res = self.to_hash(&node)?;
+            let res = self.to_hash(node.inner())?;
             #[allow(clippy::unwrap_used)]
             // if node.is_dirty() {
             //     node.write(|_| {}).unwrap();
@@ -230,8 +230,8 @@ where
         })
     }
 
-    fn to_hash(&self, node: &NodeObjRef) -> Result<TrieHash, MerkleError> {
-        let res = self.encode(node.inner())?;
+    fn to_hash(&self, node: &NodeType) -> Result<TrieHash, MerkleError> {
+        let res = self.encode(node)?;
         Ok(TrieHash(Keccak256::digest(res).into()))
     }
 
