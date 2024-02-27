@@ -15,7 +15,7 @@ use crate::nibbles::Nibbles;
 use crate::nibbles::NibblesIterator;
 use crate::{
     db::DbError,
-    merkle::{to_nibble_array, Merkle, MerkleError, Node, NodeType},
+    merkle::{to_nibble_array, Merkle, MerkleError, Node, NodeSource, NodeType},
     merkle_util::{DataStoreError, InMemoryMerkle},
 };
 

@@ -5,7 +5,7 @@ use super::{
     get_sub_universe_from_deltas, Db, DbConfig, DbError, DbHeader, DbInner, DbRev, DbRevInner,
     MutStore, SharedStore, Universe, MERKLE_META_SPACE, MERKLE_PAYLOAD_SPACE, ROOT_HASH_SPACE,
 };
-use crate::merkle::{Bincode, MerkleKeyValueStream, Node, Proof};
+use crate::merkle::{Bincode, Merkle, MerkleKeyValueStream, Node, Proof};
 use crate::shale::compact::CompactSpace;
 use crate::shale::CachedStore;
 use crate::storage;
@@ -266,7 +266,8 @@ impl Proposal {
 
 #[async_trait]
 impl api::DbView for Proposal {
-    type Stream<'a> = MerkleKeyValueStream<'a, CompactSpace<Node, storage::StoreRevMut>, Bincode>;
+    type Stream<'a> =
+        MerkleKeyValueStream<'a, Merkle<CompactSpace<Node, storage::StoreRevMut>, Bincode>>;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         self.get_revision()

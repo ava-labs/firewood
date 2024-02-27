@@ -283,7 +283,7 @@ pub struct DbRev<S> {
 
 #[async_trait]
 impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
-    type Stream<'a> = MerkleKeyValueStream<'a, S, Bincode> where Self: 'a;
+    type Stream<'a> = MerkleKeyValueStream<'a, Merkle<S, Bincode>> where Self: 'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         self.merkle
@@ -336,11 +336,14 @@ impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
 }
 
 impl<S: ShaleStore<Node> + Send + Sync> DbRev<S> {
-    pub fn stream(&self) -> merkle::MerkleKeyValueStream<'_, S, Bincode> {
+    pub fn stream(&self) -> merkle::MerkleKeyValueStream<'_, Merkle<S, Bincode>> {
         self.merkle.key_value_iter(self.header.kv_root)
     }
 
-    pub fn stream_from(&self, start_key: Key) -> merkle::MerkleKeyValueStream<'_, S, Bincode> {
+    pub fn stream_from(
+        &self,
+        start_key: Key,
+    ) -> merkle::MerkleKeyValueStream<'_, Merkle<S, Bincode>> {
         self.merkle
             .key_value_iter_from_key(self.header.kv_root, start_key)
     }
@@ -373,9 +376,9 @@ impl<S: ShaleStore<Node> + Send + Sync> DbRev<S> {
     }
 
     /// Verifies a range proof is valid for a set of keys.
-    pub fn verify_range_proof<N: AsRef<[u8]> + Send, K: AsRef<[u8]>, V: AsRef<[u8]>>(
+    pub fn verify_range_proof<NS: AsRef<[u8]> + Send, K: AsRef<[u8]>, V: AsRef<[u8]>>(
         &self,
-        proof: Proof<N>,
+        proof: Proof<NS>,
         first_key: K,
         last_key: K,
         keys: Vec<K>,
