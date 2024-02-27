@@ -735,7 +735,7 @@ impl<'de> Deserialize<'de> for EncodedNode<Bincode> {
                     .map_err(D::Error::custom)?;
                 let path = PartialPath::from_nibbles(Nibbles::<0>::new(&path).into_iter()).0;
 
-                let mut value = items
+                let value = items
                     .pop()
                     .unwrap_or_default()
                     .deserialize::<Bincode>()
