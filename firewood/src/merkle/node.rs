@@ -723,23 +723,18 @@ impl<'de> Deserialize<'de> for EncodedNode<Bincode> {
             }
 
             BranchNode::MSIZE => {
+                // We checked the length above so unwrap is safe.
+                #[allow(clippy::unwrap_used)]
                 let path = items.pop().unwrap();
                 let path = PartialPath::from_nibbles(Nibbles::<0>::new(&path).into_iter()).0;
 
+                #[allow(clippy::unwrap_used)]
                 let value = items.pop().unwrap();
                 let mut value = if value.is_empty() {
                     None
                 } else {
                     Some(Data(value))
                 };
-                // let mut value = items
-                //     .pop()
-                //     .unwrap_or_default()
-                //     .deserialize::<Bincode>()
-                //     .map_err(D::Error::custom)
-                //     .map(Data)
-                //     .map(Some)?
-                //     .filter(|data| !data.is_empty());
 
                 let mut children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
 
