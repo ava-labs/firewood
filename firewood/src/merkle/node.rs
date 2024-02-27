@@ -592,7 +592,7 @@ impl Serialize for EncodedNode<Bincode> {
                     Encoded::default()
                 };
 
-                let serialized_path = from_nibbles(&path.encode(true)).collect();
+                let serialized_path = from_nibbles(&path.encode(false)).collect();
 
                 list[BranchNode::MAX_CHILDREN + 1] = Encoded::Raw(serialized_path);
 
