@@ -138,9 +138,6 @@ impl BranchNode {
                     #[allow(clippy::unwrap_used)]
                     if c_ref.is_encoded_longer_than_hash_len::<S>(store) {
                         #[allow(clippy::indexing_slicing)]
-                        // (list[i] = bincode::DefaultOptions::new()
-                        //     .serialize(&&(*c_ref.get_root_hash::<S>(store))[..])
-                        //     .unwrap());
                         (list[i] = c_ref.get_root_hash::<S>(store).to_vec());
 
                         // See struct docs for ordering requirements
