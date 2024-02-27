@@ -693,13 +693,10 @@ impl<'de> Deserialize<'de> for EncodedNode<Bincode> {
             }
 
             BranchNode::MSIZE => {
-                // We checked the length above so unwrap is safe.
-                #[allow(clippy::unwrap_used)]
-                let path = items.pop().unwrap();
+                let path = items.pop().expect("length was checked above");
                 let path = PartialPath::from_nibbles(Nibbles::<0>::new(&path).into_iter()).0;
 
-                #[allow(clippy::unwrap_used)]
-                let value = items.pop().unwrap();
+                let value = items.pop().expect("length was checked above");
                 let mut value = if value.is_empty() {
                     None
                 } else {
