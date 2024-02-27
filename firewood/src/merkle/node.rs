@@ -69,36 +69,6 @@ impl Data {
     }
 }
 
-// TODO remove
-// #[derive(Serialize, Deserialize, Debug)]
-// enum Encoded<T> {
-//     Raw(T),
-//     Data(T),
-// }
-
-// impl Default for Encoded<Vec<u8>> {
-//     fn default() -> Self {
-//         // This is the default serialized empty vector
-//         Encoded::Data(vec![0])
-//     }
-// }
-
-// impl<T: DeserializeOwned + AsRef<[u8]>> Encoded<T> {
-//     pub fn decode(self) -> Result<T, bincode::Error> {
-//         match self {
-//             Encoded::Raw(raw) => Ok(raw),
-//             Encoded::Data(data) => bincode::DefaultOptions::new().deserialize(data.as_ref()),
-//         }
-//     }
-
-//     pub fn deserialize<De: BinarySerde>(self) -> Result<T, De::DeserializeError> {
-//         match self {
-//             Encoded::Raw(raw) => Ok(raw),
-//             Encoded::Data(data) => De::deserialize(data.as_ref()),
-//         }
-//     }
-// }
-
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner)]
 pub enum NodeType {
     Branch(Box<BranchNode>),
