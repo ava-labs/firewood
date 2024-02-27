@@ -138,9 +138,10 @@ impl BranchNode {
                     #[allow(clippy::unwrap_used)]
                     if c_ref.is_encoded_longer_than_hash_len::<S>(store) {
                         #[allow(clippy::indexing_slicing)]
-                        (list[i] = bincode::DefaultOptions::new()
-                            .serialize(&&(*c_ref.get_root_hash::<S>(store))[..])
-                            .unwrap());
+                        // (list[i] = bincode::DefaultOptions::new()
+                        //     .serialize(&&(*c_ref.get_root_hash::<S>(store))[..])
+                        //     .unwrap());
+                        (list[i] = c_ref.get_root_hash::<S>(store).to_vec());
 
                         // See struct docs for ordering requirements
                         if c_ref.is_dirty() {
@@ -165,13 +166,13 @@ impl BranchNode {
                     // can happen when manually constructing a trie from proof.
                     #[allow(clippy::indexing_slicing)]
                     if let Some(v) = &self.children_encoded[i] {
-                        if v.len() == TRIE_HASH_LEN {
-                            #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
-                            (list[i] = bincode::DefaultOptions::new().serialize(v).unwrap());
-                        } else {
-                            #[allow(clippy::indexing_slicing)]
-                            (list[i] = v.clone());
-                        }
+                        // if v.len() == TRIE_HASH_LEN {
+                        //     #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
+                        //     (list[i] = bincode::DefaultOptions::new().serialize(v).unwrap());
+                        // } else {
+                        #[allow(clippy::indexing_slicing)]
+                        (list[i] = v.clone());
+                        //}
                     }
                 }
             };
@@ -179,15 +180,18 @@ impl BranchNode {
 
         #[allow(clippy::unwrap_used)]
         if let Some(Data(val)) = &self.value {
-            list[Self::MAX_CHILDREN] = bincode::DefaultOptions::new().serialize(val).unwrap();
+            // list[Self::MAX_CHILDREN] = bincode::DefaultOptions::new().serialize(val).unwrap();
+            list[Self::MAX_CHILDREN] = val.clone();
         }
 
         #[allow(clippy::unwrap_used)]
         let path = from_nibbles(&self.path.encode(false)).collect::<Vec<_>>();
 
-        list[Self::MAX_CHILDREN + 1] = bincode::DefaultOptions::new()
-            .serialize(&path)
-            .expect("serializing raw bytes to always succeed");
+        // list[Self::MAX_CHILDREN + 1] = bincode::DefaultOptions::new()
+        //     .serialize(&path)
+        //     .expect("serializing raw bytes to always succeed");
+
+        list[Self::MAX_CHILDREN + 1] = path;
 
         bincode::DefaultOptions::new()
             .serialize(list.as_slice())
