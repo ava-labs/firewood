@@ -146,7 +146,7 @@ impl BranchNode {
                             c_ref.set_dirty(false);
                         }
                     } else {
-                        let child_encoded = &c_ref.get_encoded::<S>(store);
+                        let child_encoded = c_ref.get_encoded::<S>(store);
                         #[allow(clippy::indexing_slicing)]
                         (list[i] = child_encoded.to_vec());
                     }
