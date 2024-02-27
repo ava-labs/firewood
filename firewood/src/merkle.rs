@@ -110,8 +110,8 @@ where
         }
     }
 
-    fn encode(&self, node: &NodeObjRef) -> Result<Vec<u8>, MerkleError> {
-        let encoded = match node.inner() {
+    fn encode(&self, node: &NodeType) -> Result<Vec<u8>, MerkleError> {
+        let encoded = match node {
             NodeType::Leaf(n) => EncodedNode::new(EncodedNodeType::Leaf(n.clone())),
 
             NodeType::Branch(n) => {
@@ -123,7 +123,10 @@ where
                     .map(|(child_addr, encoded_child)| {
                         child_addr
                             // if there's a child disk address here, get the encoded bytes
-                            .map(|addr| self.get_node(addr).and_then(|node| self.encode(&node)))
+                            .map(|addr| {
+                                self.get_node(addr)
+                                    .and_then(|node| self.encode(node.inner()))
+                            })
                             // or look for the pre-fetched bytes
                             .or_else(|| encoded_child.as_ref().map(|child| Ok(child.to_vec())))
                             .transpose()
@@ -228,7 +231,7 @@ where
     }
 
     fn to_hash(&self, node: &NodeObjRef) -> Result<TrieHash, MerkleError> {
-        let res = self.encode(node)?;
+        let res = self.encode(node.inner())?;
         Ok(TrieHash(Keccak256::digest(res).into()))
     }
 
@@ -1103,7 +1106,7 @@ where
 
         // Get the hashes of the nodes.
         for node in nodes.into_iter() {
-            let encoded = self.encode(&node)?;
+            let encoded = self.encode(node.inner())?;
             let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(&encoded).into();
             proofs.insert(hash, encoded.to_vec());
         }
@@ -1543,7 +1546,7 @@ mod tests {
         let merkle = create_generic_test_merkle::<T>();
         let node_ref = merkle.put_node(node.clone()).unwrap();
 
-        let encoded = merkle.encode(&node_ref).unwrap();
+        let encoded = merkle.encode(node_ref.inner()).unwrap();
         let new_node = Node::from(merkle.decode(encoded.as_ref()).unwrap());
 
         assert_eq!(node, new_node);
