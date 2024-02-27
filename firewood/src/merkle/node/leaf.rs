@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::{Data, Encoded};
+use super::Data;
 use crate::{
     merkle::{from_nibbles, PartialPath},
     nibbles::Nibbles,
@@ -53,8 +53,8 @@ impl LeafNode {
         bincode::DefaultOptions::new()
             .serialize(
                 [
-                    Encoded::Raw(from_nibbles(&self.path.encode(true)).collect()),
-                    Encoded::Raw(self.data.to_vec()),
+                    from_nibbles(&self.path.encode(true)).collect(),
+                    self.data.to_vec(),
                 ]
                 .as_slice(),
             )
