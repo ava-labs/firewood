@@ -122,7 +122,7 @@ impl NodeType {
 
                 let cur_key = cur_key_path.into_inner();
                 #[allow(clippy::unwrap_used)]
-                let data: Vec<u8> = items.next().unwrap(); // TODO differentiate between none and empty vec?
+                let data: Vec<u8> = items.next().unwrap();
 
                 Ok(NodeType::Leaf(LeafNode::new(cur_key, data)))
             }
@@ -672,12 +672,9 @@ impl Serialize for EncodedNode<Bincode> {
                     }
                 }
 
-                list[BranchNode::MAX_CHILDREN] = if let Some(Data(val)) = &value {
-                    val.clone()
-                } else {
-                    vec![] // TODO what should this be?
-                           //Encoded::default()
-                };
+                if let Some(Data(val)) = &value {
+                    list[BranchNode::MAX_CHILDREN] = val.clone();
+                }
 
                 let serialized_path = from_nibbles(&path.encode(true)).collect();
                 list[BranchNode::MAX_CHILDREN + 1] = serialized_path;

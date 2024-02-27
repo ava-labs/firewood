@@ -156,9 +156,8 @@ mod tests {
         let data = vec![5, 6, 7, 8];
 
         let serialized_path = [vec![prefix], path.clone()].concat();
-        // 0 represents Encoded::Raw
-        let serialized_path = [vec![0, serialized_path.len() as u8], serialized_path].concat();
-        let serialized_data = [vec![0, data.len() as u8], data.clone()].concat();
+        let serialized_path = [vec![serialized_path.len() as u8], serialized_path].concat();
+        let serialized_data = [vec![data.len() as u8], data.clone()].concat();
 
         let serialized = [vec![2], serialized_path, serialized_data].concat();
 
