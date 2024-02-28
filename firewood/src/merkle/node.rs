@@ -604,8 +604,6 @@ impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
 // Note that the serializer passed in should always be the same type as T in EncodedNode<T>.
 impl Serialize for EncodedNode<Bincode> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::Error;
-
         match &self.node {
             EncodedNodeType::Leaf(n) => {
                 let list = [
@@ -633,9 +631,7 @@ impl Serialize for EncodedNode<Bincode> {
                 #[allow(clippy::indexing_slicing)]
                 for (i, child) in children {
                     if child.len() >= TRIE_HASH_LEN {
-                        let serialized_hash =
-                            Bincode::serialize(&Keccak256::digest(child).to_vec())
-                                .map_err(|e| S::Error::custom(format!("bincode error: {e}")))?;
+                        let serialized_hash = Keccak256::digest(child).to_vec();
                         list[i] = serialized_hash;
                     } else {
                         list[i] = child.to_vec();
@@ -697,7 +693,7 @@ impl<'de> Deserialize<'de> for EncodedNode<Bincode> {
                 let path = PartialPath::from_nibbles(Nibbles::<0>::new(&path).into_iter()).0;
 
                 let value = items.pop().expect("length was checked above");
-                let mut value = if value.is_empty() {
+                let value = if value.is_empty() {
                     None
                 } else {
                     Some(Data(value))
@@ -706,13 +702,8 @@ impl<'de> Deserialize<'de> for EncodedNode<Bincode> {
                 let mut children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
 
                 for (i, chd) in items.into_iter().enumerate() {
-                    if i == len - 1 {
-                        // Extract the value of the branch node and set to None if it's an empty Vec
-                        value = Some(Data(chd)).filter(|data| !data.is_empty());
-                    } else {
-                        #[allow(clippy::indexing_slicing)]
-                        (children[i] = Some(chd).filter(|chd| !chd.is_empty()));
-                    }
+                    #[allow(clippy::indexing_slicing)]
+                    (children[i] = Some(chd).filter(|chd| !chd.is_empty()));
                 }
 
                 let node = EncodedNodeType::Branch {
