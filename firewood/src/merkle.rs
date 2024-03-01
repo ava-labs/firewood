@@ -1546,8 +1546,10 @@ mod tests {
 
         let encoded = merkle.encode(&node).unwrap();
         let new_node = merkle.decode(encoded.as_ref()).unwrap();
+        let encoded_again = merkle.encode(&new_node).unwrap();
 
         assert_eq!(node, new_node);
+        assert_eq!(encoded, encoded_again);
     }
 
     #[test]
