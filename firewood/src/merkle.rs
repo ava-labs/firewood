@@ -115,8 +115,6 @@ where
             NodeType::Leaf(n) => EncodedNode::new(EncodedNodeType::Leaf(n.clone())),
 
             NodeType::Branch(n) => {
-                let path = n.path.clone();
-
                 // pair up DiskAddresses with encoded children and pick the right one
                 let encoded_children = n.chd().iter().zip(n.children_encoded.iter());
                 let children = encoded_children
@@ -135,6 +133,7 @@ where
                     .try_into()
                     .expect("MAX_CHILDREN will always be yielded");
 
+                let path = n.path.clone();
                 EncodedNode::new(EncodedNodeType::Branch {
                     path,
                     children,
@@ -217,7 +216,7 @@ where
         Ok(if let Some(root) = root {
             let mut node = self.get_node(root)?;
             let res = self.to_hash(node.inner())?;
-            #[allow(clippy::unwrap_used)]
+            // #[allow(clippy::unwrap_used)]
             // if node.is_dirty() {
             //     node.write(|_| {}).unwrap();
             //     node.set_dirty(false);
@@ -1434,8 +1433,8 @@ mod tests {
     use shale::{cached::DynamicMem, compact::CompactSpace, CachedStore};
     use test_case::test_case;
 
-    fn leaf(path: Vec<u8>, data: Vec<u8>) -> Node {
-        Node::from_leaf(LeafNode::new(PartialPath(path), Data(data)))
+    fn leaf(path: Vec<u8>, data: Vec<u8>) -> NodeType {
+        NodeType::Leaf(LeafNode::new(PartialPath(path), Data(data)))
     }
 
     #[test_case(vec![0x12, 0x34, 0x56], &[0x1, 0x2, 0x3, 0x4, 0x5, 0x6])]
@@ -1484,7 +1483,7 @@ mod tests {
         create_generic_test_merkle::<Bincode>()
     }
 
-    fn branch(path: &[u8], value: &[u8], encoded_child: Option<Vec<u8>>) -> Node {
+    fn branch(path: &[u8], value: &[u8], encoded_child: Option<Vec<u8>>) -> NodeType {
         let (path, value) = (path.to_vec(), value.to_vec());
         let path = Nibbles::<0>::new(&path);
         let path = PartialPath(path.into_iter().collect());
@@ -1498,15 +1497,15 @@ mod tests {
             children_encoded[0] = Some(child);
         }
 
-        Node::from_branch(BranchNode {
+        NodeType::Branch(Box::new(BranchNode {
             path,
             children,
             value,
             children_encoded,
-        })
+        }))
     }
 
-    fn branch_without_data(path: &[u8], encoded_child: Option<Vec<u8>>) -> Node {
+    fn branch_without_data(path: &[u8], encoded_child: Option<Vec<u8>>) -> NodeType {
         let path = path.to_vec();
         let path = Nibbles::<0>::new(&path);
         let path = PartialPath(path.into_iter().collect());
@@ -1520,12 +1519,12 @@ mod tests {
             children_encoded[0] = Some(child);
         }
 
-        Node::from_branch(BranchNode {
+        NodeType::Branch(Box::new(BranchNode {
             path,
             children,
             value,
             children_encoded,
-        })
+        }))
     }
 
     #[test_case(Bincode::new(), leaf(Vec::new(), Vec::new()) ; "empty leaf encoding with Bincode")]
@@ -1538,16 +1537,15 @@ mod tests {
     #[test_case(PlainCodec::new(), branch(b"", b"value", vec![1, 2, 3].into()) ; "branch with chd with PlainCodec")]
     #[test_case(PlainCodec::new(), branch(b"", b"value", Some(Vec::new())); "branch with empty chd with PlainCodec")]
     #[test_case(PlainCodec::new(), branch(b"", b"", vec![1, 2, 3].into()); "branch with empty value with PlainCodec")]
-    fn node_encode_decode<T>(_codec: T, node: Node)
+    fn node_encode_decode<T>(_codec: T, node: NodeType)
     where
         T: BinarySerde,
         for<'de> EncodedNode<T>: serde::Serialize + serde::Deserialize<'de>,
     {
         let merkle = create_generic_test_merkle::<T>();
-        let node_ref = merkle.put_node(node.clone()).unwrap();
 
-        let encoded = merkle.encode(node_ref.inner()).unwrap();
-        let new_node = Node::from(merkle.decode(encoded.as_ref()).unwrap());
+        let encoded = merkle.encode(&node).unwrap();
+        let new_node = merkle.decode(encoded.as_ref()).unwrap();
 
         assert_eq!(node, new_node);
     }
