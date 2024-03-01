@@ -217,6 +217,7 @@ where
             let mut node = self.get_node(root)?;
             let res = self.to_hash(node.inner())?;
             // if node.is_dirty() {
+            //     #[allow(clippy::unwrap_used)]
             //     node.write(|_| {}).unwrap();
             //     node.set_dirty(false);
             // }
