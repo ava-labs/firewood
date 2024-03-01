@@ -42,7 +42,6 @@ use super::TRIE_HASH_LEN;
 bitflags! {
     // should only ever be the size of a nibble
     struct Flags: u8 {
-        const TERMINAL = 0b0010;
         const ODD_LEN  = 0b0001;
     }
 }
@@ -441,7 +440,7 @@ impl Serialize for EncodedNode<PlainCodec> {
             EncodedNodeType::Leaf(n) => {
                 let data = Some(&*n.data);
                 let chd: Vec<(u64, Vec<u8>)> = Default::default();
-                let path: Vec<_> = from_nibbles(&n.path.encode(true)).collect();
+                let path: Vec<_> = from_nibbles(&n.path.encode()).collect();
                 (chd, data, path)
             }
 
@@ -465,7 +464,7 @@ impl Serialize for EncodedNode<PlainCodec> {
 
                 let data = value.as_deref();
 
-                let path = from_nibbles(&path.encode(false)).collect();
+                let path = from_nibbles(&path.encode()).collect();
 
                 (chd, data, path)
             }
@@ -488,7 +487,7 @@ impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
     {
         let EncodedBranchNode { chd, data, path } = Deserialize::deserialize(deserializer)?;
 
-        let path = PartialPath::from_nibbles(Nibbles::<0>::new(&path).into_iter()).0;
+        let path = PartialPath::from_nibbles(Nibbles::<0>::new(&path).into_iter());
 
         if chd.is_empty() {
             let data = if let Some(d) = data {
@@ -525,10 +524,7 @@ impl Serialize for EncodedNode<Bincode> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match &self.node {
             EncodedNodeType::Leaf(n) => {
-                let list = [
-                    from_nibbles(&n.path.encode(true)).collect(),
-                    n.data.to_vec(),
-                ];
+                let list = [from_nibbles(&n.path.encode()).collect(), n.data.to_vec()];
                 let mut seq = serializer.serialize_seq(Some(list.len()))?;
                 for e in list {
                     seq.serialize_element(&e)?;
@@ -561,7 +557,7 @@ impl Serialize for EncodedNode<Bincode> {
                     list[BranchNode::MAX_CHILDREN] = val.clone();
                 }
 
-                let serialized_path = from_nibbles(&path.encode(false)).collect();
+                let serialized_path = from_nibbles(&path.encode()).collect();
                 list[BranchNode::MAX_CHILDREN + 1] = serialized_path;
 
                 let mut seq = serializer.serialize_seq(Some(list.len()))?;
@@ -599,7 +595,7 @@ impl<'de> Deserialize<'de> for EncodedNode<Bincode> {
                         "incorrect encoded type for leaf node data",
                     ));
                 };
-                let path = PartialPath::from_nibbles(Nibbles::<0>::new(&path).into_iter()).0;
+                let path = PartialPath::from_nibbles(Nibbles::<0>::new(&path).into_iter());
                 let node = EncodedNodeType::Leaf(LeafNode {
                     path,
                     data: Data(data),
@@ -609,7 +605,7 @@ impl<'de> Deserialize<'de> for EncodedNode<Bincode> {
 
             BranchNode::MSIZE => {
                 let path = items.pop().expect("length was checked above");
-                let path = PartialPath::from_nibbles(Nibbles::<0>::new(&path).into_iter()).0;
+                let path = PartialPath::from_nibbles(Nibbles::<0>::new(&path).into_iter());
 
                 let value = items.pop().expect("length was checked above");
                 let value = if value.is_empty() {

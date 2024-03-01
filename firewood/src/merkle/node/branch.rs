@@ -109,7 +109,7 @@ impl Storable for BranchNode {
     fn serialize(&self, to: &mut [u8]) -> Result<(), crate::shale::ShaleError> {
         let mut cursor = Cursor::new(to);
 
-        let path: Vec<u8> = from_nibbles(&self.path.encode(false)).collect();
+        let path: Vec<u8> = from_nibbles(&self.path.encode()).collect();
         cursor.write_all(&[path.len() as PathLen])?;
         cursor.write_all(&path)?;
 
@@ -178,7 +178,7 @@ impl Storable for BranchNode {
         addr += path_len as usize;
 
         let path: Vec<u8> = path.into_iter().flat_map(to_nibble_array).collect();
-        let path = PartialPath::decode(&path).0;
+        let path = PartialPath::decode(&path);
 
         let node_raw =
             mem.get_view(addr, BRANCH_HEADER_SIZE)
