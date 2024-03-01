@@ -53,7 +53,7 @@ impl LeafNode {
         bincode::DefaultOptions::new()
             .serialize(
                 [
-                    from_nibbles(&self.path.encode(true)).collect(),
+                    from_nibbles(&self.path.encode()).collect(),
                     self.data.to_vec(),
                 ]
                 .as_slice(),
@@ -85,7 +85,7 @@ impl Storable for LeafNode {
     fn serialize(&self, to: &mut [u8]) -> Result<(), crate::shale::ShaleError> {
         let mut cursor = Cursor::new(to);
 
-        let path = &self.path.encode(true);
+        let path = &self.path.encode();
         let path = from_nibbles(path);
         let data = &self.data;
 
