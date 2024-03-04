@@ -150,7 +150,7 @@ where
             }
         };
 
-        Bincode::serialize(&encoded).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))
+        T::serialize(&encoded).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))
     }
 
     #[allow(dead_code)]
@@ -165,7 +165,7 @@ where
                 children,
                 value,
             } => {
-                let path = PartialPath::decode(&path).0;
+                let path = PartialPath::decode(&path);
                 let value = value.map(|v| v.0);
                 let branch = NodeType::Branch(
                     BranchNode::new(path, [None; BranchNode::MAX_CHILDREN], value, *children)
