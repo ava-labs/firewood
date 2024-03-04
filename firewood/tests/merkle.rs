@@ -5,7 +5,7 @@ use firewood::{
     merkle::{Bincode, Proof, ProofError},
     merkle_util::{DataStoreError, InMemoryMerkle},
 };
-use rand::{rngs::StdRng, Rng, SeedableRng as _};
+use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng as _};
 use std::{collections::HashMap, fmt::Write};
 
 fn merkle_build_test<
@@ -1099,7 +1099,20 @@ fn fixed_and_pseudorandom_data(random_count: u32) -> HashMap<[u8; 32], [u8; 20]>
         items.insert(more_key, data);
     }
 
-    let mut r = StdRng::seed_from_u64(0);
+    // read FIREWOOD_TEST_SEED from the environment. If it's there, parse it into a u64.
+    let seed = std::env::var("FIREWOOD_TEST_SEED")
+        .ok()
+        .map_or_else(
+            || None,
+            |s| Some(str::parse(&s).expect("couldn't parse FIREWOOD_TEST_SEED; must be a u64")),
+        )
+        .unwrap_or_else(|| thread_rng().gen());
+
+    // the test framework will only render this in verbose mode or if the test fails
+    // to re-run the test when it fails, just specify the seed instead of randomly
+    // selecting one
+    eprintln!("Seed {seed}: to rerun with this data, export FIREWOOD_TEST_SEED={seed}");
+    let mut r = StdRng::seed_from_u64(seed);
     for _ in 0..random_count {
         let key = r.gen::<[u8; 32]>();
         let val = r.gen::<[u8; 20]>();
