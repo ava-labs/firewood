@@ -545,12 +545,7 @@ impl Serialize for EncodedNode<Bincode> {
 
                 #[allow(clippy::indexing_slicing)]
                 for (i, child) in children {
-                    if child.len() >= TRIE_HASH_LEN {
-                        let serialized_hash = Keccak256::digest(child).to_vec();
-                        list[i] = serialized_hash;
-                    } else {
-                        list[i] = child.to_vec();
-                    }
+                    list[i] = child.clone();
                 }
 
                 if let Some(Data(val)) = &value {
