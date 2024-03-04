@@ -66,6 +66,10 @@ macro_rules! write_node {
     };
 }
 
+pub trait NodeSource {
+    fn get_node(&self, ptr: DiskAddress) -> Result<NodeObjRef, MerkleError>;
+}
+
 #[derive(Debug)]
 pub struct Merkle<S, T> {
     store: Box<S>,
@@ -82,11 +86,13 @@ impl<T> From<Merkle<MutStore, T>> for Merkle<SharedStore, T> {
     }
 }
 
-impl<S: ShaleStore<Node>, T> Merkle<S, T> {
-    pub fn get_node(&self, ptr: DiskAddress) -> Result<NodeObjRef, MerkleError> {
+impl<S: ShaleStore<Node>, T> NodeSource for Merkle<S, T> {
+    fn get_node(&self, ptr: DiskAddress) -> Result<NodeObjRef, MerkleError> {
         self.store.get_item(ptr).map_err(Into::into)
     }
+}
 
+impl<S: ShaleStore<Node>, T> Merkle<S, T> {
     pub fn put_node(&self, node: Node) -> Result<NodeObjRef, MerkleError> {
         self.store.put_item(node, 0).map_err(Into::into)
     }
@@ -1102,7 +1108,10 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         PathIterator::new(self, sentinel_node, key)
     }
 
-    pub(crate) fn key_value_iter(&self, root: DiskAddress) -> MerkleKeyValueStream<'_, S, T> {
+    pub(crate) fn key_value_iter(
+        &self,
+        root: DiskAddress,
+    ) -> MerkleKeyValueStream<'_, Merkle<S, T>> {
         MerkleKeyValueStream::new(self, root)
     }
 
@@ -1110,7 +1119,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         &self,
         root: DiskAddress,
         key: Key,
-    ) -> MerkleKeyValueStream<'_, S, T> {
+    ) -> MerkleKeyValueStream<'_, Merkle<S, T>> {
         MerkleKeyValueStream::from_key(self, root, key)
     }
 
@@ -1135,7 +1144,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
             return Ok(None);
         }
 
-        let mut stream = match first_key {
+        let mut stream: MerkleKeyValueStream<'_, Merkle<S, T>> = match first_key {
             // TODO: fix the call-site to force the caller to do the allocation
             Some(key) => {
                 self.key_value_iter_from_key(root, key.as_ref().to_vec().into_boxed_slice())
