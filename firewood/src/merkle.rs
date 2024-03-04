@@ -124,11 +124,11 @@ where
                             .map(|addr| {
                                 self.get_node(addr)
                                     .and_then(|node| self.encode(node.inner()))
-                                    .and_then(|node_bytes| {
+                                    .map(|node_bytes| {
                                         if node_bytes.len() >= TRIE_HASH_LEN {
-                                            Ok(Keccak256::digest(&node_bytes).to_vec())
+                                            Keccak256::digest(&node_bytes).to_vec()
                                         } else {
-                                            Ok(node_bytes)
+                                            node_bytes
                                         }
                                     })
                             })
