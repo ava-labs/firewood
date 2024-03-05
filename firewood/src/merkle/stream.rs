@@ -638,7 +638,6 @@ mod tests {
         };
 
         assert_eq!(key, vec![0x01, 0x03, 0x03, 0x07].into_boxed_slice());
-        //assert_eq!(node.inner().as_leaf().unwrap().data, vec![0x42].into());
         assert_eq!(node.as_leaf().unwrap().data, vec![0x42].into());
 
         assert!(stream.next().is_none());

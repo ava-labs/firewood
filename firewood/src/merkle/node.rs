@@ -144,24 +144,13 @@ impl Storable for NodeType {
 
         match type_id {
             NodeTypeId::Branch => {
-                let inner = NodeType::Branch(Box::new(BranchNode::deserialize(offset, mem)?));
-                Ok(inner) // TODO remove let above
-
-                // Ok(Self::new_from_hash(
-                //     encoded,
-                //     is_encoded_longer_than_hash_len,
-                //     inner,
-                // ))
+                let node = NodeType::Branch(Box::new(BranchNode::deserialize(offset, mem)?));
+                Ok(node)
             }
 
             NodeTypeId::Leaf => {
-                let inner = NodeType::Leaf(LeafNode::deserialize(offset, mem)?);
-                Ok(inner) // TODO remove let above
-
-                // TODO remove
-                //let node = Self::new_from_hash(encoded, is_encoded_longer_than_hash_len, inner);
-
-                //Ok(node)
+                let node = NodeType::Leaf(LeafNode::deserialize(offset, mem)?);
+                Ok(node)
             }
         }
     }
@@ -199,7 +188,6 @@ impl Storable for NodeType {
         //     move |_| encoded.next().unwrap_or(0)
         // });
 
-        //let type_id = NodeTypeId::from(&self.inner);
         let type_id = NodeTypeId::from(self);
 
         let meta = Meta {

@@ -184,15 +184,6 @@ where
 {
     pub fn init_root(&self) -> Result<DiskAddress, MerkleError> {
         self.store
-            // .put_item(
-            //     Node::from_branch(BranchNode {
-            //         path: vec![].into(),
-            //         children: [None; BranchNode::MAX_CHILDREN],
-            //         value: None,
-            //         children_encoded: Default::default(),
-            //     }),
-            //     Node::max_branch_node_size(),
-            // )
             .put_item(
                 NodeType::Branch(Box::new(BranchNode {
                     path: vec![].into(),
@@ -280,7 +271,6 @@ where
         let (parents, deleted) = self.insert_and_return_updates(key, val, root)?;
 
         for mut r in parents {
-            //r.write(|u| u.rehash())?;
             r.write(|_| {})?;
         }
 
@@ -315,10 +305,7 @@ where
                 break Some((node, val));
             };
 
-            //let (node_ref, next_node_ptr) = match &node.inner {
-
-            let inner_ref = node.inner_ref();
-            let (node_ref, next_node_ptr) = match inner_ref {
+            let (node_ref, next_node_ptr) = match node.inner_ref() {
                 // node.inner was a NodeType
                 // For a Branch node, we look at the child pointer. If it points
                 // to another node, we walk down that. Otherwise, we can store our
@@ -349,11 +336,6 @@ where
                                 (index[0], path.to_vec())
                             };
 
-                            // let new_leaf = Node::from_leaf(LeafNode::new(
-                            //     PartialPath(new_leaf_path),
-                            //     Data(val),
-                            // ));
-
                             let new_leaf = NodeType::Leaf(LeafNode::new(
                                 PartialPath(new_leaf_path),
                                 Data(val),
@@ -370,8 +352,6 @@ where
                                 value: n.data.clone().into(),
                                 children_encoded: Default::default(),
                             };
-
-                            // let new_branch = Node::from_branch(new_branch);
 
                             let new_branch = NodeType::Branch(Box::new(new_branch));
 
@@ -408,7 +388,6 @@ where
 
                             new_branch.children[old_leaf_index as usize] = Some(old_leaf);
 
-                            //let node = Node::from_branch(new_branch);
                             let node = NodeType::Branch(Box::new(new_branch));
                             let node = self.put_node(node)?.as_ptr();
 
@@ -437,10 +416,6 @@ where
                                 )?
                                 .as_ptr();
 
-                            // let new_leaf = Node::from_leaf(LeafNode::new(
-                            //     PartialPath(new_leaf_path),
-                            //     Data(val),
-                            // ));
                             let new_leaf = NodeType::Leaf(LeafNode::new(
                                 PartialPath(new_leaf_path),
                                 Data(val),
@@ -458,7 +433,6 @@ where
                             new_branch.children[old_leaf_index as usize] = Some(old_leaf);
                             new_branch.children[new_leaf_index as usize] = Some(new_leaf);
 
-                            //let node = Node::from_branch(new_branch);
                             let node = NodeType::Branch(Box::new(new_branch));
                             let node = self.put_node(node)?.as_ptr();
 
@@ -536,11 +510,6 @@ where
                             match n.children[next_nibble as usize] {
                                 Some(ptr) => (node, ptr),
                                 None => {
-                                    // let new_leaf = Node::from_leaf(LeafNode::new(
-                                    //     PartialPath(new_leaf_path.to_vec()),
-                                    //     Data(val),
-                                    // ));
-
                                     let new_leaf = NodeType::Leaf(LeafNode::new(
                                         PartialPath(new_leaf_path.to_vec()),
                                         Data(val),
@@ -616,10 +585,6 @@ where
                                 )?
                                 .as_ptr();
 
-                            // let new_leaf = Node::from_leaf(LeafNode::new(
-                            //     PartialPath(new_leaf_path),
-                            //     Data(val),
-                            // ));
                             let new_leaf = NodeType::Leaf(LeafNode::new(
                                 PartialPath(new_leaf_path),
                                 Data(val),
@@ -637,7 +602,6 @@ where
                             new_branch.children[old_branch_index as usize] = Some(old_branch);
                             new_branch.children[new_leaf_index as usize] = Some(new_leaf);
 
-                            //let node = Node::from_branch(new_branch);
                             let node = NodeType::Branch(Box::new(new_branch));
                             let node = self.put_node(node)?.as_ptr();
 
@@ -750,7 +714,6 @@ where
                 return Ok(None);
             };
 
-            //let data = match &node.inner {
             let data = match node.inner_ref() {
                 NodeType::Branch(ref branch) => {
                     let data = branch.value.clone();
@@ -775,7 +738,6 @@ where
                         let mut child = self.get_node(child)?;
 
                         child.write(|child| {
-                            //let child_path = child.inner.path_mut();
                             let child_path = child.path_mut();
                             let path = branch_path
                                 .iter()
@@ -836,7 +798,6 @@ where
                             // there's an optimization here for when the paths are the same length
                             // and that clone isn't great but ObjRef causes problems
                             // we can't write directly to the child because we could be changing its size
-                            //let new_child = match child.inner.clone() {
                             let new_child = match child.into_inner() {
                                 NodeType::Branch(mut child) => {
                                     let path = parent_path
@@ -1157,7 +1118,6 @@ where
 
         // Get the hashes of the nodes.
         for node in nodes.into_iter() {
-            //let encoded = self.encode(node.inner())?;
             let encoded = self.encode(&node)?;
             let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(&encoded).into();
             proofs.insert(hash, encoded.to_vec());

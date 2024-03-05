@@ -160,13 +160,12 @@ impl<T: Storable> Obj<T> {
 
 impl Obj<NodeType> {
     pub fn into_inner(mut self) -> NodeType {
-        let empty_node = LeafNode {
+        let empty_node = NodeType::Leaf(LeafNode {
             path: PartialPath(Vec::new()),
             data: Vec::new().into(),
-        };
+        });
 
-        //std::mem::replace(&mut self.value.decoded, Node::from_leaf(empty_node))
-        std::mem::replace(&mut self.value.decoded, NodeType::Leaf(empty_node))
+        std::mem::replace(&mut self.value.decoded, empty_node)
     }
 
     pub fn inner_ref(&self) -> &NodeType {
