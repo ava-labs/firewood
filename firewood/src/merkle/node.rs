@@ -4,7 +4,7 @@
 use crate::{
     logger::trace,
     merkle::from_nibbles,
-    shale::{CachedStore, ShaleError, Storable},
+    shale::{CachedStore, DiskAddress, ShaleError, Storable},
 };
 use bincode::Options;
 use bitflags::bitflags;
@@ -89,6 +89,19 @@ impl NodeType {
             NodeType::Branch(u) => u.value = Some(data),
             NodeType::Leaf(node) => node.data = data,
         }
+    }
+
+    pub(super) fn max_branch_node_size() -> u64 {
+        NodeType::Branch(
+            BranchNode {
+                path: vec![].into(),
+                children: [Some(DiskAddress::null()); BranchNode::MAX_CHILDREN],
+                value: Some(Data(Vec::new())),
+                children_encoded: Default::default(),
+            }
+            .into(),
+        )
+        .serialized_len()
     }
 }
 
@@ -191,8 +204,10 @@ impl Storable for NodeType {
 
         let meta = Meta {
             attrs,
-            encoded_len,
-            encoded,
+            //encoded_len,
+            encoded_len: 0, // TODO remove
+            // encoded,
+            encoded: [0; TRIE_HASH_LEN], // TODO remove
             type_id,
         };
 

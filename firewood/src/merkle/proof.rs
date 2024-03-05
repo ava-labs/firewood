@@ -258,7 +258,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
         let sub_proof = loop {
             // Link the child to the parent based on the node type.
             // if a child is already linked, use it instead
-            let child_node = match parent_node_ref.into_inner() {
+            let child_node = match parent_node_ref.inner_ref() {
                 #[allow(clippy::indexing_slicing)]
                 NodeType::Branch(n) => {
                     let Some(child_index) = key_nibbles.next().map(usize::from) else {
@@ -290,8 +290,8 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
             };
 
             // find the encoded subproof of the child if the partial-path and nibbles match
-            let encoded_sub_proof = match child_node.into_inner() {
-                NodeType::Leaf(n) => {
+            let encoded_sub_proof = match child_node.inner_ref() {
+                &NodeType::Leaf(ref n) => {
                     break n
                         .path
                         .iter()
@@ -300,7 +300,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                         .then(|| n.data().to_vec());
                 }
 
-                NodeType::Branch(n) => {
+                &NodeType::Branch(ref n) => {
                     let paths_match = n
                         .path
                         .iter()
@@ -480,9 +480,9 @@ where
 
     let mut index = 0;
     loop {
-        match &u_ref.into_inner() {
+        match u_ref.inner_ref() {
             #[allow(clippy::indexing_slicing)]
-            NodeType::Branch(n) => {
+            &NodeType::Branch(ref n) => {
                 // If either the key of left proof or right proof doesn't match with
                 // stop here, this is the forkpoint.
                 let path = &*n.path;
@@ -518,7 +518,7 @@ where
             }
 
             #[allow(clippy::indexing_slicing)]
-            NodeType::Leaf(n) => {
+            &NodeType::Leaf(ref n) => {
                 let path = &*n.path;
 
                 [fork_left, fork_right] = [&left_chunks[index..], &right_chunks[index..]]
@@ -530,8 +530,8 @@ where
         }
     }
 
-    match &u_ref.into_inner() {
-        NodeType::Branch(n) => {
+    match u_ref.inner_ref() {
+        &NodeType::Branch(ref n) => {
             if fork_left.is_lt() && fork_right.is_lt() {
                 return Err(ProofError::EmptyRange);
             }
@@ -617,7 +617,7 @@ where
             Ok(false)
         }
 
-        NodeType::Leaf(_) => {
+        &NodeType::Leaf(_) => {
             if fork_left.is_lt() && fork_right.is_lt() {
                 return Err(ProofError::EmptyRange);
             }
@@ -707,8 +707,8 @@ fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<NodeType> + Send + Sync, T: Bina
     }
 
     #[allow(clippy::indexing_slicing)]
-    match u_ref.into_inner() {
-        NodeType::Branch(n) if chunks[index..].starts_with(&n.path) => {
+    match u_ref.inner_ref() {
+        &NodeType::Branch(ref n) if chunks[index..].starts_with(&n.path) => {
             let index = index + n.path.len();
             let child_index = chunks[index] as usize;
 
@@ -738,7 +738,7 @@ fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<NodeType> + Send + Sync, T: Bina
             unset_node_ref(merkle, p, node, key, index + 1, remove_left)
         }
 
-        NodeType::Branch(n) => {
+        &NodeType::Branch(ref n) => {
             let cur_key = &n.path;
 
             // Find the fork point, it's a non-existent branch.

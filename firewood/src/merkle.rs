@@ -200,7 +200,7 @@ where
                     value: None,
                     children_encoded: Default::default(),
                 })),
-                Node::max_branch_node_size(),
+                NodeType::max_branch_node_size(),
             )
             .map_err(MerkleError::Shale)
             .map(|node| node.as_ptr())
@@ -316,11 +316,14 @@ where
             };
 
             //let (node_ref, next_node_ptr) = match &node.inner {
-            let (node_ref, next_node_ptr) = match node.into_inner() {
+
+            let inner_ref = node.inner_ref();
+            let (node_ref, next_node_ptr) = match inner_ref {
+                // node.inner was a NodeType
                 // For a Branch node, we look at the child pointer. If it points
                 // to another node, we walk down that. Otherwise, we can store our
                 // value as a leaf and we're done
-                NodeType::Leaf(n) => {
+                &NodeType::Leaf(ref n) => {
                     // TODO: avoid extra allocation
                     let key_remainder = once(next_nibble)
                         .chain(key_nibbles.clone())
@@ -466,7 +469,7 @@ where
                     break None;
                 }
 
-                NodeType::Branch(n) if n.path.len() == 0 => {
+                &NodeType::Branch(ref n) if n.path.len() == 0 => {
                     #[allow(clippy::indexing_slicing)]
                     match n.children[next_nibble as usize] {
                         Some(c) => (node, c),
@@ -497,7 +500,7 @@ where
                     }
                 }
 
-                NodeType::Branch(n) => {
+                &NodeType::Branch(ref n) => {
                     // TODO: avoid extra allocation
                     let key_remainder = once(next_nibble)
                         .chain(key_nibbles.clone())
@@ -749,8 +752,8 @@ where
             };
 
             //let data = match &node.inner {
-            let data = match &node.into_inner() {
-                NodeType::Branch(branch) => {
+            let data = match node.inner_ref() {
+                NodeType::Branch(ref branch) => {
                     let data = branch.value.clone();
                     let children = branch.children;
 
@@ -799,7 +802,7 @@ where
                     data
                 }
 
-                NodeType::Leaf(n) => {
+                &NodeType::Leaf(ref n) => {
                     let data = Some(n.data.clone());
 
                     // TODO: handle unwrap better
@@ -1009,13 +1012,13 @@ where
 
             start_loop_callback(node_ref.as_ptr(), nib);
 
-            let next_ptr = match node_ref.into_inner() {
+            let next_ptr = match node_ref.inner_ref() {
                 #[allow(clippy::indexing_slicing)]
-                NodeType::Branch(n) if n.path.len() == 0 => match n.children[nib as usize] {
+                &NodeType::Branch(ref n) if n.path.len() == 0 => match n.children[nib as usize] {
                     Some(c) => c,
                     None => return Ok(None),
                 },
-                NodeType::Branch(n) => {
+                &NodeType::Branch(ref n) => {
                     let mut n_path_iter = n.path.iter().copied();
 
                     if n_path_iter.next() != Some(nib) {
@@ -1046,7 +1049,7 @@ where
                         None => return Ok(None),
                     }
                 }
-                NodeType::Leaf(n) => {
+                &NodeType::Leaf(ref n) => {
                     let node_ref = if once(nib).chain(key_nibbles).eq(n.path.iter().copied()) {
                         Some(node_ref)
                     } else {
@@ -1063,11 +1066,11 @@ where
         }
 
         // when we're done iterating over nibbles, check if the node we're at has a value
-        let node_ref = match node_ref.into_inner() {
-            NodeType::Branch(n) if n.value.as_ref().is_some() && n.path.is_empty() => {
+        let node_ref = match node_ref.inner_ref() {
+            &NodeType::Branch(ref n) if n.value.as_ref().is_some() && n.path.is_empty() => {
                 Some(node_ref)
             }
-            NodeType::Leaf(n) if n.path.len() == 0 => Some(node_ref),
+            &NodeType::Leaf(ref n) if n.path.len() == 0 => Some(node_ref),
             _ => None,
         };
 
@@ -1372,7 +1375,7 @@ impl<'a> std::ops::Deref for Ref<'a> {
     type Target = [u8];
     #[allow(clippy::unwrap_used)]
     fn deref(&self) -> &[u8] {
-        match &self.0.into_inner() {
+        match &self.0.inner_ref() {
             NodeType::Branch(n) => n.value.as_ref().unwrap(),
             NodeType::Leaf(n) => &n.data,
         }
@@ -2271,9 +2274,9 @@ mod tests {
         assert_ne!(node.as_ptr(), addr);
         assert_eq!(&to_delete[0], &addr);
 
-        let (path, data) = match node.into_inner() {
-            NodeType::Leaf(leaf) => (&leaf.path, Some(&leaf.data)),
-            NodeType::Branch(branch) => (&branch.path, branch.value.as_ref()),
+        let (path, data) = match node.inner_ref() {
+            &NodeType::Leaf(ref leaf) => (&leaf.path, Some(&leaf.data)),
+            &NodeType::Branch(ref branch) => (&branch.path, branch.value.as_ref()),
         };
 
         assert_eq!(path, &PartialPath(new_path));

@@ -117,8 +117,8 @@ impl<'a, S: ShaleStore<NodeType> + Send + Sync, T> Stream for MerkleNodeStream<'
                 while let Some(mut iter_node) = iter_stack.pop() {
                     match iter_node {
                         IterationNode::Unvisited { key, node } => {
-                            match node.into_inner() {
-                                NodeType::Branch(branch) => {
+                            match node.inner_ref() {
+                                &NodeType::Branch(ref branch) => {
                                     // `node` is a branch node. Visit its children next.
                                     iter_stack.push(IterationNode::Visited {
                                         key: key.clone(),
@@ -127,7 +127,7 @@ impl<'a, S: ShaleStore<NodeType> + Send + Sync, T> Stream for MerkleNodeStream<'
                                         )),
                                     });
                                 }
-                                NodeType::Leaf(_) => {}
+                                &NodeType::Leaf(_) => {}
                             }
 
                             let key = key_from_nibble_iter(key.iter().copied().skip(1));
@@ -145,9 +145,9 @@ impl<'a, S: ShaleStore<NodeType> + Send + Sync, T> Stream for MerkleNodeStream<'
 
                             let child = merkle.get_node(child_addr)?;
 
-                            let partial_path = match child.into_inner() {
-                                NodeType::Branch(branch) => branch.path.iter().copied(),
-                                NodeType::Leaf(leaf) => leaf.path.iter().copied(),
+                            let partial_path = match child.inner_ref() {
+                                &NodeType::Branch(ref branch) => branch.path.iter().copied(),
+                                &NodeType::Leaf(ref leaf) => leaf.path.iter().copied(),
                             };
 
                             // The child's key is its parent's key, followed by the child's index,
@@ -200,8 +200,8 @@ fn get_iterator_intial_state<'a, S: ShaleStore<NodeType> + Send + Sync, T>(
             // The invariant tells us `node` is a prefix of `key`.
             // There is no more `key` left so `node` must be at `key`.
             // Visit and return `node` first.
-            match node.into_inner() {
-                NodeType::Branch(_) | NodeType::Leaf(_) => {
+            match node.inner_ref() {
+                &NodeType::Branch(_) | &NodeType::Leaf(_) => {
                     iter_stack.push(IterationNode::Unvisited {
                         key: Box::from(matched_key_nibbles),
                         node,
@@ -212,8 +212,8 @@ fn get_iterator_intial_state<'a, S: ShaleStore<NodeType> + Send + Sync, T>(
             return Ok(NodeStreamState::Iterating { iter_stack });
         };
 
-        match node.into_inner() {
-            NodeType::Branch(branch) => {
+        match node.inner_ref() {
+            &NodeType::Branch(ref branch) => {
                 // The next nibble in `key` is `next_unmatched_key_nibble`,
                 // so all children of `node` with a position > `next_unmatched_key_nibble`
                 // should be visited since they are after `key`.
@@ -239,9 +239,9 @@ fn get_iterator_intial_state<'a, S: ShaleStore<NodeType> + Send + Sync, T>(
 
                 let child = merkle.get_node(child_addr)?;
 
-                let partial_key = match child.into_inner() {
-                    NodeType::Branch(branch) => &branch.path,
-                    NodeType::Leaf(leaf) => &leaf.path,
+                let partial_key = match child.inner_ref() {
+                    &NodeType::Branch(ref branch) => &branch.path,
+                    &NodeType::Leaf(ref leaf) => &leaf.path,
                 };
 
                 let (comparison, new_unmatched_key_nibbles) =
@@ -271,7 +271,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<NodeType> + Send + Sync, T>(
                     }
                 }
             }
-            NodeType::Leaf(leaf) => {
+            &NodeType::Leaf(ref leaf) => {
                 if compare_partial_path(leaf.path.iter(), unmatched_key_nibbles).0
                     == Ordering::Greater
                 {
@@ -476,9 +476,9 @@ impl<'a, 'b, S: ShaleStore<NodeType> + Send + Sync, T> Iterator for PathIterator
                     Err(e) => return Some(Err(e)),
                 };
 
-                let partial_path = match node.into_inner() {
-                    NodeType::Branch(branch) => &branch.path,
-                    NodeType::Leaf(leaf) => &leaf.path,
+                let partial_path = match node.inner_ref() {
+                    &NodeType::Branch(ref branch) => &branch.path,
+                    &NodeType::Leaf(ref leaf) => &leaf.path,
                 };
 
                 let (comparison, unmatched_key) =
@@ -492,12 +492,12 @@ impl<'a, 'b, S: ShaleStore<NodeType> + Send + Sync, T> Iterator for PathIterator
                         self.state = PathIteratorState::Exhausted;
                         Some(Ok((node_key, node)))
                     }
-                    Ordering::Equal => match node.into_inner() {
-                        NodeType::Leaf(_) => {
+                    Ordering::Equal => match node.inner_ref() {
+                        &NodeType::Leaf(_) => {
                             self.state = PathIteratorState::Exhausted;
                             Some(Ok((node_key, node)))
                         }
-                        NodeType::Branch(branch) => {
+                        &NodeType::Branch(ref branch) => {
                             let Some(next_unmatched_key_nibble) = unmatched_key.next() else {
                                 // There's no more key to match. We're done.
                                 self.state = PathIteratorState::Exhausted;

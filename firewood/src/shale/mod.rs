@@ -168,6 +168,10 @@ impl Obj<NodeType> {
         //std::mem::replace(&mut self.value.decoded, Node::from_leaf(empty_node))
         std::mem::replace(&mut self.value.decoded, NodeType::Leaf(empty_node))
     }
+
+    pub fn inner_ref(&self) -> &NodeType {
+        &self.value.decoded
+    }
 }
 
 impl<T: Storable> Drop for Obj<T> {
