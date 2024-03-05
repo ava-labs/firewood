@@ -487,7 +487,7 @@ where
                             // set the current child to point to this leaf
                             #[allow(clippy::indexing_slicing)]
                             node.write(|node| {
-                                node.as_branch_mut().children[next_nibble as usize] =
+                                node.as_branch_mut().unwrap().children[next_nibble as usize] =
                                     Some(leaf_ptr);
                                 //node.rehash();
                             })?;
@@ -547,8 +547,8 @@ where
 
                                     #[allow(clippy::indexing_slicing)]
                                     node.write(|node| {
-                                        node.as_branch_mut().children[next_nibble as usize] =
-                                            Some(new_leaf);
+                                        node.as_branch_mut().unwrap().children
+                                            [next_nibble as usize] = Some(new_leaf);
                                         // node.rehash();
                                     })?;
 
@@ -749,7 +749,7 @@ where
             };
 
             //let data = match &node.inner {
-            let data = match node.into_inner() {
+            let data = match &node.into_inner() {
                 NodeType::Branch(branch) => {
                     let data = branch.value.clone();
                     let children = branch.children;
@@ -791,7 +791,7 @@ where
                         deleted.push(node.as_ptr());
                     } else {
                         node.write(|node| {
-                            node.as_branch_mut().value = None;
+                            node.as_branch_mut().unwrap().value = None;
                             //node.rehash();
                         })?
                     }
@@ -809,13 +809,8 @@ where
 
                     #[allow(clippy::indexing_slicing)]
                     parent.write(|parent| {
-                        parent.as_branch_mut().children[child_index as usize] = None;
+                        parent.as_branch_mut().unwrap().children[child_index as usize] = None;
                     })?;
-
-                    // let branch = parent
-                    //     .inner
-                    //     .as_branch()
-                    //     .expect("parents are always branch nodes");
 
                     let branch = parent.as_branch().expect("parents are always branch nodes");
 
@@ -1308,7 +1303,7 @@ where
         path: PartialPath,
     ) -> Result<NodeObjRef<'a>, MerkleError> {
         let write_result = node.write(|node| {
-            node.inner_mut().set_path(path);
+            node.set_path(path);
             //node.rehash();
         });
 
@@ -1324,8 +1319,7 @@ where
         data: Data,
     ) -> Result<NodeObjRef, MerkleError> {
         let write_result = node.write(|node| {
-            node.inner_mut().set_data(data);
-            //node.rehash();
+            node.set_data(data);
         });
 
         self.move_node_if_write_failed((parents, to_delete), node, write_result)

@@ -116,18 +116,18 @@ impl Storable for NodeType {
 
         let offset = offset + Meta::SIZE;
 
-        let encoded = if encoded_len > 0 {
-            Some(encoded.iter().take(encoded_len as usize).copied().collect())
-        } else {
-            None
-        };
+        // let encoded = if encoded_len > 0 {
+        //     Some(encoded.iter().take(encoded_len as usize).copied().collect())
+        // } else {
+        //     None
+        // };
 
-        let is_encoded_longer_than_hash_len =
-            if attrs.contains(NodeAttributes::ENCODED_LENGTH_IS_KNOWN) {
-                attrs.contains(NodeAttributes::ENCODED_IS_LONG).into()
-            } else {
-                None
-            };
+        // let is_encoded_longer_than_hash_len =
+        //     if attrs.contains(NodeAttributes::ENCODED_LENGTH_IS_KNOWN) {
+        //         attrs.contains(NodeAttributes::ENCODED_IS_LONG).into()
+        //     } else {
+        //         None
+        //     };
 
         match type_id {
             NodeTypeId::Branch => {
@@ -165,26 +165,26 @@ impl Storable for NodeType {
         trace!("[{self:p}] Serializing node");
         let mut cursor = Cursor::new(to);
 
-        let encoded = self
-            .encoded
-            .get()
-            .filter(|encoded| encoded.len() < TRIE_HASH_LEN);
+        // let encoded = self
+        //     .encoded
+        //     .get()
+        //     .filter(|encoded| encoded.len() < TRIE_HASH_LEN);
 
-        let encoded_len = encoded.map(Vec::len).unwrap_or(0) as u64;
+        // let encoded_len = encoded.map(Vec::len).unwrap_or(0) as u64;
 
         let mut attrs = NodeAttributes::empty();
-        if let Some(&is_encoded_longer_than_hash_len) = self.is_encoded_longer_than_hash_len.get() {
-            attrs.insert(if is_encoded_longer_than_hash_len {
-                NodeAttributes::ENCODED_IS_LONG
-            } else {
-                NodeAttributes::ENCODED_LENGTH_IS_KNOWN
-            });
-        }
+        // if let Some(&is_encoded_longer_than_hash_len) = self.is_encoded_longer_than_hash_len.get() {
+        //     attrs.insert(if is_encoded_longer_than_hash_len {
+        //         NodeAttributes::ENCODED_IS_LONG
+        //     } else {
+        //         NodeAttributes::ENCODED_LENGTH_IS_KNOWN
+        //     });
+        // }
 
-        let encoded = std::array::from_fn({
-            let mut encoded = encoded.into_iter().flatten().copied();
-            move |_| encoded.next().unwrap_or(0)
-        });
+        // let encoded = std::array::from_fn({
+        //     let mut encoded = encoded.into_iter().flatten().copied();
+        //     move |_| encoded.next().unwrap_or(0)
+        // });
 
         //let type_id = NodeTypeId::from(&self.inner);
         let type_id = NodeTypeId::from(self);
@@ -841,10 +841,8 @@ impl BinarySerde for PlainCodec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shale::cached::PlainMem;
     use bincode::Error;
-    use std::iter::repeat;
-    use test_case::{test_case, test_matrix};
+    use test_case::test_case;
 
     // TODO remove
     // #[test_matrix(

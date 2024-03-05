@@ -117,13 +117,13 @@ impl<'a, S: ShaleStore<NodeType> + Send + Sync, T> Stream for MerkleNodeStream<'
                 while let Some(mut iter_node) = iter_stack.pop() {
                     match iter_node {
                         IterationNode::Unvisited { key, node } => {
-                            match node.inner() {
+                            match node.into_inner() {
                                 NodeType::Branch(branch) => {
                                     // `node` is a branch node. Visit its children next.
                                     iter_stack.push(IterationNode::Visited {
                                         key: key.clone(),
                                         children_iter: Box::new(as_enumerated_children_iter(
-                                            branch,
+                                            &branch,
                                         )),
                                     });
                                 }
@@ -145,7 +145,7 @@ impl<'a, S: ShaleStore<NodeType> + Send + Sync, T> Stream for MerkleNodeStream<'
 
                             let child = merkle.get_node(child_addr)?;
 
-                            let partial_path = match child.inner() {
+                            let partial_path = match child.into_inner() {
                                 NodeType::Branch(branch) => branch.path.iter().copied(),
                                 NodeType::Leaf(leaf) => leaf.path.iter().copied(),
                             };
@@ -200,7 +200,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<NodeType> + Send + Sync, T>(
             // The invariant tells us `node` is a prefix of `key`.
             // There is no more `key` left so `node` must be at `key`.
             // Visit and return `node` first.
-            match &node.inner {
+            match node.into_inner() {
                 NodeType::Branch(_) | NodeType::Leaf(_) => {
                     iter_stack.push(IterationNode::Unvisited {
                         key: Box::from(matched_key_nibbles),
@@ -212,7 +212,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<NodeType> + Send + Sync, T>(
             return Ok(NodeStreamState::Iterating { iter_stack });
         };
 
-        match &node.inner {
+        match node.into_inner() {
             NodeType::Branch(branch) => {
                 // The next nibble in `key` is `next_unmatched_key_nibble`,
                 // so all children of `node` with a position > `next_unmatched_key_nibble`
@@ -220,7 +220,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<NodeType> + Send + Sync, T>(
                 iter_stack.push(IterationNode::Visited {
                     key: matched_key_nibbles.iter().copied().collect(),
                     children_iter: Box::new(
-                        as_enumerated_children_iter(branch)
+                        as_enumerated_children_iter(&branch)
                             .filter(move |(pos, _)| *pos > next_unmatched_key_nibble),
                     ),
                 });
@@ -239,7 +239,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<NodeType> + Send + Sync, T>(
 
                 let child = merkle.get_node(child_addr)?;
 
-                let partial_key = match child.inner() {
+                let partial_key = match child.into_inner() {
                     NodeType::Branch(branch) => &branch.path,
                     NodeType::Leaf(leaf) => &leaf.path,
                 };
@@ -369,7 +369,7 @@ impl<'a, S: ShaleStore<NodeType> + Send + Sync, T> Stream for MerkleKeyValueStre
             MerkleKeyValueStreamState::Initialized { node_iter: iter } => {
                 match iter.poll_next_unpin(_cx) {
                     Poll::Ready(node) => match node {
-                        Some(Ok((key, node))) => match node.inner() {
+                        Some(Ok((key, node))) => match node.into_inner() {
                             NodeType::Branch(branch) => {
                                 let Some(value) = branch.value.as_ref() else {
                                     // This node doesn't have a value to return.
@@ -432,7 +432,7 @@ impl<'a, 'b, S: ShaleStore<NodeType> + Send + Sync, T> PathIterator<'a, 'b, S, T
         sentinel_node: NodeObjRef<'a>,
         key: &'b [u8],
     ) -> Self {
-        let root = match sentinel_node.inner() {
+        let root = match sentinel_node.into_inner() {
             NodeType::Branch(branch) => match branch.children[0] {
                 Some(root) => root,
                 None => {
@@ -476,7 +476,7 @@ impl<'a, 'b, S: ShaleStore<NodeType> + Send + Sync, T> Iterator for PathIterator
                     Err(e) => return Some(Err(e)),
                 };
 
-                let partial_path = match node.inner() {
+                let partial_path = match node.into_inner() {
                     NodeType::Branch(branch) => &branch.path,
                     NodeType::Leaf(leaf) => &leaf.path,
                 };
@@ -492,7 +492,7 @@ impl<'a, 'b, S: ShaleStore<NodeType> + Send + Sync, T> Iterator for PathIterator
                         self.state = PathIteratorState::Exhausted;
                         Some(Ok((node_key, node)))
                     }
-                    Ordering::Equal => match node.inner() {
+                    Ordering::Equal => match node.into_inner() {
                         NodeType::Leaf(_) => {
                             self.state = PathIteratorState::Exhausted;
                             Some(Ok((node_key, node)))
@@ -661,7 +661,7 @@ mod tests {
             None => panic!("unexpected end of iterator"),
         };
         assert_eq!(key, vec![0x00, 0x00].into_boxed_slice());
-        assert!(node.inner().as_branch().unwrap().value.is_none());
+        assert!(node.as_branch().unwrap().value.is_none());
 
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
@@ -673,7 +673,7 @@ mod tests {
             vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00].into_boxed_slice()
         );
         assert_eq!(
-            node.inner().as_branch().unwrap().value,
+            node.as_branch().unwrap().value,
             Some(vec![0x00, 0x00, 0x00].into()),
         );
 
@@ -687,7 +687,7 @@ mod tests {
             vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x0F].into_boxed_slice()
         );
         assert_eq!(
-            node.inner().as_leaf().unwrap().data,
+            node.as_leaf().unwrap().data,
             vec![0x00, 0x00, 0x00, 0x0FF].into(),
         );
 
@@ -709,7 +709,7 @@ mod tests {
             None => panic!("unexpected end of iterator"),
         };
         assert_eq!(key, vec![0x00, 0x00].into_boxed_slice());
-        assert!(node.inner().as_branch().unwrap().value.is_none());
+        assert!(node.as_branch().unwrap().value.is_none());
 
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
@@ -721,7 +721,7 @@ mod tests {
             vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00].into_boxed_slice()
         );
         assert_eq!(
-            node.inner().as_branch().unwrap().value,
+            node.as_branch().unwrap().value,
             Some(vec![0x00, 0x00, 0x00].into()),
         );
 
@@ -757,7 +757,7 @@ mod tests {
         let (key, node) = stream.next().await.unwrap().unwrap();
 
         assert_eq!(key, vec![0x00].into_boxed_slice());
-        assert_eq!(node.inner().as_leaf().unwrap().data.to_vec(), vec![0x00]);
+        assert_eq!(node.as_leaf().unwrap().data.to_vec(), vec![0x00]);
 
         check_stream_is_done(stream).await;
     }
@@ -815,40 +815,40 @@ mod tests {
         // Covers case of branch with no value
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00].into_boxed_slice());
-        let node = node.inner().as_branch().unwrap();
+        let node = node.as_branch().unwrap();
         assert!(node.value.is_none());
         assert_eq!(node.path.to_vec(), vec![0x00, 0x00]);
 
         // Covers case of branch with value
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0x00, 0x00].into_boxed_slice());
-        let node = node.inner().as_branch().unwrap();
+        let node = node.as_branch().unwrap();
         assert_eq!(node.value.clone().unwrap().to_vec(), vec![0x00, 0x00, 0x00]);
         assert_eq!(node.path.to_vec(), vec![0x00, 0x00, 0x00]);
 
         // Covers case of leaf with partial path
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0x00, 0x00, 0x01].into_boxed_slice());
-        let node = node.inner().as_leaf().unwrap();
+        let node = node.as_leaf().unwrap();
         assert_eq!(node.clone().data.to_vec(), vec![0x00, 0x00, 0x00, 0x01]);
         assert_eq!(node.path.to_vec(), vec![0x01]);
 
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0x00, 0x00, 0xFF].into_boxed_slice());
-        let node = node.inner().as_leaf().unwrap();
+        let node = node.as_leaf().unwrap();
         assert_eq!(node.clone().data.to_vec(), vec![0x00, 0x00, 0x00, 0xFF]);
         assert_eq!(node.path.to_vec(), vec![0x0F]);
 
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
-        let node = node.inner().as_leaf().unwrap();
+        let node = node.as_leaf().unwrap();
         assert_eq!(node.clone().data.to_vec(), vec![0x00, 0xD0, 0xD0]);
         assert_eq!(node.path.to_vec(), vec![0x00, 0x0D, 0x00]); // 0x0D00 becomes 0xDO
 
         // Covers case of leaf with no partial path
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xFF].into_boxed_slice());
-        let node = node.inner().as_leaf().unwrap();
+        let node = node.as_leaf().unwrap();
         assert_eq!(node.clone().data.to_vec(), vec![0x00, 0xFF]);
         assert_eq!(node.path.to_vec(), vec![0x0F]);
 
@@ -864,7 +864,7 @@ mod tests {
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
         assert_eq!(
-            node.inner().as_leaf().unwrap().clone().data.to_vec(),
+            node.as_leaf().unwrap().clone().data.to_vec(),
             vec![0x00, 0xD0, 0xD0]
         );
 
@@ -872,7 +872,7 @@ mod tests {
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xFF].into_boxed_slice());
         assert_eq!(
-            node.inner().as_leaf().unwrap().clone().data.to_vec(),
+            node.as_leaf().unwrap().clone().data.to_vec(),
             vec![0x00, 0xFF]
         );
 
