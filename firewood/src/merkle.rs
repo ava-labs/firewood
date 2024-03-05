@@ -119,22 +119,26 @@ where
                 let encoded_children = n.chd().iter().zip(n.children_encoded.iter());
                 let children = encoded_children
                     .map(|(child_addr, encoded_child)| {
-                        child_addr
-                            // if there's a child disk address here, get the encoded bytes
-                            .map(|addr| {
-                                self.get_node(addr)
-                                    .and_then(|node| self.encode(node.inner()))
-                                    .map(|node_bytes| {
-                                        if node_bytes.len() >= TRIE_HASH_LEN {
-                                            Keccak256::digest(&node_bytes).to_vec()
-                                        } else {
-                                            node_bytes
-                                        }
-                                    })
-                            })
-                            // or look for the pre-fetched bytes
-                            .or_else(|| encoded_child.as_ref().map(|child| Ok(child.to_vec())))
-                            .transpose()
+                        if encoded_child.is_some() {
+                            // We already have the encoded bytes or hash for this node.
+                            Ok(encoded_child.clone())
+                        } else {
+                            // Calculate the encoded bytes (and possibly hash) for this node.
+                            child_addr
+                                // if there's a child disk address here, get the encoded bytes
+                                .map(|addr| {
+                                    self.get_node(addr)
+                                        .and_then(|node| self.encode(node.inner()))
+                                        .map(|node_bytes| {
+                                            if node_bytes.len() >= TRIE_HASH_LEN {
+                                                Keccak256::digest(&node_bytes).to_vec()
+                                            } else {
+                                                node_bytes
+                                            }
+                                        })
+                                })
+                                .transpose()
+                        }
                     })
                     .collect::<Result<Vec<Option<Vec<u8>>>, MerkleError>>()?
                     .try_into()
