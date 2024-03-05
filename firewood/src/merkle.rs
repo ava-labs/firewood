@@ -121,22 +121,21 @@ where
                     .map(|(child_addr, encoded_child)| {
                         encoded_child
                             .as_ref()
+                            // If we already have the encoded bytes/hash for this node, use it.
                             .map(|node_digest| Ok(node_digest.to_vec()))
                             .or_else(|| {
                                 // Calculate the encoded bytes (and possibly hash) for this node.
-                                child_addr
-                                    // if there's a child disk address here, get the encoded bytes
-                                    .map(|addr| {
-                                        self.get_node(addr)
-                                            .and_then(|node| self.encode(node.inner()))
-                                            .map(|node_bytes| {
-                                                if node_bytes.len() >= TRIE_HASH_LEN {
-                                                    Keccak256::digest(&node_bytes).to_vec()
-                                                } else {
-                                                    node_bytes
-                                                }
-                                            })
-                                    })
+                                child_addr.map(|addr| {
+                                    self.get_node(addr)
+                                        .and_then(|node| self.encode(node.inner()))
+                                        .map(|node_bytes| {
+                                            if node_bytes.len() >= TRIE_HASH_LEN {
+                                                Keccak256::digest(&node_bytes).to_vec()
+                                            } else {
+                                                node_bytes
+                                            }
+                                        })
+                                })
                             })
                             .transpose()
                     })
