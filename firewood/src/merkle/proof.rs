@@ -616,7 +616,7 @@ where
             Ok(false)
         }
 
-        &NodeType::Leaf(_) => {
+        NodeType::Leaf(_) => {
             if fork_left.is_lt() && fork_right.is_lt() {
                 return Err(ProofError::EmptyRange);
             }

@@ -127,7 +127,7 @@ impl<'a, S: ShaleStore<NodeType> + Send + Sync, T> Stream for MerkleNodeStream<'
                                         )),
                                     });
                                 }
-                                &NodeType::Leaf(_) => {}
+                                NodeType::Leaf(_) => {}
                             }
 
                             let key = key_from_nibble_iter(key.iter().copied().skip(1));
@@ -201,7 +201,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<NodeType> + Send + Sync, T>(
             // There is no more `key` left so `node` must be at `key`.
             // Visit and return `node` first.
             match node.inner_ref() {
-                &NodeType::Branch(_) | &NodeType::Leaf(_) => {
+                NodeType::Branch(_) | NodeType::Leaf(_) => {
                     iter_stack.push(IterationNode::Unvisited {
                         key: Box::from(matched_key_nibbles),
                         node,
@@ -493,7 +493,7 @@ impl<'a, 'b, S: ShaleStore<NodeType> + Send + Sync, T> Iterator for PathIterator
                         Some(Ok((node_key, node)))
                     }
                     Ordering::Equal => match node.inner_ref() {
-                        &NodeType::Leaf(_) => {
+                        NodeType::Leaf(_) => {
                             self.state = PathIteratorState::Exhausted;
                             Some(Ok((node_key, node)))
                         }
