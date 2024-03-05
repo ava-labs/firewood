@@ -323,7 +323,7 @@ where
                 // For a Branch node, we look at the child pointer. If it points
                 // to another node, we walk down that. Otherwise, we can store our
                 // value as a leaf and we're done
-                &NodeType::Leaf(ref n) => {
+                NodeType::Leaf(n) => {
                     // TODO: avoid extra allocation
                     let key_remainder = once(next_nibble)
                         .chain(key_nibbles.clone())
@@ -469,7 +469,7 @@ where
                     break None;
                 }
 
-                &NodeType::Branch(ref n) if n.path.len() == 0 => {
+                NodeType::Branch(n) if n.path.len() == 0 => {
                     #[allow(clippy::indexing_slicing)]
                     match n.children[next_nibble as usize] {
                         Some(c) => (node, c),
@@ -500,7 +500,7 @@ where
                     }
                 }
 
-                &NodeType::Branch(ref n) => {
+                NodeType::Branch(n) => {
                     // TODO: avoid extra allocation
                     let key_remainder = once(next_nibble)
                         .chain(key_nibbles.clone())
@@ -802,7 +802,7 @@ where
                     data
                 }
 
-                &NodeType::Leaf(ref n) => {
+                NodeType::Leaf(n) => {
                     let data = Some(n.data.clone());
 
                     // TODO: handle unwrap better
@@ -1014,11 +1014,11 @@ where
 
             let next_ptr = match node_ref.inner_ref() {
                 #[allow(clippy::indexing_slicing)]
-                &NodeType::Branch(ref n) if n.path.len() == 0 => match n.children[nib as usize] {
+                NodeType::Branch(n) if n.path.len() == 0 => match n.children[nib as usize] {
                     Some(c) => c,
                     None => return Ok(None),
                 },
-                &NodeType::Branch(ref n) => {
+                NodeType::Branch(n) => {
                     let mut n_path_iter = n.path.iter().copied();
 
                     if n_path_iter.next() != Some(nib) {
@@ -1049,7 +1049,7 @@ where
                         None => return Ok(None),
                     }
                 }
-                &NodeType::Leaf(ref n) => {
+                NodeType::Leaf(n) => {
                     let node_ref = if once(nib).chain(key_nibbles).eq(n.path.iter().copied()) {
                         Some(node_ref)
                     } else {
@@ -1067,10 +1067,10 @@ where
 
         // when we're done iterating over nibbles, check if the node we're at has a value
         let node_ref = match node_ref.inner_ref() {
-            &NodeType::Branch(ref n) if n.value.as_ref().is_some() && n.path.is_empty() => {
+            NodeType::Branch(n) if n.value.as_ref().is_some() && n.path.is_empty() => {
                 Some(node_ref)
             }
-            &NodeType::Leaf(ref n) if n.path.len() == 0 => Some(node_ref),
+            NodeType::Leaf(n) if n.path.len() == 0 => Some(node_ref),
             _ => None,
         };
 
@@ -2275,8 +2275,8 @@ mod tests {
         assert_eq!(&to_delete[0], &addr);
 
         let (path, data) = match node.inner_ref() {
-            &NodeType::Leaf(ref leaf) => (&leaf.path, Some(&leaf.data)),
-            &NodeType::Branch(ref branch) => (&branch.path, branch.value.as_ref()),
+            NodeType::Leaf(leaf) => (&leaf.path, Some(&leaf.data)),
+            NodeType::Branch(branch) => (&branch.path, branch.value.as_ref()),
         };
 
         assert_eq!(path, &PartialPath(new_path));
