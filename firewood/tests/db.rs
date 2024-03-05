@@ -7,7 +7,7 @@ use firewood::{
 };
 use tokio::task::block_in_place;
 
-use std::{collections::VecDeque, sync::Arc};
+use std::{collections::VecDeque, env::temp_dir, path::PathBuf, sync::Arc};
 
 mod common;
 use common::TestDbCreator;
@@ -156,6 +156,87 @@ async fn test_revisions() {
                 "not the same: pass {i}"
             );
         }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::unwrap_used)]
+async fn create_db_issue_proof() {
+    let cfg = DbConfig::builder()
+        .meta_ncached_pages(1024)
+        .meta_ncached_files(128)
+        .payload_ncached_pages(1024)
+        .payload_ncached_files(128)
+        .payload_file_nbit(16)
+        .payload_regn_nbit(16)
+        .wal(
+            WalConfig::builder()
+                .file_nbit(15)
+                .block_nbit(8)
+                .max_revisions(10)
+                .build(),
+        );
+
+    let mut tmpdir: PathBuf = std::env::var_os("CARGO_TARGET_DIR")
+        .unwrap_or(temp_dir().into())
+        .into();
+    tmpdir.push("/tmp/test_db_proof");
+
+    let db = firewood::db::Db::new(tmpdir, &cfg.truncate(true).build())
+        .await
+        .unwrap();
+
+    let items = vec![
+        ("d", "verb"),
+        ("do", "verb"),
+        ("doe", "reindeer"),
+        ("e", "coin"),
+    ];
+
+    let mut batch = Vec::new();
+    for (k, v) in items {
+        let write = BatchOp::Put {
+            key: k.as_bytes(),
+            value: v.as_bytes().to_vec(),
+        };
+        batch.push(write);
+    }
+    let proposal = Arc::new(db.propose(batch).await.unwrap());
+    proposal.commit().await.unwrap();
+
+    let root_hash = db.root_hash().await.unwrap();
+
+    // Add second commit
+    let mut batch = Vec::new();
+    for (k, v) in Vec::from([("x", "two")]).iter() {
+        let write = BatchOp::Put {
+            key: k.to_string().as_bytes().to_vec(),
+            value: v.as_bytes().to_vec(),
+        };
+        batch.push(write);
+    }
+    let proposal = Arc::new(db.propose(batch).await.unwrap());
+    proposal.commit().await.unwrap();
+
+    let rev = db.revision(root_hash).await.unwrap();
+    let key = "doe".as_bytes();
+    let root_hash = rev.root_hash().await.unwrap();
+
+    match rev.single_key_proof(key).await {
+        Ok(proof) => {
+            let verification = rev.verify_proof(&proof.unwrap(), key, root_hash).unwrap();
+            assert!(verification.is_some());
+        }
+        Err(e) => {
+            panic!("Error: {}", e);
+        }
+    }
+
+    let missing_key = "dog".as_bytes();
+    // The proof for the missing key will return the path to the missing key
+    if let Err(e) = rev.single_key_proof(missing_key).await {
+        println!("Error: {}", e);
+        // TODO do type assertion on error
     }
 }
 
