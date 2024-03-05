@@ -221,17 +221,8 @@ where
             .ok_or(MerkleError::NotBranchNode)?
             .children[0];
         Ok(if let Some(root) = root {
-            let mut node = self.get_node(root)?;
-            let res = self.to_hash(node.inner())?;
-            // if node.is_dirty() {
-            //     #[allow(clippy::unwrap_used)]
-            //     node.write(|_| {}).unwrap();
-            //     node.set_dirty(false);
-            // }
-            // TODO only write if dirty, or remove notion of dirty
-            #[allow(clippy::unwrap_used)]
-            node.write(|_| {}).unwrap();
-            res
+            let node = self.get_node(root)?;
+            self.to_hash(node.inner())?
         } else {
             *Self::empty_root()
         })
