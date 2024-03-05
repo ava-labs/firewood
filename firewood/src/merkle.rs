@@ -586,7 +586,6 @@ where
 
                             new_branch.children[old_branch_index as usize] = Some(old_branch);
 
-                            // let node = Node::from_branch(new_branch);
                             let node = NodeType::Branch(Box::new(new_branch));
                             let node = self.put_node(node)?.as_ptr();
 
@@ -2151,10 +2150,6 @@ mod tests {
             .chain(path.clone())
             .collect::<Vec<_>>();
 
-        // let node = Node::from_leaf(LeafNode {
-        //     path: PartialPath::from(path),
-        //     data: Data(data.clone()),
-        // });
         let node = NodeType::Leaf(LeafNode {
             path: PartialPath::from(path),
             data: Data(data.clone()),
@@ -2174,10 +2169,6 @@ mod tests {
             .chain(data.clone())
             .collect::<Vec<_>>();
 
-        // let node = Node::from_leaf(LeafNode {
-        //     path: PartialPath::from(path.clone()),
-        //     data: Data(data),
-        // });
         let node = NodeType::Leaf(LeafNode {
             path: PartialPath::from(path.clone()),
             data: Data(data),
@@ -2197,12 +2188,6 @@ mod tests {
             .chain(path.clone())
             .collect::<Vec<_>>();
 
-        // let node = Node::from_branch(BranchNode {
-        //     path: PartialPath::from(path.clone()),
-        //     children: Default::default(),
-        //     value: Some(Data(data.clone())),
-        //     children_encoded: Default::default(),
-        // });
         let node = NodeType::Branch(Box::new(BranchNode {
             path: PartialPath::from(path.clone()),
             children: Default::default(),
@@ -2224,12 +2209,6 @@ mod tests {
             .chain(data.clone())
             .collect::<Vec<_>>();
 
-        // let node = Node::from_branch(BranchNode {
-        //     path: PartialPath::from(path.clone()),
-        //     children: Default::default(),
-        //     value: Some(Data(data)),
-        //     children_encoded: Default::default(),
-        // });
         let node = NodeType::Branch(Box::new(BranchNode {
             path: PartialPath::from(path.clone()),
             children: Default::default(),

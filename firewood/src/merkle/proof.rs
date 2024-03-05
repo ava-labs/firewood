@@ -359,7 +359,6 @@ where
         .get(child_hash)
         .ok_or(ProofError::ProofNodeMissing)?;
     let child_node = merkle.decode(child_proof.as_ref())?;
-    // let node = merkle.put_node(Node::from(child_node))?;
     let node = merkle.put_node(child_node)?;
     Ok(node)
 }
