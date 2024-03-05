@@ -20,7 +20,7 @@ use pprof::ProfilerGuard;
 use rand::{distributions::Alphanumeric, rngs::StdRng, Rng, SeedableRng};
 use std::{fs::File, iter::repeat_with, os::raw::c_int, path::Path, sync::Arc};
 
-pub type MerkleWithEncoder = Merkle<CompactSpace<Node, DynamicMem>, Bincode>;
+pub type MerkleWithEncoder = Merkle<CompactSpace<NodeType, DynamicMem>, Bincode>;
 
 const ZERO_HASH: TrieHash = TrieHash([0u8; TRIE_HASH_LEN]);
 

@@ -12,7 +12,7 @@ use std::sync::{Arc, RwLock, RwLockWriteGuard};
 
 use thiserror::Error;
 
-use crate::merkle::{LeafNode, Node, PartialPath};
+use crate::merkle::{LeafNode, NodeType, PartialPath};
 
 pub mod cached;
 pub mod compact;
@@ -158,14 +158,15 @@ impl<T: Storable> Obj<T> {
     }
 }
 
-impl Obj<Node> {
-    pub fn into_inner(mut self) -> Node {
+impl Obj<NodeType> {
+    pub fn into_inner(mut self) -> NodeType {
         let empty_node = LeafNode {
             path: PartialPath(Vec::new()),
             data: Vec::new().into(),
         };
 
-        std::mem::replace(&mut self.value.decoded, Node::from_leaf(empty_node))
+        //std::mem::replace(&mut self.value.decoded, Node::from_leaf(empty_node))
+        std::mem::replace(&mut self.value.decoded, NodeType::Leaf(empty_node))
     }
 }
 
@@ -211,8 +212,8 @@ impl<'a, T: Storable + Debug> ObjRef<'a, T> {
     }
 }
 
-impl<'a> ObjRef<'a, Node> {
-    pub fn into_inner(mut self) -> Node {
+impl<'a> ObjRef<'a, NodeType> {
+    pub fn into_inner(mut self) -> NodeType {
         // Safety: okay because we'll never be touching "self.inner" again
         let b = unsafe { ManuallyDrop::take(&mut self.inner) };
 

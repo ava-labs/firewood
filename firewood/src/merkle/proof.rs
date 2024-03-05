@@ -15,7 +15,7 @@ use crate::nibbles::Nibbles;
 use crate::nibbles::NibblesIterator;
 use crate::{
     db::DbError,
-    merkle::{to_nibble_array, Merkle, MerkleError, Node, NodeType},
+    merkle::{to_nibble_array, Merkle, MerkleError, NodeType},
     merkle_util::{DataStoreError, InMemoryMerkle},
 };
 
@@ -351,7 +351,7 @@ fn decode_subproof<'a, S, T, N>(
     child_hash: &HashKey,
 ) -> Result<NodeObjRef<'a>, ProofError>
 where
-    S: ShaleStore<Node> + Send + Sync,
+    S: ShaleStore<NodeType> + Send + Sync,
     T: BinarySerde,
     EncodedNode<T>: serde::Serialize + for<'de> serde::Deserialize<'de>,
     N: AsRef<[u8]>,
@@ -360,7 +360,8 @@ where
         .get(child_hash)
         .ok_or(ProofError::ProofNodeMissing)?;
     let child_node = merkle.decode(child_proof.as_ref())?;
-    let node = merkle.put_node(Node::from(child_node))?;
+    // let node = merkle.put_node(Node::from(child_node))?;
+    let node = merkle.put_node(child_node)?;
     Ok(node)
 }
 
@@ -681,7 +682,7 @@ where
 //     keep the entire branch and return.
 //   - the fork point is a shortnode, the shortnode is excluded in the range,
 //     unset the entire branch.
-fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySerde>(
+fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<NodeType> + Send + Sync, T: BinarySerde>(
     merkle: &Merkle<S, T>,
     parent: DiskAddress,
     node: Option<DiskAddress>,

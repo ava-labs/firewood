@@ -126,7 +126,7 @@
 //!   (`storage::CachedSpace`).
 //!
 //! - Make changes to the trie, and that induces the writes to some nodes. The nodes are either
-//!   already cached in memory (its pages are cached, or its handle `ObjRef<Node>` is still in
+//!   already cached in memory (its pages are cached, or its handle `ObjRef<NodeType>` is still in
 //!   `shale::ObjCache`) or need to be brought into the memory (if that's the case, go back to the
 //!   second step for it).
 //!
