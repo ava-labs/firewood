@@ -122,16 +122,15 @@ where
                         child_addr
                             // if there's a child disk address here, get the encoded bytes
                             .map(|addr| {
-                                self.get_node(addr)
-                                    // .and_then(|node| self.encode(node.inner()))
-                                    .and_then(|node| self.encode(&node))
-                                    .map(|node_bytes| {
+                                self.get_node(addr).and_then(|node| self.encode(&node)).map(
+                                    |node_bytes| {
                                         if node_bytes.len() >= TRIE_HASH_LEN {
                                             Keccak256::digest(&node_bytes).to_vec()
                                         } else {
                                             node_bytes
                                         }
-                                    })
+                                    },
+                                )
                             })
                             // or look for the pre-fetched bytes
                             .or_else(|| encoded_child.as_ref().map(|child| Ok(child.to_vec())))
@@ -217,13 +216,11 @@ where
     pub fn root_hash(&self, sentinel: DiskAddress) -> Result<TrieHash, MerkleError> {
         let root = self
             .get_node(sentinel)?
-            //.inner TODO remove
             .as_branch()
             .ok_or(MerkleError::NotBranchNode)?
             .children[0];
         Ok(if let Some(root) = root {
             let node = self.get_node(root)?;
-            //self.to_hash(node.inner())?
             self.to_hash(&node)?
         } else {
             *Self::empty_root()
@@ -451,10 +448,6 @@ where
                             // insert the leaf to the empty slot
                             // create a new leaf
                             let leaf_ptr = self
-                                // .put_node(Node::from_leaf(LeafNode::new(
-                                //     PartialPath(key_nibbles.collect()),
-                                //     Data(val),
-                                // )))?
                                 .put_node(NodeType::Leaf(LeafNode::new(
                                     PartialPath(key_nibbles.collect()),
                                     Data(val),
@@ -466,7 +459,6 @@ where
                             node.write(|node| {
                                 node.as_branch_mut().unwrap().children[next_nibble as usize] =
                                     Some(leaf_ptr);
-                                //node.rehash();
                             })?;
 
                             break None;
@@ -521,7 +513,6 @@ where
                                     node.write(|node| {
                                         node.as_branch_mut().unwrap().children
                                             [next_nibble as usize] = Some(new_leaf);
-                                        // node.rehash();
                                     })?;
 
                                     break None;
@@ -627,7 +618,6 @@ where
                     self,
                     node,
                     |u| {
-                        //info = match &mut u.inner {
                         info = match u {
                             NodeType::Branch(n) => {
                                 n.value = Some(Data(val));
@@ -649,8 +639,6 @@ where
                                 }
                             }
                         };
-
-                        // u.rehash()
                     },
                     &mut parents,
                     &mut deleted
@@ -674,12 +662,6 @@ where
                 (chd[idx as usize] = Some(c_ptr));
 
                 let branch = self
-                    // .put_node(Node::from_branch(BranchNode {
-                    //     path: vec![].into(),
-                    //     children: chd,
-                    //     value: Some(Data(val)),
-                    //     children_encoded: Default::default(),
-                    // }))?
                     .put_node(NodeType::Branch(Box::new(BranchNode {
                         path: vec![].into(),
                         children: chd,
@@ -729,7 +711,7 @@ where
                         .filter_map(|(i, child)| child.map(|child| (i, child)))
                         .collect();
 
-                    // don't change the sentinal node
+                    // don't change the sentinel node
                     if children.len() == 1 && !parents.is_empty() {
                         let branch_path = &branch.path.0;
 
@@ -746,8 +728,6 @@ where
                                 .chain(child_path.0.iter().copied())
                                 .collect();
                             *child_path = PartialPath(path);
-
-                            //child.rehash();
                         })?;
 
                         set_parent(child.as_ptr(), &mut parents);
@@ -756,7 +736,6 @@ where
                     } else {
                         node.write(|node| {
                             node.as_branch_mut().unwrap().value = None;
-                            //node.rehash();
                         })?
                     }
 
@@ -808,8 +787,6 @@ where
                                         .collect();
 
                                     child.path = PartialPath(path);
-
-                                    //Node::from_branch(child)
                                     NodeType::Branch(child)
                                 }
                                 NodeType::Leaf(mut child) => {
@@ -821,8 +798,6 @@ where
                                         .collect();
 
                                     child.path = PartialPath(path);
-
-                                    //Node::from_leaf(child)
                                     NodeType::Leaf(child)
                                 }
                             };
@@ -1266,7 +1241,6 @@ where
     ) -> Result<NodeObjRef<'a>, MerkleError> {
         let write_result = node.write(|node| {
             node.set_path(path);
-            //node.rehash();
         });
 
         self.move_node_if_write_failed((parents, to_delete), node, write_result)
@@ -1311,13 +1285,10 @@ fn set_parent(new_chd: DiskAddress, parents: &mut [(NodeObjRef, u8)]) {
     let (p_ref, idx) = parents.last_mut().unwrap();
     #[allow(clippy::unwrap_used)]
     p_ref
-        .write(|p| {
-            match p {
-                #[allow(clippy::indexing_slicing)]
-                NodeType::Branch(pp) => pp.children[*idx as usize] = Some(new_chd),
-                _ => unreachable!(),
-            }
-            //p.rehash();
+        .write(|p| match p {
+            #[allow(clippy::indexing_slicing)]
+            NodeType::Branch(pp) => pp.children[*idx as usize] = Some(new_chd),
+            _ => unreachable!(),
         })
         .unwrap();
 }
@@ -1375,7 +1346,6 @@ impl<'a, S: ShaleStore<NodeType> + Send + Sync, T> RefMut<'a, S, T> {
                         NodeType::Branch(n) => &mut n.value.as_mut().unwrap().0,
                         NodeType::Leaf(n) => &mut n.data.0,
                     });
-                    //u.rehash()
                 },
                 &mut parents,
                 &mut deleted
