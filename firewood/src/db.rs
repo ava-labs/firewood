@@ -28,6 +28,7 @@ use crate::{
         CachedStore, Obj, ShaleError, ShaleStore, SpaceId, Storable, StoredView,
     },
 };
+use aiofut::AioError;
 use async_trait::async_trait;
 use bytemuck::{cast_slice, Pod, Zeroable};
 
@@ -65,6 +66,7 @@ pub type SharedStore = CompactSpace<Node, StoreRevShared>;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum DbError {
+    Aio(AioError),
     InvalidParams,
     Merkle(MerkleError),
     System(nix::Error),
@@ -78,6 +80,7 @@ pub enum DbError {
 impl fmt::Display for DbError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            DbError::Aio(e) => write!(f, "aio error: {e:?}"),
             DbError::InvalidParams => write!(f, "invalid parameters provided"),
             DbError::Merkle(e) => write!(f, "merkle error: {e:?}"),
             DbError::System(e) => write!(f, "system error: {e:?}"),
@@ -540,9 +543,7 @@ impl Db {
             .build();
         let (sender, inbound) = tokio::sync::mpsc::unbounded_channel();
         let disk_requester = DiskBufferRequester::new(sender);
-        let buffer = cfg.buffer.clone();
-        #[allow(clippy::unwrap_used)]
-        let disk_buffer = DiskBuffer::new(inbound, &buffer, &wal).expect("DiskBuffer::new");
+        let disk_buffer = DiskBuffer::new(inbound, &cfg.buffer, &wal).map_err(DbError::Aio)?;
 
         let disk_thread = Some(
             std::thread::Builder::new()
