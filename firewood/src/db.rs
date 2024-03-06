@@ -678,12 +678,9 @@ impl Db {
         })
         .chain({
             // write out the CompactSpaceHeader
-                let space_reserved = NonZeroUsize::new(SPACE_RESERVED as usize)
-                    .expect("SPACE_RESERVED is non-zero");
-                csh = CompactSpaceHeader::new(
-                    space_reserved,
-                    space_reserved,
-            );
+            let space_reserved =
+                NonZeroUsize::new(SPACE_RESERVED as usize).expect("SPACE_RESERVED is non-zero");
+            csh = CompactSpaceHeader::new(space_reserved, space_reserved);
             bytemuck::bytes_of(&csh)
         })
         .copied()
