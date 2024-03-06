@@ -432,7 +432,7 @@ impl<'a, 'b, S: ShaleStore<NodeType> + Send + Sync, T> PathIterator<'a, 'b, S, T
         sentinel_node: NodeObjRef<'a>,
         key: &'b [u8],
     ) -> Self {
-        let root = match sentinel_node.into_inner() {
+        let root = match sentinel_node.inner_ref() {
             NodeType::Branch(branch) => match branch.children[0] {
                 Some(root) => root,
                 None => {
