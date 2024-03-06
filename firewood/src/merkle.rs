@@ -235,7 +235,7 @@ where
     fn dump_(&self, u: DiskAddress, w: &mut dyn Write) -> Result<(), MerkleError> {
         let u_ref = self.get_node(u)?;
 
-        match &u_ref.into_inner() {
+        match u_ref.inner_ref() {
             NodeType::Branch(n) => {
                 writeln!(w, "{n:?}")?;
                 for c in n.children.iter().flatten() {
