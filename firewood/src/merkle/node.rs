@@ -540,48 +540,6 @@ mod tests {
     use bincode::Error;
     use test_case::test_case;
 
-    // TODO remove
-    // #[test_matrix(
-    //     [Nil, vec![], vec![0x01], (0..TRIE_HASH_LEN as u8).collect::<Vec<_>>(), (0..33).collect::<Vec<_>>()],
-    //     [Nil, false, true]
-    // )]
-    // fn cached_node_data(
-    //     encoded: impl Into<Option<Vec<u8>>>,
-    //     is_encoded_longer_than_hash_len: impl Into<Option<bool>>,
-    // ) {
-    //     let leaf = NodeType::Leaf(LeafNode::new(PartialPath(vec![1, 2, 3]), Data(vec![4, 5])));
-    //     let branch = NodeType::Branch(Box::new(BranchNode {
-    //         path: vec![].into(),
-    //         children: [Some(DiskAddress::from(1)); BranchNode::MAX_CHILDREN],
-    //         value: Some(Data(vec![1, 2, 3])),
-    //         children_encoded: std::array::from_fn(|_| Some(vec![1])),
-    //     }));
-
-    //     let encoded = encoded.into();
-    //     let is_encoded_longer_than_hash_len = is_encoded_longer_than_hash_len.into();
-
-    //     let node = Node::new_from_hash(encoded.clone(), is_encoded_longer_than_hash_len, leaf);
-
-    //     check_node_encoding(node);
-
-    //     let node = Node::new_from_hash(encoded.clone(), is_encoded_longer_than_hash_len, branch);
-
-    //     check_node_encoding(node);
-    // }
-
-    // #[test_matrix(
-    //     (0..0, 0..15, 0..16, 0..31, 0..32),
-    //     [0..0, 0..16, 0..32]
-    // )]
-    // fn leaf_node<Iter: Iterator<Item = u8>>(path: Iter, data: Iter) {
-    //     let node = Node::from_leaf(LeafNode::new(
-    //         PartialPath(path.map(|x| x & 0xf).collect()),
-    //         Data(data.collect()),
-    //     ));
-
-    //     check_node_encoding(node);
-    // }
-
     #[test_case(&[])]
     #[test_case(&[0x00])]
     #[test_case(&[0x0F])]
@@ -605,77 +563,6 @@ mod tests {
 
         Ok(())
     }
-
-    // #[test_matrix(
-    //     [&[], &[0xf], &[0xf, 0xf]],
-    //     [vec![], vec![1,0,0,0,0,0,0,1], vec![1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1], repeat(1).take(16).collect()],
-    //     [Nil, 0, 15],
-    //     [
-    //         std::array::from_fn(|_| None),
-    //         std::array::from_fn(|_| Some(vec![1])),
-    //         [Some(vec![1]), None, None, None, None, None, None, None, None, None, None, None, None, None, None, Some(vec![1])],
-    //         std::array::from_fn(|_| Some(vec![1; 32])),
-    //         std::array::from_fn(|_| Some(vec![1; 33]))
-    //     ]
-    // )]
-    // fn branch_encoding(
-    //     path: &[u8],
-    //     children: Vec<usize>,
-    //     value: impl Into<Option<u8>>,
-    //     children_encoded: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN],
-    // ) {
-    //     let path = PartialPath(path.iter().copied().map(|x| x & 0xf).collect());
-
-    //     let mut children = children.into_iter().map(|x| {
-    //         if x == 0 {
-    //             None
-    //         } else {
-    //             Some(DiskAddress::from(x))
-    //         }
-    //     });
-
-    //     let children = std::array::from_fn(|_| children.next().flatten());
-
-    //     let value = value
-    //         .into()
-    //         .map(|x| Data(std::iter::repeat(x).take(x as usize).collect()));
-
-    //     let node = Node::from_branch(BranchNode {
-    //         path,
-    //         children,
-    //         value,
-    //         children_encoded,
-    //     });
-
-    //     check_node_encoding(node);
-    // }
-
-    // fn check_node_encoding(node: Node) {
-    //     let serialized_len = node.serialized_len();
-
-    //     let mut bytes = vec![0; serialized_len as usize];
-    //     node.serialize(&mut bytes).expect("node should serialize");
-
-    //     let mut mem = PlainMem::new(serialized_len, 0);
-    //     mem.write(0, &bytes);
-
-    //     let mut hydrated_node = Node::deserialize(0, &mem).expect("node should deserialize");
-
-    //     let encoded = node
-    //         .encoded
-    //         .get()
-    //         .filter(|encoded| encoded.len() >= TRIE_HASH_LEN);
-
-    //     match encoded {
-    //         // long-encoded won't be serialized
-    //         Some(encoded) if hydrated_node.encoded.get().is_none() => {
-    //             hydrated_node.encoded = OnceLock::from(encoded.clone());
-    //         }
-    //         _ => (),
-    //     }
-
-    //     assert_eq!(node, hydrated_node);
-    // }
 
     struct Nil;
 
