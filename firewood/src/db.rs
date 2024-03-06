@@ -678,11 +678,11 @@ impl Db {
         })
         .chain({
             // write out the CompactSpaceHeader
-            csh = CompactSpaceHeader::new(
-                #[allow(clippy::unwrap_used)]
-                NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(),
-                #[allow(clippy::unwrap_used)]
-                NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(),
+                let space_reserved = NonZeroUsize::new(SPACE_RESERVED as usize)
+                    .expect("SPACE_RESERVED is non-zero");
+                csh = CompactSpaceHeader::new(
+                    space_reserved,
+                    space_reserved,
             );
             bytemuck::bytes_of(&csh)
         })
