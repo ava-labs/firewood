@@ -235,7 +235,6 @@ where
     fn dump_(&self, u: DiskAddress, w: &mut dyn Write) -> Result<(), MerkleError> {
         let u_ref = self.get_node(u)?;
 
-        // match &u_ref {
         match &u_ref.into_inner() {
             NodeType::Branch(n) => {
                 writeln!(w, "{n:?}")?;
@@ -303,7 +302,6 @@ where
             };
 
             let (node_ref, next_node_ptr) = match node.inner_ref() {
-                // node.inner was a NodeType
                 // For a Branch node, we look at the child pointer. If it points
                 // to another node, we walk down that. Otherwise, we can store our
                 // value as a leaf and we're done
