@@ -633,7 +633,6 @@ where
                                     let idx = n.path[0];
                                     #[allow(clippy::indexing_slicing)]
                                     (n.path = PartialPath(n.path[1..].to_vec()));
-                                    // u.rehash();
 
                                     Some((idx, true, None, val))
                                 }
@@ -2165,7 +2164,6 @@ mod tests {
         let write_result = node_ref.write(|node| {
             node.set_path(PartialPath(new_path.clone()));
             node.set_data(Data(new_data.clone()));
-            //node.rehash();
         });
 
         assert!(matches!(write_result, Err(ObjWriteSizeError)));
