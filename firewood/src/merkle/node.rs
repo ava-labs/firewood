@@ -64,35 +64,35 @@ impl Data {
 }
 
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner)]
-pub enum NodeType {
+pub enum Node {
     Branch(Box<BranchNode>),
     Leaf(LeafNode),
 }
 
-impl NodeType {
+impl Node {
     pub fn path_mut(&mut self) -> &mut PartialPath {
         match self {
-            NodeType::Branch(u) => &mut u.path,
-            NodeType::Leaf(node) => &mut node.path,
+            Node::Branch(u) => &mut u.path,
+            Node::Leaf(node) => &mut node.path,
         }
     }
 
     pub fn set_path(&mut self, path: PartialPath) {
         match self {
-            NodeType::Branch(u) => u.path = path,
-            NodeType::Leaf(node) => node.path = path,
+            Node::Branch(u) => u.path = path,
+            Node::Leaf(node) => node.path = path,
         }
     }
 
     pub fn set_data(&mut self, data: Data) {
         match self {
-            NodeType::Branch(u) => u.value = Some(data),
-            NodeType::Leaf(node) => node.data = data,
+            Node::Branch(u) => u.value = Some(data),
+            Node::Leaf(node) => node.data = data,
         }
     }
 
     pub(super) fn max_branch_node_size() -> u64 {
-        NodeType::Branch(Box::new(BranchNode {
+        Node::Branch(Box::new(BranchNode {
             path: vec![].into(),
             children: [Some(DiskAddress::null()); BranchNode::MAX_CHILDREN],
             value: Some(Data(Vec::new())),
@@ -102,7 +102,7 @@ impl NodeType {
     }
 }
 
-impl Storable for NodeType {
+impl Storable for Node {
     fn deserialize<T: CachedStore>(offset: usize, mem: &T) -> Result<Self, ShaleError> {
         let meta_raw =
             mem.get_view(offset, Meta::SIZE as u64)
@@ -124,11 +124,11 @@ impl Storable for NodeType {
         let node = match type_id {
             NodeTypeId::Branch => {
                 let node = BranchNode::deserialize(offset, mem)?;
-                NodeType::Branch(Box::new(node))
+                Node::Branch(Box::new(node))
             }
             NodeTypeId::Leaf => {
                 let node = LeafNode::deserialize(offset, mem)?;
-                NodeType::Leaf(node)
+                Node::Leaf(node)
             }
         };
 
@@ -138,8 +138,8 @@ impl Storable for NodeType {
     fn serialized_len(&self) -> u64 {
         Meta::SIZE as u64
             + match &self {
-                NodeType::Branch(n) => n.serialized_len(),
-                NodeType::Leaf(n) => n.serialized_len(),
+                Node::Branch(n) => n.serialized_len(),
+                Node::Leaf(n) => n.serialized_len(),
             }
     }
 
@@ -156,13 +156,13 @@ impl Storable for NodeType {
         let pos = cursor.position() as usize;
 
         match &self {
-            NodeType::Branch(n) =>
+            Node::Branch(n) =>
             {
                 #[allow(clippy::indexing_slicing)]
                 n.serialize(&mut cursor.get_mut()[pos..])
             }
 
-            NodeType::Leaf(n) =>
+            Node::Leaf(n) =>
             {
                 #[allow(clippy::indexing_slicing)]
                 n.serialize(&mut cursor.get_mut()[pos..])
@@ -182,7 +182,7 @@ impl Meta {
 }
 
 mod type_id {
-    use super::{CheckedBitPattern, NoUninit, NodeType};
+    use super::{CheckedBitPattern, NoUninit, Node};
     use crate::shale::ShaleError;
 
     #[derive(Clone, Copy, CheckedBitPattern, NoUninit)]
@@ -200,11 +200,11 @@ mod type_id {
         }
     }
 
-    impl From<&NodeType> for NodeTypeId {
-        fn from(node_type: &NodeType) -> Self {
+    impl From<&Node> for NodeTypeId {
+        fn from(node_type: &Node) -> Self {
             match node_type {
-                NodeType::Branch(_) => NodeTypeId::Branch,
-                NodeType::Leaf(_) => NodeTypeId::Leaf,
+                Node::Branch(_) => NodeTypeId::Branch,
+                Node::Leaf(_) => NodeTypeId::Leaf,
             }
         }
     }

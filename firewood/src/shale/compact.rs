@@ -2,7 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::logger::trace;
-use crate::merkle::NodeType;
+use crate::merkle::Node;
 use crate::shale::ObjCache;
 use crate::storage::{StoreRevMut, StoreRevShared};
 
@@ -569,9 +569,9 @@ impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
     }
 }
 
-impl From<Box<CompactSpace<NodeType, StoreRevMut>>> for CompactSpace<NodeType, StoreRevShared> {
+impl From<Box<CompactSpace<Node, StoreRevMut>>> for CompactSpace<Node, StoreRevShared> {
     #[allow(clippy::unwrap_used)]
-    fn from(value: Box<CompactSpace<NodeType, StoreRevMut>>) -> Self {
+    fn from(value: Box<CompactSpace<Node, StoreRevMut>>) -> Self {
         let inner = value.inner.into_inner().unwrap();
         CompactSpace {
             inner: RwLock::new(inner.into()),

@@ -15,7 +15,7 @@ use crate::nibbles::Nibbles;
 use crate::nibbles::NibblesIterator;
 use crate::{
     db::DbError,
-    merkle::{to_nibble_array, Merkle, MerkleError, NodeType},
+    merkle::{to_nibble_array, Merkle, MerkleError, Node},
     merkle_util::{DataStoreError, InMemoryMerkle},
 };
 
@@ -260,7 +260,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
             // if a child is already linked, use it instead
             let child_node = match parent_node_ref.inner_ref() {
                 #[allow(clippy::indexing_slicing)]
-                NodeType::Branch(n) => {
+                Node::Branch(n) => {
                     let Some(child_index) = key_nibbles.next().map(usize::from) else {
                         break None;
                     };
@@ -291,7 +291,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
 
             // find the encoded subproof of the child if the partial-path and nibbles match
             let encoded_sub_proof = match child_node.inner_ref() {
-                NodeType::Leaf(n) => {
+                Node::Leaf(n) => {
                     break n
                         .path
                         .iter()
@@ -300,7 +300,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                         .then(|| n.data().to_vec());
                 }
 
-                NodeType::Branch(n) => {
+                Node::Branch(n) => {
                     let paths_match = n
                         .path
                         .iter()
@@ -350,7 +350,7 @@ fn decode_subproof<'a, S, T, N>(
     child_hash: &HashKey,
 ) -> Result<NodeObjRef<'a>, ProofError>
 where
-    S: ShaleStore<NodeType> + Send + Sync,
+    S: ShaleStore<Node> + Send + Sync,
     T: BinarySerde,
     EncodedNode<T>: serde::Serialize + for<'de> serde::Deserialize<'de>,
     N: AsRef<[u8]>,
@@ -365,10 +365,10 @@ where
 
 pub(crate) fn locate_subproof(
     mut key_nibbles: NibblesIterator<'_, 0>,
-    node: NodeType,
+    node: Node,
 ) -> Result<(Option<SubProof>, NibblesIterator<'_, 0>), ProofError> {
     match node {
-        NodeType::Leaf(n) => {
+        Node::Leaf(n) => {
             let cur_key = &n.path().0;
             // Check if the key of current node match with the given key
             // and consume the current-key portion of the nibbles-iterator
@@ -385,7 +385,7 @@ pub(crate) fn locate_subproof(
 
             Ok((sub_proof.into(), key_nibbles))
         }
-        NodeType::Branch(n) => {
+        Node::Branch(n) => {
             let partial_path = &n.path.0;
 
             let does_not_match = key_nibbles.size_hint().0 < partial_path.len()
@@ -481,7 +481,7 @@ where
     loop {
         match u_ref.inner_ref() {
             #[allow(clippy::indexing_slicing)]
-            NodeType::Branch(n) => {
+            Node::Branch(n) => {
                 // If either the key of left proof or right proof doesn't match with
                 // stop here, this is the forkpoint.
                 let path = &*n.path;
@@ -517,7 +517,7 @@ where
             }
 
             #[allow(clippy::indexing_slicing)]
-            NodeType::Leaf(n) => {
+            Node::Leaf(n) => {
                 let path = &*n.path;
 
                 [fork_left, fork_right] = [&left_chunks[index..], &right_chunks[index..]]
@@ -530,7 +530,7 @@ where
     }
 
     match u_ref.inner_ref() {
-        NodeType::Branch(n) => {
+        Node::Branch(n) => {
             if fork_left.is_lt() && fork_right.is_lt() {
                 return Err(ProofError::EmptyRange);
             }
@@ -616,7 +616,7 @@ where
             Ok(false)
         }
 
-        NodeType::Leaf(_) => {
+        Node::Leaf(_) => {
             if fork_left.is_lt() && fork_right.is_lt() {
                 return Err(ProofError::EmptyRange);
             }
@@ -633,7 +633,7 @@ where
             if fork_left.is_ne() && fork_right.is_ne() {
                 p_ref
                     .write(|p| {
-                        if let NodeType::Branch(n) = p {
+                        if let Node::Branch(n) = p {
                             #[allow(clippy::indexing_slicing)]
                             (n.chd_mut()[left_chunks[index - 1] as usize] = None);
                             #[allow(clippy::indexing_slicing)]
@@ -680,7 +680,7 @@ where
 //     keep the entire branch and return.
 //   - the fork point is a shortnode, the shortnode is excluded in the range,
 //     unset the entire branch.
-fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<NodeType> + Send + Sync, T: BinarySerde>(
+fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySerde>(
     merkle: &Merkle<S, T>,
     parent: DiskAddress,
     node: Option<DiskAddress>,
@@ -707,7 +707,7 @@ fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<NodeType> + Send + Sync, T: Bina
 
     #[allow(clippy::indexing_slicing)]
     match u_ref.inner_ref() {
-        NodeType::Branch(n) if chunks[index..].starts_with(&n.path) => {
+        Node::Branch(n) if chunks[index..].starts_with(&n.path) => {
             let index = index + n.path.len();
             let child_index = chunks[index] as usize;
 
@@ -737,7 +737,7 @@ fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<NodeType> + Send + Sync, T: Bina
             unset_node_ref(merkle, p, node, key, index + 1, remove_left)
         }
 
-        NodeType::Branch(n) => {
+        Node::Branch(n) => {
             let cur_key = &n.path;
 
             // Find the fork point, it's a non-existent branch.
@@ -767,11 +767,11 @@ fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<NodeType> + Send + Sync, T: Bina
 
                 p_ref
                     .write(|p| match p {
-                        NodeType::Branch(pp) => {
+                        Node::Branch(pp) => {
                             pp.chd_mut()[chunks[index - 1] as usize] = None;
                             pp.chd_encoded_mut()[chunks[index - 1] as usize] = None;
                         }
-                        NodeType::Leaf(_) => (),
+                        Node::Leaf(_) => (),
                     })
                     .unwrap();
             }
@@ -779,7 +779,7 @@ fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<NodeType> + Send + Sync, T: Bina
             Ok(())
         }
 
-        NodeType::Leaf(n) => {
+        Node::Leaf(n) => {
             let mut p_ref = merkle
                 .get_node(parent)
                 .map_err(|_| ProofError::NoSuchNode)?;
@@ -806,7 +806,7 @@ fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<NodeType> + Send + Sync, T: Bina
             } else {
                 p_ref
                     .write(|p| {
-                        if let NodeType::Branch(n) = p {
+                        if let Node::Branch(n) = p {
                             #[allow(clippy::indexing_slicing)]
                             let index = chunks[index - 1] as usize;
 

@@ -4,7 +4,7 @@
 use crate::{
     merkle::{
         proof::{Proof, ProofError},
-        BinarySerde, EncodedNode, Merkle, NodeType, Ref, RefMut, TrieHash,
+        BinarySerde, EncodedNode, Merkle, Node, Ref, RefMut, TrieHash,
     },
     shale::{
         self, cached::DynamicMem, compact::CompactSpace, disk_address::DiskAddress, CachedStore,
@@ -36,7 +36,7 @@ pub enum DataStoreError {
     ProofEmptyKeyValuesError,
 }
 
-type InMemoryStore = CompactSpace<NodeType, DynamicMem>;
+type InMemoryStore = CompactSpace<Node, DynamicMem>;
 
 pub struct InMemoryMerkle<T> {
     root: DiskAddress,

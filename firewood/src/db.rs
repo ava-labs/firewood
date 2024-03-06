@@ -9,8 +9,8 @@ pub use crate::{
 use crate::{
     file,
     merkle::{
-        Bincode, Key, Merkle, MerkleError, MerkleKeyValueStream, NodeType, Proof, ProofError,
-        TrieHash, TRIE_HASH_LEN,
+        Bincode, Key, Merkle, MerkleError, MerkleKeyValueStream, Node, Proof, ProofError, TrieHash,
+        TRIE_HASH_LEN,
     },
     storage::{
         buffer::{DiskBuffer, DiskBufferRequester},
@@ -59,8 +59,8 @@ const SPACE_RESERVED: u64 = 0x1000;
 
 const MAGIC_STR: &[u8; 16] = b"firewood v0.1\0\0\0";
 
-pub type MutStore = CompactSpace<NodeType, StoreRevMut>;
-pub type SharedStore = CompactSpace<NodeType, StoreRevShared>;
+pub type MutStore = CompactSpace<Node, StoreRevMut>;
+pub type SharedStore = CompactSpace<Node, StoreRevShared>;
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -282,7 +282,7 @@ pub struct DbRev<S> {
 }
 
 #[async_trait]
-impl<S: ShaleStore<NodeType> + Send + Sync> api::DbView for DbRev<S> {
+impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
     type Stream<'a> = MerkleKeyValueStream<'a, S, Bincode> where Self: 'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
@@ -335,7 +335,7 @@ impl<S: ShaleStore<NodeType> + Send + Sync> api::DbView for DbRev<S> {
     }
 }
 
-impl<S: ShaleStore<NodeType> + Send + Sync> DbRev<S> {
+impl<S: ShaleStore<Node> + Send + Sync> DbRev<S> {
     pub fn stream(&self) -> merkle::MerkleKeyValueStream<'_, S, Bincode> {
         self.merkle.key_value_iter(self.header.kv_root)
     }
@@ -402,7 +402,7 @@ impl DbRev<MutStore> {
         &mut self,
     ) -> (
         &mut shale::Obj<DbHeader>,
-        &mut Merkle<CompactSpace<NodeType, StoreRevMut>, Bincode>,
+        &mut Merkle<CompactSpace<Node, StoreRevMut>, Bincode>,
     ) {
         (&mut self.header, &mut self.merkle)
     }
@@ -748,7 +748,7 @@ impl Db {
 
         let header_refs = (db_header_ref, merkle_payload_header_ref);
 
-        let mut rev: DbRev<CompactSpace<NodeType, StoreRevMut>> = Db::new_revision(
+        let mut rev: DbRev<CompactSpace<Node, StoreRevMut>> = Db::new_revision(
             header_refs,
             (store.merkle.meta.clone(), store.merkle.payload.clone()),
             self.payload_regn_nbit,
@@ -785,7 +785,7 @@ impl Db {
         payload_regn_nbit: u64,
         payload_max_walk: u64,
         cfg: &DbRevConfig,
-    ) -> Result<DbRev<CompactSpace<NodeType, K>>, DbError> {
+    ) -> Result<DbRev<CompactSpace<Node, K>>, DbError> {
         // TODO: This should be a compile time check
         const DB_OFFSET: u64 = Db::PARAM_SIZE;
         let merkle_offset = DB_OFFSET + DbHeader::MSIZE;
