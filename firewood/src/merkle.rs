@@ -694,7 +694,7 @@ where
             };
 
             let data = match node.inner_ref() {
-                NodeType::Branch(ref branch) => {
+                NodeType::Branch(branch) => {
                     let data = branch.value.clone();
                     let children = branch.children;
 
@@ -784,6 +784,7 @@ where
                                         .collect();
 
                                     child.path = PartialPath(path);
+
                                     NodeType::Branch(child)
                                 }
                                 NodeType::Leaf(mut child) => {
@@ -795,6 +796,7 @@ where
                                         .collect();
 
                                     child.path = PartialPath(path);
+
                                     NodeType::Leaf(child)
                                 }
                             };
@@ -846,7 +848,7 @@ where
         deleted: &mut Vec<DiskAddress>,
     ) -> Result<(), MerkleError> {
         let u_ref = self.get_node(u)?;
-        match u_ref.into_inner() {
+        match u_ref.inner_ref() {
             NodeType::Branch(n) => {
                 for c in n.children.iter().flatten() {
                     self.remove_tree_(*c, deleted)?
@@ -1302,7 +1304,7 @@ impl<'a> std::ops::Deref for Ref<'a> {
     type Target = [u8];
     #[allow(clippy::unwrap_used)]
     fn deref(&self) -> &[u8] {
-        match &self.0.inner_ref() {
+        match self.0.inner_ref() {
             NodeType::Branch(n) => n.value.as_ref().unwrap(),
             NodeType::Leaf(n) => &n.data,
         }
