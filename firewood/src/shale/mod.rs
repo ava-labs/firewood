@@ -140,11 +140,6 @@ impl<T: Storable> Obj<T> {
     }
 
     #[inline(always)]
-    pub fn get_space_id(&self) -> SpaceId {
-        self.value.get_mem_store().id()
-    }
-
-    #[inline(always)]
     pub const fn from_typed_view(value: StoredView<T>) -> Self {
         Obj { value, dirty: None }
     }
@@ -159,7 +154,7 @@ impl<T: Storable> Obj<T> {
             let mut new_value = vec![0; new_value_len as usize];
             // TODO: log error
             #[allow(clippy::unwrap_used)]
-            self.value.write_mem_image(&mut new_value).unwrap();
+            self.value.serialize(&mut new_value).unwrap();
             let offset = self.value.get_offset();
             let bx: &mut dyn CachedStore = self.value.get_mut_mem_store();
             bx.write(offset, &new_value).expect("write should succeed");
@@ -293,9 +288,9 @@ pub trait Storable {
 }
 
 pub fn to_dehydrated(item: &dyn Storable) -> Result<Vec<u8>, ShaleError> {
-    let mut buff = vec![0; item.serialized_len() as usize];
-    item.serialize(&mut buff)?;
-    Ok(buff)
+    let mut buf = vec![0; item.serialized_len() as usize];
+    item.serialize(&mut buf)?;
+    Ok(buf)
 }
 
 /// A stored view of any [Storable]
@@ -355,7 +350,7 @@ impl<T: Storable> StoredView<T> {
         }
     }
 
-    fn write_mem_image(&self, mem_image: &mut [u8]) -> Result<(), ShaleError> {
+    fn serialize(&self, mem_image: &mut [u8]) -> Result<(), ShaleError> {
         self.item.serialize(mem_image)
     }
 
