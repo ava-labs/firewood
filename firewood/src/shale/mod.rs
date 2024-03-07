@@ -103,7 +103,7 @@ pub trait CachedStore: Debug + Send + Sync {
     fn is_writeable(&self) -> bool;
 }
 
-/// A wrapper of `StoredView` to enable writes. The direct construction (by [Obj::from_typed_view]
+/// A wrapper of `StoredView` to enable writes. The direct construction (by [Obj::from_stored_view]
 /// or [StoredView::ptr_to_obj]) could be useful for some unsafe access to a low-level item (e.g.
 /// headers/metadata at bootstrap or part of [ShaleStore] implementation) stored at a given [DiskAddress]
 /// . Users of [ShaleStore] implementation, however, will only use [ObjRef] for safeguarded access.
@@ -138,7 +138,7 @@ impl<T: Storable> Obj<T> {
     }
 
     #[inline(always)]
-    pub const fn from_typed_view(value: StoredView<T>) -> Self {
+    pub const fn from_stored_view(value: StoredView<T>) -> Self {
         Obj { value, dirty: None }
     }
 
@@ -391,7 +391,7 @@ impl<T: Storable + 'static> StoredView<T> {
         ptr: DiskAddress,
         len_limit: u64,
     ) -> Result<Obj<T>, ShaleError> {
-        Ok(Obj::from_typed_view(Self::new(
+        Ok(Obj::from_stored_view(Self::new(
             ptr.get(),
             len_limit,
             store,
@@ -405,7 +405,7 @@ impl<T: Storable + 'static> StoredView<T> {
         len_limit: u64,
         item: T,
     ) -> Result<Obj<T>, ShaleError> {
-        Ok(Obj::from_typed_view(Self::from_hydrated(
+        Ok(Obj::from_stored_view(Self::from_hydrated(
             addr, len_limit, item, store,
         )?))
     }
