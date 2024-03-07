@@ -54,7 +54,6 @@ pub type SpaceId = u8;
 pub const INVALID_SPACE_ID: SpaceId = 0xff;
 
 pub struct DiskWrite {
-    pub space_id: SpaceId,
     pub space_off: u64,
     pub data: Box<[u8]>,
 }
@@ -63,8 +62,7 @@ impl std::fmt::Debug for DiskWrite {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         write!(
             f,
-            "[Disk space=0x{:02x} offset=0x{:04x} data=0x{}",
-            self.space_id,
+            "[Disk offset=0x{:04x} data=0x{}",
             self.space_off,
             hex::encode(&self.data)
         )
@@ -105,7 +103,7 @@ pub trait CachedStore: Debug + Send + Sync {
     fn is_writeable(&self) -> bool;
 }
 
-/// A wrapper of `TypedView` to enable writes. The direct construction (by [Obj::from_typed_view]
+/// A wrapper of `StoredView` to enable writes. The direct construction (by [Obj::from_typed_view]
 /// or [StoredView::ptr_to_obj]) could be useful for some unsafe access to a low-level item (e.g.
 /// headers/metadata at bootstrap or part of [ShaleStore] implementation) stored at a given [DiskAddress]
 /// . Users of [ShaleStore] implementation, however, will only use [ObjRef] for safeguarded access.
