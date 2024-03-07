@@ -636,7 +636,7 @@ impl Db {
 
         Ok(Self {
             inner: Arc::new(RwLock::new(DbInner {
-                disk_thread: disk_thread,
+                disk_thread,
                 disk_requester,
                 cached_space: data_cache,
                 reset_store_headers,
