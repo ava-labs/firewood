@@ -506,7 +506,7 @@ impl Db {
             file::Options::NoTruncate
         };
 
-        let (db_path, reset) = file::open_dir(db_path, open_options)?;
+        let (db_path, reset_store_headers) = file::open_dir(db_path, open_options)?;
 
         let merkle_path = file::touch_dir("merkle", &db_path)?;
         let merkle_meta_path = file::touch_dir("meta", &merkle_path)?;
@@ -516,7 +516,7 @@ impl Db {
         let meta_file = crate::file::File::new(0, SPACE_RESERVED, &merkle_meta_path)?;
         let meta_fd = meta_file.as_fd();
 
-        if reset {
+        if reset_store_headers {
             // initialize DbParams
             if cfg.payload_file_nbit < cfg.payload_regn_nbit
                 || cfg.payload_regn_nbit < PAGE_SIZE_NBIT
@@ -639,7 +639,7 @@ impl Db {
                 disk_thread: disk_thread,
                 disk_requester,
                 cached_space: data_cache,
-                reset_store_headers: reset,
+                reset_store_headers,
                 root_hash_staging: StoreRevMut::new(root_hash_cache),
             })),
             revisions: Arc::new(Mutex::new(DbRevInner {
