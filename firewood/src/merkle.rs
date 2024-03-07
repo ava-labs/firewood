@@ -1459,7 +1459,8 @@ mod tests {
                 std::num::NonZeroUsize::new(RESERVED).unwrap(),
             ))
             .unwrap(),
-        );
+        )
+        .unwrap();
         let compact_header = shale::StoredView::ptr_to_obj(
             &dm,
             compact_header,
