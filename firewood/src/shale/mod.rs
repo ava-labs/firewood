@@ -364,7 +364,7 @@ impl<T: Storable + 'static> StoredView<T> {
 
         Ok(Self {
             offset,
-            item: item,
+            item,
             mem: space.get_shared(),
             len_limit,
         })
