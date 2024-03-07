@@ -54,7 +54,7 @@ pub type SpaceId = u8;
 pub const INVALID_SPACE_ID: SpaceId = 0xff;
 
 pub struct DiskWrite {
-    pub space_off: u64,
+    pub offset: u64,
     pub data: Box<[u8]>,
 }
 
@@ -63,7 +63,7 @@ impl std::fmt::Debug for DiskWrite {
         write!(
             f,
             "[Disk offset=0x{:04x} data=0x{}",
-            self.space_off,
+            self.offset,
             hex::encode(&self.data)
         )
     }
