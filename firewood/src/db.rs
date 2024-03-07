@@ -535,6 +535,23 @@ impl Db {
         let (sender, inbound) = tokio::sync::mpsc::unbounded_channel();
         let disk_requester = DiskBufferRequester::new(sender);
 
+        let wal_config = WalConfig::builder()
+            .file_nbit(params.wal_file_nbit)
+            .block_nbit(params.wal_block_nbit)
+            .max_revisions(cfg.wal.max_revisions)
+            .build();
+
+        #[allow(clippy::unwrap_used)]
+        let disk_buffer =
+            DiskBuffer::new(inbound, &cfg.buffer, &wal_config).expect("DiskBuffer::new");
+
+        let disk_thread = Some(
+            std::thread::Builder::new()
+                .name("DiskBuffer".to_string())
+                .spawn(move || disk_buffer.run())
+                .expect("thread spawn should succeed"),
+        );
+
         // set up caches
         #[allow(clippy::unwrap_used)]
         let root_hash_cache: Arc<CachedSpace> = CachedSpace::new(
@@ -612,24 +629,9 @@ impl Db {
             &cfg.rev,
         )?;
 
-        let wal_config = WalConfig::builder()
-            .file_nbit(params.wal_file_nbit)
-            .block_nbit(params.wal_block_nbit)
-            .max_revisions(cfg.wal.max_revisions)
-            .build();
-
-        #[allow(clippy::unwrap_used)]
-        let disk_buffer =
-            DiskBuffer::new(inbound, &cfg.buffer, &wal_config).expect("DiskBuffer::new");
-
         Ok(Self {
             inner: Arc::new(RwLock::new(DbInner {
-                disk_thread: Some(
-                    std::thread::Builder::new()
-                        .name("DiskBuffer".to_string())
-                        .spawn(move || disk_buffer.run())
-                        .expect("thread spawn should succeed"),
-                ),
+                disk_thread: disk_thread,
                 disk_requester,
                 cached_space: data_cache,
                 reset_store_headers: reset,
