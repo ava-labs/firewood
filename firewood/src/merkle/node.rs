@@ -20,6 +20,7 @@ use std::{
     io::{Cursor, Write},
     marker::PhantomData,
     mem::size_of,
+    ops::Deref,
     sync::{
         atomic::{AtomicBool, Ordering},
         OnceLock,
@@ -440,7 +441,7 @@ impl Serialize for EncodedNode<PlainCodec> {
             EncodedNodeType::Leaf(n) => {
                 let data = Some(&*n.data);
                 let chd: Vec<(u64, Vec<u8>)> = Default::default();
-                let path: Vec<_> = from_nibbles(&n.path.encode()).collect();
+                let path: Vec<_> = from_nibbles(n.path.deref()).collect();
                 (chd, data, path)
             }
 
@@ -464,7 +465,7 @@ impl Serialize for EncodedNode<PlainCodec> {
 
                 let data = value.as_deref();
 
-                let path = from_nibbles(&path.encode()).collect();
+                let path = from_nibbles(path.deref()).collect();
 
                 (chd, data, path)
             }
