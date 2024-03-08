@@ -20,6 +20,7 @@ use std::{
     io::{Cursor, Write},
     marker::PhantomData,
     mem::size_of,
+    ops::Deref,
     sync::{
         atomic::{AtomicBool, Ordering},
         OnceLock,
@@ -37,7 +38,7 @@ pub use partial_path::PartialPath;
 
 use crate::nibbles::Nibbles;
 
-use super::TRIE_HASH_LEN;
+use super::{from_nibbles_2, TRIE_HASH_LEN};
 
 bitflags! {
     // should only ever be the size of a nibble
@@ -427,7 +428,8 @@ pub enum EncodedNodeType {
 struct EncodedBranchNode {
     chd: Vec<(u64, Vec<u8>)>,
     data: Option<Vec<u8>>,
-    path: Vec<u8>,
+    path_bit_len: u64,
+    raw_path: Vec<u8>,
 }
 
 // Note that the serializer passed in should always be the same type as T in EncodedNode<T>.
@@ -436,12 +438,13 @@ impl Serialize for EncodedNode<PlainCodec> {
     where
         S: serde::Serializer,
     {
-        let (chd, data, path) = match &self.node {
+        let (chd, data, path_bit_len, path) = match &self.node {
             EncodedNodeType::Leaf(n) => {
                 let data = Some(&*n.data);
                 let chd: Vec<(u64, Vec<u8>)> = Default::default();
-                let path: Vec<_> = from_nibbles(&n.path.encode()).collect();
-                (chd, data, path)
+                let path_bit_len: u64 = (n.path.len() * 4).try_into().expect("path too long");
+                let path: Vec<_> = from_nibbles_2(n.path.deref()).collect();
+                (chd, data, path_bit_len, path)
             }
 
             EncodedNodeType::Branch {
@@ -464,9 +467,11 @@ impl Serialize for EncodedNode<PlainCodec> {
 
                 let data = value.as_deref();
 
-                let path = from_nibbles(&path.encode()).collect();
+                let path_bit_len: u64 = (path.len() * 4).try_into().expect("path too long");
 
-                (chd, data, path)
+                let path = from_nibbles_2(path.deref()).collect();
+
+                (chd, data, path_bit_len, path)
             }
         };
 
@@ -474,6 +479,7 @@ impl Serialize for EncodedNode<PlainCodec> {
 
         s.serialize_element(&chd)?;
         s.serialize_element(&data)?;
+        s.serialize_element(&path_bit_len)?;
         s.serialize_element(&path)?;
 
         s.end()
@@ -485,9 +491,21 @@ impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
     where
         D: serde::Deserializer<'de>,
     {
-        let EncodedBranchNode { chd, data, path } = Deserialize::deserialize(deserializer)?;
+        let EncodedBranchNode {
+            chd,
+            data,
+            path_bit_len,
+            raw_path,
+        } = Deserialize::deserialize(deserializer)?;
 
-        let path = PartialPath::from_nibbles(Nibbles::<0>::new(&path).into_iter());
+        let odd_num_nibbles = path_bit_len % 8 != 0;
+
+        let mut nibbles: Vec<u8> = Nibbles::<0>::new(&raw_path).into_iter().collect();
+        if odd_num_nibbles {
+            let _ = nibbles.pop();
+        }
+
+        let path = PartialPath(nibbles);
 
         if chd.is_empty() {
             let data = if let Some(d) = data {

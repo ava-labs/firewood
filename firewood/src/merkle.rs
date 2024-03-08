@@ -1389,6 +1389,17 @@ pub fn from_nibbles(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
     nibbles.chunks_exact(2).map(|p| (p[0] << 4) | p[1])
 }
 
+// TODO comment / rename
+pub fn from_nibbles_2(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
+    debug_assert_eq!(nibbles.len() & 1, 0);
+    #[allow(clippy::indexing_slicing)]
+    let chunks = nibbles.chunks(2);
+    chunks.map(|p| {
+        let second_nibble = if p.len() == 1 { 0 } else { p[1] };
+        (p[0] << 4) | second_nibble
+    })
+}
+
 /// The [`PrefixOverlap`] type represents the _shared_ and _unique_ parts of two potentially overlapping slices.
 /// As the type-name implies, the `shared` property only constitues a shared *prefix*.
 /// The `unique_*` properties, [`unique_a`][`PrefixOverlap::unique_a`] and [`unique_b`][`PrefixOverlap::unique_b`]
