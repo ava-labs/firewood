@@ -475,7 +475,7 @@ impl Serialize for EncodedNode<PlainCodec> {
             }
         };
 
-        let mut s = serializer.serialize_tuple(3)?;
+        let mut s = serializer.serialize_tuple(4)?;
 
         s.serialize_element(&chd)?;
         s.serialize_element(&data)?;
