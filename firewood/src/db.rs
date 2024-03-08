@@ -49,7 +49,7 @@ use std::{
 };
 use tokio::task::block_in_place;
 
-mod proposal;
+pub mod proposal;
 
 use self::proposal::ProposalBase;
 

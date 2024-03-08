@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::{Database as DatabaseService, IntoStatusResultExt, Iter};
+use super::{Database as DatabaseService, IntoStatusResultExt};
 use crate::rpcdb::{
     database_server::Database, CloseRequest, CloseResponse, CompactRequest, CompactResponse,
     DeleteRequest, DeleteResponse, GetRequest, GetResponse, HasRequest, HasResponse,
@@ -113,20 +113,13 @@ impl Database for DatabaseService {
 
     async fn new_iterator_with_start_and_prefix(
         &self,
-        request: Request<NewIteratorWithStartAndPrefixRequest>,
+        req: Request<NewIteratorWithStartAndPrefixRequest>,
     ) -> Result<Response<NewIteratorWithStartAndPrefixResponse>, Status> {
         let NewIteratorWithStartAndPrefixRequest {
             start: _,
             prefix: _,
-        } = request.into_inner();
-
-        // TODO: create the actual iterator
-        let id = {
-            let mut iters = self.iterators.lock().await;
-            iters.insert(Iter)
-        };
-
-        Ok(Response::new(NewIteratorWithStartAndPrefixResponse { id }))
+        } = req.into_inner();
+        Err(Status::unimplemented("new_iterator_with_start_and_prefix not implemented"))
     }
 
     async fn iterator_next(
