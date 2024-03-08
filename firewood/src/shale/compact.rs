@@ -203,14 +203,14 @@ impl Storable for CompactSpaceHeader {
         #[allow(clippy::indexing_slicing)]
         let meta_space_tail = raw.as_deref()[..8].into();
         #[allow(clippy::indexing_slicing)]
-        let space_tail = raw.as_deref()[8..16].into();
+        let data_space_tail = raw.as_deref()[8..16].into();
         #[allow(clippy::indexing_slicing)]
         let base_addr = raw.as_deref()[16..24].into();
         #[allow(clippy::indexing_slicing)]
         let alloc_addr = raw.as_deref()[24..].into();
         Ok(Self {
             meta_space_tail,
-            data_space_tail: space_tail,
+            data_space_tail,
             base_addr,
             alloc_addr,
         })
