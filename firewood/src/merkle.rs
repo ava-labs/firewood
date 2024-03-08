@@ -1391,7 +1391,6 @@ pub fn from_nibbles(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
 
 // TODO comment / rename
 pub fn from_nibbles_2(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
-    debug_assert_eq!(nibbles.len() & 1, 0);
     #[allow(clippy::indexing_slicing)]
     let chunks = nibbles.chunks(2);
     chunks.map(|p| {
