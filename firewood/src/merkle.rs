@@ -2,7 +2,7 @@ use crate::db::{MutStore, SharedStore};
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 use crate::nibbles::Nibbles;
-use crate::shale::{self, disk_address::DiskAddress, ObjWriteSizeError, ShaleError, ShaleStore};
+use crate::shale::{self, disk_address::DiskAddress, ObjWriteSizeError, ShaleError};
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
 use sha3::Digest;

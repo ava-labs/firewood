@@ -25,7 +25,7 @@ use crate::{
         self,
         compact::{CompactSpace, CompactSpaceHeader},
         disk_address::DiskAddress,
-        CachedStore, Obj, ShaleError, ShaleStore, SpaceId, Storable, StoredView,
+        CachedStore, Obj, ShaleError, SpaceId, Storable, StoredView,
     },
 };
 use aiofut::AioError;

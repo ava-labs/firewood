@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use crate::shale::ObjWriteSizeError;
-use crate::shale::{disk_address::DiskAddress, ShaleError, ShaleStore};
+use crate::shale::{disk_address::DiskAddress, ShaleError};
 use crate::v2::api::HashKey;
 use aiofut::AioError;
 use nix::errno::Errno;

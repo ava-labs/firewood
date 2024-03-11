@@ -5,7 +5,7 @@ use super::{Data, Node};
 use crate::{
     merkle::{from_nibbles, to_nibble_array, PartialPath},
     nibbles::Nibbles,
-    shale::{DiskAddress, ShaleError, ShaleStore, Storable},
+    shale::{DiskAddress, ShaleError, Storable},
 };
 use bincode::{Error, Options};
 use serde::de::Error as DeError;

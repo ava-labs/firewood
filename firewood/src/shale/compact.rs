@@ -7,7 +7,7 @@ use crate::shale::ObjCache;
 use crate::storage::{StoreRevMut, StoreRevShared};
 
 use super::disk_address::DiskAddress;
-use super::{CachedStore, Obj, ObjRef, ShaleError, ShaleStore, Storable, StoredView};
+use super::{CachedStore, Obj, ObjRef, ShaleError, Storable, StoredView};
 use bytemuck::{Pod, Zeroable};
 use std::fmt::Debug;
 use std::io::{Cursor, Write};

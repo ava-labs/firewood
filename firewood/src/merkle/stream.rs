@@ -4,7 +4,7 @@
 use super::{node::Node, BranchNode, Key, Merkle, MerkleError, NodeObjRef, NodeType, Value};
 use crate::{
     nibbles::{Nibbles, NibblesIterator},
-    shale::{DiskAddress, ShaleStore},
+    shale::DiskAddress,
     v2::api,
 };
 use futures::{stream::FusedStream, Stream, StreamExt};
