@@ -1290,7 +1290,7 @@ impl<'a> std::ops::Deref for Ref<'a> {
     }
 }
 
-impl<'a, S: CachedStore, T> RefMut<'a, S, T> {
+impl<'a, S, T> RefMut<'a, S, T> {
     fn new(ptr: DiskAddress, parents: ParentAddresses, merkle: &'a mut Merkle<S, T>) -> Self {
         Self {
             ptr,
@@ -1298,7 +1298,9 @@ impl<'a, S: CachedStore, T> RefMut<'a, S, T> {
             merkle,
         }
     }
+}
 
+impl<'a, S: CachedStore, T> RefMut<'a, S, T> {
     #[allow(clippy::unwrap_used)]
     pub fn get(&self) -> Ref {
         Ref(self.merkle.get_node(self.ptr).unwrap())
