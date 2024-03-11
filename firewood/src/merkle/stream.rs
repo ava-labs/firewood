@@ -67,10 +67,10 @@ impl NodeStreamState<'_> {
 }
 
 #[derive(Debug)]
-pub struct MerkleNodeStream<'a, S, T> {
+pub struct MerkleNodeStream<'a, S, C> {
     state: NodeStreamState<'a>,
     merkle_root: DiskAddress,
-    merkle: &'a Merkle<S, T>,
+    merkle: &'a Merkle<S, C>,
 }
 
 impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleNodeStream<'a, S, T> {
@@ -81,10 +81,10 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleNodeStream<
     }
 }
 
-impl<'a, S, T> MerkleNodeStream<'a, S, T> {
+impl<'a, S, C> MerkleNodeStream<'a, S, C> {
     /// Returns a new iterator that will iterate over all the nodes in `merkle`
     /// with keys greater than or equal to `key`.
-    pub(super) fn new(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress, key: Key) -> Self {
+    pub(super) fn new(merkle: &'a Merkle<S, C>, merkle_root: DiskAddress, key: Key) -> Self {
         Self {
             state: NodeStreamState::new(key),
             merkle_root,
@@ -178,8 +178,8 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
 
 /// Returns the initial state for an iterator over the given `merkle` with root `root_node`
 /// which starts at `key`.
-fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
-    merkle: &'a Merkle<S, T>,
+fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, C>(
+    merkle: &'a Merkle<S, C>,
     root_node: DiskAddress,
     key: &[u8],
 ) -> Result<NodeStreamState<'a>, api::Error> {
@@ -315,10 +315,10 @@ impl<'a, S, T> MerkleKeyValueStreamState<'a, S, T> {
 }
 
 #[derive(Debug)]
-pub struct MerkleKeyValueStream<'a, S, T> {
-    state: MerkleKeyValueStreamState<'a, S, T>,
+pub struct MerkleKeyValueStream<'a, S, C> {
+    state: MerkleKeyValueStreamState<'a, S, C>,
     merkle_root: DiskAddress,
-    merkle: &'a Merkle<S, T>,
+    merkle: &'a Merkle<S, C>,
 }
 
 impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleKeyValueStream<'a, S, T> {
@@ -327,8 +327,8 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleKeyValueStr
     }
 }
 
-impl<'a, S, T> MerkleKeyValueStream<'a, S, T> {
-    pub(super) fn new(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress) -> Self {
+impl<'a, S, C> MerkleKeyValueStream<'a, S, C> {
+    pub(super) fn new(merkle: &'a Merkle<S, C>, merkle_root: DiskAddress) -> Self {
         Self {
             state: MerkleKeyValueStreamState::new(),
             merkle_root,
@@ -336,7 +336,7 @@ impl<'a, S, T> MerkleKeyValueStream<'a, S, T> {
         }
     }
 
-    pub(super) fn from_key(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress, key: Key) -> Self {
+    pub(super) fn from_key(merkle: &'a Merkle<S, C>, merkle_root: DiskAddress, key: Key) -> Self {
         Self {
             state: MerkleKeyValueStreamState::with_key(key),
             merkle_root,
@@ -421,14 +421,14 @@ enum PathIteratorState<'a> {
 ///   remaining unmatched key, the node proves the non-existence of the key.
 /// Note that thi means that the last node's key isn't necessarily a prefix of
 /// the key we're traversing to.
-pub struct PathIterator<'a, 'b, S, T> {
+pub struct PathIterator<'a, 'b, S, C> {
     state: PathIteratorState<'b>,
-    merkle: &'a Merkle<S, T>,
+    merkle: &'a Merkle<S, C>,
 }
 
-impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> PathIterator<'a, 'b, S, T> {
+impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, C> PathIterator<'a, 'b, S, C> {
     pub(super) fn new(
-        merkle: &'a Merkle<S, T>,
+        merkle: &'a Merkle<S, C>,
         sentinel_node: NodeObjRef<'a>,
         key: &'b [u8],
     ) -> Self {
@@ -591,8 +591,8 @@ mod tests {
     use futures::StreamExt;
     use test_case::test_case;
 
-    impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
-        pub(crate) fn node_iter(&self, root: DiskAddress) -> MerkleNodeStream<'_, S, T> {
+    impl<S: ShaleStore<Node> + Send + Sync, C> Merkle<S, C> {
+        pub(crate) fn node_iter(&self, root: DiskAddress) -> MerkleNodeStream<'_, S, C> {
             MerkleNodeStream::new(self, root, Box::new([]))
         }
 
@@ -600,7 +600,7 @@ mod tests {
             &self,
             root: DiskAddress,
             key: Key,
-        ) -> MerkleNodeStream<'_, S, T> {
+        ) -> MerkleNodeStream<'_, S, C> {
             MerkleNodeStream::new(self, root, key)
         }
     }

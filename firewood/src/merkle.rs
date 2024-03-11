@@ -67,13 +67,13 @@ macro_rules! write_node {
 }
 
 #[derive(Debug)]
-pub struct Merkle<S, T> {
+pub struct Merkle<S, C> {
     store: Box<S>,
-    phantom: PhantomData<T>,
+    phantom: PhantomData<C>,
 }
 
-impl<T> From<Merkle<MutStore, T>> for Merkle<SharedStore, T> {
-    fn from(value: Merkle<MutStore, T>) -> Self {
+impl<C> From<Merkle<MutStore, C>> for Merkle<SharedStore, C> {
+    fn from(value: Merkle<MutStore, C>) -> Self {
         let store = value.store.into();
         Merkle {
             store: Box::new(store),
@@ -82,7 +82,7 @@ impl<T> From<Merkle<MutStore, T>> for Merkle<SharedStore, T> {
     }
 }
 
-impl<S: ShaleStore<Node>, T> Merkle<S, T> {
+impl<S: ShaleStore<Node>, C> Merkle<S, C> {
     pub fn get_node(&self, ptr: DiskAddress) -> Result<NodeObjRef, MerkleError> {
         self.store.get_item(ptr).map_err(Into::into)
     }
@@ -96,11 +96,11 @@ impl<S: ShaleStore<Node>, T> Merkle<S, T> {
     }
 }
 
-impl<'de, S, T> Merkle<S, T>
+impl<'de, S, C> Merkle<S, C>
 where
     S: ShaleStore<Node> + Send + Sync,
-    T: BinarySerde,
-    EncodedNode<T>: serde::Serialize + serde::Deserialize<'de>,
+    C: BinarySerde,
+    EncodedNode<C>: serde::Serialize + serde::Deserialize<'de>,
 {
     pub fn new(store: Box<S>) -> Self {
         Self {
@@ -144,13 +144,13 @@ where
             }
         };
 
-        T::serialize(&encoded).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))
+        C::serialize(&encoded).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))
     }
 
     #[allow(dead_code)]
     fn decode(&self, buf: &'de [u8]) -> Result<NodeType, MerkleError> {
-        let encoded: EncodedNode<T> =
-            T::deserialize(buf).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))?;
+        let encoded: EncodedNode<C> =
+            C::deserialize(buf).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))?;
 
         match encoded.node {
             EncodedNodeType::Leaf(leaf) => Ok(NodeType::Leaf(leaf)),
@@ -172,7 +172,7 @@ where
     }
 }
 
-impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
+impl<S: ShaleStore<Node> + Send + Sync, C> Merkle<S, C> {
     pub fn init_root(&self) -> Result<DiskAddress, MerkleError> {
         self.store
             .put_item(
@@ -1027,7 +1027,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         &mut self,
         key: K,
         root: DiskAddress,
-    ) -> Result<Option<RefMut<S, T>>, MerkleError> {
+    ) -> Result<Option<RefMut<S, C>>, MerkleError> {
         if root.is_null() {
             return Ok(None);
         }
@@ -1098,11 +1098,11 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         &'a self,
         sentinel_node: NodeObjRef<'a>,
         key: &'b [u8],
-    ) -> PathIterator<'_, 'b, S, T> {
+    ) -> PathIterator<'_, 'b, S, C> {
         PathIterator::new(self, sentinel_node, key)
     }
 
-    pub(crate) fn key_value_iter(&self, root: DiskAddress) -> MerkleKeyValueStream<'_, S, T> {
+    pub(crate) fn key_value_iter(&self, root: DiskAddress) -> MerkleKeyValueStream<'_, S, C> {
         MerkleKeyValueStream::new(self, root)
     }
 
@@ -1110,7 +1110,7 @@ impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
         &self,
         root: DiskAddress,
         key: Key,
-    ) -> MerkleKeyValueStream<'_, S, T> {
+    ) -> MerkleKeyValueStream<'_, S, C> {
         MerkleKeyValueStream::from_key(self, root, key)
     }
 
@@ -1275,10 +1275,10 @@ fn set_parent(new_chd: DiskAddress, parents: &mut [(NodeObjRef, u8)]) {
 
 pub struct Ref<'a>(NodeObjRef<'a>);
 
-pub struct RefMut<'a, S, T> {
+pub struct RefMut<'a, S, C> {
     ptr: DiskAddress,
     parents: ParentAddresses,
-    merkle: &'a mut Merkle<S, T>,
+    merkle: &'a mut Merkle<S, C>,
 }
 
 impl<'a> std::ops::Deref for Ref<'a> {
@@ -1292,8 +1292,8 @@ impl<'a> std::ops::Deref for Ref<'a> {
     }
 }
 
-impl<'a, S: ShaleStore<Node> + Send + Sync, T> RefMut<'a, S, T> {
-    fn new(ptr: DiskAddress, parents: ParentAddresses, merkle: &'a mut Merkle<S, T>) -> Self {
+impl<'a, S: ShaleStore<Node> + Send + Sync, C> RefMut<'a, S, C> {
+    fn new(ptr: DiskAddress, parents: ParentAddresses, merkle: &'a mut Merkle<S, C>) -> Self {
         Self {
             ptr,
             parents,
