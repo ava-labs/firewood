@@ -125,7 +125,7 @@ impl BranchNode {
         ))
     }
 
-    pub(super) fn encode<A: CachedStore>(&self, store: &CompactSpace<Node, A>) -> Vec<u8> {
+    pub(super) fn encode<S: CachedStore>(&self, store: &CompactSpace<Node, S>) -> Vec<u8> {
         // path + children + value
         let mut list = <[Vec<u8>; Self::MSIZE]>::default();
 
