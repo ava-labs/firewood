@@ -1066,7 +1066,7 @@ impl<S: CachedStore, T> Merkle<S, T> {
 
         // Get the hashes of the nodes.
         for node in nodes.into_iter() {
-            let encoded = <&[u8]>::clone(&node.get_encoded(&self.store));
+            let encoded = node.get_encoded(&self.store);
             let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(encoded).into();
             proofs.insert(hash, encoded.to_vec());
         }
