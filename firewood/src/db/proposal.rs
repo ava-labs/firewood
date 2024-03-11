@@ -3,7 +3,7 @@
 
 use super::{
     get_sub_universe_from_deltas, Db, DbConfig, DbError, DbHeader, DbInner, DbRev, DbRevInner,
-    MutStore, SharedStore, Universe, MERKLE_META_SPACE, MERKLE_PAYLOAD_SPACE, ROOT_HASH_SPACE,
+    SharedStore, Universe, MERKLE_META_SPACE, MERKLE_PAYLOAD_SPACE, ROOT_HASH_SPACE,
 };
 use crate::merkle::{Bincode, MerkleKeyValueStream, Node, Proof};
 use crate::shale::compact::CompactSpace;
@@ -31,7 +31,7 @@ pub struct Proposal {
     pub(super) cfg: DbConfig,
 
     // State of the proposal
-    pub(super) rev: DbRev<MutStore>,
+    pub(super) rev: DbRev<SharedStore>,
     pub(super) store: Universe<StoreRevMut>,
     pub(super) committed: Arc<Mutex<bool>>,
     pub(super) root_hash: TrieHash,
@@ -119,7 +119,7 @@ impl Proposal {
             m,
             r,
             cfg,
-            rev,
+            rev: rev.into(),
             store,
             committed: Arc::new(Mutex::new(false)),
             root_hash: hash,
@@ -215,7 +215,7 @@ impl Proposal {
             revisions.inner.pop_back();
         }
 
-        revisions.base_revision = Arc::new(rev.into());
+        revisions.base_revision = Arc::new(rev);
 
         // update the rolling window of root hashes
         revisions.root_hashes.push_front(hash);
@@ -259,14 +259,15 @@ impl Proposal {
 }
 
 impl Proposal {
-    pub const fn get_revision(&self) -> &DbRev<MutStore> {
+    pub const fn get_revision(&self) -> &DbRev<SharedStore> {
         &self.rev
     }
 }
 
 #[async_trait]
 impl api::DbView for Proposal {
-    type Stream<'a> = MerkleKeyValueStream<'a, CompactSpace<Node, storage::StoreRevMut>, Bincode>;
+    type Stream<'a> =
+        MerkleKeyValueStream<'a, CompactSpace<Node, storage::StoreRevShared>, Bincode>;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         self.get_revision()

@@ -867,7 +867,7 @@ impl Db {
             m: Arc::clone(&self.inner),
             r: Arc::clone(&self.revisions),
             cfg: self.cfg.clone(),
-            rev,
+            rev: rev.into(),
             store,
             committed: Arc::new(Mutex::new(false)),
             root_hash,
