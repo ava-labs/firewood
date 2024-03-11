@@ -581,8 +581,7 @@ impl From<CompactSpace<Node, StoreRevMut>> for CompactSpace<Node, StoreRevShared
 }
 
 impl<T: Storable + Debug + 'static, M: CachedStore> CompactSpace<T, M> {
-    // TODO should this be pub?
-    pub fn put_item(&self, item: T, extra: u64) -> Result<ObjRef<'_, T>, ShaleError> {
+    pub(crate) fn put_item(&self, item: T, extra: u64) -> Result<ObjRef<'_, T>, ShaleError> {
         let size = item.serialized_len() + extra;
         #[allow(clippy::unwrap_used)]
         let addr = self.inner.write().unwrap().alloc(size)?;
@@ -611,17 +610,15 @@ impl<T: Storable + Debug + 'static, M: CachedStore> CompactSpace<T, M> {
         Ok(obj_ref)
     }
 
-    // TODO should this be pub?
     #[allow(clippy::unwrap_used)]
-    pub fn free_item(&mut self, ptr: DiskAddress) -> Result<(), ShaleError> {
+    pub(crate) fn free_item(&mut self, ptr: DiskAddress) -> Result<(), ShaleError> {
         let mut inner = self.inner.write().unwrap();
         self.obj_cache.pop(ptr);
         #[allow(clippy::unwrap_used)]
         inner.free(ptr.unwrap().get() as u64)
     }
 
-    // TODO should this be pub?
-    pub fn get_item(&self, ptr: DiskAddress) -> Result<ObjRef<'_, T>, ShaleError> {
+    pub(crate) fn get_item(&self, ptr: DiskAddress) -> Result<ObjRef<'_, T>, ShaleError> {
         let obj = self.obj_cache.get(ptr)?;
 
         #[allow(clippy::unwrap_used)]
@@ -649,9 +646,8 @@ impl<T: Storable + Debug + 'static, M: CachedStore> CompactSpace<T, M> {
         Ok(ObjRef::new(obj, cache))
     }
 
-    // TODO should this be pub?
     #[allow(clippy::unwrap_used)]
-    pub fn flush_dirty(&self) -> Option<()> {
+    pub(crate) fn flush_dirty(&self) -> Option<()> {
         let mut inner = self.inner.write().unwrap();
         inner.header.flush_dirty();
         // hold the write lock to ensure that both cache and header are flushed in-sync
