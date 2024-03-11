@@ -69,13 +69,13 @@ macro_rules! write_node {
 }
 
 #[derive(Debug)]
-pub struct Merkle<A, C> {
-    store: CompactSpace<Node, A>,
-    phantom: PhantomData<C>,
+pub struct Merkle<S, T> {
+    store: CompactSpace<Node, S>,
+    phantom: PhantomData<T>,
 }
 
-impl<C> From<Merkle<StoreRevMut, C>> for Merkle<StoreRevShared, C> {
-    fn from(value: Merkle<StoreRevMut, C>) -> Self {
+impl<T> From<Merkle<StoreRevMut, T>> for Merkle<StoreRevShared, T> {
+    fn from(value: Merkle<StoreRevMut, T>) -> Self {
         let store = value.store.into();
         Merkle {
             store,
@@ -84,7 +84,7 @@ impl<C> From<Merkle<StoreRevMut, C>> for Merkle<StoreRevShared, C> {
     }
 }
 
-impl<A: CachedStore, C> Merkle<A, C> {
+impl<S: CachedStore, T> Merkle<S, T> {
     pub fn get_node(&self, ptr: DiskAddress) -> Result<NodeObjRef, MerkleError> {
         self.store.get_item(ptr).map_err(Into::into)
     }
@@ -98,13 +98,13 @@ impl<A: CachedStore, C> Merkle<A, C> {
     }
 }
 
-impl<'de, A, C> Merkle<A, C>
+impl<'de, S, T> Merkle<S, T>
 where
-    A: CachedStore,
-    C: BinarySerde,
-    EncodedNode<C>: serde::Serialize + serde::Deserialize<'de>,
+    S: CachedStore,
+    T: BinarySerde,
+    EncodedNode<T>: serde::Serialize + serde::Deserialize<'de>,
 {
-    pub const fn new(store: CompactSpace<Node, A>) -> Self {
+    pub const fn new(store: CompactSpace<Node, S>) -> Self {
         Self {
             store,
             phantom: PhantomData,
@@ -146,13 +146,13 @@ where
             }
         };
 
-        C::serialize(&encoded).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))
+        T::serialize(&encoded).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))
     }
 
     #[allow(dead_code)]
     fn decode(&self, buf: &'de [u8]) -> Result<NodeType, MerkleError> {
-        let encoded: EncodedNode<C> =
-            C::deserialize(buf).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))?;
+        let encoded: EncodedNode<T> =
+            T::deserialize(buf).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))?;
 
         match encoded.node {
             EncodedNodeType::Leaf(leaf) => Ok(NodeType::Leaf(leaf)),
@@ -174,7 +174,7 @@ where
     }
 }
 
-impl<A: CachedStore, C> Merkle<A, C> {
+impl<S: CachedStore, T> Merkle<S, T> {
     pub fn init_root(&self) -> Result<DiskAddress, MerkleError> {
         self.store
             .put_item(
@@ -190,7 +190,7 @@ impl<A: CachedStore, C> Merkle<A, C> {
             .map(|node| node.as_ptr())
     }
 
-    pub const fn get_store(&self) -> &CompactSpace<Node, A> {
+    pub const fn get_store(&self) -> &CompactSpace<Node, S> {
         &self.store
     }
 
@@ -1029,7 +1029,7 @@ impl<A: CachedStore, C> Merkle<A, C> {
         &mut self,
         key: K,
         root: DiskAddress,
-    ) -> Result<Option<RefMut<A, C>>, MerkleError> {
+    ) -> Result<Option<RefMut<S, T>>, MerkleError> {
         if root.is_null() {
             return Ok(None);
         }
@@ -1100,11 +1100,11 @@ impl<A: CachedStore, C> Merkle<A, C> {
         &'a self,
         sentinel_node: NodeObjRef<'a>,
         key: &'b [u8],
-    ) -> PathIterator<'_, 'b, A, C> {
+    ) -> PathIterator<'_, 'b, S, T> {
         PathIterator::new(self, sentinel_node, key)
     }
 
-    pub(crate) fn key_value_iter(&self, root: DiskAddress) -> MerkleKeyValueStream<'_, A, C> {
+    pub(crate) fn key_value_iter(&self, root: DiskAddress) -> MerkleKeyValueStream<'_, S, T> {
         MerkleKeyValueStream::new(self, root)
     }
 
@@ -1112,7 +1112,7 @@ impl<A: CachedStore, C> Merkle<A, C> {
         &self,
         root: DiskAddress,
         key: Key,
-    ) -> MerkleKeyValueStream<'_, A, C> {
+    ) -> MerkleKeyValueStream<'_, S, T> {
         MerkleKeyValueStream::from_key(self, root, key)
     }
 
@@ -1277,10 +1277,10 @@ fn set_parent(new_chd: DiskAddress, parents: &mut [(NodeObjRef, u8)]) {
 
 pub struct Ref<'a>(NodeObjRef<'a>);
 
-pub struct RefMut<'a, A, C> {
+pub struct RefMut<'a, S, T> {
     ptr: DiskAddress,
     parents: ParentAddresses,
-    merkle: &'a mut Merkle<A, C>,
+    merkle: &'a mut Merkle<S, T>,
 }
 
 impl<'a> std::ops::Deref for Ref<'a> {
@@ -1294,8 +1294,8 @@ impl<'a> std::ops::Deref for Ref<'a> {
     }
 }
 
-impl<'a, A: CachedStore, C> RefMut<'a, A, C> {
-    fn new(ptr: DiskAddress, parents: ParentAddresses, merkle: &'a mut Merkle<A, C>) -> Self {
+impl<'a, S: CachedStore, T> RefMut<'a, S, T> {
+    fn new(ptr: DiskAddress, parents: ParentAddresses, merkle: &'a mut Merkle<S, T>) -> Self {
         Self {
             ptr,
             parents,
