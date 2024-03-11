@@ -9,7 +9,7 @@ pub use crate::{
 use crate::{
     file,
     merkle::{
-        Bincode, Key, Merkle, MerkleError, MerkleKeyValueStream, Node, Proof, ProofError, TrieHash,
+        Bincode, Key, Merkle, MerkleError, MerkleKeyValueStream, Proof, ProofError, TrieHash,
         TRIE_HASH_LEN,
     },
     storage::{
@@ -22,10 +22,8 @@ use crate::{
 use crate::{
     merkle,
     shale::{
-        self,
-        compact::{CompactSpace, CompactSpaceHeader},
-        disk_address::DiskAddress,
-        CachedStore, Obj, ShaleError, SpaceId, Storable, StoredView,
+        self, compact::CompactSpaceHeader, disk_address::DiskAddress, CachedStore, Obj, ShaleError,
+        SpaceId, Storable, StoredView,
     },
 };
 use aiofut::AioError;

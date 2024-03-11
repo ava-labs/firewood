@@ -84,7 +84,7 @@ impl<C> From<Merkle<StoreRevMut, C>> for Merkle<StoreRevShared, C> {
     }
 }
 
-impl<A, C> Merkle<A, C> {
+impl<A: CachedStore, C> Merkle<A, C> {
     pub fn get_node(&self, ptr: DiskAddress) -> Result<NodeObjRef, MerkleError> {
         self.store.get_item(ptr).map_err(Into::into)
     }
@@ -174,7 +174,7 @@ where
     }
 }
 
-impl<A, C> Merkle<A, C> {
+impl<A: CachedStore, C> Merkle<A, C> {
     pub fn init_root(&self) -> Result<DiskAddress, MerkleError> {
         self.store
             .put_item(
@@ -191,7 +191,7 @@ impl<A, C> Merkle<A, C> {
     }
 
     pub fn get_store(&self) -> &CompactSpace<Node, A> {
-        self.store.as_ref()
+        &self.store
     }
 
     pub fn empty_root() -> &'static TrieHash {
@@ -216,7 +216,7 @@ impl<A, C> Merkle<A, C> {
             .children[0];
         Ok(if let Some(root) = root {
             let mut node = self.get_node(root)?;
-            let res = *node.get_root_hash::<CompactSpace<Node, A>>(self.store.as_ref()); // TODO what should turbofin param be?
+            let res = *node.get_root_hash(&self.store); // TODO what should turbofin param be?
             #[allow(clippy::unwrap_used)]
             if node.is_dirty() {
                 node.write(|_| {}).unwrap();
@@ -233,7 +233,7 @@ impl<A, C> Merkle<A, C> {
 
         let hash = match u_ref.root_hash.get() {
             Some(h) => h,
-            None => u_ref.get_root_hash::<CompactSpace<Node, A>>(self.store.as_ref()), // TODO what should turbofin param be?
+            None => u_ref.get_root_hash(&self.store),
         };
 
         write!(w, "{u:?} => {}: ", hex::encode(**hash))?;
@@ -1070,8 +1070,7 @@ impl<A, C> Merkle<A, C> {
 
         // Get the hashes of the nodes.
         for node in nodes.into_iter() {
-            let encoded =
-                <&[u8]>::clone(&node.get_encoded::<CompactSpace<Node, A>>(self.store.as_ref()));
+            let encoded = <&[u8]>::clone(&node.get_encoded(&self.store));
             let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(encoded).into();
             proofs.insert(hash, encoded.to_vec());
         }
@@ -1410,7 +1409,7 @@ mod tests {
         assert_eq!(n, nibbles);
     }
 
-    fn create_generic_test_merkle<'de, T>() -> Merkle<CompactSpace<Node, InMemLinearStore>, T>
+    fn create_generic_test_merkle<'de, T>() -> Merkle<InMemLinearStore, T>
     where
         T: BinarySerde,
         EncodedNode<T>: serde::Serialize + serde::Deserialize<'de>,
@@ -1442,11 +1441,10 @@ mod tests {
             shale::compact::CompactSpace::new(mem_meta, mem_payload, compact_header, cache, 10, 16)
                 .expect("CompactSpace init fail");
 
-        let store = Box::new(space);
-        Merkle::new(store)
+        Merkle::new(space)
     }
 
-    pub(super) fn create_test_merkle() -> Merkle<CompactSpace<Node, InMemLinearStore>, Bincode> {
+    pub(super) fn create_test_merkle() -> Merkle<InMemLinearStore, Bincode> {
         create_generic_test_merkle::<Bincode>()
     }
 
@@ -1511,9 +1509,9 @@ mod tests {
         let merkle = create_test_merkle();
 
         let node_ref = merkle.put_node(node).unwrap();
-        let encoded = node_ref.get_encoded(merkle.store.as_ref());
+        let encoded = node_ref.get_encoded(&merkle.store);
         let new_node = Node::from(NodeType::decode(encoded).unwrap());
-        let new_node_encoded = new_node.get_encoded(merkle.store.as_ref());
+        let new_node_encoded = new_node.get_encoded(&merkle.store);
 
         assert_eq!(encoded, new_node_encoded);
     }

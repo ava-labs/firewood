@@ -5,8 +5,7 @@ use super::{
     get_sub_universe_from_deltas, Db, DbConfig, DbError, DbHeader, DbInner, DbRev, DbRevInner,
     Universe, MERKLE_META_SPACE, MERKLE_PAYLOAD_SPACE, ROOT_HASH_SPACE,
 };
-use crate::merkle::{Bincode, MerkleKeyValueStream, Node, Proof};
-use crate::shale::compact::CompactSpace;
+use crate::merkle::{Bincode, MerkleKeyValueStream, Proof};
 use crate::shale::CachedStore;
 use crate::storage::{self, StoreRevShared};
 use crate::{

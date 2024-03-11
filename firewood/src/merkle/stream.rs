@@ -1,13 +1,13 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::{node::Node, BranchNode, Key, Merkle, MerkleError, NodeObjRef, NodeType, Value};
+use super::{BranchNode, Key, Merkle, MerkleError, NodeObjRef, NodeType, Value};
 use crate::{
     nibbles::{Nibbles, NibblesIterator},
     shale::{CachedStore, DiskAddress},
     v2::api,
 };
-use futures::{stream::FusedStream, Stream, StreamExt};
+use futures::{stream::FusedStream, Stream};
 use std::task::Poll;
 use std::{cmp::Ordering, iter::once};
 
@@ -582,10 +582,7 @@ use super::tests::create_test_merkle;
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
-    use crate::{
-        merkle::Bincode,
-        shale::{cached::InMemLinearStore, compact::CompactSpace},
-    };
+    use crate::{merkle::Bincode, shale::cached::InMemLinearStore};
 
     use super::*;
     use futures::StreamExt;
@@ -772,10 +769,7 @@ mod tests {
     ///
     /// Note the 0000 branch has no value and the F0F0
     /// The number next to each branch is the position of the child in the branch's children array.
-    fn created_populated_merkle() -> (
-        Merkle<CompactSpace<Node, InMemLinearStore>, Bincode>,
-        DiskAddress,
-    ) {
+    fn created_populated_merkle() -> (Merkle<InMemLinearStore, Bincode>, DiskAddress) {
         let mut merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
 
