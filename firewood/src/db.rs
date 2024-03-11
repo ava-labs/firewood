@@ -58,10 +58,6 @@ const SPACE_RESERVED: u64 = 0x1000;
 
 const MAGIC_STR: &[u8; 16] = b"firewood v0.1\0\0\0";
 
-// TODO remove
-// pub type MutStore = CompactSpace<Node, StoreRevMut>;
-// pub type SharedStore = CompactSpace<Node, StoreRevShared>;
-
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum DbError {
@@ -278,14 +274,14 @@ impl<T: MemStoreR + 'static> Universe<Arc<T>> {
 
 /// Some readable version of the DB.
 #[derive(Debug)]
-pub struct DbRev<A> {
+pub struct DbRev<T> {
     header: shale::Obj<DbHeader>,
-    merkle: Merkle<A, Bincode>,
+    merkle: Merkle<T, Bincode>,
 }
 
 #[async_trait]
-impl<A: CachedStore> api::DbView for DbRev<A> {
-    type Stream<'a> = MerkleKeyValueStream<'a, A, Bincode> where Self: 'a;
+impl<T: CachedStore> api::DbView for DbRev<T> {
+    type Stream<'a> = MerkleKeyValueStream<'a, T, Bincode> where Self: 'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         self.merkle
@@ -337,12 +333,12 @@ impl<A: CachedStore> api::DbView for DbRev<A> {
     }
 }
 
-impl<A: CachedStore> DbRev<A> {
-    pub fn stream(&self) -> merkle::MerkleKeyValueStream<'_, A, Bincode> {
+impl<T: CachedStore> DbRev<T> {
+    pub fn stream(&self) -> merkle::MerkleKeyValueStream<'_, T, Bincode> {
         self.merkle.key_value_iter(self.header.kv_root)
     }
 
-    pub fn stream_from(&self, start_key: Key) -> merkle::MerkleKeyValueStream<'_, A, Bincode> {
+    pub fn stream_from(&self, start_key: Key) -> merkle::MerkleKeyValueStream<'_, T, Bincode> {
         self.merkle
             .key_value_iter_from_key(self.header.kv_root, start_key)
     }
@@ -471,7 +467,7 @@ pub struct DbRevInner<T> {
 #[derive(Debug)]
 pub struct Db {
     inner: Arc<RwLock<DbInner>>,
-    revisions: Arc<Mutex<DbRevInner<StoreRevShared>>>, // TODO is this right?
+    revisions: Arc<Mutex<DbRevInner<StoreRevShared>>>,
     payload_regn_nbit: u64,
     metrics: Arc<DbMetrics>,
     cfg: DbConfig,
