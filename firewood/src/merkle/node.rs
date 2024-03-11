@@ -4,7 +4,7 @@
 use crate::{
     logger::trace,
     merkle::from_nibbles,
-    shale::{disk_address::DiskAddress, CachedStore, ShaleError, Storable},
+    shale::{compact::CompactSpace, disk_address::DiskAddress, CachedStore, ShaleError, Storable},
 };
 use bincode::{Error, Options};
 use bitflags::bitflags;
@@ -103,7 +103,7 @@ impl NodeType {
         }
     }
 
-    pub fn encode<S: ShaleStore<Node>>(&self, store: &S) -> Vec<u8> {
+    pub fn encode<A>(&self, store: &CompactSpace<Node, A>) -> Vec<u8> {
         match &self {
             NodeType::Leaf(n) => n.encode(),
             NodeType::Branch(n) => n.encode(store),
@@ -223,18 +223,18 @@ impl Node {
         })
     }
 
-    pub(super) fn get_encoded<S: ShaleStore<Node>>(&self, store: &S) -> &[u8] {
-        self.encoded.get_or_init(|| self.inner.encode::<S>(store))
+    pub(super) fn get_encoded<A>(&self, store: &CompactSpace<Node, A>) -> &[u8] {
+        self.encoded.get_or_init(|| self.inner.encode(store))
     }
 
-    pub(super) fn get_root_hash<S: ShaleStore<Node>>(&self, store: &S) -> &TrieHash {
+    pub(super) fn get_root_hash<A>(&self, store: &CompactSpace<Node, A>) -> &TrieHash {
         self.root_hash.get_or_init(|| {
             self.set_dirty(true);
-            TrieHash(Keccak256::digest(self.get_encoded::<S>(store)).into())
+            TrieHash(Keccak256::digest(self.get_encoded(store)).into())
         })
     }
 
-    fn is_encoded_longer_than_hash_len<S: ShaleStore<Node>>(&self, store: &S) -> bool {
+    fn is_encoded_longer_than_hash_len<A>(&self, store: &CompactSpace<Node, A>) -> bool {
         *self
             .is_encoded_longer_than_hash_len
             .get_or_init(|| self.get_encoded(store).len() >= TRIE_HASH_LEN)
