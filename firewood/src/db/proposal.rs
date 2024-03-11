@@ -7,7 +7,7 @@ use super::{
 };
 use crate::merkle::{Bincode, MerkleKeyValueStream, Proof};
 use crate::shale::CachedStore;
-use crate::storage::{self, StoreRevShared};
+use crate::storage::StoreRevShared;
 use crate::{
     merkle::{TrieHash, TRIE_HASH_LEN},
     storage::{buffer::BufferWrite, AshRecord, StoreRevMut},
@@ -265,7 +265,7 @@ impl Proposal {
 
 #[async_trait]
 impl api::DbView for Proposal {
-    type Stream<'a> = MerkleKeyValueStream<'a, storage::StoreRevMut, Bincode>;
+    type Stream<'a> = MerkleKeyValueStream<'a, StoreRevMut, Bincode>;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         self.get_revision()
