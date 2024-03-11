@@ -280,14 +280,14 @@ impl<T: MemStoreR + 'static> Universe<Arc<T>> {
 
 /// Some readable version of the DB.
 #[derive(Debug)]
-pub struct DbRev<S> {
+pub struct DbRev<A> {
     header: shale::Obj<DbHeader>,
-    merkle: Merkle<S, Bincode>,
+    merkle: Merkle<A, Bincode>,
 }
 
 #[async_trait]
-impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
-    type Stream<'a> = MerkleKeyValueStream<'a, S, Bincode> where Self: 'a;
+impl<A: CachedStore> api::DbView for DbRev<A> {
+    type Stream<'a> = MerkleKeyValueStream<'a, A, Bincode> where Self: 'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         self.merkle
@@ -339,12 +339,12 @@ impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
     }
 }
 
-impl<S: ShaleStore<Node> + Send + Sync> DbRev<S> {
-    pub fn stream(&self) -> merkle::MerkleKeyValueStream<'_, S, Bincode> {
+impl<A: CachedStore> DbRev<A> {
+    pub fn stream(&self) -> merkle::MerkleKeyValueStream<'_, A, Bincode> {
         self.merkle.key_value_iter(self.header.kv_root)
     }
 
-    pub fn stream_from(&self, start_key: Key) -> merkle::MerkleKeyValueStream<'_, S, Bincode> {
+    pub fn stream_from(&self, start_key: Key) -> merkle::MerkleKeyValueStream<'_, A, Bincode> {
         self.merkle
             .key_value_iter_from_key(self.header.kv_root, start_key)
     }
@@ -392,7 +392,7 @@ impl<S: ShaleStore<Node> + Send + Sync> DbRev<S> {
     }
 }
 
-impl DbRev<MutStore> {
+impl DbRev<StoreRevMut> {
     fn borrow_split(
         &mut self,
     ) -> (
@@ -409,8 +409,8 @@ impl DbRev<MutStore> {
     }
 }
 
-impl From<DbRev<MutStore>> for DbRev<SharedStore> {
-    fn from(mut value: DbRev<MutStore>) -> Self {
+impl From<DbRev<StoreRevMut>> for DbRev<StoreRevShared> {
+    fn from(mut value: DbRev<StoreRevMut>) -> Self {
         value.flush_dirty();
         DbRev {
             header: value.header,
@@ -438,7 +438,7 @@ impl Drop for DbInner {
 
 #[async_trait]
 impl api::Db for Db {
-    type Historical = DbRev<SharedStore>;
+    type Historical = DbRev<StoreRevShared>;
 
     type Proposal = proposal::Proposal;
 
@@ -478,7 +478,7 @@ pub struct DbRevInner<T> {
 #[derive(Debug)]
 pub struct Db {
     inner: Arc<RwLock<DbInner>>,
-    revisions: Arc<Mutex<DbRevInner<SharedStore>>>,
+    revisions: Arc<Mutex<DbRevInner<StoreRevShared>>>, // TODO is this right?
     payload_regn_nbit: u64,
     metrics: Arc<DbMetrics>,
     cfg: DbConfig,
@@ -701,7 +701,7 @@ impl Db {
         &self,
         cached_space: &Universe<Arc<CachedSpace>>,
         reset_store_headers: bool,
-    ) -> Result<(Universe<StoreRevMut>, DbRev<MutStore>), DbError> {
+    ) -> Result<(Universe<StoreRevMut>, DbRev<StoreRevMut>), DbError> {
         let mut offset = Db::PARAM_SIZE as usize;
         let db_header: DiskAddress = DiskAddress::from(offset);
         offset += DbHeader::MSIZE as usize;
@@ -882,7 +882,7 @@ impl Db {
     ///
     /// If no revision with matching root hash found, returns None.
     // #[measure([HitCount])]
-    pub fn get_revision(&self, root_hash: &TrieHash) -> Option<DbRev<SharedStore>> {
+    pub fn get_revision(&self, root_hash: &TrieHash) -> Option<DbRev<StoreRevShared>> {
         let mut revisions = self.revisions.lock();
         let inner_lock = self.inner.read();
 
