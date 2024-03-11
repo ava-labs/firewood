@@ -393,12 +393,7 @@ impl<A: CachedStore> DbRev<A> {
 }
 
 impl DbRev<StoreRevMut> {
-    fn borrow_split(
-        &mut self,
-    ) -> (
-        &mut shale::Obj<DbHeader>,
-        &mut Merkle<CompactSpace<Node, StoreRevMut>, Bincode>,
-    ) {
+    fn borrow_split(&mut self) -> (&mut shale::Obj<DbHeader>, &mut Merkle<StoreRevMut, Bincode>) {
         (&mut self.header, &mut self.merkle)
     }
 
@@ -742,7 +737,7 @@ impl Db {
 
         let header_refs = (db_header_ref, merkle_payload_header_ref);
 
-        let mut rev: DbRev<CompactSpace<Node, StoreRevMut>> = Db::new_revision(
+        let mut rev: DbRev<StoreRevMut> = Db::new_revision(
             header_refs,
             (store.merkle.meta.clone(), store.merkle.payload.clone()),
             self.payload_regn_nbit,
@@ -779,7 +774,7 @@ impl Db {
         payload_regn_nbit: u64,
         payload_max_walk: u64,
         cfg: &DbRevConfig,
-    ) -> Result<DbRev<CompactSpace<Node, K>>, DbError> {
+    ) -> Result<DbRev<K>, DbError> {
         // TODO: This should be a compile time check
         const DB_OFFSET: u64 = Db::PARAM_SIZE;
         let merkle_offset = DB_OFFSET + DbHeader::MSIZE;
@@ -802,7 +797,7 @@ impl Db {
         )
         .unwrap();
 
-        let merkle = Merkle::new(Box::new(merkle_space));
+        let merkle = Merkle::new(merkle_space);
 
         if db_header_ref.kv_root.is_null() {
             let mut err = Ok(());

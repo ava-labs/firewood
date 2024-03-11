@@ -4,8 +4,8 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use crate::shale::ObjWriteSizeError;
 use crate::shale::{disk_address::DiskAddress, ShaleError};
+use crate::shale::{CachedStore, ObjWriteSizeError};
 use crate::v2::api::HashKey;
 use aiofut::AioError;
 use nix::errno::Errno;
@@ -384,8 +384,8 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     }
 }
 
-fn decode_subproof<'a, S: ShaleStore<Node>, C, N: AsRef<[u8]>>(
-    merkle: &'a Merkle<S, C>,
+fn decode_subproof<'a, A: CachedStore, C, N: AsRef<[u8]>>(
+    merkle: &'a Merkle<A, C>,
     proofs_map: &HashMap<HashKey, N>,
     child_hash: &HashKey,
 ) -> Result<NodeObjRef<'a>, ProofError> {
@@ -714,8 +714,8 @@ where
 //     keep the entire branch and return.
 //   - the fork point is a shortnode, the shortnode is excluded in the range,
 //     unset the entire branch.
-fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, C: BinarySerde>(
-    merkle: &Merkle<S, C>,
+fn unset_node_ref<K: AsRef<[u8]>, A: CachedStore, C: BinarySerde>(
+    merkle: &Merkle<A, C>,
     parent: DiskAddress,
     node: Option<DiskAddress>,
     key: K,

@@ -266,7 +266,7 @@ impl Proposal {
 
 #[async_trait]
 impl api::DbView for Proposal {
-    type Stream<'a> = MerkleKeyValueStream<'a, CompactSpace<Node, storage::StoreRevMut>, Bincode>;
+    type Stream<'a> = MerkleKeyValueStream<'a, storage::StoreRevMut, Bincode>;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         self.get_revision()

@@ -36,11 +36,11 @@ pub enum DataStoreError {
     ProofEmptyKeyValuesError,
 }
 
-type InMemoryStore = CompactSpace<Node, InMemLinearStore>;
+// type InMemoryStore = CompactSpace<Node, InMemLinearStore>;
 
 pub struct InMemoryMerkle<C> {
     root: DiskAddress,
-    merkle: Merkle<InMemoryStore, C>,
+    merkle: Merkle<InMemLinearStore, C>,
 }
 
 impl<C> InMemoryMerkle<C>
@@ -77,7 +77,7 @@ where
             shale::compact::CompactSpace::new(mem_meta, mem_payload, compact_header, cache, 10, 16)
                 .expect("CompactSpace init fail");
 
-        let merkle = Merkle::new(Box::new(space));
+        let merkle = Merkle::new(space);
         #[allow(clippy::unwrap_used)]
         let root = merkle.init_root().unwrap();
 
@@ -105,7 +105,7 @@ where
     pub fn get_mut<K: AsRef<[u8]>>(
         &mut self,
         key: K,
-    ) -> Result<Option<RefMut<InMemoryStore, C>>, DataStoreError> {
+    ) -> Result<Option<RefMut<InMemLinearStore, C>>, DataStoreError> {
         self.merkle
             .get_mut(key, self.root)
             .map_err(|_err| DataStoreError::GetError)
@@ -115,7 +115,7 @@ where
         self.root
     }
 
-    pub fn get_merkle_mut(&mut self) -> &mut Merkle<InMemoryStore, C> {
+    pub fn get_merkle_mut(&mut self) -> &mut Merkle<InMemLinearStore, C> {
         &mut self.merkle
     }
 

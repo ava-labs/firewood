@@ -7,7 +7,7 @@ use crate::shale::ObjCache;
 use crate::storage::{StoreRevMut, StoreRevShared};
 
 use super::disk_address::DiskAddress;
-use super::{CachedStore, Obj, ObjRef, ShaleError, Storable, StoredView};
+use super::{CachedStore, Obj, ObjRef, ShaleError, ShaleStore, Storable, StoredView};
 use bytemuck::{Pod, Zeroable};
 use std::fmt::Debug;
 use std::io::{Cursor, Write};
@@ -580,10 +580,9 @@ impl From<Box<CompactSpace<Node, StoreRevMut>>> for CompactSpace<Node, StoreRevS
     }
 }
 
-impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> ShaleStore<T>
-    for CompactSpace<T, M>
-{
-    fn put_item(&self, item: T, extra: u64) -> Result<ObjRef<'_, T>, ShaleError> {
+impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> CompactSpace<T, M> {
+    // TODO should this be pub?
+    pub fn put_item(&self, item: T, extra: u64) -> Result<ObjRef<'_, T>, ShaleError> {
         let size = item.serialized_len() + extra;
         #[allow(clippy::unwrap_used)]
         let addr = self.inner.write().unwrap().alloc(size)?;
@@ -612,15 +611,17 @@ impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> Sh
         Ok(obj_ref)
     }
 
+    // TODO should this be pub?
     #[allow(clippy::unwrap_used)]
-    fn free_item(&mut self, ptr: DiskAddress) -> Result<(), ShaleError> {
+    pub fn free_item(&mut self, ptr: DiskAddress) -> Result<(), ShaleError> {
         let mut inner = self.inner.write().unwrap();
         self.obj_cache.pop(ptr);
         #[allow(clippy::unwrap_used)]
         inner.free(ptr.unwrap().get() as u64)
     }
 
-    fn get_item(&self, ptr: DiskAddress) -> Result<ObjRef<'_, T>, ShaleError> {
+    // TODO should this be pub?
+    pub fn get_item(&self, ptr: DiskAddress) -> Result<ObjRef<'_, T>, ShaleError> {
         let obj = self.obj_cache.get(ptr)?;
 
         #[allow(clippy::unwrap_used)]
@@ -648,8 +649,9 @@ impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore + Send + Sync> Sh
         Ok(ObjRef::new(obj, cache))
     }
 
+    // TODO should this be pub?
     #[allow(clippy::unwrap_used)]
-    fn flush_dirty(&self) -> Option<()> {
+    pub fn flush_dirty(&self) -> Option<()> {
         let mut inner = self.inner.write().unwrap();
         inner.header.flush_dirty();
         // hold the write lock to ensure that both cache and header are flushed in-sync

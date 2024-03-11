@@ -78,7 +78,7 @@ impl<C> From<Merkle<StoreRevMut, C>> for Merkle<StoreRevShared, C> {
     fn from(value: Merkle<StoreRevMut, C>) -> Self {
         let store = value.store.into();
         Merkle {
-            store: Box::new(store),
+            store: store,
             phantom: PhantomData,
         }
     }
