@@ -67,13 +67,13 @@ impl NodeStreamState<'_> {
 }
 
 #[derive(Debug)]
-pub struct MerkleNodeStream<'a, A, C> {
+pub struct MerkleNodeStream<'a, S, T> {
     state: NodeStreamState<'a>,
     merkle_root: DiskAddress,
-    merkle: &'a Merkle<A, C>,
+    merkle: &'a Merkle<S, T>,
 }
 
-impl<'a, A: CachedStore, C> FusedStream for MerkleNodeStream<'a, A, C> {
+impl<'a, S: CachedStore, T> FusedStream for MerkleNodeStream<'a, S, T> {
     fn is_terminated(&self) -> bool {
         // The top of `iter_stack` is the next node to return.
         // If `iter_stack` is empty, there are no more nodes to visit.
@@ -81,10 +81,10 @@ impl<'a, A: CachedStore, C> FusedStream for MerkleNodeStream<'a, A, C> {
     }
 }
 
-impl<'a, A, C> MerkleNodeStream<'a, A, C> {
+impl<'a, S, T> MerkleNodeStream<'a, S, T> {
     /// Returns a new iterator that will iterate over all the nodes in `merkle`
     /// with keys greater than or equal to `key`.
-    pub(super) fn new(merkle: &'a Merkle<A, C>, merkle_root: DiskAddress, key: Key) -> Self {
+    pub(super) fn new(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress, key: Key) -> Self {
         Self {
             state: NodeStreamState::new(key),
             merkle_root,
@@ -93,7 +93,7 @@ impl<'a, A, C> MerkleNodeStream<'a, A, C> {
     }
 }
 
-impl<'a, A: CachedStore, C> Stream for MerkleNodeStream<'a, A, C> {
+impl<'a, S: CachedStore, T> Stream for MerkleNodeStream<'a, S, T> {
     type Item = Result<(Key, NodeObjRef<'a>), api::Error>;
 
     fn poll_next(
@@ -315,20 +315,20 @@ impl<'a, A, C> MerkleKeyValueStreamState<'a, A, C> {
 }
 
 #[derive(Debug)]
-pub struct MerkleKeyValueStream<'a, S, C> {
-    state: MerkleKeyValueStreamState<'a, S, C>,
+pub struct MerkleKeyValueStream<'a, S, T> {
+    state: MerkleKeyValueStreamState<'a, S, T>,
     merkle_root: DiskAddress,
-    merkle: &'a Merkle<S, C>,
+    merkle: &'a Merkle<S, T>,
 }
 
-impl<'a, A: CachedStore, C> FusedStream for MerkleKeyValueStream<'a, A, C> {
+impl<'a, S: CachedStore, T> FusedStream for MerkleKeyValueStream<'a, S, T> {
     fn is_terminated(&self) -> bool {
         matches!(&self.state, MerkleKeyValueStreamState::Initialized { node_iter } if node_iter.is_terminated())
     }
 }
 
-impl<'a, S, C> MerkleKeyValueStream<'a, S, C> {
-    pub(super) fn new(merkle: &'a Merkle<S, C>, merkle_root: DiskAddress) -> Self {
+impl<'a, S, T> MerkleKeyValueStream<'a, S, T> {
+    pub(super) fn new(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress) -> Self {
         Self {
             state: MerkleKeyValueStreamState::new(),
             merkle_root,
@@ -336,7 +336,7 @@ impl<'a, S, C> MerkleKeyValueStream<'a, S, C> {
         }
     }
 
-    pub(super) fn from_key(merkle: &'a Merkle<S, C>, merkle_root: DiskAddress, key: Key) -> Self {
+    pub(super) fn from_key(merkle: &'a Merkle<S, T>, merkle_root: DiskAddress, key: Key) -> Self {
         Self {
             state: MerkleKeyValueStreamState::with_key(key),
             merkle_root,
@@ -345,7 +345,7 @@ impl<'a, S, C> MerkleKeyValueStream<'a, S, C> {
     }
 }
 
-impl<'a, A: CachedStore, C> Stream for MerkleKeyValueStream<'a, A, C> {
+impl<'a, S: CachedStore, T> Stream for MerkleKeyValueStream<'a, S, T> {
     type Item = Result<(Key, Value), api::Error>;
 
     fn poll_next(
@@ -456,7 +456,7 @@ impl<'a, 'b, A: CachedStore, C> PathIterator<'a, 'b, A, C> {
     }
 }
 
-impl<'a, 'b, A: CachedStore, C> Iterator for PathIterator<'a, 'b, A, C> {
+impl<'a, 'b, S: CachedStore, T> Iterator for PathIterator<'a, 'b, S, T> {
     type Item = Result<(Key, NodeObjRef<'a>), MerkleError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -588,8 +588,8 @@ mod tests {
     use futures::StreamExt;
     use test_case::test_case;
 
-    impl<A: CachedStore, C> Merkle<A, C> {
-        pub(crate) fn node_iter(&self, root: DiskAddress) -> MerkleNodeStream<'_, A, C> {
+    impl<S: CachedStore, T> Merkle<S, T> {
+        pub(crate) fn node_iter(&self, root: DiskAddress) -> MerkleNodeStream<'_, S, T> {
             MerkleNodeStream::new(self, root, Box::new([]))
         }
 
@@ -597,7 +597,7 @@ mod tests {
             &self,
             root: DiskAddress,
             key: Key,
-        ) -> MerkleNodeStream<'_, A, C> {
+        ) -> MerkleNodeStream<'_, S, T> {
             MerkleNodeStream::new(self, root, key)
         }
     }
