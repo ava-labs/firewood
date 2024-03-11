@@ -103,7 +103,7 @@ impl NodeType {
         }
     }
 
-    pub fn encode<A: CachedStore>(&self, store: &CompactSpace<Node, A>) -> Vec<u8> {
+    pub fn encode<S: CachedStore>(&self, store: &CompactSpace<Node, S>) -> Vec<u8> {
         match &self {
             NodeType::Leaf(n) => n.encode(),
             NodeType::Branch(n) => n.encode(store),
@@ -223,20 +223,20 @@ impl Node {
         })
     }
 
-    pub(super) fn get_encoded<A: CachedStore>(&self, store: &CompactSpace<Node, A>) -> &[u8] {
+    pub(super) fn get_encoded<S: CachedStore>(&self, store: &CompactSpace<Node, S>) -> &[u8] {
         self.encoded.get_or_init(|| self.inner.encode(store))
     }
 
-    pub(super) fn get_root_hash<A: CachedStore>(&self, store: &CompactSpace<Node, A>) -> &TrieHash {
+    pub(super) fn get_root_hash<S: CachedStore>(&self, store: &CompactSpace<Node, S>) -> &TrieHash {
         self.root_hash.get_or_init(|| {
             self.set_dirty(true);
             TrieHash(Keccak256::digest(self.get_encoded(store)).into())
         })
     }
 
-    fn is_encoded_longer_than_hash_len<A: CachedStore>(
+    fn is_encoded_longer_than_hash_len<S: CachedStore>(
         &self,
-        store: &CompactSpace<Node, A>,
+        store: &CompactSpace<Node, S>,
     ) -> bool {
         *self
             .is_encoded_longer_than_hash_len
