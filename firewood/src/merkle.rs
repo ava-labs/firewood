@@ -1,8 +1,10 @@
-use crate::db::{MutStore, SharedStore};
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 use crate::nibbles::Nibbles;
+use crate::shale::compact::CompactSpace;
+use crate::shale::CachedStore;
 use crate::shale::{self, disk_address::DiskAddress, ObjWriteSizeError, ShaleError};
+use crate::storage::{StoreRevMut, StoreRevShared};
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
 use sha3::Digest;
@@ -67,13 +69,13 @@ macro_rules! write_node {
 }
 
 #[derive(Debug)]
-pub struct Merkle<S, C> {
-    store: Box<S>,
+pub struct Merkle<A, C> {
+    store: CompactSpace<Node, A>,
     phantom: PhantomData<C>,
 }
 
-impl<C> From<Merkle<MutStore, C>> for Merkle<SharedStore, C> {
-    fn from(value: Merkle<MutStore, C>) -> Self {
+impl<C> From<Merkle<StoreRevMut, C>> for Merkle<StoreRevShared, C> {
+    fn from(value: Merkle<StoreRevMut, C>) -> Self {
         let store = value.store.into();
         Merkle {
             store: Box::new(store),
@@ -82,7 +84,7 @@ impl<C> From<Merkle<MutStore, C>> for Merkle<SharedStore, C> {
     }
 }
 
-impl<S: ShaleStore<Node>, C> Merkle<S, C> {
+impl<A, C> Merkle<A, C> {
     pub fn get_node(&self, ptr: DiskAddress) -> Result<NodeObjRef, MerkleError> {
         self.store.get_item(ptr).map_err(Into::into)
     }
@@ -96,13 +98,13 @@ impl<S: ShaleStore<Node>, C> Merkle<S, C> {
     }
 }
 
-impl<'de, S, C> Merkle<S, C>
+impl<'de, A, C> Merkle<A, C>
 where
-    S: ShaleStore<Node> + Send + Sync,
+    A: CachedStore,
     C: BinarySerde,
     EncodedNode<C>: serde::Serialize + serde::Deserialize<'de>,
 {
-    pub fn new(store: Box<S>) -> Self {
+    pub fn new(store: CompactSpace<Node, A>) -> Self {
         Self {
             store,
             phantom: PhantomData,
@@ -172,7 +174,7 @@ where
     }
 }
 
-impl<S: ShaleStore<Node> + Send + Sync, C> Merkle<S, C> {
+impl<A, C> Merkle<A, C> {
     pub fn init_root(&self) -> Result<DiskAddress, MerkleError> {
         self.store
             .put_item(
@@ -188,7 +190,7 @@ impl<S: ShaleStore<Node> + Send + Sync, C> Merkle<S, C> {
             .map(|node| node.as_ptr())
     }
 
-    pub fn get_store(&self) -> &S {
+    pub fn get_store(&self) -> &CompactSpace<Node, A> {
         self.store.as_ref()
     }
 
@@ -214,7 +216,7 @@ impl<S: ShaleStore<Node> + Send + Sync, C> Merkle<S, C> {
             .children[0];
         Ok(if let Some(root) = root {
             let mut node = self.get_node(root)?;
-            let res = *node.get_root_hash::<S>(self.store.as_ref());
+            let res = *node.get_root_hash::<CompactSpace<Node, A>>(self.store.as_ref()); // TODO what should turbofin param be?
             #[allow(clippy::unwrap_used)]
             if node.is_dirty() {
                 node.write(|_| {}).unwrap();
@@ -231,7 +233,7 @@ impl<S: ShaleStore<Node> + Send + Sync, C> Merkle<S, C> {
 
         let hash = match u_ref.root_hash.get() {
             Some(h) => h,
-            None => u_ref.get_root_hash::<S>(self.store.as_ref()),
+            None => u_ref.get_root_hash::<CompactSpace<Node, A>>(self.store.as_ref()), // TODO what should turbofin param be?
         };
 
         write!(w, "{u:?} => {}: ", hex::encode(**hash))?;
@@ -1027,7 +1029,7 @@ impl<S: ShaleStore<Node> + Send + Sync, C> Merkle<S, C> {
         &mut self,
         key: K,
         root: DiskAddress,
-    ) -> Result<Option<RefMut<S, C>>, MerkleError> {
+    ) -> Result<Option<RefMut<A, C>>, MerkleError> {
         if root.is_null() {
             return Ok(None);
         }
@@ -1068,7 +1070,8 @@ impl<S: ShaleStore<Node> + Send + Sync, C> Merkle<S, C> {
 
         // Get the hashes of the nodes.
         for node in nodes.into_iter() {
-            let encoded = <&[u8]>::clone(&node.get_encoded::<S>(self.store.as_ref()));
+            let encoded =
+                <&[u8]>::clone(&node.get_encoded::<CompactSpace<Node, A>>(self.store.as_ref()));
             let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(encoded).into();
             proofs.insert(hash, encoded.to_vec());
         }
@@ -1098,11 +1101,11 @@ impl<S: ShaleStore<Node> + Send + Sync, C> Merkle<S, C> {
         &'a self,
         sentinel_node: NodeObjRef<'a>,
         key: &'b [u8],
-    ) -> PathIterator<'_, 'b, S, C> {
+    ) -> PathIterator<'_, 'b, A, C> {
         PathIterator::new(self, sentinel_node, key)
     }
 
-    pub(crate) fn key_value_iter(&self, root: DiskAddress) -> MerkleKeyValueStream<'_, S, C> {
+    pub(crate) fn key_value_iter(&self, root: DiskAddress) -> MerkleKeyValueStream<'_, A, C> {
         MerkleKeyValueStream::new(self, root)
     }
 
@@ -1110,7 +1113,7 @@ impl<S: ShaleStore<Node> + Send + Sync, C> Merkle<S, C> {
         &self,
         root: DiskAddress,
         key: Key,
-    ) -> MerkleKeyValueStream<'_, S, C> {
+    ) -> MerkleKeyValueStream<'_, A, C> {
         MerkleKeyValueStream::from_key(self, root, key)
     }
 
@@ -1275,10 +1278,10 @@ fn set_parent(new_chd: DiskAddress, parents: &mut [(NodeObjRef, u8)]) {
 
 pub struct Ref<'a>(NodeObjRef<'a>);
 
-pub struct RefMut<'a, S, C> {
+pub struct RefMut<'a, A, C> {
     ptr: DiskAddress,
     parents: ParentAddresses,
-    merkle: &'a mut Merkle<S, C>,
+    merkle: &'a mut Merkle<A, C>,
 }
 
 impl<'a> std::ops::Deref for Ref<'a> {
@@ -1292,8 +1295,8 @@ impl<'a> std::ops::Deref for Ref<'a> {
     }
 }
 
-impl<'a, S: ShaleStore<Node> + Send + Sync, C> RefMut<'a, S, C> {
-    fn new(ptr: DiskAddress, parents: ParentAddresses, merkle: &'a mut Merkle<S, C>) -> Self {
+impl<'a, A: CachedStore, C> RefMut<'a, A, C> {
+    fn new(ptr: DiskAddress, parents: ParentAddresses, merkle: &'a mut Merkle<A, C>) -> Self {
         Self {
             ptr,
             parents,
