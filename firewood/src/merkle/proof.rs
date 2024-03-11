@@ -270,17 +270,17 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     /// necessary nodes will be resolved and leave the remaining as hashnode.
     ///
     /// The given edge proof is allowed to be an existent or non-existent proof.
-    fn proof_to_path<K, C>(
+    fn proof_to_path<K, T>(
         &self,
         key: K,
         root_hash: HashKey,
-        in_mem_merkle: &mut InMemoryMerkle<C>,
+        in_mem_merkle: &mut InMemoryMerkle<T>,
         allow_non_existent_node: bool,
     ) -> Result<Option<Vec<u8>>, ProofError>
     where
         K: AsRef<[u8]>,
-        C: BinarySerde,
-        EncodedNode<C>: serde::Serialize + serde::de::DeserializeOwned,
+        T: BinarySerde,
+        EncodedNode<T>: serde::Serialize + serde::de::DeserializeOwned,
     {
         // Start with the sentinel root
         let sentinel = in_mem_merkle.get_sentinel_address();
@@ -384,8 +384,8 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     }
 }
 
-fn decode_subproof<'a, A: CachedStore, C, N: AsRef<[u8]>>(
-    merkle: &'a Merkle<A, C>,
+fn decode_subproof<'a, S: CachedStore, T, N: AsRef<[u8]>>(
+    merkle: &'a Merkle<S, T>,
     proofs_map: &HashMap<HashKey, N>,
     child_hash: &HashKey,
 ) -> Result<NodeObjRef<'a>, ProofError> {
@@ -714,8 +714,8 @@ where
 //     keep the entire branch and return.
 //   - the fork point is a shortnode, the shortnode is excluded in the range,
 //     unset the entire branch.
-fn unset_node_ref<K: AsRef<[u8]>, A: CachedStore, C: BinarySerde>(
-    merkle: &Merkle<A, C>,
+fn unset_node_ref<K: AsRef<[u8]>, S: CachedStore, T: BinarySerde>(
+    merkle: &Merkle<S, T>,
     parent: DiskAddress,
     node: Option<DiskAddress>,
     key: K,
