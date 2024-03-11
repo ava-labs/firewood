@@ -580,7 +580,7 @@ impl From<CompactSpace<Node, StoreRevMut>> for CompactSpace<Node, StoreRevShared
     }
 }
 
-impl<T: Storable + Debug + 'static + PartialEq, M: CachedStore> CompactSpace<T, M> {
+impl<T: Storable + Debug + 'static, M: CachedStore> CompactSpace<T, M> {
     // TODO should this be pub?
     pub fn put_item(&self, item: T, extra: u64) -> Result<ObjRef<'_, T>, ShaleError> {
         let size = item.serialized_len() + extra;
