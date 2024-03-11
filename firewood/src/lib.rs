@@ -79,8 +79,7 @@
 //!
 //! - Persistent item storage stash: `CompactStore` in `shale` defines a pool of typed objects that are
 //!   persisted on disk but also made accessible in memory transparently. It is built on top of `CachedStore`
-//!   by defining how "items" of the given type are laid out, allocated and recycled throughout their
-//!   lifecycles (there is a disk-friendly, malloc-style kind of basic implementation in `shale` crate).
+//!   and defines how "items" of a given type are laid out, allocated and recycled throughout their lifecycles.
 //!
 //! - Data structure: in Firewood, one trie is maintained by invoking `CompactStore` (see `src/merkle.rs`).
 //!   The data structure code is totally unaware of how its objects (i.e., nodes) are organized or
