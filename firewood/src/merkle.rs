@@ -190,10 +190,6 @@ impl<S: CachedStore, T> Merkle<S, T> {
             .map(|node| node.as_ptr())
     }
 
-    pub const fn get_store(&self) -> &CompactSpace<Node, S> {
-        &self.store
-    }
-
     pub fn empty_root() -> &'static TrieHash {
         static V: OnceLock<TrieHash> = OnceLock::new();
         #[allow(clippy::unwrap_used)]
