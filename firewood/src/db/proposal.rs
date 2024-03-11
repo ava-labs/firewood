@@ -3,12 +3,12 @@
 
 use super::{
     get_sub_universe_from_deltas, Db, DbConfig, DbError, DbHeader, DbInner, DbRev, DbRevInner,
-    MutStore, SharedStore, Universe, MERKLE_META_SPACE, MERKLE_PAYLOAD_SPACE, ROOT_HASH_SPACE,
+    Universe, MERKLE_META_SPACE, MERKLE_PAYLOAD_SPACE, ROOT_HASH_SPACE,
 };
 use crate::merkle::{Bincode, MerkleKeyValueStream, Node, Proof};
 use crate::shale::compact::CompactSpace;
 use crate::shale::CachedStore;
-use crate::storage;
+use crate::storage::{self, StoreRevShared};
 use crate::{
     merkle::{TrieHash, TRIE_HASH_LEN},
     storage::{buffer::BufferWrite, AshRecord, StoreRevMut},
@@ -27,11 +27,11 @@ use tokio::task::block_in_place;
 pub struct Proposal {
     // State of the Db
     pub(super) m: Arc<RwLock<DbInner>>,
-    pub(super) r: Arc<Mutex<DbRevInner<SharedStore>>>,
+    pub(super) r: Arc<Mutex<DbRevInner<StoreRevShared>>>,
     pub(super) cfg: DbConfig,
 
     // State of the proposal
-    pub(super) rev: DbRev<MutStore>,
+    pub(super) rev: DbRev<StoreRevMut>,
     pub(super) store: Universe<StoreRevMut>,
     pub(super) committed: Arc<Mutex<bool>>,
     pub(super) root_hash: TrieHash,
@@ -41,7 +41,7 @@ pub struct Proposal {
 
 pub enum ProposalBase {
     Proposal(Arc<Proposal>),
-    View(Arc<DbRev<SharedStore>>),
+    View(Arc<DbRev<StoreRevShared>>),
 }
 
 #[async_trait]
@@ -259,7 +259,7 @@ impl Proposal {
 }
 
 impl Proposal {
-    pub const fn get_revision(&self) -> &DbRev<MutStore> {
+    pub const fn get_revision(&self) -> &DbRev<StoreRevMut> {
         &self.rev
     }
 }
