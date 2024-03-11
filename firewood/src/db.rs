@@ -60,8 +60,9 @@ const SPACE_RESERVED: u64 = 0x1000;
 
 const MAGIC_STR: &[u8; 16] = b"firewood v0.1\0\0\0";
 
-pub type MutStore = CompactSpace<Node, StoreRevMut>;
-pub type SharedStore = CompactSpace<Node, StoreRevShared>;
+// TODO remove
+// pub type MutStore = CompactSpace<Node, StoreRevMut>;
+// pub type SharedStore = CompactSpace<Node, StoreRevShared>;
 
 #[derive(Debug)]
 #[non_exhaustive]
