@@ -5,7 +5,7 @@ use super::{Data, Node};
 use crate::{
     merkle::{from_nibbles, to_nibble_array, PartialPath},
     nibbles::Nibbles,
-    shale::{compact::CompactSpace, DiskAddress, ShaleError, Storable},
+    shale::{compact::CompactSpace, CachedStore, DiskAddress, ShaleError, Storable},
 };
 use bincode::{Error, Options};
 use serde::de::Error as DeError;
@@ -125,7 +125,7 @@ impl BranchNode {
         ))
     }
 
-    pub(super) fn encode<A>(&self, store: &CompactSpace<Node, A>) -> Vec<u8> {
+    pub(super) fn encode<A: CachedStore>(&self, store: &CompactSpace<Node, A>) -> Vec<u8> {
         // path + children + value
         let mut list = <[Vec<u8>; Self::MSIZE]>::default();
 

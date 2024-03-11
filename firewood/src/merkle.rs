@@ -78,7 +78,7 @@ impl<C> From<Merkle<StoreRevMut, C>> for Merkle<StoreRevShared, C> {
     fn from(value: Merkle<StoreRevMut, C>) -> Self {
         let store = value.store.into();
         Merkle {
-            store: store,
+            store,
             phantom: PhantomData,
         }
     }
@@ -1395,7 +1395,7 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
 mod tests {
     use super::*;
     use crate::merkle::node::PlainCodec;
-    use shale::{cached::InMemLinearStore, compact::CompactSpace, CachedStore};
+    use shale::{cached::InMemLinearStore, CachedStore};
     use test_case::test_case;
 
     fn leaf(path: Vec<u8>, data: Vec<u8>) -> Node {

@@ -569,9 +569,9 @@ impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
     }
 }
 
-impl From<Box<CompactSpace<Node, StoreRevMut>>> for CompactSpace<Node, StoreRevShared> {
+impl From<CompactSpace<Node, StoreRevMut>> for CompactSpace<Node, StoreRevShared> {
     #[allow(clippy::unwrap_used)]
-    fn from(value: Box<CompactSpace<Node, StoreRevMut>>) -> Self {
+    fn from(value: CompactSpace<Node, StoreRevMut>) -> Self {
         let inner = value.inner.into_inner().unwrap();
         CompactSpace {
             inner: RwLock::new(inner.into()),
