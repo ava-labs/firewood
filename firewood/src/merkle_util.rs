@@ -35,15 +35,15 @@ pub enum DataStoreError {
 
 // type InMemoryStore = CompactSpace<Node, InMemLinearStore>;
 
-pub struct InMemoryMerkle<C> {
+pub struct InMemoryMerkle<T> {
     root: DiskAddress,
-    merkle: Merkle<InMemLinearStore, C>,
+    merkle: Merkle<InMemLinearStore, T>,
 }
 
-impl<C> InMemoryMerkle<C>
+impl<T> InMemoryMerkle<T>
 where
-    C: BinarySerde,
-    EncodedNode<C>: serde::Serialize + serde::de::DeserializeOwned,
+    T: BinarySerde,
+    EncodedNode<T>: serde::Serialize + serde::de::DeserializeOwned,
 {
     pub fn new(meta_size: u64, compact_size: u64) -> Self {
         const RESERVED: usize = 0x1000;
@@ -102,7 +102,7 @@ where
     pub fn get_mut<K: AsRef<[u8]>>(
         &mut self,
         key: K,
-    ) -> Result<Option<RefMut<InMemLinearStore, C>>, DataStoreError> {
+    ) -> Result<Option<RefMut<InMemLinearStore, T>>, DataStoreError> {
         self.merkle
             .get_mut(key, self.root)
             .map_err(|_err| DataStoreError::GetError)
@@ -112,7 +112,7 @@ where
         self.root
     }
 
-    pub fn get_merkle_mut(&mut self) -> &mut Merkle<InMemLinearStore, C> {
+    pub fn get_merkle_mut(&mut self) -> &mut Merkle<InMemLinearStore, T> {
         &mut self.merkle
     }
 

@@ -178,8 +178,8 @@ impl<'a, S: CachedStore, T> Stream for MerkleNodeStream<'a, S, T> {
 
 /// Returns the initial state for an iterator over the given `merkle` with root `root_node`
 /// which starts at `key`.
-fn get_iterator_intial_state<'a, A: CachedStore, C>(
-    merkle: &'a Merkle<A, C>,
+fn get_iterator_intial_state<'a, S: CachedStore, T>(
+    merkle: &'a Merkle<S, T>,
     root_node: DiskAddress,
     key: &[u8],
 ) -> Result<NodeStreamState<'a>, api::Error> {
@@ -290,18 +290,18 @@ fn get_iterator_intial_state<'a, A: CachedStore, C>(
 }
 
 #[derive(Debug)]
-enum MerkleKeyValueStreamState<'a, A, C> {
+enum MerkleKeyValueStreamState<'a, S, T> {
     /// The iterator state is lazily initialized when poll_next is called
     /// for the first time. The iteration start key is stored here.
     Uninitialized(Key),
     /// The iterator works by iterating over the nodes in the merkle trie
     /// and returning the key-value pairs for nodes that have values.
     Initialized {
-        node_iter: MerkleNodeStream<'a, A, C>,
+        node_iter: MerkleNodeStream<'a, S, T>,
     },
 }
 
-impl<'a, A, C> MerkleKeyValueStreamState<'a, A, C> {
+impl<'a, S, T> MerkleKeyValueStreamState<'a, S, T> {
     /// Returns a new iterator that will iterate over all the key-value pairs in `merkle`.
     fn new() -> Self {
         Self::Uninitialized(Box::new([]))
@@ -421,14 +421,14 @@ enum PathIteratorState<'a> {
 ///   remaining unmatched key, the node proves the non-existence of the key.
 /// Note that thi means that the last node's key isn't necessarily a prefix of
 /// the key we're traversing to.
-pub struct PathIterator<'a, 'b, S, C> {
+pub struct PathIterator<'a, 'b, S, T> {
     state: PathIteratorState<'b>,
-    merkle: &'a Merkle<S, C>,
+    merkle: &'a Merkle<S, T>,
 }
 
-impl<'a, 'b, A: CachedStore, C> PathIterator<'a, 'b, A, C> {
+impl<'a, 'b, S: CachedStore, T> PathIterator<'a, 'b, S, T> {
     pub(super) fn new(
-        merkle: &'a Merkle<A, C>,
+        merkle: &'a Merkle<S, T>,
         sentinel_node: NodeObjRef<'a>,
         key: &'b [u8],
     ) -> Self {
