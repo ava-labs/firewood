@@ -33,8 +33,6 @@ pub enum DataStoreError {
     ProofEmptyKeyValuesError,
 }
 
-// type InMemoryStore = CompactSpace<Node, InMemLinearStore>;
-
 pub struct InMemoryMerkle<T> {
     root: DiskAddress,
     merkle: Merkle<InMemLinearStore, T>,
