@@ -212,7 +212,7 @@ impl<S: CachedStore, T> Merkle<S, T> {
             .children[0];
         Ok(if let Some(root) = root {
             let mut node = self.get_node(root)?;
-            let res = *node.get_root_hash(&self.store); // TODO what should turbofin param be?
+            let res = *node.get_root_hash(&self.store);
             #[allow(clippy::unwrap_used)]
             if node.is_dirty() {
                 node.write(|_| {}).unwrap();
