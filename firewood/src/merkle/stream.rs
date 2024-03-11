@@ -7,7 +7,7 @@ use crate::{
     shale::{CachedStore, DiskAddress},
     v2::api,
 };
-use futures::{stream::FusedStream, Stream};
+use futures::{stream::FusedStream, Stream, StreamExt};
 use std::task::Poll;
 use std::{cmp::Ordering, iter::once};
 
@@ -345,7 +345,7 @@ impl<'a, S, C> MerkleKeyValueStream<'a, S, C> {
     }
 }
 
-impl<'a, A, C> Stream for MerkleKeyValueStream<'a, A, C> {
+impl<'a, A: CachedStore, C> Stream for MerkleKeyValueStream<'a, A, C> {
     type Item = Result<(Key, Value), api::Error>;
 
     fn poll_next(

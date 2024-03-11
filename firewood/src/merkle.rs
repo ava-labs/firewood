@@ -104,7 +104,7 @@ where
     C: BinarySerde,
     EncodedNode<C>: serde::Serialize + serde::Deserialize<'de>,
 {
-    pub fn new(store: CompactSpace<Node, A>) -> Self {
+    pub const fn new(store: CompactSpace<Node, A>) -> Self {
         Self {
             store,
             phantom: PhantomData,
@@ -190,7 +190,7 @@ impl<A: CachedStore, C> Merkle<A, C> {
             .map(|node| node.as_ptr())
     }
 
-    pub fn get_store(&self) -> &CompactSpace<Node, A> {
+    pub const fn get_store(&self) -> &CompactSpace<Node, A> {
         &self.store
     }
 
