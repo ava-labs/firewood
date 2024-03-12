@@ -38,9 +38,9 @@ impl Debug for LeafNode {
 }
 
 impl LeafNode {
-    pub fn new<P: Into<PartialPath>, D: Into<Data>>(path: P, data: D) -> Self {
+    pub fn new<P: Into<PartialPath>, D: Into<Data>>(partial_path: P, data: D) -> Self {
         Self {
-            partial_path: path.into(),
+            partial_path: partial_path.into(),
             data: data.into(),
         }
     }

@@ -62,13 +62,13 @@ impl BranchNode {
     pub const MSIZE: usize = Self::MAX_CHILDREN + 2;
 
     pub fn new(
-        path: PartialPath,
+        partial_path: PartialPath,
         chd: [Option<DiskAddress>; Self::MAX_CHILDREN],
         value: Option<Vec<u8>>,
         chd_encoded: [Option<Vec<u8>>; Self::MAX_CHILDREN],
     ) -> Self {
         BranchNode {
-            partial_path: path,
+            partial_path,
             children: chd,
             value: value.map(Data),
             children_encoded: chd_encoded,
