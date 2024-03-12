@@ -1540,12 +1540,12 @@ mod tests {
         }))
     }
 
-    #[test_case(Bincode::new(), leaf(Vec::new(), Vec::new()) ; "empty leaf encoding with Bincode")]
+    #[test_case(Bincode::new(), leaf(Vec::new(), vec![1,2]) ; "leaf without partial path encoding with Bincode")]
     #[test_case(Bincode::new(), leaf(vec![1, 2, 3], vec![4, 5]) ; "leaf encoding with Bincode")]
     #[test_case(Bincode::new(), branch(b"", b"value", vec![1, 2, 3].into()) ; "branch with chd with Bincode")]
     #[test_case(Bincode::new(), branch(b"", b"value", None); "branch without chd with Bincode")]
     #[test_case(Bincode::new(), branch_without_data(b"", None); "branch without value and chd with Bincode")]
-    #[test_case(PlainCodec::new(), leaf(Vec::new(),vec![1,2]) ; "empty leaf encoding with PlainCodec")]
+    #[test_case(PlainCodec::new(), leaf(Vec::new(),vec![1,2]) ; "leaf without partial path encoding with PlainCodec")]
     #[test_case(PlainCodec::new(), leaf(vec![1, 2, 3], vec![4, 5]) ; "leaf encoding with PlainCodec")]
     #[test_case(PlainCodec::new(), branch(b"", b"value", vec![1, 2, 3].into()) ; "branch with chd with PlainCodec")]
     #[test_case(PlainCodec::new(), branch(b"01", b"value", vec![1, 2, 3].into()); "branch with path and value and chd with PlainCodec")]
