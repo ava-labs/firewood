@@ -112,7 +112,7 @@ where
         }
     }
 
-    fn encode(&self, path: &[u8], node: &NodeType) -> Result<Vec<u8>, MerkleError> {
+    fn encode(&self, path: PartialPath, node: &NodeType) -> Result<Vec<u8>, MerkleError> {
         let encoded = match node {
             NodeType::Leaf(n) => EncodedNode::new(EncodedNodeType::Leaf(n.clone())),
 
@@ -138,7 +138,7 @@ where
                                             .chain(partial_path)
                                             .collect::<Vec<u8>>();
 
-                                        self.encode(&child_path, node.inner())
+                                        self.encode(PartialPath(child_path), node.inner())
                                     })
                                     .map(|node_bytes| {
                                         if node_bytes.len() >= TRIE_HASH_LEN {
@@ -156,7 +156,6 @@ where
                     .try_into()
                     .expect("MAX_CHILDREN will always be yielded");
 
-                let path = n.path.clone();
                 EncodedNode::new(EncodedNodeType::Branch {
                     path,
                     children,
@@ -248,13 +247,13 @@ where
                 NodeType::Branch(n) => n.path.clone(),
                 NodeType::Leaf(n) => n.path.clone(),
             };
-            self.to_hash(&node_path.0, node.inner())?
+            self.to_hash(node_path, node.inner())?
         } else {
             *Self::empty_root()
         })
     }
 
-    fn to_hash(&self, path: &[u8], node: &NodeType) -> Result<TrieHash, MerkleError> {
+    fn to_hash(&self, path: PartialPath, node: &NodeType) -> Result<TrieHash, MerkleError> {
         let res = self.encode(path, node)?;
         Ok(TrieHash(Keccak256::digest(res).into()))
     }
@@ -1129,7 +1128,9 @@ where
 
         // Get the hashes of the nodes.
         for (path, node) in nodes_and_paths.into_iter() {
-            let encoded = self.encode(&path, node.inner())?;
+            let path_nibbles = Nibbles::<0>::new(path.as_ref()).into_iter().collect();
+
+            let encoded = self.encode(PartialPath(path_nibbles), node.inner())?;
             let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(&encoded).into();
             proofs.insert(hash, encoded.to_vec());
         }
@@ -1571,9 +1572,9 @@ mod tests {
     {
         let merkle = create_generic_test_merkle::<T>();
 
-        let encoded = merkle.encode(&[], &node).unwrap();
+        let encoded = merkle.encode(PartialPath(vec![]), &node).unwrap();
         let new_node = merkle.decode(encoded.as_ref()).unwrap();
-        let encoded_again = merkle.encode(&[], &new_node).unwrap();
+        let encoded_again = merkle.encode(PartialPath(vec![]), &new_node).unwrap();
 
         assert_eq!(node, new_node);
         assert_eq!(encoded, encoded_again);
