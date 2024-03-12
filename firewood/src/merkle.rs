@@ -243,6 +243,7 @@ where
             .children[0];
         Ok(if let Some(root) = root {
             let node = self.get_node(root)?;
+            // The root node's path is just its partial path since it has no ancestors.
             let node_path = match node.inner() {
                 NodeType::Branch(n) => n.partial_path.clone(),
                 NodeType::Leaf(n) => n.partial_path.clone(),
@@ -1133,11 +1134,7 @@ where
 
         // Get the hashes of the nodes.
         for (path, node) in nodes_and_paths.into_iter() {
-            // TODO why does shared_path_proof fail if we swap the commented line below?
-            // The path passed in should be in nibbles, not whole bytes
-            // let path = Nibbles::<0>::new(path.as_ref()).into_iter().collect();
             let path = PartialPath(path.to_vec());
-
             let encoded = self.encode(path, node.inner())?;
             let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(&encoded).into();
             proofs.insert(hash, encoded.to_vec());
