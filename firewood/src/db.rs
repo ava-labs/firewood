@@ -9,7 +9,7 @@ pub use crate::{
 use crate::{
     file,
     merkle::{
-        Bincode, Key, Merkle, MerkleError, MerkleKeyValueStream, Node, Proof, ProofError, TrieHash,
+        Bincode, Key, Merkle, MerkleError, MerkleKeyValueStream, Proof, ProofError, TrieHash,
         TRIE_HASH_LEN,
     },
     storage::{
@@ -22,12 +22,11 @@ use crate::{
 use crate::{
     merkle,
     shale::{
-        self,
-        compact::{CompactSpace, CompactSpaceHeader},
-        disk_address::DiskAddress,
-        CachedStore, Obj, ShaleError, ShaleStore, SpaceId, Storable, StoredView,
+        self, compact::CompactSpaceHeader, disk_address::DiskAddress, CachedStore, Obj, ShaleError,
+        SpaceId, Storable, StoredView,
     },
 };
+use aiofut::AioError;
 use async_trait::async_trait;
 use bytemuck::{cast_slice, Pod, Zeroable};
 
@@ -59,12 +58,10 @@ const SPACE_RESERVED: u64 = 0x1000;
 
 const MAGIC_STR: &[u8; 16] = b"firewood v0.1\0\0\0";
 
-pub type MutStore = CompactSpace<Node, StoreRevMut>;
-pub type SharedStore = CompactSpace<Node, StoreRevShared>;
-
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum DbError {
+    Aio(AioError),
     InvalidParams,
     Merkle(MerkleError),
     System(nix::Error),
@@ -78,6 +75,7 @@ pub enum DbError {
 impl fmt::Display for DbError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            DbError::Aio(e) => write!(f, "aio error: {e:?}"),
             DbError::InvalidParams => write!(f, "invalid parameters provided"),
             DbError::Merkle(e) => write!(f, "merkle error: {e:?}"),
             DbError::System(e) => write!(f, "system error: {e:?}"),
@@ -276,14 +274,14 @@ impl<T: MemStoreR + 'static> Universe<Arc<T>> {
 
 /// Some readable version of the DB.
 #[derive(Debug)]
-pub struct DbRev<S> {
+pub struct DbRev<T> {
     header: shale::Obj<DbHeader>,
-    merkle: Merkle<S, Bincode>,
+    merkle: Merkle<T, Bincode>,
 }
 
 #[async_trait]
-impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
-    type Stream<'a> = MerkleKeyValueStream<'a, S, Bincode> where Self: 'a;
+impl<T: CachedStore> api::DbView for DbRev<T> {
+    type Stream<'a> = MerkleKeyValueStream<'a, T, Bincode> where Self: 'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         self.merkle
@@ -335,12 +333,12 @@ impl<S: ShaleStore<Node> + Send + Sync> api::DbView for DbRev<S> {
     }
 }
 
-impl<S: ShaleStore<Node> + Send + Sync> DbRev<S> {
-    pub fn stream(&self) -> merkle::MerkleKeyValueStream<'_, S, Bincode> {
+impl<T: CachedStore> DbRev<T> {
+    pub fn stream(&self) -> merkle::MerkleKeyValueStream<'_, T, Bincode> {
         self.merkle.key_value_iter(self.header.kv_root)
     }
 
-    pub fn stream_from(&self, start_key: Key) -> merkle::MerkleKeyValueStream<'_, S, Bincode> {
+    pub fn stream_from(&self, start_key: Key) -> merkle::MerkleKeyValueStream<'_, T, Bincode> {
         self.merkle
             .key_value_iter_from_key(self.header.kv_root, start_key)
     }
@@ -397,13 +395,8 @@ impl<S: ShaleStore<Node> + Send + Sync> DbRev<S> {
     }
 }
 
-impl DbRev<MutStore> {
-    fn borrow_split(
-        &mut self,
-    ) -> (
-        &mut shale::Obj<DbHeader>,
-        &mut Merkle<CompactSpace<Node, StoreRevMut>, Bincode>,
-    ) {
+impl DbRev<StoreRevMut> {
+    fn borrow_split(&mut self) -> (&mut shale::Obj<DbHeader>, &mut Merkle<StoreRevMut, Bincode>) {
         (&mut self.header, &mut self.merkle)
     }
 
@@ -414,8 +407,8 @@ impl DbRev<MutStore> {
     }
 }
 
-impl From<DbRev<MutStore>> for DbRev<SharedStore> {
-    fn from(mut value: DbRev<MutStore>) -> Self {
+impl From<DbRev<StoreRevMut>> for DbRev<StoreRevShared> {
+    fn from(mut value: DbRev<StoreRevMut>) -> Self {
         value.flush_dirty();
         DbRev {
             header: value.header,
@@ -443,7 +436,7 @@ impl Drop for DbInner {
 
 #[async_trait]
 impl api::Db for Db {
-    type Historical = DbRev<SharedStore>;
+    type Historical = DbRev<StoreRevShared>;
 
     type Proposal = proposal::Proposal;
 
@@ -483,7 +476,7 @@ pub struct DbRevInner<T> {
 #[derive(Debug)]
 pub struct Db {
     inner: Arc<RwLock<DbInner>>,
-    revisions: Arc<Mutex<DbRevInner<SharedStore>>>,
+    revisions: Arc<Mutex<DbRevInner<StoreRevShared>>>,
     payload_regn_nbit: u64,
     metrics: Arc<DbMetrics>,
     cfg: DbConfig,
@@ -515,44 +508,44 @@ impl Db {
             file::Options::NoTruncate
         };
 
-        let (db_path, reset) = file::open_dir(db_path, open_options)?;
+        let (db_path, reset_store_headers) = file::open_dir(db_path, open_options)?;
 
         let merkle_path = file::touch_dir("merkle", &db_path)?;
         let merkle_meta_path = file::touch_dir("meta", &merkle_path)?;
         let merkle_payload_path = file::touch_dir("compact", &merkle_path)?;
-
         let root_hash_path = file::touch_dir("root_hash", &db_path)?;
 
-        let file0 = crate::file::File::new(0, SPACE_RESERVED, &merkle_meta_path)?;
-        let fd0 = file0.as_fd();
+        let meta_file = crate::file::File::new(0, SPACE_RESERVED, &merkle_meta_path)?;
+        let meta_fd = meta_file.as_fd();
 
-        if reset {
-            // initialize dbparams
+        if reset_store_headers {
+            // initialize DbParams
             if cfg.payload_file_nbit < cfg.payload_regn_nbit
                 || cfg.payload_regn_nbit < PAGE_SIZE_NBIT
             {
                 return Err(DbError::InvalidParams);
             }
-            Self::initialize_header_on_disk(&cfg, fd0)?;
+            Self::initialize_header_on_disk(&cfg, meta_fd)?;
         }
 
         // read DbParams
         let mut header_bytes = [0; size_of::<DbParams>()];
-        nix::sys::uio::pread(fd0, &mut header_bytes, 0).map_err(DbError::System)?;
-        drop(file0);
+        nix::sys::uio::pread(meta_fd, &mut header_bytes, 0).map_err(DbError::System)?;
+        drop(meta_file);
         #[allow(clippy::indexing_slicing)]
         let params: DbParams = cast_slice(&header_bytes)[0];
 
-        let wal = WalConfig::builder()
+        let (sender, inbound) = tokio::sync::mpsc::unbounded_channel();
+        let disk_requester = DiskBufferRequester::new(sender);
+
+        let wal_config = WalConfig::builder()
             .file_nbit(params.wal_file_nbit)
             .block_nbit(params.wal_block_nbit)
             .max_revisions(cfg.wal.max_revisions)
             .build();
-        let (sender, inbound) = tokio::sync::mpsc::unbounded_channel();
-        let disk_requester = DiskBufferRequester::new(sender);
-        let buffer = cfg.buffer.clone();
-        #[allow(clippy::unwrap_used)]
-        let disk_buffer = DiskBuffer::new(inbound, &buffer, &wal).expect("DiskBuffer::new");
+
+        let disk_buffer =
+            DiskBuffer::new(inbound, &cfg.buffer, &wal_config).map_err(DbError::Aio)?;
 
         let disk_thread = Some(
             std::thread::Builder::new()
@@ -561,6 +554,7 @@ impl Db {
                 .expect("thread spawn should succeed"),
         );
 
+        // set up caches
         #[allow(clippy::unwrap_used)]
         let root_hash_cache: Arc<CachedSpace> = CachedSpace::new(
             &StoreConfig::builder()
@@ -575,7 +569,6 @@ impl Db {
         .unwrap()
         .into();
 
-        // setup disk buffer
         #[allow(clippy::unwrap_used)]
         let data_cache = Universe {
             merkle: SubUniverse::<Arc<CachedSpace>>::new(
@@ -619,9 +612,6 @@ impl Db {
         // recover from Wal
         disk_requester.init_wal("wal", &db_path);
 
-        let root_hash_staging = StoreRevMut::new(root_hash_cache);
-        let reset_headers = reset;
-
         let base = Universe {
             merkle: get_sub_universe_from_empty_delta(&data_cache.merkle),
         };
@@ -650,8 +640,8 @@ impl Db {
                 disk_thread,
                 disk_requester,
                 cached_space: data_cache,
-                reset_store_headers: reset_headers,
-                root_hash_staging,
+                reset_store_headers,
+                root_hash_staging: StoreRevMut::new(root_hash_cache),
             })),
             revisions: Arc::new(Mutex::new(DbRevInner {
                 inner: VecDeque::new(),
@@ -672,7 +662,6 @@ impl Db {
         // DbHeader (just a pointer to the sentinel)
         // CompactSpaceHeader for future allocations
         let (params, hdr, csh);
-        #[allow(clippy::unwrap_used)]
         let header_bytes: Vec<u8> = {
             params = DbParams {
                 magic: *MAGIC_STR,
@@ -693,11 +682,9 @@ impl Db {
         })
         .chain({
             // write out the CompactSpaceHeader
-            csh = CompactSpaceHeader::new(
-                NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(),
-                #[allow(clippy::unwrap_used)]
-                NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(),
-            );
+            let space_reserved =
+                NonZeroUsize::new(SPACE_RESERVED as usize).expect("SPACE_RESERVED is non-zero");
+            csh = CompactSpaceHeader::new(space_reserved, space_reserved);
             bytemuck::bytes_of(&csh)
         })
         .copied()
@@ -712,7 +699,7 @@ impl Db {
         &self,
         cached_space: &Universe<Arc<CachedSpace>>,
         reset_store_headers: bool,
-    ) -> Result<(Universe<StoreRevMut>, DbRev<MutStore>), DbError> {
+    ) -> Result<(Universe<StoreRevMut>, DbRev<StoreRevMut>), DbError> {
         let mut offset = Db::PARAM_SIZE as usize;
         let db_header: DiskAddress = DiskAddress::from(offset);
         offset += DbHeader::MSIZE as usize;
@@ -753,7 +740,7 @@ impl Db {
 
         let header_refs = (db_header_ref, merkle_payload_header_ref);
 
-        let mut rev: DbRev<CompactSpace<Node, StoreRevMut>> = Db::new_revision(
+        let mut rev: DbRev<StoreRevMut> = Db::new_revision(
             header_refs,
             (store.merkle.meta.clone(), store.merkle.payload.clone()),
             self.payload_regn_nbit,
@@ -790,7 +777,7 @@ impl Db {
         payload_regn_nbit: u64,
         payload_max_walk: u64,
         cfg: &DbRevConfig,
-    ) -> Result<DbRev<CompactSpace<Node, K>>, DbError> {
+    ) -> Result<DbRev<K>, DbError> {
         // TODO: This should be a compile time check
         const DB_OFFSET: u64 = Db::PARAM_SIZE;
         let merkle_offset = DB_OFFSET + DbHeader::MSIZE;
@@ -813,7 +800,7 @@ impl Db {
         )
         .unwrap();
 
-        let merkle = Merkle::new(Box::new(merkle_space));
+        let merkle = Merkle::new(merkle_space);
 
         if db_header_ref.kv_root.is_null() {
             let mut err = Ok(());
@@ -893,7 +880,7 @@ impl Db {
     ///
     /// If no revision with matching root hash found, returns None.
     // #[measure([HitCount])]
-    pub fn get_revision(&self, root_hash: &TrieHash) -> Option<DbRev<SharedStore>> {
+    pub fn get_revision(&self, root_hash: &TrieHash) -> Option<DbRev<StoreRevShared>> {
         let mut revisions = self.revisions.lock();
         let inner_lock = self.inner.read();
 

@@ -1,8 +1,10 @@
-use crate::db::{MutStore, SharedStore};
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 use crate::nibbles::Nibbles;
-use crate::shale::{self, disk_address::DiskAddress, ObjWriteSizeError, ShaleError, ShaleStore};
+use crate::shale::compact::CompactSpace;
+use crate::shale::CachedStore;
+use crate::shale::{self, disk_address::DiskAddress, ObjWriteSizeError, ShaleError};
+use crate::storage::{StoreRevMut, StoreRevShared};
 use crate::v2::api::{self, HashKey};
 use futures::{StreamExt, TryStreamExt};
 use sha3::{Digest, Keccak256};
@@ -69,21 +71,21 @@ macro_rules! write_node {
 
 #[derive(Debug)]
 pub struct Merkle<S, T> {
-    store: Box<S>,
+    store: CompactSpace<Node, S>,
     phantom: PhantomData<T>,
 }
 
-impl<T> From<Merkle<MutStore, T>> for Merkle<SharedStore, T> {
-    fn from(value: Merkle<MutStore, T>) -> Self {
+impl<T> From<Merkle<StoreRevMut, T>> for Merkle<StoreRevShared, T> {
+    fn from(value: Merkle<StoreRevMut, T>) -> Self {
         let store = value.store.into();
         Merkle {
-            store: Box::new(store),
+            store,
             phantom: PhantomData,
         }
     }
 }
 
-impl<S: ShaleStore<Node>, T> Merkle<S, T> {
+impl<S: CachedStore, T> Merkle<S, T> {
     pub fn get_node(&self, ptr: DiskAddress) -> Result<NodeObjRef, MerkleError> {
         self.store.get_item(ptr).map_err(Into::into)
     }
@@ -99,11 +101,11 @@ impl<S: ShaleStore<Node>, T> Merkle<S, T> {
 
 impl<'de, S, T> Merkle<S, T>
 where
-    S: ShaleStore<Node> + Send + Sync,
+    S: CachedStore,
     T: BinarySerde,
     EncodedNode<T>: serde::Serialize + serde::Deserialize<'de>,
 {
-    pub fn new(store: Box<S>) -> Self {
+    pub const fn new(store: CompactSpace<Node, S>) -> Self {
         Self {
             store,
             phantom: PhantomData,
@@ -175,12 +177,22 @@ where
     }
 }
 
-impl<S, T> Merkle<S, T>
+// TODO remove
+// <<<<<<< HEAD
+// impl<S, T> Merkle<S, T>
+// where
+//     S: ShaleStore<Node> + Send + Sync,
+//     T: BinarySerde,
+//     EncodedNode<T>: serde::Serialize + for<'de> serde::Deserialize<'de>,
+// {
+// =======
+impl<S: CachedStore, T> Merkle<S, T>
 where
-    S: ShaleStore<Node> + Send + Sync,
+    S: CachedStore,
     T: BinarySerde,
     EncodedNode<T>: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
+    //>>>>>>> origin/main
     pub fn init_root(&self) -> Result<DiskAddress, MerkleError> {
         self.store
             .put_item(
@@ -194,10 +206,6 @@ where
             )
             .map_err(MerkleError::Shale)
             .map(|node| node.as_ptr())
-    }
-
-    pub fn get_store(&self) -> &S {
-        self.store.as_ref()
     }
 
     pub fn empty_root() -> &'static TrieHash {
@@ -1328,7 +1336,7 @@ impl<'a> std::ops::Deref for Ref<'a> {
     }
 }
 
-impl<'a, S: ShaleStore<Node> + Send + Sync, T> RefMut<'a, S, T> {
+impl<'a, S, T> RefMut<'a, S, T> {
     fn new(ptr: DiskAddress, parents: ParentAddresses, merkle: &'a mut Merkle<S, T>) -> Self {
         Self {
             ptr,
@@ -1336,7 +1344,9 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> RefMut<'a, S, T> {
             merkle,
         }
     }
+}
 
+impl<'a, S: CachedStore, T> RefMut<'a, S, T> {
     #[allow(clippy::unwrap_used)]
     pub fn get(&self) -> Ref {
         Ref(self.merkle.get_node(self.ptr).unwrap())
@@ -1429,7 +1439,7 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
 mod tests {
     use super::*;
     use crate::merkle::node::PlainCodec;
-    use shale::{cached::DynamicMem, compact::CompactSpace, CachedStore};
+    use shale::{cached::InMemLinearStore, CachedStore};
     use test_case::test_case;
 
     fn leaf(path: Vec<u8>, data: Vec<u8>) -> NodeType {
@@ -1443,14 +1453,14 @@ mod tests {
         assert_eq!(n, nibbles);
     }
 
-    fn create_generic_test_merkle<'de, T>() -> Merkle<CompactSpace<Node, DynamicMem>, T>
+    fn create_generic_test_merkle<'de, T>() -> Merkle<InMemLinearStore, T>
     where
         T: BinarySerde,
         EncodedNode<T>: serde::Serialize + serde::Deserialize<'de>,
     {
         const RESERVED: usize = 0x1000;
 
-        let mut dm = shale::cached::DynamicMem::new(0x10000, 0);
+        let mut dm = shale::cached::InMemLinearStore::new(0x10000, 0);
         let compact_header = DiskAddress::null();
         dm.write(
             compact_header.into(),
@@ -1468,18 +1478,17 @@ mod tests {
         )
         .unwrap();
         let mem_meta = dm;
-        let mem_payload = DynamicMem::new(0x10000, 0x1);
+        let mem_payload = InMemLinearStore::new(0x10000, 0x1);
 
         let cache = shale::ObjCache::new(1);
         let space =
             shale::compact::CompactSpace::new(mem_meta, mem_payload, compact_header, cache, 10, 16)
                 .expect("CompactSpace init fail");
 
-        let store = Box::new(space);
-        Merkle::new(store)
+        Merkle::new(space)
     }
 
-    pub(super) fn create_test_merkle() -> Merkle<CompactSpace<Node, DynamicMem>, Bincode> {
+    pub(super) fn create_test_merkle() -> Merkle<InMemLinearStore, Bincode> {
         create_generic_test_merkle::<Bincode>()
     }
 

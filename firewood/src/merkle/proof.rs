@@ -4,9 +4,10 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use crate::shale::ObjWriteSizeError;
-use crate::shale::{disk_address::DiskAddress, ShaleError, ShaleStore};
+use crate::shale::{disk_address::DiskAddress, ShaleError};
+use crate::shale::{CachedStore, ObjWriteSizeError};
 use crate::v2::api::HashKey;
+use aiofut::AioError;
 use nix::errno::Errno;
 use sha3::Digest;
 use thiserror::Error;
@@ -23,6 +24,8 @@ use super::{BinarySerde, EncodedNode, NodeObjRef};
 
 #[derive(Debug, Error)]
 pub enum ProofError {
+    #[error("aio error: {0:?}")]
+    AioError(AioError),
     #[error("decoding error")]
     DecodeError(#[from] bincode::Error),
     #[error("no such node")]
@@ -74,6 +77,7 @@ impl From<DataStoreError> for ProofError {
 impl From<DbError> for ProofError {
     fn from(d: DbError) -> ProofError {
         match d {
+            DbError::Aio(e) => ProofError::AioError(e),
             DbError::InvalidParams => ProofError::InvalidProof,
             DbError::Merkle(e) => ProofError::InvalidNode(e),
             DbError::System(e) => ProofError::SystemError(e),
@@ -351,10 +355,10 @@ fn decode_subproof<'a, S, T, N>(
     child_hash: &HashKey,
 ) -> Result<NodeObjRef<'a>, ProofError>
 where
-    S: ShaleStore<Node> + Send + Sync,
+    S: CachedStore,
     T: BinarySerde,
-    EncodedNode<T>: serde::Serialize + for<'de> serde::Deserialize<'de>,
-    N: AsRef<[u8]>,
+    EncodedNode<T>: serde::Serialize + serde::de::DeserializeOwned,
+    N: AsRef<[u8]> + Send,
 {
     let child_proof = proofs_map
         .get(child_hash)
@@ -681,7 +685,7 @@ where
 //     keep the entire branch and return.
 //   - the fork point is a shortnode, the shortnode is excluded in the range,
 //     unset the entire branch.
-fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySerde>(
+fn unset_node_ref<K: AsRef<[u8]>, S: CachedStore, T: BinarySerde>(
     merkle: &Merkle<S, T>,
     parent: DiskAddress,
     node: Option<DiskAddress>,
