@@ -1383,19 +1383,21 @@ pub const fn to_nibble_array(x: u8) -> [u8; 2] {
 // given a set of nibbles, take each pair and convert this back into bytes
 // if an odd number of nibbles, in debug mode it panics. In release mode,
 // the final nibble is dropped
-pub fn from_nibbles(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
+pub fn from_nibbles_even(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
     debug_assert_eq!(nibbles.len() & 1, 0);
     #[allow(clippy::indexing_slicing)]
     nibbles.chunks_exact(2).map(|p| (p[0] << 4) | p[1])
 }
 
 // TODO comment / rename
-pub fn from_nibbles_2(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
-    #[allow(clippy::indexing_slicing)]
+pub fn from_nibbles(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
     let chunks = nibbles.chunks(2);
     chunks.map(|p| {
-        let second_nibble = if p.len() == 1 { 0 } else { p[1] };
-        (p[0] << 4) | second_nibble
+        #[allow(clippy::indexing_slicing)]
+        {
+            let second_nibble = if p.len() == 1 { 0 } else { p[1] };
+            (p[0] << 4) | second_nibble
+        }
     })
 }
 

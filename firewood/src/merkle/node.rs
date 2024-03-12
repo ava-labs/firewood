@@ -3,7 +3,7 @@
 
 use crate::{
     logger::trace,
-    merkle::from_nibbles,
+    merkle::from_nibbles_even,
     shale::{disk_address::DiskAddress, CachedStore, ShaleError, Storable},
 };
 use bincode::Options;
@@ -20,7 +20,6 @@ use std::{
     io::{Cursor, Write},
     marker::PhantomData,
     mem::size_of,
-    ops::Deref,
     sync::{
         atomic::{AtomicBool, Ordering},
         OnceLock,
@@ -38,7 +37,7 @@ pub use partial_path::PartialPath;
 
 use crate::nibbles::Nibbles;
 
-use super::{from_nibbles_2, TRIE_HASH_LEN};
+use super::{from_nibbles, TRIE_HASH_LEN};
 
 bitflags! {
     // should only ever be the size of a nibble
@@ -443,7 +442,7 @@ impl Serialize for EncodedNode<PlainCodec> {
                 let data = Some(&*n.data);
                 let chd: Vec<(u64, Vec<u8>)> = Default::default();
                 let path_bit_len: u64 = (n.path.len() * 4).try_into().expect("path too long");
-                let path: Vec<_> = from_nibbles_2(n.path.deref()).collect();
+                let path: Vec<_> = from_nibbles(&n.path).collect();
                 (chd, data, path_bit_len, path)
             }
 
@@ -469,7 +468,7 @@ impl Serialize for EncodedNode<PlainCodec> {
 
                 let path_bit_len: u64 = (path.len() * 4).try_into().expect("path too long");
 
-                let path = from_nibbles_2(path.deref()).collect();
+                let path = from_nibbles(path).collect();
 
                 (chd, data, path_bit_len, path)
             }
@@ -542,7 +541,10 @@ impl Serialize for EncodedNode<Bincode> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match &self.node {
             EncodedNodeType::Leaf(n) => {
-                let list = [from_nibbles(&n.path.encode()).collect(), n.data.to_vec()];
+                let list = [
+                    from_nibbles_even(&n.path.encode()).collect(),
+                    n.data.to_vec(),
+                ];
                 let mut seq = serializer.serialize_seq(Some(list.len()))?;
                 for e in list {
                     seq.serialize_element(&e)?;
@@ -570,7 +572,7 @@ impl Serialize for EncodedNode<Bincode> {
                     list[BranchNode::MAX_CHILDREN] = val.clone();
                 }
 
-                let serialized_path = from_nibbles(&path.encode()).collect();
+                let serialized_path = from_nibbles_even(&path.encode()).collect();
                 list[BranchNode::MAX_CHILDREN + 1] = serialized_path;
 
                 let mut seq = serializer.serialize_seq(Some(list.len()))?;

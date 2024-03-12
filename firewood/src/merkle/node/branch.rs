@@ -3,7 +3,7 @@
 
 use super::Data;
 use crate::{
-    merkle::{from_nibbles, to_nibble_array, PartialPath},
+    merkle::{from_nibbles_even, to_nibble_array, PartialPath},
     shale::{DiskAddress, ShaleError, Storable},
 };
 use std::{
@@ -109,7 +109,7 @@ impl Storable for BranchNode {
     fn serialize(&self, to: &mut [u8]) -> Result<(), crate::shale::ShaleError> {
         let mut cursor = Cursor::new(to);
 
-        let path: Vec<u8> = from_nibbles(&self.path.encode()).collect();
+        let path: Vec<u8> = from_nibbles_even(&self.path.encode()).collect();
         cursor.write_all(&[path.len() as PathLen])?;
         cursor.write_all(&path)?;
 
