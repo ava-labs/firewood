@@ -1133,9 +1133,12 @@ where
 
         // Get the hashes of the nodes.
         for (path, node) in nodes_and_paths.into_iter() {
-            let path_nibbles = Nibbles::<0>::new(path.as_ref()).into_iter().collect();
+            // TODO why does shared_path_proof fail if we swap the commented line below?
+            // The path passed in should be in nibbles, not whole bytes
+            // let path = Nibbles::<0>::new(path.as_ref()).into_iter().collect();
+            let path = PartialPath(path.to_vec());
 
-            let encoded = self.encode(PartialPath(path_nibbles), node.inner())?;
+            let encoded = self.encode(path, node.inner())?;
             let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(&encoded).into();
             proofs.insert(hash, encoded.to_vec());
         }
