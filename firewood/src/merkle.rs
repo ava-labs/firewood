@@ -310,7 +310,7 @@ impl<S: CachedStore, T> Merkle<S, T> {
                         .chain(key_nibbles.clone())
                         .collect::<Vec<_>>();
 
-                    let overlap = PrefixOverlap::from(&n.path, &key_remainder);
+                    let overlap = PrefixOverlap::from(&n.partial_path, &key_remainder);
 
                     #[allow(clippy::indexing_slicing)]
                     match (overlap.unique_a.len(), overlap.unique_b.len()) {
@@ -623,15 +623,15 @@ impl<S: CachedStore, T> Merkle<S, T> {
                                 None
                             }
                             NodeType::Leaf(n) => {
-                                if n.path.len() == 0 {
+                                if n.partial_path.len() == 0 {
                                     n.data = Data(val);
 
                                     None
                                 } else {
                                     #[allow(clippy::indexing_slicing)]
-                                    let idx = n.path[0];
+                                    let idx = n.partial_path[0];
                                     #[allow(clippy::indexing_slicing)]
-                                    (n.path = PartialPath(n.path[1..].to_vec()));
+                                    (n.partial_path = PartialPath(n.partial_path[1..].to_vec()));
                                     u.rehash();
 
                                     Some((idx, true, None, val))
@@ -802,10 +802,10 @@ impl<S: CachedStore, T> Merkle<S, T> {
                                         .iter()
                                         .copied()
                                         .chain(once(child_index as u8))
-                                        .chain(child.path.0.iter().copied())
+                                        .chain(child.partial_path.0.iter().copied())
                                         .collect();
 
-                                    child.path = PartialPath(path);
+                                    child.partial_path = PartialPath(path);
 
                                     Node::from_leaf(child)
                                 }
@@ -994,7 +994,10 @@ impl<S: CachedStore, T> Merkle<S, T> {
                     }
                 }
                 NodeType::Leaf(n) => {
-                    let node_ref = if once(nib).chain(key_nibbles).eq(n.path.iter().copied()) {
+                    let node_ref = if once(nib)
+                        .chain(key_nibbles)
+                        .eq(n.partial_path.iter().copied())
+                    {
                         Some(node_ref)
                     } else {
                         None
@@ -1014,7 +1017,7 @@ impl<S: CachedStore, T> Merkle<S, T> {
             NodeType::Branch(n) if n.value.as_ref().is_some() && n.path.is_empty() => {
                 Some(node_ref)
             }
-            NodeType::Leaf(n) if n.path.len() == 0 => Some(node_ref),
+            NodeType::Leaf(n) if n.partial_path.len() == 0 => Some(node_ref),
             _ => None,
         };
 
@@ -2084,7 +2087,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let node = Node::from_leaf(LeafNode {
-            path: PartialPath::from(path),
+            partial_path: PartialPath::from(path),
             data: Data(data.clone()),
         });
 
@@ -2103,7 +2106,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let node = Node::from_leaf(LeafNode {
-            path: PartialPath::from(path.clone()),
+            partial_path: PartialPath::from(path.clone()),
             data: Data(data),
         });
 
@@ -2187,7 +2190,7 @@ mod tests {
         assert_eq!(&to_delete[0], &addr);
 
         let (path, data) = match node.inner() {
-            NodeType::Leaf(leaf) => (&leaf.path, Some(&leaf.data)),
+            NodeType::Leaf(leaf) => (&leaf.partial_path, Some(&leaf.data)),
             NodeType::Branch(branch) => (&branch.path, branch.value.as_ref()),
         };
 

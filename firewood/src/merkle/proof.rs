@@ -333,7 +333,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
             let encoded_sub_proof = match child_node.inner() {
                 NodeType::Leaf(n) => {
                     break n
-                        .path
+                        .partial_path
                         .iter()
                         .copied()
                         .eq(key_nibbles) // all nibbles have to match
@@ -552,7 +552,7 @@ where
 
             #[allow(clippy::indexing_slicing)]
             NodeType::Leaf(n) => {
-                let path = &*n.path;
+                let path = &*n.partial_path;
 
                 [fork_left, fork_right] = [&left_chunks[index..], &right_chunks[index..]]
                     .map(|chunks| chunks.chunks(path.len()).next().unwrap_or_default())
