@@ -127,8 +127,8 @@ where
                                 self.get_node(addr)
                                     .and_then(|node| {
                                         let partial_path = match node.inner() {
-                                            NodeType::Leaf(n) => n.path.iter().copied(),
-                                            NodeType::Branch(n) => n.path.iter().copied(),
+                                            NodeType::Leaf(n) => n.partial_path.iter().copied(),
+                                            NodeType::Branch(n) => n.partial_path.iter().copied(),
                                         };
 
                                         let child_path = path
@@ -210,7 +210,7 @@ where
         self.store
             .put_item(
                 Node::from_branch(BranchNode {
-                    path: vec![].into(),
+                    partial_path: vec![].into(),
                     children: [None; BranchNode::MAX_CHILDREN],
                     value: None,
                     children_encoded: Default::default(),
@@ -244,8 +244,8 @@ where
         Ok(if let Some(root) = root {
             let node = self.get_node(root)?;
             let node_path = match node.inner() {
-                NodeType::Branch(n) => n.path.clone(),
-                NodeType::Leaf(n) => n.path.clone(),
+                NodeType::Branch(n) => n.partial_path.clone(),
+                NodeType::Leaf(n) => n.partial_path.clone(),
             };
             self.to_hash(node_path, node.inner())?
         } else {
@@ -337,7 +337,7 @@ where
                         .chain(key_nibbles.clone())
                         .collect::<Vec<_>>();
 
-                    let overlap = PrefixOverlap::from(&n.path, &key_remainder);
+                    let overlap = PrefixOverlap::from(&n.partial_path, &key_remainder);
 
                     #[allow(clippy::indexing_slicing)]
                     match (overlap.unique_a.len(), overlap.unique_b.len()) {
@@ -368,7 +368,7 @@ where
                             children[new_leaf_index as usize] = Some(new_leaf);
 
                             let new_branch = BranchNode {
-                                path: PartialPath(overlap.shared.to_vec()),
+                                partial_path: PartialPath(overlap.shared.to_vec()),
                                 children,
                                 value: n.data.clone().into(),
                                 children_encoded: Default::default(),
@@ -401,7 +401,7 @@ where
                                 .as_ptr();
 
                             let mut new_branch = BranchNode {
-                                path: PartialPath(new_branch_path),
+                                partial_path: PartialPath(new_branch_path),
                                 children: [None; BranchNode::MAX_CHILDREN],
                                 value: Some(val.into()),
                                 children_encoded: Default::default(),
@@ -445,7 +445,7 @@ where
                             let new_leaf = self.put_node(new_leaf)?.as_ptr();
 
                             let mut new_branch = BranchNode {
-                                path: PartialPath(new_branch_path),
+                                partial_path: PartialPath(new_branch_path),
                                 children: [None; BranchNode::MAX_CHILDREN],
                                 value: None,
                                 children_encoded: Default::default(),
@@ -464,7 +464,7 @@ where
                     break None;
                 }
 
-                NodeType::Branch(n) if n.path.len() == 0 => {
+                NodeType::Branch(n) if n.partial_path.len() == 0 => {
                     #[allow(clippy::indexing_slicing)]
                     match n.children[next_nibble as usize] {
                         Some(c) => (node, c),
@@ -497,7 +497,7 @@ where
                         .chain(key_nibbles.clone())
                         .collect::<Vec<_>>();
 
-                    let overlap = PrefixOverlap::from(&n.path, &key_remainder);
+                    let overlap = PrefixOverlap::from(&n.partial_path, &key_remainder);
 
                     #[allow(clippy::indexing_slicing)]
                     match (overlap.unique_a.len(), overlap.unique_b.len()) {
@@ -564,7 +564,7 @@ where
                                 .as_ptr();
 
                             let mut new_branch = BranchNode {
-                                path: PartialPath(new_branch_path),
+                                partial_path: PartialPath(new_branch_path),
                                 children: [None; BranchNode::MAX_CHILDREN],
                                 value: Some(val.into()),
                                 children_encoded: Default::default(),
@@ -610,7 +610,7 @@ where
                             let new_leaf = self.put_node(new_leaf)?.as_ptr();
 
                             let mut new_branch = BranchNode {
-                                path: PartialPath(new_branch_path),
+                                partial_path: PartialPath(new_branch_path),
                                 children: [None; BranchNode::MAX_CHILDREN],
                                 value: None,
                                 children_encoded: Default::default(),
@@ -650,15 +650,15 @@ where
                                 None
                             }
                             NodeType::Leaf(n) => {
-                                if n.path.len() == 0 {
+                                if n.partial_path.len() == 0 {
                                     n.data = Data(val);
 
                                     None
                                 } else {
                                     #[allow(clippy::indexing_slicing)]
-                                    let idx = n.path[0];
+                                    let idx = n.partial_path[0];
                                     #[allow(clippy::indexing_slicing)]
-                                    (n.path = PartialPath(n.path[1..].to_vec()));
+                                    (n.partial_path = PartialPath(n.partial_path[1..].to_vec()));
                                     u.rehash();
 
                                     Some((idx, true, None, val))
@@ -691,7 +691,7 @@ where
 
                 let branch = self
                     .put_node(Node::from_branch(BranchNode {
-                        path: vec![].into(),
+                        partial_path: vec![].into(),
                         children: chd,
                         value: Some(Data(val)),
                         children_encoded: Default::default(),
@@ -741,7 +741,7 @@ where
 
                     // don't change the sentinal node
                     if children.len() == 1 && !parents.is_empty() {
-                        let branch_path = &branch.path.0;
+                        let branch_path = &branch.partial_path.0;
 
                         #[allow(clippy::indexing_slicing)]
                         let (child_index, child) = children[0];
@@ -801,7 +801,7 @@ where
                     match (children.len(), &branch.value, !parents.is_empty()) {
                         // node is invalid, all single-child nodes should have data
                         (1, None, true) => {
-                            let parent_path = &branch.path.0;
+                            let parent_path = &branch.partial_path.0;
 
                             #[allow(clippy::indexing_slicing)]
                             let (child_index, child) = children[0];
@@ -817,10 +817,10 @@ where
                                         .iter()
                                         .copied()
                                         .chain(once(child_index as u8))
-                                        .chain(child.path.0.iter().copied())
+                                        .chain(child.partial_path.0.iter().copied())
                                         .collect();
 
-                                    child.path = PartialPath(path);
+                                    child.partial_path = PartialPath(path);
 
                                     Node::from_branch(child)
                                 }
@@ -829,10 +829,10 @@ where
                                         .iter()
                                         .copied()
                                         .chain(once(child_index as u8))
-                                        .chain(child.path.0.iter().copied())
+                                        .chain(child.partial_path.0.iter().copied())
                                         .collect();
 
-                                    child.path = PartialPath(path);
+                                    child.partial_path = PartialPath(path);
 
                                     Node::from_leaf(child)
                                 }
@@ -848,7 +848,7 @@ where
                         // branch nodes shouldn't have no children
                         (0, Some(data), true) => {
                             let leaf = Node::from_leaf(LeafNode::new(
-                                PartialPath(branch.path.0.clone()),
+                                PartialPath(branch.partial_path.0.clone()),
                                 data.clone(),
                             ));
 
@@ -985,12 +985,14 @@ where
 
             let next_ptr = match &node_ref.inner {
                 #[allow(clippy::indexing_slicing)]
-                NodeType::Branch(n) if n.path.len() == 0 => match n.children[nib as usize] {
-                    Some(c) => c,
-                    None => return Ok(None),
-                },
+                NodeType::Branch(n) if n.partial_path.len() == 0 => {
+                    match n.children[nib as usize] {
+                        Some(c) => c,
+                        None => return Ok(None),
+                    }
+                }
                 NodeType::Branch(n) => {
-                    let mut n_path_iter = n.path.iter().copied();
+                    let mut n_path_iter = n.partial_path.iter().copied();
 
                     if n_path_iter.next() != Some(nib) {
                         return Ok(None);
@@ -1021,7 +1023,10 @@ where
                     }
                 }
                 NodeType::Leaf(n) => {
-                    let node_ref = if once(nib).chain(key_nibbles).eq(n.path.iter().copied()) {
+                    let node_ref = if once(nib)
+                        .chain(key_nibbles)
+                        .eq(n.partial_path.iter().copied())
+                    {
                         Some(node_ref)
                     } else {
                         None
@@ -1038,10 +1043,10 @@ where
 
         // when we're done iterating over nibbles, check if the node we're at has a value
         let node_ref = match &node_ref.inner {
-            NodeType::Branch(n) if n.value.as_ref().is_some() && n.path.is_empty() => {
+            NodeType::Branch(n) if n.value.as_ref().is_some() && n.partial_path.is_empty() => {
                 Some(node_ref)
             }
-            NodeType::Leaf(n) if n.path.len() == 0 => Some(node_ref),
+            NodeType::Leaf(n) if n.partial_path.len() == 0 => Some(node_ref),
             _ => None,
         };
 
@@ -1525,7 +1530,7 @@ mod tests {
         }
 
         NodeType::Branch(Box::new(BranchNode {
-            path,
+            partial_path: path,
             children,
             value,
             children_encoded,
@@ -1535,7 +1540,7 @@ mod tests {
     fn branch_without_data(path: &[u8], encoded_child: Option<Vec<u8>>) -> NodeType {
         let path = path.to_vec();
         let path = Nibbles::<0>::new(&path);
-        let path = PartialPath(path.into_iter().collect());
+        let path: PartialPath = PartialPath(path.into_iter().collect());
 
         let children = Default::default();
         // TODO: Properly test empty data as a value
@@ -1547,7 +1552,7 @@ mod tests {
         }
 
         NodeType::Branch(Box::new(BranchNode {
-            path,
+            partial_path: path,
             children,
             value,
             children_encoded,
@@ -2126,7 +2131,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let node = Node::from_leaf(LeafNode {
-            path: PartialPath::from(path),
+            partial_path: PartialPath::from(path),
             data: Data(data.clone()),
         });
 
@@ -2145,7 +2150,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let node = Node::from_leaf(LeafNode {
-            path: PartialPath::from(path.clone()),
+            partial_path: PartialPath::from(path.clone()),
             data: Data(data),
         });
 
@@ -2164,7 +2169,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let node = Node::from_branch(BranchNode {
-            path: PartialPath::from(path.clone()),
+            partial_path: PartialPath::from(path.clone()),
             children: Default::default(),
             value: Some(Data(data.clone())),
             children_encoded: Default::default(),
@@ -2185,7 +2190,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let node = Node::from_branch(BranchNode {
-            path: PartialPath::from(path.clone()),
+            partial_path: PartialPath::from(path.clone()),
             children: Default::default(),
             value: Some(Data(data)),
             children_encoded: Default::default(),
@@ -2229,8 +2234,8 @@ mod tests {
         assert_eq!(&to_delete[0], &addr);
 
         let (path, data) = match node.inner() {
-            NodeType::Leaf(leaf) => (&leaf.path, Some(&leaf.data)),
-            NodeType::Branch(branch) => (&branch.path, branch.value.as_ref()),
+            NodeType::Leaf(leaf) => (&leaf.partial_path, Some(&leaf.data)),
+            NodeType::Branch(branch) => (&branch.partial_path, branch.value.as_ref()),
         };
 
         assert_eq!(path, &PartialPath(new_path));
