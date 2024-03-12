@@ -29,11 +29,11 @@ use std::{
 
 mod branch;
 mod leaf;
-mod partial_path;
+mod path;
 
 pub use branch::BranchNode;
 pub use leaf::{LeafNode, SIZE as LEAF_NODE_SIZE};
-pub use partial_path::Path;
+pub use path::Path;
 
 use crate::nibbles::Nibbles;
 
