@@ -118,7 +118,7 @@ where
             NodeType::Leaf(n) => EncodedNode::new(EncodedNodeType::Leaf(n.clone())),
 
             NodeType::Branch(n) => {
-                let path = n.path.clone();
+                let path = n.partial_path.clone();
 
                 // pair up DiskAddresses with encoded children and pick the right one
                 let encoded_children = n.chd().iter().zip(n.children_encoded.iter());
@@ -179,7 +179,7 @@ impl<S: CachedStore, T> Merkle<S, T> {
         self.store
             .put_item(
                 Node::from_branch(BranchNode {
-                    path: vec![].into(),
+                    partial_path: vec![].into(),
                     children: [None; BranchNode::MAX_CHILDREN],
                     value: None,
                     children_encoded: Default::default(),
@@ -341,7 +341,7 @@ impl<S: CachedStore, T> Merkle<S, T> {
                             children[new_leaf_index as usize] = Some(new_leaf);
 
                             let new_branch = BranchNode {
-                                path: PartialPath(overlap.shared.to_vec()),
+                                partial_path: PartialPath(overlap.shared.to_vec()),
                                 children,
                                 value: n.data.clone().into(),
                                 children_encoded: Default::default(),
@@ -374,7 +374,7 @@ impl<S: CachedStore, T> Merkle<S, T> {
                                 .as_ptr();
 
                             let mut new_branch = BranchNode {
-                                path: PartialPath(new_branch_path),
+                                partial_path: PartialPath(new_branch_path),
                                 children: [None; BranchNode::MAX_CHILDREN],
                                 value: Some(val.into()),
                                 children_encoded: Default::default(),
@@ -418,7 +418,7 @@ impl<S: CachedStore, T> Merkle<S, T> {
                             let new_leaf = self.put_node(new_leaf)?.as_ptr();
 
                             let mut new_branch = BranchNode {
-                                path: PartialPath(new_branch_path),
+                                partial_path: PartialPath(new_branch_path),
                                 children: [None; BranchNode::MAX_CHILDREN],
                                 value: None,
                                 children_encoded: Default::default(),
@@ -437,7 +437,7 @@ impl<S: CachedStore, T> Merkle<S, T> {
                     break None;
                 }
 
-                NodeType::Branch(n) if n.path.len() == 0 => {
+                NodeType::Branch(n) if n.partial_path.len() == 0 => {
                     #[allow(clippy::indexing_slicing)]
                     match n.children[next_nibble as usize] {
                         Some(c) => (node, c),
@@ -470,7 +470,7 @@ impl<S: CachedStore, T> Merkle<S, T> {
                         .chain(key_nibbles.clone())
                         .collect::<Vec<_>>();
 
-                    let overlap = PrefixOverlap::from(&n.path, &key_remainder);
+                    let overlap = PrefixOverlap::from(&n.partial_path, &key_remainder);
 
                     #[allow(clippy::indexing_slicing)]
                     match (overlap.unique_a.len(), overlap.unique_b.len()) {
@@ -537,7 +537,7 @@ impl<S: CachedStore, T> Merkle<S, T> {
                                 .as_ptr();
 
                             let mut new_branch = BranchNode {
-                                path: PartialPath(new_branch_path),
+                                partial_path: PartialPath(new_branch_path),
                                 children: [None; BranchNode::MAX_CHILDREN],
                                 value: Some(val.into()),
                                 children_encoded: Default::default(),
@@ -583,7 +583,7 @@ impl<S: CachedStore, T> Merkle<S, T> {
                             let new_leaf = self.put_node(new_leaf)?.as_ptr();
 
                             let mut new_branch = BranchNode {
-                                path: PartialPath(new_branch_path),
+                                partial_path: PartialPath(new_branch_path),
                                 children: [None; BranchNode::MAX_CHILDREN],
                                 value: None,
                                 children_encoded: Default::default(),
@@ -664,7 +664,7 @@ impl<S: CachedStore, T> Merkle<S, T> {
 
                 let branch = self
                     .put_node(Node::from_branch(BranchNode {
-                        path: vec![].into(),
+                        partial_path: vec![].into(),
                         children: chd,
                         value: Some(Data(val)),
                         children_encoded: Default::default(),
@@ -714,7 +714,7 @@ impl<S: CachedStore, T> Merkle<S, T> {
 
                     // don't change the sentinal node
                     if children.len() == 1 && !parents.is_empty() {
-                        let branch_path = &branch.path.0;
+                        let branch_path = &branch.partial_path.0;
 
                         #[allow(clippy::indexing_slicing)]
                         let (child_index, child) = children[0];
@@ -774,7 +774,7 @@ impl<S: CachedStore, T> Merkle<S, T> {
                     match (children.len(), &branch.value, !parents.is_empty()) {
                         // node is invalid, all single-child nodes should have data
                         (1, None, true) => {
-                            let parent_path = &branch.path.0;
+                            let parent_path = &branch.partial_path.0;
 
                             #[allow(clippy::indexing_slicing)]
                             let (child_index, child) = children[0];
@@ -790,10 +790,10 @@ impl<S: CachedStore, T> Merkle<S, T> {
                                         .iter()
                                         .copied()
                                         .chain(once(child_index as u8))
-                                        .chain(child.path.0.iter().copied())
+                                        .chain(child.partial_path.0.iter().copied())
                                         .collect();
 
-                                    child.path = PartialPath(path);
+                                    child.partial_path = PartialPath(path);
 
                                     Node::from_branch(child)
                                 }
@@ -821,7 +821,7 @@ impl<S: CachedStore, T> Merkle<S, T> {
                         // branch nodes shouldn't have no children
                         (0, Some(data), true) => {
                             let leaf = Node::from_leaf(LeafNode::new(
-                                PartialPath(branch.path.0.clone()),
+                                PartialPath(branch.partial_path.0.clone()),
                                 data.clone(),
                             ));
 
@@ -958,12 +958,14 @@ impl<S: CachedStore, T> Merkle<S, T> {
 
             let next_ptr = match &node_ref.inner {
                 #[allow(clippy::indexing_slicing)]
-                NodeType::Branch(n) if n.path.len() == 0 => match n.children[nib as usize] {
-                    Some(c) => c,
-                    None => return Ok(None),
-                },
+                NodeType::Branch(n) if n.partial_path.len() == 0 => {
+                    match n.children[nib as usize] {
+                        Some(c) => c,
+                        None => return Ok(None),
+                    }
+                }
                 NodeType::Branch(n) => {
-                    let mut n_path_iter = n.path.iter().copied();
+                    let mut n_path_iter = n.partial_path.iter().copied();
 
                     if n_path_iter.next() != Some(nib) {
                         return Ok(None);
@@ -1014,7 +1016,7 @@ impl<S: CachedStore, T> Merkle<S, T> {
 
         // when we're done iterating over nibbles, check if the node we're at has a value
         let node_ref = match &node_ref.inner {
-            NodeType::Branch(n) if n.value.as_ref().is_some() && n.path.is_empty() => {
+            NodeType::Branch(n) if n.value.as_ref().is_some() && n.partial_path.is_empty() => {
                 Some(node_ref)
             }
             NodeType::Leaf(n) if n.partial_path.len() == 0 => Some(node_ref),
@@ -1464,7 +1466,7 @@ mod tests {
         }
 
         Node::from_branch(BranchNode {
-            path,
+            partial_path: path,
             children,
             value,
             children_encoded,
@@ -1486,7 +1488,7 @@ mod tests {
         }
 
         Node::from_branch(BranchNode {
-            path,
+            partial_path: path,
             children,
             value,
             children_encoded,
@@ -2125,7 +2127,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let node = Node::from_branch(BranchNode {
-            path: PartialPath::from(path.clone()),
+            partial_path: PartialPath::from(path.clone()),
             children: Default::default(),
             value: Some(Data(data.clone())),
             children_encoded: Default::default(),
@@ -2146,7 +2148,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let node = Node::from_branch(BranchNode {
-            path: PartialPath::from(path.clone()),
+            partial_path: PartialPath::from(path.clone()),
             children: Default::default(),
             value: Some(Data(data)),
             children_encoded: Default::default(),
@@ -2191,7 +2193,7 @@ mod tests {
 
         let (path, data) = match node.inner() {
             NodeType::Leaf(leaf) => (&leaf.partial_path, Some(&leaf.data)),
-            NodeType::Branch(branch) => (&branch.path, branch.value.as_ref()),
+            NodeType::Branch(branch) => (&branch.partial_path, branch.value.as_ref()),
         };
 
         assert_eq!(path, &PartialPath(new_path));

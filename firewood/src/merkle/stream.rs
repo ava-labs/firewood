@@ -146,7 +146,7 @@ impl<'a, S: CachedStore, T> Stream for MerkleNodeStream<'a, S, T> {
                             let child = merkle.get_node(child_addr)?;
 
                             let partial_path = match child.inner() {
-                                NodeType::Branch(branch) => branch.path.iter().copied(),
+                                NodeType::Branch(branch) => branch.partial_path.iter().copied(),
                                 NodeType::Leaf(leaf) => leaf.partial_path.iter().copied(),
                             };
 
@@ -240,7 +240,7 @@ fn get_iterator_intial_state<'a, S: CachedStore, T>(
                 let child = merkle.get_node(child_addr)?;
 
                 let partial_key = match child.inner() {
-                    NodeType::Branch(branch) => &branch.path,
+                    NodeType::Branch(branch) => &branch.partial_path,
                     NodeType::Leaf(leaf) => &leaf.partial_path,
                 };
 
@@ -477,7 +477,7 @@ impl<'a, 'b, S: CachedStore, T> Iterator for PathIterator<'a, 'b, S, T> {
                 };
 
                 let partial_path = match node.inner() {
-                    NodeType::Branch(branch) => &branch.path,
+                    NodeType::Branch(branch) => &branch.partial_path,
                     NodeType::Leaf(leaf) => &leaf.partial_path,
                 };
 
@@ -810,14 +810,14 @@ mod tests {
         assert_eq!(key, vec![0x00].into_boxed_slice());
         let node = node.inner().as_branch().unwrap();
         assert!(node.value.is_none());
-        assert_eq!(node.path.to_vec(), vec![0x00, 0x00]);
+        assert_eq!(node.partial_path.to_vec(), vec![0x00, 0x00]);
 
         // Covers case of branch with value
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0x00, 0x00].into_boxed_slice());
         let node = node.inner().as_branch().unwrap();
         assert_eq!(node.value.clone().unwrap().to_vec(), vec![0x00, 0x00, 0x00]);
-        assert_eq!(node.path.to_vec(), vec![0x00, 0x00, 0x00]);
+        assert_eq!(node.partial_path.to_vec(), vec![0x00, 0x00, 0x00]);
 
         // Covers case of leaf with partial path
         let (key, node) = stream.next().await.unwrap().unwrap();
