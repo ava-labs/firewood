@@ -1389,7 +1389,8 @@ pub fn from_nibbles_even(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
     nibbles.chunks_exact(2).map(|p| (p[0] << 4) | p[1])
 }
 
-// TODO comment / rename
+// Turns a slice of nibbles into bytes and returns an iterator over those bytes.
+// If there are an odd number of nibbles, pads the last byte with a zero nibble.
 pub fn from_nibbles(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
     let chunks = nibbles.chunks(2);
     chunks.map(|p| {
