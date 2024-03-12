@@ -112,20 +112,34 @@ where
         }
     }
 
-    fn encode(&self, node: &NodeType) -> Result<Vec<u8>, MerkleError> {
+    fn encode(&self, path: &[u8], node: &NodeType) -> Result<Vec<u8>, MerkleError> {
         let encoded = match node {
             NodeType::Leaf(n) => EncodedNode::new(EncodedNodeType::Leaf(n.clone())),
 
             NodeType::Branch(n) => {
                 // pair up DiskAddresses with encoded children and pick the right one
-                let encoded_children = n.chd().iter().zip(n.children_encoded.iter());
+                let encoded_children = n.chd().iter().zip(n.children_encoded.iter()).enumerate();
                 let children = encoded_children
-                    .map(|(child_addr, encoded_child)| {
+                    .map(|(child_index, (child_addr, encoded_child))| {
                         child_addr
                             // if there's a child disk address here, get the encoded bytes
                             .map(|addr| {
                                 self.get_node(addr)
-                                    .and_then(|node| self.encode(node.inner()))
+                                    .and_then(|node| {
+                                        let partial_path = match node.inner() {
+                                            NodeType::Leaf(n) => n.path.iter().copied(),
+                                            NodeType::Branch(n) => n.path.iter().copied(),
+                                        };
+
+                                        let child_path = path
+                                            .iter()
+                                            .copied()
+                                            .chain(once(child_index as u8))
+                                            .chain(partial_path)
+                                            .collect::<Vec<u8>>();
+
+                                        self.encode(&child_path, node.inner())
+                                    })
                                     .map(|node_bytes| {
                                         if node_bytes.len() >= TRIE_HASH_LEN {
                                             Keccak256::digest(&node_bytes).to_vec()
@@ -230,14 +244,18 @@ where
             .children[0];
         Ok(if let Some(root) = root {
             let node = self.get_node(root)?;
-            self.to_hash(node.inner())?
+            let node_path = match node.inner() {
+                NodeType::Branch(n) => n.path.clone(),
+                NodeType::Leaf(n) => n.path.clone(),
+            };
+            self.to_hash(&node_path.0, node.inner())?
         } else {
             *Self::empty_root()
         })
     }
 
-    fn to_hash(&self, node: &NodeType) -> Result<TrieHash, MerkleError> {
-        let res = self.encode(node)?;
+    fn to_hash(&self, path: &[u8], node: &NodeType) -> Result<TrieHash, MerkleError> {
+        let res = self.encode(path, node)?;
         Ok(TrieHash(Keccak256::digest(res).into()))
     }
 
@@ -1106,13 +1124,12 @@ where
 
         let path_iter = self.path_iter(sentinel_node, key.as_ref());
 
-        let nodes = path_iter
-            .map(|result| result.map(|(_, node)| node))
-            .collect::<Result<Vec<NodeObjRef>, MerkleError>>()?;
+        let nodes_and_paths =
+            path_iter.collect::<Result<Vec<(Box<[u8]>, NodeObjRef)>, MerkleError>>()?;
 
         // Get the hashes of the nodes.
-        for node in nodes.into_iter() {
-            let encoded = self.encode(node.inner())?;
+        for (path, node) in nodes_and_paths.into_iter() {
+            let encoded = self.encode(&path, node.inner())?;
             let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(&encoded).into();
             proofs.insert(hash, encoded.to_vec());
         }
@@ -1554,9 +1571,9 @@ mod tests {
     {
         let merkle = create_generic_test_merkle::<T>();
 
-        let encoded = merkle.encode(&node).unwrap();
+        let encoded = merkle.encode(&[], &node).unwrap();
         let new_node = merkle.decode(encoded.as_ref()).unwrap();
-        let encoded_again = merkle.encode(&new_node).unwrap();
+        let encoded_again = merkle.encode(&[], &new_node).unwrap();
 
         assert_eq!(node, new_node);
         assert_eq!(encoded, encoded_again);
