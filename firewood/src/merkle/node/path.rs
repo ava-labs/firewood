@@ -63,12 +63,12 @@ impl Path {
     // TODO: remove all non `Nibbles` usages and delete this function.
     // I also think `Path` could probably borrow instead of own data.
     //
-    /// Returns the decoded partial path
+    /// Returns the decoded path.
     pub fn decode(raw: &[u8]) -> Self {
         Self::from_iter(raw.iter().copied())
     }
 
-    /// Returns the decoded partial path
+    /// Returns the decoded path.
     pub fn from_nibbles<const N: usize>(nibbles: NibblesIterator<'_, N>) -> Self {
         Self::from_iter(nibbles)
     }
