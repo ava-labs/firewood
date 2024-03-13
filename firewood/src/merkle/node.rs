@@ -509,13 +509,6 @@ impl<T> PartialEq for EncodedNode<T> {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct EncodedBranchNode {
-    chd: Vec<(u64, Vec<u8>)>,
-    data: Option<Vec<u8>>,
-    path: Vec<u8>,
-}
-
 // Note that the serializer passed in should always be the same type as T in EncodedNode<T>.
 impl Serialize for EncodedNode<PlainCodec> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -536,14 +529,14 @@ impl Serialize for EncodedNode<PlainCodec> {
             })
             .collect();
 
-        let data = self.value.as_deref();
+        let value = self.value.as_deref();
 
         let path: Vec<u8> = from_nibbles(&self.partial_path.encode()).collect();
 
         let mut s = serializer.serialize_tuple(3)?;
 
         s.serialize_element(&chd)?;
-        s.serialize_element(&data)?;
+        s.serialize_element(&value)?;
         s.serialize_element(&path)?;
 
         s.end()
@@ -555,11 +548,11 @@ impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
     where
         D: serde::Deserializer<'de>,
     {
-        let EncodedBranchNode {
-            chd,
-            data: value,
-            path,
-        } = Deserialize::deserialize(deserializer)?;
+        let chd: Vec<(u64, Vec<u8>)>;
+        let value: Option<Vec<u8>>;
+        let path: Vec<u8>;
+
+        (chd, value, path) = Deserialize::deserialize(deserializer)?;
 
         let path = PartialPath::from_nibbles(Nibbles::<0>::new(&path).into_iter());
 
