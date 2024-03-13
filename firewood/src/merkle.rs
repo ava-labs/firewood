@@ -119,7 +119,7 @@ where
                 EncodedNode {
                     partial_path: n.partial_path.clone(),
                     children: Box::new(children),
-                    value: Some(n.data.0.clone()), // TODO implement into?
+                    value: n.data.clone().into(),
                     phantom: PhantomData,
                 }
             }
