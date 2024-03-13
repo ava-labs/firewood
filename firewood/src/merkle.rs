@@ -19,8 +19,7 @@ mod stream;
 mod trie_hash;
 
 pub use node::{
-    BinarySerde, Bincode, BranchNode, Data, EncodedNode, EncodedNodeType, LeafNode, Node, NodeType,
-    PartialPath,
+    BinarySerde, Bincode, BranchNode, Data, EncodedNode, LeafNode, Node, NodeType, PartialPath,
 };
 pub use proof::{Proof, ProofError};
 pub use stream::MerkleKeyValueStream;
@@ -115,7 +114,15 @@ where
     #[allow(dead_code)]
     fn encode(&self, node: &NodeType) -> Result<Vec<u8>, MerkleError> {
         let encoded = match node {
-            NodeType::Leaf(n) => EncodedNode::new(EncodedNodeType::Leaf(n.clone())),
+            NodeType::Leaf(n) => {
+                let children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
+                EncodedNode {
+                    path: n.partial_path,
+                    children: Box::new(children),
+                    value: Some(n.data.0), // TODO implement into?
+                    phantom: PhantomData,
+                }
+            }
 
             NodeType::Branch(n) => {
                 let path = n.partial_path.clone();
@@ -138,11 +145,17 @@ where
                     .try_into()
                     .expect("MAX_CHILDREN will always be yielded");
 
-                EncodedNode::new(EncodedNodeType::Branch {
+                let value = if let Some(v) = n.value {
+                    Some(v.0.clone())
+                } else {
+                    None
+                };
+                EncodedNode {
                     path,
                     children,
-                    value: n.value.clone(),
-                })
+                    value: value,
+                    phantom: PhantomData,
+                }
             }
         };
 
@@ -154,23 +167,36 @@ where
         let encoded: EncodedNode<T> =
             T::deserialize(buf).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))?;
 
-        match encoded.node {
-            EncodedNodeType::Leaf(leaf) => Ok(NodeType::Leaf(leaf)),
-            EncodedNodeType::Branch {
-                path,
-                children,
-                value,
-            } => {
-                let path = PartialPath::decode(&path);
-                let value = value.map(|v| v.0);
-                let branch = NodeType::Branch(
-                    BranchNode::new(path, [None; BranchNode::MAX_CHILDREN], value, *children)
-                        .into(),
-                );
+        // match encoded.node {
+        //     EncodedNodeType::Leaf(leaf) => Ok(NodeType::Leaf(leaf)),
+        //     EncodedNodeType::Branch {
+        //         path,
+        //         children,
+        //         value,
+        //     } => {
+        //         let path = PartialPath::decode(&path);
+        //         let value = value.map(|v| v.0);
+        //         let branch = NodeType::Branch(
+        //             BranchNode::new(path, [None; BranchNode::MAX_CHILDREN], value, *children)
+        //                 .into(),
+        //         );
 
-                Ok(branch)
-            }
-        }
+        //         Ok(branch)
+        //     }
+        // }
+        let path = PartialPath::decode(&encoded.path);
+        let value = value.map(|v| v.0);
+        let branch = NodeType::Branch(
+            BranchNode::new(
+                path,
+                [None; BranchNode::MAX_CHILDREN],
+                value,
+                *encoded.children,
+            )
+            .into(),
+        );
+
+        Ok()
     }
 }
 
