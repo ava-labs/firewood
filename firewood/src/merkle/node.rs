@@ -56,9 +56,9 @@ impl std::ops::Deref for Data {
     }
 }
 
-impl Into<Option<Vec<u8>>> for Data {
-    fn into(self) -> Option<Vec<u8>> {
-        Some(self.0)
+impl From<Data> for Option<Vec<u8>> {
+    fn from(val: Data) -> Self {
+        Some(val.0)
     }
 }
 
