@@ -482,9 +482,14 @@ impl Storable for Node {
     }
 }
 
+/// Contains the fields that we include in a node's hash.
+/// If this is a leaf node, `children` is empty and `value` is Some.
+/// If this is a branch node, `children` is non-empty.
 #[derive(Debug)]
 pub struct EncodedNode<T> {
     pub(crate) partial_path: PartialPath,
+    /// If a child is None, it doesn't exist.
+    /// If it's Some, it's the value or value hash of the child.
     pub(crate) children: Box<[Option<Vec<u8>>; BranchNode::MAX_CHILDREN]>,
     pub(crate) value: Option<Vec<u8>>,
     pub(crate) phantom: PhantomData<T>,
@@ -602,8 +607,6 @@ impl Serialize for EncodedNode<Bincode> {
 
         seq.end()
     }
-    // }
-    //}
 }
 
 impl<'de> Deserialize<'de> for EncodedNode<Bincode> {

@@ -185,10 +185,19 @@ where
         //     }
         // }
 
-        let path = PartialPath::decode(&encoded.partial_path);
+        if encoded.children.iter().all(|b| b.is_none()) {
+            // This is a leaf node
+            //let value = encoded.value.map(|v| Data(v));
+            return Ok(NodeType::Leaf(LeafNode::new(
+                encoded.partial_path, // todo need to decode?
+                Data(encoded.value.unwrap()),
+            )));
+        }
+
+        // let path = PartialPath::decode(&encoded.partial_path);
         Ok(NodeType::Branch(
             BranchNode::new(
-                path,
+                encoded.partial_path, // todo is this right?
                 [None; BranchNode::MAX_CHILDREN],
                 encoded.value,
                 *encoded.children,
@@ -1543,16 +1552,16 @@ mod tests {
         assert_eq!(encoded, new_node_encoded);
     }
 
-    #[test_case(Bincode::new(), leaf(Vec::new(), Vec::new()) ; "empty leaf encoding with Bincode")]
-    #[test_case(Bincode::new(), leaf(vec![1, 2, 3], vec![4, 5]) ; "leaf encoding with Bincode")]
-    #[test_case(Bincode::new(), branch(b"", b"value", vec![1, 2, 3].into()) ; "branch with chd with Bincode")]
-    #[test_case(Bincode::new(), branch(b"", b"value", None); "branch without chd with Bincode")]
-    #[test_case(Bincode::new(), branch_without_data(b"", None); "branch without value and chd with Bincode")]
-    #[test_case(PlainCodec::new(), leaf(Vec::new(), Vec::new()) ; "empty leaf encoding with PlainCodec")]
-    #[test_case(PlainCodec::new(), leaf(vec![1, 2, 3], vec![4, 5]) ; "leaf encoding with PlainCodec")]
-    #[test_case(PlainCodec::new(), branch(b"", b"value", vec![1, 2, 3].into()) ; "branch with chd with PlainCodec")]
-    #[test_case(PlainCodec::new(), branch(b"", b"value", Some(Vec::new())); "branch with empty chd with PlainCodec")]
-    #[test_case(PlainCodec::new(), branch(b"", b"", vec![1, 2, 3].into()); "branch with empty value with PlainCodec")]
+    #[test_case(Bincode::new(), leaf(vec![], vec![4, 5]) ; "leaf without partial path encoding with Bincode")]
+    #[test_case(Bincode::new(), leaf(vec![1, 2, 3], vec![4, 5]) ; "leaf with partial path encoding with Bincode")]
+    #[test_case(Bincode::new(), branch(b"a", b"value", vec![1, 2, 3].into()) ; "branch with partial path and value with Bincode")]
+    #[test_case(Bincode::new(), branch(b"a", &[], vec![1, 2, 3].into()) ; "branch with partial path and no value with Bincode")]
+    #[test_case(Bincode::new(), branch(b"", &[1], vec![1, 2, 3].into()) ; "branch with no partial path and value with Bincode")]
+    #[test_case(PlainCodec::new(), leaf(Vec::new(), vec![4, 5]) ; "leaf without partial path encoding with PlainCodec")]
+    #[test_case(PlainCodec::new(), leaf(vec![1, 2, 3], vec![4, 5]) ; "leaf with partial path encoding with PlainCodec")]
+    #[test_case(PlainCodec::new(), branch(b"a", b"value", vec![1, 2, 3].into()) ; "branch with partial path and value with PlainCodec")]
+    #[test_case(PlainCodec::new(), branch(b"a", &[], vec![1, 2, 3].into()) ; "branch with partial path and no value with PlainCodec")]
+    #[test_case(PlainCodec::new(), branch(b"", &[1], vec![1, 2, 3].into()) ; "branch with no partial path and value with PlainCodec")]
     fn node_encode_decode<T>(_codec: T, node: Node)
     where
         T: BinarySerde,
