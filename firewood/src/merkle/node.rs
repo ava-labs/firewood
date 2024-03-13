@@ -16,7 +16,6 @@ use serde::{
 };
 use sha3::{Digest, Keccak256};
 use std::{
-    default,
     fmt::Debug,
     io::{Cursor, Write},
     marker::PhantomData,
@@ -483,12 +482,18 @@ impl Storable for Node {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(Debug)]
 pub struct EncodedNode<T> {
     pub(crate) path: PartialPath,
     pub(crate) children: Box<[Option<Vec<u8>>; BranchNode::MAX_CHILDREN]>,
     pub(crate) value: Option<Vec<u8>>,
     pub(crate) phantom: PhantomData<T>,
+}
+
+impl<T> PartialEq for EncodedNode<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path && self.children == other.children && self.value == other.value
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -563,24 +568,6 @@ impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
 // Note that the serializer passed in should always be the same type as T in EncodedNode<T>.
 impl Serialize for EncodedNode<Bincode> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        // match &self.node {
-        //     EncodedNodeType::Leaf(n) => {
-        //         let list = [
-        //             from_nibbles(&n.partial_path.encode()).collect(),
-        //             n.data.to_vec(),
-        //         ];
-        //         let mut seq = serializer.serialize_seq(Some(list.len()))?;
-        //         for e in list {
-        //             seq.serialize_element(&e)?;
-        //         }
-        //         seq.end()
-        //     }
-
-        //     EncodedNodeType::Branch {
-        //         path,
-        //         children,
-        //         value,
-        //     } => {
         let mut list = <[Vec<u8>; BranchNode::MAX_CHILDREN + 2]>::default();
         let children = self
             .children

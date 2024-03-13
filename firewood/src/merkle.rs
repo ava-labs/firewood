@@ -117,9 +117,9 @@ where
             NodeType::Leaf(n) => {
                 let children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
                 EncodedNode {
-                    path: n.partial_path,
+                    path: n.partial_path.clone(),
                     children: Box::new(children),
-                    value: Some(n.data.0), // TODO implement into?
+                    value: Some(n.data.0.clone()), // TODO implement into?
                     phantom: PhantomData,
                 }
             }
@@ -145,7 +145,7 @@ where
                     .try_into()
                     .expect("MAX_CHILDREN will always be yielded");
 
-                let value = if let Some(v) = n.value {
+                let value = if let Some(v) = &n.value {
                     Some(v.0.clone())
                 } else {
                     None
@@ -185,18 +185,15 @@ where
         //     }
         // }
         let path = PartialPath::decode(&encoded.path);
-        let value = value.map(|v| v.0);
-        let branch = NodeType::Branch(
+        Ok(NodeType::Branch(
             BranchNode::new(
                 path,
                 [None; BranchNode::MAX_CHILDREN],
-                value,
+                encoded.value,
                 *encoded.children,
             )
             .into(),
-        );
-
-        Ok()
+        ))
     }
 }
 
