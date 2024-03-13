@@ -514,39 +514,23 @@ impl Serialize for EncodedNode<PlainCodec> {
     where
         S: serde::Serializer,
     {
-        let (chd, data, path) = match &self.node {
-            EncodedNodeType::Leaf(n) => {
-                let data = Some(&*n.data);
-                let chd: Vec<(u64, Vec<u8>)> = Default::default();
-                let path: Vec<_> = from_nibbles(&n.partial_path.encode()).collect();
-                (chd, data, path)
-            }
+        let chd: Vec<(u64, Vec<u8>)> = self
+            .children
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| c.as_ref().map(|c| (i as u64, c)))
+            .map(|(i, c)| {
+                if c.len() >= TRIE_HASH_LEN {
+                    (i, Keccak256::digest(c).to_vec())
+                } else {
+                    (i, c.to_vec())
+                }
+            })
+            .collect();
 
-            EncodedNodeType::Branch {
-                path,
-                children,
-                value,
-            } => {
-                let chd: Vec<(u64, Vec<u8>)> = children
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, c)| c.as_ref().map(|c| (i as u64, c)))
-                    .map(|(i, c)| {
-                        if c.len() >= TRIE_HASH_LEN {
-                            (i, Keccak256::digest(c).to_vec())
-                        } else {
-                            (i, c.to_vec())
-                        }
-                    })
-                    .collect();
+        let data = self.value.as_deref();
 
-                let data = value.as_deref();
-
-                let path = from_nibbles(&path.encode()).collect();
-
-                (chd, data, path)
-            }
-        };
+        let path: Vec<u8> = from_nibbles(&self.path.encode()).collect();
 
         let mut s = serializer.serialize_tuple(3)?;
 
@@ -563,40 +547,26 @@ impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
     where
         D: serde::Deserializer<'de>,
     {
-        let EncodedBranchNode { chd, data, path } = Deserialize::deserialize(deserializer)?;
+        let EncodedBranchNode {
+            chd,
+            data: value,
+            path,
+        } = Deserialize::deserialize(deserializer)?;
 
         let path = PartialPath::from_nibbles(Nibbles::<0>::new(&path).into_iter());
 
-        if chd.is_empty() {
-            let data = if let Some(d) = data {
-                Data(d)
-            } else {
-                Data(Vec::new())
-            };
-
-            let node = EncodedNodeType::Leaf(LeafNode {
-                partial_path: path,
-                data,
-            });
-
-            Ok(Self::new(node))
-        } else {
-            let mut children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
-            let value = data.map(Data);
-
-            #[allow(clippy::indexing_slicing)]
-            for (i, chd) in chd {
-                children[i as usize] = Some(chd);
-            }
-
-            let node = EncodedNodeType::Branch {
-                path,
-                children: children.into(),
-                value,
-            };
-
-            Ok(Self::new(node))
+        let mut children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
+        #[allow(clippy::indexing_slicing)]
+        for (i, chd) in chd {
+            children[i as usize] = Some(chd);
         }
+
+        Ok(Self {
+            path,
+            children: children.into(),
+            value,
+            phantom: PhantomData,
+        })
     }
 }
 
