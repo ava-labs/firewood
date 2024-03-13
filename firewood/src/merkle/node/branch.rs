@@ -3,7 +3,7 @@
 
 use super::{Data, Node};
 use crate::{
-    merkle::{from_nibbles, to_nibble_array, Path},
+    merkle::{nibbles_to_bytes_iter, to_nibble_array, Path},
     nibbles::Nibbles,
     shale::{compact::CompactSpace, CachedStore, DiskAddress, ShaleError, Storable},
 };
@@ -176,7 +176,7 @@ impl BranchNode {
         }
 
         #[allow(clippy::unwrap_used)]
-        let path = from_nibbles(&self.partial_path.encode()).collect::<Vec<_>>();
+        let path = nibbles_to_bytes_iter(&self.partial_path.encode()).collect::<Vec<_>>();
 
         list[Self::MAX_CHILDREN + 1] = path;
 
@@ -202,7 +202,7 @@ impl Storable for BranchNode {
     fn serialize(&self, to: &mut [u8]) -> Result<(), crate::shale::ShaleError> {
         let mut cursor = Cursor::new(to);
 
-        let path: Vec<u8> = from_nibbles(&self.partial_path.encode()).collect();
+        let path: Vec<u8> = nibbles_to_bytes_iter(&self.partial_path.encode()).collect();
         cursor.write_all(&[path.len() as PathLen])?;
         cursor.write_all(&path)?;
 

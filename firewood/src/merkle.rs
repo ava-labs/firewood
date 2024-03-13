@@ -1346,7 +1346,7 @@ pub const fn to_nibble_array(x: u8) -> [u8; 2] {
 /// Returns an iterator where each element is the result of combining
 /// 2 nibbles of `nibbles`. If `nibbles` is odd length, panics in
 /// debug mode and drops the final nibble in release mode.
-pub fn from_nibbles(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
+pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
     debug_assert_eq!(nibbles.len() & 1, 0);
     #[allow(clippy::indexing_slicing)]
     nibbles.chunks_exact(2).map(|p| (p[0] << 4) | p[1])

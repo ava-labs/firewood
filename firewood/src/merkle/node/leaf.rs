@@ -3,7 +3,7 @@
 
 use super::Data;
 use crate::{
-    merkle::{from_nibbles, Path},
+    merkle::{nibbles_to_bytes_iter, Path},
     nibbles::Nibbles,
     shale::{ShaleError::InvalidCacheView, Storable},
 };
@@ -58,7 +58,7 @@ impl LeafNode {
         bincode::DefaultOptions::new()
             .serialize(
                 [
-                    from_nibbles(&self.partial_path.encode()).collect(),
+                    nibbles_to_bytes_iter(&self.partial_path.encode()).collect(),
                     self.data.to_vec(),
                 ]
                 .as_slice(),
@@ -91,7 +91,7 @@ impl Storable for LeafNode {
         let mut cursor = Cursor::new(to);
 
         let path = &self.partial_path.encode();
-        let path = from_nibbles(path);
+        let path = nibbles_to_bytes_iter(path);
         let data = &self.data;
 
         let path_len = self.partial_path.serialized_len() as PathLen;

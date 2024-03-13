@@ -3,7 +3,7 @@
 
 use crate::{
     logger::trace,
-    merkle::from_nibbles,
+    merkle::nibbles_to_bytes_iter,
     shale::{compact::CompactSpace, disk_address::DiskAddress, CachedStore, ShaleError, Storable},
 };
 use bincode::{Error, Options};
@@ -524,7 +524,7 @@ impl Serialize for EncodedNode<PlainCodec> {
             EncodedNodeType::Leaf(n) => {
                 let data = Some(&*n.data);
                 let chd: Vec<(u64, Vec<u8>)> = Default::default();
-                let path: Vec<_> = from_nibbles(&n.partial_path.encode()).collect();
+                let path: Vec<_> = nibbles_to_bytes_iter(&n.partial_path.encode()).collect();
                 (chd, data, path)
             }
 
@@ -548,7 +548,7 @@ impl Serialize for EncodedNode<PlainCodec> {
 
                 let data = value.as_deref();
 
-                let path = from_nibbles(&path.encode()).collect();
+                let path = nibbles_to_bytes_iter(&path.encode()).collect();
 
                 (chd, data, path)
             }
@@ -612,7 +612,7 @@ impl Serialize for EncodedNode<Bincode> {
         match &self.node {
             EncodedNodeType::Leaf(n) => {
                 let list = [
-                    from_nibbles(&n.partial_path.encode()).collect(),
+                    nibbles_to_bytes_iter(&n.partial_path.encode()).collect(),
                     n.data.to_vec(),
                 ];
                 let mut seq = serializer.serialize_seq(Some(list.len()))?;
@@ -647,7 +647,7 @@ impl Serialize for EncodedNode<Bincode> {
                     list[BranchNode::MAX_CHILDREN] = val.clone();
                 }
 
-                let serialized_path = from_nibbles(&path.encode()).collect();
+                let serialized_path = nibbles_to_bytes_iter(&path.encode()).collect();
                 list[BranchNode::MAX_CHILDREN + 1] = serialized_path;
 
                 let mut seq = serializer.serialize_seq(Some(list.len()))?;
