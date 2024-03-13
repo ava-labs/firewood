@@ -483,28 +483,22 @@ impl Storable for Node {
 }
 
 pub struct EncodedNode<T> {
-    pub(crate) node: EncodedNodeType,
+    pub(crate) path: PartialPath,
+    pub(crate) children: Box<[Option<Vec<u8>>; BranchNode::MAX_CHILDREN]>,
+    pub(crate) value: Option<Vec<u8>>,
     pub(crate) phantom: PhantomData<T>,
 }
 
-impl<T> EncodedNode<T> {
-    pub const fn new(node: EncodedNodeType) -> Self {
-        Self {
-            node,
-            phantom: PhantomData,
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub enum EncodedNodeType {
-    Leaf(LeafNode),
-    Branch {
-        path: PartialPath,
-        children: Box<[Option<Vec<u8>>; BranchNode::MAX_CHILDREN]>,
-        value: Option<Data>,
-    },
-}
+// TODO remove
+// #[derive(Debug, PartialEq)]
+// pub enum EncodedNodeType {
+//     Leaf(LeafNode),
+//     Branch {
+//         path: PartialPath,
+//         children: Box<[Option<Vec<u8>>; BranchNode::MAX_CHILDREN]>,
+//         value: Option<Data>,
+//     },
+// }
 
 // TODO: probably can merge with `EncodedNodeType`.
 #[derive(Debug, Deserialize)]
