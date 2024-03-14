@@ -408,7 +408,7 @@ impl Storable for Node {
 /// If this is a branch node, `children` is non-empty.
 #[derive(Debug)]
 pub struct EncodedNode<T> {
-    pub(crate) partial_path: Path,
+    pub(crate) path: Path,
     /// If a child is None, it doesn't exist.
     /// If it's Some, it's the value or value hash of the child.
     pub(crate) children: Box<[Option<Vec<u8>>; BranchNode::MAX_CHILDREN]>,
@@ -418,9 +418,7 @@ pub struct EncodedNode<T> {
 
 impl<T> PartialEq for EncodedNode<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.partial_path == other.partial_path
-            && self.children == other.children
-            && self.value == other.value
+        self.path == other.path && self.children == other.children && self.value == other.value
     }
 }
 
@@ -439,7 +437,7 @@ impl Serialize for EncodedNode<PlainCodec> {
 
         let value = self.value.as_deref();
 
-        let path: Vec<u8> = nibbles_to_bytes_iter(&self.partial_path.encode()).collect();
+        let path: Vec<u8> = nibbles_to_bytes_iter(&self.path.encode()).collect();
 
         let mut s = serializer.serialize_tuple(3)?;
 
@@ -471,7 +469,7 @@ impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
         }
 
         Ok(Self {
-            partial_path: path,
+            path,
             children: children.into(),
             value,
             phantom: PhantomData,
@@ -498,7 +496,7 @@ impl Serialize for EncodedNode<Bincode> {
             list[BranchNode::MAX_CHILDREN] = val.clone();
         }
 
-        let serialized_path = nibbles_to_bytes_iter(&self.partial_path.encode()).collect();
+        let serialized_path = nibbles_to_bytes_iter(&self.path.encode()).collect();
         list[BranchNode::MAX_CHILDREN + 1] = serialized_path;
 
         let mut seq = serializer.serialize_seq(Some(list.len()))?;
@@ -537,7 +535,7 @@ impl<'de> Deserialize<'de> for EncodedNode<Bincode> {
                 let path = Path::from_nibbles(Nibbles::<0>::new(&path).into_iter());
                 let children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
                 Ok(Self {
-                    partial_path: path,
+                    path,
                     children: children.into(),
                     value: Some(data),
                     phantom: PhantomData,
@@ -559,7 +557,7 @@ impl<'de> Deserialize<'de> for EncodedNode<Bincode> {
                 }
 
                 Ok(Self {
-                    partial_path: path,
+                    path,
                     children: children.into(),
                     value,
                     phantom: PhantomData,
@@ -717,7 +715,7 @@ mod tests {
     #[test_case(&[0x0F,0x01,0x0F])]
     fn encoded_branch_node_bincode_serialize(path_nibbles: &[u8]) -> Result<(), Error> {
         let node = EncodedNode::<Bincode> {
-            partial_path: Path(path_nibbles.to_vec()),
+            path: Path(path_nibbles.to_vec()),
             children: Default::default(),
             value: Some(vec![1, 2, 3, 4]),
             phantom: PhantomData,

@@ -111,12 +111,12 @@ where
         }
     }
 
-    fn encode(&self, _path: Path, node: &NodeType) -> Result<Vec<u8>, MerkleError> {
+    fn encode(&self, path: Path, node: &NodeType) -> Result<Vec<u8>, MerkleError> {
         let encoded = match node {
             NodeType::Leaf(n) => {
                 let children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
                 EncodedNode {
-                    partial_path: n.partial_path.clone(), // TODO pass whole path not partial path
+                    path: path.clone(),
                     children: Box::new(children),
                     value: n.data.clone().into(),
                     phantom: PhantomData,
@@ -127,35 +127,25 @@ where
                 // pair up DiskAddresses with encoded children and pick the right one
                 let encoded_children = n.chd().iter().zip(n.children_encoded.iter()).enumerate();
                 let children = encoded_children
-                    .map(|(_child_index, (child_addr, encoded_child))| {
+                    .map(|(child_index, (child_addr, encoded_child))| {
                         child_addr
                             // if there's a child disk address here, get the encoded bytes
                             .map(|addr| {
                                 self.get_node(addr)
                                     .and_then(|node| {
                                         let partial_path = match node.inner() {
-                                            NodeType::Leaf(n) => n.partial_path.clone(),
-                                            NodeType::Branch(n) => n.partial_path.clone(),
+                                            NodeType::Leaf(n) => n.partial_path.iter().copied(),
+                                            NodeType::Branch(n) => n.partial_path.iter().copied(),
                                         };
 
-                                        self.encode(partial_path, node.inner())
+                                        let child_path = path
+                                            .iter()
+                                            .copied()
+                                            .chain(once(child_index as u8))
+                                            .chain(partial_path)
+                                            .collect::<Vec<u8>>();
 
-                                        // TODO remove the above and use the below.
-                                        // We want to eventually pass the node's whole path into the encode function
-                                        // rather than its partial path so the encoding matches merkledb.
-                                        // let partial_path = match node.inner() {
-                                        //     NodeType::Leaf(n) => n.partial_path.iter().copied(),
-                                        //     NodeType::Branch(n) => n.partial_path.iter().copied(),
-                                        // };
-
-                                        // let child_path = path
-                                        //     .iter()
-                                        //     .copied()
-                                        //     .chain(once(child_index as u8))
-                                        //     .chain(partial_path)
-                                        //     .collect::<Vec<u8>>();
-
-                                        // self.encode(Path(child_path), node.inner())
+                                        self.encode(Path(child_path), node.inner())
                                     })
                                     .map(|node_bytes| {
                                         if node_bytes.len() >= TRIE_HASH_LEN {
@@ -175,7 +165,7 @@ where
 
                 let value = n.value.as_ref().map(|v| v.0.clone());
                 EncodedNode {
-                    partial_path: n.partial_path.clone(), // TODO pass whole path not partial path
+                    path: path.clone(),
                     children,
                     value,
                     phantom: PhantomData,
@@ -193,14 +183,14 @@ where
         if encoded.children.iter().all(|b| b.is_none()) {
             // This is a leaf node
             return Ok(NodeType::Leaf(LeafNode::new(
-                encoded.partial_path,
+                encoded.path,
                 Data(encoded.value.expect("leaf nodes must always have a value")),
             )));
         }
 
         Ok(NodeType::Branch(
             BranchNode::new(
-                encoded.partial_path,
+                encoded.path,
                 [None; BranchNode::MAX_CHILDREN],
                 encoded.value,
                 *encoded.children,
