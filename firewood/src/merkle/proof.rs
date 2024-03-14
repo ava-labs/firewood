@@ -20,7 +20,7 @@ use crate::{
     merkle_util::{DataStoreError, InMemoryMerkle},
 };
 
-use super::{BinarySerde, EncodedNode, NodeObjRef};
+use super::{BinarySerde, EncodedNode};
 
 #[derive(Debug, Error)]
 pub enum ProofError {
@@ -273,7 +273,16 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                         // If the child already resolved, then use the existing node.
                         Some(node) => merkle.get_node(node)?,
                         None => {
-                            let child_node = decode_subproof(merkle, proofs_map, &child_hash)?;
+                            let child_proof = proofs_map
+                                .get(&child_hash)
+                                .ok_or(ProofError::ProofNodeMissing)?;
+
+                            let child_node = merkle.decode(
+                                0, /* TODO pass nibbles to skip */
+                                child_proof.as_ref(),
+                            )?;
+
+                            let child_node = merkle.put_node(Node::from(child_node))?;
 
                             // insert the leaf to the empty slot
                             parent_node_ref.write(|node| {
@@ -347,25 +356,6 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
             None => Err(ProofError::NodeNotInTrie),
         }
     }
-}
-
-fn decode_subproof<'a, S, T, N>(
-    merkle: &'a Merkle<S, T>,
-    proofs_map: &HashMap<HashKey, N>,
-    child_hash: &HashKey,
-) -> Result<NodeObjRef<'a>, ProofError>
-where
-    S: CachedStore,
-    T: BinarySerde,
-    EncodedNode<T>: serde::Serialize + serde::de::DeserializeOwned,
-    N: AsRef<[u8]> + Send,
-{
-    let child_proof = proofs_map
-        .get(child_hash)
-        .ok_or(ProofError::ProofNodeMissing)?;
-    let child_node = merkle.decode(0 /* TODO pass nibbles to skip */, child_proof.as_ref())?;
-    let node = merkle.put_node(Node::from(child_node))?;
-    Ok(node)
 }
 
 pub(crate) fn locate_subproof(
