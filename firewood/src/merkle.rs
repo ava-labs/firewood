@@ -111,7 +111,7 @@ where
         }
     }
 
-    fn encode(&self, path: PartialPath, node: &NodeType) -> Result<Vec<u8>, MerkleError> {
+    fn encode(&self, _path: PartialPath, node: &NodeType) -> Result<Vec<u8>, MerkleError> {
         let encoded = match node {
             NodeType::Leaf(n) => {
                 let children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
@@ -127,25 +127,35 @@ where
                 // pair up DiskAddresses with encoded children and pick the right one
                 let encoded_children = n.chd().iter().zip(n.children_encoded.iter()).enumerate();
                 let children = encoded_children
-                    .map(|(child_index, (child_addr, encoded_child))| {
+                    .map(|(_child_index, (child_addr, encoded_child))| {
                         child_addr
                             // if there's a child disk address here, get the encoded bytes
                             .map(|addr| {
                                 self.get_node(addr)
                                     .and_then(|node| {
                                         let partial_path = match node.inner() {
-                                            NodeType::Leaf(n) => n.partial_path.iter().copied(),
-                                            NodeType::Branch(n) => n.partial_path.iter().copied(),
+                                            NodeType::Leaf(n) => n.partial_path.clone(),
+                                            NodeType::Branch(n) => n.partial_path.clone(),
                                         };
 
-                                        let child_path = path
-                                            .iter()
-                                            .copied()
-                                            .chain(once(child_index as u8))
-                                            .chain(partial_path)
-                                            .collect::<Vec<u8>>();
+                                        self.encode(partial_path, node.inner())
 
-                                        self.encode(PartialPath(child_path), node.inner())
+                                        // TODO remove the above and use the below.
+                                        // We want to eventually pass the node's whole path into the encode function
+                                        // rather than its partial path so the encoding matches merkledb.
+                                        // let partial_path = match node.inner() {
+                                        //     NodeType::Leaf(n) => n.partial_path.iter().copied(),
+                                        //     NodeType::Branch(n) => n.partial_path.iter().copied(),
+                                        // };
+
+                                        // let child_path = path
+                                        //     .iter()
+                                        //     .copied()
+                                        //     .chain(once(child_index as u8))
+                                        //     .chain(partial_path)
+                                        //     .collect::<Vec<u8>>();
+
+                                        // self.encode(PartialPath(child_path), node.inner())
                                     })
                                     .map(|node_bytes| {
                                         if node_bytes.len() >= TRIE_HASH_LEN {
