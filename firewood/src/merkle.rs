@@ -210,7 +210,7 @@ where
     }
 }
 
-impl<S: CachedStore, T> Merkle<S, T>
+impl<S, T> Merkle<S, T>
 where
     S: CachedStore,
     T: BinarySerde,
