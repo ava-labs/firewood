@@ -3,7 +3,7 @@
 
 use super::Data;
 use crate::{
-    merkle::{from_nibbles, to_nibble_array, PartialPath},
+    merkle::{nibbles_to_bytes_iter, to_nibble_array, Path},
     shale::{DiskAddress, ShaleError, Storable},
 };
 use std::{
@@ -20,7 +20,7 @@ const MAX_CHILDREN: usize = 16;
 
 #[derive(PartialEq, Eq, Clone)]
 pub struct BranchNode {
-    pub(crate) partial_path: PartialPath,
+    pub(crate) partial_path: Path,
     pub(crate) children: [Option<DiskAddress>; MAX_CHILDREN],
     pub(crate) value: Option<Data>,
     pub(crate) children_encoded: [Option<Vec<u8>>; MAX_CHILDREN],
@@ -59,7 +59,7 @@ impl BranchNode {
     pub const MSIZE: usize = Self::MAX_CHILDREN + 2;
 
     pub fn new(
-        partial_path: PartialPath,
+        partial_path: Path,
         chd: [Option<DiskAddress>; Self::MAX_CHILDREN],
         value: Option<Vec<u8>>,
         chd_encoded: [Option<Vec<u8>>; Self::MAX_CHILDREN],
@@ -109,7 +109,7 @@ impl Storable for BranchNode {
     fn serialize(&self, to: &mut [u8]) -> Result<(), crate::shale::ShaleError> {
         let mut cursor = Cursor::new(to);
 
-        let path: Vec<u8> = from_nibbles(&self.partial_path.encode()).collect();
+        let path: Vec<u8> = nibbles_to_bytes_iter(&self.partial_path.encode()).collect();
         cursor.write_all(&[path.len() as PathLen])?;
         cursor.write_all(&path)?;
 
@@ -178,7 +178,7 @@ impl Storable for BranchNode {
         addr += path_len as usize;
 
         let path: Vec<u8> = path.into_iter().flat_map(to_nibble_array).collect();
-        let path = PartialPath::decode(&path);
+        let path = Path::decode(&path);
 
         let node_raw =
             mem.get_view(addr, BRANCH_HEADER_SIZE)
