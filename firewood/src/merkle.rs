@@ -1324,7 +1324,7 @@ impl<'a, S: CachedStore, T> RefMut<'a, S, T> {
                 |u| {
                     #[allow(clippy::unwrap_used)]
                     modify(match &mut u.inner {
-                        NodeType::Branch(n) => &mut n.value.as_mut().unwrap(),
+                        NodeType::Branch(n) => n.value.as_mut().unwrap(),
                         NodeType::Leaf(n) => &mut n.data,
                     });
                     u.rehash()
