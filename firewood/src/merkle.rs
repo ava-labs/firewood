@@ -176,7 +176,11 @@ where
         T::serialize(&encoded).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))
     }
 
-    fn decode(&self, buf: &'de [u8]) -> Result<NodeType, MerkleError> {
+    fn decode(
+        &self,
+        _path_nibbles_to_skip: usize,
+        buf: &'de [u8],
+    ) -> Result<NodeType, MerkleError> {
         let encoded: EncodedNode<T> =
             T::deserialize(buf).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))?;
 
@@ -1088,7 +1092,7 @@ where
                 .get(&cur_hash)
                 .ok_or(ProofError::ProofNodeMissing)?;
 
-            let node = self.decode(cur_proof.as_ref())?;
+            let node = self.decode(0 /* TODO pass nibbles to skip */, cur_proof.as_ref())?;
             // TODO: I think this will currently fail if the key is &[];
             let (sub_proof, traversed_nibbles) = locate_subproof(key_nibbles, node)?;
             key_nibbles = traversed_nibbles;
@@ -1552,7 +1556,9 @@ mod tests {
         let merkle = create_generic_test_merkle::<T>();
 
         let encoded = merkle.encode(Path(vec![]), &node).unwrap();
-        let new_node = merkle.decode(encoded.as_ref()).unwrap();
+        let new_node = merkle
+            .decode(0 /* TODO pass nibbles to skip */, encoded.as_ref())
+            .unwrap();
         let encoded_again = merkle.encode(Path(vec![]), &new_node).unwrap();
 
         assert_eq!(node, new_node);

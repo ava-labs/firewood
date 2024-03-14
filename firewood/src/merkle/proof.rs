@@ -363,7 +363,7 @@ where
     let child_proof = proofs_map
         .get(child_hash)
         .ok_or(ProofError::ProofNodeMissing)?;
-    let child_node = merkle.decode(child_proof.as_ref())?;
+    let child_node = merkle.decode(0 /* TODO pass nibbles to skip */, child_proof.as_ref())?;
     let node = merkle.put_node(Node::from(child_node))?;
     Ok(node)
 }
