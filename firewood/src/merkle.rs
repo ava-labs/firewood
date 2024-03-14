@@ -264,11 +264,7 @@ where
         val: Vec<u8>,
         root: DiskAddress,
     ) -> Result<(), MerkleError> {
-        let (parents, deleted) = self.insert_and_return_updates(key, val, root)?;
-
-        for mut r in parents {
-            r.write(|_| {})?;
-        }
+        let (_, deleted) = self.insert_and_return_updates(key, val, root)?;
 
         for ptr in deleted {
             self.free_node(ptr)?
@@ -815,16 +811,11 @@ where
                             deleted.push(parent.as_ptr());
                         }
 
-                        _ => parent.write(|_| {})?,
+                        _ => {}
                     }
-
                     data
                 }
             };
-
-            for (mut parent, _) in parents {
-                parent.write(|_| {})?;
-            }
 
             data
         };
