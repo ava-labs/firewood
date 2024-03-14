@@ -116,7 +116,7 @@ where
             NodeType::Leaf(n) => {
                 let children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
                 EncodedNode {
-                    partial_path: n.partial_path.clone(),
+                    partial_path: n.partial_path.clone(), // TODO pass whole path not partial path
                     children: Box::new(children),
                     value: n.data.clone().into(),
                     phantom: PhantomData,
@@ -175,7 +175,7 @@ where
 
                 let value = n.value.as_ref().map(|v| v.0.clone());
                 EncodedNode {
-                    partial_path: n.partial_path.clone(),
+                    partial_path: n.partial_path.clone(), // TODO pass whole path not partial path
                     children,
                     value,
                     phantom: PhantomData,
@@ -210,22 +210,12 @@ where
     }
 }
 
-// TODO remove
-// <<<<<<< HEAD
-// impl<S, T> Merkle<S, T>
-// where
-//     S: ShaleStore<Node> + Send + Sync,
-//     T: BinarySerde,
-//     EncodedNode<T>: serde::Serialize + for<'de> serde::Deserialize<'de>,
-// {
-// =======
 impl<S: CachedStore, T> Merkle<S, T>
 where
     S: CachedStore,
     T: BinarySerde,
     EncodedNode<T>: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
-    //>>>>>>> origin/main
     pub fn init_root(&self) -> Result<DiskAddress, MerkleError> {
         self.store
             .put_item(
