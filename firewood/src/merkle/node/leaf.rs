@@ -2,7 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::{
-    merkle::{from_nibbles, PartialPath},
+    merkle::{nibbles_to_bytes_iter, Path},
     nibbles::Nibbles,
     shale::{ShaleError::InvalidCacheView, Storable},
 };
@@ -21,7 +21,7 @@ type DataLen = u32;
 
 #[derive(PartialEq, Eq, Clone)]
 pub struct LeafNode {
-    pub(crate) partial_path: PartialPath,
+    pub(crate) partial_path: Path,
     pub(crate) data: Vec<u8>,
 }
 
@@ -37,14 +37,14 @@ impl Debug for LeafNode {
 }
 
 impl LeafNode {
-    pub fn new<P: Into<PartialPath>, D: Into<Vec<u8>>>(partial_path: P, data: D) -> Self {
+    pub fn new<P: Into<Path>, D: Into<Vec<u8>>>(partial_path: P, data: D) -> Self {
         Self {
             partial_path: partial_path.into(),
             data: data.into(),
         }
     }
 
-    pub const fn path(&self) -> &PartialPath {
+    pub const fn path(&self) -> &Path {
         &self.partial_path
     }
 
@@ -57,7 +57,7 @@ impl LeafNode {
         bincode::DefaultOptions::new()
             .serialize(
                 [
-                    from_nibbles(&self.partial_path.encode()).collect(),
+                    nibbles_to_bytes_iter(&self.partial_path.encode()).collect(),
                     self.data.to_vec(),
                 ]
                 .as_slice(),
@@ -90,7 +90,7 @@ impl Storable for LeafNode {
         let mut cursor = Cursor::new(to);
 
         let path = &self.partial_path.encode();
-        let path = from_nibbles(path);
+        let path = nibbles_to_bytes_iter(path);
         let data = &self.data;
 
         let path_len = self.partial_path.serialized_len() as PathLen;
@@ -137,7 +137,7 @@ impl Storable for LeafNode {
 
         let path = {
             let nibbles = Nibbles::<0>::new(path).into_iter();
-            PartialPath::from_nibbles(nibbles).0
+            Path::from_nibbles(nibbles).0
         };
 
         let data = data.to_vec();
