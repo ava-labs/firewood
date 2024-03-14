@@ -46,29 +46,6 @@ bitflags! {
     }
 }
 
-// TODO remove
-// #[derive(Debug, PartialEq, Eq, Clone)]
-// pub struct Data(pub(super) Vec<u8>);
-
-// impl std::ops::Deref for Data {
-//     type Target = [u8];
-//     fn deref(&self) -> &[u8] {
-//         &self.0
-//     }
-// }
-
-// impl From<Vec<u8>> for Data {
-//     fn from(v: Vec<u8>) -> Self {
-//         Self(v)
-//     }
-// }
-
-// impl Data {
-//     pub fn into_inner(self) -> Vec<u8> {
-//         self.0
-//     }
-// }
-
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner)]
 pub enum NodeType {
     Branch(Box<BranchNode>),
