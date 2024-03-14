@@ -61,7 +61,8 @@ impl BranchNode {
     pub const MAX_CHILDREN: usize = MAX_CHILDREN;
     pub const MSIZE: usize = Self::MAX_CHILDREN + 2;
 
-    pub fn new(
+    // TODO remove
+    pub const fn new(
         partial_path: Path,
         chd: [Option<DiskAddress>; Self::MAX_CHILDREN],
         value: Option<Vec<u8>>,

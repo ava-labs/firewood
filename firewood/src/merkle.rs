@@ -141,11 +141,10 @@ where
                     .try_into()
                     .expect("MAX_CHILDREN will always be yielded");
 
-                let value = n.value.as_ref().map(|v| v.clone());
                 EncodedNode {
                     partial_path: n.partial_path.clone(),
                     children,
-                    value,
+                    value: n.value.clone(),
                     phantom: PhantomData,
                 }
             }
@@ -378,7 +377,7 @@ impl<S: CachedStore, T> Merkle<S, T> {
                             let mut new_branch = BranchNode {
                                 partial_path: Path(new_branch_path),
                                 children: [None; BranchNode::MAX_CHILDREN],
-                                value: Some(val.into()),
+                                value: Some(val),
                                 children_encoded: Default::default(),
                             };
 
@@ -538,7 +537,7 @@ impl<S: CachedStore, T> Merkle<S, T> {
                             let mut new_branch = BranchNode {
                                 partial_path: Path(new_branch_path),
                                 children: [None; BranchNode::MAX_CHILDREN],
-                                value: Some(val.into()),
+                                value: Some(val),
                                 children_encoded: Default::default(),
                             };
 

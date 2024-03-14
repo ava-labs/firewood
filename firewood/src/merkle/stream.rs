@@ -670,7 +670,7 @@ mod tests {
         );
         assert_eq!(
             node.inner().as_branch().unwrap().value,
-            Some(vec![0x00, 0x00, 0x00].into()),
+            Some(vec![0x00, 0x00, 0x00]),
         );
 
         let (key, node) = match stream.next() {
@@ -718,7 +718,7 @@ mod tests {
         );
         assert_eq!(
             node.inner().as_branch().unwrap().value,
-            Some(vec![0x00, 0x00, 0x00].into()),
+            Some(vec![0x00, 0x00, 0x00]),
         );
 
         assert!(stream.next().is_none());
