@@ -61,21 +61,6 @@ impl BranchNode {
     pub const MAX_CHILDREN: usize = MAX_CHILDREN;
     pub const MSIZE: usize = Self::MAX_CHILDREN + 2;
 
-    // TODO remove
-    pub const fn new(
-        partial_path: Path,
-        chd: [Option<DiskAddress>; Self::MAX_CHILDREN],
-        value: Option<Vec<u8>>,
-        chd_encoded: [Option<Vec<u8>>; Self::MAX_CHILDREN],
-    ) -> Self {
-        BranchNode {
-            partial_path,
-            children: chd,
-            value,
-            children_encoded: chd_encoded,
-        }
-    }
-
     pub const fn value(&self) -> &Option<Vec<u8>> {
         &self.value
     }
@@ -118,12 +103,12 @@ impl BranchNode {
             (chd_encoded[i] = Some(chd).filter(|data| !data.is_empty()));
         }
 
-        Ok(BranchNode::new(
-            path,
-            [None; Self::MAX_CHILDREN],
+        Ok(BranchNode {
+            partial_path: path,
+            children: [None; Self::MAX_CHILDREN],
             value,
-            chd_encoded,
-        ))
+            children_encoded: chd_encoded,
+        })
     }
 
     pub(super) fn encode<S: CachedStore>(&self, store: &CompactSpace<Node, S>) -> Vec<u8> {

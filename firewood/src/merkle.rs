@@ -167,12 +167,12 @@ where
         }
 
         Ok(NodeType::Branch(
-            BranchNode::new(
-                encoded.partial_path,
-                [None; BranchNode::MAX_CHILDREN],
-                encoded.value,
-                *encoded.children,
-            )
+            BranchNode {
+                partial_path: encoded.partial_path,
+                children: [None; BranchNode::MAX_CHILDREN],
+                value: encoded.value,
+                children_encoded: *encoded.children,
+            }
             .into(),
         ))
     }
