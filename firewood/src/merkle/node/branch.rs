@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::{Data, Node};
+use super::Node;
 use crate::{
     merkle::{from_nibbles, to_nibble_array, PartialPath},
     nibbles::Nibbles,
@@ -25,7 +25,7 @@ const MAX_CHILDREN: usize = 16;
 pub struct BranchNode {
     pub(crate) partial_path: PartialPath,
     pub(crate) children: [Option<DiskAddress>; MAX_CHILDREN],
-    pub(crate) value: Option<Data>,
+    pub(crate) value: Option<Vec<u8>>,
     pub(crate) children_encoded: [Option<Vec<u8>>; MAX_CHILDREN],
 }
 
@@ -70,12 +70,12 @@ impl BranchNode {
         BranchNode {
             partial_path,
             children: chd,
-            value: value.map(Data),
+            value,
             children_encoded: chd_encoded,
         }
     }
 
-    pub const fn value(&self) -> &Option<Data> {
+    pub const fn value(&self) -> &Option<Vec<u8>> {
         &self.value
     }
 
@@ -171,7 +171,7 @@ impl BranchNode {
         }
 
         #[allow(clippy::unwrap_used)]
-        if let Some(Data(val)) = &self.value {
+        if let Some(val) = &self.value {
             list[Self::MAX_CHILDREN] = val.clone();
         }
 
@@ -312,7 +312,7 @@ impl Storable for BranchNode {
 
                 addr += len as usize;
 
-                Some(Data(data.as_deref()))
+                Some(data.as_deref())
             }
             None => None,
         };
