@@ -14,7 +14,6 @@ use serde::{
     ser::{SerializeSeq, SerializeTuple},
     Deserialize, Serialize,
 };
-use sha3::{Digest, Keccak256};
 use std::{
     fmt::Debug,
     io::{Cursor, Write},
@@ -435,14 +434,7 @@ impl Serialize for EncodedNode<PlainCodec> {
             .children
             .iter()
             .enumerate()
-            .filter_map(|(i, c)| c.as_ref().map(|c| (i as u64, c)))
-            .map(|(i, c)| {
-                if c.len() >= TRIE_HASH_LEN {
-                    (i, Keccak256::digest(c).to_vec())
-                } else {
-                    (i, c.to_vec())
-                }
-            })
+            .filter_map(|(i, c)| c.as_ref().map(|c| (i as u64, c.to_vec())))
             .collect();
 
         let value = self.value.as_deref();
@@ -499,12 +491,7 @@ impl Serialize for EncodedNode<Bincode> {
 
         #[allow(clippy::indexing_slicing)]
         for (i, child) in children {
-            if child.len() >= TRIE_HASH_LEN {
-                let serialized_hash = Keccak256::digest(child).to_vec();
-                list[i] = serialized_hash;
-            } else {
-                list[i] = child.to_vec();
-            }
+            list[i] = child.to_vec();
         }
 
         if let Some(val) = &self.value {
