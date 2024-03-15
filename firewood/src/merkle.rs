@@ -187,7 +187,7 @@ where
 
         let partial_path: Vec<u8> = encoded
             .path
-            .into_iter()
+            .iter()
             .skip(path_nibbles_to_skip)
             .copied()
             .collect();
