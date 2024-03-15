@@ -378,21 +378,27 @@ impl Storable for Node {
 /// Contains the fields that we include in a node's hash.
 /// If this is a leaf node, `children` is empty and `value` is Some.
 /// If this is a branch node, `children` is non-empty.
-#[derive(Debug)]
+#[derive(Debug, Eq)]
 pub struct EncodedNode<T> {
     pub(crate) partial_path: Path,
     /// If a child is None, it doesn't exist.
     /// If it's Some, it's the value or value hash of the child.
-    pub(crate) children: Box<[Option<Vec<u8>>; BranchNode::MAX_CHILDREN]>,
+    pub(crate) children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN],
     pub(crate) value: Option<Vec<u8>>,
     pub(crate) phantom: PhantomData<T>,
 }
 
+// driving this adds an unnecessary bound, T: PartialEq
+// PhantomData<T> is PartialEq for all T
 impl<T> PartialEq for EncodedNode<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.partial_path == other.partial_path
-            && self.children == other.children
-            && self.value == other.value
+        let Self {
+            partial_path,
+            children,
+            value,
+            phantom: _,
+        } = self;
+        partial_path == &other.partial_path && children == &other.children && value == &other.value
     }
 }
 
@@ -444,7 +450,7 @@ impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
 
         Ok(Self {
             partial_path: path,
-            children: children.into(),
+            children,
             value,
             phantom: PhantomData,
         })
@@ -510,7 +516,7 @@ impl<'de> Deserialize<'de> for EncodedNode<Bincode> {
                 let children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
                 Ok(Self {
                     partial_path: path,
-                    children: children.into(),
+                    children,
                     value: Some(value),
                     phantom: PhantomData,
                 })
@@ -532,7 +538,7 @@ impl<'de> Deserialize<'de> for EncodedNode<Bincode> {
 
                 Ok(Self {
                     partial_path: path,
-                    children: children.into(),
+                    children,
                     value,
                     phantom: PhantomData,
                 })
