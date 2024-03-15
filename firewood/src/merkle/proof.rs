@@ -96,7 +96,7 @@ impl From<DbError> for ProofError {
 
 /// A proof that a single key is present
 ///
-/// The generic N represents the storage for the node data
+/// The generic N represents the storage for the node
 #[derive(Clone, Debug)]
 pub struct Proof<N>(pub HashMap<HashKey, N>);
 
@@ -106,7 +106,7 @@ pub struct Proof<N>(pub HashMap<HashKey, N>);
 
 #[derive(Debug)]
 pub(crate) enum SubProof {
-    Data(Vec<u8>),
+    Value(Vec<u8>),
     Hash(HashKey),
 }
 
@@ -173,7 +173,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
         // Special case, there is only one element and two edge keys are same.
         // In this case, we can't construct two edge paths. So handle it here.
         if keys.len() == 1 && first_key.as_ref() == last_key.as_ref() {
-            let data =
+            let value =
                 self.proof_to_path(first_key.as_ref(), root_hash, &mut in_mem_merkle, false)?;
 
             #[allow(clippy::indexing_slicing)]
@@ -181,7 +181,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 // correct proof but invalid key
                 Err(ProofError::InvalidEdgeKeys)
             } else {
-                match data {
+                match value {
                     #[allow(clippy::indexing_slicing)]
                     Some(val) if val == vals[0].as_ref() => Ok(true),
                     None => Ok(false),
@@ -311,7 +311,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                         .iter()
                         .copied()
                         .eq(key_nibbles) // all nibbles have to match
-                        .then(|| n.data().to_vec());
+                        .then(|| n.value().to_vec());
                 }
 
                 NodeType::Branch(n) => {
@@ -330,11 +330,11 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                             .chd_encode()
                             .get(*index as usize)
                             .and_then(|inner| inner.as_ref())
-                            .map(|data| &**data);
+                            .map(|value| &**value);
 
                         subproof
                     } else {
-                        break n.value.as_ref().map(|data| data.to_vec());
+                        break n.value.as_ref().map(|value| value.to_vec());
                     }
                 }
             };
@@ -351,7 +351,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
         };
 
         match sub_proof {
-            Some(data) => Ok(Some(data)),
+            Some(value) => Ok(Some(value)),
             None if allow_non_existent_node => Ok(None),
             None => Err(ProofError::NodeNotInTrie),
         }
@@ -374,9 +374,9 @@ pub(crate) fn locate_subproof(
                 return Ok((None, Nibbles::<0>::new(&[]).into_iter()));
             }
 
-            let encoded: Vec<u8> = n.data().to_vec();
+            let encoded: Vec<u8> = n.value().to_vec();
 
-            let sub_proof = SubProof::Data(encoded);
+            let sub_proof = SubProof::Value(encoded);
 
             Ok((sub_proof.into(), key_nibbles))
         }
@@ -395,17 +395,17 @@ pub(crate) fn locate_subproof(
             let Some(index) = key_nibbles.next().map(|nib| nib as usize) else {
                 let encoded = n.value;
 
-                let sub_proof = encoded.map(|encoded| SubProof::Data(encoded.into_inner()));
+                let sub_proof = encoded.map(SubProof::Value);
 
                 return Ok((sub_proof, key_nibbles));
             };
 
             // consume items returning the item at index
             #[allow(clippy::indexing_slicing)]
-            let data = n.chd_encode()[index]
+            let value = n.chd_encode()[index]
                 .as_ref()
                 .ok_or(ProofError::InvalidData)?;
-            generate_subproof(data).map(|subproof| (Some(subproof), key_nibbles))
+            generate_subproof(value).map(|subproof| (Some(subproof), key_nibbles))
         }
     }
 }

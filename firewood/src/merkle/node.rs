@@ -45,34 +45,6 @@ bitflags! {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Data(pub(super) Vec<u8>);
-
-impl std::ops::Deref for Data {
-    type Target = [u8];
-    fn deref(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-impl From<Data> for Option<Vec<u8>> {
-    fn from(val: Data) -> Self {
-        Some(val.0)
-    }
-}
-
-impl From<Vec<u8>> for Data {
-    fn from(v: Vec<u8>) -> Self {
-        Self(v)
-    }
-}
-
-impl Data {
-    pub fn into_inner(self) -> Vec<u8> {
-        self.0
-    }
-}
-
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner)]
 pub enum NodeType {
     Branch(Box<BranchNode>),
@@ -94,10 +66,10 @@ impl NodeType {
         }
     }
 
-    pub fn set_data(&mut self, data: Data) {
+    pub fn set_value(&mut self, value: Vec<u8>) {
         match self {
-            NodeType::Branch(u) => u.value = Some(data),
-            NodeType::Leaf(node) => node.data = data,
+            NodeType::Branch(u) => u.value = Some(value),
+            NodeType::Leaf(node) => node.value = value,
         }
     }
 }
@@ -173,7 +145,7 @@ impl Node {
                     BranchNode {
                         partial_path: vec![].into(),
                         children: [Some(DiskAddress::null()); BranchNode::MAX_CHILDREN],
-                        value: Some(Data(Vec::new())),
+                        value: Some(Vec::new()),
                         children_encoded: Default::default(),
                     }
                     .into(),
@@ -527,9 +499,9 @@ impl<'de> Deserialize<'de> for EncodedNode<Bincode> {
                         "incorrect encoded type for leaf node path",
                     ));
                 };
-                let Some(data) = items.next() else {
+                let Some(value) = items.next() else {
                     return Err(D::Error::custom(
-                        "incorrect encoded type for leaf node data",
+                        "incorrect encoded type for leaf node value",
                     ));
                 };
                 let path = Path::from_nibbles(Nibbles::<0>::new(&path).into_iter());
@@ -537,7 +509,7 @@ impl<'de> Deserialize<'de> for EncodedNode<Bincode> {
                 Ok(Self {
                     path,
                     children: children.into(),
-                    value: Some(data),
+                    value: Some(value),
                     phantom: PhantomData,
                 })
             }
@@ -672,11 +644,11 @@ mod tests {
         encoded: impl Into<Option<Vec<u8>>>,
         is_encoded_longer_than_hash_len: impl Into<Option<bool>>,
     ) {
-        let leaf = NodeType::Leaf(LeafNode::new(Path(vec![1, 2, 3]), Data(vec![4, 5])));
+        let leaf = NodeType::Leaf(LeafNode::new(Path(vec![1, 2, 3]), vec![4, 5]));
         let branch = NodeType::Branch(Box::new(BranchNode {
             partial_path: vec![].into(),
             children: [Some(DiskAddress::from(1)); BranchNode::MAX_CHILDREN],
-            value: Some(Data(vec![1, 2, 3])),
+            value: Some(vec![1, 2, 3]),
             children_encoded: std::array::from_fn(|_| Some(vec![1])),
         }));
 
@@ -696,10 +668,10 @@ mod tests {
         (0..0, 0..15, 0..16, 0..31, 0..32),
         [0..0, 0..16, 0..32]
     )]
-    fn leaf_node<Iter: Iterator<Item = u8>>(path: Iter, data: Iter) {
+    fn leaf_node<Iter: Iterator<Item = u8>>(path: Iter, value: Iter) {
         let node = Node::from_leaf(LeafNode::new(
             Path(path.map(|x| x & 0xf).collect()),
-            Data(data.collect()),
+            value.collect::<Vec<u8>>(),
         ));
 
         check_node_encoding(node);
@@ -762,7 +734,7 @@ mod tests {
 
         let value = value
             .into()
-            .map(|x| Data(std::iter::repeat(x).take(x as usize).collect()));
+            .map(|x| std::iter::repeat(x).take(x as usize).collect());
 
         let node = Node::from_branch(BranchNode {
             partial_path,
