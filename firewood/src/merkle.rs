@@ -180,9 +180,9 @@ where
 
         let partial_path: Vec<u8> = encoded
             .path
-            .iter()
+            .0
+            .into_iter()
             .skip(path_nibbles_to_skip)
-            .copied()
             .collect();
 
         if encoded.children.iter().all(|b| b.is_none()) {
