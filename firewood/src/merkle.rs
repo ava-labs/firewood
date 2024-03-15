@@ -173,11 +173,7 @@ where
         T::serialize(&encoded).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))
     }
 
-    fn decode(
-        &self,
-        _path_nibbles_to_skip: usize,
-        buf: &'de [u8],
-    ) -> Result<NodeType, MerkleError> {
+    fn decode(&self, path_nibbles_to_skip: usize, buf: &'de [u8]) -> Result<NodeType, MerkleError> {
         let encoded: EncodedNode<T> =
             T::deserialize(buf).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))?;
 
@@ -189,9 +185,16 @@ where
             )));
         }
 
+        let partial_path: Vec<u8> = encoded
+            .path
+            .into_iter()
+            .skip(path_nibbles_to_skip)
+            .copied()
+            .collect();
+
         Ok(NodeType::Branch(
             BranchNode {
-                partial_path: encoded.path,
+                partial_path: Path(partial_path),
                 children: [None; BranchNode::MAX_CHILDREN],
                 value: encoded.value,
                 children_encoded: *encoded.children,
