@@ -308,6 +308,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                         // If the child already resolved, then use the existing node.
                         Some(node) => merkle.get_node(node)?,
                         None => {
+                            // Look up the child's encoded bytes and decode to get the child.
                             let child_node_bytes = proof_nodes_map
                                 .get(&child_hash)
                                 .ok_or(ProofError::ProofNodeMissing)?;
