@@ -116,7 +116,7 @@ where
                 let children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
                 EncodedNode {
                     path: path.clone(),
-                    children: Box::new(children),
+                    children,
                     value: n.value.clone().into(),
                     phantom: PhantomData,
                 }
@@ -198,7 +198,7 @@ where
                 partial_path: Path(partial_path),
                 children: [None; BranchNode::MAX_CHILDREN],
                 value: encoded.value,
-                children_encoded: *encoded.children,
+                children_encoded: encoded.children,
             }
             .into(),
         ))
