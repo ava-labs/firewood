@@ -115,7 +115,7 @@ where
             NodeType::Leaf(n) => {
                 let children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
                 EncodedNode {
-                    path: path.clone(),
+                    path,
                     children,
                     value: n.value.clone().into(),
                     phantom: PhantomData,
@@ -163,7 +163,7 @@ where
                     .expect("MAX_CHILDREN will always be yielded");
 
                 EncodedNode {
-                    path: path.clone(),
+                    path,
                     children,
                     value: n.value.clone(),
                     phantom: PhantomData,
