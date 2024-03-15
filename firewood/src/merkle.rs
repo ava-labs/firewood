@@ -109,6 +109,7 @@ where
         }
     }
 
+    // TODO should this take in a &Path?
     fn encode(&self, path: Path, node: &NodeType) -> Result<Vec<u8>, MerkleError> {
         let encoded = match node {
             NodeType::Leaf(n) => {
@@ -177,20 +178,20 @@ where
         let encoded: EncodedNode<T> =
             T::deserialize(buf).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))?;
 
-        if encoded.children.iter().all(|b| b.is_none()) {
-            // This is a leaf node
-            return Ok(NodeType::Leaf(LeafNode::new(
-                encoded.path,
-                encoded.value.expect("leaf nodes must always have a value"),
-            )));
-        }
-
         let partial_path: Vec<u8> = encoded
             .path
             .iter()
             .skip(path_nibbles_to_skip)
             .copied()
             .collect();
+
+        if encoded.children.iter().all(|b| b.is_none()) {
+            // This is a leaf node
+            return Ok(NodeType::Leaf(LeafNode::new(
+                Path(partial_path),
+                encoded.value.expect("leaf nodes must always have a value"),
+            )));
+        }
 
         Ok(NodeType::Branch(
             BranchNode {
@@ -1082,16 +1083,23 @@ where
 
         let mut cur_hash = root_hash;
         let proofs_map = &proof.0;
+        let mut path_nibbles_to_skip = 0;
 
         loop {
             let cur_proof = proofs_map
                 .get(&cur_hash)
                 .ok_or(ProofError::ProofNodeMissing)?;
 
-            let node = self.decode(0 /* TODO pass nibbles to skip */, cur_proof.as_ref())?;
+            let node = self.decode(path_nibbles_to_skip, cur_proof.as_ref())?;
+
+            let start_len = key_nibbles.size_hint().0;
+
             // TODO: I think this will currently fail if the key is &[];
             let (sub_proof, traversed_nibbles) = locate_subproof(key_nibbles, node)?;
+
             key_nibbles = traversed_nibbles;
+            let end_len = key_nibbles.size_hint().0;
+            path_nibbles_to_skip += start_len - end_len;
 
             cur_hash = match sub_proof {
                 // Return when reaching the end of the key.
@@ -1547,11 +1555,16 @@ mod tests {
     {
         let merkle = create_generic_test_merkle::<T>();
 
-        let encoded = merkle.encode(Path(vec![]), &node).unwrap();
+        let path = match &node {
+            NodeType::Branch(n) => n.partial_path.clone(),
+            NodeType::Leaf(n) => n.partial_path.clone(),
+        };
+
+        let encoded = merkle.encode(path.clone(), &node).unwrap();
         let new_node = merkle
             .decode(0 /* TODO pass nibbles to skip */, encoded.as_ref())
             .unwrap();
-        let encoded_again = merkle.encode(Path(vec![]), &new_node).unwrap();
+        let encoded_again = merkle.encode(path, &new_node).unwrap();
 
         assert_eq!(node, new_node);
         assert_eq!(encoded, encoded_again);
