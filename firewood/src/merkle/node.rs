@@ -417,12 +417,15 @@ impl Serialize for EncodedNode<PlainCodec> {
 
         let value = self.value.as_deref();
 
-        let path: Vec<u8> = nibbles_to_bytes_iter(&self.path.encode()).collect();
+        let path_length_bits: u64 = self.path.len() as u64 * 4;
 
-        let mut s = serializer.serialize_tuple(3)?;
+        let path: Vec<u8> = nibbles_to_bytes_iter(self.path.as_ref()).collect();
+
+        let mut s = serializer.serialize_tuple(4)?;
 
         s.serialize_element(&chd)?;
         s.serialize_element(&value)?;
+        s.serialize_element(&path_length_bits)?;
         s.serialize_element(&path)?;
 
         s.end()
@@ -436,11 +439,21 @@ impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
     {
         let chd: Vec<(u64, Vec<u8>)>;
         let value: Option<Vec<u8>>;
+        let path_length_bits: u64;
         let path: Vec<u8>;
 
-        (chd, value, path) = Deserialize::deserialize(deserializer)?;
+        (chd, value, path_length_bits, path) = Deserialize::deserialize(deserializer)?;
 
-        let path = Path::from_nibbles(Nibbles::<0>::new(&path).into_iter());
+        let path_odd_length = path_length_bits % 8 != 0;
+
+        let mut path: Vec<u8> = path
+            .into_iter()
+            .flat_map(|b| [b >> 4, b & 0b_0000_1111])
+            .collect();
+
+        if path_odd_length {
+            path.pop();
+        }
 
         let mut children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
         #[allow(clippy::indexing_slicing)]
@@ -449,7 +462,7 @@ impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
         }
 
         Ok(Self {
-            path,
+            path: Path(path),
             children,
             value,
             phantom: PhantomData,
