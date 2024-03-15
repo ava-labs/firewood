@@ -1548,6 +1548,7 @@ mod tests {
     #[test_case(PlainCodec::new(), branch(b"abcd", b"value", vec![1, 2, 3].into()) ; "branch with partial path and value with PlainCodec")]
     #[test_case(PlainCodec::new(), branch(b"abcd", &[], vec![1, 2, 3].into()) ; "branch with partial path and no value with PlainCodec")]
     #[test_case(PlainCodec::new(), branch(b"", &[1,3,3,7], vec![1, 2, 3].into()) ; "branch with no partial path and value with PlainCodec")]
+    // TODO add tests where we skip path nibbles in decode.
     fn node_encode_decode<T>(_codec: T, node: NodeType)
     where
         T: BinarySerde,
@@ -1561,9 +1562,7 @@ mod tests {
         };
 
         let encoded = merkle.encode(path.clone(), &node).unwrap();
-        let new_node = merkle
-            .decode(0 /* TODO pass nibbles to skip */, encoded.as_ref())
-            .unwrap();
+        let new_node = merkle.decode(0, encoded.as_ref()).unwrap();
         let encoded_again = merkle.encode(path, &new_node).unwrap();
 
         assert_eq!(node, new_node);

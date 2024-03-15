@@ -258,6 +258,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
 
         let mut child_hash = root_hash;
         let proof_nodes_map = &self.0;
+        let mut path_nibbles_to_skip = 0;
 
         let sub_proof = loop {
             // Link the child to the parent based on the node type.
@@ -269,6 +270,13 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                         break None;
                     };
 
+                    if root_hash != child_hash {
+                        // `key_nibbles` has an extra zero nibble in front that's not actually
+                        // part of the key. When calculating how many nibbles of the encoded
+                        // node's path to skip, ignore this extra non-existent nibble.
+                        path_nibbles_to_skip += 1;
+                    }
+
                     match n.chd()[child_index] {
                         // If the child already resolved, then use the existing node.
                         Some(node) => merkle.get_node(node)?,
@@ -279,10 +287,13 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                                 .get(&child_hash)
                                 .ok_or(ProofError::ProofNodeMissing)?;
 
-                            let child_node = merkle.decode(
-                                0, /* TODO pass nibbles to skip */
-                                child_node_bytes.as_ref(),
-                            )?;
+                            let child_node =
+                                merkle.decode(path_nibbles_to_skip, child_node_bytes.as_ref())?;
+
+                            path_nibbles_to_skip += match &child_node {
+                                NodeType::Branch(n) => n.partial_path.len(),
+                                NodeType::Leaf(n) => n.partial_path.len(),
+                            };
 
                             let child_node = merkle.put_node(Node::from(child_node))?;
 
