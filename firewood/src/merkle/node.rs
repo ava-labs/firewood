@@ -11,6 +11,7 @@ use bitflags::bitflags;
 use bytemuck::{CheckedBitPattern, NoUninit, Pod, Zeroable};
 use enum_as_inner::EnumAsInner;
 use serde::{
+    de::Visitor,
     ser::{SerializeSeq, SerializeTuple},
     Deserialize, Serialize,
 };
@@ -402,6 +403,112 @@ impl<T> PartialEq for EncodedNode<T> {
     }
 }
 
+#[derive(Debug)]
+struct PathWithBitsPrefix(Vec<u8>); // this vec is the "raw" key (each byte is 2 nibbles)
+
+impl<'de> Deserialize<'de> for PathWithBitsPrefix {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(deserializer
+            .deserialize_struct("Key", &["f1", "f2"], TupleVisitor)
+            .unwrap())
+    }
+}
+
+struct TupleVisitor;
+
+impl<'de> Visitor<'de> for TupleVisitor {
+    type Value = PathWithBitsPrefix;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("tuple")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        let length = seq.next_element::<u64>().unwrap().unwrap() / 4;
+        println!("{length}");
+        let mut data = vec![];
+        for _ in 0..length {
+            data.push(seq.next_element::<u8>().unwrap().unwrap());
+        }
+        Ok(PathWithBitsPrefix(data))
+    }
+}
+
+impl Serialize for PathWithBitsPrefix {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let path_length_bits: u64 = (self.0.len() as u64).checked_mul(4u64).unwrap();
+
+        let mut serializer_1 = serializer.serialize_tuple(1 + self.0.len()).unwrap();
+
+        serializer_1.serialize_element(&path_length_bits)?;
+        for byt in self.0.iter() {
+            serializer_1.serialize_element(byt)?;
+        }
+        serializer_1.end()
+    }
+}
+
+struct BytesVisitor;
+
+impl<'de> Visitor<'de> for BytesVisitor {
+    type Value = Vec<u8>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("byte array")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        todo!()
+    }
+}
+
+struct VarintVisitor;
+
+impl<'de> Visitor<'de> for VarintVisitor {
+    type Value = u64;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("varint")
+    }
+
+    fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(v)
+    }
+}
+
+struct BitPrefixVisitor;
+
+impl<'de> Visitor<'de> for BitPrefixVisitor {
+    type Value = PathWithBitsPrefix;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("vector with bit size prefix")
+    }
+
+    fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        // convert from v (a &[u8]) into length in bytes (usize)
+        todo!()
+    }
+}
+
 // Note that the serializer passed in should always be the same type as T in EncodedNode<T>.
 impl Serialize for EncodedNode<PlainCodec> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -417,16 +524,13 @@ impl Serialize for EncodedNode<PlainCodec> {
 
         let value = self.value.as_deref();
 
-        let path_length_bits: u64 = self.path.len() as u64 * 4;
+        let path = PathWithBitsPrefix(nibbles_to_bytes_iter(self.path.as_ref()).collect());
 
-        let path: Vec<u8> = nibbles_to_bytes_iter(self.path.as_ref()).collect();
-
-        let mut s = serializer.serialize_tuple(4)?;
+        let mut s = serializer.serialize_tuple(3)?;
 
         s.serialize_element(&chd)?;
         s.serialize_element(&value)?;
-        s.serialize_element(&path_length_bits)?;
-        s.serialize_element(&path)?;
+        s.serialize_element(&path)?; // If path is [3,4] we write [2, 3, 4]. We want [3, 4]
 
         s.end()
     }
@@ -439,11 +543,13 @@ impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
     {
         let chd: Vec<(u64, Vec<u8>)>;
         let value: Option<Vec<u8>>;
-        let path_length_bits: u64;
-        let path: Vec<u8>;
+        let path: PathWithBitsPrefix;
 
-        (chd, value, path_length_bits, path) = Deserialize::deserialize(deserializer)?;
+        (chd, value, path) = Deserialize::deserialize(deserializer)?;
 
+        todo!();
+
+        /*
         let path_odd_length = path_length_bits % 8 != 0;
 
         let mut path: Vec<u8> = path
@@ -467,6 +573,7 @@ impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
             value,
             phantom: PhantomData,
         })
+        */
     }
 }
 
@@ -792,6 +899,22 @@ mod tests {
         }
 
         assert_eq!(node, hydrated_node);
+    }
+
+    /*
+    3
+    thread 'merkle::node::tests::test_encode_path_with_bits_prefix' panicked at firewood/src/merkle/node.rs:437:57:
+    called `Option::unwrap()` on a `None` value
+            */
+    #[test]
+    fn test_encode_path_with_bits_prefix() {
+        let sut = PathWithBitsPrefix(vec![1, 2, 3]);
+
+        let result = PlainCodec::serialize(&sut).unwrap();
+        assert_eq!(result, &[12, 1, 2, 3]);
+
+        let got = PlainCodec::deserialize::<PathWithBitsPrefix>(&result).unwrap();
+        assert_eq!(got.0, sut.0);
     }
 
     struct Nil;
