@@ -8,7 +8,6 @@ use crate::{
     },
     shale::{self, cached::InMemLinearStore, disk_address::DiskAddress, CachedStore, StoredView},
 };
-use std::num::NonZeroUsize;
 use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq)]
@@ -52,12 +51,8 @@ where
         #[allow(clippy::unwrap_used)]
         dm.write(
             compact_header.into(),
-            &shale::to_dehydrated(&shale::compact::CompactSpaceHeader::new(
-                NonZeroUsize::new(RESERVED).unwrap(),
-                #[allow(clippy::unwrap_used)]
-                NonZeroUsize::new(RESERVED).unwrap(),
-            ))
-            .unwrap(),
+            &shale::to_dehydrated(&shale::compact::CompactSpaceHeader::new(RESERVED, RESERVED))
+                .unwrap(),
         )
         .expect("write should succeed");
         #[allow(clippy::unwrap_used)]

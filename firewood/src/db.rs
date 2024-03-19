@@ -38,7 +38,6 @@ use std::{
     fmt,
     io::{Cursor, ErrorKind, Write},
     mem::size_of,
-    num::NonZeroUsize,
     ops::Deref,
     os::fd::{AsFd, BorrowedFd},
     path::Path,
@@ -198,9 +197,10 @@ impl DbHeader {
     pub const MSIZE: u64 = std::mem::size_of::<Self>() as u64;
 
     pub const fn new_empty() -> Self {
-        Self {
-            kv_root: DiskAddress::null(),
-        }
+        todo!()
+        // Self {
+        //     kv_root: DiskAddress::null(),
+        // }
     }
 }
 
@@ -673,8 +673,7 @@ impl Db {
         })
         .chain({
             // write out the CompactSpaceHeader
-            let space_reserved =
-                NonZeroUsize::new(SPACE_RESERVED as usize).expect("SPACE_RESERVED is non-zero");
+            let space_reserved = SPACE_RESERVED as usize;
             csh = CompactSpaceHeader::new(space_reserved, space_reserved);
             bytemuck::bytes_of(&csh)
         })
@@ -706,9 +705,8 @@ impl Db {
             merkle_meta_store.write(
                 merkle_payload_header.into(),
                 &shale::to_dehydrated(&shale::compact::CompactSpaceHeader::new(
-                    NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(),
-                    #[allow(clippy::unwrap_used)]
-                    NonZeroUsize::new(SPACE_RESERVED as usize).unwrap(),
+                    SPACE_RESERVED as usize,
+                    SPACE_RESERVED as usize,
                 ))?,
             )?;
             merkle_meta_store.write(

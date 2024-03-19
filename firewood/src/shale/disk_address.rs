@@ -3,7 +3,6 @@
 
 use std::hash::Hash;
 use std::mem::size_of;
-use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut};
 
 use bytemuck::{Pod, Zeroable};
@@ -13,10 +12,10 @@ use crate::shale::{CachedStore, ShaleError, Storable};
 /// The virtual disk address of an object
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, Eq, Hash, Ord, PartialOrd, PartialEq, Pod, Zeroable)]
-pub struct DiskAddress(pub Option<NonZeroUsize>);
+pub struct DiskAddress(pub usize);
 
 impl Deref for DiskAddress {
-    type Target = Option<NonZeroUsize>;
+    type Target = usize;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -32,36 +31,26 @@ impl DerefMut for DiskAddress {
 impl DiskAddress {
     pub(crate) const MSIZE: u64 = size_of::<Self>() as u64;
 
-    /// Return a None DiskAddress
-    pub const fn null() -> Self {
-        DiskAddress(None)
-    }
-
-    /// Indicate whether the DiskAddress is null
-    pub fn is_null(&self) -> bool {
-        self.is_none()
-    }
-
-    /// Convert a NonZeroUsize to a DiskAddress
-    pub const fn new(addr: NonZeroUsize) -> Self {
-        DiskAddress(Some(addr))
+    pub const fn new(addr: usize) -> Self {
+        DiskAddress(addr)
     }
 
     /// Get the little endian bytes for a DiskAddress for storage
     pub fn to_le_bytes(&self) -> [u8; 8] {
-        self.0.map(|v| v.get()).unwrap_or_default().to_le_bytes()
+        self.0.to_le_bytes()
     }
 
     /// Get the inner usize, using 0 if None
+    /// TODO remove?
     pub fn get(&self) -> usize {
-        self.0.map(|v| v.get()).unwrap_or_default()
+        self.0
     }
 }
 
 /// Convert from a usize to a DiskAddress
 impl From<usize> for DiskAddress {
     fn from(value: usize) -> Self {
-        DiskAddress(NonZeroUsize::new(value))
+        DiskAddress(value)
     }
 }
 
@@ -171,7 +160,7 @@ impl Storable for DiskAddress {
     fn serialize(&self, to: &mut [u8]) -> Result<(), ShaleError> {
         use std::io::{Cursor, Write};
         #[allow(clippy::unwrap_used)]
-        Cursor::new(to).write_all(&self.0.unwrap().get().to_le_bytes())?;
+        Cursor::new(to).write_all(&self.to_le_bytes())?;
         Ok(())
     }
 
@@ -185,8 +174,6 @@ impl Storable for DiskAddress {
         let addrdyn = &*raw;
         let addrvec = addrdyn.as_deref();
         #[allow(clippy::unwrap_used)]
-        Ok(Self(NonZeroUsize::new(usize::from_le_bytes(
-            addrvec.try_into().unwrap(),
-        ))))
+        Ok(Self(usize::from_le_bytes(addrvec.try_into().unwrap())))
     }
 }

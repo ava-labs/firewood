@@ -1417,11 +1417,8 @@ mod tests {
         let compact_header = DiskAddress::null();
         dm.write(
             compact_header.into(),
-            &shale::to_dehydrated(&shale::compact::CompactSpaceHeader::new(
-                std::num::NonZeroUsize::new(RESERVED).unwrap(),
-                std::num::NonZeroUsize::new(RESERVED).unwrap(),
-            ))
-            .unwrap(),
+            &shale::to_dehydrated(&shale::compact::CompactSpaceHeader::new(RESERVED, RESERVED))
+                .unwrap(),
         )
         .unwrap();
         let compact_header = shale::StoredView::ptr_to_obj(

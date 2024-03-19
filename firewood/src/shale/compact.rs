@@ -11,7 +11,6 @@ use super::{CachedStore, Obj, ObjRef, ShaleError, Storable, StoredView};
 use bytemuck::{Pod, Zeroable};
 use std::fmt::Debug;
 use std::io::{Cursor, Write};
-use std::num::NonZeroUsize;
 use std::sync::RwLock;
 
 type PayLoadSize = u64;
@@ -54,7 +53,7 @@ impl Storable for CompactHeader {
         Ok(Self {
             payload_size,
             is_freed,
-            desc_addr: DiskAddress(NonZeroUsize::new(desc_addr)),
+            desc_addr: DiskAddress(desc_addr),
         })
     }
 
@@ -173,7 +172,7 @@ impl CompactSpaceHeaderSliced {
 impl CompactSpaceHeader {
     pub const MSIZE: u64 = 32;
 
-    pub const fn new(meta_base: NonZeroUsize, compact_base: NonZeroUsize) -> Self {
+    pub const fn new(meta_base: usize, compact_base: usize) -> Self {
         Self {
             meta_space_tail: DiskAddress::new(meta_base),
             data_space_tail: DiskAddress::new(compact_base),
@@ -340,7 +339,7 @@ impl<M: CachedStore> CompactSpaceInner<M> {
         let mut f = offset;
 
         #[allow(clippy::unwrap_used)]
-        if offset + fsize < self.header.data_space_tail.unwrap().get() as u64
+        if offset + fsize < self.header.data_space_tail.0 as u64
             && (regn_size - (offset & (regn_size - 1))) >= fsize + hsize
         {
             // merge with higher data segment
@@ -526,7 +525,7 @@ impl<M: CachedStore> CompactSpaceInner<M> {
         #[allow(clippy::unwrap_used)]
         f.modify(|f| f.payload_size = length).unwrap();
         #[allow(clippy::unwrap_used)]
-        Ok((offset + CompactHeader::MSIZE as usize).0.unwrap().get() as u64)
+        Ok((offset + CompactHeader::MSIZE as usize).0 as u64)
     }
 
     fn alloc(&mut self, length: u64) -> Result<u64, ShaleError> {
@@ -614,7 +613,7 @@ impl<T: Storable + Debug + 'static, M: CachedStore> CompactSpace<T, M> {
         let mut inner = self.inner.write().unwrap();
         self.obj_cache.pop(ptr);
         #[allow(clippy::unwrap_used)]
-        inner.free(ptr.unwrap().get() as u64)
+        inner.free(ptr.0 as u64)
     }
 
     pub(crate) fn get_item(&self, ptr: DiskAddress) -> Result<ObjRef<'_, T>, ShaleError> {
@@ -632,7 +631,7 @@ impl<T: Storable + Debug + 'static, M: CachedStore> CompactSpace<T, M> {
         if ptr < DiskAddress::from(CompactSpaceHeader::MSIZE as usize) {
             return Err(ShaleError::InvalidAddressLength {
                 expected: DiskAddress::from(CompactSpaceHeader::MSIZE as usize),
-                found: ptr.0.map(|inner| inner.get()).unwrap_or_default() as u64,
+                found: ptr.0 as u64,
             });
         }
 
@@ -708,27 +707,23 @@ mod tests {
 
     #[test]
     fn test_space_item() {
-        let meta_size: NonZeroUsize = NonZeroUsize::new(0x10000).unwrap();
-        let compact_size: NonZeroUsize = NonZeroUsize::new(0x10000).unwrap();
+        let meta_size: u64 = 0x10000;
+        let compact_size: u64 = 0x10000;
         let reserved: DiskAddress = 0x1000.into();
 
-        let mut dm = InMemLinearStore::new(meta_size.get() as u64, 0x0);
+        let mut dm = InMemLinearStore::new(meta_size, 0x0);
 
         // initialize compact space
         let compact_header = DiskAddress::from(0x1);
         dm.write(
-            compact_header.unwrap().get(),
-            &shale::to_dehydrated(&CompactSpaceHeader::new(
-                reserved.0.unwrap(),
-                reserved.0.unwrap(),
-            ))
-            .unwrap(),
+            compact_header.get(),
+            &shale::to_dehydrated(&CompactSpaceHeader::new(reserved.0, reserved.0)).unwrap(),
         )
         .unwrap();
         let compact_header =
             StoredView::ptr_to_obj(&dm, compact_header, CompactHeader::MSIZE).unwrap();
         let mem_meta = dm;
-        let mem_payload = InMemLinearStore::new(compact_size.get() as u64, 0x1);
+        let mem_payload = InMemLinearStore::new(compact_size, 0x1);
 
         let cache: ObjCache<Hash> = ObjCache::new(1);
         let space =
