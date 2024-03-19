@@ -218,10 +218,7 @@ impl Storable for DbHeader {
         Ok(Self {
             kv_root: root_bytes
                 .try_into()
-                .map_err(|_| ShaleError::InvalidAddressLength {
-                    expected: Self::MSIZE,
-                    found: root_bytes.len() as u64,
-                })?,
+                .expect("Self::MSIZE > DiskAddress:MSIZE"),
         })
     }
 
