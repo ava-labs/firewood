@@ -201,13 +201,21 @@ impl Storable for CompactSpaceHeader {
                 size: Self::MSIZE,
             })?;
         #[allow(clippy::indexing_slicing)]
-        let meta_space_tail = raw.as_deref()[..8].try_into().unwrap();
+        let meta_space_tail = raw.as_deref()[..8]
+            .try_into()
+            .expect("Self::MSIZE = 4 * DiskAddress::MSIZE");
         #[allow(clippy::indexing_slicing)]
-        let data_space_tail = raw.as_deref()[8..16].try_into().unwrap();
+        let data_space_tail = raw.as_deref()[8..16]
+            .try_into()
+            .expect("Self::MSIZE = 4 * DiskAddress::MSIZE");
         #[allow(clippy::indexing_slicing)]
-        let base_addr = raw.as_deref()[16..24].try_into().unwrap();
+        let base_addr = raw.as_deref()[16..24]
+            .try_into()
+            .expect("Self::MSIZE = 4 * DiskAddress::MSIZE");
         #[allow(clippy::indexing_slicing)]
-        let alloc_addr = raw.as_deref()[24..].try_into().unwrap();
+        let alloc_addr = raw.as_deref()[24..]
+            .try_into()
+            .expect("Self::MSIZE = 4 * DiskAddress::MSIZE");
         Ok(Self {
             meta_space_tail,
             data_space_tail,
