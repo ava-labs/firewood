@@ -1,9 +1,8 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::Data;
 use crate::{
-    merkle::{from_nibbles, PartialPath},
+    merkle::{nibbles_to_bytes_iter, Path},
     nibbles::Nibbles,
     shale::{ShaleError::InvalidCacheView, Storable},
 };
@@ -17,34 +16,39 @@ use std::{
 pub const SIZE: usize = 2;
 
 type PathLen = u8;
-type DataLen = u32;
+type ValueLen = u32;
 
 #[derive(PartialEq, Eq, Clone)]
 pub struct LeafNode {
-    pub(crate) path: PartialPath,
-    pub(crate) data: Data,
+    pub(crate) partial_path: Path,
+    pub(crate) value: Vec<u8>,
 }
 
 impl Debug for LeafNode {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), FmtError> {
-        write!(f, "[Leaf {:?} {}]", self.path, hex::encode(&*self.data))
+        write!(
+            f,
+            "[Leaf {:?} {}]",
+            self.partial_path,
+            hex::encode(&*self.value)
+        )
     }
 }
 
 impl LeafNode {
-    pub fn new<P: Into<PartialPath>, D: Into<Data>>(path: P, data: D) -> Self {
+    pub fn new<P: Into<Path>, V: Into<Vec<u8>>>(partial_path: P, value: V) -> Self {
         Self {
-            path: path.into(),
-            data: data.into(),
+            partial_path: partial_path.into(),
+            value: value.into(),
         }
     }
 
-    pub const fn path(&self) -> &PartialPath {
-        &self.path
+    pub const fn path(&self) -> &Path {
+        &self.partial_path
     }
 
-    pub const fn data(&self) -> &Data {
-        &self.data
+    pub const fn value(&self) -> &Vec<u8> {
+        &self.value
     }
 }
 
@@ -52,7 +56,7 @@ impl LeafNode {
 #[repr(C, packed)]
 struct Meta {
     path_len: PathLen,
-    data_len: DataLen,
+    value_len: ValueLen,
 }
 
 impl Meta {
@@ -62,23 +66,26 @@ impl Meta {
 impl Storable for LeafNode {
     fn serialized_len(&self) -> u64 {
         let meta_len = size_of::<Meta>() as u64;
-        let path_len = self.path.serialized_len();
-        let data_len = self.data.len() as u64;
+        let path_len = self.partial_path.serialized_len();
+        let value_len = self.value.len() as u64;
 
-        meta_len + path_len + data_len
+        meta_len + path_len + value_len
     }
 
     fn serialize(&self, to: &mut [u8]) -> Result<(), crate::shale::ShaleError> {
         let mut cursor = Cursor::new(to);
 
-        let path = &self.path.encode();
-        let path = from_nibbles(path);
-        let data = &self.data;
+        let path = &self.partial_path.encode();
+        let path = nibbles_to_bytes_iter(path);
+        let value = &self.value;
 
-        let path_len = self.path.serialized_len() as PathLen;
-        let data_len = data.len() as DataLen;
+        let path_len = self.partial_path.serialized_len() as PathLen;
+        let value_len = value.len() as ValueLen;
 
-        let meta = Meta { path_len, data_len };
+        let meta = Meta {
+            path_len,
+            value_len,
+        };
 
         cursor.write_all(bytemuck::bytes_of(&meta))?;
 
@@ -86,7 +93,7 @@ impl Storable for LeafNode {
             cursor.write_all(&[nibble])?;
         }
 
-        cursor.write_all(data)?;
+        cursor.write_all(value)?;
 
         Ok(())
     }
@@ -107,23 +114,26 @@ impl Storable for LeafNode {
             .as_deref();
 
         let offset = offset + Meta::SIZE;
-        let Meta { path_len, data_len } = *bytemuck::from_bytes(&node_header_raw);
-        let size = path_len as u64 + data_len as u64;
+        let Meta {
+            path_len,
+            value_len,
+        } = *bytemuck::from_bytes(&node_header_raw);
+        let size = path_len as u64 + value_len as u64;
 
         let remainder = mem
             .get_view(offset, size)
             .ok_or(InvalidCacheView { offset, size })?
             .as_deref();
 
-        let (path, data) = remainder.split_at(path_len as usize);
+        let (path, value) = remainder.split_at(path_len as usize);
 
         let path = {
             let nibbles = Nibbles::<0>::new(path).into_iter();
-            PartialPath::from_nibbles(nibbles).0
+            Path::from_nibbles(nibbles).0
         };
 
-        let data = Data(data.to_vec());
+        let value = value.to_vec();
 
-        Ok(Self::new(path, data))
+        Ok(Self::new(path, value))
     }
 }

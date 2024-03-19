@@ -1,8 +1,10 @@
-use crate::db::{MutStore, SharedStore};
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 use crate::nibbles::Nibbles;
-use crate::shale::{self, disk_address::DiskAddress, ObjWriteSizeError, ShaleError, ShaleStore};
+use crate::shale::compact::CompactSpace;
+use crate::shale::CachedStore;
+use crate::shale::{self, disk_address::DiskAddress, ObjWriteSizeError, ShaleError};
+use crate::storage::{StoreRevMut, StoreRevShared};
 use crate::v2::api::{self, HashKey};
 use futures::{StreamExt, TryStreamExt};
 use sha3::{Digest, Keccak256};
@@ -16,10 +18,7 @@ pub mod proof;
 mod stream;
 mod trie_hash;
 
-pub use node::{
-    BinarySerde, Bincode, BranchNode, Data, EncodedNode, EncodedNodeType, LeafNode, Node,
-    PartialPath,
-};
+pub use node::{BinarySerde, Bincode, BranchNode, EncodedNode, LeafNode, Node, Path};
 pub use proof::{Proof, ProofError};
 pub use stream::MerkleKeyValueStream;
 pub use trie_hash::{TrieHash, TRIE_HASH_LEN};
@@ -69,21 +68,21 @@ macro_rules! write_node {
 
 #[derive(Debug)]
 pub struct Merkle<S, T> {
-    store: Box<S>,
+    store: CompactSpace<Node, S>,
     phantom: PhantomData<T>,
 }
 
-impl<T> From<Merkle<MutStore, T>> for Merkle<SharedStore, T> {
-    fn from(value: Merkle<MutStore, T>) -> Self {
+impl<T> From<Merkle<StoreRevMut, T>> for Merkle<StoreRevShared, T> {
+    fn from(value: Merkle<StoreRevMut, T>) -> Self {
         let store = value.store.into();
         Merkle {
-            store: Box::new(store),
+            store,
             phantom: PhantomData,
         }
     }
 }
 
-impl<S: ShaleStore<Node>, T> Merkle<S, T> {
+impl<S: CachedStore, T> Merkle<S, T> {
     pub fn get_node(&self, ptr: DiskAddress) -> Result<NodeObjRef, MerkleError> {
         self.store.get_item(ptr).map_err(Into::into)
     }
@@ -99,38 +98,72 @@ impl<S: ShaleStore<Node>, T> Merkle<S, T> {
 
 impl<'de, S, T> Merkle<S, T>
 where
-    S: ShaleStore<Node> + Send + Sync,
+    S: CachedStore,
     T: BinarySerde,
     EncodedNode<T>: serde::Serialize + serde::Deserialize<'de>,
 {
-    pub fn new(store: Box<S>) -> Self {
+    pub const fn new(store: CompactSpace<Node, S>) -> Self {
         Self {
             store,
             phantom: PhantomData,
         }
     }
 
-    fn encode(&self, node: &Node) -> Result<Vec<u8>, MerkleError> {
+    fn encode(&self, _path: Path, node: &Node) -> Result<Vec<u8>, MerkleError> {
         let encoded = match node {
-            Node::Leaf(n) => EncodedNode::new(EncodedNodeType::Leaf(n.clone())),
+            Node::Leaf(n) => {
+                let children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
+                EncodedNode {
+                    partial_path: n.partial_path.clone(), // TODO pass whole path not partial path
+                    children,
+                    value: n.value.clone().into(),
+                    phantom: PhantomData,
+                }
+            }
 
             Node::Branch(n) => {
                 // pair up DiskAddresses with encoded children and pick the right one
-                let encoded_children = n.chd().iter().zip(n.children_encoded.iter());
+                let encoded_children = n.chd().iter().zip(n.children_encoded.iter()).enumerate();
                 let children = encoded_children
-                    .map(|(child_addr, encoded_child)| {
+                    .map(|(_child_index, (child_addr, encoded_child))| {
                         child_addr
                             // if there's a child disk address here, get the encoded bytes
                             .map(|addr| {
-                                self.get_node(addr).and_then(|node| self.encode(&node)).map(
-                                    |node_bytes| {
+                                self.get_node(addr)
+                                    .and_then(|node| {
+                                        let node = node.inner_ref();
+
+                                        let partial_path = match &node {
+                                            Node::Leaf(n) => n.partial_path.clone(),
+                                            Node::Branch(n) => n.partial_path.clone(),
+                                        };
+
+                                        self.encode(partial_path, node)
+
+                                        // TODO remove the above and use the below.
+                                        // We want to eventually pass the node's whole path into the encode function
+                                        // rather than its partial path so the encoding matches merkledb.
+                                        // let partial_path = match node.inner() {
+                                        //     Node::Leaf(n) => n.partial_path.iter().copied(),
+                                        //     Node::Branch(n) => n.partial_path.iter().copied(),
+                                        // };
+
+                                        // let child_path = path
+                                        //     .iter()
+                                        //     .copied()
+                                        //     .chain(once(child_index as u8))
+                                        //     .chain(partial_path)
+                                        //     .collect::<Vec<u8>>();
+
+                                        // self.encode(Path(child_path), node.inner())
+                                    })
+                                    .map(|node_bytes| {
                                         if node_bytes.len() >= TRIE_HASH_LEN {
                                             Keccak256::digest(&node_bytes).to_vec()
                                         } else {
                                             node_bytes
                                         }
-                                    },
-                                )
+                                    })
                             })
                             // or look for the pre-fetched bytes
                             .or_else(|| encoded_child.as_ref().map(|child| Ok(child.to_vec())))
@@ -140,12 +173,12 @@ where
                     .try_into()
                     .expect("MAX_CHILDREN will always be yielded");
 
-                let path = n.path.clone();
-                EncodedNode::new(EncodedNodeType::Branch {
-                    path,
+                EncodedNode {
+                    partial_path: n.partial_path.clone(), // TODO pass whole path not partial path
                     children,
                     value: n.value.clone(),
-                })
+                    phantom: PhantomData,
+                }
             }
         };
 
@@ -156,28 +189,29 @@ where
         let encoded: EncodedNode<T> =
             T::deserialize(buf).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))?;
 
-        match encoded.node {
-            EncodedNodeType::Leaf(leaf) => Ok(Node::Leaf(leaf)),
-            EncodedNodeType::Branch {
-                path,
-                children,
-                value,
-            } => {
-                let value = value.map(|v| v.0);
-                let branch = Node::Branch(
-                    BranchNode::new(path, [None; BranchNode::MAX_CHILDREN], value, *children)
-                        .into(),
-                );
-
-                Ok(branch)
-            }
+        if encoded.children.iter().all(|b| b.is_none()) {
+            // This is a leaf node
+            return Ok(Node::Leaf(LeafNode::new(
+                encoded.partial_path,
+                encoded.value.expect("leaf nodes must always have a value"),
+            )));
         }
+
+        Ok(Node::Branch(
+            BranchNode {
+                partial_path: encoded.partial_path,
+                children: [None; BranchNode::MAX_CHILDREN],
+                value: encoded.value,
+                children_encoded: encoded.children,
+            }
+            .into(),
+        ))
     }
 }
 
 impl<S, T> Merkle<S, T>
 where
-    S: ShaleStore<Node> + Send + Sync,
+    S: CachedStore,
     T: BinarySerde,
     EncodedNode<T>: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
@@ -185,7 +219,7 @@ where
         self.store
             .put_item(
                 Node::Branch(Box::new(BranchNode {
-                    path: vec![].into(),
+                    partial_path: vec![].into(),
                     children: [None; BranchNode::MAX_CHILDREN],
                     value: None,
                     children_encoded: Default::default(),
@@ -194,10 +228,6 @@ where
             )
             .map_err(MerkleError::Shale)
             .map(|node| node.as_ptr())
-    }
-
-    pub fn get_store(&self) -> &S {
-        self.store.as_ref()
     }
 
     pub fn empty_root() -> &'static TrieHash {
@@ -221,14 +251,19 @@ where
             .children[0];
         Ok(if let Some(root) = root {
             let node = self.get_node(root)?;
-            self.to_hash(&node)?
+            // The root node's path is just its partial path since it has no ancestors.
+            let node_path = match node.inner_ref() {
+                Node::Branch(n) => n.partial_path.clone(),
+                Node::Leaf(n) => n.partial_path.clone(),
+            };
+            self.to_hash(node_path, &node)?
         } else {
             *Self::empty_root()
         })
     }
 
-    fn to_hash(&self, node: &Node) -> Result<TrieHash, MerkleError> {
-        let res = self.encode(node)?;
+    fn to_hash(&self, path: Path, node: &Node) -> Result<TrieHash, MerkleError> {
+        let res = self.encode(path, node)?;
         Ok(TrieHash(Keccak256::digest(res).into()))
     }
 
@@ -307,16 +342,16 @@ where
                         .chain(key_nibbles.clone())
                         .collect::<Vec<_>>();
 
-                    let overlap = PrefixOverlap::from(&n.path, &key_remainder);
+                    let overlap = PrefixOverlap::from(&n.partial_path, &key_remainder);
 
                     #[allow(clippy::indexing_slicing)]
                     match (overlap.unique_a.len(), overlap.unique_b.len()) {
-                        // same node, overwrite the data
+                        // same node, overwrite the value
                         (0, 0) => {
-                            self.update_data_and_move_node_if_larger(
+                            self.update_value_and_move_node_if_larger(
                                 (&mut parents, &mut deleted),
                                 node,
-                                Data(val),
+                                val,
                             )?;
                         }
 
@@ -327,8 +362,7 @@ where
                                 (index[0], path.to_vec())
                             };
 
-                            let new_leaf =
-                                Node::Leaf(LeafNode::new(PartialPath(new_leaf_path), Data(val)));
+                            let new_leaf = Node::Leaf(LeafNode::new(Path(new_leaf_path), val));
 
                             let new_leaf = self.put_node(new_leaf)?.as_ptr();
 
@@ -336,9 +370,9 @@ where
                             children[new_leaf_index as usize] = Some(new_leaf);
 
                             let new_branch = BranchNode {
-                                path: PartialPath(overlap.shared.to_vec()),
+                                partial_path: Path(overlap.shared.to_vec()),
                                 children,
-                                value: n.data.clone().into(),
+                                value: n.value.clone().into(),
                                 children_encoded: Default::default(),
                             };
 
@@ -364,14 +398,14 @@ where
                                 .update_path_and_move_node_if_larger(
                                     (&mut parents, &mut deleted),
                                     node,
-                                    PartialPath(old_leaf_path.to_vec()),
+                                    Path(old_leaf_path.to_vec()),
                                 )?
                                 .as_ptr();
 
                             let mut new_branch = BranchNode {
-                                path: PartialPath(new_branch_path),
+                                partial_path: Path(new_branch_path),
                                 children: [None; BranchNode::MAX_CHILDREN],
-                                value: Some(val.into()),
+                                value: Some(val),
                                 children_encoded: Default::default(),
                             };
 
@@ -401,17 +435,16 @@ where
                                 .update_path_and_move_node_if_larger(
                                     (&mut parents, &mut deleted),
                                     node,
-                                    PartialPath(old_leaf_path.to_vec()),
+                                    Path(old_leaf_path.to_vec()),
                                 )?
                                 .as_ptr();
 
-                            let new_leaf =
-                                Node::Leaf(LeafNode::new(PartialPath(new_leaf_path), Data(val)));
+                            let new_leaf = Node::Leaf(LeafNode::new(Path(new_leaf_path), val));
 
                             let new_leaf = self.put_node(new_leaf)?.as_ptr();
 
                             let mut new_branch = BranchNode {
-                                path: PartialPath(new_branch_path),
+                                partial_path: Path(new_branch_path),
                                 children: [None; BranchNode::MAX_CHILDREN],
                                 value: None,
                                 children_encoded: Default::default(),
@@ -430,7 +463,7 @@ where
                     break None;
                 }
 
-                Node::Branch(n) if n.path.len() == 0 => {
+                Node::Branch(n) if n.partial_path.len() == 0 => {
                     #[allow(clippy::indexing_slicing)]
                     match n.children[next_nibble as usize] {
                         Some(c) => (node, c),
@@ -439,16 +472,16 @@ where
                             // create a new leaf
                             let leaf_ptr = self
                                 .put_node(Node::Leaf(LeafNode::new(
-                                    PartialPath(key_nibbles.collect()),
-                                    Data(val),
+                                    Path(key_nibbles.collect()),
+                                    val,
                                 )))?
                                 .as_ptr();
 
                             // set the current child to point to this leaf
                             #[allow(clippy::indexing_slicing)]
                             node.write(|node| {
-                                node.as_branch_mut().unwrap().children[next_nibble as usize] =
-                                    Some(leaf_ptr);
+                                let node = node.as_branch_mut().expect("this is a branch node");
+                                node.children[next_nibble as usize] = Some(leaf_ptr);
                             })?;
 
                             break None;
@@ -462,16 +495,16 @@ where
                         .chain(key_nibbles.clone())
                         .collect::<Vec<_>>();
 
-                    let overlap = PrefixOverlap::from(&n.path, &key_remainder);
+                    let overlap = PrefixOverlap::from(&n.partial_path, &key_remainder);
 
                     #[allow(clippy::indexing_slicing)]
                     match (overlap.unique_a.len(), overlap.unique_b.len()) {
-                        // same node, overwrite the data
+                        // same node, overwrite the value
                         (0, 0) => {
-                            self.update_data_and_move_node_if_larger(
+                            self.update_value_and_move_node_if_larger(
                                 (&mut parents, &mut deleted),
                                 node,
-                                Data(val),
+                                val,
                             )?;
                             break None;
                         }
@@ -493,16 +526,17 @@ where
                                 Some(ptr) => (node, ptr),
                                 None => {
                                     let new_leaf = Node::Leaf(LeafNode::new(
-                                        PartialPath(new_leaf_path.to_vec()),
-                                        Data(val),
+                                        Path(new_leaf_path.to_vec()),
+                                        val,
                                     ));
 
                                     let new_leaf = self.put_node(new_leaf)?.as_ptr();
 
                                     #[allow(clippy::indexing_slicing)]
                                     node.write(|node| {
-                                        node.as_branch_mut().unwrap().children
-                                            [next_nibble as usize] = Some(new_leaf);
+                                        let node =
+                                            node.as_branch_mut().expect("this is a branch node");
+                                        node.children[next_nibble as usize] = Some(new_leaf);
                                     })?;
 
                                     break None;
@@ -523,14 +557,14 @@ where
                                 .update_path_and_move_node_if_larger(
                                     (&mut parents, &mut deleted),
                                     node,
-                                    PartialPath(old_branch_path.to_vec()),
+                                    Path(old_branch_path.to_vec()),
                                 )?
                                 .as_ptr();
 
                             let mut new_branch = BranchNode {
-                                path: PartialPath(new_branch_path),
+                                partial_path: Path(new_branch_path),
                                 children: [None; BranchNode::MAX_CHILDREN],
-                                value: Some(val.into()),
+                                value: Some(val),
                                 children_encoded: Default::default(),
                             };
 
@@ -562,17 +596,16 @@ where
                                 .update_path_and_move_node_if_larger(
                                     (&mut parents, &mut deleted),
                                     node,
-                                    PartialPath(old_branch_path.to_vec()),
+                                    Path(old_branch_path.to_vec()),
                                 )?
                                 .as_ptr();
 
-                            let new_leaf =
-                                Node::Leaf(LeafNode::new(PartialPath(new_leaf_path), Data(val)));
+                            let new_leaf = Node::Leaf(LeafNode::new(Path(new_leaf_path), val));
 
                             let new_leaf = self.put_node(new_leaf)?.as_ptr();
 
                             let mut new_branch = BranchNode {
-                                path: PartialPath(new_branch_path),
+                                partial_path: Path(new_branch_path),
                                 children: [None; BranchNode::MAX_CHILDREN],
                                 value: None,
                                 children_encoded: Default::default(),
@@ -608,19 +641,19 @@ where
                     |u| {
                         info = match u {
                             Node::Branch(n) => {
-                                n.value = Some(Data(val));
+                                n.value = Some(val);
                                 None
                             }
                             Node::Leaf(n) => {
-                                if n.path.len() == 0 {
-                                    n.data = Data(val);
+                                if n.partial_path.len() == 0 {
+                                    n.value = val;
 
                                     None
                                 } else {
                                     #[allow(clippy::indexing_slicing)]
-                                    let idx = n.path[0];
+                                    let idx = n.partial_path[0];
                                     #[allow(clippy::indexing_slicing)]
-                                    (n.path = PartialPath(n.path[1..].to_vec()));
+                                    (n.partial_path = Path(n.partial_path[1..].to_vec()));
 
                                     Some((idx, true, None, val))
                                 }
@@ -648,14 +681,14 @@ where
                 #[allow(clippy::indexing_slicing)]
                 (chd[idx as usize] = Some(c_ptr));
 
-                let branch = self
-                    .put_node(Node::Branch(Box::new(BranchNode {
-                        path: vec![].into(),
-                        children: chd,
-                        value: Some(Data(val)),
-                        children_encoded: Default::default(),
-                    })))?
-                    .as_ptr();
+                let node = Node::Branch(Box::new(BranchNode {
+                    partial_path: vec![].into(),
+                    children: chd,
+                    value: Some(val),
+                    children_encoded: Default::default(),
+                }));
+
+                let branch = self.put_node(node)?.as_ptr();
 
                 set_parent(branch, &mut parents);
             }
@@ -675,7 +708,7 @@ where
 
         let mut deleted = Vec::new();
 
-        let data = {
+        let value = {
             let (node, mut parents) =
                 self.get_node_and_parents_by_key(self.get_node(root)?, key)?;
 
@@ -683,16 +716,15 @@ where
                 return Ok(None);
             };
 
-            let data = match node.inner_ref() {
+            let value = match node.inner_ref() {
                 Node::Branch(branch) => {
-                    let data = branch.value.clone();
-                    let children = branch.children;
-
-                    if data.is_none() {
+                    let value = branch.value.clone();
+                    if value.is_none() {
                         return Ok(None);
                     }
 
-                    let children: Vec<_> = children
+                    let children: Vec<_> = branch
+                        .children
                         .iter()
                         .enumerate()
                         .filter_map(|(i, child)| child.map(|child| (i, child)))
@@ -700,7 +732,7 @@ where
 
                     // don't change the sentinel node
                     if children.len() == 1 && !parents.is_empty() {
-                        let branch_path = &branch.path.0;
+                        let branch_path = &branch.partial_path.0;
 
                         #[allow(clippy::indexing_slicing)]
                         let (child_index, child) = children[0];
@@ -714,7 +746,7 @@ where
                                 .chain(once(child_index as u8))
                                 .chain(child_path.0.iter().copied())
                                 .collect();
-                            *child_path = PartialPath(path);
+                            *child_path = Path(path);
                         })?;
 
                         set_parent(child.as_ptr(), &mut parents);
@@ -722,15 +754,16 @@ where
                         deleted.push(node.as_ptr());
                     } else {
                         node.write(|node| {
-                            node.as_branch_mut().unwrap().value = None;
+                            let node = node.as_branch_mut().expect("the sentinel node is a branch");
+                            node.value = None;
                         })?
                     }
 
-                    data
+                    value
                 }
 
                 Node::Leaf(n) => {
-                    let data = Some(n.data.clone());
+                    let value = Some(n.value.clone());
 
                     // TODO: handle unwrap better
                     deleted.push(node.as_ptr());
@@ -739,7 +772,10 @@ where
 
                     #[allow(clippy::indexing_slicing)]
                     parent.write(|parent| {
-                        parent.as_branch_mut().unwrap().children[child_index as usize] = None;
+                        let parent = parent
+                            .as_branch_mut()
+                            .expect("leaf node's parent is always a branch");
+                        parent.children[child_index as usize] = None;
                     })?;
 
                     let branch = parent.as_branch().expect("parents are always branch nodes");
@@ -752,9 +788,9 @@ where
                         .collect();
 
                     match (children.len(), &branch.value, !parents.is_empty()) {
-                        // node is invalid, all single-child nodes should have data
+                        // node is invalid, all single-child nodes should have a value
                         (1, None, true) => {
-                            let parent_path = &branch.path.0;
+                            let parent_path = &branch.partial_path.0;
 
                             #[allow(clippy::indexing_slicing)]
                             let (child_index, child) = children[0];
@@ -770,10 +806,10 @@ where
                                         .iter()
                                         .copied()
                                         .chain(once(child_index as u8))
-                                        .chain(child.path.0.iter().copied())
+                                        .chain(child.partial_path.0.iter().copied())
                                         .collect();
 
-                                    child.path = PartialPath(path);
+                                    child.partial_path = Path(path);
 
                                     Node::Branch(child)
                                 }
@@ -782,10 +818,10 @@ where
                                         .iter()
                                         .copied()
                                         .chain(once(child_index as u8))
-                                        .chain(child.path.0.iter().copied())
+                                        .chain(child.partial_path.0.iter().copied())
                                         .collect();
 
-                                    child.path = PartialPath(path);
+                                    child.partial_path = Path(path);
 
                                     Node::Leaf(child)
                                 }
@@ -799,10 +835,10 @@ where
                         }
 
                         // branch nodes shouldn't have no children
-                        (0, Some(data), true) => {
+                        (0, Some(value), true) => {
                             let leaf = Node::Leaf(LeafNode::new(
-                                PartialPath(branch.path.0.clone()),
-                                data.clone(),
+                                Path(branch.partial_path.0.clone()),
+                                value.clone(),
                             ));
 
                             let leaf = self.put_node(leaf)?.as_ptr();
@@ -813,18 +849,19 @@ where
 
                         _ => {}
                     }
-                    data
+
+                    value
                 }
             };
 
-            data
+            value
         };
 
         for ptr in deleted.into_iter() {
             self.free_node(ptr)?;
         }
 
-        Ok(data.map(|data| data.0))
+        Ok(value)
     }
 
     fn remove_tree_(
@@ -933,12 +970,12 @@ where
 
             let next_ptr = match node_ref.inner_ref() {
                 #[allow(clippy::indexing_slicing)]
-                Node::Branch(n) if n.path.len() == 0 => match n.children[nib as usize] {
+                Node::Branch(n) if n.partial_path.len() == 0 => match n.children[nib as usize] {
                     Some(c) => c,
                     None => return Ok(None),
                 },
                 Node::Branch(n) => {
-                    let mut n_path_iter = n.path.iter().copied();
+                    let mut n_path_iter = n.partial_path.iter().copied();
 
                     if n_path_iter.next() != Some(nib) {
                         return Ok(None);
@@ -969,7 +1006,10 @@ where
                     }
                 }
                 Node::Leaf(n) => {
-                    let node_ref = if once(nib).chain(key_nibbles).eq(n.path.iter().copied()) {
+                    let node_ref = if once(nib)
+                        .chain(key_nibbles)
+                        .eq(n.partial_path.iter().copied())
+                    {
                         Some(node_ref)
                     } else {
                         None
@@ -986,8 +1026,10 @@ where
 
         // when we're done iterating over nibbles, check if the node we're at has a value
         let node_ref = match node_ref.inner_ref() {
-            Node::Branch(n) if n.value.as_ref().is_some() && n.path.is_empty() => Some(node_ref),
-            Node::Leaf(n) if n.path.len() == 0 => Some(node_ref),
+            Node::Branch(n) if n.value.as_ref().is_some() && n.partial_path.is_empty() => {
+                Some(node_ref)
+            }
+            Node::Leaf(n) if n.partial_path.len() == 0 => Some(node_ref),
             _ => None,
         };
 
@@ -1041,7 +1083,7 @@ where
 
             cur_hash = match sub_proof {
                 // Return when reaching the end of the key.
-                Some(SubProof::Data(value)) if key_nibbles.is_empty() => return Ok(Some(value)),
+                Some(SubProof::Value(value)) if key_nibbles.is_empty() => return Ok(Some(value)),
                 // The trie doesn't contain the key.
                 Some(SubProof::Hash(hash)) => hash,
                 _ => return Ok(None),
@@ -1069,13 +1111,13 @@ where
 
         let path_iter = self.path_iter(sentinel_node, key.as_ref());
 
-        let nodes = path_iter
-            .map(|result| result.map(|(_, node)| node))
-            .collect::<Result<Vec<NodeObjRef>, MerkleError>>()?;
+        let nodes_and_paths =
+            path_iter.collect::<Result<Vec<(Box<[u8]>, NodeObjRef)>, MerkleError>>()?;
 
         // Get the hashes of the nodes.
-        for node in nodes.into_iter() {
-            let encoded = self.encode(&node)?;
+        for (path, node) in nodes_and_paths.into_iter() {
+            let path = Path(path.to_vec());
+            let encoded = self.encode(path, &node)?;
             let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(&encoded).into();
             proofs.insert(hash, encoded.to_vec());
         }
@@ -1155,7 +1197,7 @@ where
 
         // transpose the Option<Result<T, E>> to Result<Option<T>, E>
         // If this is an error, the ? operator will return it
-        let Some((first_key, first_data)) = first_result.transpose()? else {
+        let Some((first_key, first_value)) = first_result.transpose()? else {
             // nothing returned, either the trie is empty or the key wasn't found
             return Ok(None);
         };
@@ -1165,7 +1207,7 @@ where
             .map_err(|e| api::Error::InternalError(Box::new(e)))?;
         let limit = limit.map(|old_limit| old_limit - 1);
 
-        let mut middle = vec![(first_key.into_vec(), first_data)];
+        let mut middle = vec![(first_key.into_vec(), first_value)];
 
         // we stop streaming if either we hit the limit or the key returned was larger
         // than the largest key requested
@@ -1219,7 +1261,7 @@ where
         &'a self,
         (parents, to_delete): (&mut [(NodeObjRef, u8)], &mut Vec<DiskAddress>),
         mut node: NodeObjRef<'a>,
-        path: PartialPath,
+        path: Path,
     ) -> Result<NodeObjRef<'a>, MerkleError> {
         let write_result = node.write(|node| {
             node.set_path(path);
@@ -1228,16 +1270,16 @@ where
         self.move_node_if_write_failed((parents, to_delete), node, write_result)
     }
 
-    /// Try to update the [NodeObjRef]'s data/value in-place. If the update fails because the node can no longer fit at its old address,
+    /// Try to update the [NodeObjRef]'s value in-place. If the update fails because the node can no longer fit at its old address,
     /// then the old address is marked for deletion and the [Node] (with its update) is inserted at a new address.
-    fn update_data_and_move_node_if_larger<'a>(
+    fn update_value_and_move_node_if_larger<'a>(
         &'a self,
         (parents, to_delete): (&mut [(NodeObjRef, u8)], &mut Vec<DiskAddress>),
         mut node: NodeObjRef<'a>,
-        data: Data,
+        value: Vec<u8>,
     ) -> Result<NodeObjRef, MerkleError> {
         let write_result = node.write(|node| {
-            node.set_data(data);
+            node.set_value(value);
         });
 
         self.move_node_if_write_failed((parents, to_delete), node, write_result)
@@ -1289,12 +1331,12 @@ impl<'a> std::ops::Deref for Ref<'a> {
     fn deref(&self) -> &[u8] {
         match self.0.inner_ref() {
             Node::Branch(n) => n.value.as_ref().unwrap(),
-            Node::Leaf(n) => &n.data,
+            Node::Leaf(n) => &n.value,
         }
     }
 }
 
-impl<'a, S: ShaleStore<Node> + Send + Sync, T> RefMut<'a, S, T> {
+impl<'a, S, T> RefMut<'a, S, T> {
     fn new(ptr: DiskAddress, parents: ParentAddresses, merkle: &'a mut Merkle<S, T>) -> Self {
         Self {
             ptr,
@@ -1302,7 +1344,9 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> RefMut<'a, S, T> {
             merkle,
         }
     }
+}
 
+impl<'a, S: CachedStore, T> RefMut<'a, S, T> {
     #[allow(clippy::unwrap_used)]
     pub fn get(&self) -> Ref {
         Ref(self.merkle.get_node(self.ptr).unwrap())
@@ -1325,8 +1369,8 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> RefMut<'a, S, T> {
                 |u| {
                     #[allow(clippy::unwrap_used)]
                     modify(match u {
-                        Node::Branch(n) => &mut n.value.as_mut().unwrap().0,
-                        Node::Leaf(n) => &mut n.data.0,
+                        Node::Branch(n) => n.value.as_mut().unwrap(),
+                        Node::Leaf(n) => &mut n.value,
                     });
                 },
                 &mut parents,
@@ -1345,10 +1389,10 @@ pub const fn to_nibble_array(x: u8) -> [u8; 2] {
     [x >> 4, x & 0b_0000_1111]
 }
 
-// given a set of nibbles, take each pair and convert this back into bytes
-// if an odd number of nibbles, in debug mode it panics. In release mode,
-// the final nibble is dropped
-pub fn from_nibbles(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
+/// Returns an iterator where each element is the result of combining
+/// 2 nibbles of `nibbles`. If `nibbles` is odd length, panics in
+/// debug mode and drops the final nibble in release mode.
+pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
     debug_assert_eq!(nibbles.len() & 1, 0);
     #[allow(clippy::indexing_slicing)]
     nibbles.chunks_exact(2).map(|p| (p[0] << 4) | p[1])
@@ -1394,11 +1438,11 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
 mod tests {
     use super::*;
     use crate::merkle::node::PlainCodec;
-    use shale::{cached::DynamicMem, compact::CompactSpace, CachedStore};
+    use shale::{cached::InMemLinearStore, CachedStore};
     use test_case::test_case;
 
-    fn leaf(path: Vec<u8>, data: Vec<u8>) -> Node {
-        Node::Leaf(LeafNode::new(PartialPath(path), Data(data)))
+    fn leaf(path: Vec<u8>, value: Vec<u8>) -> Node {
+        Node::Leaf(LeafNode::new(Path(path), value))
     }
 
     #[test_case(vec![0x12, 0x34, 0x56], &[0x1, 0x2, 0x3, 0x4, 0x5, 0x6])]
@@ -1408,14 +1452,14 @@ mod tests {
         assert_eq!(n, nibbles);
     }
 
-    fn create_generic_test_merkle<'de, T>() -> Merkle<CompactSpace<Node, DynamicMem>, T>
+    fn create_generic_test_merkle<'de, T>() -> Merkle<InMemLinearStore, T>
     where
         T: BinarySerde,
         EncodedNode<T>: serde::Serialize + serde::Deserialize<'de>,
     {
         const RESERVED: usize = 0x1000;
 
-        let mut dm = shale::cached::DynamicMem::new(0x10000, 0);
+        let mut dm = shale::cached::InMemLinearStore::new(0x10000, 0);
         let compact_header = DiskAddress::null();
         dm.write(
             compact_header.into(),
@@ -1433,29 +1477,27 @@ mod tests {
         )
         .unwrap();
         let mem_meta = dm;
-        let mem_payload = DynamicMem::new(0x10000, 0x1);
+        let mem_payload = InMemLinearStore::new(0x10000, 0x1);
 
         let cache = shale::ObjCache::new(1);
         let space =
             shale::compact::CompactSpace::new(mem_meta, mem_payload, compact_header, cache, 10, 16)
                 .expect("CompactSpace init fail");
 
-        let store = Box::new(space);
-        Merkle::new(store)
+        Merkle::new(space)
     }
 
-    pub(super) fn create_test_merkle() -> Merkle<CompactSpace<Node, DynamicMem>, Bincode> {
+    pub(super) fn create_test_merkle() -> Merkle<InMemLinearStore, Bincode> {
         create_generic_test_merkle::<Bincode>()
     }
 
     fn branch(path: &[u8], value: &[u8], encoded_child: Option<Vec<u8>>) -> Node {
         let (path, value) = (path.to_vec(), value.to_vec());
         let path = Nibbles::<0>::new(&path);
-        let path = PartialPath(path.into_iter().collect());
+        let path = Path(path.into_iter().collect());
 
         let children = Default::default();
-        // TODO: Properly test empty data as a value
-        let value = Some(Data(value));
+        let value = if value.is_empty() { None } else { Some(value) };
         let mut children_encoded = <[Option<Vec<u8>>; BranchNode::MAX_CHILDREN]>::default();
 
         if let Some(child) = encoded_child {
@@ -1463,46 +1505,23 @@ mod tests {
         }
 
         Node::Branch(Box::new(BranchNode {
-            path,
+            partial_path: path,
             children,
             value,
             children_encoded,
         }))
     }
 
-    fn branch_without_data(path: &[u8], encoded_child: Option<Vec<u8>>) -> Node {
-        let path = path.to_vec();
-        let path = Nibbles::<0>::new(&path);
-        let path = PartialPath(path.into_iter().collect());
-
-        let children = Default::default();
-        // TODO: Properly test empty data as a value
-        let value = None;
-        let mut children_encoded = <[Option<Vec<u8>>; BranchNode::MAX_CHILDREN]>::default();
-
-        if let Some(child) = encoded_child {
-            children_encoded[0] = Some(child);
-        }
-
-        Node::Branch(Box::new(BranchNode {
-            path,
-            children,
-            value,
-            children_encoded,
-        }))
-    }
-
-    #[test_case(Bincode::new(), leaf(Vec::new(), Vec::new()) ; "empty leaf encoding with Bincode")]
-    #[test_case(Bincode::new(), leaf(vec![1, 2, 3], vec![4, 5]) ; "leaf encoding with Bincode")]
-    #[test_case(Bincode::new(), branch(b"", b"value", vec![1, 2, 3].into()) ; "branch with chd with Bincode")]
-    #[test_case(Bincode::new(), branch(b"", b"value", None); "branch without chd with Bincode")]
-    #[test_case(Bincode::new(), branch_without_data(b"", None); "branch without value and chd with Bincode")]
-    #[test_case(PlainCodec::new(), leaf(Vec::new(), Vec::new()) ; "empty leaf encoding with PlainCodec")]
-    #[test_case(PlainCodec::new(), leaf(vec![1, 2, 3], vec![4, 5]) ; "leaf encoding with PlainCodec")]
-    #[test_case(PlainCodec::new(), branch(b"", b"value", vec![1, 2, 3].into()) ; "branch with chd with PlainCodec")]
-    #[test_case(PlainCodec::new(), branch(b"01", b"value", vec![1, 2, 3].into()); "branch with path and value and chd with PlainCodec")]
-    #[test_case(PlainCodec::new(), branch(b"", b"value", Some(Vec::new())); "branch with empty chd with PlainCodec")]
-    #[test_case(PlainCodec::new(), branch(b"", b"", vec![1, 2, 3].into()); "branch with empty value with PlainCodec")]
+    #[test_case(Bincode::new(), leaf(vec![], vec![4, 5]) ; "leaf without partial path encoding with Bincode")]
+    #[test_case(Bincode::new(), leaf(vec![1, 2, 3], vec![4, 5]) ; "leaf with partial path encoding with Bincode")]
+    #[test_case(Bincode::new(), branch(b"abcd", b"value", vec![1, 2, 3].into()) ; "branch with partial path and value with Bincode")]
+    #[test_case(Bincode::new(), branch(b"abcd", &[], vec![1, 2, 3].into()) ; "branch with partial path and no value with Bincode")]
+    #[test_case(Bincode::new(), branch(b"", &[1,3,3,7], vec![1, 2, 3].into()) ; "branch with no partial path and value with Bincode")]
+    #[test_case(PlainCodec::new(), leaf(Vec::new(), vec![4, 5]) ; "leaf without partial path encoding with PlainCodec")]
+    #[test_case(PlainCodec::new(), leaf(vec![1, 2, 3], vec![4, 5]) ; "leaf with partial path encoding with PlainCodec")]
+    #[test_case(PlainCodec::new(), branch(b"abcd", b"value", vec![1, 2, 3].into()) ; "branch with partial path and value with PlainCodec")]
+    #[test_case(PlainCodec::new(), branch(b"abcd", &[], vec![1, 2, 3].into()) ; "branch with partial path and no value with PlainCodec")]
+    #[test_case(PlainCodec::new(), branch(b"", &[1,3,3,7], vec![1, 2, 3].into()) ; "branch with no partial path and value with PlainCodec")]
     fn node_encode_decode<T>(_codec: T, node: Node)
     where
         T: BinarySerde,
@@ -1510,9 +1529,9 @@ mod tests {
     {
         let merkle = create_generic_test_merkle::<T>();
 
-        let encoded = merkle.encode(&node).unwrap();
+        let encoded = merkle.encode(Path(vec![]), &node).unwrap();
         let new_node = merkle.decode(encoded.as_ref()).unwrap();
-        let encoded_again = merkle.encode(&new_node).unwrap();
+        let encoded_again = merkle.encode(Path(vec![]), &new_node).unwrap();
 
         assert_eq!(node, new_node);
         assert_eq!(encoded, encoded_again);
@@ -2055,7 +2074,7 @@ mod tests {
     #[test]
     fn update_leaf_with_larger_path() -> Result<(), MerkleError> {
         let path = vec![0x00];
-        let data = vec![0x00];
+        let value = vec![0x00];
 
         let double_path = path
             .clone()
@@ -2064,36 +2083,36 @@ mod tests {
             .collect::<Vec<_>>();
 
         let node = Node::Leaf(LeafNode {
-            path: PartialPath::from(path),
-            data: Data(data.clone()),
+            partial_path: Path::from(path),
+            value: value.clone(),
         });
 
-        check_node_update(node, double_path, data)
+        check_node_update(node, double_path, value)
     }
 
     #[test]
-    fn update_leaf_with_larger_data() -> Result<(), MerkleError> {
+    fn update_leaf_with_larger_value() -> Result<(), MerkleError> {
         let path = vec![0x00];
-        let data = vec![0x00];
+        let value = vec![0x00];
 
-        let double_data = data
+        let double_value = value
             .clone()
             .into_iter()
-            .chain(data.clone())
+            .chain(value.clone())
             .collect::<Vec<_>>();
 
         let node = Node::Leaf(LeafNode {
-            path: PartialPath::from(path.clone()),
-            data: Data(data),
+            partial_path: Path::from(path.clone()),
+            value,
         });
 
-        check_node_update(node, path, double_data)
+        check_node_update(node, path, double_value)
     }
 
     #[test]
     fn update_branch_with_larger_path() -> Result<(), MerkleError> {
         let path = vec![0x00];
-        let data = vec![0x00];
+        let value = vec![0x00];
 
         let double_path = path
             .clone()
@@ -2101,41 +2120,43 @@ mod tests {
             .chain(path.clone())
             .collect::<Vec<_>>();
 
-        let node = Node::Branch(Box::new(BranchNode {
-            path: PartialPath::from(path.clone()),
+        let node = BranchNode {
+            partial_path: Path::from(path.clone()),
             children: Default::default(),
-            value: Some(Data(data.clone())),
+            value: Some(value.clone()),
             children_encoded: Default::default(),
-        }));
+        };
 
-        check_node_update(node, double_path, data)
+        let node = Node::Branch(Box::new(node));
+
+        check_node_update(node, double_path, value)
     }
 
     #[test]
-    fn update_branch_with_larger_data() -> Result<(), MerkleError> {
+    fn update_branch_with_larger_value() -> Result<(), MerkleError> {
         let path = vec![0x00];
-        let data = vec![0x00];
+        let value = vec![0x00];
 
-        let double_data = data
+        let double_value = value
             .clone()
             .into_iter()
-            .chain(data.clone())
+            .chain(value.clone())
             .collect::<Vec<_>>();
 
         let node = Node::Branch(Box::new(BranchNode {
-            path: PartialPath::from(path.clone()),
+            partial_path: Path::from(path.clone()),
             children: Default::default(),
-            value: Some(Data(data)),
+            value: Some(value),
             children_encoded: Default::default(),
         }));
 
-        check_node_update(node, path, double_data)
+        check_node_update(node, path, double_value)
     }
 
     fn check_node_update(
         node: Node,
         new_path: Vec<u8>,
-        new_data: Vec<u8>,
+        new_value: Vec<u8>,
     ) -> Result<(), MerkleError> {
         let merkle = create_test_merkle();
         let root = merkle.init_root()?;
@@ -2146,8 +2167,8 @@ mod tests {
 
         // make sure that doubling the path length will fail on a normal write
         let write_result = node_ref.write(|node| {
-            node.set_path(PartialPath(new_path.clone()));
-            node.set_data(Data(new_data.clone()));
+            node.set_path(Path(new_path.clone()));
+            node.set_value(new_value.clone());
         });
 
         assert!(matches!(write_result, Err(ObjWriteSizeError)));
@@ -2159,19 +2180,19 @@ mod tests {
         let node = merkle.update_path_and_move_node_if_larger(
             (&mut parents, &mut to_delete),
             node_ref,
-            PartialPath(new_path.clone()),
+            Path(new_path.clone()),
         )?;
 
         assert_ne!(node.as_ptr(), addr);
         assert_eq!(&to_delete[0], &addr);
 
-        let (path, data) = match node.inner_ref() {
-            Node::Leaf(leaf) => (&leaf.path, Some(&leaf.data)),
-            Node::Branch(branch) => (&branch.path, branch.value.as_ref()),
+        let (path, value) = match node.inner_ref() {
+            Node::Leaf(leaf) => (&leaf.partial_path, Some(&leaf.value)),
+            Node::Branch(branch) => (&branch.partial_path, branch.value.as_ref()),
         };
 
-        assert_eq!(path, &PartialPath(new_path));
-        assert_eq!(data, Some(&Data(new_data)));
+        assert_eq!(path, &Path(new_path));
+        assert_eq!(value, Some(&new_value));
 
         Ok(())
     }

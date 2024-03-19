@@ -12,13 +12,11 @@ use std::sync::{Arc, RwLock, RwLockWriteGuard};
 
 use thiserror::Error;
 
-use crate::merkle::{LeafNode, Node, PartialPath};
+use crate::merkle::{LeafNode, Node, Path};
 
 pub mod cached;
 pub mod compact;
 pub mod disk_address;
-#[cfg(test)]
-pub mod plainmem;
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -52,22 +50,6 @@ pub struct ObjWriteSizeError;
 
 pub type SpaceId = u8;
 pub const INVALID_SPACE_ID: SpaceId = 0xff;
-
-pub struct DiskWrite {
-    pub offset: u64,
-    pub data: Box<[u8]>,
-}
-
-impl std::fmt::Debug for DiskWrite {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(
-            f,
-            "[Disk offset=0x{:04x} data=0x{}",
-            self.offset,
-            hex::encode(&self.data)
-        )
-    }
-}
 
 /// A handle that pins and provides a readable access to a portion of the linear memory image.
 pub trait CachedView {
@@ -105,8 +87,7 @@ pub trait CachedStore: Debug + Send + Sync {
 
 /// A wrapper of `StoredView` to enable writes. The direct construction (by [Obj::from_stored_view]
 /// or [StoredView::ptr_to_obj]) could be useful for some unsafe access to a low-level item (e.g.
-/// headers/metadata at bootstrap or part of [ShaleStore] implementation) stored at a given [DiskAddress]
-/// . Users of [ShaleStore] implementation, however, will only use [ObjRef] for safeguarded access.
+/// headers/metadata at bootstrap) stored at a given [DiskAddress].
 #[derive(Debug)]
 pub struct Obj<T: Storable> {
     value: StoredView<T>,
@@ -161,16 +142,16 @@ impl<T: Storable> Obj<T> {
 }
 
 impl Obj<Node> {
-    fn into_inner(mut self) -> Node {
+    pub fn into_inner(mut self) -> Node {
         let empty_node = Node::Leaf(LeafNode {
-            path: PartialPath(Vec::new()),
-            data: Vec::new().into(),
+            partial_path: Path(Vec::new()),
+            value: Vec::new(),
         });
 
         std::mem::replace(&mut self.value.item, empty_node)
     }
 
-    pub fn inner_ref(&self) -> &Node {
+    pub const fn inner_ref(&self) -> &Node {
         &self.value.item
     }
 }
@@ -188,7 +169,7 @@ impl<T: Storable> Deref for Obj<T> {
     }
 }
 
-/// User handle that offers read & write access to the stored [ShaleStore] item.
+/// User handle that offers read & write access to the stored items.
 #[derive(Debug)]
 pub struct ObjRef<'a, T: Storable> {
     inner: ManuallyDrop<Obj<T>>,
@@ -263,19 +244,6 @@ impl<'a, T: Storable> Drop for ObjRef<'a, T> {
             }
         }
     }
-}
-
-/// A persistent item storage backed by linear logical space. New items can be created and old
-/// items could be retrieved or dropped.
-pub trait ShaleStore<T: Storable + Debug> {
-    /// Dereference [DiskAddress] to a unique handle that allows direct access to the item in memory.
-    fn get_item(&'_ self, ptr: DiskAddress) -> Result<ObjRef<'_, T>, ShaleError>;
-    /// Allocate a new item.
-    fn put_item(&'_ self, item: T, extra: u64) -> Result<ObjRef<'_, T>, ShaleError>;
-    /// Free an item and recycle its space when applicable.
-    fn free_item(&mut self, item: DiskAddress) -> Result<(), ShaleError>;
-    /// Flush all dirty writes.
-    fn flush_dirty(&self) -> Option<()>;
 }
 
 /// A stored item type that can be decoded from or encoded to on-disk raw bytes. An efficient
@@ -459,7 +427,7 @@ pub struct ObjCacheInner<T: Storable> {
     dirty: HashSet<DiskAddress>,
 }
 
-/// [ObjRef] pool that is used by [ShaleStore] implementation to construct [ObjRef]s.
+/// [ObjRef] pool that is used by [compact::CompactSpace] to construct [ObjRef]s.
 #[derive(Debug)]
 pub struct ObjCache<T: Storable>(Arc<RwLock<ObjCacheInner<T>>>);
 

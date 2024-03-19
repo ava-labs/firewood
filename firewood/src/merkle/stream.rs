@@ -4,7 +4,7 @@
 use super::{BranchNode, Key, Merkle, MerkleError, Node, NodeObjRef, Value};
 use crate::{
     nibbles::{Nibbles, NibblesIterator},
-    shale::{DiskAddress, ShaleStore},
+    shale::{CachedStore, DiskAddress},
     v2::api,
 };
 use futures::{stream::FusedStream, Stream, StreamExt};
@@ -73,7 +73,7 @@ pub struct MerkleNodeStream<'a, S, T> {
     merkle: &'a Merkle<S, T>,
 }
 
-impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleNodeStream<'a, S, T> {
+impl<'a, S: CachedStore, T> FusedStream for MerkleNodeStream<'a, S, T> {
     fn is_terminated(&self) -> bool {
         // The top of `iter_stack` is the next node to return.
         // If `iter_stack` is empty, there are no more nodes to visit.
@@ -93,7 +93,7 @@ impl<'a, S, T> MerkleNodeStream<'a, S, T> {
     }
 }
 
-impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S, T> {
+impl<'a, S: CachedStore, T> Stream for MerkleNodeStream<'a, S, T> {
     type Item = Result<(Key, NodeObjRef<'a>), api::Error>;
 
     fn poll_next(
@@ -123,7 +123,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                                     iter_stack.push(IterationNode::Visited {
                                         key: key.clone(),
                                         children_iter: Box::new(as_enumerated_children_iter(
-                                            &branch,
+                                            branch,
                                         )),
                                     });
                                 }
@@ -146,8 +146,8 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
                             let child = merkle.get_node(child_addr)?;
 
                             let partial_path = match child.inner_ref() {
-                                Node::Branch(branch) => branch.path.iter().copied(),
-                                Node::Leaf(leaf) => leaf.path.iter().copied(),
+                                Node::Branch(branch) => branch.partial_path.iter().copied(),
+                                Node::Leaf(leaf) => leaf.partial_path.iter().copied(),
                             };
 
                             // The child's key is its parent's key, followed by the child's index,
@@ -178,7 +178,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleNodeStream<'a, S
 
 /// Returns the initial state for an iterator over the given `merkle` with root `root_node`
 /// which starts at `key`.
-fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
+fn get_iterator_intial_state<'a, S: CachedStore, T>(
     merkle: &'a Merkle<S, T>,
     root_node: DiskAddress,
     key: &[u8],
@@ -220,7 +220,7 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                 iter_stack.push(IterationNode::Visited {
                     key: matched_key_nibbles.iter().copied().collect(),
                     children_iter: Box::new(
-                        as_enumerated_children_iter(&branch)
+                        as_enumerated_children_iter(branch)
                             .filter(move |(pos, _)| *pos > next_unmatched_key_nibble),
                     ),
                 });
@@ -240,8 +240,8 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                 let child = merkle.get_node(child_addr)?;
 
                 let partial_key = match child.inner_ref() {
-                    Node::Branch(branch) => &branch.path,
-                    Node::Leaf(leaf) => &leaf.path,
+                    Node::Branch(branch) => &branch.partial_path,
+                    Node::Leaf(leaf) => &leaf.partial_path,
                 };
 
                 let (comparison, new_unmatched_key_nibbles) =
@@ -272,13 +272,13 @@ fn get_iterator_intial_state<'a, S: ShaleStore<Node> + Send + Sync, T>(
                 }
             }
             Node::Leaf(leaf) => {
-                if compare_partial_path(leaf.path.iter(), unmatched_key_nibbles).0
+                if compare_partial_path(leaf.partial_path.iter(), unmatched_key_nibbles).0
                     == Ordering::Greater
                 {
                     // `child` is after `key`.
                     let key = matched_key_nibbles
                         .iter()
-                        .chain(leaf.path.iter())
+                        .chain(leaf.partial_path.iter())
                         .copied()
                         .collect();
                     iter_stack.push(IterationNode::Unvisited { key, node });
@@ -321,7 +321,7 @@ pub struct MerkleKeyValueStream<'a, S, T> {
     merkle: &'a Merkle<S, T>,
 }
 
-impl<'a, S: ShaleStore<Node> + Send + Sync, T> FusedStream for MerkleKeyValueStream<'a, S, T> {
+impl<'a, S: CachedStore, T> FusedStream for MerkleKeyValueStream<'a, S, T> {
     fn is_terminated(&self) -> bool {
         matches!(&self.state, MerkleKeyValueStreamState::Initialized { node_iter } if node_iter.is_terminated())
     }
@@ -345,7 +345,7 @@ impl<'a, S, T> MerkleKeyValueStream<'a, S, T> {
     }
 }
 
-impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'a, S, T> {
+impl<'a, S: CachedStore, T> Stream for MerkleKeyValueStream<'a, S, T> {
     type Item = Result<(Key, Value), api::Error>;
 
     fn poll_next(
@@ -381,7 +381,7 @@ impl<'a, S: ShaleStore<Node> + Send + Sync, T> Stream for MerkleKeyValueStream<'
                                 Poll::Ready(Some(Ok((key, value))))
                             }
                             Node::Leaf(leaf) => {
-                                let value = leaf.data.to_vec();
+                                let value = leaf.value.to_vec();
                                 Poll::Ready(Some(Ok((key, value))))
                             }
                         },
@@ -426,7 +426,7 @@ pub struct PathIterator<'a, 'b, S, T> {
     merkle: &'a Merkle<S, T>,
 }
 
-impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> PathIterator<'a, 'b, S, T> {
+impl<'a, 'b, S: CachedStore, T> PathIterator<'a, 'b, S, T> {
     pub(super) fn new(
         merkle: &'a Merkle<S, T>,
         sentinel_node: NodeObjRef<'a>,
@@ -456,7 +456,7 @@ impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> PathIterator<'a, 'b, S, T> {
     }
 }
 
-impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> Iterator for PathIterator<'a, 'b, S, T> {
+impl<'a, 'b, S: CachedStore, T> Iterator for PathIterator<'a, 'b, S, T> {
     type Item = Result<(Key, NodeObjRef<'a>), MerkleError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -477,8 +477,8 @@ impl<'a, 'b, S: ShaleStore<Node> + Send + Sync, T> Iterator for PathIterator<'a,
                 };
 
                 let partial_path = match node.inner_ref() {
-                    Node::Branch(branch) => &branch.path,
-                    Node::Leaf(leaf) => &leaf.path,
+                    Node::Branch(branch) => &branch.partial_path,
+                    Node::Leaf(leaf) => &leaf.partial_path,
                 };
 
                 let (comparison, unmatched_key) =
@@ -582,16 +582,13 @@ use super::tests::create_test_merkle;
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
-    use crate::{
-        merkle::Bincode,
-        shale::{cached::DynamicMem, compact::CompactSpace},
-    };
+    use crate::{merkle::Bincode, shale::cached::InMemLinearStore};
 
     use super::*;
     use futures::StreamExt;
     use test_case::test_case;
 
-    impl<S: ShaleStore<Node> + Send + Sync, T> Merkle<S, T> {
+    impl<S: CachedStore, T> Merkle<S, T> {
         pub(crate) fn node_iter(&self, root: DiskAddress) -> MerkleNodeStream<'_, S, T> {
             MerkleNodeStream::new(self, root, Box::new([]))
         }
@@ -638,7 +635,7 @@ mod tests {
         };
 
         assert_eq!(key, vec![0x01, 0x03, 0x03, 0x07].into_boxed_slice());
-        assert_eq!(node.as_leaf().unwrap().data, vec![0x42].into());
+        assert_eq!(node.as_leaf().unwrap().value, vec![0x42]);
 
         assert!(stream.next().is_none());
     }
@@ -673,7 +670,7 @@ mod tests {
         );
         assert_eq!(
             node.as_branch().unwrap().value,
-            Some(vec![0x00, 0x00, 0x00].into()),
+            Some(vec![0x00, 0x00, 0x00]),
         );
 
         let (key, node) = match stream.next() {
@@ -685,10 +682,7 @@ mod tests {
             key,
             vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x0F].into_boxed_slice()
         );
-        assert_eq!(
-            node.as_leaf().unwrap().data,
-            vec![0x00, 0x00, 0x00, 0x0FF].into(),
-        );
+        assert_eq!(node.as_leaf().unwrap().value, vec![0x00, 0x00, 0x00, 0x0FF],);
 
         assert!(stream.next().is_none());
     }
@@ -721,7 +715,7 @@ mod tests {
         );
         assert_eq!(
             node.as_branch().unwrap().value,
-            Some(vec![0x00, 0x00, 0x00].into()),
+            Some(vec![0x00, 0x00, 0x00]),
         );
 
         assert!(stream.next().is_none());
@@ -756,7 +750,7 @@ mod tests {
         let (key, node) = stream.next().await.unwrap().unwrap();
 
         assert_eq!(key, vec![0x00].into_boxed_slice());
-        assert_eq!(node.as_leaf().unwrap().data.to_vec(), vec![0x00]);
+        assert_eq!(node.as_leaf().unwrap().value.to_vec(), vec![0x00]);
 
         check_stream_is_done(stream).await;
     }
@@ -772,8 +766,7 @@ mod tests {
     ///
     /// Note the 0000 branch has no value and the F0F0
     /// The number next to each branch is the position of the child in the branch's children array.
-    fn created_populated_merkle() -> (Merkle<CompactSpace<Node, DynamicMem>, Bincode>, DiskAddress)
-    {
+    fn created_populated_merkle() -> (Merkle<InMemLinearStore, Bincode>, DiskAddress) {
         let mut merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
 
@@ -814,40 +807,40 @@ mod tests {
         assert_eq!(key, vec![0x00].into_boxed_slice());
         let node = node.as_branch().unwrap();
         assert!(node.value.is_none());
-        assert_eq!(node.path.to_vec(), vec![0x00, 0x00]);
+        assert_eq!(node.partial_path.to_vec(), vec![0x00, 0x00]);
 
         // Covers case of branch with value
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0x00, 0x00].into_boxed_slice());
         let node = node.as_branch().unwrap();
         assert_eq!(node.value.clone().unwrap().to_vec(), vec![0x00, 0x00, 0x00]);
-        assert_eq!(node.path.to_vec(), vec![0x00, 0x00, 0x00]);
+        assert_eq!(node.partial_path.to_vec(), vec![0x00, 0x00, 0x00]);
 
         // Covers case of leaf with partial path
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0x00, 0x00, 0x01].into_boxed_slice());
         let node = node.as_leaf().unwrap();
-        assert_eq!(node.clone().data.to_vec(), vec![0x00, 0x00, 0x00, 0x01]);
-        assert_eq!(node.path.to_vec(), vec![0x01]);
+        assert_eq!(node.clone().value.to_vec(), vec![0x00, 0x00, 0x00, 0x01]);
+        assert_eq!(node.partial_path.to_vec(), vec![0x01]);
 
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0x00, 0x00, 0xFF].into_boxed_slice());
         let node = node.as_leaf().unwrap();
-        assert_eq!(node.clone().data.to_vec(), vec![0x00, 0x00, 0x00, 0xFF]);
-        assert_eq!(node.path.to_vec(), vec![0x0F]);
+        assert_eq!(node.clone().value.to_vec(), vec![0x00, 0x00, 0x00, 0xFF]);
+        assert_eq!(node.partial_path.to_vec(), vec![0x0F]);
 
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
         let node = node.as_leaf().unwrap();
-        assert_eq!(node.clone().data.to_vec(), vec![0x00, 0xD0, 0xD0]);
-        assert_eq!(node.path.to_vec(), vec![0x00, 0x0D, 0x00]); // 0x0D00 becomes 0xDO
+        assert_eq!(node.clone().value.to_vec(), vec![0x00, 0xD0, 0xD0]);
+        assert_eq!(node.partial_path.to_vec(), vec![0x00, 0x0D, 0x00]); // 0x0D00 becomes 0xDO
 
         // Covers case of leaf with no partial path
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xFF].into_boxed_slice());
         let node = node.as_leaf().unwrap();
-        assert_eq!(node.clone().data.to_vec(), vec![0x00, 0xFF]);
-        assert_eq!(node.path.to_vec(), vec![0x0F]);
+        assert_eq!(node.clone().value.to_vec(), vec![0x00, 0xFF]);
+        assert_eq!(node.partial_path.to_vec(), vec![0x0F]);
 
         check_stream_is_done(stream).await;
     }
@@ -861,7 +854,7 @@ mod tests {
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
         assert_eq!(
-            node.as_leaf().unwrap().clone().data.to_vec(),
+            node.as_leaf().unwrap().clone().value.to_vec(),
             vec![0x00, 0xD0, 0xD0]
         );
 
@@ -869,7 +862,7 @@ mod tests {
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xFF].into_boxed_slice());
         assert_eq!(
-            node.as_leaf().unwrap().clone().data.to_vec(),
+            node.as_leaf().unwrap().clone().value.to_vec(),
             vec![0x00, 0xFF]
         );
 
@@ -885,7 +878,7 @@ mod tests {
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
         assert_eq!(
-            node.into_inner().as_leaf().unwrap().clone().data.to_vec(),
+            node.into_inner().as_leaf().unwrap().clone().value.to_vec(),
             vec![0x00, 0xD0, 0xD0]
         );
 
@@ -893,7 +886,7 @@ mod tests {
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xFF].into_boxed_slice());
         assert_eq!(
-            node.into_inner().as_leaf().unwrap().clone().data.to_vec(),
+            node.into_inner().as_leaf().unwrap().clone().value.to_vec(),
             vec![0x00, 0xFF]
         );
 
@@ -1043,7 +1036,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn key_value_root_with_empty_data() {
+    async fn key_value_root_with_empty_value() {
         let mut merkle = create_test_merkle();
         let root = merkle.init_root().unwrap();
 

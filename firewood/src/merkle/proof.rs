@@ -4,9 +4,10 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use crate::shale::ObjWriteSizeError;
-use crate::shale::{disk_address::DiskAddress, ShaleError, ShaleStore};
+use crate::shale::{disk_address::DiskAddress, ShaleError};
+use crate::shale::{CachedStore, ObjWriteSizeError};
 use crate::v2::api::HashKey;
+use aiofut::AioError;
 use nix::errno::Errno;
 use sha3::Digest;
 use thiserror::Error;
@@ -19,10 +20,12 @@ use crate::{
     merkle_util::{DataStoreError, InMemoryMerkle},
 };
 
-use super::{BinarySerde, EncodedNode, NodeObjRef};
+use super::{BinarySerde, EncodedNode};
 
 #[derive(Debug, Error)]
 pub enum ProofError {
+    #[error("aio error: {0:?}")]
+    AioError(AioError),
     #[error("decoding error")]
     DecodeError(#[from] bincode::Error),
     #[error("no such node")]
@@ -74,6 +77,7 @@ impl From<DataStoreError> for ProofError {
 impl From<DbError> for ProofError {
     fn from(d: DbError) -> ProofError {
         match d {
+            DbError::Aio(e) => ProofError::AioError(e),
             DbError::InvalidParams => ProofError::InvalidProof,
             DbError::Merkle(e) => ProofError::InvalidNode(e),
             DbError::System(e) => ProofError::SystemError(e),
@@ -92,7 +96,7 @@ impl From<DbError> for ProofError {
 
 /// A proof that a single key is present
 ///
-/// The generic N represents the storage for the node data
+/// The generic N represents the storage for the node
 #[derive(Clone, Debug)]
 pub struct Proof<N>(pub HashMap<HashKey, N>);
 
@@ -102,7 +106,7 @@ pub struct Proof<N>(pub HashMap<HashKey, N>);
 
 #[derive(Debug)]
 pub(crate) enum SubProof {
-    Data(Vec<u8>),
+    Value(Vec<u8>),
     Hash(HashKey),
 }
 
@@ -169,7 +173,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
         // Special case, there is only one element and two edge keys are same.
         // In this case, we can't construct two edge paths. So handle it here.
         if keys.len() == 1 && first_key.as_ref() == last_key.as_ref() {
-            let data =
+            let value =
                 self.proof_to_path(first_key.as_ref(), root_hash, &mut in_mem_merkle, false)?;
 
             #[allow(clippy::indexing_slicing)]
@@ -177,7 +181,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 // correct proof but invalid key
                 Err(ProofError::InvalidEdgeKeys)
             } else {
-                match data {
+                match value {
                     #[allow(clippy::indexing_slicing)]
                     Some(val) if val == vals[0].as_ref() => Ok(true),
                     None => Ok(false),
@@ -246,19 +250,19 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
         // Start with the sentinel root
         let sentinel = in_mem_merkle.get_sentinel_address();
         let merkle = in_mem_merkle.get_merkle_mut();
-        let mut parent_node_ref = merkle
+        let mut parent_node = merkle
             .get_node(sentinel)
             .map_err(|_| ProofError::NoSuchNode)?;
 
         let mut key_nibbles = Nibbles::<1>::new(key.as_ref()).into_iter().peekable();
 
         let mut child_hash = root_hash;
-        let proofs_map = &self.0;
+        let proof_nodes_map = &self.0;
 
         let sub_proof = loop {
             // Link the child to the parent based on the node type.
             // if a child is already linked, use it instead
-            let child_node = match parent_node_ref.inner_ref() {
+            let child_node = match parent_node.inner_ref() {
                 #[allow(clippy::indexing_slicing)]
                 Node::Branch(n) => {
                     let Some(child_index) = key_nibbles.next().map(usize::from) else {
@@ -269,10 +273,17 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                         // If the child already resolved, then use the existing node.
                         Some(node) => merkle.get_node(node)?,
                         None => {
-                            let child_node = decode_subproof(merkle, proofs_map, &child_hash)?;
+                            // Look up the child's encoded bytes and decode to get the child.
+                            let child_node_bytes = proof_nodes_map
+                                .get(&child_hash)
+                                .ok_or(ProofError::ProofNodeMissing)?;
 
-                            // insert the leaf to the empty slot
-                            parent_node_ref.write(|node| {
+                            let child_node = merkle.decode(child_node_bytes.as_ref())?;
+
+                            let child_node = merkle.put_node(child_node)?;
+
+                            // insert `child_node` to the appropriate index in the `parent_node`
+                            parent_node.write(|node| {
                                 #[allow(clippy::indexing_slicing)]
                                 let node = node
                                     .as_branch_mut()
@@ -289,20 +300,20 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 _ => return Err(ProofError::InvalidNode(MerkleError::ParentLeafBranch)),
             };
 
-            // find the encoded subproof of the child if the partial-path and nibbles match
+            // find the encoded subproof of the child if the partial path and nibbles match
             let encoded_sub_proof = match child_node.inner_ref() {
                 Node::Leaf(n) => {
                     break n
-                        .path
+                        .partial_path
                         .iter()
                         .copied()
                         .eq(key_nibbles) // all nibbles have to match
-                        .then(|| n.data().to_vec());
+                        .then(|| n.value().to_vec());
                 }
 
                 Node::Branch(n) => {
                     let paths_match = n
-                        .path
+                        .partial_path
                         .iter()
                         .copied()
                         .all(|nibble| Some(nibble) == key_nibbles.next());
@@ -316,11 +327,11 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                             .chd_encode()
                             .get(*index as usize)
                             .and_then(|inner| inner.as_ref())
-                            .map(|data| &**data);
+                            .map(|value| &**value);
 
                         subproof
                     } else {
-                        break n.value.as_ref().map(|data| data.to_vec());
+                        break n.value.as_ref().map(|value| value.to_vec());
                     }
                 }
             };
@@ -333,34 +344,15 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 }
             }
 
-            parent_node_ref = child_node;
+            parent_node = child_node;
         };
 
         match sub_proof {
-            Some(data) => Ok(Some(data)),
+            Some(value) => Ok(Some(value)),
             None if allow_non_existent_node => Ok(None),
             None => Err(ProofError::NodeNotInTrie),
         }
     }
-}
-
-fn decode_subproof<'a, S, T, N>(
-    merkle: &'a Merkle<S, T>,
-    proofs_map: &HashMap<HashKey, N>,
-    child_hash: &HashKey,
-) -> Result<NodeObjRef<'a>, ProofError>
-where
-    S: ShaleStore<Node> + Send + Sync,
-    T: BinarySerde,
-    EncodedNode<T>: serde::Serialize + for<'de> serde::Deserialize<'de>,
-    N: AsRef<[u8]>,
-{
-    let child_proof = proofs_map
-        .get(child_hash)
-        .ok_or(ProofError::ProofNodeMissing)?;
-    let child_node = merkle.decode(child_proof.as_ref())?;
-    let node = merkle.put_node(child_node)?;
-    Ok(node)
 }
 
 pub(crate) fn locate_subproof(
@@ -379,14 +371,14 @@ pub(crate) fn locate_subproof(
                 return Ok((None, Nibbles::<0>::new(&[]).into_iter()));
             }
 
-            let encoded: Vec<u8> = n.data().to_vec();
+            let encoded: Vec<u8> = n.value().to_vec();
 
-            let sub_proof = SubProof::Data(encoded);
+            let sub_proof = SubProof::Value(encoded);
 
             Ok((sub_proof.into(), key_nibbles))
         }
         Node::Branch(n) => {
-            let partial_path = &n.path.0;
+            let partial_path = &n.partial_path.0;
 
             let does_not_match = key_nibbles.size_hint().0 < partial_path.len()
                 || !partial_path
@@ -400,17 +392,17 @@ pub(crate) fn locate_subproof(
             let Some(index) = key_nibbles.next().map(|nib| nib as usize) else {
                 let encoded = n.value;
 
-                let sub_proof = encoded.map(|encoded| SubProof::Data(encoded.into_inner()));
+                let sub_proof = encoded.map(SubProof::Value);
 
                 return Ok((sub_proof, key_nibbles));
             };
 
             // consume items returning the item at index
             #[allow(clippy::indexing_slicing)]
-            let data = n.chd_encode()[index]
+            let value = n.chd_encode()[index]
                 .as_ref()
                 .ok_or(ProofError::InvalidData)?;
-            generate_subproof(data).map(|subproof| (Some(subproof), key_nibbles))
+            generate_subproof(value).map(|subproof| (Some(subproof), key_nibbles))
         }
     }
 }
@@ -484,7 +476,7 @@ where
             Node::Branch(n) => {
                 // If either the key of left proof or right proof doesn't match with
                 // stop here, this is the forkpoint.
-                let path = &*n.path;
+                let path = &*n.partial_path;
 
                 if !path.is_empty() {
                     [fork_left, fork_right] = [&left_chunks[index..], &right_chunks[index..]]
@@ -518,7 +510,7 @@ where
 
             #[allow(clippy::indexing_slicing)]
             Node::Leaf(n) => {
-                let path = &*n.path;
+                let path = &*n.partial_path;
 
                 [fork_left, fork_right] = [&left_chunks[index..], &right_chunks[index..]]
                     .map(|chunks| chunks.chunks(path.len()).next().unwrap_or_default())
@@ -563,7 +555,7 @@ where
             }
 
             let p = u_ref.as_ptr();
-            index += n.path.len();
+            index += n.partial_path.len();
 
             // Only one proof points to non-existent key.
             if fork_right.is_ne() {
@@ -680,7 +672,7 @@ where
 //     keep the entire branch and return.
 //   - the fork point is a shortnode, the shortnode is excluded in the range,
 //     unset the entire branch.
-fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySerde>(
+fn unset_node_ref<K: AsRef<[u8]>, S: CachedStore, T: BinarySerde>(
     merkle: &Merkle<S, T>,
     parent: DiskAddress,
     node: Option<DiskAddress>,
@@ -707,8 +699,8 @@ fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySe
 
     #[allow(clippy::indexing_slicing)]
     match u_ref.inner_ref() {
-        Node::Branch(n) if chunks[index..].starts_with(&n.path) => {
-            let index = index + n.path.len();
+        Node::Branch(n) if chunks[index..].starts_with(&n.partial_path) => {
+            let index = index + n.partial_path.len();
             let child_index = chunks[index] as usize;
 
             let node = n.chd()[child_index];
@@ -738,7 +730,7 @@ fn unset_node_ref<K: AsRef<[u8]>, S: ShaleStore<Node> + Send + Sync, T: BinarySe
         }
 
         Node::Branch(n) => {
-            let cur_key = &n.path;
+            let cur_key = &n.partial_path;
 
             // Find the fork point, it's a non-existent branch.
             //
