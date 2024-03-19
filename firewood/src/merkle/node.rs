@@ -6,6 +6,7 @@ use crate::{
     merkle::nibbles_to_bytes_iter,
     shale::{disk_address::DiskAddress, CachedStore, ShaleError, Storable},
 };
+use arrayref::array_ref;
 use bincode::Options;
 use bitflags::bitflags;
 use bytemuck::{CheckedBitPattern, NoUninit, Pod, Zeroable};
@@ -433,10 +434,10 @@ impl<'de> Visitor<'de> for TupleVisitor {
         let length = seq.next_element::<u64>().unwrap().unwrap() / 4;
         println!("{length}");
         let mut data = vec![];
-        for _ in 0..length {
+        for _ in 0..=length {
             data.push(seq.next_element::<u8>().unwrap().unwrap());
         }
-        Ok(PathWithBitsPrefix(data))
+        Ok(PathWithBitsPrefix(data.to_vec()))
     }
 }
 
@@ -905,7 +906,8 @@ mod tests {
     3
     thread 'merkle::node::tests::test_encode_path_with_bits_prefix' panicked at firewood/src/merkle/node.rs:437:57:
     called `Option::unwrap()` on a `None` value
-            */
+    stack backtrace:
+                */
     #[test]
     fn test_encode_path_with_bits_prefix() {
         let sut = PathWithBitsPrefix(vec![1, 2, 3]);
