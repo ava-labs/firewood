@@ -75,11 +75,13 @@ impl From<[u8; 8]> for DiskAddress {
 /// Convert from a slice of bytes to a DiskAddress
 /// panics if the slice isn't 8 bytes; used for
 /// serialization from disk
-impl From<&[u8]> for DiskAddress {
-    fn from(value: &[u8]) -> Self {
+impl TryFrom<&[u8]> for DiskAddress {
+    type Error = std::array::TryFromSliceError;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         #[allow(clippy::unwrap_used)]
-        let bytes: [u8; 8] = value.try_into().unwrap();
-        bytes.into()
+        let bytes: [u8; 8] = value.try_into()?;
+        Ok(bytes.into())
     }
 }
 

@@ -201,13 +201,13 @@ impl Storable for CompactSpaceHeader {
                 size: Self::MSIZE,
             })?;
         #[allow(clippy::indexing_slicing)]
-        let meta_space_tail = raw.as_deref()[..8].into();
+        let meta_space_tail = raw.as_deref()[..8].try_into().unwrap();
         #[allow(clippy::indexing_slicing)]
-        let data_space_tail = raw.as_deref()[8..16].into();
+        let data_space_tail = raw.as_deref()[8..16].try_into().unwrap();
         #[allow(clippy::indexing_slicing)]
-        let base_addr = raw.as_deref()[16..24].into();
+        let base_addr = raw.as_deref()[16..24].try_into().unwrap();
         #[allow(clippy::indexing_slicing)]
-        let alloc_addr = raw.as_deref()[24..].into();
+        let alloc_addr = raw.as_deref()[24..].try_into().unwrap();
         Ok(Self {
             meta_space_tail,
             data_space_tail,
@@ -631,7 +631,7 @@ impl<T: Storable + Debug + 'static, M: CachedStore> CompactSpace<T, M> {
         #[allow(clippy::unwrap_used)]
         if ptr < DiskAddress::from(CompactSpaceHeader::MSIZE as usize) {
             return Err(ShaleError::InvalidAddressLength {
-                expected: DiskAddress::from(CompactSpaceHeader::MSIZE as usize),
+                expected: CompactSpaceHeader::MSIZE,
                 found: ptr.0.map(|inner| inner.get()).unwrap_or_default() as u64,
             });
         }
