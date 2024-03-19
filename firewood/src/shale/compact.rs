@@ -171,7 +171,7 @@ impl CompactSpaceHeaderSliced {
 }
 
 impl CompactSpaceHeader {
-    pub const MSIZE: u64 = 4 * DiskAddress::MSIZE as u64;
+    pub const MSIZE: u64 = 4 * DiskAddress::MSIZE;
     const META_SPACE_TAIL_OFFSET: usize = 0;
     const DATA_SPACE_TAIL_OFFSET: usize = DiskAddress::MSIZE as usize;
     const BASE_ADDR_OFFSET: usize = 2 * DiskAddress::MSIZE as usize;
