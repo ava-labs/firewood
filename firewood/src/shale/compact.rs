@@ -7,7 +7,7 @@ use crate::shale::ObjCache;
 use crate::storage::{StoreRevMut, StoreRevShared};
 
 use super::disk_address::DiskAddress;
-use super::{CachedStore, Obj, ObjRef, ShaleError, Storable, StoredView};
+use super::{LinearStore, Obj, ObjRef, ShaleError, Storable, StoredView};
 use bytemuck::{Pod, Zeroable};
 use std::fmt::Debug;
 use std::io::{Cursor, Write};
@@ -36,7 +36,7 @@ impl CompactHeader {
 }
 
 impl Storable for CompactHeader {
-    fn deserialize<T: CachedStore>(addr: usize, mem: &T) -> Result<Self, ShaleError> {
+    fn deserialize<T: LinearStore>(addr: usize, mem: &T) -> Result<Self, ShaleError> {
         let raw = mem
             .get_view(addr, Self::MSIZE)
             .ok_or(ShaleError::InvalidCacheView {
@@ -81,7 +81,7 @@ impl CompactFooter {
 }
 
 impl Storable for CompactFooter {
-    fn deserialize<T: CachedStore>(addr: usize, mem: &T) -> Result<Self, ShaleError> {
+    fn deserialize<T: LinearStore>(addr: usize, mem: &T) -> Result<Self, ShaleError> {
         let raw = mem
             .get_view(addr, Self::MSIZE)
             .ok_or(ShaleError::InvalidCacheView {
@@ -114,7 +114,7 @@ impl CompactDescriptor {
 }
 
 impl Storable for CompactDescriptor {
-    fn deserialize<T: CachedStore>(addr: usize, mem: &T) -> Result<Self, ShaleError> {
+    fn deserialize<T: LinearStore>(addr: usize, mem: &T) -> Result<Self, ShaleError> {
         let raw = mem
             .get_view(addr, Self::MSIZE)
             .ok_or(ShaleError::InvalidCacheView {
@@ -217,7 +217,7 @@ impl CompactSpaceHeader {
 }
 
 impl Storable for CompactSpaceHeader {
-    fn deserialize<T: CachedStore + Debug>(addr: usize, mem: &T) -> Result<Self, ShaleError> {
+    fn deserialize<T: LinearStore + Debug>(addr: usize, mem: &T) -> Result<Self, ShaleError> {
         let raw = mem
             .get_view(addr, Self::MSIZE)
             .ok_or(ShaleError::InvalidCacheView {
@@ -276,7 +276,7 @@ impl From<CompactSpaceInner<StoreRevMut>> for CompactSpaceInner<StoreRevShared> 
     }
 }
 
-impl<M: CachedStore> CompactSpaceInner<M> {
+impl<M: LinearStore> CompactSpaceInner<M> {
     fn get_descriptor(&self, ptr: DiskAddress) -> Result<Obj<CompactDescriptor>, ShaleError> {
         StoredView::ptr_to_obj(&self.meta_space, ptr, CompactDescriptor::MSIZE)
     }
@@ -571,7 +571,7 @@ pub struct CompactSpace<T: Storable, M> {
     obj_cache: ObjCache<T>,
 }
 
-impl<T: Storable, M: CachedStore> CompactSpace<T, M> {
+impl<T: Storable, M: LinearStore> CompactSpace<T, M> {
     pub fn new(
         meta_space: M,
         data_space: M,
@@ -605,7 +605,7 @@ impl From<CompactSpace<Node, StoreRevMut>> for CompactSpace<Node, StoreRevShared
     }
 }
 
-impl<T: Storable + Debug + 'static, M: CachedStore> CompactSpace<T, M> {
+impl<T: Storable + Debug + 'static, M: LinearStore> CompactSpace<T, M> {
     pub(crate) fn put_item(&self, item: T, extra: u64) -> Result<ObjRef<'_, T>, ShaleError> {
         let size = item.serialized_len() + extra;
         #[allow(clippy::unwrap_used)]
@@ -706,7 +706,7 @@ mod tests {
     }
 
     impl Storable for Hash {
-        fn deserialize<T: CachedStore>(addr: usize, mem: &T) -> Result<Self, ShaleError> {
+        fn deserialize<T: LinearStore>(addr: usize, mem: &T) -> Result<Self, ShaleError> {
             let raw = mem
                 .get_view(addr, Self::MSIZE)
                 .ok_or(ShaleError::InvalidCacheView {

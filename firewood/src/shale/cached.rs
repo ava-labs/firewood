@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::shale::{CachedStore, CachedView, SendSyncDerefMut, SpaceId};
+use crate::shale::{CachedView, LinearStore, SendSyncDerefMut, SpaceId};
 use std::{
     fmt::Debug,
     ops::{Deref, DerefMut},
@@ -25,7 +25,7 @@ impl InMemLinearStore {
     }
 }
 
-impl CachedStore for InMemLinearStore {
+impl LinearStore for InMemLinearStore {
     fn get_view(
         &self,
         offset: usize,
@@ -51,7 +51,7 @@ impl CachedStore for InMemLinearStore {
         }))
     }
 
-    fn get_shared(&self) -> Box<dyn SendSyncDerefMut<Target = dyn CachedStore>> {
+    fn get_shared(&self) -> Box<dyn SendSyncDerefMut<Target = dyn LinearStore>> {
         Box::new(InMemLinearStoreShared(Self {
             space: self.space.clone(),
             id: self.id,
@@ -98,8 +98,8 @@ struct InMemLinearStoreView {
 struct InMemLinearStoreShared(InMemLinearStore);
 
 impl Deref for InMemLinearStoreShared {
-    type Target = dyn CachedStore;
-    fn deref(&self) -> &(dyn CachedStore + 'static) {
+    type Target = dyn LinearStore;
+    fn deref(&self) -> &(dyn LinearStore + 'static) {
         &self.0
     }
 }

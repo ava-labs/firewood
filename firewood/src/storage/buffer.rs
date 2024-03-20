@@ -642,7 +642,7 @@ mod tests {
     use tokio::task::block_in_place;
 
     use super::*;
-    use crate::shale::CachedStore;
+    use crate::shale::LinearStore;
     use crate::{
         file,
         storage::{
