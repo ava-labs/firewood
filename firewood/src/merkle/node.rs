@@ -6,7 +6,7 @@ use crate::{
     merkle::nibbles_to_bytes_iter,
     shale::{disk_address::DiskAddress, CachedStore, ShaleError, Storable},
 };
-use arrayref::array_ref;
+
 use bincode::Options;
 use bitflags::bitflags;
 use bytemuck::{CheckedBitPattern, NoUninit, Pod, Zeroable};
@@ -430,8 +430,7 @@ impl<'de> Visitor<'de> for TupleVisitor {
         A: serde::de::SeqAccess<'de>,
     {
         let length = seq.next_element::<u64>()?.ok_or(serde::de::Error::custom("missing length"))? / 4;
-        println!("{length}");
-        let mut data = vec![];
+        let mut data = Vec::with_capacity(length as usize);
         for _ in 0..length {
             data.push(seq.next_element::<u8>()?.ok_or(serde::de::Error::custom("not enough bytes"))?);
         }
