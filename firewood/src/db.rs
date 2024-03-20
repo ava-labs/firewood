@@ -218,7 +218,7 @@ impl Storable for DbHeader {
         Ok(Self {
             kv_root: root_bytes
                 .try_into()
-                .expect("Self::MSIZE > DiskAddress:MSIZE"),
+                .expect("Self::MSIZE == DiskAddress:MSIZE"),
         })
     }
 
