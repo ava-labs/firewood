@@ -412,9 +412,7 @@ impl<'de> Deserialize<'de> for PathWithBitsPrefix {
     where
         D: serde::Deserializer<'de>,
     {
-        Ok(deserializer
-            .deserialize_struct("Key", &["f1", "f2"], TupleVisitor)
-            .unwrap())
+        deserializer.deserialize_tuple(usize::MAX, TupleVisitor)
     }
 }
 
@@ -431,11 +429,11 @@ impl<'de> Visitor<'de> for TupleVisitor {
     where
         A: serde::de::SeqAccess<'de>,
     {
-        let length = seq.next_element::<u64>().unwrap().unwrap() / 4;
+        let length = seq.next_element::<u64>()?.ok_or(serde::de::Error::custom("missing length"))? / 4;
         println!("{length}");
         let mut data = vec![];
-        for _ in 0..=length {
-            data.push(seq.next_element::<u8>().unwrap().unwrap());
+        for _ in 0..length {
+            data.push(seq.next_element::<u8>()?.ok_or(serde::de::Error::custom("not enough bytes"))?);
         }
         Ok(PathWithBitsPrefix(data.to_vec()))
     }
@@ -446,67 +444,15 @@ impl Serialize for PathWithBitsPrefix {
     where
         S: serde::Serializer,
     {
-        let path_length_bits: u64 = (self.0.len() as u64).checked_mul(4u64).unwrap();
+        let path_length_bits: u64 = (self.0.len() as u64).checked_mul(4u64).expect("too many bits to serialize");
 
-        let mut serializer_1 = serializer.serialize_tuple(1 + self.0.len()).unwrap();
+        let mut serializer_1 = serializer.serialize_tuple(1 + self.0.len())?;
 
         serializer_1.serialize_element(&path_length_bits)?;
         for byt in self.0.iter() {
             serializer_1.serialize_element(byt)?;
         }
         serializer_1.end()
-    }
-}
-
-struct BytesVisitor;
-
-impl<'de> Visitor<'de> for BytesVisitor {
-    type Value = Vec<u8>;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        formatter.write_str("byte array")
-    }
-
-    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-    where
-        A: serde::de::SeqAccess<'de>,
-    {
-        todo!()
-    }
-}
-
-struct VarintVisitor;
-
-impl<'de> Visitor<'de> for VarintVisitor {
-    type Value = u64;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        formatter.write_str("varint")
-    }
-
-    fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        Ok(v)
-    }
-}
-
-struct BitPrefixVisitor;
-
-impl<'de> Visitor<'de> for BitPrefixVisitor {
-    type Value = PathWithBitsPrefix;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        formatter.write_str("vector with bit size prefix")
-    }
-
-    fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        // convert from v (a &[u8]) into length in bytes (usize)
-        todo!()
     }
 }
 
@@ -758,6 +704,7 @@ impl BinarySerde for PlainCodec {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::shale::cached::InMemLinearStore;
