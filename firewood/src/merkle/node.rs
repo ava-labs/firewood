@@ -879,16 +879,25 @@ mod tests {
         assert_eq!(node, hydrated_node);
     }
 
-    // #[test]
-    // fn test_encode_path_with_bits_prefix() {
-    //     let sut = PathWithBitsPrefix(vec![1, 2, 3]);
+    #[test_case(&[],&[0])]
+    #[test_case(&[0],&[4,0])]
+    #[test_case(&[0x01],&[4,0x10])]
+    #[test_case(&[0x0F],&[4,0xF0])]
+    #[test_case(&[0x00, 0x00],&[8,0x00])]
+    #[test_case(&[0x01, 0x02],&[8,0x12])]
+    #[test_case(&[0x00,0x0F],&[8,0x0F])]
+    #[test_case(&[0x0F,0x0F],&[8,0xFF])]
+    #[test_case(&[0x0F,0x01,0x0F],&[12,0xF1,0xF0])]
+    fn test_encode_path_with_bits_prefix(path_nibbles: &[u8], expected_bytes: &[u8]) {
+        let path = PathWithBitsPrefix(Path(path_nibbles.to_vec()));
 
-    //     let result = PlainCodec::serialize(&sut).unwrap();
-    //     assert_eq!(result, &[12, 1, 2, 3]);
+        let serialized_path = PlainCodec::serialize(&path).unwrap();
+        assert_eq!(serialized_path, expected_bytes);
 
-    //     let got = PlainCodec::deserialize::<PathWithBitsPrefix>(&result).unwrap();
-    //     assert_eq!(got.0, sut.0);
-    // }
+        let deserialized_path =
+            PlainCodec::deserialize::<PathWithBitsPrefix>(&serialized_path).unwrap();
+        assert_eq!(deserialized_path.0, path.0);
+    }
 
     struct Nil;
 
