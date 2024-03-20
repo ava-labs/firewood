@@ -434,10 +434,17 @@ impl<'de> Visitor<'de> for TupleVisitor {
     where
         A: serde::de::SeqAccess<'de>,
     {
-        let path_bytes_len = seq
+        let path_bits_len = seq
             .next_element::<u64>()?
-            .ok_or(serde::de::Error::custom("missing length"))?
-            / BITS_PER_NIBBLE;
+            .ok_or(serde::de::Error::custom("missing length"))?;
+
+        if path_bits_len % BITS_PER_NIBBLE != 0 {
+            return Err(serde::de::Error::custom(
+                "path length is not a multiple of 4",
+            ));
+        }
+
+        let path_bytes_len = path_bits_len / BITS_PER_NIBBLE;
 
         let mut path_bytes = Vec::with_capacity(path_bytes_len as usize);
 
