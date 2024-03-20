@@ -689,7 +689,7 @@ impl<T: Storable + Debug + 'static, M: CachedStore> CompactSpace<T, M> {
 mod tests {
     use sha3::Digest;
 
-    use crate::shale::{self, cached::InMemLinearStore, ObjCache};
+    use crate::shale::{self, cached::InMemLinearStore};
 
     use super::*;
 
@@ -785,15 +785,13 @@ mod tests {
             .cache
             .lock()
             .pinned
-            .get(&DiskAddress::from(4113))
-            .is_some());
+            .contains_key(&DiskAddress::from(4113)));
         // dirty
         assert!(obj_ref
             .cache
             .lock()
             .dirty
-            .get(&DiskAddress::from(4113))
-            .is_some());
+            .contains(&DiskAddress::from(4113)));
         drop(obj_ref);
         // write is visible
         assert_eq!(
