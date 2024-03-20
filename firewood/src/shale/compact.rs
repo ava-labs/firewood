@@ -225,14 +225,21 @@ impl Storable for CompactSpaceHeader {
                 size: Self::SERIALIZED_LEN,
             })?;
         #[allow(clippy::indexing_slicing)]
-        let meta_space_tail = raw.as_deref()[..Self::DATA_SPACE_TAIL_OFFSET].into();
+        let meta_space_tail = raw.as_deref()[..Self::DATA_SPACE_TAIL_OFFSET]
+            .try_into()
+            .expect("Self::MSIZE = 4 * DiskAddress::MSIZE");
         #[allow(clippy::indexing_slicing)]
-        let data_space_tail =
-            raw.as_deref()[Self::DATA_SPACE_TAIL_OFFSET..Self::BASE_ADDR_OFFSET].into();
+        let data_space_tail = raw.as_deref()[Self::DATA_SPACE_TAIL_OFFSET..Self::BASE_ADDR_OFFSET]
+            .try_into()
+            .expect("Self::MSIZE = 4 * DiskAddress::MSIZE");
         #[allow(clippy::indexing_slicing)]
-        let base_addr = raw.as_deref()[Self::BASE_ADDR_OFFSET..Self::ALLOC_ADDR_OFFSET].into();
+        let base_addr = raw.as_deref()[Self::BASE_ADDR_OFFSET..Self::ALLOC_ADDR_OFFSET]
+            .try_into()
+            .expect("Self::MSIZE = 4 * DiskAddress::MSIZE");
         #[allow(clippy::indexing_slicing)]
-        let alloc_addr = raw.as_deref()[Self::ALLOC_ADDR_OFFSET..].into();
+        let alloc_addr = raw.as_deref()[Self::ALLOC_ADDR_OFFSET..]
+            .try_into()
+            .expect("Self::MSIZE = 4 * DiskAddress::MSIZE");
         Ok(Self {
             meta_space_tail,
             data_space_tail,
@@ -660,7 +667,7 @@ impl<T: Storable + Debug + 'static, M: CachedStore> CompactSpace<T, M> {
         #[allow(clippy::unwrap_used)]
         if ptr < DiskAddress::from(CompactSpaceHeader::SERIALIZED_LEN as usize) {
             return Err(ShaleError::InvalidAddressLength {
-                expected: DiskAddress::from(CompactSpaceHeader::SERIALIZED_LEN as usize),
+                expected: CompactSpaceHeader::SERIALIZED_LEN,
                 found: ptr.0.map(|inner| inner.get()).unwrap_or_default() as u64,
             });
         }
@@ -688,7 +695,7 @@ impl<T: Storable + Debug + 'static, M: CachedStore> CompactSpace<T, M> {
 mod tests {
     use sha3::Digest;
 
-    use crate::shale::{self, cached::InMemLinearStore, ObjCache};
+    use crate::shale::{self, cached::InMemLinearStore};
 
     use super::*;
 
@@ -784,15 +791,13 @@ mod tests {
             .cache
             .lock()
             .pinned
-            .get(&DiskAddress::from(4113))
-            .is_some());
+            .contains_key(&DiskAddress::from(4113)));
         // dirty
         assert!(obj_ref
             .cache
             .lock()
             .dirty
-            .get(&DiskAddress::from(4113))
-            .is_some());
+            .contains(&DiskAddress::from(4113)));
         drop(obj_ref);
         // write is visible
         assert_eq!(
