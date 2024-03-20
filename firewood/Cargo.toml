@@ -16,7 +16,6 @@ homepage = "https://avalabs.org"
 readme = "../README.md"
 
 [dependencies]
-arrayref = "*"
 aquamarine = "0.5.0"
 async-trait = "0.1.77"
 bytemuck = { version = "1.14.3", features = ["derive"] }

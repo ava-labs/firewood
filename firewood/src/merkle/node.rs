@@ -6,7 +6,6 @@ use crate::{
     merkle::nibbles_to_bytes_iter,
     shale::{disk_address::DiskAddress, CachedStore, ShaleError, Storable},
 };
-
 use bincode::Options;
 use bitflags::bitflags;
 use bytemuck::{CheckedBitPattern, NoUninit, Pod, Zeroable};
