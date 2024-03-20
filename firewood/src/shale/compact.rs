@@ -75,7 +75,7 @@ struct CompactFooter {
 }
 
 impl CompactFooter {
-    const MSIZE: u64 = 8; // u64.to_le_bytes() returns [u8; 8]
+    const MSIZE: u64 = std::mem::size_of::<u64>() as u64;
 }
 
 impl Storable for CompactFooter {
