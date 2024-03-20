@@ -47,6 +47,8 @@ bitflags! {
     }
 }
 
+const BITS_PER_NIBBLE: u64 = 4;
+
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner)]
 pub enum NodeType {
     Branch(Box<BranchNode>),
@@ -412,6 +414,9 @@ impl<'de> Deserialize<'de> for PathWithBitsPrefix {
     where
         D: serde::Deserializer<'de>,
     {
+        // TODO danlaine: This is slightly abusing the serde API.
+        // We don't know the number of bytes in the tuple until we've read the first u64.
+        // We should implement a custom serializer/deserializer for EncodedNode.
         deserializer.deserialize_tuple(usize::MAX, TupleVisitor)
     }
 }
@@ -429,12 +434,21 @@ impl<'de> Visitor<'de> for TupleVisitor {
     where
         A: serde::de::SeqAccess<'de>,
     {
-        let length = seq.next_element::<u64>()?.ok_or(serde::de::Error::custom("missing length"))? / 4;
-        let mut data = Vec::with_capacity(length as usize);
-        for _ in 0..length {
-            data.push(seq.next_element::<u8>()?.ok_or(serde::de::Error::custom("not enough bytes"))?);
+        let path_bytes_len = seq
+            .next_element::<u64>()?
+            .ok_or(serde::de::Error::custom("missing length"))?
+            / BITS_PER_NIBBLE;
+
+        let mut path_bytes = Vec::with_capacity(path_bytes_len as usize);
+
+        for _ in 0..path_bytes_len {
+            path_bytes.push(
+                seq.next_element::<u8>()?
+                    .ok_or(serde::de::Error::custom("not enough bytes"))?,
+            );
         }
-        Ok(PathWithBitsPrefix(data.to_vec()))
+
+        Ok(PathWithBitsPrefix(path_bytes))
     }
 }
 
@@ -443,15 +457,18 @@ impl Serialize for PathWithBitsPrefix {
     where
         S: serde::Serializer,
     {
-        let path_length_bits: u64 = (self.0.len() as u64).checked_mul(4u64).expect("too many bits to serialize");
+        let path_length_bits: u64 = (self.0.len() as u64)
+            .checked_mul(4u64)
+            .expect("too many bits to serialize");
 
-        let mut serializer_1 = serializer.serialize_tuple(1 + self.0.len())?;
+        let mut serializer = serializer.serialize_tuple(1 + self.0.len())?;
 
-        serializer_1.serialize_element(&path_length_bits)?;
+        serializer.serialize_element(&path_length_bits)?;
         for byt in self.0.iter() {
-            serializer_1.serialize_element(byt)?;
+            serializer.serialize_element(byt)?;
         }
-        serializer_1.end()
+
+        serializer.end()
     }
 }
 
@@ -476,7 +493,7 @@ impl Serialize for EncodedNode<PlainCodec> {
 
         s.serialize_element(&chd)?;
         s.serialize_element(&value)?;
-        s.serialize_element(&path)?; // If path is [3,4] we write [2, 3, 4]. We want [3, 4]
+        s.serialize_element(&path)?;
 
         s.end()
     }
@@ -489,11 +506,9 @@ impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
     {
         let chd: Vec<(u64, Vec<u8>)>;
         let value: Option<Vec<u8>>;
-        let path: PathWithBitsPrefix;
+        let raw_path: PathWithBitsPrefix;
 
-        (chd, value, path) = Deserialize::deserialize(deserializer)?;
-
-        todo!();
+        (chd, value, raw_path) = Deserialize::deserialize(deserializer)?;
 
         /*
         let path_odd_length = path_length_bits % 8 != 0;
