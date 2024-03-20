@@ -24,7 +24,9 @@ pub struct CompactHeader {
 }
 
 impl CompactHeader {
-    pub const MSIZE: u64 = 17;
+    const IS_FREED_OFFSET: usize = 8;
+    const DESC_ADDR_OFFSET: usize = 9;
+    pub const MSIZE: u64 = (Self::DESC_ADDR_OFFSET + std::mem::size_of::<usize>()) as u64;
 
     pub const fn is_freed(&self) -> bool {
         self.is_freed
@@ -44,13 +46,19 @@ impl Storable for CompactHeader {
                 size: Self::MSIZE,
             })?;
         #[allow(clippy::indexing_slicing)]
-        let payload_size =
-            u64::from_le_bytes(raw.as_deref()[..8].try_into().expect("invalid slice"));
+        let payload_size = u64::from_le_bytes(
+            raw.as_deref()[..Self::IS_FREED_OFFSET]
+                .try_into()
+                .expect("invalid slice"),
+        );
         #[allow(clippy::indexing_slicing)]
-        let is_freed = raw.as_deref()[8] != 0;
+        let is_freed = raw.as_deref()[Self::IS_FREED_OFFSET] != 0;
         #[allow(clippy::indexing_slicing)]
-        let desc_addr =
-            usize::from_le_bytes(raw.as_deref()[9..17].try_into().expect("invalid slice"));
+        let desc_addr = usize::from_le_bytes(
+            raw.as_deref()[Self::DESC_ADDR_OFFSET..Self::MSIZE as usize]
+                .try_into()
+                .expect("invalid slice"),
+        );
         Ok(Self {
             payload_size,
             is_freed,
@@ -77,7 +85,7 @@ struct CompactFooter {
 }
 
 impl CompactFooter {
-    const MSIZE: u64 = std::mem::size_of::<PayLoadSize>() as u64;
+    const MSIZE: u64 = 8;
 }
 
 impl Storable for CompactFooter {
@@ -110,7 +118,8 @@ struct CompactDescriptor {
 }
 
 impl CompactDescriptor {
-    const MSIZE: u64 = 16;
+    const HADDR_OFFSET: usize = 8;
+    const MSIZE: u64 = 8 + std::mem::size_of::<usize>() as u64;
 }
 
 impl Storable for CompactDescriptor {
@@ -122,10 +131,17 @@ impl Storable for CompactDescriptor {
                 size: Self::MSIZE,
             })?;
         #[allow(clippy::indexing_slicing)]
-        let payload_size =
-            u64::from_le_bytes(raw.as_deref()[..8].try_into().expect("invalid slice"));
+        let payload_size = u64::from_le_bytes(
+            raw.as_deref()[..Self::HADDR_OFFSET]
+                .try_into()
+                .expect("invalid slice"),
+        );
         #[allow(clippy::indexing_slicing)]
-        let haddr = usize::from_le_bytes(raw.as_deref()[8..].try_into().expect("invalid slice"));
+        let haddr = usize::from_le_bytes(
+            raw.as_deref()[Self::HADDR_OFFSET..]
+                .try_into()
+                .expect("invalid slice"),
+        );
         Ok(Self {
             payload_size,
             haddr,
@@ -171,11 +187,11 @@ impl CompactSpaceHeaderSliced {
 }
 
 impl CompactSpaceHeader {
-    pub const MSIZE: u64 = 4 * DiskAddress::MSIZE;
     const META_SPACE_TAIL_OFFSET: usize = 0;
     const DATA_SPACE_TAIL_OFFSET: usize = DiskAddress::MSIZE as usize;
-    const BASE_ADDR_OFFSET: usize = 2 * DiskAddress::MSIZE as usize;
-    const ALLOC_ADDR_OFFSET: usize = 3 * DiskAddress::MSIZE as usize;
+    const BASE_ADDR_OFFSET: usize = Self::DATA_SPACE_TAIL_OFFSET + DiskAddress::MSIZE as usize;
+    const ALLOC_ADDR_OFFSET: usize = Self::BASE_ADDR_OFFSET + DiskAddress::MSIZE as usize;
+    pub const MSIZE: u64 = Self::ALLOC_ADDR_OFFSET as u64 + DiskAddress::MSIZE;
 
     pub const fn new(meta_base: NonZeroUsize, compact_base: NonZeroUsize) -> Self {
         Self {
