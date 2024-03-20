@@ -171,7 +171,11 @@ impl CompactSpaceHeaderSliced {
 }
 
 impl CompactSpaceHeader {
-    pub const MSIZE: u64 = 32;
+    pub const MSIZE: u64 = 4 * DiskAddress::MSIZE;
+    const META_SPACE_TAIL_OFFSET: usize = 0;
+    const DATA_SPACE_TAIL_OFFSET: usize = DiskAddress::MSIZE as usize;
+    const BASE_ADDR_OFFSET: usize = 2 * DiskAddress::MSIZE as usize;
+    const ALLOC_ADDR_OFFSET: usize = 3 * DiskAddress::MSIZE as usize;
 
     pub const fn new(meta_base: NonZeroUsize, compact_base: NonZeroUsize) -> Self {
         Self {
@@ -184,10 +188,30 @@ impl CompactSpaceHeader {
 
     fn into_fields(r: Obj<Self>) -> Result<CompactSpaceHeaderSliced, ShaleError> {
         Ok(CompactSpaceHeaderSliced {
-            meta_space_tail: StoredView::slice(&r, 0, 8, r.meta_space_tail)?,
-            data_space_tail: StoredView::slice(&r, 8, 8, r.data_space_tail)?,
-            base_addr: StoredView::slice(&r, 16, 8, r.base_addr)?,
-            alloc_addr: StoredView::slice(&r, 24, 8, r.alloc_addr)?,
+            meta_space_tail: StoredView::slice(
+                &r,
+                Self::META_SPACE_TAIL_OFFSET,
+                DiskAddress::MSIZE,
+                r.meta_space_tail,
+            )?,
+            data_space_tail: StoredView::slice(
+                &r,
+                Self::DATA_SPACE_TAIL_OFFSET,
+                DiskAddress::MSIZE,
+                r.data_space_tail,
+            )?,
+            base_addr: StoredView::slice(
+                &r,
+                Self::BASE_ADDR_OFFSET,
+                DiskAddress::MSIZE,
+                r.base_addr,
+            )?,
+            alloc_addr: StoredView::slice(
+                &r,
+                Self::ALLOC_ADDR_OFFSET,
+                DiskAddress::MSIZE,
+                r.alloc_addr,
+            )?,
         })
     }
 }
@@ -201,13 +225,21 @@ impl Storable for CompactSpaceHeader {
                 size: Self::MSIZE,
             })?;
         #[allow(clippy::indexing_slicing)]
-        let meta_space_tail = raw.as_deref()[..8].into();
+        let meta_space_tail = raw.as_deref()[..Self::DATA_SPACE_TAIL_OFFSET]
+            .try_into()
+            .expect("Self::MSIZE = 4 * DiskAddress::MSIZE");
         #[allow(clippy::indexing_slicing)]
-        let data_space_tail = raw.as_deref()[8..16].into();
+        let data_space_tail = raw.as_deref()[Self::DATA_SPACE_TAIL_OFFSET..Self::BASE_ADDR_OFFSET]
+            .try_into()
+            .expect("Self::MSIZE = 4 * DiskAddress::MSIZE");
         #[allow(clippy::indexing_slicing)]
-        let base_addr = raw.as_deref()[16..24].into();
+        let base_addr = raw.as_deref()[Self::BASE_ADDR_OFFSET..Self::ALLOC_ADDR_OFFSET]
+            .try_into()
+            .expect("Self::MSIZE = 4 * DiskAddress::MSIZE");
         #[allow(clippy::indexing_slicing)]
-        let alloc_addr = raw.as_deref()[24..].into();
+        let alloc_addr = raw.as_deref()[Self::ALLOC_ADDR_OFFSET..]
+            .try_into()
+            .expect("Self::MSIZE = 4 * DiskAddress::MSIZE");
         Ok(Self {
             meta_space_tail,
             data_space_tail,
@@ -631,7 +663,7 @@ impl<T: Storable + Debug + 'static, M: CachedStore> CompactSpace<T, M> {
         #[allow(clippy::unwrap_used)]
         if ptr < DiskAddress::from(CompactSpaceHeader::MSIZE as usize) {
             return Err(ShaleError::InvalidAddressLength {
-                expected: DiskAddress::from(CompactSpaceHeader::MSIZE as usize),
+                expected: CompactSpaceHeader::MSIZE,
                 found: ptr.0.map(|inner| inner.get()).unwrap_or_default() as u64,
             });
         }
@@ -659,7 +691,7 @@ impl<T: Storable + Debug + 'static, M: CachedStore> CompactSpace<T, M> {
 mod tests {
     use sha3::Digest;
 
-    use crate::shale::{self, cached::InMemLinearStore, ObjCache};
+    use crate::shale::{self, cached::InMemLinearStore};
 
     use super::*;
 
@@ -755,15 +787,13 @@ mod tests {
             .cache
             .lock()
             .pinned
-            .get(&DiskAddress::from(4113))
-            .is_some());
+            .contains_key(&DiskAddress::from(4113)));
         // dirty
         assert!(obj_ref
             .cache
             .lock()
             .dirty
-            .get(&DiskAddress::from(4113))
-            .is_some());
+            .contains(&DiskAddress::from(4113)));
         drop(obj_ref);
         // write is visible
         assert_eq!(
