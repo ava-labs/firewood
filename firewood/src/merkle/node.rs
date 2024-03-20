@@ -486,7 +486,7 @@ impl Serialize for EncodedNode<Bincode> {
         }
 
         if let Some(val) = &self.value {
-            list[BranchNode::MAX_CHILDREN] = val.clone();
+            list[BranchNode::MAX_CHILDREN].clone_from(val);
         }
 
         let serialized_path = nibbles_to_bytes_iter(&self.path.encode()).collect();
