@@ -148,10 +148,10 @@ where
                                         self.encode(Path(child_path), node.inner())
                                     })
                                     .map(|node_bytes| {
-                                        let foo = Keccak256::digest(&node_bytes);
-                                        let foo: [u8; TRIE_HASH_LEN] =
-                                            foo.as_slice().try_into().expect("hash length");
-                                        foo
+                                        Keccak256::digest(&node_bytes)
+                                            .as_slice()
+                                            .try_into()
+                                            .expect("TODO can this panic?")
                                     })
                             })
                             // or look for the pre-fetched bytes
