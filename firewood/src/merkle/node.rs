@@ -11,6 +11,7 @@ use bitflags::bitflags;
 use bytemuck::{CheckedBitPattern, NoUninit, Pod, Zeroable};
 use enum_as_inner::EnumAsInner;
 use serde::{
+    de::Visitor,
     ser::{SerializeSeq, SerializeTuple},
     Deserialize, Serialize,
 };
@@ -44,6 +45,19 @@ bitflags! {
         const ODD_LEN  = 0b0001;
     }
 }
+
+const NIBBLES_PER_BYTE: usize = 2;
+const BITS_PER_NIBBLE: u64 = 4;
+const BITS_PER_BYTE: u64 = 8;
+
+// TODO danlaine: This exists to prevent someone from forcing a very large
+// memory allocation during PathWithBitsPrefix deserialization.
+// Instead of specifying a max size, we should change how we
+// serialize/deserialize paths during node hashing so that on deserialize, when
+// we read the path bit length, we can verify that the &[u8] we're decoding
+// has the expected number of bits.
+pub const MAX_PATH_BYTE_LEN: u64 = 2 * 1024 * 1024; // 2 MiB
+const MAX_PATH_BIT_LEN: u64 = MAX_PATH_BYTE_LEN * BITS_PER_BYTE;
 
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner)]
 pub enum NodeType {
@@ -402,6 +416,113 @@ impl<T> PartialEq for EncodedNode<T> {
     }
 }
 
+#[derive(Debug)]
+struct PathWithBitsPrefix(Path);
+
+impl<'de> Deserialize<'de> for PathWithBitsPrefix {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // TODO danlaine: This is slightly abusing the serde API.
+        // We don't know the number of bytes in the tuple until we've read the first u64.
+        // We should implement a custom serializer/deserializer for EncodedNode.
+        deserializer.deserialize_tuple(usize::MAX, TupleVisitor)
+    }
+}
+
+struct TupleVisitor;
+
+impl<'de> Visitor<'de> for TupleVisitor {
+    type Value = PathWithBitsPrefix;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("tuple")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        let path_bits_len = seq
+            .next_element::<u64>()?
+            .ok_or(serde::de::Error::custom("missing length"))?;
+
+        if path_bits_len == 0 {
+            return Ok(PathWithBitsPrefix(Path(vec![])));
+        }
+
+        if path_bits_len % BITS_PER_NIBBLE != 0 {
+            return Err(serde::de::Error::custom(
+                "path length is not a multiple of 4",
+            ));
+        }
+
+        if path_bits_len > MAX_PATH_BIT_LEN {
+            return Err(serde::de::Error::custom(
+                "path bit length > {MAX_PATH_BIT_LEN}",
+            ));
+        }
+
+        // Add BITS_PER_NIBBLE so that if there are an odd number of nibbles,
+        // we need to read the final byte.
+        // e.g. if `path_bits_len` is 12 we need to read 2 bytes
+        // If we didn't add BITS_PER_NIBBLE `path_bytes_len` would be 1.
+        // Note `path_bytes_len` >= 1 because we assert `path_bits_len` > 0.
+        let path_bytes_len = (path_bits_len + BITS_PER_NIBBLE) / BITS_PER_BYTE;
+
+        let mut path = Vec::with_capacity(NIBBLES_PER_BYTE * path_bytes_len as usize);
+
+        for _ in 0..path_bytes_len {
+            let byte = seq
+                .next_element::<u8>()?
+                .ok_or(serde::de::Error::custom("not enough bytes"))?;
+
+            // Convert the byte to 2 nibbles
+            path.push(byte >> 4);
+            path.push(byte & 0b_0000_1111);
+        }
+
+        if path_bits_len % BITS_PER_BYTE != 0 {
+            // The last byte only contained one nibble.
+            let padding_nibble = path.pop().expect("path_bytes_len > 0");
+            if padding_nibble != 0 {
+                return Err(serde::de::Error::custom("padding nibble is not 0"));
+            }
+        }
+
+        Ok(PathWithBitsPrefix(Path(path)))
+    }
+}
+
+impl Serialize for PathWithBitsPrefix {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let path_length_bits: u64 = (self.0.len() as u64)
+            .checked_mul(4u64)
+            .expect("too many bits to serialize");
+
+        let path_bytes = nibbles_to_bytes_iter(self.0.as_ref());
+
+        // If there are an odd number of nibbles, we need an additional byte to hold
+        // the last nibble.
+        // e.g. If this path has 3 nibbles we need to write 2 bytes.
+        // If we didn't add 1 then `path_bytes_len` would be 1.
+        let path_bytes_len = (self.0.len() + 1) / 2;
+
+        let mut serializer = serializer.serialize_tuple(1 + path_bytes_len)?;
+
+        serializer.serialize_element(&path_length_bits)?;
+        for byt in path_bytes {
+            serializer.serialize_element(&byt)?;
+        }
+
+        serializer.end()
+    }
+}
+
 // Note that the serializer passed in should always be the same type as T in EncodedNode<T>.
 impl Serialize for EncodedNode<PlainCodec> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -417,15 +538,12 @@ impl Serialize for EncodedNode<PlainCodec> {
 
         let value = self.value.as_deref();
 
-        let path_length_bits: u64 = self.path.len() as u64 * 4;
+        let path = PathWithBitsPrefix(self.path.clone());
 
-        let path: Vec<u8> = nibbles_to_bytes_iter(self.path.as_ref()).collect();
-
-        let mut s = serializer.serialize_tuple(4)?;
+        let mut s = serializer.serialize_tuple(3)?;
 
         s.serialize_element(&chd)?;
         s.serialize_element(&value)?;
-        s.serialize_element(&path_length_bits)?;
         s.serialize_element(&path)?;
 
         s.end()
@@ -439,21 +557,9 @@ impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
     {
         let chd: Vec<(u64, Vec<u8>)>;
         let value: Option<Vec<u8>>;
-        let path_length_bits: u64;
-        let path: Vec<u8>;
+        let path: PathWithBitsPrefix;
 
-        (chd, value, path_length_bits, path) = Deserialize::deserialize(deserializer)?;
-
-        let path_odd_length = path_length_bits % 8 != 0;
-
-        let mut path: Vec<u8> = path
-            .into_iter()
-            .flat_map(|b| [b >> 4, b & 0b_0000_1111])
-            .collect();
-
-        if path_odd_length {
-            path.pop();
-        }
+        (chd, value, path) = Deserialize::deserialize(deserializer)?;
 
         let mut children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
         #[allow(clippy::indexing_slicing)]
@@ -462,7 +568,7 @@ impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
         }
 
         Ok(Self {
-            path: Path(path),
+            path: path.0,
             children,
             value,
             phantom: PhantomData,
@@ -650,6 +756,7 @@ impl BinarySerde for PlainCodec {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::shale::cached::InMemLinearStore;
@@ -792,6 +899,26 @@ mod tests {
         }
 
         assert_eq!(node, hydrated_node);
+    }
+
+    #[test_case(&[],&[0])]
+    #[test_case(&[0],&[4,0])]
+    #[test_case(&[0x01],&[4,0x10])]
+    #[test_case(&[0x0F],&[4,0xF0])]
+    #[test_case(&[0x00, 0x00],&[8,0x00])]
+    #[test_case(&[0x01, 0x02],&[8,0x12])]
+    #[test_case(&[0x00,0x0F],&[8,0x0F])]
+    #[test_case(&[0x0F,0x0F],&[8,0xFF])]
+    #[test_case(&[0x0F,0x01,0x0F],&[12,0xF1,0xF0])]
+    fn test_encode_path_with_bits_prefix(path_nibbles: &[u8], expected_bytes: &[u8]) {
+        let path = PathWithBitsPrefix(Path(path_nibbles.to_vec()));
+
+        let serialized_path = PlainCodec::serialize(&path).unwrap();
+        assert_eq!(serialized_path, expected_bytes);
+
+        let deserialized_path =
+            PlainCodec::deserialize::<PathWithBitsPrefix>(&serialized_path).unwrap();
+        assert_eq!(deserialized_path.0, path.0);
     }
 
     struct Nil;
