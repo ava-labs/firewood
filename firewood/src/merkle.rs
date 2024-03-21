@@ -5,9 +5,9 @@ use crate::shale::compact::CompactSpace;
 use crate::shale::CachedStore;
 use crate::shale::{self, disk_address::DiskAddress, ObjWriteSizeError, ShaleError};
 use crate::storage::{StoreRevMut, StoreRevShared};
-use crate::v2::api;
+use crate::v2::api::{self, HashKey};
 use futures::{StreamExt, TryStreamExt};
-use sha3::Digest;
+use sha3::{Digest, Keccak256};
 use std::{
     collections::HashMap, future::ready, io::Write, iter::once, marker::PhantomData, sync::OnceLock,
 };
@@ -23,6 +23,7 @@ pub use proof::{Proof, ProofError};
 pub use stream::MerkleKeyValueStream;
 pub use trie_hash::{TrieHash, TRIE_HASH_LEN};
 
+use self::proof::{locate_subproof, SubProof};
 use self::stream::PathIterator;
 
 type NodeObjRef<'a> = shale::ObjRef<'a, Node>;
@@ -108,14 +109,12 @@ where
         }
     }
 
-    // TODO: use `encode` / `decode` instead of `node.encode` / `node.decode` after extention node removal.
-    #[allow(dead_code)]
-    fn encode(&self, node: &NodeType) -> Result<Vec<u8>, MerkleError> {
+    fn encode(&self, _path: Path, node: &NodeType) -> Result<Vec<u8>, MerkleError> {
         let encoded = match node {
             NodeType::Leaf(n) => {
                 let children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
                 EncodedNode {
-                    partial_path: n.partial_path.clone(),
+                    partial_path: n.partial_path.clone(), // TODO pass whole path not partial path
                     children,
                     value: n.value.clone().into(),
                     phantom: PhantomData,
@@ -124,14 +123,45 @@ where
 
             NodeType::Branch(n) => {
                 // pair up DiskAddresses with encoded children and pick the right one
-                let encoded_children = n.chd().iter().zip(n.children_encoded.iter());
+                let encoded_children = n.chd().iter().zip(n.children_encoded.iter()).enumerate();
                 let children = encoded_children
-                    .map(|(child_addr, encoded_child)| {
+                    .map(|(_child_index, (child_addr, encoded_child))| {
                         child_addr
                             // if there's a child disk address here, get the encoded bytes
                             .map(|addr| {
                                 self.get_node(addr)
-                                    .and_then(|node| self.encode(node.inner()))
+                                    .and_then(|node| {
+                                        let partial_path = match node.inner() {
+                                            NodeType::Leaf(n) => n.partial_path.clone(),
+                                            NodeType::Branch(n) => n.partial_path.clone(),
+                                        };
+
+                                        self.encode(partial_path, node.inner())
+
+                                        // TODO remove the above and use the below.
+                                        // We want to eventually pass the node's whole path into the encode function
+                                        // rather than its partial path so the encoding matches merkledb.
+                                        // let partial_path = match node.inner() {
+                                        //     NodeType::Leaf(n) => n.partial_path.iter().copied(),
+                                        //     NodeType::Branch(n) => n.partial_path.iter().copied(),
+                                        // };
+
+                                        // let child_path = path
+                                        //     .iter()
+                                        //     .copied()
+                                        //     .chain(once(child_index as u8))
+                                        //     .chain(partial_path)
+                                        //     .collect::<Vec<u8>>();
+
+                                        // self.encode(Path(child_path), node.inner())
+                                    })
+                                    .map(|node_bytes| {
+                                        if node_bytes.len() >= TRIE_HASH_LEN {
+                                            Keccak256::digest(&node_bytes).to_vec()
+                                        } else {
+                                            node_bytes
+                                        }
+                                    })
                             })
                             // or look for the pre-fetched bytes
                             .or_else(|| encoded_child.as_ref().map(|child| Ok(child.to_vec())))
@@ -142,7 +172,7 @@ where
                     .expect("MAX_CHILDREN will always be yielded");
 
                 EncodedNode {
-                    partial_path: n.partial_path.clone(),
+                    partial_path: n.partial_path.clone(), // TODO pass whole path not partial path
                     children,
                     value: n.value.clone(),
                     phantom: PhantomData,
@@ -153,7 +183,6 @@ where
         T::serialize(&encoded).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))
     }
 
-    #[allow(dead_code)]
     fn decode(&self, buf: &'de [u8]) -> Result<NodeType, MerkleError> {
         let encoded: EncodedNode<T> =
             T::deserialize(buf).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))?;
@@ -178,7 +207,12 @@ where
     }
 }
 
-impl<S: CachedStore, T> Merkle<S, T> {
+impl<S, T> Merkle<S, T>
+where
+    S: CachedStore,
+    T: BinarySerde,
+    EncodedNode<T>: serde::Serialize + for<'de> serde::Deserialize<'de>,
+{
     pub fn init_root(&self) -> Result<DiskAddress, MerkleError> {
         self.store
             .put_item(
@@ -215,28 +249,25 @@ impl<S: CachedStore, T> Merkle<S, T> {
             .ok_or(MerkleError::NotBranchNode)?
             .children[0];
         Ok(if let Some(root) = root {
-            let mut node = self.get_node(root)?;
-            let res = *node.get_root_hash(&self.store);
-            #[allow(clippy::unwrap_used)]
-            if node.is_dirty() {
-                node.write(|_| {}).unwrap();
-                node.set_dirty(false);
-            }
-            res
+            let node = self.get_node(root)?;
+            // The root node's path is just its partial path since it has no ancestors.
+            let node_path = match node.inner() {
+                NodeType::Branch(n) => n.partial_path.clone(),
+                NodeType::Leaf(n) => n.partial_path.clone(),
+            };
+            self.to_hash(node_path, node.inner())?
         } else {
             *Self::empty_root()
         })
     }
 
+    fn to_hash(&self, path: Path, node: &NodeType) -> Result<TrieHash, MerkleError> {
+        let res = self.encode(path, node)?;
+        Ok(TrieHash(Keccak256::digest(res).into()))
+    }
+
     fn dump_(&self, u: DiskAddress, w: &mut dyn Write) -> Result<(), MerkleError> {
         let u_ref = self.get_node(u)?;
-
-        let hash = match u_ref.root_hash.get() {
-            Some(h) => h,
-            None => u_ref.get_root_hash(&self.store),
-        };
-
-        write!(w, "{u:?} => {}: ", hex::encode(**hash))?;
 
         match &u_ref.inner {
             NodeType::Branch(n) => {
@@ -1039,6 +1070,42 @@ impl<S: CachedStore, T> Merkle<S, T> {
         Ok(ptr.map(|ptr| RefMut::new(ptr, parents, self)))
     }
 
+    /// verify_proof checks merkle proofs. The given proof must contain the value for
+    /// key in a trie with the given root hash. VerifyProof returns an error if the
+    /// proof contains invalid trie nodes or the wrong value.
+    ///
+    /// The generic N represents the storage for the node data
+    pub fn verify_proof<K: AsRef<[u8]>, N: AsRef<[u8]> + Send>(
+        &self,
+        proof: &Proof<N>,
+        key: K,
+        root_hash: HashKey,
+    ) -> Result<Option<Vec<u8>>, ProofError> {
+        let mut key_nibbles = Nibbles::<0>::new(key.as_ref()).into_iter();
+
+        let mut cur_hash = root_hash;
+        let proofs_map = &proof.0;
+
+        loop {
+            let cur_proof = proofs_map
+                .get(&cur_hash)
+                .ok_or(ProofError::ProofNodeMissing)?;
+
+            let node = self.decode(cur_proof.as_ref())?;
+            // TODO: I think this will currently fail if the key is &[];
+            let (sub_proof, traversed_nibbles) = locate_subproof(key_nibbles, node)?;
+            key_nibbles = traversed_nibbles;
+
+            cur_hash = match sub_proof {
+                // Return when reaching the end of the key.
+                Some(SubProof::Value(value)) if key_nibbles.is_empty() => return Ok(Some(value)),
+                // The trie doesn't contain the key.
+                Some(SubProof::Hash(hash)) => hash,
+                _ => return Ok(None),
+            };
+        }
+    }
+
     /// Constructs a merkle proof for key. The result contains all encoded nodes
     /// on the path to the value at key. The value itself is also included in the
     /// last node and can be retrieved by verifying the proof.
@@ -1059,14 +1126,14 @@ impl<S: CachedStore, T> Merkle<S, T> {
 
         let path_iter = self.path_iter(sentinel_node, key.as_ref());
 
-        let nodes = path_iter
-            .map(|result| result.map(|(_, node)| node))
-            .collect::<Result<Vec<NodeObjRef>, MerkleError>>()?;
+        let nodes_and_paths =
+            path_iter.collect::<Result<Vec<(Box<[u8]>, NodeObjRef)>, MerkleError>>()?;
 
         // Get the hashes of the nodes.
-        for node in nodes.into_iter() {
-            let encoded = node.get_encoded(&self.store);
-            let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(encoded).into();
+        for (path, node) in nodes_and_paths.into_iter() {
+            let path = Path(path.to_vec());
+            let encoded = self.encode(path, node.inner())?;
+            let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(&encoded).into();
             proofs.insert(hash, encoded.to_vec());
         }
         Ok(Proof(proofs))
@@ -1395,8 +1462,8 @@ mod tests {
     use shale::cached::InMemLinearStore;
     use test_case::test_case;
 
-    fn leaf(path: Vec<u8>, value: Vec<u8>) -> Node {
-        Node::from_leaf(LeafNode::new(Path(path), value))
+    fn leaf(path: Vec<u8>, value: Vec<u8>) -> NodeType {
+        NodeType::Leaf(LeafNode::new(Path(path), value))
     }
 
     #[test_case(vec![0x12, 0x34, 0x56], &[0x1, 0x2, 0x3, 0x4, 0x5, 0x6])]
@@ -1445,7 +1512,7 @@ mod tests {
         create_generic_test_merkle::<Bincode>()
     }
 
-    fn branch(path: &[u8], value: &[u8], encoded_child: Option<Vec<u8>>) -> Node {
+    fn branch(path: &[u8], value: &[u8], encoded_child: Option<Vec<u8>>) -> NodeType {
         let (path, value) = (path.to_vec(), value.to_vec());
         let path = Nibbles::<0>::new(&path);
         let path = Path(path.into_iter().collect());
@@ -1458,58 +1525,12 @@ mod tests {
             children_encoded[0] = Some(child);
         }
 
-        Node::from_branch(BranchNode {
+        NodeType::Branch(Box::new(BranchNode {
             partial_path: path,
             children,
             value,
             children_encoded,
-        })
-    }
-
-    fn branch_without_value(path: &[u8], encoded_child: Option<Vec<u8>>) -> Node {
-        let path = path.to_vec();
-        let path = Nibbles::<0>::new(&path);
-        let path = Path(path.into_iter().collect());
-
-        let children = Default::default();
-        // TODO: Properly test empty value
-        let value = None;
-        let mut children_encoded = <[Option<Vec<u8>>; BranchNode::MAX_CHILDREN]>::default();
-
-        if let Some(child) = encoded_child {
-            children_encoded[0] = Some(child);
-        }
-
-        Node::from_branch(BranchNode {
-            partial_path: path,
-            children,
-            value,
-            children_encoded,
-        })
-    }
-
-    #[test_case(leaf(Vec::new(), Vec::new()) ; "empty leaf encoding")]
-    #[test_case(leaf(vec![1, 2, 3], vec![4, 5]) ; "leaf encoding")]
-    #[test_case(branch(b"", b"value", vec![1, 2, 3].into()) ; "branch with chd")]
-    #[test_case(branch(b"", b"value", None); "branch without chd")]
-    #[test_case(branch_without_value(b"", None); "branch without value and chd")]
-    #[test_case(branch(b"", b"", None); "branch without path value or children")]
-    #[test_case(branch(b"", b"value", None) ; "branch with value")]
-    #[test_case(branch(&[2], b"", None); "branch with path")]
-    #[test_case(branch(b"", b"", vec![1, 2, 3].into()); "branch with children")]
-    #[test_case(branch(&[2], b"value", None); "branch with path and value")]
-    #[test_case(branch(b"", b"value", vec![1, 2, 3].into()); "branch with value and children")]
-    #[test_case(branch(&[2], b"", vec![1, 2, 3].into()); "branch with path and children")]
-    #[test_case(branch(&[2], b"value", vec![1, 2, 3].into()); "branch with path value and children")]
-    fn encode(node: Node) {
-        let merkle = create_test_merkle();
-
-        let node_ref = merkle.put_node(node).unwrap();
-        let encoded = node_ref.get_encoded(&merkle.store);
-        let new_node = Node::from(NodeType::decode(encoded).unwrap());
-        let new_node_encoded = new_node.get_encoded(&merkle.store);
-
-        assert_eq!(encoded, new_node_encoded);
+        }))
     }
 
     #[test_case(Bincode::new(), leaf(vec![], vec![4, 5]) ; "leaf without partial path encoding with Bincode")]
@@ -1522,18 +1543,19 @@ mod tests {
     #[test_case(PlainCodec::new(), branch(b"abcd", b"value", vec![1, 2, 3].into()) ; "branch with partial path and value with PlainCodec")]
     #[test_case(PlainCodec::new(), branch(b"abcd", &[], vec![1, 2, 3].into()) ; "branch with partial path and no value with PlainCodec")]
     #[test_case(PlainCodec::new(), branch(b"", &[1,3,3,7], vec![1, 2, 3].into()) ; "branch with no partial path and value with PlainCodec")]
-    fn node_encode_decode<T>(_codec: T, node: Node)
+    fn node_encode_decode<T>(_codec: T, node: NodeType)
     where
         T: BinarySerde,
         for<'de> EncodedNode<T>: serde::Serialize + serde::Deserialize<'de>,
     {
         let merkle = create_generic_test_merkle::<T>();
-        let node_ref = merkle.put_node(node.clone()).unwrap();
 
-        let encoded = merkle.encode(node_ref.inner()).unwrap();
-        let new_node = Node::from(merkle.decode(encoded.as_ref()).unwrap());
+        let encoded = merkle.encode(Path(vec![]), &node).unwrap();
+        let new_node = merkle.decode(encoded.as_ref()).unwrap();
+        let encoded_again = merkle.encode(Path(vec![]), &new_node).unwrap();
 
         assert_eq!(node, new_node);
+        assert_eq!(encoded, encoded_again);
     }
 
     #[test]
@@ -1795,12 +1817,12 @@ mod tests {
         let value2 = b"2";
         merkle.insert(key2, value2.to_vec(), root).unwrap();
 
-        let root_hash = merkle.root_hash(root).unwrap();
+        let root_hash = merkle.root_hash(root).unwrap().0;
 
         let verified = {
             let key = key1;
             let proof = merkle.prove(key, root).unwrap();
-            proof.verify(key, root_hash.0).unwrap()
+            merkle.verify_proof(&proof, key, root_hash).unwrap()
         };
 
         assert_eq!(verified, Some(value1.to_vec()));
@@ -1808,7 +1830,7 @@ mod tests {
         let verified = {
             let key = key2;
             let proof = merkle.prove(key, root).unwrap();
-            proof.verify(key, root_hash.0).unwrap()
+            merkle.verify_proof(&proof, key, root_hash).unwrap()
         };
 
         assert_eq!(verified, Some(value2.to_vec()));
@@ -2044,7 +2066,7 @@ mod tests {
 
         let proof = merkle.prove(key, root).unwrap();
 
-        let verified = proof.verify(key, root_hash.0).unwrap();
+        let verified = merkle.verify_proof(&proof, key, root_hash.0).unwrap();
 
         assert_eq!(verified, Some(value.to_vec()));
     }
@@ -2064,7 +2086,7 @@ mod tests {
 
         let verified = {
             let proof = merkle.prove(key1, root).unwrap();
-            proof.verify(key1, root_hash.0).unwrap()
+            merkle.verify_proof(&proof, key1, root_hash.0).unwrap()
         };
 
         assert_eq!(verified.as_deref(), Some(key1.as_slice()));

@@ -224,7 +224,7 @@ async fn create_db_issue_proof() {
 
     match rev.single_key_proof(key).await {
         Ok(proof) => {
-            let verification = proof.unwrap().verify(key, root_hash).unwrap();
+            let verification = rev.verify_proof(&proof.unwrap(), key, root_hash).unwrap();
             assert!(verification.is_some());
         }
         Err(e) => {

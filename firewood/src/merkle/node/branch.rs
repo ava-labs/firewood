@@ -1,14 +1,9 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
-
-use super::Node;
 use crate::{
     merkle::{nibbles_to_bytes_iter, to_nibble_array, Path},
-    nibbles::Nibbles,
-    shale::{compact::CompactSpace, CachedStore, DiskAddress, ShaleError, Storable},
+    shale::{DiskAddress, ShaleError, Storable},
 };
-use bincode::{Error, Options};
-use serde::de::Error as DeError;
 use std::{
     fmt::{Debug, Error as FmtError, Formatter},
     io::{Cursor, Read, Write},
@@ -79,96 +74,6 @@ impl BranchNode {
 
     pub fn chd_encoded_mut(&mut self) -> &mut [Option<Vec<u8>>; Self::MAX_CHILDREN] {
         &mut self.children_encoded
-    }
-
-    pub(super) fn decode(buf: &[u8]) -> Result<Self, Error> {
-        let mut items: Vec<Vec<u8>> = bincode::DefaultOptions::new().deserialize(buf)?;
-
-        let path = items.pop().ok_or(Error::custom("Invalid Branch Node"))?;
-        let path = Nibbles::<0>::new(&path);
-        let path = Path::from_nibbles(path.into_iter());
-
-        // we've already validated the size, that's why we can safely unwrap
-        #[allow(clippy::unwrap_used)]
-        let value = items.pop().unwrap();
-        // Extract the value of the branch node and set to None if it's an empty Vec
-        let value = Some(value).filter(|value| !value.is_empty());
-
-        // encode all children.
-        let mut chd_encoded: [Option<Vec<u8>>; Self::MAX_CHILDREN] = Default::default();
-
-        // we popped the last element, so their should only be NBRANCH items left
-        for (i, chd) in items.into_iter().enumerate() {
-            #[allow(clippy::indexing_slicing)]
-            (chd_encoded[i] = Some(chd).filter(|value| !value.is_empty()));
-        }
-
-        Ok(BranchNode {
-            partial_path: path,
-            children: [None; Self::MAX_CHILDREN],
-            value,
-            children_encoded: chd_encoded,
-        })
-    }
-
-    pub(super) fn encode<S: CachedStore>(&self, store: &CompactSpace<Node, S>) -> Vec<u8> {
-        // path + children + value
-        let mut list = <[Vec<u8>; Self::MSIZE]>::default();
-
-        for (i, c) in self.children.iter().enumerate() {
-            match c {
-                Some(c) => {
-                    #[allow(clippy::unwrap_used)]
-                    let mut c_ref = store.get_item(*c).unwrap();
-
-                    #[allow(clippy::unwrap_used)]
-                    if c_ref.is_encoded_longer_than_hash_len(store) {
-                        #[allow(clippy::indexing_slicing)]
-                        (list[i] = c_ref.get_root_hash(store).to_vec());
-
-                        // See struct docs for ordering requirements
-                        if c_ref.is_dirty() {
-                            c_ref.write(|_| {}).unwrap();
-                            c_ref.set_dirty(false);
-                        }
-                    } else {
-                        let child_encoded = c_ref.get_encoded(store);
-                        #[allow(clippy::indexing_slicing)]
-                        (list[i] = child_encoded.to_vec());
-                    }
-                }
-
-                // TODO:
-                // we need a better solution for this. This is only used for reconstructing a
-                // merkle-tree in memory. The proper way to do it is to abstract a trait for nodes
-                // but that's a heavy lift.
-                // TODO:
-                // change the data-structure children: [(Option<DiskAddress>, Option<Vec<u8>>); Self::MAX_CHILDREN]
-                None => {
-                    // Check if there is already a calculated encoded value for the child, which
-                    // can happen when manually constructing a trie from proof.
-                    #[allow(clippy::indexing_slicing)]
-                    if let Some(v) = &self.children_encoded[i] {
-                        #[allow(clippy::indexing_slicing)]
-                        list[i].clone_from(v);
-                    }
-                }
-            };
-        }
-
-        #[allow(clippy::unwrap_used)]
-        if let Some(val) = &self.value {
-            list[Self::MAX_CHILDREN].clone_from(val);
-        }
-
-        #[allow(clippy::unwrap_used)]
-        let path = nibbles_to_bytes_iter(&self.partial_path.encode()).collect::<Vec<_>>();
-
-        list[Self::MAX_CHILDREN + 1] = path;
-
-        bincode::DefaultOptions::new()
-            .serialize(list.as_slice())
-            .expect("serializing `Encoded` to always succeed")
     }
 }
 

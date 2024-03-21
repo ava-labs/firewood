@@ -6,7 +6,6 @@ use crate::{
     nibbles::Nibbles,
     shale::{ShaleError::InvalidCacheView, Storable},
 };
-use bincode::Options;
 use bytemuck::{Pod, Zeroable};
 use std::{
     fmt::{Debug, Error as FmtError, Formatter},
@@ -50,19 +49,6 @@ impl LeafNode {
 
     pub const fn value(&self) -> &Vec<u8> {
         &self.value
-    }
-
-    pub(super) fn encode(&self) -> Vec<u8> {
-        #[allow(clippy::unwrap_used)]
-        bincode::DefaultOptions::new()
-            .serialize(
-                [
-                    nibbles_to_bytes_iter(&self.partial_path.encode()).collect(),
-                    self.value.to_vec(),
-                ]
-                .as_slice(),
-            )
-            .unwrap()
     }
 }
 
@@ -149,33 +135,5 @@ impl Storable for LeafNode {
         let value = value.to_vec();
 
         Ok(Self::new(path, value))
-    }
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod tests {
-    use super::*;
-    use test_case::test_case;
-
-    // these tests will fail if the encoding mechanism changes and should be updated accordingly
-    //
-    // Even length so ODD_LEN flag is not set so flag byte is 0b0000_0000
-    #[test_case(0x00, vec![0x12, 0x34], vec![1, 2, 3, 4]; "even length")]
-    // Odd length so ODD_LEN flag is set so flag byte is 0b0000_0001
-    // This is combined with the first nibble of the path (0b0000_0010) to become 0b0001_0010
-    #[test_case(0b0001_0010, vec![0x34], vec![2, 3, 4]; "odd length")]
-    fn encode_regression_test(prefix: u8, path: Vec<u8>, nibbles: Vec<u8>) {
-        let value = vec![5, 6, 7, 8];
-
-        let serialized_path = [vec![prefix], path.clone()].concat();
-        let serialized_path = [vec![serialized_path.len() as u8], serialized_path].concat();
-        let serialized_value = [vec![value.len() as u8], value.clone()].concat();
-
-        let serialized = [vec![2], serialized_path, serialized_value].concat();
-
-        let node = LeafNode::new(nibbles, value.clone());
-
-        assert_eq!(node.encode(), serialized);
     }
 }

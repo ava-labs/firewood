@@ -375,6 +375,15 @@ impl<T: CachedStore> DbRev<T> {
         self.merkle.prove::<K>(key, self.header.kv_root)
     }
 
+    pub fn verify_proof<K: AsRef<[u8]>, N: AsRef<[u8]> + Send>(
+        &self,
+        proof: &Proof<N>,
+        key: K,
+        root_hash: HashKey,
+    ) -> Result<Option<Vec<u8>>, ProofError> {
+        self.merkle.verify_proof(proof, key, root_hash)
+    }
+
     /// Verifies a range proof is valid for a set of keys.
     pub fn verify_range_proof<N: AsRef<[u8]> + Send, K: AsRef<[u8]>, V: AsRef<[u8]>>(
         &self,

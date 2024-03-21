@@ -4,9 +4,9 @@
 use crate::{
     logger::trace,
     merkle::nibbles_to_bytes_iter,
-    shale::{compact::CompactSpace, disk_address::DiskAddress, CachedStore, ShaleError, Storable},
+    shale::{disk_address::DiskAddress, CachedStore, ShaleError, Storable},
 };
-use bincode::{Error, Options};
+use bincode::Options;
 use bitflags::bitflags;
 use bytemuck::{CheckedBitPattern, NoUninit, Pod, Zeroable};
 use enum_as_inner::EnumAsInner;
@@ -14,7 +14,6 @@ use serde::{
     ser::{SerializeSeq, SerializeTuple},
     Deserialize, Serialize,
 };
-use sha3::{Digest, Keccak256};
 use std::{
     fmt::Debug,
     io::{Cursor, Write},
@@ -37,7 +36,7 @@ pub use path::Path;
 
 use crate::nibbles::Nibbles;
 
-use super::{TrieHash, TRIE_HASH_LEN};
+use super::TRIE_HASH_LEN;
 
 bitflags! {
     // should only ever be the size of a nibble
@@ -53,41 +52,6 @@ pub enum NodeType {
 }
 
 impl NodeType {
-    pub fn decode(buf: &[u8]) -> Result<NodeType, Error> {
-        let items: Vec<Vec<u8>> = bincode::DefaultOptions::new().deserialize(buf)?;
-
-        match items.len() {
-            LEAF_NODE_SIZE => {
-                let mut items = items.into_iter();
-
-                #[allow(clippy::unwrap_used)]
-                let decoded_key: Vec<u8> = items.next().unwrap();
-
-                let decoded_key_nibbles = Nibbles::<0>::new(&decoded_key);
-
-                let cur_key_path = Path::from_nibbles(decoded_key_nibbles.into_iter());
-
-                let cur_key = cur_key_path.into_inner();
-                #[allow(clippy::unwrap_used)]
-                let value: Vec<u8> = items.next().unwrap();
-
-                Ok(NodeType::Leaf(LeafNode::new(cur_key, value)))
-            }
-            // TODO: add path
-            BranchNode::MSIZE => Ok(NodeType::Branch(BranchNode::decode(buf)?.into())),
-            size => Err(Box::new(bincode::ErrorKind::Custom(format!(
-                "invalid size: {size}"
-            )))),
-        }
-    }
-
-    pub fn encode<S: CachedStore>(&self, store: &CompactSpace<Node, S>) -> Vec<u8> {
-        match &self {
-            NodeType::Leaf(n) => n.encode(),
-            NodeType::Branch(n) => n.encode(store),
-        }
-    }
-
     pub fn path_mut(&mut self) -> &mut Path {
         match self {
             NodeType::Branch(u) => &mut u.partial_path,
@@ -112,7 +76,6 @@ impl NodeType {
 
 #[derive(Debug)]
 pub struct Node {
-    pub(super) root_hash: OnceLock<TrieHash>,
     encoded: OnceLock<Vec<u8>>,
     is_encoded_longer_than_hash_len: OnceLock<bool>,
     // lazy_dirty is an atomicbool, but only writers ever set it
@@ -129,23 +92,18 @@ impl PartialEq for Node {
         let is_dirty = self.is_dirty();
 
         let Node {
-            root_hash,
             encoded,
             is_encoded_longer_than_hash_len: _,
             lazy_dirty: _,
             inner,
         } = self;
-        *root_hash == other.root_hash
-            && *encoded == other.encoded
-            && is_dirty == other.is_dirty()
-            && *inner == other.inner
+        *encoded == other.encoded && is_dirty == other.is_dirty() && *inner == other.inner
     }
 }
 
 impl Clone for Node {
     fn clone(&self) -> Self {
         Self {
-            root_hash: self.root_hash.clone(),
             is_encoded_longer_than_hash_len: self.is_encoded_longer_than_hash_len.clone(),
             encoded: self.encoded.clone(),
             lazy_dirty: AtomicBool::new(self.is_dirty()),
@@ -157,7 +115,6 @@ impl Clone for Node {
 impl From<NodeType> for Node {
     fn from(inner: NodeType) -> Self {
         let mut s = Self {
-            root_hash: OnceLock::new(),
             encoded: OnceLock::new(),
             is_encoded_longer_than_hash_len: OnceLock::new(),
             inner,
@@ -172,9 +129,8 @@ bitflags! {
     #[derive(Debug, Default, Clone, Copy, Pod, Zeroable)]
     #[repr(transparent)]
     struct NodeAttributes: u8 {
-        const HAS_ROOT_HASH           = 0b001;
-        const ENCODED_LENGTH_IS_KNOWN = 0b010;
-        const ENCODED_IS_LONG         = 0b110;
+        const ENCODED_LENGTH_IS_KNOWN           = 0b001;
+        const ENCODED_IS_LONG = 0b010;
     }
 }
 
@@ -183,7 +139,6 @@ impl Node {
         let max_size: OnceLock<u64> = OnceLock::new();
         *max_size.get_or_init(|| {
             Self {
-                root_hash: OnceLock::new(),
                 encoded: OnceLock::new(),
                 is_encoded_longer_than_hash_len: OnceLock::new(),
                 inner: NodeType::Branch(
@@ -201,30 +156,9 @@ impl Node {
         })
     }
 
-    pub(super) fn get_encoded<S: CachedStore>(&self, store: &CompactSpace<Node, S>) -> &[u8] {
-        self.encoded.get_or_init(|| self.inner.encode(store))
-    }
-
-    pub(super) fn get_root_hash<S: CachedStore>(&self, store: &CompactSpace<Node, S>) -> &TrieHash {
-        self.root_hash.get_or_init(|| {
-            self.set_dirty(true);
-            TrieHash(Keccak256::digest(self.get_encoded(store)).into())
-        })
-    }
-
-    fn is_encoded_longer_than_hash_len<S: CachedStore>(
-        &self,
-        store: &CompactSpace<Node, S>,
-    ) -> bool {
-        *self
-            .is_encoded_longer_than_hash_len
-            .get_or_init(|| self.get_encoded(store).len() >= TRIE_HASH_LEN)
-    }
-
     pub(super) fn rehash(&mut self) {
         self.encoded = OnceLock::new();
         self.is_encoded_longer_than_hash_len = OnceLock::new();
-        self.root_hash = OnceLock::new();
     }
 
     pub fn from_branch<B: Into<Box<BranchNode>>>(node: B) -> Self {
@@ -244,16 +178,11 @@ impl Node {
     }
 
     pub(super) fn new_from_hash(
-        root_hash: Option<TrieHash>,
         encoded: Option<Vec<u8>>,
         is_encoded_longer_than_hash_len: Option<bool>,
         inner: NodeType,
     ) -> Self {
         Self {
-            root_hash: match root_hash {
-                Some(h) => OnceLock::from(h),
-                None => OnceLock::new(),
-            },
             encoded: match encoded.filter(|encoded| !encoded.is_empty()) {
                 Some(e) => OnceLock::from(e),
                 None => OnceLock::new(),
@@ -271,9 +200,10 @@ impl Node {
         self.lazy_dirty.load(Ordering::Relaxed)
     }
 
-    pub(super) fn set_dirty(&self, is_dirty: bool) {
-        self.lazy_dirty.store(is_dirty, Ordering::Relaxed)
-    }
+    // TODO use or remove
+    // pub(super) fn set_dirty(&self, is_dirty: bool) {
+    //     self.lazy_dirty.store(is_dirty, Ordering::Relaxed)
+    // }
 
     pub(crate) fn as_branch_mut(&mut self) -> &mut Box<BranchNode> {
         self.inner_mut()
@@ -285,7 +215,6 @@ impl Node {
 #[derive(Clone, Copy, CheckedBitPattern, NoUninit)]
 #[repr(C, packed)]
 struct Meta {
-    root_hash: [u8; TRIE_HASH_LEN],
     attrs: NodeAttributes,
     encoded_len: u64,
     encoded: [u8; TRIE_HASH_LEN],
@@ -341,7 +270,6 @@ impl Storable for Node {
             .map_err(|_| ShaleError::InvalidNodeMeta)?;
 
         let Meta {
-            root_hash,
             attrs,
             encoded_len,
             encoded,
@@ -351,12 +279,6 @@ impl Storable for Node {
         trace!("[{mem:p}] Deserializing node at {offset}");
 
         let offset = offset + Meta::SIZE;
-
-        let root_hash = if attrs.contains(NodeAttributes::HAS_ROOT_HASH) {
-            Some(TrieHash(root_hash))
-        } else {
-            None
-        };
 
         let encoded = if encoded_len > 0 {
             Some(encoded.iter().take(encoded_len as usize).copied().collect())
@@ -376,7 +298,6 @@ impl Storable for Node {
                 let inner = NodeType::Branch(Box::new(BranchNode::deserialize(offset, mem)?));
 
                 Ok(Self::new_from_hash(
-                    root_hash,
                     encoded,
                     is_encoded_longer_than_hash_len,
                     inner,
@@ -385,8 +306,7 @@ impl Storable for Node {
 
             NodeTypeId::Leaf => {
                 let inner = NodeType::Leaf(LeafNode::deserialize(offset, mem)?);
-                let node =
-                    Self::new_from_hash(root_hash, encoded, is_encoded_longer_than_hash_len, inner);
+                let node = Self::new_from_hash(encoded, is_encoded_longer_than_hash_len, inner);
 
                 Ok(node)
             }
@@ -405,11 +325,6 @@ impl Storable for Node {
         trace!("[{self:p}] Serializing node");
         let mut cursor = Cursor::new(to);
 
-        let (mut attrs, root_hash) = match self.root_hash.get() {
-            Some(hash) => (NodeAttributes::HAS_ROOT_HASH, hash.0),
-            None => Default::default(),
-        };
-
         let encoded = self
             .encoded
             .get()
@@ -417,6 +332,7 @@ impl Storable for Node {
 
         let encoded_len = encoded.map(Vec::len).unwrap_or(0) as u64;
 
+        let mut attrs = NodeAttributes::empty();
         if let Some(&is_encoded_longer_than_hash_len) = self.is_encoded_longer_than_hash_len.get() {
             attrs.insert(if is_encoded_longer_than_hash_len {
                 NodeAttributes::ENCODED_IS_LONG
@@ -433,7 +349,6 @@ impl Storable for Node {
         let type_id = NodeTypeId::from(&self.inner);
 
         let meta = Meta {
-            root_hash,
             attrs,
             encoded_len,
             encoded,
@@ -497,14 +412,7 @@ impl Serialize for EncodedNode<PlainCodec> {
             .children
             .iter()
             .enumerate()
-            .filter_map(|(i, c)| c.as_ref().map(|c| (i as u64, c)))
-            .map(|(i, c)| {
-                if c.len() >= TRIE_HASH_LEN {
-                    (i, Keccak256::digest(c).to_vec())
-                } else {
-                    (i, c.to_vec())
-                }
-            })
+            .filter_map(|(i, c)| c.as_ref().map(|c| (i as u64, c.to_vec())))
             .collect();
 
         let value = self.value.as_deref();
@@ -561,12 +469,7 @@ impl Serialize for EncodedNode<Bincode> {
 
         #[allow(clippy::indexing_slicing)]
         for (i, child) in children {
-            if child.len() >= TRIE_HASH_LEN {
-                let serialized_hash = Keccak256::digest(child).to_vec();
-                list[i] = serialized_hash;
-            } else {
-                list[i] = child.to_vec();
-            }
+            list[i] = child.to_vec();
         }
 
         if let Some(val) = &self.value {
@@ -737,16 +640,15 @@ impl BinarySerde for PlainCodec {
 mod tests {
     use super::*;
     use crate::shale::cached::InMemLinearStore;
+    use bincode::Error;
     use std::iter::repeat;
     use test_case::{test_case, test_matrix};
 
     #[test_matrix(
-        [Nil, [0x00; TRIE_HASH_LEN]],
         [Nil, vec![], vec![0x01], (0..TRIE_HASH_LEN as u8).collect::<Vec<_>>(), (0..33).collect::<Vec<_>>()],
         [Nil, false, true]
     )]
     fn cached_node_data(
-        root_hash: impl Into<Option<[u8; TRIE_HASH_LEN]>>,
         encoded: impl Into<Option<Vec<u8>>>,
         is_encoded_longer_than_hash_len: impl Into<Option<bool>>,
     ) {
@@ -758,25 +660,14 @@ mod tests {
             children_encoded: std::array::from_fn(|_| Some(vec![1])),
         }));
 
-        let root_hash = root_hash.into().map(TrieHash);
         let encoded = encoded.into();
         let is_encoded_longer_than_hash_len = is_encoded_longer_than_hash_len.into();
 
-        let node = Node::new_from_hash(
-            root_hash,
-            encoded.clone(),
-            is_encoded_longer_than_hash_len,
-            leaf,
-        );
+        let node = Node::new_from_hash(encoded.clone(), is_encoded_longer_than_hash_len, leaf);
 
         check_node_encoding(node);
 
-        let node = Node::new_from_hash(
-            root_hash,
-            encoded.clone(),
-            is_encoded_longer_than_hash_len,
-            branch,
-        );
+        let node = Node::new_from_hash(encoded.clone(), is_encoded_longer_than_hash_len, branch);
 
         check_node_encoding(node);
     }
