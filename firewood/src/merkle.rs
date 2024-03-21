@@ -147,12 +147,7 @@ where
 
                                         self.encode(Path(child_path), node.inner())
                                     })
-                                    .map(|node_bytes| {
-                                        Keccak256::digest(&node_bytes)
-                                            .as_slice()
-                                            .try_into()
-                                            .expect("TODO can this panic?")
-                                    })
+                                    .map(|node_bytes| Keccak256::digest(&node_bytes).into())
                             })
                             // or look for the pre-fetched bytes
                             .or_else(|| encoded_child.as_ref().map(|child| Ok(*child)))
