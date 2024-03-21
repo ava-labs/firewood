@@ -113,7 +113,8 @@ where
     fn encode(&self, path: Path, node: &NodeType) -> Result<Vec<u8>, MerkleError> {
         let encoded = match node {
             NodeType::Leaf(n) => {
-                let children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
+                let children: [Option<[u8; TRIE_HASH_LEN]>; BranchNode::MAX_CHILDREN] =
+                    Default::default();
                 EncodedNode {
                     path,
                     children,
@@ -147,18 +148,17 @@ where
                                         self.encode(Path(child_path), node.inner())
                                     })
                                     .map(|node_bytes| {
-                                        if node_bytes.len() >= TRIE_HASH_LEN {
-                                            Keccak256::digest(&node_bytes).to_vec()
-                                        } else {
-                                            node_bytes
-                                        }
+                                        let foo = Keccak256::digest(&node_bytes);
+                                        let foo: [u8; TRIE_HASH_LEN] =
+                                            foo.as_slice().try_into().expect("hash length");
+                                        foo
                                     })
                             })
                             // or look for the pre-fetched bytes
-                            .or_else(|| encoded_child.as_ref().map(|child| Ok(child.to_vec())))
+                            .or_else(|| encoded_child.as_ref().map(|child| Ok(*child)))
                             .transpose()
                     })
-                    .collect::<Result<Vec<Option<Vec<u8>>>, MerkleError>>()?
+                    .collect::<Result<Vec<Option<[u8; TRIE_HASH_LEN]>>, MerkleError>>()?
                     .try_into()
                     .expect("MAX_CHILDREN will always be yielded");
 
@@ -1528,9 +1528,17 @@ mod tests {
         let path = Nibbles::<0>::new(&path);
         let path = Path(path.into_iter().collect());
 
+        let encoded_child = encoded_child.map(|c| {
+            // If `c` is lss than `TRIE_HASH_LEN` fill the rest with zeroes
+            let mut arr: [u8; TRIE_HASH_LEN] = [0; TRIE_HASH_LEN];
+            arr[..c.len()].copy_from_slice(&c);
+            arr
+        });
+
         let children = Default::default();
         let value = if value.is_empty() { None } else { Some(value) };
-        let mut children_encoded = <[Option<Vec<u8>>; BranchNode::MAX_CHILDREN]>::default();
+        let mut children_encoded =
+            <[Option<[u8; TRIE_HASH_LEN]>; BranchNode::MAX_CHILDREN]>::default();
 
         if let Some(child) = encoded_child {
             children_encoded[0] = Some(child);

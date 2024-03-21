@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 use crate::{
-    merkle::{nibbles_to_bytes_iter, to_nibble_array, Path},
+    merkle::{nibbles_to_bytes_iter, to_nibble_array, Path, TRIE_HASH_LEN},
     shale::{DiskAddress, ShaleError, Storable},
 };
 use std::{
@@ -21,7 +21,7 @@ pub struct BranchNode {
     pub(crate) partial_path: Path,
     pub(crate) children: [Option<DiskAddress>; MAX_CHILDREN],
     pub(crate) value: Option<Vec<u8>>,
-    pub(crate) children_encoded: [Option<Vec<u8>>; MAX_CHILDREN],
+    pub(crate) children_encoded: [Option<[u8; TRIE_HASH_LEN]>; MAX_CHILDREN],
 }
 
 impl Debug for BranchNode {
@@ -68,11 +68,11 @@ impl BranchNode {
         &mut self.children
     }
 
-    pub const fn chd_encode(&self) -> &[Option<Vec<u8>>; Self::MAX_CHILDREN] {
+    pub const fn chd_encode(&self) -> &[Option<[u8; TRIE_HASH_LEN]>; Self::MAX_CHILDREN] {
         &self.children_encoded
     }
 
-    pub fn chd_encoded_mut(&mut self) -> &mut [Option<Vec<u8>>; Self::MAX_CHILDREN] {
+    pub fn chd_encoded_mut(&mut self) -> &mut [Option<[u8; TRIE_HASH_LEN]>; Self::MAX_CHILDREN] {
         &mut self.children_encoded
     }
 }
@@ -208,7 +208,8 @@ impl Storable for BranchNode {
             None => None,
         };
 
-        let mut children_encoded: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
+        let mut children_encoded: [Option<[u8; TRIE_HASH_LEN]>; BranchNode::MAX_CHILDREN] =
+            Default::default();
 
         for child in &mut children_encoded {
             const ENCODED_CHILD_LEN_SIZE: u64 = size_of::<EncodedChildLen>() as u64;
@@ -242,6 +243,8 @@ impl Storable for BranchNode {
                     size: len,
                 })?
                 .as_deref();
+
+            let encoded: [u8; TRIE_HASH_LEN] = encoded.try_into().expect("TODO");
 
             addr += len as usize;
 
