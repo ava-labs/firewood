@@ -125,10 +125,7 @@ impl<T: api::DbView + Send + Sync> api::DbView for Proposal<T> {
         }
     }
 
-    async fn single_key_proof<K: KeyType>(
-        &self,
-        _key: K,
-    ) -> Result<Option<Proof<Vec<u8>>>, api::Error> {
+    async fn single_key_proof<K: KeyType>(&self, _key: K) -> Result<Option<Proof>, api::Error> {
         todo!();
     }
 

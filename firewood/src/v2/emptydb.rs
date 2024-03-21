@@ -66,7 +66,7 @@ impl DbView for HistoricalImpl {
         Ok(None)
     }
 
-    async fn single_key_proof<K: KeyType>(&self, _key: K) -> Result<Option<Proof<Vec<u8>>>, Error> {
+    async fn single_key_proof<K: KeyType>(&self, _key: K) -> Result<Option<Proof>, Error> {
         Ok(None)
     }
 

@@ -131,16 +131,16 @@ where
         String::from_utf8(s).map_err(|_err| DataStoreError::UTF8Error)
     }
 
-    pub fn prove<K: AsRef<[u8]>>(&self, key: K) -> Result<Proof<Vec<u8>>, DataStoreError> {
+    pub fn prove<K: AsRef<[u8]>>(&self, key: K) -> Result<Proof, DataStoreError> {
         self.merkle
             .prove(key, self.root)
             .map_err(|_err| DataStoreError::ProofError)
     }
 
-    pub fn verify_proof<N: AsRef<[u8]> + Send, K: AsRef<[u8]>>(
+    pub fn verify_proof<K: AsRef<[u8]>>(
         &self,
         key: K,
-        proof: &Proof<N>,
+        proof: &Proof,
     ) -> Result<Option<Vec<u8>>, DataStoreError> {
         let hash: [u8; 32] = *self.root_hash()?;
         self.merkle
@@ -148,9 +148,9 @@ where
             .map_err(|_err| DataStoreError::ProofVerificationError)
     }
 
-    pub fn verify_range_proof<N: AsRef<[u8]> + Send, K: AsRef<[u8]>, V: AsRef<[u8]>>(
+    pub fn verify_range_proof<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         &self,
-        proof: &Proof<N>,
+        proof: &Proof,
         first_key: K,
         last_key: K,
         keys: Vec<K>,

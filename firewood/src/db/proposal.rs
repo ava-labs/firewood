@@ -281,7 +281,7 @@ impl api::DbView for Proposal {
         Ok(self.get_revision().kv_get(key))
     }
 
-    async fn single_key_proof<K>(&self, key: K) -> Result<Option<Proof<Vec<u8>>>, api::Error>
+    async fn single_key_proof<K>(&self, key: K) -> Result<Option<Proof>, api::Error>
     where
         K: api::KeyType,
     {

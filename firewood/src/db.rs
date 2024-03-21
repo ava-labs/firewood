@@ -303,10 +303,7 @@ impl<T: CachedStore> api::DbView for DbRev<T> {
         }
     }
 
-    async fn single_key_proof<K: api::KeyType>(
-        &self,
-        key: K,
-    ) -> Result<Option<Proof<Vec<u8>>>, api::Error> {
+    async fn single_key_proof<K: api::KeyType>(&self, key: K) -> Result<Option<Proof>, api::Error> {
         self.merkle
             .prove(key, self.header.kv_root)
             .map(Some)
@@ -371,13 +368,13 @@ impl<T: CachedStore> DbRev<T> {
             .map_err(DbError::Merkle)
     }
 
-    pub fn prove<K: AsRef<[u8]>>(&self, key: K) -> Result<Proof<Vec<u8>>, MerkleError> {
+    pub fn prove<K: AsRef<[u8]>>(&self, key: K) -> Result<Proof, MerkleError> {
         self.merkle.prove::<K>(key, self.header.kv_root)
     }
 
-    pub fn verify_proof<K: AsRef<[u8]>, N: AsRef<[u8]> + Send>(
+    pub fn verify_proof<K: AsRef<[u8]>>(
         &self,
-        proof: &Proof<N>,
+        proof: &Proof,
         key: K,
         root_hash: HashKey,
     ) -> Result<Option<Vec<u8>>, ProofError> {
@@ -385,9 +382,9 @@ impl<T: CachedStore> DbRev<T> {
     }
 
     /// Verifies a range proof is valid for a set of keys.
-    pub fn verify_range_proof<N: AsRef<[u8]> + Send, K: AsRef<[u8]>, V: AsRef<[u8]>>(
+    pub fn verify_range_proof<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         &self,
-        proof: Proof<N>,
+        proof: Proof,
         first_key: K,
         last_key: K,
         keys: Vec<K>,
