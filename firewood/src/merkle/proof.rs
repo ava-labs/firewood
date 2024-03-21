@@ -16,7 +16,7 @@ use crate::nibbles::Nibbles;
 use crate::nibbles::NibblesIterator;
 use crate::{
     db::DbError,
-    merkle::{to_nibble_array, Merkle, MerkleError, Node, NodeType},
+    merkle::{to_nibble_array, Merkle, MerkleError, Node},
     merkle_util::{DataStoreError, InMemoryMerkle},
 };
 
@@ -262,9 +262,9 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
         let sub_proof = loop {
             // Link the child to the parent based on the node type.
             // if a child is already linked, use it instead
-            let child_node = match &parent_node.inner() {
+            let child_node = match parent_node.inner_ref() {
                 #[allow(clippy::indexing_slicing)]
-                NodeType::Branch(n) => {
+                Node::Branch(n) => {
                     let Some(child_index) = key_nibbles.next().map(usize::from) else {
                         break None;
                     };
@@ -280,13 +280,12 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
 
                             let child_node = merkle.decode(child_node_bytes.as_ref())?;
 
-                            let child_node = merkle.put_node(Node::from(child_node))?;
+                            let child_node = merkle.put_node(child_node)?;
 
                             // insert `child_node` to the appropriate index in the `parent_node`
                             parent_node.write(|node| {
                                 #[allow(clippy::indexing_slicing)]
                                 let node = node
-                                    .inner_mut()
                                     .as_branch_mut()
                                     .expect("parent_node_ref must be a branch");
                                 node.chd_mut()[child_index] = Some(child_node.as_ptr());
@@ -302,8 +301,8 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
             };
 
             // find the encoded subproof of the child if the partial path and nibbles match
-            let encoded_sub_proof = match child_node.inner() {
-                NodeType::Leaf(n) => {
+            let encoded_sub_proof = match child_node.inner_ref() {
+                Node::Leaf(n) => {
                     break n
                         .partial_path
                         .iter()
@@ -312,7 +311,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                         .then(|| n.value().to_vec());
                 }
 
-                NodeType::Branch(n) => {
+                Node::Branch(n) => {
                     let paths_match = n
                         .partial_path
                         .iter()
@@ -358,10 +357,10 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
 
 pub(crate) fn locate_subproof(
     mut key_nibbles: NibblesIterator<'_, 0>,
-    node: NodeType,
+    node: Node,
 ) -> Result<(Option<SubProof>, NibblesIterator<'_, 0>), ProofError> {
     match node {
-        NodeType::Leaf(n) => {
+        Node::Leaf(n) => {
             let cur_key = &n.path().0;
             // Check if the key of current node match with the given key
             // and consume the current-key portion of the nibbles-iterator
@@ -378,7 +377,7 @@ pub(crate) fn locate_subproof(
 
             Ok((sub_proof.into(), key_nibbles))
         }
-        NodeType::Branch(n) => {
+        Node::Branch(n) => {
             let partial_path = &n.partial_path.0;
 
             let does_not_match = key_nibbles.size_hint().0 < partial_path.len()
@@ -472,9 +471,9 @@ where
 
     let mut index = 0;
     loop {
-        match &u_ref.inner() {
+        match u_ref.inner_ref() {
             #[allow(clippy::indexing_slicing)]
-            NodeType::Branch(n) => {
+            Node::Branch(n) => {
                 // If either the key of left proof or right proof doesn't match with
                 // stop here, this is the forkpoint.
                 let path = &*n.partial_path;
@@ -510,7 +509,7 @@ where
             }
 
             #[allow(clippy::indexing_slicing)]
-            NodeType::Leaf(n) => {
+            Node::Leaf(n) => {
                 let path = &*n.partial_path;
 
                 [fork_left, fork_right] = [&left_chunks[index..], &right_chunks[index..]]
@@ -522,8 +521,8 @@ where
         }
     }
 
-    match &u_ref.inner() {
-        NodeType::Branch(n) => {
+    match u_ref.inner_ref() {
+        Node::Branch(n) => {
             if fork_left.is_lt() && fork_right.is_lt() {
                 return Err(ProofError::EmptyRange);
             }
@@ -544,7 +543,7 @@ where
                 #[allow(clippy::unwrap_used)]
                 p_ref
                     .write(|p| {
-                        let pp = p.inner_mut().as_branch_mut().expect("not a branch node");
+                        let pp = p.as_branch_mut().expect("not a branch node");
                         #[allow(clippy::indexing_slicing)]
                         (pp.chd_mut()[left_chunks[index - 1] as usize] = None);
                         #[allow(clippy::indexing_slicing)]
@@ -589,7 +588,7 @@ where
             for i in left_chunks[index] + 1..right_chunks[index] {
                 u_ref
                     .write(|u| {
-                        let uu = u.inner_mut().as_branch_mut().unwrap();
+                        let uu = u.as_branch_mut().unwrap();
                         #[allow(clippy::indexing_slicing)]
                         (uu.chd_mut()[i as usize] = None);
                         #[allow(clippy::indexing_slicing)]
@@ -609,7 +608,7 @@ where
             Ok(false)
         }
 
-        NodeType::Leaf(_) => {
+        Node::Leaf(_) => {
             if fork_left.is_lt() && fork_right.is_lt() {
                 return Err(ProofError::EmptyRange);
             }
@@ -626,7 +625,7 @@ where
             if fork_left.is_ne() && fork_right.is_ne() {
                 p_ref
                     .write(|p| {
-                        if let NodeType::Branch(n) = p.inner_mut() {
+                        if let Node::Branch(n) = p {
                             #[allow(clippy::indexing_slicing)]
                             (n.chd_mut()[left_chunks[index - 1] as usize] = None);
                             #[allow(clippy::indexing_slicing)]
@@ -637,7 +636,7 @@ where
             } else if fork_right.is_ne() {
                 p_ref
                     .write(|p| {
-                        let pp = p.inner_mut().as_branch_mut().expect("not a branch node");
+                        let pp = p.as_branch_mut().expect("not a branch node");
                         #[allow(clippy::indexing_slicing)]
                         (pp.chd_mut()[left_chunks[index - 1] as usize] = None);
                         #[allow(clippy::indexing_slicing)]
@@ -647,7 +646,7 @@ where
             } else if fork_left.is_ne() {
                 p_ref
                     .write(|p| {
-                        let pp = p.inner_mut().as_branch_mut().expect("not a branch node");
+                        let pp = p.as_branch_mut().expect("not a branch node");
                         #[allow(clippy::indexing_slicing)]
                         (pp.chd_mut()[right_chunks[index - 1] as usize] = None);
                         #[allow(clippy::indexing_slicing)]
@@ -699,8 +698,8 @@ fn unset_node_ref<K: AsRef<[u8]>, S: CachedStore, T: BinarySerde>(
     }
 
     #[allow(clippy::indexing_slicing)]
-    match &u_ref.inner() {
-        NodeType::Branch(n) if chunks[index..].starts_with(&n.partial_path) => {
+    match u_ref.inner_ref() {
+        Node::Branch(n) if chunks[index..].starts_with(&n.partial_path) => {
             let index = index + n.partial_path.len();
             let child_index = chunks[index] as usize;
 
@@ -716,7 +715,7 @@ fn unset_node_ref<K: AsRef<[u8]>, S: CachedStore, T: BinarySerde>(
             for i in iter {
                 u_ref
                     .write(|u| {
-                        let uu = u.inner_mut().as_branch_mut().unwrap();
+                        let uu = u.as_branch_mut().unwrap();
                         #[allow(clippy::indexing_slicing)]
                         (uu.chd_mut()[i] = None);
                         #[allow(clippy::indexing_slicing)]
@@ -730,7 +729,7 @@ fn unset_node_ref<K: AsRef<[u8]>, S: CachedStore, T: BinarySerde>(
             unset_node_ref(merkle, p, node, key, index + 1, remove_left)
         }
 
-        NodeType::Branch(n) => {
+        Node::Branch(n) => {
             let cur_key = &n.partial_path;
 
             // Find the fork point, it's a non-existent branch.
@@ -759,12 +758,12 @@ fn unset_node_ref<K: AsRef<[u8]>, S: CachedStore, T: BinarySerde>(
                     .map_err(|_| ProofError::NoSuchNode)?;
 
                 p_ref
-                    .write(|p| match p.inner_mut() {
-                        NodeType::Branch(pp) => {
+                    .write(|p| match p {
+                        Node::Branch(pp) => {
                             pp.chd_mut()[chunks[index - 1] as usize] = None;
                             pp.chd_encoded_mut()[chunks[index - 1] as usize] = None;
                         }
-                        NodeType::Leaf(_) => (),
+                        Node::Leaf(_) => (),
                     })
                     .unwrap();
             }
@@ -772,7 +771,7 @@ fn unset_node_ref<K: AsRef<[u8]>, S: CachedStore, T: BinarySerde>(
             Ok(())
         }
 
-        NodeType::Leaf(n) => {
+        Node::Leaf(n) => {
             let mut p_ref = merkle
                 .get_node(parent)
                 .map_err(|_| ProofError::NoSuchNode)?;
@@ -787,7 +786,7 @@ fn unset_node_ref<K: AsRef<[u8]>, S: CachedStore, T: BinarySerde>(
                     (Ordering::Greater, false) | (Ordering::Less, true) => {
                         p_ref
                             .write(|p| {
-                                let pp = p.inner_mut().as_branch_mut().expect("not a branch node");
+                                let pp = p.as_branch_mut().expect("not a branch node");
                                 let index = chunks[index - 1] as usize;
                                 pp.chd_mut()[index] = None;
                                 pp.chd_encoded_mut()[index] = None;
@@ -799,7 +798,7 @@ fn unset_node_ref<K: AsRef<[u8]>, S: CachedStore, T: BinarySerde>(
             } else {
                 p_ref
                     .write(|p| {
-                        if let NodeType::Branch(n) = p.inner_mut() {
+                        if let Node::Branch(n) = p {
                             #[allow(clippy::indexing_slicing)]
                             let index = chunks[index - 1] as usize;
 

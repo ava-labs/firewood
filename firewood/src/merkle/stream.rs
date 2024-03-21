@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::{BranchNode, Key, Merkle, MerkleError, NodeObjRef, NodeType, Value};
+use super::{BranchNode, Key, Merkle, MerkleError, Node, NodeObjRef, Value};
 use crate::{
     nibbles::{Nibbles, NibblesIterator},
     shale::{CachedStore, DiskAddress},
@@ -117,8 +117,8 @@ impl<'a, S: CachedStore, T> Stream for MerkleNodeStream<'a, S, T> {
                 while let Some(mut iter_node) = iter_stack.pop() {
                     match iter_node {
                         IterationNode::Unvisited { key, node } => {
-                            match node.inner() {
-                                NodeType::Branch(branch) => {
+                            match node.inner_ref() {
+                                Node::Branch(branch) => {
                                     // `node` is a branch node. Visit its children next.
                                     iter_stack.push(IterationNode::Visited {
                                         key: key.clone(),
@@ -127,7 +127,7 @@ impl<'a, S: CachedStore, T> Stream for MerkleNodeStream<'a, S, T> {
                                         )),
                                     });
                                 }
-                                NodeType::Leaf(_) => {}
+                                Node::Leaf(_) => {}
                             }
 
                             let key = key_from_nibble_iter(key.iter().copied().skip(1));
@@ -145,9 +145,9 @@ impl<'a, S: CachedStore, T> Stream for MerkleNodeStream<'a, S, T> {
 
                             let child = merkle.get_node(child_addr)?;
 
-                            let partial_path = match child.inner() {
-                                NodeType::Branch(branch) => branch.partial_path.iter().copied(),
-                                NodeType::Leaf(leaf) => leaf.partial_path.iter().copied(),
+                            let partial_path = match child.inner_ref() {
+                                Node::Branch(branch) => branch.partial_path.iter().copied(),
+                                Node::Leaf(leaf) => leaf.partial_path.iter().copied(),
                             };
 
                             // The child's key is its parent's key, followed by the child's index,
@@ -200,8 +200,8 @@ fn get_iterator_intial_state<'a, S: CachedStore, T>(
             // The invariant tells us `node` is a prefix of `key`.
             // There is no more `key` left so `node` must be at `key`.
             // Visit and return `node` first.
-            match &node.inner {
-                NodeType::Branch(_) | NodeType::Leaf(_) => {
+            match node.inner_ref() {
+                Node::Branch(_) | Node::Leaf(_) => {
                     iter_stack.push(IterationNode::Unvisited {
                         key: Box::from(matched_key_nibbles),
                         node,
@@ -212,8 +212,8 @@ fn get_iterator_intial_state<'a, S: CachedStore, T>(
             return Ok(NodeStreamState::Iterating { iter_stack });
         };
 
-        match &node.inner {
-            NodeType::Branch(branch) => {
+        match node.inner_ref() {
+            Node::Branch(branch) => {
                 // The next nibble in `key` is `next_unmatched_key_nibble`,
                 // so all children of `node` with a position > `next_unmatched_key_nibble`
                 // should be visited since they are after `key`.
@@ -239,9 +239,9 @@ fn get_iterator_intial_state<'a, S: CachedStore, T>(
 
                 let child = merkle.get_node(child_addr)?;
 
-                let partial_key = match child.inner() {
-                    NodeType::Branch(branch) => &branch.partial_path,
-                    NodeType::Leaf(leaf) => &leaf.partial_path,
+                let partial_key = match child.inner_ref() {
+                    Node::Branch(branch) => &branch.partial_path,
+                    Node::Leaf(leaf) => &leaf.partial_path,
                 };
 
                 let (comparison, new_unmatched_key_nibbles) =
@@ -271,7 +271,7 @@ fn get_iterator_intial_state<'a, S: CachedStore, T>(
                     }
                 }
             }
-            NodeType::Leaf(leaf) => {
+            Node::Leaf(leaf) => {
                 if compare_partial_path(leaf.partial_path.iter(), unmatched_key_nibbles).0
                     == Ordering::Greater
                 {
@@ -369,8 +369,8 @@ impl<'a, S: CachedStore, T> Stream for MerkleKeyValueStream<'a, S, T> {
             MerkleKeyValueStreamState::Initialized { node_iter: iter } => {
                 match iter.poll_next_unpin(_cx) {
                     Poll::Ready(node) => match node {
-                        Some(Ok((key, node))) => match node.inner() {
-                            NodeType::Branch(branch) => {
+                        Some(Ok((key, node))) => match node.into_inner() {
+                            Node::Branch(branch) => {
                                 let Some(value) = branch.value.as_ref() else {
                                     // This node doesn't have a value to return.
                                     // Continue to the next node.
@@ -380,7 +380,7 @@ impl<'a, S: CachedStore, T> Stream for MerkleKeyValueStream<'a, S, T> {
                                 let value = value.to_vec();
                                 Poll::Ready(Some(Ok((key, value))))
                             }
-                            NodeType::Leaf(leaf) => {
+                            Node::Leaf(leaf) => {
                                 let value = leaf.value.to_vec();
                                 Poll::Ready(Some(Ok((key, value))))
                             }
@@ -432,8 +432,8 @@ impl<'a, 'b, S: CachedStore, T> PathIterator<'a, 'b, S, T> {
         sentinel_node: NodeObjRef<'a>,
         key: &'b [u8],
     ) -> Self {
-        let root = match sentinel_node.inner() {
-            NodeType::Branch(branch) => match branch.children[0] {
+        let root = match sentinel_node.inner_ref() {
+            Node::Branch(branch) => match branch.children[0] {
                 Some(root) => root,
                 None => {
                     return Self {
@@ -476,9 +476,9 @@ impl<'a, 'b, S: CachedStore, T> Iterator for PathIterator<'a, 'b, S, T> {
                     Err(e) => return Some(Err(e)),
                 };
 
-                let partial_path = match node.inner() {
-                    NodeType::Branch(branch) => &branch.partial_path,
-                    NodeType::Leaf(leaf) => &leaf.partial_path,
+                let partial_path = match node.inner_ref() {
+                    Node::Branch(branch) => &branch.partial_path,
+                    Node::Leaf(leaf) => &leaf.partial_path,
                 };
 
                 let (comparison, unmatched_key) =
@@ -492,12 +492,12 @@ impl<'a, 'b, S: CachedStore, T> Iterator for PathIterator<'a, 'b, S, T> {
                         self.state = PathIteratorState::Exhausted;
                         Some(Ok((node_key, node)))
                     }
-                    Ordering::Equal => match node.inner() {
-                        NodeType::Leaf(_) => {
+                    Ordering::Equal => match node.inner_ref() {
+                        Node::Leaf(_) => {
                             self.state = PathIteratorState::Exhausted;
                             Some(Ok((node_key, node)))
                         }
-                        NodeType::Branch(branch) => {
+                        Node::Branch(branch) => {
                             let Some(next_unmatched_key_nibble) = unmatched_key.next() else {
                                 // There's no more key to match. We're done.
                                 self.state = PathIteratorState::Exhausted;
@@ -634,7 +634,7 @@ mod tests {
         };
 
         assert_eq!(key, vec![0x01, 0x03, 0x03, 0x07].into_boxed_slice());
-        assert_eq!(node.inner().as_leaf().unwrap().value, vec![0x42]);
+        assert_eq!(node.as_leaf().unwrap().value, vec![0x42]);
 
         assert!(stream.next().is_none());
     }
@@ -656,7 +656,7 @@ mod tests {
             None => panic!("unexpected end of iterator"),
         };
         assert_eq!(key, vec![0x00, 0x00].into_boxed_slice());
-        assert!(node.inner().as_branch().unwrap().value.is_none());
+        assert!(node.as_branch().unwrap().value.is_none());
 
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
@@ -668,7 +668,7 @@ mod tests {
             vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00].into_boxed_slice()
         );
         assert_eq!(
-            node.inner().as_branch().unwrap().value,
+            node.as_branch().unwrap().value,
             Some(vec![0x00, 0x00, 0x00]),
         );
 
@@ -681,10 +681,7 @@ mod tests {
             key,
             vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x0F].into_boxed_slice()
         );
-        assert_eq!(
-            node.inner().as_leaf().unwrap().value,
-            vec![0x00, 0x00, 0x00, 0x0FF],
-        );
+        assert_eq!(node.as_leaf().unwrap().value, vec![0x00, 0x00, 0x00, 0x0FF],);
 
         assert!(stream.next().is_none());
     }
@@ -704,7 +701,7 @@ mod tests {
             None => panic!("unexpected end of iterator"),
         };
         assert_eq!(key, vec![0x00, 0x00].into_boxed_slice());
-        assert!(node.inner().as_branch().unwrap().value.is_none());
+        assert!(node.as_branch().unwrap().value.is_none());
 
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
@@ -716,7 +713,7 @@ mod tests {
             vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00].into_boxed_slice()
         );
         assert_eq!(
-            node.inner().as_branch().unwrap().value,
+            node.as_branch().unwrap().value,
             Some(vec![0x00, 0x00, 0x00]),
         );
 
@@ -752,7 +749,7 @@ mod tests {
         let (key, node) = stream.next().await.unwrap().unwrap();
 
         assert_eq!(key, vec![0x00].into_boxed_slice());
-        assert_eq!(node.inner().as_leaf().unwrap().value.to_vec(), vec![0x00]);
+        assert_eq!(node.as_leaf().unwrap().value.to_vec(), vec![0x00]);
 
         check_stream_is_done(stream).await;
     }
@@ -807,40 +804,40 @@ mod tests {
         // Covers case of branch with no value
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00].into_boxed_slice());
-        let node = node.inner().as_branch().unwrap();
+        let node = node.as_branch().unwrap();
         assert!(node.value.is_none());
         assert_eq!(node.partial_path.to_vec(), vec![0x00, 0x00]);
 
         // Covers case of branch with value
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0x00, 0x00].into_boxed_slice());
-        let node = node.inner().as_branch().unwrap();
+        let node = node.as_branch().unwrap();
         assert_eq!(node.value.clone().unwrap().to_vec(), vec![0x00, 0x00, 0x00]);
         assert_eq!(node.partial_path.to_vec(), vec![0x00, 0x00, 0x00]);
 
         // Covers case of leaf with partial path
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0x00, 0x00, 0x01].into_boxed_slice());
-        let node = node.inner().as_leaf().unwrap();
+        let node = node.as_leaf().unwrap();
         assert_eq!(node.clone().value.to_vec(), vec![0x00, 0x00, 0x00, 0x01]);
         assert_eq!(node.partial_path.to_vec(), vec![0x01]);
 
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0x00, 0x00, 0xFF].into_boxed_slice());
-        let node = node.inner().as_leaf().unwrap();
+        let node = node.as_leaf().unwrap();
         assert_eq!(node.clone().value.to_vec(), vec![0x00, 0x00, 0x00, 0xFF]);
         assert_eq!(node.partial_path.to_vec(), vec![0x0F]);
 
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
-        let node = node.inner().as_leaf().unwrap();
+        let node = node.as_leaf().unwrap();
         assert_eq!(node.clone().value.to_vec(), vec![0x00, 0xD0, 0xD0]);
         assert_eq!(node.partial_path.to_vec(), vec![0x00, 0x0D, 0x00]); // 0x0D00 becomes 0xDO
 
         // Covers case of leaf with no partial path
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xFF].into_boxed_slice());
-        let node = node.inner().as_leaf().unwrap();
+        let node = node.as_leaf().unwrap();
         assert_eq!(node.clone().value.to_vec(), vec![0x00, 0xFF]);
         assert_eq!(node.partial_path.to_vec(), vec![0x0F]);
 
@@ -856,7 +853,7 @@ mod tests {
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
         assert_eq!(
-            node.inner().as_leaf().unwrap().clone().value.to_vec(),
+            node.as_leaf().unwrap().clone().value.to_vec(),
             vec![0x00, 0xD0, 0xD0]
         );
 
@@ -864,7 +861,7 @@ mod tests {
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xFF].into_boxed_slice());
         assert_eq!(
-            node.inner().as_leaf().unwrap().clone().value.to_vec(),
+            node.as_leaf().unwrap().clone().value.to_vec(),
             vec![0x00, 0xFF]
         );
 
@@ -880,7 +877,7 @@ mod tests {
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
         assert_eq!(
-            node.inner().as_leaf().unwrap().clone().value.to_vec(),
+            node.into_inner().as_leaf().unwrap().clone().value.to_vec(),
             vec![0x00, 0xD0, 0xD0]
         );
 
@@ -888,7 +885,7 @@ mod tests {
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xFF].into_boxed_slice());
         assert_eq!(
-            node.inner().as_leaf().unwrap().clone().value.to_vec(),
+            node.into_inner().as_leaf().unwrap().clone().value.to_vec(),
             vec![0x00, 0xFF]
         );
 

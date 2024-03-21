@@ -8,7 +8,7 @@ use crate::{
 };
 use bincode::Options;
 use bitflags::bitflags;
-use bytemuck::{CheckedBitPattern, NoUninit, Pod, Zeroable};
+use bytemuck::{CheckedBitPattern, NoUninit};
 use enum_as_inner::EnumAsInner;
 use serde::{
     ser::{SerializeSeq, SerializeTuple},
@@ -19,11 +19,6 @@ use std::{
     io::{Cursor, Write},
     marker::PhantomData,
     mem::size_of,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        OnceLock,
-    },
-    vec,
 };
 
 mod branch;
@@ -36,8 +31,6 @@ pub use path::Path;
 
 use crate::nibbles::Nibbles;
 
-use super::TRIE_HASH_LEN;
-
 bitflags! {
     // should only ever be the size of a nibble
     struct Flags: u8 {
@@ -46,178 +39,116 @@ bitflags! {
 }
 
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner)]
-pub enum NodeType {
+pub enum Node {
     Branch(Box<BranchNode>),
     Leaf(LeafNode),
 }
 
-impl NodeType {
+impl Node {
     pub fn path_mut(&mut self) -> &mut Path {
         match self {
-            NodeType::Branch(u) => &mut u.partial_path,
-            NodeType::Leaf(node) => &mut node.partial_path,
+            Node::Branch(u) => &mut u.partial_path,
+            Node::Leaf(node) => &mut node.partial_path,
         }
     }
 
     pub fn set_path(&mut self, path: Path) {
         match self {
-            NodeType::Branch(u) => u.partial_path = path,
-            NodeType::Leaf(node) => node.partial_path = path,
+            Node::Branch(u) => u.partial_path = path,
+            Node::Leaf(node) => node.partial_path = path,
         }
     }
 
     pub fn set_value(&mut self, value: Vec<u8>) {
         match self {
-            NodeType::Branch(u) => u.value = Some(value),
-            NodeType::Leaf(node) => node.value = value,
+            Node::Branch(u) => u.value = Some(value),
+            Node::Leaf(node) => node.value = value,
         }
     }
-}
 
-#[derive(Debug)]
-pub struct Node {
-    encoded: OnceLock<Vec<u8>>,
-    is_encoded_longer_than_hash_len: OnceLock<bool>,
-    // lazy_dirty is an atomicbool, but only writers ever set it
-    // Therefore, we can always use Relaxed ordering. It's atomic
-    // just to ensure Sync + Send.
-    lazy_dirty: AtomicBool,
-    pub(super) inner: NodeType,
-}
-
-impl Eq for Node {}
-
-impl PartialEq for Node {
-    fn eq(&self, other: &Self) -> bool {
-        let is_dirty = self.is_dirty();
-
-        let Node {
-            encoded,
-            is_encoded_longer_than_hash_len: _,
-            lazy_dirty: _,
-            inner,
-        } = self;
-        *encoded == other.encoded && is_dirty == other.is_dirty() && *inner == other.inner
-    }
-}
-
-impl Clone for Node {
-    fn clone(&self) -> Self {
-        Self {
-            is_encoded_longer_than_hash_len: self.is_encoded_longer_than_hash_len.clone(),
-            encoded: self.encoded.clone(),
-            lazy_dirty: AtomicBool::new(self.is_dirty()),
-            inner: self.inner.clone(),
-        }
-    }
-}
-
-impl From<NodeType> for Node {
-    fn from(inner: NodeType) -> Self {
-        let mut s = Self {
-            encoded: OnceLock::new(),
-            is_encoded_longer_than_hash_len: OnceLock::new(),
-            inner,
-            lazy_dirty: AtomicBool::new(false),
-        };
-        s.rehash();
-        s
-    }
-}
-
-bitflags! {
-    #[derive(Debug, Default, Clone, Copy, Pod, Zeroable)]
-    #[repr(transparent)]
-    struct NodeAttributes: u8 {
-        const ENCODED_LENGTH_IS_KNOWN           = 0b001;
-        const ENCODED_IS_LONG = 0b010;
-    }
-}
-
-impl Node {
     pub(super) fn max_branch_node_size() -> u64 {
-        let max_size: OnceLock<u64> = OnceLock::new();
-        *max_size.get_or_init(|| {
-            Self {
-                encoded: OnceLock::new(),
-                is_encoded_longer_than_hash_len: OnceLock::new(),
-                inner: NodeType::Branch(
-                    BranchNode {
-                        partial_path: vec![].into(),
-                        children: [Some(DiskAddress::null()); BranchNode::MAX_CHILDREN],
-                        value: Some(Vec::new()),
-                        children_encoded: Default::default(),
-                    }
-                    .into(),
-                ),
-                lazy_dirty: AtomicBool::new(false),
+        Node::Branch(Box::new(BranchNode {
+            partial_path: vec![].into(),
+            children: [Some(DiskAddress::null()); BranchNode::MAX_CHILDREN],
+            value: Some(vec![]),
+            children_encoded: Default::default(),
+        }))
+        .serialized_len()
+    }
+}
+
+impl Storable for Node {
+    fn deserialize<T: CachedStore>(offset: usize, mem: &T) -> Result<Self, ShaleError> {
+        let meta_raw =
+            mem.get_view(offset, Meta::SIZE as u64)
+                .ok_or(ShaleError::InvalidCacheView {
+                    offset,
+                    size: Meta::SIZE as u64,
+                })?;
+        let meta_raw = meta_raw.as_deref();
+
+        let meta = bytemuck::checked::try_from_bytes::<Meta>(&meta_raw)
+            .map_err(|_| ShaleError::InvalidNodeMeta)?;
+
+        let Meta { type_id } = *meta;
+
+        trace!("[{mem:p}] Deserializing node at {offset}");
+
+        let offset = offset + Meta::SIZE;
+
+        let node = match type_id {
+            NodeTypeId::Branch => {
+                let node = BranchNode::deserialize(offset, mem)?;
+                Node::Branch(Box::new(node))
             }
-            .serialized_len()
-        })
+            NodeTypeId::Leaf => {
+                let node = LeafNode::deserialize(offset, mem)?;
+                Node::Leaf(node)
+            }
+        };
+
+        Ok(node)
     }
 
-    pub(super) fn rehash(&mut self) {
-        self.encoded = OnceLock::new();
-        self.is_encoded_longer_than_hash_len = OnceLock::new();
+    fn serialized_len(&self) -> u64 {
+        Meta::SIZE as u64
+            + match &self {
+                Node::Branch(n) => n.serialized_len(),
+                Node::Leaf(n) => n.serialized_len(),
+            }
     }
 
-    pub fn from_branch<B: Into<Box<BranchNode>>>(node: B) -> Self {
-        Self::from(NodeType::Branch(node.into()))
-    }
+    fn serialize(&self, to: &mut [u8]) -> Result<(), ShaleError> {
+        trace!("[{self:p}] Serializing node");
+        let mut cursor = Cursor::new(to);
 
-    pub fn from_leaf(leaf: LeafNode) -> Self {
-        Self::from(NodeType::Leaf(leaf))
-    }
+        let type_id = NodeTypeId::from(self);
 
-    pub const fn inner(&self) -> &NodeType {
-        &self.inner
-    }
+        let meta = Meta { type_id };
 
-    pub fn inner_mut(&mut self) -> &mut NodeType {
-        &mut self.inner
-    }
+        cursor.write_all(bytemuck::bytes_of(&meta))?;
 
-    pub(super) fn new_from_hash(
-        encoded: Option<Vec<u8>>,
-        is_encoded_longer_than_hash_len: Option<bool>,
-        inner: NodeType,
-    ) -> Self {
-        Self {
-            encoded: match encoded.filter(|encoded| !encoded.is_empty()) {
-                Some(e) => OnceLock::from(e),
-                None => OnceLock::new(),
-            },
-            is_encoded_longer_than_hash_len: match is_encoded_longer_than_hash_len {
-                Some(v) => OnceLock::from(v),
-                None => OnceLock::new(),
-            },
-            inner,
-            lazy_dirty: AtomicBool::new(false),
+        let pos = cursor.position() as usize;
+
+        match &self {
+            Node::Branch(n) =>
+            {
+                #[allow(clippy::indexing_slicing)]
+                n.serialize(&mut cursor.get_mut()[pos..])
+            }
+
+            Node::Leaf(n) =>
+            {
+                #[allow(clippy::indexing_slicing)]
+                n.serialize(&mut cursor.get_mut()[pos..])
+            }
         }
-    }
-
-    pub(super) fn is_dirty(&self) -> bool {
-        self.lazy_dirty.load(Ordering::Relaxed)
-    }
-
-    // TODO use or remove
-    // pub(super) fn set_dirty(&self, is_dirty: bool) {
-    //     self.lazy_dirty.store(is_dirty, Ordering::Relaxed)
-    // }
-
-    pub(crate) fn as_branch_mut(&mut self) -> &mut Box<BranchNode> {
-        self.inner_mut()
-            .as_branch_mut()
-            .expect("must be a branch node")
     }
 }
 
 #[derive(Clone, Copy, CheckedBitPattern, NoUninit)]
 #[repr(C, packed)]
 struct Meta {
-    attrs: NodeAttributes,
-    encoded_len: u64,
-    encoded: [u8; TRIE_HASH_LEN],
     type_id: NodeTypeId,
 }
 
@@ -226,7 +157,7 @@ impl Meta {
 }
 
 mod type_id {
-    use super::{CheckedBitPattern, NoUninit, NodeType};
+    use super::{CheckedBitPattern, NoUninit, Node};
     use crate::shale::ShaleError;
 
     #[derive(Clone, Copy, CheckedBitPattern, NoUninit)]
@@ -244,11 +175,11 @@ mod type_id {
         }
     }
 
-    impl From<&NodeType> for NodeTypeId {
-        fn from(node_type: &NodeType) -> Self {
+    impl From<&Node> for NodeTypeId {
+        fn from(node_type: &Node) -> Self {
             match node_type {
-                NodeType::Branch(_) => NodeTypeId::Branch,
-                NodeType::Leaf(_) => NodeTypeId::Leaf,
+                Node::Branch(_) => NodeTypeId::Branch,
+                Node::Leaf(_) => NodeTypeId::Leaf,
             }
         }
     }
@@ -256,129 +187,7 @@ mod type_id {
 
 use type_id::NodeTypeId;
 
-impl Storable for Node {
-    fn deserialize<T: CachedStore>(offset: usize, mem: &T) -> Result<Self, ShaleError> {
-        let meta_raw =
-            mem.get_view(offset, Meta::SIZE as u64)
-                .ok_or(ShaleError::InvalidCacheView {
-                    offset,
-                    size: Meta::SIZE as u64,
-                })?;
-        let meta_raw = meta_raw.as_deref();
-
-        let meta = bytemuck::checked::try_from_bytes::<Meta>(&meta_raw)
-            .map_err(|_| ShaleError::InvalidNodeMeta)?;
-
-        let Meta {
-            attrs,
-            encoded_len,
-            encoded,
-            type_id,
-        } = *meta;
-
-        trace!("[{mem:p}] Deserializing node at {offset}");
-
-        let offset = offset + Meta::SIZE;
-
-        let encoded = if encoded_len > 0 {
-            Some(encoded.iter().take(encoded_len as usize).copied().collect())
-        } else {
-            None
-        };
-
-        let is_encoded_longer_than_hash_len =
-            if attrs.contains(NodeAttributes::ENCODED_LENGTH_IS_KNOWN) {
-                attrs.contains(NodeAttributes::ENCODED_IS_LONG).into()
-            } else {
-                None
-            };
-
-        match type_id {
-            NodeTypeId::Branch => {
-                let inner = NodeType::Branch(Box::new(BranchNode::deserialize(offset, mem)?));
-
-                Ok(Self::new_from_hash(
-                    encoded,
-                    is_encoded_longer_than_hash_len,
-                    inner,
-                ))
-            }
-
-            NodeTypeId::Leaf => {
-                let inner = NodeType::Leaf(LeafNode::deserialize(offset, mem)?);
-                let node = Self::new_from_hash(encoded, is_encoded_longer_than_hash_len, inner);
-
-                Ok(node)
-            }
-        }
-    }
-
-    fn serialized_len(&self) -> u64 {
-        Meta::SIZE as u64
-            + match &self.inner {
-                NodeType::Branch(n) => n.serialized_len(),
-                NodeType::Leaf(n) => n.serialized_len(),
-            }
-    }
-
-    fn serialize(&self, to: &mut [u8]) -> Result<(), ShaleError> {
-        trace!("[{self:p}] Serializing node");
-        let mut cursor = Cursor::new(to);
-
-        let encoded = self
-            .encoded
-            .get()
-            .filter(|encoded| encoded.len() < TRIE_HASH_LEN);
-
-        let encoded_len = encoded.map(Vec::len).unwrap_or(0) as u64;
-
-        let mut attrs = NodeAttributes::empty();
-        if let Some(&is_encoded_longer_than_hash_len) = self.is_encoded_longer_than_hash_len.get() {
-            attrs.insert(if is_encoded_longer_than_hash_len {
-                NodeAttributes::ENCODED_IS_LONG
-            } else {
-                NodeAttributes::ENCODED_LENGTH_IS_KNOWN
-            });
-        }
-
-        let encoded = std::array::from_fn({
-            let mut encoded = encoded.into_iter().flatten().copied();
-            move |_| encoded.next().unwrap_or(0)
-        });
-
-        let type_id = NodeTypeId::from(&self.inner);
-
-        let meta = Meta {
-            attrs,
-            encoded_len,
-            encoded,
-            type_id,
-        };
-
-        cursor.write_all(bytemuck::bytes_of(&meta))?;
-
-        match &self.inner {
-            NodeType::Branch(n) => {
-                let pos = cursor.position() as usize;
-
-                #[allow(clippy::indexing_slicing)]
-                n.serialize(&mut cursor.get_mut()[pos..])
-            }
-
-            NodeType::Leaf(n) => {
-                let pos = cursor.position() as usize;
-
-                #[allow(clippy::indexing_slicing)]
-                n.serialize(&mut cursor.get_mut()[pos..])
-            }
-        }
-    }
-}
-
-/// Contains the fields that we include in a node's hash.
-/// If this is a leaf node, `children` is empty and `value` is Some.
-/// If this is a branch node, `children` is non-empty.
-#[derive(Debug, Eq)]
+#[derive(Debug)]
 pub struct EncodedNode<T> {
     pub(crate) partial_path: Path,
     /// If a child is None, it doesn't exist.
@@ -639,51 +448,8 @@ impl BinarySerde for PlainCodec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shale::cached::InMemLinearStore;
     use bincode::Error;
-    use std::iter::repeat;
-    use test_case::{test_case, test_matrix};
-
-    #[test_matrix(
-        [Nil, vec![], vec![0x01], (0..TRIE_HASH_LEN as u8).collect::<Vec<_>>(), (0..33).collect::<Vec<_>>()],
-        [Nil, false, true]
-    )]
-    fn cached_node_data(
-        encoded: impl Into<Option<Vec<u8>>>,
-        is_encoded_longer_than_hash_len: impl Into<Option<bool>>,
-    ) {
-        let leaf = NodeType::Leaf(LeafNode::new(Path(vec![1, 2, 3]), vec![4, 5]));
-        let branch = NodeType::Branch(Box::new(BranchNode {
-            partial_path: vec![].into(),
-            children: [Some(DiskAddress::from(1)); BranchNode::MAX_CHILDREN],
-            value: Some(vec![1, 2, 3]),
-            children_encoded: std::array::from_fn(|_| Some(vec![1])),
-        }));
-
-        let encoded = encoded.into();
-        let is_encoded_longer_than_hash_len = is_encoded_longer_than_hash_len.into();
-
-        let node = Node::new_from_hash(encoded.clone(), is_encoded_longer_than_hash_len, leaf);
-
-        check_node_encoding(node);
-
-        let node = Node::new_from_hash(encoded.clone(), is_encoded_longer_than_hash_len, branch);
-
-        check_node_encoding(node);
-    }
-
-    #[test_matrix(
-        (0..0, 0..15, 0..16, 0..31, 0..32),
-        [0..0, 0..16, 0..32]
-    )]
-    fn leaf_node<Iter: Iterator<Item = u8>>(path: Iter, value: Iter) {
-        let node = Node::from_leaf(LeafNode::new(
-            Path(path.map(|x| x & 0xf).collect()),
-            value.collect::<Vec<u8>>(),
-        ));
-
-        check_node_encoding(node);
-    }
+    use test_case::test_case;
 
     #[test_case(&[])]
     #[test_case(&[0x00])]
@@ -708,77 +474,6 @@ mod tests {
         assert_eq!(&node, &deserialized_node);
 
         Ok(())
-    }
-
-    #[test_matrix(
-        [&[], &[0xf], &[0xf, 0xf]],
-        [vec![], vec![1,0,0,0,0,0,0,1], vec![1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1], repeat(1).take(16).collect()],
-        [Nil, 0, 15],
-        [
-            std::array::from_fn(|_| None),
-            std::array::from_fn(|_| Some(vec![1])),
-            [Some(vec![1]), None, None, None, None, None, None, None, None, None, None, None, None, None, None, Some(vec![1])],
-            std::array::from_fn(|_| Some(vec![1; 32])),
-            std::array::from_fn(|_| Some(vec![1; 33]))
-        ]
-    )]
-    fn branch_encoding(
-        path: &[u8],
-        children: Vec<usize>,
-        value: impl Into<Option<u8>>,
-        children_encoded: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN],
-    ) {
-        let partial_path = Path(path.iter().copied().map(|x| x & 0xf).collect());
-
-        let mut children = children.into_iter().map(|x| {
-            if x == 0 {
-                None
-            } else {
-                Some(DiskAddress::from(x))
-            }
-        });
-
-        let children = std::array::from_fn(|_| children.next().flatten());
-
-        let value = value
-            .into()
-            .map(|x| std::iter::repeat(x).take(x as usize).collect());
-
-        let node = Node::from_branch(BranchNode {
-            partial_path,
-            children,
-            value,
-            children_encoded,
-        });
-
-        check_node_encoding(node);
-    }
-
-    fn check_node_encoding(node: Node) {
-        let serialized_len = node.serialized_len();
-
-        let mut bytes = vec![0; serialized_len as usize];
-        node.serialize(&mut bytes).expect("node should serialize");
-
-        let mut mem = InMemLinearStore::new(serialized_len, 0);
-        mem.write(0, &bytes).expect("write should succed");
-
-        let mut hydrated_node = Node::deserialize(0, &mem).expect("node should deserialize");
-
-        let encoded = node
-            .encoded
-            .get()
-            .filter(|encoded| encoded.len() >= TRIE_HASH_LEN);
-
-        match encoded {
-            // long-encoded won't be serialized
-            Some(encoded) if hydrated_node.encoded.get().is_none() => {
-                hydrated_node.encoded = OnceLock::from(encoded.clone());
-            }
-            _ => (),
-        }
-
-        assert_eq!(node, hydrated_node);
     }
 
     struct Nil;
