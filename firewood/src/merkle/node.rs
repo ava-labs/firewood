@@ -439,6 +439,10 @@ impl<'de> Visitor<'de> for TupleVisitor {
             .next_element::<u64>()?
             .ok_or(serde::de::Error::custom("missing length"))?;
 
+        if path_bits_len == 0 {
+            return Ok(PathWithBitsPrefix(Path(vec![])));
+        }
+
         if path_bits_len % BITS_PER_NIBBLE != 0 {
             return Err(serde::de::Error::custom(
                 "path length is not a multiple of 4",
@@ -449,6 +453,7 @@ impl<'de> Visitor<'de> for TupleVisitor {
         // we need to read the final byte.
         // e.g. if `path_bits_len` is 12 we need to read 2 bytes
         // If we didn't add BITS_PER_NIBBLE `path_bytes_len` would be 1.
+        // Note `path_bytes_len` >= 1 because we assert `path_bits_len` > 0.
         let path_bytes_len = (path_bits_len + BITS_PER_NIBBLE) / BITS_PER_BYTE;
 
         let mut path = Vec::with_capacity(NIBBLES_PER_BYTE * path_bytes_len as usize);
@@ -465,7 +470,10 @@ impl<'de> Visitor<'de> for TupleVisitor {
 
         if path_bits_len % BITS_PER_BYTE != 0 {
             // The last byte only contained one nibble.
-            path.pop();
+            let padding_nibble = path.pop().expect("path_bytes_len > 0");
+            if padding_nibble != 0 {
+                return Err(serde::de::Error::custom("padding nibble is not 0"));
+            }
         }
 
         Ok(PathWithBitsPrefix(Path(path)))
