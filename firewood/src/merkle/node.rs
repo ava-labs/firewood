@@ -46,9 +46,18 @@ bitflags! {
     }
 }
 
+const NIBBLES_PER_BYTE: usize = 2;
 const BITS_PER_NIBBLE: u64 = 4;
 const BITS_PER_BYTE: u64 = 8;
-const NIBBLES_PER_BYTE: usize = 2;
+
+// TODO danlaine: This exists to prevent someone from forcing a very large
+// memory allocation during PathWithBitsPrefix deserialization.
+// Instead of specifying a max size, we should change how we
+// serialize/deserialize paths during node hashing so that on deserialize, when
+// we read the path bit length, we can verify that the &[u8] we're decoding
+// has the expected number of bits.
+pub const MAX_PATH_BYTE_LEN: u64 = 2 * 1024 * 1024; // 2 MiB
+const MAX_PATH_BIT_LEN: u64 = MAX_PATH_BYTE_LEN * BITS_PER_BYTE;
 
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner)]
 pub enum NodeType {
@@ -446,6 +455,12 @@ impl<'de> Visitor<'de> for TupleVisitor {
         if path_bits_len % BITS_PER_NIBBLE != 0 {
             return Err(serde::de::Error::custom(
                 "path length is not a multiple of 4",
+            ));
+        }
+
+        if path_bits_len > MAX_PATH_BIT_LEN {
+            return Err(serde::de::Error::custom(
+                "path bit length > {MAX_PATH_BIT_LEN}",
             ));
         }
 
