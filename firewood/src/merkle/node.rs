@@ -418,12 +418,11 @@ impl<T> PartialEq for EncodedNode<T> {
 
 /// A path and its length in bits.
 #[derive(Debug)]
-struct PathWithBitsPrefix(u64, Path);
+struct PathWithBitsPrefix(Path);
 
-impl From<Path> for PathWithBitsPrefix {
-    fn from(path: Path) -> Self {
-        let path_length_bits = (path.len() as u64) * BITS_PER_NIBBLE;
-        Self(path_length_bits, path)
+impl PathWithBitsPrefix {
+    fn bit_len(&self) -> u64 {
+        self.0.len() as u64 * BITS_PER_NIBBLE
     }
 }
 
@@ -432,74 +431,72 @@ impl<'de> Deserialize<'de> for PathWithBitsPrefix {
     where
         D: serde::Deserializer<'de>,
     {
-        deserializer.deserialize_seq(TupleVisitor)
-    }
-}
+        struct PathVisitor;
 
-struct TupleVisitor;
+        impl<'de> Visitor<'de> for PathVisitor {
+            type Value = PathWithBitsPrefix;
 
-impl<'de> Visitor<'de> for TupleVisitor {
-    type Value = PathWithBitsPrefix;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a bit-length prefixed path of nibbles")
+            }
 
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        formatter.write_str("tuple")
-    }
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let path_bits_len = seq
+                    .size_hint()
+                    .map(|x| x as u64)
+                    .ok_or(serde::de::Error::custom("missing path length"))?;
 
-    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-    where
-        A: serde::de::SeqAccess<'de>,
-    {
-        let path_bits_len = seq
-            .size_hint()
-            .map(|x| x as u64)
-            .ok_or(serde::de::Error::custom("missing length"))?;
+                if path_bits_len == 0 {
+                    return Ok(PathWithBitsPrefix(Path(vec![])));
+                }
 
-        if path_bits_len == 0 {
-            return Ok(PathWithBitsPrefix(0, Path(vec![])));
-        }
+                if path_bits_len % BITS_PER_NIBBLE != 0 {
+                    return Err(serde::de::Error::custom(
+                        "path length is not a multiple of 4",
+                    ));
+                }
 
-        if path_bits_len % BITS_PER_NIBBLE != 0 {
-            return Err(serde::de::Error::custom(
-                "path length is not a multiple of 4",
-            ));
-        }
+                if path_bits_len > MAX_PATH_BIT_LEN {
+                    return Err(serde::de::Error::custom(format!(
+                        "path bit length > {MAX_PATH_BIT_LEN}"
+                    )));
+                }
 
-        if path_bits_len > MAX_PATH_BIT_LEN {
-            return Err(serde::de::Error::custom(
-                "path bit length > {MAX_PATH_BIT_LEN}",
-            ));
-        }
+                // Add BITS_PER_NIBBLE so that if there are an odd number of nibbles,
+                // we need to read the final byte.
+                // e.g. if `path_bits_len` is 12 we need to read 2 bytes
+                // If we didn't add BITS_PER_NIBBLE `path_bytes_len` would be 1.
+                // Note `path_bytes_len` >= 1 because we assert `path_bits_len` > 0.
+                let path_bytes_len = (path_bits_len + BITS_PER_NIBBLE) / BITS_PER_BYTE;
 
-        // Add BITS_PER_NIBBLE so that if there are an odd number of nibbles,
-        // we need to read the final byte.
-        // e.g. if `path_bits_len` is 12 we need to read 2 bytes
-        // If we didn't add BITS_PER_NIBBLE `path_bytes_len` would be 1.
-        // Note `path_bytes_len` >= 1 because we assert `path_bits_len` > 0.
-        let path_bytes_len = (path_bits_len + BITS_PER_NIBBLE) / BITS_PER_BYTE;
+                let mut path = Vec::with_capacity(NIBBLES_PER_BYTE * path_bytes_len as usize);
 
-        let mut path = Vec::with_capacity(NIBBLES_PER_BYTE * path_bytes_len as usize);
+                for _ in 0..path_bytes_len {
+                    let byte = seq.next_element::<u8>()?.ok_or(serde::de::Error::custom(
+                        "not enough bytes for path desierialization",
+                    ))?;
 
-        for _ in 0..path_bytes_len {
-            let byte = seq
-                .next_element::<u8>()?
-                .ok_or(serde::de::Error::custom("not enough bytes"))?;
+                    // Convert the byte to 2 nibbles
+                    path.push(byte >> 4);
+                    path.push(byte & 0b_0000_1111);
+                }
 
-            // Convert the byte to 2 nibbles
-            path.push(byte >> 4);
-            path.push(byte & 0b_0000_1111);
-        }
+                if path_bits_len % BITS_PER_BYTE != 0 {
+                    // The last byte only contained one nibble.
+                    let padding_nibble = path.pop().expect("path_bytes_len > 0");
+                    if padding_nibble != 0 {
+                        return Err(serde::de::Error::custom("path padding nibble is not 0"));
+                    }
+                }
 
-        if path_bits_len % BITS_PER_BYTE != 0 {
-            // The last byte only contained one nibble.
-            let padding_nibble = path.pop().expect("path_bytes_len > 0");
-            if padding_nibble != 0 {
-                return Err(serde::de::Error::custom("padding nibble is not 0"));
+                Ok(PathWithBitsPrefix(Path(path)))
             }
         }
 
-        let path = Path(path);
-
-        Ok(PathWithBitsPrefix::from(path))
+        deserializer.deserialize_seq(PathVisitor)
     }
 }
 
@@ -508,11 +505,11 @@ impl Serialize for PathWithBitsPrefix {
     where
         S: serde::Serializer,
     {
-        let path_length_bits = self.0;
+        let path_length_bits = self.bit_len();
 
         let mut serializer = serializer.serialize_seq(Some(path_length_bits as usize))?;
 
-        let path_bytes = nibbles_to_bytes_iter(self.1.as_ref());
+        let path_bytes = nibbles_to_bytes_iter(self.0.as_ref());
 
         for byt in path_bytes {
             serializer.serialize_element(&byt)?;
@@ -537,7 +534,7 @@ impl Serialize for EncodedNode<PlainCodec> {
 
         let value = self.value.as_deref();
 
-        let path = PathWithBitsPrefix::from(self.path.clone());
+        let path = PathWithBitsPrefix(self.path.clone());
 
         let mut s = serializer.serialize_tuple(3)?;
 
@@ -567,7 +564,7 @@ impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
         }
 
         Ok(Self {
-            path: path.1,
+            path: path.0,
             children,
             value,
             phantom: PhantomData,
@@ -913,7 +910,7 @@ mod tests {
     #[test_case(&[0x0F,0x0F],&[8,0xFF])]
     #[test_case(&[0x0F,0x01,0x0F],&[12,0xF1,0xF0])]
     fn test_encode_path_with_bits_prefix(path_nibbles: &[u8], expected_bytes: &[u8]) {
-        let path = PathWithBitsPrefix::from(Path(path_nibbles.to_vec()));
+        let path = PathWithBitsPrefix(Path(path_nibbles.to_vec()));
 
         let serialized_path = PlainCodec::serialize(&path).unwrap();
         assert_eq!(serialized_path, expected_bytes);
