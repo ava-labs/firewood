@@ -146,13 +146,7 @@ where
 
                                         self.encode(Path(child_path), node.inner())
                                     })
-                                    .map(|node_bytes| {
-                                        if node_bytes.len() >= TRIE_HASH_LEN {
-                                            Keccak256::digest(&node_bytes).to_vec()
-                                        } else {
-                                            node_bytes
-                                        }
-                                    })
+                                    .map(|node_bytes| Keccak256::digest(node_bytes).to_vec())
                             })
                             // or look for the pre-fetched bytes
                             .or_else(|| encoded_child.as_ref().map(|child| Ok(child.to_vec())))

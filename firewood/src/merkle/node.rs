@@ -15,6 +15,7 @@ use serde::{
     ser::{SerializeSeq, SerializeTuple},
     Deserialize, Serialize,
 };
+use sha3::Digest;
 use std::{
     fmt::Debug,
     io::{Cursor, Write},
@@ -532,7 +533,13 @@ impl Serialize for EncodedNode<PlainCodec> {
             .filter_map(|(i, c)| c.as_ref().map(|c| (i as u64, c.to_vec())))
             .collect();
 
-        let value = self.value.as_deref();
+        let value = self.value.as_deref().map(|v| {
+            if v.len() >= TRIE_HASH_LEN {
+                sha3::Keccak256::digest(v).to_vec()
+            } else {
+                v.to_vec()
+            }
+        });
 
         let path = PathWithBitsPrefix(self.path.clone());
 
