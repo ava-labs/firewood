@@ -343,7 +343,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                             .chd_encode()
                             .get(*index as usize)
                             .and_then(|inner| inner.as_ref())
-                            .map(|value| &**value);
+                            .map(|value| *value);
 
                         subproof
                     } else {
@@ -355,7 +355,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
             match encoded_sub_proof {
                 None => break None,
                 Some(encoded) => {
-                    let hash = generate_subproof_hash(encoded)?;
+                    let hash = generate_subproof_hash(&encoded)?;
                     child_hash = hash;
                 }
             }
