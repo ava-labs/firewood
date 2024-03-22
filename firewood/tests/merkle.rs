@@ -2,7 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use firewood::{
-    merkle::{Bincode, Proof, ProofError},
+    merkle::{Bincode, NodeType, Proof, ProofError},
     merkle_util::{DataStoreError, InMemoryMerkle},
 };
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng as _};
@@ -680,7 +680,7 @@ fn test_all_elements_proof() -> Result<(), ProofError> {
     let keys: Vec<&[u8; 32]> = item_iter.clone().map(|item| item.0).collect();
     let vals: Vec<&[u8; 20]> = item_iter.map(|item| item.1).collect();
 
-    let empty_proof = Proof(HashMap::<[u8; 32], Vec<u8>>::new());
+    let empty_proof = Proof(HashMap::<[u8; 32], NodeType>::new());
     let empty_key: [u8; 32] = [0; 32];
     merkle.verify_range_proof(
         &empty_proof,

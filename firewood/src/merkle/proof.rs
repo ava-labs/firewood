@@ -98,7 +98,7 @@ impl From<DbError> for ProofError {
 ///
 /// The generic N represents the storage for the node
 #[derive(Clone, Debug)]
-pub struct Proof<N>(pub HashMap<HashKey, N>);
+pub struct Proof(pub HashMap<HashKey, NodeType>);
 
 /// `SubProof` contains the value or the hash of a node that maps
 /// to a single proof step. If reaches an end step during proof verification,
@@ -110,8 +110,8 @@ pub(crate) enum SubProof {
     Hash(HashKey),
 }
 
-impl<N: AsRef<[u8]> + Send> Proof<N> {
-    pub fn extend(&mut self, other: Proof<N>) {
+impl Proof {
+    pub fn extend(&mut self, other: Proof) {
         self.0.extend(other.0)
     }
 
@@ -258,7 +258,6 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
 
         let mut child_hash = root_hash;
         let proof_nodes_map = &self.0;
-        let mut path_nibbles_to_skip = 0;
 
         let sub_proof = loop {
             // Link the child to the parent based on the node type.
@@ -270,32 +269,16 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                         break None;
                     };
 
-                    if root_hash != child_hash {
-                        // `key_nibbles` has an extra zero nibble in front that's not actually
-                        // part of the key. When calculating how many nibbles of the encoded
-                        // node's path to skip, ignore this extra non-existent nibble.
-                        path_nibbles_to_skip += 1;
-                    }
-
                     match n.chd()[child_index] {
                         // If the child already resolved, then use the existing node.
                         Some(node) => merkle.get_node(node)?,
                         None => {
                             // Look up the child's encoded bytes and decode to get the child.
-                            // Look up the child's encoded bytes and decode to get the child.
-                            let child_node_bytes = proof_nodes_map
+                            let child_node = proof_nodes_map
                                 .get(&child_hash)
                                 .ok_or(ProofError::ProofNodeMissing)?;
 
-                            let child_node =
-                                merkle.decode(path_nibbles_to_skip, child_node_bytes.as_ref())?;
-
-                            path_nibbles_to_skip += match &child_node {
-                                NodeType::Branch(n) => n.partial_path.len(),
-                                NodeType::Leaf(n) => n.partial_path.len(),
-                            };
-
-                            let child_node = merkle.put_node(Node::from(child_node))?;
+                            let child_node = merkle.put_node(Node::from(child_node.to_owned()))?; // todo avoid clone
 
                             // insert `child_node` to the appropriate index in the `parent_node`
                             parent_node.write(|node| {
@@ -371,9 +354,10 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     }
 }
 
+// TODO document this function
 pub(crate) fn locate_subproof(
     mut key_nibbles: NibblesIterator<'_, 0>,
-    node: NodeType,
+    node: NodeType, // TODO should this be a reference?
 ) -> Result<(Option<SubProof>, NibblesIterator<'_, 0>), ProofError> {
     match node {
         NodeType::Leaf(n) => {
