@@ -109,12 +109,13 @@ where
         }
     }
 
-    fn encode(&self, _path: Path, node: &NodeType) -> Result<Vec<u8>, MerkleError> {
+    // TODO should this take in a &Path?
+    fn encode(&self, path: Path, node: &NodeType) -> Result<Vec<u8>, MerkleError> {
         let encoded = match node {
             NodeType::Leaf(n) => {
                 let children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
                 EncodedNode {
-                    partial_path: n.partial_path.clone(), // TODO pass whole path not partial path
+                    path,
                     children,
                     value: n.value.clone().into(),
                     phantom: PhantomData,
@@ -125,43 +126,27 @@ where
                 // pair up DiskAddresses with encoded children and pick the right one
                 let encoded_children = n.chd().iter().zip(n.children_encoded.iter()).enumerate();
                 let children = encoded_children
-                    .map(|(_child_index, (child_addr, encoded_child))| {
+                    .map(|(child_index, (child_addr, encoded_child))| {
                         child_addr
                             // if there's a child disk address here, get the encoded bytes
                             .map(|addr| {
                                 self.get_node(addr)
                                     .and_then(|node| {
                                         let partial_path = match node.inner() {
-                                            NodeType::Leaf(n) => n.partial_path.clone(),
-                                            NodeType::Branch(n) => n.partial_path.clone(),
+                                            NodeType::Leaf(n) => n.partial_path.iter().copied(),
+                                            NodeType::Branch(n) => n.partial_path.iter().copied(),
                                         };
 
-                                        self.encode(partial_path, node.inner())
+                                        let child_path = path
+                                            .iter()
+                                            .copied()
+                                            .chain(once(child_index as u8))
+                                            .chain(partial_path)
+                                            .collect::<Vec<u8>>();
 
-                                        // TODO remove the above and use the below.
-                                        // We want to eventually pass the node's whole path into the encode function
-                                        // rather than its partial path so the encoding matches merkledb.
-                                        // let partial_path = match node.inner() {
-                                        //     NodeType::Leaf(n) => n.partial_path.iter().copied(),
-                                        //     NodeType::Branch(n) => n.partial_path.iter().copied(),
-                                        // };
-
-                                        // let child_path = path
-                                        //     .iter()
-                                        //     .copied()
-                                        //     .chain(once(child_index as u8))
-                                        //     .chain(partial_path)
-                                        //     .collect::<Vec<u8>>();
-
-                                        // self.encode(Path(child_path), node.inner())
+                                        self.encode(Path(child_path), node.inner())
                                     })
-                                    .map(|node_bytes| {
-                                        if node_bytes.len() >= TRIE_HASH_LEN {
-                                            Keccak256::digest(&node_bytes).to_vec()
-                                        } else {
-                                            node_bytes
-                                        }
-                                    })
+                                    .map(|node_bytes| Keccak256::digest(node_bytes).to_vec())
                             })
                             // or look for the pre-fetched bytes
                             .or_else(|| encoded_child.as_ref().map(|child| Ok(child.to_vec())))
@@ -172,7 +157,7 @@ where
                     .expect("MAX_CHILDREN will always be yielded");
 
                 EncodedNode {
-                    partial_path: n.partial_path.clone(), // TODO pass whole path not partial path
+                    path,
                     children,
                     value: n.value.clone(),
                     phantom: PhantomData,
@@ -183,21 +168,28 @@ where
         T::serialize(&encoded).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))
     }
 
-    fn decode(&self, buf: &'de [u8]) -> Result<NodeType, MerkleError> {
+    fn decode(&self, path_nibbles_to_skip: usize, buf: &'de [u8]) -> Result<NodeType, MerkleError> {
         let encoded: EncodedNode<T> =
             T::deserialize(buf).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))?;
+
+        let partial_path: Vec<u8> = encoded
+            .path
+            .0
+            .into_iter()
+            .skip(path_nibbles_to_skip)
+            .collect();
 
         if encoded.children.iter().all(|b| b.is_none()) {
             // This is a leaf node
             return Ok(NodeType::Leaf(LeafNode::new(
-                encoded.partial_path,
+                Path(partial_path),
                 encoded.value.expect("leaf nodes must always have a value"),
             )));
         }
 
         Ok(NodeType::Branch(
             BranchNode {
-                partial_path: encoded.partial_path,
+                partial_path: Path(partial_path),
                 children: [None; BranchNode::MAX_CHILDREN],
                 value: encoded.value,
                 children_encoded: encoded.children,
@@ -1085,16 +1077,23 @@ where
 
         let mut cur_hash = root_hash;
         let proofs_map = &proof.0;
+        let mut path_nibbles_to_skip = 0;
 
         loop {
             let cur_proof = proofs_map
                 .get(&cur_hash)
                 .ok_or(ProofError::ProofNodeMissing)?;
 
-            let node = self.decode(cur_proof.as_ref())?;
+            let node = self.decode(path_nibbles_to_skip, cur_proof.as_ref())?;
+
+            let start_len = key_nibbles.size_hint().0;
+
             // TODO: I think this will currently fail if the key is &[];
             let (sub_proof, traversed_nibbles) = locate_subproof(key_nibbles, node)?;
+
             key_nibbles = traversed_nibbles;
+            let end_len = key_nibbles.size_hint().0;
+            path_nibbles_to_skip += start_len - end_len;
 
             cur_hash = match sub_proof {
                 // Return when reaching the end of the key.
@@ -1413,10 +1412,16 @@ pub const fn to_nibble_array(x: u8) -> [u8; 2] {
 /// Returns an iterator where each element is the result of combining
 /// 2 nibbles of `nibbles`. If `nibbles` is odd length, panics in
 /// debug mode and drops the final nibble in release mode.
+/// TODO update comment
 pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
-    debug_assert_eq!(nibbles.len() & 1, 0);
     #[allow(clippy::indexing_slicing)]
-    nibbles.chunks_exact(2).map(|p| (p[0] << 4) | p[1])
+    nibbles.chunks(2).map(|p| {
+        if p.len() == 1 {
+            p[0] << 4
+        } else {
+            (p[0] << 4) | p[1]
+        }
+    })
 }
 
 /// The [`PrefixOverlap`] type represents the _shared_ and _unique_ parts of two potentially overlapping slices.
@@ -1543,6 +1548,7 @@ mod tests {
     #[test_case(PlainCodec::new(), branch(b"abcd", b"value", vec![1, 2, 3].into()) ; "branch with partial path and value with PlainCodec")]
     #[test_case(PlainCodec::new(), branch(b"abcd", &[], vec![1, 2, 3].into()) ; "branch with partial path and no value with PlainCodec")]
     #[test_case(PlainCodec::new(), branch(b"", &[1,3,3,7], vec![1, 2, 3].into()) ; "branch with no partial path and value with PlainCodec")]
+    // TODO add tests where we skip path nibbles in decode.
     fn node_encode_decode<T>(_codec: T, node: NodeType)
     where
         T: BinarySerde,
@@ -1550,9 +1556,14 @@ mod tests {
     {
         let merkle = create_generic_test_merkle::<T>();
 
-        let encoded = merkle.encode(Path(vec![]), &node).unwrap();
-        let new_node = merkle.decode(encoded.as_ref()).unwrap();
-        let encoded_again = merkle.encode(Path(vec![]), &new_node).unwrap();
+        let path = match &node {
+            NodeType::Branch(n) => n.partial_path.clone(),
+            NodeType::Leaf(n) => n.partial_path.clone(),
+        };
+
+        let encoded = merkle.encode(path.clone(), &node).unwrap();
+        let new_node = merkle.decode(0, encoded.as_ref()).unwrap();
+        let encoded_again = merkle.encode(path, &new_node).unwrap();
 
         assert_eq!(node, new_node);
         assert_eq!(encoded, encoded_again);

@@ -11,9 +11,11 @@ use bitflags::bitflags;
 use bytemuck::{CheckedBitPattern, NoUninit, Pod, Zeroable};
 use enum_as_inner::EnumAsInner;
 use serde::{
+    de::Visitor,
     ser::{SerializeSeq, SerializeTuple},
     Deserialize, Serialize,
 };
+use sha3::Digest;
 use std::{
     fmt::Debug,
     io::{Cursor, Write},
@@ -44,6 +46,19 @@ bitflags! {
         const ODD_LEN  = 0b0001;
     }
 }
+
+const NIBBLES_PER_BYTE: usize = 2;
+const BITS_PER_NIBBLE: u64 = 4;
+const BITS_PER_BYTE: u64 = 8;
+
+// TODO danlaine: This exists to prevent someone from forcing a very large
+// memory allocation during PathWithBitsPrefix deserialization.
+// Instead of specifying a max size, we should change how we
+// serialize/deserialize paths during node hashing so that on deserialize, when
+// we read the path bit length, we can verify that the &[u8] we're decoding
+// has the expected number of bits.
+pub const MAX_PATH_BYTE_LEN: u64 = 2 * 1024 * 1024; // 2 MiB
+const MAX_PATH_BIT_LEN: u64 = MAX_PATH_BYTE_LEN * BITS_PER_BYTE;
 
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner)]
 pub enum NodeType {
@@ -380,7 +395,7 @@ impl Storable for Node {
 /// If this is a branch node, `children` is non-empty.
 #[derive(Debug, Eq)]
 pub struct EncodedNode<T> {
-    pub(crate) partial_path: Path,
+    pub(crate) path: Path,
     /// If a child is None, it doesn't exist.
     /// If it's Some, it's the value or value hash of the child.
     pub(crate) children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN],
@@ -393,12 +408,115 @@ pub struct EncodedNode<T> {
 impl<T> PartialEq for EncodedNode<T> {
     fn eq(&self, other: &Self) -> bool {
         let Self {
-            partial_path,
+            path,
             children,
             value,
             phantom: _,
         } = self;
-        partial_path == &other.partial_path && children == &other.children && value == &other.value
+        path == &other.path && children == &other.children && value == &other.value
+    }
+}
+
+/// A path and its length in bits.
+#[derive(Debug)]
+struct PathWithBitsPrefix(Path);
+
+impl PathWithBitsPrefix {
+    fn bit_len(&self) -> u64 {
+        self.0.len() as u64 * BITS_PER_NIBBLE
+    }
+}
+
+impl<'de> Deserialize<'de> for PathWithBitsPrefix {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct PathVisitor;
+
+        impl<'de> Visitor<'de> for PathVisitor {
+            type Value = PathWithBitsPrefix;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a bit-length prefixed path of nibbles")
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let path_bits_len = seq
+                    .size_hint()
+                    .map(|x| x as u64)
+                    .ok_or(serde::de::Error::custom("missing path length"))?;
+
+                if path_bits_len == 0 {
+                    return Ok(PathWithBitsPrefix(Path(vec![])));
+                }
+
+                if path_bits_len % BITS_PER_NIBBLE != 0 {
+                    return Err(serde::de::Error::custom(
+                        "path length is not a multiple of 4",
+                    ));
+                }
+
+                if path_bits_len > MAX_PATH_BIT_LEN {
+                    return Err(serde::de::Error::custom(format!(
+                        "path bit length > {MAX_PATH_BIT_LEN}"
+                    )));
+                }
+
+                // Add BITS_PER_NIBBLE so that if there are an odd number of nibbles,
+                // we need to read the final byte.
+                // e.g. if `path_bits_len` is 12 we need to read 2 bytes
+                // If we didn't add BITS_PER_NIBBLE `path_bytes_len` would be 1.
+                // Note `path_bytes_len` >= 1 because we assert `path_bits_len` > 0.
+                let path_bytes_len = (path_bits_len + BITS_PER_NIBBLE) / BITS_PER_BYTE;
+
+                let mut path = Vec::with_capacity(NIBBLES_PER_BYTE * path_bytes_len as usize);
+
+                for _ in 0..path_bytes_len {
+                    let byte = seq.next_element::<u8>()?.ok_or(serde::de::Error::custom(
+                        "not enough bytes for path desierialization",
+                    ))?;
+
+                    // Convert the byte to 2 nibbles
+                    path.push(byte >> 4);
+                    path.push(byte & 0b_0000_1111);
+                }
+
+                if path_bits_len % BITS_PER_BYTE != 0 {
+                    // The last byte only contained one nibble.
+                    let padding_nibble = path.pop().expect("path_bytes_len > 0");
+                    if padding_nibble != 0 {
+                        return Err(serde::de::Error::custom("path padding nibble is not 0"));
+                    }
+                }
+
+                Ok(PathWithBitsPrefix(Path(path)))
+            }
+        }
+
+        deserializer.deserialize_seq(PathVisitor)
+    }
+}
+
+impl Serialize for PathWithBitsPrefix {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let path_length_bits = self.bit_len();
+
+        let mut serializer = serializer.serialize_seq(Some(path_length_bits as usize))?;
+
+        let path_bytes = nibbles_to_bytes_iter(self.0.as_ref());
+
+        for byt in path_bytes {
+            serializer.serialize_element(&byt)?;
+        }
+
+        serializer.end()
     }
 }
 
@@ -415,9 +533,15 @@ impl Serialize for EncodedNode<PlainCodec> {
             .filter_map(|(i, c)| c.as_ref().map(|c| (i as u64, c.to_vec())))
             .collect();
 
-        let value = self.value.as_deref();
+        let value = self.value.as_deref().map(|v| {
+            if v.len() >= TRIE_HASH_LEN {
+                sha3::Keccak256::digest(v).to_vec()
+            } else {
+                v.to_vec()
+            }
+        });
 
-        let path: Vec<u8> = nibbles_to_bytes_iter(&self.partial_path.encode()).collect();
+        let path = PathWithBitsPrefix(self.path.clone());
 
         let mut s = serializer.serialize_tuple(3)?;
 
@@ -436,11 +560,9 @@ impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
     {
         let chd: Vec<(u64, Vec<u8>)>;
         let value: Option<Vec<u8>>;
-        let path: Vec<u8>;
+        let path: PathWithBitsPrefix;
 
         (chd, value, path) = Deserialize::deserialize(deserializer)?;
-
-        let path = Path::from_nibbles(Nibbles::<0>::new(&path).into_iter());
 
         let mut children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
         #[allow(clippy::indexing_slicing)]
@@ -449,7 +571,7 @@ impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
         }
 
         Ok(Self {
-            partial_path: path,
+            path: path.0,
             children,
             value,
             phantom: PhantomData,
@@ -458,6 +580,9 @@ impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
 }
 
 // Note that the serializer passed in should always be the same type as T in EncodedNode<T>.
+// TODO danlaine: Consider implementing our own serializer for hashing nodes so that we don't
+// need to make assumptions about how values are serialized by the [serde::Serializer].
+// Namely, we should implement it specifically so it encodes nodes the same way as merkledb.
 impl Serialize for EncodedNode<Bincode> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut list = <[Vec<u8>; BranchNode::MAX_CHILDREN + 2]>::default();
@@ -476,7 +601,7 @@ impl Serialize for EncodedNode<Bincode> {
             list[BranchNode::MAX_CHILDREN].clone_from(val);
         }
 
-        let serialized_path = nibbles_to_bytes_iter(&self.partial_path.encode()).collect();
+        let serialized_path = nibbles_to_bytes_iter(&self.path.encode()).collect();
         list[BranchNode::MAX_CHILDREN + 1] = serialized_path;
 
         let mut seq = serializer.serialize_seq(Some(list.len()))?;
@@ -515,7 +640,7 @@ impl<'de> Deserialize<'de> for EncodedNode<Bincode> {
                 let path = Path::from_nibbles(Nibbles::<0>::new(&path).into_iter());
                 let children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
                 Ok(Self {
-                    partial_path: path,
+                    path,
                     children,
                     value: Some(value),
                     phantom: PhantomData,
@@ -537,7 +662,7 @@ impl<'de> Deserialize<'de> for EncodedNode<Bincode> {
                 }
 
                 Ok(Self {
-                    partial_path: path,
+                    path,
                     children,
                     value,
                     phantom: PhantomData,
@@ -637,6 +762,7 @@ impl BinarySerde for PlainCodec {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::shale::cached::InMemLinearStore;
@@ -695,7 +821,7 @@ mod tests {
     #[test_case(&[0x0F,0x01,0x0F])]
     fn encoded_branch_node_bincode_serialize(path_nibbles: &[u8]) -> Result<(), Error> {
         let node = EncodedNode::<Bincode> {
-            partial_path: Path(path_nibbles.to_vec()),
+            path: Path(path_nibbles.to_vec()),
             children: Default::default(),
             value: Some(vec![1, 2, 3, 4]),
             phantom: PhantomData,
@@ -779,6 +905,26 @@ mod tests {
         }
 
         assert_eq!(node, hydrated_node);
+    }
+
+    #[test_case(&[],&[0])]
+    #[test_case(&[0],&[4,0])]
+    #[test_case(&[0x01],&[4,0x10])]
+    #[test_case(&[0x0F],&[4,0xF0])]
+    #[test_case(&[0x00, 0x00],&[8,0x00])]
+    #[test_case(&[0x01, 0x02],&[8,0x12])]
+    #[test_case(&[0x00,0x0F],&[8,0x0F])]
+    #[test_case(&[0x0F,0x0F],&[8,0xFF])]
+    #[test_case(&[0x0F,0x01,0x0F],&[12,0xF1,0xF0])]
+    fn test_encode_path_with_bits_prefix(path_nibbles: &[u8], expected_bytes: &[u8]) {
+        let path = PathWithBitsPrefix(Path(path_nibbles.to_vec()));
+
+        let serialized_path = PlainCodec::serialize(&path).unwrap();
+        assert_eq!(serialized_path, expected_bytes);
+
+        let deserialized_path =
+            PlainCodec::deserialize::<PathWithBitsPrefix>(&serialized_path).unwrap();
+        assert_eq!(deserialized_path.0, path.0);
     }
 
     struct Nil;
