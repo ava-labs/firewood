@@ -416,6 +416,7 @@ impl<T> PartialEq for EncodedNode<T> {
     }
 }
 
+/// A path and its length in bits.
 #[derive(Debug)]
 struct PathWithBitsPrefix(u64, Path);
 
@@ -431,9 +432,6 @@ impl<'de> Deserialize<'de> for PathWithBitsPrefix {
     where
         D: serde::Deserializer<'de>,
     {
-        // TODO danlaine: This is slightly abusing the serde API.
-        // We don't know the number of bytes in the tuple until we've read the first u64.
-        // We should implement a custom serializer/deserializer for EncodedNode.
         deserializer.deserialize_seq(TupleVisitor)
     }
 }
@@ -512,15 +510,9 @@ impl Serialize for PathWithBitsPrefix {
     {
         let path_length_bits = self.0;
 
-        let path_bytes = nibbles_to_bytes_iter(self.1.as_ref());
-
-        // If there are an odd number of nibbles, we need an additional byte to hold
-        // the last nibble.
-        // e.g. If this path has 3 nibbles we need to write 2 bytes.
-        // If we didn't add 1 then `path_bytes_len` would be 1.
-        let path_bytes_len = (self.1.len() + 1) / 2;
-
         let mut serializer = serializer.serialize_seq(Some(path_length_bits as usize))?;
+
+        let path_bytes = nibbles_to_bytes_iter(self.1.as_ref());
 
         for byt in path_bytes {
             serializer.serialize_element(&byt)?;
@@ -584,6 +576,9 @@ impl<'de> Deserialize<'de> for EncodedNode<PlainCodec> {
 }
 
 // Note that the serializer passed in should always be the same type as T in EncodedNode<T>.
+// TODO danlaine: Consider implementing our own serializer for hashing nodes so that we don't
+// need to make assumptions about how values are serialized by the [serde::Serializer].
+// Namely, we should implement it specifically so it encodes nodes the same way as merkledb.
 impl Serialize for EncodedNode<Bincode> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut list = <[Vec<u8>; BranchNode::MAX_CHILDREN + 2]>::default();
