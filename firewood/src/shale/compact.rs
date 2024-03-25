@@ -364,7 +364,7 @@ impl<M: LinearStore> CompactSpaceInner<M> {
             assert!(!header.is_freed);
             header.payload_size
         };
-        let mut free_header_offset = header_offset; // todo document
+        let mut free_header_offset = header_offset;
         let mut free_payload_size = header_payload_size;
 
         if header_offset & (region_size - 1) > 0 {
@@ -398,9 +398,9 @@ impl<M: LinearStore> CompactSpaceInner<M> {
                 let next_footer_offset = next_header_offset + hsize + next_header.payload_size;
                 free_footer_offset = next_footer_offset;
                 {
-                    let nfooter =
+                    let next_footer =
                         self.get_footer(DiskAddress::from(next_footer_offset as usize))?;
-                    assert!(next_footer_offset == nfooter.payload_size);
+                    assert!(next_header.payload_size == next_footer.payload_size);
                 }
                 free_payload_size += hsize + fsize + next_header.payload_size;
                 self.del_desc(next_header.desc_addr)?;
