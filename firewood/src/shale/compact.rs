@@ -354,11 +354,9 @@ impl<M: LinearStore> CompactSpaceInner<M> {
     }
 
     fn free(&mut self, addr: u64) -> Result<(), ShaleError> {
-        let hsize = CompactHeader::SERIALIZED_LEN;
-        let fsize = CompactFooter::SERIALIZED_LEN;
         let regn_size = 1 << self.regn_nbit;
 
-        let mut offset = addr - hsize;
+        let mut offset = addr - CompactHeader::SERIALIZED_LEN;
         let header_payload_size = {
             let header = self.get_header(DiskAddress::from(offset as usize))?;
             assert!(!header.is_freed);
@@ -369,16 +367,18 @@ impl<M: LinearStore> CompactSpaceInner<M> {
 
         if offset & (regn_size - 1) > 0 {
             // merge with lower data segment
-            offset -= fsize;
+            offset -= CompactFooter::SERIALIZED_LEN;
             let (pheader_is_freed, pheader_payload_size, pheader_desc_addr) = {
                 let pfooter = self.get_footer(DiskAddress::from(offset as usize))?;
-                offset -= pfooter.payload_size + hsize;
+                offset -= pfooter.payload_size + CompactHeader::SERIALIZED_LEN;
                 let pheader = self.get_header(DiskAddress::from(offset as usize))?;
                 (pheader.is_freed, pheader.payload_size, pheader.desc_addr)
             };
             if pheader_is_freed {
                 h = offset;
-                payload_size += hsize + fsize + pheader_payload_size;
+                payload_size += CompactHeader::SERIALIZED_LEN
+                    + CompactFooter::SERIALIZED_LEN
+                    + pheader_payload_size;
                 self.del_desc(pheader_desc_addr)?;
             }
         }
@@ -387,23 +387,27 @@ impl<M: LinearStore> CompactSpaceInner<M> {
         let mut f = offset;
 
         #[allow(clippy::unwrap_used)]
-        if offset + fsize < self.header.data_space_tail.unwrap().get() as u64
-            && (regn_size - (offset & (regn_size - 1))) >= fsize + hsize
+        if offset + CompactFooter::SERIALIZED_LEN
+            < self.header.data_space_tail.unwrap().get() as u64
+            && (regn_size - (offset & (regn_size - 1)))
+                >= CompactFooter::SERIALIZED_LEN + CompactHeader::SERIALIZED_LEN
         {
             // merge with higher data segment
-            offset += fsize;
+            offset += CompactFooter::SERIALIZED_LEN;
             let (nheader_is_freed, nheader_payload_size, nheader_desc_addr) = {
                 let nheader = self.get_header(DiskAddress::from(offset as usize))?;
                 (nheader.is_freed, nheader.payload_size, nheader.desc_addr)
             };
             if nheader_is_freed {
-                offset += hsize + nheader_payload_size;
+                offset += CompactHeader::SERIALIZED_LEN + nheader_payload_size;
                 f = offset;
                 {
                     let nfooter = self.get_footer(DiskAddress::from(offset as usize))?;
                     assert!(nheader_payload_size == nfooter.payload_size);
                 }
-                payload_size += hsize + fsize + nheader_payload_size;
+                payload_size += CompactHeader::SERIALIZED_LEN
+                    + CompactFooter::SERIALIZED_LEN
+                    + nheader_payload_size;
                 self.del_desc(nheader_desc_addr)?;
             }
         }
@@ -434,14 +438,14 @@ impl<M: LinearStore> CompactSpaceInner<M> {
     }
 
     fn alloc_from_freed(&mut self, length: u64) -> Result<Option<u64>, ShaleError> {
+        const HEADER_SIZE: usize = CompactHeader::SERIALIZED_LEN as usize;
+        const FOOTER_SIZE: usize = CompactFooter::SERIALIZED_LEN as usize;
+        const DESCRIPTOR_SIZE: usize = CompactDescriptor::SERIALIZED_LEN as usize;
+
         let tail = *self.header.meta_space_tail;
         if tail == *self.header.base_addr {
             return Ok(None);
         }
-
-        let hsize = CompactHeader::SERIALIZED_LEN as usize;
-        let fsize = CompactFooter::SERIALIZED_LEN as usize;
-        let dsize = CompactDescriptor::SERIALIZED_LEN as usize;
 
         let mut old_alloc_addr = *self.header.alloc_addr;
 
@@ -468,7 +472,7 @@ impl<M: LinearStore> CompactSpaceInner<M> {
                 }
                 self.del_desc(ptr)?;
                 true
-            } else if desc_payload_size > length as usize + hsize + fsize {
+            } else if desc_payload_size > length as usize + HEADER_SIZE + FOOTER_SIZE {
                 // able to split
                 {
                     let mut lheader = self.get_header(DiskAddress::from(desc_haddr))?;
@@ -483,15 +487,16 @@ impl<M: LinearStore> CompactSpaceInner<M> {
                         .unwrap();
                 }
                 {
-                    let mut lfooter =
-                        self.get_footer(DiskAddress::from(desc_haddr + hsize + length as usize))?;
+                    let mut lfooter = self.get_footer(DiskAddress::from(
+                        desc_haddr + HEADER_SIZE + length as usize,
+                    ))?;
                     //assert!(lfooter.payload_size == desc_payload_size);
                     #[allow(clippy::unwrap_used)]
                     lfooter.modify(|f| f.payload_size = length).unwrap();
                 }
 
-                let offset = desc_haddr + hsize + length as usize + fsize;
-                let rpayload_size = desc_payload_size - length as usize - fsize - hsize;
+                let offset = desc_haddr + HEADER_SIZE + length as usize + FOOTER_SIZE;
+                let rpayload_size = desc_payload_size - length as usize - FOOTER_SIZE - HEADER_SIZE;
                 let rdesc_addr = self.new_desc()?;
                 {
                     let mut rdesc = self.get_descriptor(rdesc_addr)?;
@@ -516,7 +521,7 @@ impl<M: LinearStore> CompactSpaceInner<M> {
                 }
                 {
                     let mut rfooter =
-                        self.get_footer(DiskAddress::from(offset + hsize + rpayload_size))?;
+                        self.get_footer(DiskAddress::from(offset + HEADER_SIZE + rpayload_size))?;
                     #[allow(clippy::unwrap_used)]
                     rfooter
                         .modify(|f| f.payload_size = rpayload_size as u64)
@@ -530,10 +535,10 @@ impl<M: LinearStore> CompactSpaceInner<M> {
             #[allow(clippy::unwrap_used)]
             if exit {
                 self.header.alloc_addr.modify(|r| *r = ptr).unwrap();
-                res = Some((desc_haddr + hsize) as u64);
+                res = Some((desc_haddr + HEADER_SIZE) as u64);
                 break;
             }
-            ptr += dsize;
+            ptr += DESCRIPTOR_SIZE;
             if ptr >= tail {
                 ptr = *self.header.base_addr;
             }
