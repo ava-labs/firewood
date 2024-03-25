@@ -118,7 +118,7 @@ struct DbParams {
 }
 
 #[derive(Clone, Debug)]
-/// Necessary linear space instances bundled for a `CompactSpace`.
+/// Necessary linear space instances bundled for a `Store`.
 struct SubUniverse<T> {
     meta: T,
     payload: T,
@@ -616,7 +616,7 @@ impl Db {
         let meta: StoreRevMut = base.merkle.meta.clone().into();
         let payload: StoreRevMut = base.merkle.payload.clone().into();
 
-        // get references to the DbHeader and the CompactSpaceHeader
+        // get references to the DbHeader and the StoreHeader
         // for free space management
         let db_header_ref = Db::get_db_header_ref(&meta)?;
         let merkle_payload_header_ref =
@@ -656,7 +656,7 @@ impl Db {
         // The header consists of three parts:
         // DbParams
         // DbHeader (just a pointer to the sentinel)
-        // CompactSpaceHeader for future allocations
+        // StoreHeader for future allocations
         let (params, hdr, csh);
         let header_bytes: Vec<u8> = {
             params = DbParams {
@@ -677,7 +677,7 @@ impl Db {
             bytemuck::bytes_of(&hdr)
         })
         .chain({
-            // write out the CompactSpaceHeader
+            // write out the StoreHeader
             let space_reserved =
                 NonZeroUsize::new(SPACE_RESERVED as usize).expect("SPACE_RESERVED is non-zero");
             csh = StoreHeader::new(space_reserved, space_reserved);

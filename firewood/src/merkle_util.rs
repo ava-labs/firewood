@@ -73,7 +73,7 @@ where
         let cache = shale::ObjCache::new(1);
         let space =
             shale::compact::Store::new(mem_meta, mem_payload, compact_header, cache, 10, 16)
-                .expect("CompactSpace init fail");
+                .expect("Store init fail");
 
         let merkle = Merkle::new(space);
         #[allow(clippy::unwrap_used)]

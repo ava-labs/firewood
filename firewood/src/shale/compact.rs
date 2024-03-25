@@ -160,7 +160,7 @@ impl Storable for ObjDescriptor {
     }
 }
 
-/// A header for a [CompactSpace].
+/// A header for a [Store].
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct StoreHeader {
