@@ -417,9 +417,9 @@ impl<M: LinearStore> CompactSpaceInner<M> {
             })
             .unwrap();
         }
-        let mut header = self.get_header(DiskAddress::from(free_header_offset as usize))?;
+        let mut free_header = self.get_header(DiskAddress::from(free_header_offset as usize))?;
         #[allow(clippy::unwrap_used)]
-        header
+        free_header
             .modify(|h| {
                 h.payload_size = free_payload_size;
                 h.is_freed = true;
@@ -427,9 +427,9 @@ impl<M: LinearStore> CompactSpaceInner<M> {
             })
             .unwrap();
 
-        let mut footer = self.get_footer(DiskAddress::from(free_footer_offset as usize))?;
+        let mut free_footer = self.get_footer(DiskAddress::from(free_footer_offset as usize))?;
         #[allow(clippy::unwrap_used)]
-        footer
+        free_footer
             .modify(|f| f.payload_size = free_payload_size)
             .unwrap();
 
