@@ -60,7 +60,7 @@ impl Storable for ChunkHeader {
                 .expect("invalid slice"),
         );
         Ok(Self {
-            chunk_size: chunk_size,
+            chunk_size,
             is_freed,
             desc_addr: DiskAddress(NonZeroUsize::new(desc_addr)),
         })
