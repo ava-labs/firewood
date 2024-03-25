@@ -356,55 +356,54 @@ impl<M: LinearStore> CompactSpaceInner<M> {
     fn free(&mut self, addr: u64) -> Result<(), ShaleError> {
         let hsize = CompactHeader::SERIALIZED_LEN;
         let fsize = CompactFooter::SERIALIZED_LEN;
-        let regn_size = 1 << self.regn_nbit;
+        let region_size = 1 << self.regn_nbit;
 
-        let mut offset = addr - hsize;
+        let header_offset = addr - hsize;
         let header_payload_size = {
-            let header = self.get_header(DiskAddress::from(offset as usize))?;
+            let header = self.get_header(DiskAddress::from(header_offset as usize))?;
             assert!(!header.is_freed);
             header.payload_size
         };
-        let mut h = offset;
+        let mut h = header_offset; // todo document
         let mut payload_size = header_payload_size;
 
-        if offset & (regn_size - 1) > 0 {
-            // merge with lower data segment
-            offset -= fsize;
-            let (pheader_is_freed, pheader_payload_size, pheader_desc_addr) = {
-                let pfooter = self.get_footer(DiskAddress::from(offset as usize))?;
-                offset -= pfooter.payload_size + hsize;
-                let pheader = self.get_header(DiskAddress::from(offset as usize))?;
-                (pheader.is_freed, pheader.payload_size, pheader.desc_addr)
-            };
-            if pheader_is_freed {
-                h = offset;
-                payload_size += hsize + fsize + pheader_payload_size;
-                self.del_desc(pheader_desc_addr)?;
+        if header_offset & (region_size - 1) > 0 {
+            // TODO danlaine: document what this condition means.
+            // merge with previous chunk if it's freed.
+            let prev_footer_offset = header_offset - fsize;
+            let prev_footer = self.get_footer(DiskAddress::from(prev_footer_offset as usize))?;
+
+            let prev_header_offset = prev_footer_offset - prev_footer.payload_size - hsize;
+            let prev_header = self.get_header(DiskAddress::from(prev_header_offset as usize))?;
+
+            if prev_header.is_freed {
+                h = prev_header_offset;
+                payload_size += hsize + fsize + prev_header.payload_size;
+                self.del_desc(prev_header.desc_addr)?;
             }
         }
 
-        offset = addr + header_payload_size;
-        let mut f = offset;
+        let footer_offset = addr + header_payload_size;
+        let mut f = footer_offset;
 
         #[allow(clippy::unwrap_used)]
-        if offset + fsize < self.header.data_space_tail.unwrap().get() as u64
-            && (regn_size - (offset & (regn_size - 1))) >= fsize + hsize
+        if footer_offset + fsize < self.header.data_space_tail.unwrap().get() as u64
+            && (region_size - (footer_offset & (region_size - 1))) >= fsize + hsize
         {
-            // merge with higher data segment
-            offset += fsize;
-            let (nheader_is_freed, nheader_payload_size, nheader_desc_addr) = {
-                let nheader = self.get_header(DiskAddress::from(offset as usize))?;
-                (nheader.is_freed, nheader.payload_size, nheader.desc_addr)
-            };
-            if nheader_is_freed {
-                offset += hsize + nheader_payload_size;
-                f = offset;
+            // TODO danlaine: document what this condition means.
+            // merge with next chunk if it's freed.
+            let next_header_offset = footer_offset + fsize;
+            let next_header = self.get_header(DiskAddress::from(next_header_offset as usize))?;
+            if next_header.is_freed {
+                let next_footer_offset = next_header_offset + hsize + next_header.payload_size;
+                f = next_footer_offset;
                 {
-                    let nfooter = self.get_footer(DiskAddress::from(offset as usize))?;
-                    assert!(nheader_payload_size == nfooter.payload_size);
+                    let nfooter =
+                        self.get_footer(DiskAddress::from(next_footer_offset as usize))?;
+                    assert!(next_footer_offset == nfooter.payload_size);
                 }
-                payload_size += hsize + fsize + nheader_payload_size;
-                self.del_desc(nheader_desc_addr)?;
+                payload_size += hsize + fsize + next_header.payload_size;
+                self.del_desc(next_header.desc_addr)?;
             }
         }
 
@@ -418,17 +417,19 @@ impl<M: LinearStore> CompactSpaceInner<M> {
             })
             .unwrap();
         }
-        let mut h = self.get_header(DiskAddress::from(h as usize))?;
-        let mut f = self.get_footer(DiskAddress::from(f as usize))?;
+        let mut header = self.get_header(DiskAddress::from(h as usize))?;
         #[allow(clippy::unwrap_used)]
-        h.modify(|h| {
-            h.payload_size = payload_size;
-            h.is_freed = true;
-            h.desc_addr = desc_addr;
-        })
-        .unwrap();
+        header
+            .modify(|h| {
+                h.payload_size = payload_size;
+                h.is_freed = true;
+                h.desc_addr = desc_addr;
+            })
+            .unwrap();
+
+        let mut footer = self.get_footer(DiskAddress::from(f as usize))?;
         #[allow(clippy::unwrap_used)]
-        f.modify(|f| f.payload_size = payload_size).unwrap();
+        footer.modify(|f| f.payload_size = payload_size).unwrap();
 
         Ok(())
     }
@@ -545,7 +546,7 @@ impl<M: LinearStore> CompactSpaceInner<M> {
     }
 
     fn alloc_new(&mut self, length: u64) -> Result<u64, ShaleError> {
-        let regn_size = 1 << self.regn_nbit;
+        let region_size = 1 << self.regn_nbit;
         let total_length = CompactHeader::SERIALIZED_LEN + length + CompactFooter::SERIALIZED_LEN;
         let mut offset = *self.header.data_space_tail;
         #[allow(clippy::unwrap_used)]
@@ -553,7 +554,7 @@ impl<M: LinearStore> CompactSpaceInner<M> {
             .data_space_tail
             .modify(|r| {
                 // an item is always fully in one region
-                let rem = regn_size - (offset & (regn_size - 1)).get();
+                let rem = region_size - (offset & (region_size - 1)).get();
                 if rem < total_length as usize {
                     offset += rem;
                     *r += rem;
