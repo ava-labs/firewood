@@ -14,14 +14,15 @@ use std::io::{Cursor, Write};
 use std::num::NonZeroUsize;
 use std::sync::RwLock;
 
+/// Marks the end of an [Obj].
 #[derive(Debug)]
-pub struct CompactHeader {
+pub struct ObjHeader {
     payload_size: u64,
     is_freed: bool,
     desc_addr: DiskAddress,
 }
 
-impl CompactHeader {
+impl ObjHeader {
     const IS_FREED_OFFSET: usize = std::mem::size_of::<usize>();
     const DESC_ADDR_OFFSET: usize = Self::IS_FREED_OFFSET + 1;
     pub const SERIALIZED_LEN: u64 = (Self::DESC_ADDR_OFFSET + std::mem::size_of::<usize>()) as u64;
@@ -35,7 +36,7 @@ impl CompactHeader {
     }
 }
 
-impl Storable for CompactHeader {
+impl Storable for ObjHeader {
     fn deserialize<T: LinearStore>(addr: usize, mem: &T) -> Result<Self, ShaleError> {
         let raw = mem
             .get_view(addr, Self::SERIALIZED_LEN)
@@ -77,16 +78,17 @@ impl Storable for CompactHeader {
     }
 }
 
+/// Marks the end of an [Obj].
 #[derive(Debug)]
-struct CompactFooter {
+struct ObjFooter {
     payload_size: u64,
 }
 
-impl CompactFooter {
+impl ObjFooter {
     const SERIALIZED_LEN: u64 = std::mem::size_of::<u64>() as u64;
 }
 
-impl Storable for CompactFooter {
+impl Storable for ObjFooter {
     fn deserialize<T: LinearStore>(addr: usize, mem: &T) -> Result<Self, ShaleError> {
         let raw = mem
             .get_view(addr, Self::SERIALIZED_LEN)
@@ -110,17 +112,17 @@ impl Storable for CompactFooter {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct CompactDescriptor {
+struct ObjDescriptor {
     payload_size: u64,
     haddr: usize, // disk address of the free space
 }
 
-impl CompactDescriptor {
+impl ObjDescriptor {
     const HADDR_OFFSET: usize = 8;
     const SERIALIZED_LEN: u64 = (Self::HADDR_OFFSET + std::mem::size_of::<usize>()) as u64;
 }
 
-impl Storable for CompactDescriptor {
+impl Storable for ObjDescriptor {
     fn deserialize<T: LinearStore>(addr: usize, mem: &T) -> Result<Self, ShaleError> {
         let raw = mem
             .get_view(addr, Self::SERIALIZED_LEN)
@@ -158,9 +160,10 @@ impl Storable for CompactDescriptor {
     }
 }
 
+/// A header for a [CompactSpace].
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
-pub struct CompactSpaceHeader {
+pub struct StoreHeader {
     meta_space_tail: DiskAddress,
     data_space_tail: DiskAddress,
     base_addr: DiskAddress,
@@ -168,14 +171,14 @@ pub struct CompactSpaceHeader {
 }
 
 #[derive(Debug)]
-struct CompactSpaceHeaderSliced {
+struct StoreHeaderSliced {
     meta_space_tail: Obj<DiskAddress>,
     data_space_tail: Obj<DiskAddress>,
     base_addr: Obj<DiskAddress>,
     alloc_addr: Obj<DiskAddress>,
 }
 
-impl CompactSpaceHeaderSliced {
+impl StoreHeaderSliced {
     fn flush_dirty(&mut self) {
         self.meta_space_tail.flush_dirty();
         self.data_space_tail.flush_dirty();
@@ -184,7 +187,7 @@ impl CompactSpaceHeaderSliced {
     }
 }
 
-impl CompactSpaceHeader {
+impl StoreHeader {
     const META_SPACE_TAIL_OFFSET: usize = 0;
     const DATA_SPACE_TAIL_OFFSET: usize = DiskAddress::SERIALIZED_LEN as usize;
     const BASE_ADDR_OFFSET: usize =
@@ -201,8 +204,8 @@ impl CompactSpaceHeader {
         }
     }
 
-    fn into_fields(r: Obj<Self>) -> Result<CompactSpaceHeaderSliced, ShaleError> {
-        Ok(CompactSpaceHeaderSliced {
+    fn into_fields(r: Obj<Self>) -> Result<StoreHeaderSliced, ShaleError> {
+        Ok(StoreHeaderSliced {
             meta_space_tail: StoredView::slice(
                 &r,
                 Self::META_SPACE_TAIL_OFFSET,
@@ -231,7 +234,7 @@ impl CompactSpaceHeader {
     }
 }
 
-impl Storable for CompactSpaceHeader {
+impl Storable for StoreHeader {
     fn deserialize<T: LinearStore + Debug>(addr: usize, mem: &T) -> Result<Self, ShaleError> {
         let raw = mem
             .get_view(addr, Self::SERIALIZED_LEN)
@@ -278,17 +281,17 @@ impl Storable for CompactSpaceHeader {
 }
 
 #[derive(Debug)]
-struct CompactSpaceInner<M> {
+struct StoreInner<M> {
     meta_space: M,
     data_space: M,
-    header: CompactSpaceHeaderSliced,
+    header: StoreHeaderSliced,
     alloc_max_walk: u64,
     regn_nbit: u64,
 }
 
-impl From<CompactSpaceInner<StoreRevMut>> for CompactSpaceInner<StoreRevShared> {
-    fn from(value: CompactSpaceInner<StoreRevMut>) -> CompactSpaceInner<StoreRevShared> {
-        CompactSpaceInner {
+impl From<StoreInner<StoreRevMut>> for StoreInner<StoreRevShared> {
+    fn from(value: StoreInner<StoreRevMut>) -> StoreInner<StoreRevShared> {
+        StoreInner {
             meta_space: value.meta_space.into(),
             data_space: value.data_space.into(),
             header: value.header,
@@ -298,9 +301,9 @@ impl From<CompactSpaceInner<StoreRevMut>> for CompactSpaceInner<StoreRevShared> 
     }
 }
 
-impl<M: LinearStore> CompactSpaceInner<M> {
-    fn get_descriptor(&self, ptr: DiskAddress) -> Result<Obj<CompactDescriptor>, ShaleError> {
-        StoredView::ptr_to_obj(&self.meta_space, ptr, CompactDescriptor::SERIALIZED_LEN)
+impl<M: LinearStore> StoreInner<M> {
+    fn get_descriptor(&self, ptr: DiskAddress) -> Result<Obj<ObjDescriptor>, ShaleError> {
+        StoredView::ptr_to_obj(&self.meta_space, ptr, ObjDescriptor::SERIALIZED_LEN)
     }
 
     fn get_data_ref<U: Storable + 'static>(
@@ -311,16 +314,16 @@ impl<M: LinearStore> CompactSpaceInner<M> {
         StoredView::ptr_to_obj(&self.data_space, ptr, len_limit)
     }
 
-    fn get_header(&self, ptr: DiskAddress) -> Result<Obj<CompactHeader>, ShaleError> {
-        self.get_data_ref::<CompactHeader>(ptr, CompactHeader::SERIALIZED_LEN)
+    fn get_header(&self, ptr: DiskAddress) -> Result<Obj<ObjHeader>, ShaleError> {
+        self.get_data_ref::<ObjHeader>(ptr, ObjHeader::SERIALIZED_LEN)
     }
 
-    fn get_footer(&self, ptr: DiskAddress) -> Result<Obj<CompactFooter>, ShaleError> {
-        self.get_data_ref::<CompactFooter>(ptr, CompactFooter::SERIALIZED_LEN)
+    fn get_footer(&self, ptr: DiskAddress) -> Result<Obj<ObjFooter>, ShaleError> {
+        self.get_data_ref::<ObjFooter>(ptr, ObjFooter::SERIALIZED_LEN)
     }
 
     fn del_desc(&mut self, desc_addr: DiskAddress) -> Result<(), ShaleError> {
-        let desc_size = CompactDescriptor::SERIALIZED_LEN;
+        let desc_size = ObjDescriptor::SERIALIZED_LEN;
         // TODO: subtracting two disk addresses is only used here, probably can rewrite this
         // debug_assert!((desc_addr.0 - self.header.base_addr.value.into()) % desc_size == 0);
         #[allow(clippy::unwrap_used)]
@@ -347,15 +350,15 @@ impl<M: LinearStore> CompactSpaceInner<M> {
         #[allow(clippy::unwrap_used)]
         self.header
             .meta_space_tail
-            .modify(|r| *r += CompactDescriptor::SERIALIZED_LEN as usize)
+            .modify(|r| *r += ObjDescriptor::SERIALIZED_LEN as usize)
             .unwrap();
 
         Ok(DiskAddress(addr))
     }
 
     fn free(&mut self, addr: u64) -> Result<(), ShaleError> {
-        let hsize = CompactHeader::SERIALIZED_LEN;
-        let fsize = CompactFooter::SERIALIZED_LEN;
+        let hsize = ObjHeader::SERIALIZED_LEN;
+        let fsize = ObjFooter::SERIALIZED_LEN;
         let regn_size = 1 << self.regn_nbit;
 
         let mut offset = addr - hsize;
@@ -439,9 +442,9 @@ impl<M: LinearStore> CompactSpaceInner<M> {
             return Ok(None);
         }
 
-        let hsize = CompactHeader::SERIALIZED_LEN as usize;
-        let fsize = CompactFooter::SERIALIZED_LEN as usize;
-        let dsize = CompactDescriptor::SERIALIZED_LEN as usize;
+        let hsize = ObjHeader::SERIALIZED_LEN as usize;
+        let fsize = ObjFooter::SERIALIZED_LEN as usize;
+        let dsize = ObjDescriptor::SERIALIZED_LEN as usize;
 
         let mut old_alloc_addr = *self.header.alloc_addr;
 
@@ -546,7 +549,7 @@ impl<M: LinearStore> CompactSpaceInner<M> {
 
     fn alloc_new(&mut self, length: u64) -> Result<u64, ShaleError> {
         let regn_size = 1 << self.regn_nbit;
-        let total_length = CompactHeader::SERIALIZED_LEN + length + CompactFooter::SERIALIZED_LEN;
+        let total_length = ObjHeader::SERIALIZED_LEN + length + ObjFooter::SERIALIZED_LEN;
         let mut offset = *self.header.data_space_tail;
         #[allow(clippy::unwrap_used)]
         self.header
@@ -563,7 +566,7 @@ impl<M: LinearStore> CompactSpaceInner<M> {
             .unwrap();
         let mut h = self.get_header(offset)?;
         let mut f =
-            self.get_footer(offset + CompactHeader::SERIALIZED_LEN as usize + length as usize)?;
+            self.get_footer(offset + ObjHeader::SERIALIZED_LEN as usize + length as usize)?;
         #[allow(clippy::unwrap_used)]
         h.modify(|h| {
             h.payload_size = length;
@@ -574,7 +577,7 @@ impl<M: LinearStore> CompactSpaceInner<M> {
         #[allow(clippy::unwrap_used)]
         f.modify(|f| f.payload_size = length).unwrap();
         #[allow(clippy::unwrap_used)]
-        Ok((offset + CompactHeader::SERIALIZED_LEN as usize)
+        Ok((offset + ObjHeader::SERIALIZED_LEN as usize)
             .0
             .unwrap()
             .get() as u64)
@@ -592,25 +595,25 @@ impl<M: LinearStore> CompactSpaceInner<M> {
 }
 
 #[derive(Debug)]
-pub struct CompactSpace<T: Storable, M> {
-    inner: RwLock<CompactSpaceInner<M>>,
+pub struct Store<T: Storable, M> {
+    inner: RwLock<StoreInner<M>>,
     obj_cache: ObjCache<T>,
 }
 
-impl<T: Storable, M: LinearStore> CompactSpace<T, M> {
+impl<T: Storable, M: LinearStore> Store<T, M> {
     pub fn new(
         meta_space: M,
         data_space: M,
-        header: Obj<CompactSpaceHeader>,
+        header: Obj<StoreHeader>,
         obj_cache: super::ObjCache<T>,
         alloc_max_walk: u64,
         regn_nbit: u64,
     ) -> Result<Self, ShaleError> {
-        let cs = CompactSpace {
-            inner: RwLock::new(CompactSpaceInner {
+        let cs = Store {
+            inner: RwLock::new(StoreInner {
                 meta_space,
                 data_space,
-                header: CompactSpaceHeader::into_fields(header)?,
+                header: StoreHeader::into_fields(header)?,
                 alloc_max_walk,
                 regn_nbit,
             }),
@@ -620,18 +623,18 @@ impl<T: Storable, M: LinearStore> CompactSpace<T, M> {
     }
 }
 
-impl From<CompactSpace<Node, StoreRevMut>> for CompactSpace<Node, StoreRevShared> {
+impl From<Store<Node, StoreRevMut>> for Store<Node, StoreRevShared> {
     #[allow(clippy::unwrap_used)]
-    fn from(value: CompactSpace<Node, StoreRevMut>) -> Self {
+    fn from(value: Store<Node, StoreRevMut>) -> Self {
         let inner = value.inner.into_inner().unwrap();
-        CompactSpace {
+        Store {
             inner: RwLock::new(inner.into()),
             obj_cache: value.obj_cache,
         }
     }
 }
 
-impl<T: Storable + Debug + 'static, M: LinearStore> CompactSpace<T, M> {
+impl<T: Storable + Debug + 'static, M: LinearStore> Store<T, M> {
     pub(crate) fn put_item(&self, item: T, extra: u64) -> Result<ObjRef<'_, T>, ShaleError> {
         let size = item.serialized_len() + extra;
         #[allow(clippy::unwrap_used)]
@@ -680,15 +683,15 @@ impl<T: Storable + Debug + 'static, M: LinearStore> CompactSpace<T, M> {
         }
 
         #[allow(clippy::unwrap_used)]
-        if ptr < DiskAddress::from(CompactSpaceHeader::SERIALIZED_LEN as usize) {
+        if ptr < DiskAddress::from(StoreHeader::SERIALIZED_LEN as usize) {
             return Err(ShaleError::InvalidAddressLength {
-                expected: CompactSpaceHeader::SERIALIZED_LEN,
+                expected: StoreHeader::SERIALIZED_LEN,
                 found: ptr.0.map(|inner| inner.get()).unwrap_or_default() as u64,
             });
         }
 
         let payload_size = inner
-            .get_header(ptr - CompactHeader::SERIALIZED_LEN as usize)?
+            .get_header(ptr - ObjHeader::SERIALIZED_LEN as usize)?
             .payload_size;
         let obj = self.obj_cache.put(inner.get_data_ref(ptr, payload_size)?);
         let cache = &self.obj_cache;
@@ -769,21 +772,17 @@ mod tests {
         let compact_header = DiskAddress::from(0x1);
         dm.write(
             compact_header.unwrap().get(),
-            &shale::to_dehydrated(&CompactSpaceHeader::new(
-                reserved.0.unwrap(),
-                reserved.0.unwrap(),
-            ))
-            .unwrap(),
+            &shale::to_dehydrated(&StoreHeader::new(reserved.0.unwrap(), reserved.0.unwrap()))
+                .unwrap(),
         )
         .unwrap();
         let compact_header =
-            StoredView::ptr_to_obj(&dm, compact_header, CompactHeader::SERIALIZED_LEN).unwrap();
+            StoredView::ptr_to_obj(&dm, compact_header, ObjHeader::SERIALIZED_LEN).unwrap();
         let mem_meta = dm;
         let mem_payload = InMemLinearStore::new(compact_size.get() as u64, 0x1);
 
         let cache: ObjCache<Hash> = ObjCache::new(1);
-        let space =
-            CompactSpace::new(mem_meta, mem_payload, compact_header, cache, 10, 16).unwrap();
+        let space = Store::new(mem_meta, mem_payload, compact_header, cache, 10, 16).unwrap();
 
         // initial write
         let data = b"hello world";
