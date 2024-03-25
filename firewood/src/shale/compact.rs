@@ -364,8 +364,8 @@ impl<M: LinearStore> CompactSpaceInner<M> {
             assert!(!header.is_freed);
             header.payload_size
         };
-        let mut h = header_offset; // todo document
-        let mut payload_size = header_payload_size;
+        let mut free_header_offset = header_offset; // todo document
+        let mut free_payload_size = header_payload_size;
 
         if header_offset & (region_size - 1) > 0 {
             // TODO danlaine: document what this condition means.
@@ -377,14 +377,14 @@ impl<M: LinearStore> CompactSpaceInner<M> {
             let prev_header = self.get_header(DiskAddress::from(prev_header_offset as usize))?;
 
             if prev_header.is_freed {
-                h = prev_header_offset;
-                payload_size += hsize + fsize + prev_header.payload_size;
+                free_header_offset = prev_header_offset;
+                free_payload_size += hsize + fsize + prev_header.payload_size;
                 self.del_desc(prev_header.desc_addr)?;
             }
         }
 
         let footer_offset = addr + header_payload_size;
-        let mut f = footer_offset;
+        let mut free_footer_offset = footer_offset;
 
         #[allow(clippy::unwrap_used)]
         if footer_offset + fsize < self.header.data_space_tail.unwrap().get() as u64
@@ -396,13 +396,13 @@ impl<M: LinearStore> CompactSpaceInner<M> {
             let next_header = self.get_header(DiskAddress::from(next_header_offset as usize))?;
             if next_header.is_freed {
                 let next_footer_offset = next_header_offset + hsize + next_header.payload_size;
-                f = next_footer_offset;
+                free_footer_offset = next_footer_offset;
                 {
                     let nfooter =
                         self.get_footer(DiskAddress::from(next_footer_offset as usize))?;
                     assert!(next_footer_offset == nfooter.payload_size);
                 }
-                payload_size += hsize + fsize + next_header.payload_size;
+                free_payload_size += hsize + fsize + next_header.payload_size;
                 self.del_desc(next_header.desc_addr)?;
             }
         }
@@ -412,24 +412,26 @@ impl<M: LinearStore> CompactSpaceInner<M> {
             let mut desc = self.get_descriptor(desc_addr)?;
             #[allow(clippy::unwrap_used)]
             desc.modify(|d| {
-                d.payload_size = payload_size;
-                d.haddr = h as usize;
+                d.payload_size = free_payload_size;
+                d.haddr = free_header_offset as usize;
             })
             .unwrap();
         }
-        let mut header = self.get_header(DiskAddress::from(h as usize))?;
+        let mut header = self.get_header(DiskAddress::from(free_header_offset as usize))?;
         #[allow(clippy::unwrap_used)]
         header
             .modify(|h| {
-                h.payload_size = payload_size;
+                h.payload_size = free_payload_size;
                 h.is_freed = true;
                 h.desc_addr = desc_addr;
             })
             .unwrap();
 
-        let mut footer = self.get_footer(DiskAddress::from(f as usize))?;
+        let mut footer = self.get_footer(DiskAddress::from(free_footer_offset as usize))?;
         #[allow(clippy::unwrap_used)]
-        footer.modify(|f| f.payload_size = payload_size).unwrap();
+        footer
+            .modify(|f| f.payload_size = free_payload_size)
+            .unwrap();
 
         Ok(())
     }
