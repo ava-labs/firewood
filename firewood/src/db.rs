@@ -678,9 +678,9 @@ impl Db {
         })
         .chain({
             // write out the StoreHeader
-            let reserved_store = NonZeroUsize::new(RESERVED_STORE_ID as usize)
+            let store_reserved = NonZeroUsize::new(RESERVED_STORE_ID as usize)
                 .expect("RESERVED_STORE_ID is non-zero");
-            csh = StoreHeader::new(reserved_store, reserved_store);
+            csh = StoreHeader::new(store_reserved, store_reserved);
             bytemuck::bytes_of(&csh)
         })
         .copied()
