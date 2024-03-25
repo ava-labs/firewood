@@ -8,7 +8,7 @@ use firewood::{
     db::{BatchOp, DbConfig},
     merkle::{Bincode, Merkle, TrieHash, TRIE_HASH_LEN},
     shale::{
-        compact::{ObjHeader, Store},
+        compact::{ChunkHeader, Store},
         disk_address::DiskAddress,
         in_mem::InMemLinearStore,
         LinearStore, ObjCache, Storable, StoredView,
@@ -96,9 +96,9 @@ fn bench_merkle<const N: usize>(criterion: &mut Criterion) {
 
                     #[allow(clippy::unwrap_used)]
                     let merkle_payload_header_ref = StoredView::ptr_to_obj(
-                        &InMemLinearStore::new(2 * ObjHeader::SERIALIZED_LEN, 9),
+                        &InMemLinearStore::new(2 * ChunkHeader::SERIALIZED_LEN, 9),
                         merkle_payload_header,
-                        ObjHeader::SERIALIZED_LEN,
+                        ChunkHeader::SERIALIZED_LEN,
                     )
                     .unwrap();
 

@@ -757,7 +757,7 @@ impl Db {
         StoredView::ptr_to_obj(
             meta_ref,
             payload_header,
-            shale::compact::ObjHeader::SERIALIZED_LEN,
+            shale::compact::ChunkHeader::SERIALIZED_LEN,
         )
         .map_err(Into::into)
     }

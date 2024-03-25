@@ -1427,7 +1427,7 @@ mod tests {
         let compact_header = shale::StoredView::ptr_to_obj(
             &dm,
             compact_header,
-            shale::compact::ObjHeader::SERIALIZED_LEN,
+            shale::compact::ChunkHeader::SERIALIZED_LEN,
         )
         .unwrap();
         let mem_meta = dm;
