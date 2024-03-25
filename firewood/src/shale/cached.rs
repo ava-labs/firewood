@@ -95,6 +95,15 @@ struct InMemLinearStoreView {
     mem: InMemLinearStore,
 }
 
+impl CachedView for InMemLinearStoreView {
+    type DerefReturn = Vec<u8>;
+
+    fn as_deref(&self) -> Self::DerefReturn {
+        #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
+        self.mem.space.read().unwrap()[self.offset..self.offset + self.length].to_vec()
+    }
+}
+
 struct InMemLinearStoreShared(InMemLinearStore);
 
 impl Deref for InMemLinearStoreShared {
@@ -107,15 +116,6 @@ impl Deref for InMemLinearStoreShared {
 impl DerefMut for InMemLinearStoreShared {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
-    }
-}
-
-impl CachedView for InMemLinearStoreView {
-    type DerefReturn = Vec<u8>;
-
-    fn as_deref(&self) -> Self::DerefReturn {
-        #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
-        self.mem.space.read().unwrap()[self.offset..self.offset + self.length].to_vec()
     }
 }
 
