@@ -300,10 +300,6 @@ impl From<StoreInner<StoreRevMut>> for StoreInner<StoreRevShared> {
 }
 
 impl<M: LinearStore> StoreInner<M> {
-    fn get_descriptor(&self, ptr: DiskAddress) -> Result<Obj<ChunkDescriptor>, ShaleError> {
-        StoredView::ptr_to_obj(&self.meta_store, ptr, ChunkDescriptor::SERIALIZED_LEN)
-    }
-
     fn get_data_ref<U: Storable + 'static>(
         &self,
         ptr: DiskAddress,
@@ -320,7 +316,11 @@ impl<M: LinearStore> StoreInner<M> {
         self.get_data_ref::<ChunkFooter>(ptr, ChunkFooter::SERIALIZED_LEN)
     }
 
-    fn del_desc(&mut self, desc_addr: DiskAddress) -> Result<(), ShaleError> {
+    fn get_descriptor(&self, ptr: DiskAddress) -> Result<Obj<ChunkDescriptor>, ShaleError> {
+        StoredView::ptr_to_obj(&self.meta_store, ptr, ChunkDescriptor::SERIALIZED_LEN)
+    }
+
+    fn delete_descriptor(&mut self, desc_addr: DiskAddress) -> Result<(), ShaleError> {
         let desc_size = ChunkDescriptor::SERIALIZED_LEN;
         // TODO: subtracting two disk addresses is only used here, probably can rewrite this
         // debug_assert!((desc_addr.0 - self.header.base_addr.value.into()) % desc_size == 0);
@@ -343,7 +343,7 @@ impl<M: LinearStore> StoreInner<M> {
         Ok(())
     }
 
-    fn new_desc(&mut self) -> Result<DiskAddress, ShaleError> {
+    fn new_descriptor_address(&mut self) -> Result<DiskAddress, ShaleError> {
         let addr = **self.header.meta_store_tail;
         #[allow(clippy::unwrap_used)]
         self.header
@@ -381,7 +381,7 @@ impl<M: LinearStore> StoreInner<M> {
                 free_chunk_size += ChunkHeader::SERIALIZED_LEN
                     + ChunkFooter::SERIALIZED_LEN
                     + prev_header.chunk_size;
-                self.del_desc(prev_header.desc_addr)?;
+                self.delete_descriptor(prev_header.desc_addr)?;
             }
         }
 
@@ -410,11 +410,11 @@ impl<M: LinearStore> StoreInner<M> {
                 free_chunk_size += ChunkHeader::SERIALIZED_LEN
                     + ChunkFooter::SERIALIZED_LEN
                     + next_header.chunk_size;
-                self.del_desc(next_header.desc_addr)?;
+                self.delete_descriptor(next_header.desc_addr)?;
             }
         }
 
-        let desc_addr = self.new_desc()?;
+        let desc_addr = self.new_descriptor_address()?;
         {
             let mut desc = self.get_descriptor(desc_addr)?;
             #[allow(clippy::unwrap_used)]
@@ -476,7 +476,7 @@ impl<M: LinearStore> StoreInner<M> {
                     #[allow(clippy::unwrap_used)]
                     header.modify(|h| h.is_freed = false).unwrap();
                 }
-                self.del_desc(ptr)?;
+                self.delete_descriptor(ptr)?;
                 true
             } else if chunk_size > length as usize + HEADER_SIZE + FOOTER_SIZE {
                 // able to split
@@ -503,7 +503,7 @@ impl<M: LinearStore> StoreInner<M> {
 
                 let offset = desc_haddr + HEADER_SIZE + length as usize + FOOTER_SIZE;
                 let rchunk_size = chunk_size - length as usize - FOOTER_SIZE - HEADER_SIZE;
-                let rdesc_addr = self.new_desc()?;
+                let rdesc_addr = self.new_descriptor_address()?;
                 {
                     let mut rdesc = self.get_descriptor(rdesc_addr)?;
                     #[allow(clippy::unwrap_used)]
@@ -533,7 +533,7 @@ impl<M: LinearStore> StoreInner<M> {
                         .modify(|f| f.chunk_size = rchunk_size as u64)
                         .unwrap();
                 }
-                self.del_desc(ptr)?;
+                self.delete_descriptor(ptr)?;
                 true
             } else {
                 false
