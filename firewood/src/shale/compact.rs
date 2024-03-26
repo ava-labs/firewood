@@ -324,6 +324,8 @@ impl<M: LinearStore> StoreInner<M> {
         let desc_size = ChunkDescriptor::SERIALIZED_LEN;
         // TODO: subtracting two disk addresses is only used here, probably can rewrite this
         // debug_assert!((desc_addr.0 - self.header.base_addr.value.into()) % desc_size == 0);
+
+        // Move the last descriptor to the position of the deleted descriptor
         #[allow(clippy::unwrap_used)]
         self.header
             .meta_store_tail
@@ -331,13 +333,16 @@ impl<M: LinearStore> StoreInner<M> {
             .unwrap();
 
         if desc_addr != DiskAddress(**self.header.meta_store_tail) {
-            let desc_last = self.get_descriptor(*self.header.meta_store_tail.value)?;
+            let last_desc = self.get_descriptor(*self.header.meta_store_tail.value)?;
+
             let mut desc = self.get_descriptor(desc_addr)?;
             #[allow(clippy::unwrap_used)]
-            desc.modify(|r| *r = *desc_last).unwrap();
-            let mut header = self.get_header(desc.haddr.into())?;
+            desc.modify(|r| *r = *last_desc).unwrap();
+
+            // `chunk_header` is associated with the deleted descriptor
+            let mut chunk_header = self.get_header(desc.haddr.into())?;
             #[allow(clippy::unwrap_used)]
-            header.modify(|h| h.desc_addr = desc_addr).unwrap();
+            chunk_header.modify(|h| h.desc_addr = desc_addr).unwrap();
         }
 
         Ok(())
