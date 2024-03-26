@@ -440,21 +440,21 @@ impl<M: LinearStore> StoreInner<M> {
         const FOOTER_SIZE: usize = ChunkFooter::SERIALIZED_LEN as usize;
         const DESCRIPTOR_SIZE: usize = ChunkDescriptor::SERIALIZED_LEN as usize;
 
-        let meta_store_tail = *self.header.meta_store_tail;
-        if meta_store_tail == *self.header.base_addr {
+        let tail = *self.header.meta_store_tail;
+        if tail == *self.header.base_addr {
             return Ok(None);
         }
 
         let mut old_alloc_addr = *self.header.alloc_addr;
 
-        if old_alloc_addr >= meta_store_tail {
+        if old_alloc_addr >= tail {
             old_alloc_addr = *self.header.base_addr;
         }
 
         let mut ptr = old_alloc_addr;
         let mut res: Option<u64> = None;
         for _ in 0..self.alloc_max_walk {
-            assert!(ptr < meta_store_tail);
+            assert!(ptr < tail);
             let (chunk_size, desc_haddr) = {
                 let desc = self.get_descriptor(ptr)?;
                 (desc.chunk_size as usize, desc.haddr)
@@ -537,7 +537,7 @@ impl<M: LinearStore> StoreInner<M> {
                 break;
             }
             ptr += DESCRIPTOR_SIZE;
-            if ptr >= meta_store_tail {
+            if ptr >= tail {
                 ptr = *self.header.base_addr;
             }
             if ptr == old_alloc_addr {
