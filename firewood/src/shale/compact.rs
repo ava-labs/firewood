@@ -115,12 +115,13 @@ impl Storable for ChunkFooter {
 #[derive(Clone, Copy, Debug)]
 struct ChunkDescriptor {
     chunk_size: u64,
-    haddr: usize, // disk address of the free space
+    chunk_header_addr: usize,
 }
 
 impl ChunkDescriptor {
-    const HADDR_OFFSET: usize = 8;
-    const SERIALIZED_LEN: u64 = (Self::HADDR_OFFSET + std::mem::size_of::<usize>()) as u64;
+    const CHUNK_HEADER_ADDR_OFFSET: usize = 8;
+    const SERIALIZED_LEN: u64 =
+        (Self::CHUNK_HEADER_ADDR_OFFSET + std::mem::size_of::<usize>()) as u64;
 }
 
 impl Storable for ChunkDescriptor {
@@ -133,17 +134,20 @@ impl Storable for ChunkDescriptor {
             })?;
         #[allow(clippy::indexing_slicing)]
         let chunk_size = u64::from_le_bytes(
-            raw.as_deref()[..Self::HADDR_OFFSET]
+            raw.as_deref()[..Self::CHUNK_HEADER_ADDR_OFFSET]
                 .try_into()
                 .expect("invalid slice"),
         );
         #[allow(clippy::indexing_slicing)]
-        let haddr = usize::from_le_bytes(
-            raw.as_deref()[Self::HADDR_OFFSET..]
+        let chunk_header_addr = usize::from_le_bytes(
+            raw.as_deref()[Self::CHUNK_HEADER_ADDR_OFFSET..]
                 .try_into()
                 .expect("invalid slice"),
         );
-        Ok(Self { chunk_size, haddr })
+        Ok(Self {
+            chunk_size,
+            chunk_header_addr,
+        })
     }
 
     fn serialized_len(&self) -> u64 {
@@ -153,7 +157,7 @@ impl Storable for ChunkDescriptor {
     fn serialize(&self, to: &mut [u8]) -> Result<(), ShaleError> {
         let mut cur = Cursor::new(to);
         cur.write_all(&self.chunk_size.to_le_bytes())?;
-        cur.write_all(&self.haddr.to_le_bytes())?;
+        cur.write_all(&self.chunk_header_addr.to_le_bytes())?;
         Ok(())
     }
 }
@@ -340,7 +344,7 @@ impl<M: LinearStore> StoreInner<M> {
             desc.modify(|r| *r = *last_desc).unwrap();
 
             // `chunk_header` is associated with the deleted descriptor
-            let mut chunk_header = self.get_header(desc.haddr.into())?;
+            let mut chunk_header = self.get_header(desc.chunk_header_addr.into())?;
             #[allow(clippy::unwrap_used)]
             chunk_header.modify(|h| h.desc_addr = desc_addr).unwrap();
         }
@@ -425,7 +429,7 @@ impl<M: LinearStore> StoreInner<M> {
             #[allow(clippy::unwrap_used)]
             desc.modify(|d| {
                 d.chunk_size = free_chunk_size;
-                d.haddr = free_header_offset as usize;
+                d.chunk_header_addr = free_header_offset as usize;
             })
             .unwrap();
         }
@@ -468,14 +472,14 @@ impl<M: LinearStore> StoreInner<M> {
         let mut res: Option<u64> = None;
         for _ in 0..self.alloc_max_walk {
             assert!(ptr < tail);
-            let (chunk_size, desc_haddr) = {
+            let (chunk_size, chunk_addr) = {
                 let desc = self.get_descriptor(ptr)?;
-                (desc.chunk_size as usize, desc.haddr)
+                (desc.chunk_size as usize, desc.chunk_header_addr)
             };
             let exit = if chunk_size == length as usize {
                 // perfect match
                 {
-                    let mut header = self.get_header(DiskAddress::from(desc_haddr))?;
+                    let mut header = self.get_header(DiskAddress::from(chunk_addr))?;
                     assert_eq!(header.chunk_size as usize, chunk_size);
                     assert!(header.is_freed);
                     #[allow(clippy::unwrap_used)]
@@ -486,7 +490,7 @@ impl<M: LinearStore> StoreInner<M> {
             } else if chunk_size > length as usize + HEADER_SIZE + FOOTER_SIZE {
                 // able to split
                 {
-                    let mut lheader = self.get_header(DiskAddress::from(desc_haddr))?;
+                    let mut lheader = self.get_header(DiskAddress::from(chunk_addr))?;
                     assert_eq!(lheader.chunk_size as usize, chunk_size);
                     assert!(lheader.is_freed);
                     #[allow(clippy::unwrap_used)]
@@ -499,14 +503,14 @@ impl<M: LinearStore> StoreInner<M> {
                 }
                 {
                     let mut lfooter = self.get_footer(DiskAddress::from(
-                        desc_haddr + HEADER_SIZE + length as usize,
+                        chunk_addr + HEADER_SIZE + length as usize,
                     ))?;
                     //assert!(lfooter.chunk_size == chunk_size);
                     #[allow(clippy::unwrap_used)]
                     lfooter.modify(|f| f.chunk_size = length).unwrap();
                 }
 
-                let offset = desc_haddr + HEADER_SIZE + length as usize + FOOTER_SIZE;
+                let offset = chunk_addr + HEADER_SIZE + length as usize + FOOTER_SIZE;
                 let rchunk_size = chunk_size - length as usize - FOOTER_SIZE - HEADER_SIZE;
                 let rdesc_addr = self.new_descriptor_address()?;
                 {
@@ -515,7 +519,7 @@ impl<M: LinearStore> StoreInner<M> {
                     rdesc
                         .modify(|rd| {
                             rd.chunk_size = rchunk_size as u64;
-                            rd.haddr = offset;
+                            rd.chunk_header_addr = offset;
                         })
                         .unwrap();
                 }
@@ -546,7 +550,7 @@ impl<M: LinearStore> StoreInner<M> {
             #[allow(clippy::unwrap_used)]
             if exit {
                 self.header.alloc_addr.modify(|r| *r = ptr).unwrap();
-                res = Some((desc_haddr + HEADER_SIZE) as u64);
+                res = Some((chunk_addr + HEADER_SIZE) as u64);
                 break;
             }
             ptr += DESCRIPTOR_SIZE;
