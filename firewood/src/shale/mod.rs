@@ -89,7 +89,7 @@ pub trait LinearStore: Debug + Send + Sync {
 }
 
 /// A wrapper of `StoredView` to enable writes. The direct construction (by [Obj::from_stored_view]
-/// or [StoredView::ptr_to_obj]) could be useful for some unsafe access to a low-level item (e.g.
+/// or [StoredView::addr_to_obj]) could be useful for some unsafe access to a low-level item (e.g.
 /// headers/metadata at bootstrap) stored at a given [DiskAddress].
 #[derive(Debug)]
 pub struct Obj<T: Storable> {
