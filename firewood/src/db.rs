@@ -10,12 +10,11 @@ use crate::{
     file,
     merkle::{
         Bincode, Key, Merkle, MerkleError, MerkleKeyValueStream, Proof, ProofError, TrieHash,
-        TRIE_HASH_LEN,
     },
     storage::{
         buffer::{DiskBuffer, DiskBufferRequester},
-        CachedStore, MemStoreR, StoreConfig, StoreDelta, StoreRevMut, StoreRevShared, StoreWrite,
-        ZeroStore, PAGE_SIZE_NBIT,
+        CachedStore, MemStoreR, StoreConfig, StoreDelta, StoreRevMut, StoreRevShared,
+        PAGE_SIZE_NBIT,
     },
     v2::api::{self, HashKey, KeyType, ValueType},
 };
@@ -130,42 +129,11 @@ impl<T> SubUniverse<T> {
     }
 }
 
-impl SubUniverse<StoreRevShared> {
-    fn to_mem_store_r(&self) -> SubUniverse<Arc<impl MemStoreR>> {
-        SubUniverse {
-            meta: self.meta.inner().clone(),
-            payload: self.payload.inner().clone(),
-        }
-    }
-}
-
 impl SubUniverse<StoreRevMut> {
     fn new_from_other(&self) -> SubUniverse<StoreRevMut> {
         SubUniverse {
             meta: StoreRevMut::new_from_other(&self.meta),
             payload: StoreRevMut::new_from_other(&self.payload),
-        }
-    }
-}
-
-impl<T: MemStoreR + 'static> SubUniverse<Arc<T>> {
-    fn rewind(
-        &self,
-        meta_writes: &[StoreWrite],
-        payload_writes: &[StoreWrite],
-    ) -> SubUniverse<StoreRevShared> {
-        SubUniverse::new(
-            StoreRevShared::from_ash(self.meta.clone(), meta_writes),
-            StoreRevShared::from_ash(self.payload.clone(), payload_writes),
-        )
-    }
-}
-
-impl SubUniverse<Arc<CachedStore>> {
-    fn to_mem_store_r(&self) -> SubUniverse<Arc<impl MemStoreR>> {
-        SubUniverse {
-            meta: self.meta.clone(),
-            payload: self.payload.clone(),
         }
     }
 }
@@ -240,39 +208,17 @@ struct Universe<T> {
 }
 
 impl Universe<StoreRevShared> {
-    fn to_mem_store_r(&self) -> Universe<Arc<impl MemStoreR>> {
-        Universe {
-            merkle: self.merkle.to_mem_store_r(),
-        }
-    }
+    // fn to_mem_store_r(&self) -> Universe<Arc<impl MemStoreR>> {
+    //     Universe {
+    //         merkle: self.merkle.to_mem_store_r(),
+    //     }
+    // }
 }
 
 impl Universe<StoreRevMut> {
     fn new_from_other(&self) -> Universe<StoreRevMut> {
         Universe {
             merkle: self.merkle.new_from_other(),
-        }
-    }
-}
-
-impl Universe<Arc<CachedStore>> {
-    fn to_mem_store_r(&self) -> Universe<Arc<impl MemStoreR>> {
-        Universe {
-            merkle: self.merkle.to_mem_store_r(),
-        }
-    }
-}
-
-impl<T: MemStoreR + 'static> Universe<Arc<T>> {
-    fn rewind(
-        &self,
-        merkle_meta_writes: &[StoreWrite],
-        merkle_payload_writes: &[StoreWrite],
-    ) -> Universe<StoreRevShared> {
-        Universe {
-            merkle: self
-                .merkle
-                .rewind(merkle_meta_writes, merkle_payload_writes),
         }
     }
 }
@@ -630,6 +576,8 @@ impl Db {
             cfg.payload_max_walk,
             &cfg.rev,
         )?;
+        let mut root_hashes = VecDeque::new();
+        root_hashes.push_back(base_revision.kv_root_hash()?);
 
         Ok(Self {
             inner: Arc::new(RwLock::new(DbInner {
@@ -641,7 +589,7 @@ impl Db {
             })),
             revisions: Arc::new(Mutex::new(DbRevInner {
                 inner: VecDeque::new(),
-                root_hashes: VecDeque::new(),
+                root_hashes,
                 max_revisions: cfg.wal.max_revisions as usize,
                 base,
                 base_revision: Arc::new(base_revision.into()),
@@ -870,85 +818,27 @@ impl Db {
         })
     }
 
-    /// Get a handle that grants the access to any committed state of the entire DB,
-    /// with a given root hash. If the given root hash matches with more than one
-    /// revisions, we use the most recent one as the trie are the same.
+    /// Get a handle that grants the access to any committed state of the entire DB
+    /// that is already in memory, with a given root hash. If the given root hash
+    /// matches with more than one revisions, we use the most recent one as the
+    /// trie are the same.
     ///
     /// If no revision with matching root hash found, returns None.
     // #[measure([HitCount])]
     pub fn get_revision(&self, root_hash: &TrieHash) -> Option<DbRev<StoreRevShared>> {
-        let mut revisions = self.revisions.lock();
+        let revisions = self.revisions.lock();
         let inner_lock = self.inner.read();
 
         // Find the revision index with the given root hash.
-        let mut nback = revisions.root_hashes.iter().position(|r| r == root_hash);
-        let rlen = revisions.root_hashes.len();
-
-        #[allow(clippy::unwrap_used)]
-        if nback.is_none() && rlen < revisions.max_revisions {
-            let ashes = inner_lock
-                .disk_requester
-                .collect_ash(revisions.max_revisions)
-                .ok()
-                .unwrap();
-
-            #[allow(clippy::indexing_slicing)]
-            (nback = ashes
-                .iter()
-                .skip(rlen)
-                .map(|ash| {
-                    StoreRevShared::from_ash(
-                        Arc::new(ZeroStore::default()),
-                        #[allow(clippy::indexing_slicing)]
-                        &ash.0[&ROOT_HASH_STORE_ID].redo,
-                    )
-                })
-                .map(|root_hash_store| {
-                    root_hash_store
-                        .get_view(0, TRIE_HASH_LEN as u64)
-                        .expect("get view failed")
-                        .as_deref()
-                })
-                .map(|data| TrieHash(data[..TRIE_HASH_LEN].try_into().unwrap()))
-                .position(|trie_hash| &trie_hash == root_hash));
-        }
-
+        let nback = revisions.root_hashes.iter().position(|r| r == root_hash);
         let nback = nback?;
-
-        let rlen = revisions.inner.len();
-        if rlen < nback {
-            // TODO: Remove unwrap
-            #[allow(clippy::unwrap_used)]
-            let ashes = inner_lock.disk_requester.collect_ash(nback).ok().unwrap();
-            for mut ash in ashes.into_iter().skip(rlen) {
-                for (_, a) in ash.0.iter_mut() {
-                    a.undo.reverse()
-                }
-
-                let u = match revisions.inner.back() {
-                    Some(u) => u.to_mem_store_r().rewind(
-                        #[allow(clippy::indexing_slicing)]
-                        &ash.0[&MERKLE_META_STORE_ID].undo,
-                        #[allow(clippy::indexing_slicing)]
-                        &ash.0[&MERKLE_PAYLOAD_STORE_ID].undo,
-                    ),
-                    None => inner_lock.cached_store.to_mem_store_r().rewind(
-                        #[allow(clippy::indexing_slicing)]
-                        &ash.0[&MERKLE_META_STORE_ID].undo,
-                        #[allow(clippy::indexing_slicing)]
-                        &ash.0[&MERKLE_PAYLOAD_STORE_ID].undo,
-                    ),
-                };
-                revisions.inner.push_back(u);
-            }
-        }
-
         let store = if nback == 0 {
             &revisions.base
         } else {
             #[allow(clippy::indexing_slicing)]
             &revisions.inner[nback - 1]
         };
+
         // Release the lock after we find the revision
         drop(inner_lock);
 

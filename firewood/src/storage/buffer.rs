@@ -14,7 +14,6 @@ use super::{AshRecord, FilePool, Page, StoreDelta, StoreError, WalConfig, PAGE_S
 use crate::shale::StoreId;
 use crate::storage::DeltaPage;
 use aiofut::{AioBuilder, AioError, AioManager};
-use futures::future::join_all;
 use growthring::{
     wal::{RecoverPolicy, WalLoader, WalWriter},
     walerror::WalError,
@@ -22,11 +21,7 @@ use growthring::{
 };
 use tokio::task::block_in_place;
 use tokio::{
-    sync::{
-        mpsc,
-        oneshot::{self, error::RecvError},
-        Mutex, Notify, Semaphore,
-    },
+    sync::{mpsc, oneshot, Mutex, Notify, Semaphore},
     task,
 };
 use typed_builder::TypedBuilder;
@@ -38,10 +33,9 @@ pub enum BufferCmd {
     /// Initialize the Wal.
     InitWal(PathBuf, String),
     /// Process a write batch against the underlying store.
-    WriteBatch(BufferWrites, AshRecord),
+    WriteBatch(BufferWrites),
     /// Get a page from the disk buffer.
     GetPage((StoreId, u64), oneshot::Sender<Option<Page>>),
-    CollectAsh(usize, oneshot::Sender<Vec<AshRecord>>),
     /// Register a new store and add the files to a memory mapped pool.
     RegCachedStore(StoreId, Arc<FilePool>),
     /// Returns false if the
@@ -152,7 +146,6 @@ impl DiskBuffer {
 
         let max = WalQueueMax {
             batch: cfg.wal_max_batch,
-            revisions: wal_cfg.max_revisions,
             pending: cfg.max_pending,
         };
 
@@ -206,7 +199,6 @@ impl DiskBuffer {
 #[derive(Clone, Copy)]
 struct WalQueueMax {
     batch: usize,
-    revisions: u32,
     pending: usize,
 }
 
@@ -342,10 +334,9 @@ async fn init_wal(
 
 async fn run_wal_queue(
     max: WalQueueMax,
-    wal: Rc<Mutex<WalWriter<WalFileImpl, WalStoreImpl>>>,
     pending: Rc<RefCell<HashMap<(StoreId, u64), PendingPage>>>,
     file_pools: Rc<RefCell<[Option<Arc<FilePool>>; 255]>>,
-    mut writes: mpsc::Receiver<(BufferWrites, AshRecord)>,
+    mut writes: mpsc::Receiver<BufferWrites>,
     fc_notifier: Rc<Notify>,
     aiomgr: Rc<AioManager>,
 ) {
@@ -353,32 +344,21 @@ async fn run_wal_queue(
 
     loop {
         let mut bwrites = Vec::new();
-        let mut records = Vec::new();
-        let wal = wal.clone();
 
-        if let Some((bw, ac)) = writes.recv().await {
-            records.push(ac);
+        if let Some(bw) = writes.recv().await {
             bwrites.extend(bw.into_vec());
         } else {
             break;
         }
 
-        while let Ok((bw, ac)) = writes.try_recv() {
-            records.push(ac);
+        while let Ok(bw) = writes.try_recv() {
             bwrites.extend(bw.into_vec());
 
-            if records.len() >= max.batch {
+            if bwrites.len() >= max.batch {
                 break;
             }
         }
 
-        // first write to Wal
-        #[allow(clippy::unwrap_used)]
-        let ring_ids = join_all(wal.clone().lock().await.grow(records))
-            .await
-            .into_iter()
-            .map(|ring| ring.map_err(|_| "Wal Error while writing").unwrap().1)
-            .collect::<Vec<_>>();
         let sem = Rc::new(tokio::sync::Semaphore::new(0));
         let mut npermit = 0;
 
@@ -435,14 +415,6 @@ async fn run_wal_queue(
         let task = async move {
             #[allow(clippy::unwrap_used)]
             let _ = sem.acquire_many(npermit).await.unwrap();
-
-            #[allow(clippy::unwrap_used)]
-            wal.lock()
-                .await
-                .peel(ring_ids, max.revisions)
-                .await
-                .map_err(|_| "Wal errored while pruning")
-                .unwrap()
         };
 
         task::spawn_local(task);
@@ -469,11 +441,12 @@ async fn process(
     wal_cfg: &WalConfig,
     req: BufferCmd,
     max: WalQueueMax,
-    wal_in: mpsc::Sender<(BufferWrites, AshRecord)>,
-    writes: &mut Option<mpsc::Receiver<(BufferWrites, AshRecord)>>,
+    wal_in: mpsc::Sender<BufferWrites>,
+    writes: &mut Option<mpsc::Receiver<BufferWrites>>,
 ) -> bool {
     match req {
         BufferCmd::Shutdown => return false,
+
         BufferCmd::InitWal(rootpath, waldir) => {
             let final_path = rootpath.join(&waldir);
 
@@ -503,7 +476,6 @@ async fn process(
 
             let task = run_wal_queue(
                 max,
-                initialized_wal,
                 pending,
                 file_pools.clone(),
                 writes,
@@ -523,27 +495,12 @@ async fn process(
                     .map(|e| e.staging_data.clone()),
             )
             .unwrap(),
-        BufferCmd::WriteBatch(writes, wal_writes) => {
+
+        BufferCmd::WriteBatch(writes) => {
             #[allow(clippy::unwrap_used)]
-            wal_in.send((writes, wal_writes)).await.unwrap();
+            wal_in.send(writes).await.unwrap();
         }
-        BufferCmd::CollectAsh(nrecords, tx) => {
-            // wait to ensure writes are paused for Wal
-            #[allow(clippy::unwrap_used)]
-            let ash = wal
-                .as_ref()
-                .unwrap()
-                .lock()
-                .await
-                .read_recent_records(nrecords, &RecoverPolicy::Strict)
-                .await
-                .unwrap()
-                .into_iter()
-                .map(AshRecord::deserialize)
-                .collect();
-            #[allow(clippy::unwrap_used)]
-            tx.send(ash).unwrap();
-        }
+
         BufferCmd::RegCachedStore(store_id, files) => {
             file_pools
                 .borrow_mut()
@@ -592,9 +549,9 @@ impl DiskBufferRequester {
     }
 
     /// Sends a batch of writes to the buffer.
-    pub fn write(&self, page_batch: BufferWrites, write_batch: AshRecord) {
+    pub fn write(&self, page_batch: BufferWrites) {
         self.sender
-            .send(BufferCmd::WriteBatch(page_batch, write_batch))
+            .send(BufferCmd::WriteBatch(page_batch))
             .map_err(StoreError::Send)
             .ok();
     }
@@ -615,16 +572,6 @@ impl DiskBufferRequester {
             .ok();
     }
 
-    /// Collect the last N records from the Wal.
-    pub fn collect_ash(&self, nrecords: usize) -> Result<Vec<AshRecord>, StoreError<RecvError>> {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        self.sender
-            .send(BufferCmd::CollectAsh(nrecords, resp_tx))
-            .map_err(StoreError::Send)
-            .ok();
-        block_in_place(|| resp_rx.blocking_recv().map_err(StoreError::Receive))
-    }
-
     /// Register a cached store to the buffer.
     pub fn reg_cached_store(&self, store_id: StoreId, files: Arc<FilePool>) {
         self.sender
@@ -643,10 +590,7 @@ mod tests {
     use crate::shale::LinearStore;
     use crate::{
         file,
-        storage::{
-            Ash, CachedStore, MemStoreR, StoreConfig, StoreRevMut, StoreRevMutDelta,
-            StoreRevShared, ZeroStore,
-        },
+        storage::{Ash, CachedStore, MemStoreR, StoreConfig, StoreRevMut, StoreRevMutDelta},
     };
 
     const STATE_STORE_ID: StoreId = 0x0;
@@ -719,23 +663,18 @@ mod tests {
         mut_store.write(0, change).unwrap();
         assert_eq!(mut_store.id(), STATE_STORE_ID);
 
-        // wal should have no records.
-        assert!(disk_requester.collect_ash(1).unwrap().is_empty());
-
         // get RO view of the buffer from the beginning.
         let view = mut_store.get_view(0, change.len() as u64).unwrap();
         assert_eq!(view.as_deref(), change);
 
-        let (page_batch, write_batch) = create_batches(&mut_store);
+        let page_batch = create_batches(&mut_store);
 
         // create a mutation request to the disk buffer by passing the page and write batch.
         let d1 = disk_requester.clone();
         let write_thread_handle = std::thread::spawn(move || {
-            // wal is empty
-            assert!(d1.collect_ash(1).unwrap().is_empty());
             // page is not yet persisted to disk.
             assert!(d1.get_page(STATE_STORE_ID, 0).is_none());
-            d1.write(page_batch, write_batch);
+            d1.write(page_batch);
         });
         // wait for the write to complete.
         write_thread_handle.join().unwrap();
@@ -749,9 +688,6 @@ mod tests {
             .join("wal")
             .join("00000000.log");
         assert!(log_file.exists());
-
-        // verify
-        assert_eq!(disk_requester.collect_ash(1).unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -790,42 +726,21 @@ mod tests {
         mut_store.write(0, &hash).unwrap();
         assert_eq!(mut_store.id(), STATE_STORE_ID);
 
-        // wal should have no records.
-        assert!(disk_requester.collect_ash(1).unwrap().is_empty());
-
         // get RO view of the buffer from the beginning.
         let view = mut_store.get_view(0, hash.len() as u64).unwrap();
         assert_eq!(view.as_deref(), hash);
 
         // Commit the change. Take the delta from cached store,
         // then apply changes to the CachedStore.
-        let (redo_delta, wal) = mut_store.delta();
+        let (redo_delta, _) = mut_store.delta();
         state_cache.update(&redo_delta).unwrap();
 
-        // create a mutation request to the disk buffer by passing the page and write batch.
-        // wal is empty
-        assert!(disk_requester.collect_ash(1).unwrap().is_empty());
         // page is not yet persisted to disk.
         assert!(disk_requester.get_page(STATE_STORE_ID, 0).is_none());
-        disk_requester.write(
-            Box::new([BufferWrite {
-                store_id: STATE_STORE_ID,
-                delta: redo_delta,
-            }]),
-            AshRecord([(STATE_STORE_ID, wal)].into()),
-        );
-
-        // verify
-        assert_eq!(disk_requester.collect_ash(1).unwrap().len(), 1);
-        let ashes = disk_requester.collect_ash(1).unwrap();
-
-        // replay the redo from the wal
-        let shared_store = StoreRevShared::from_ash(
-            Arc::new(ZeroStore::default()),
-            &ashes[0].0[&STATE_STORE_ID].redo,
-        );
-        let view = shared_store.get_view(0, hash.len() as u64).unwrap();
-        assert_eq!(view.as_deref(), hash);
+        disk_requester.write(Box::new([BufferWrite {
+            store_id: STATE_STORE_ID,
+            delta: redo_delta,
+        }]));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -879,11 +794,6 @@ mod tests {
         let mut another_store = StoreRevMut::new_from_other(&store);
         block_in_place(|| another_store.write(32, &another_hash)).unwrap();
         assert_eq!(another_store.id(), STATE_STORE_ID);
-
-        // wal should have no records.
-        assert!(block_in_place(|| disk_requester.collect_ash(1))
-            .unwrap()
-            .is_empty());
 
         // get RO view of the buffer from the beginning. Both stores should have the same view.
         let view = store.get_view(0, HASH_SIZE as u64).unwrap();
@@ -943,7 +853,7 @@ mod tests {
         disk_requester
     }
 
-    fn create_batches(rev_mut: &StoreRevMut) -> (BufferWrites, AshRecord) {
+    fn create_batches(rev_mut: &StoreRevMut) -> BufferWrites {
         let deltas = std::mem::replace(
             &mut *rev_mut.deltas.write(),
             StoreRevMutDelta {
@@ -959,12 +869,9 @@ mod tests {
         }
         pages.sort_by_key(|p| p.0);
 
-        let page_batch = Box::new([BufferWrite {
+        Box::new([BufferWrite {
             store_id: STATE_STORE_ID,
             delta: StoreDelta(pages),
-        }]);
-
-        let write_batch = AshRecord([(STATE_STORE_ID, deltas.plain)].into());
-        (page_batch, write_batch)
+        }])
     }
 }

@@ -3,14 +3,14 @@
 
 use super::{
     get_sub_universe_from_deltas, Db, DbConfig, DbError, DbHeader, DbInner, DbRev, DbRevInner,
-    Universe, MERKLE_META_STORE_ID, MERKLE_PAYLOAD_STORE_ID, ROOT_HASH_STORE_ID,
+    Universe,
 };
 use crate::merkle::{Bincode, MerkleKeyValueStream, Proof};
 use crate::shale::LinearStore;
 use crate::storage::StoreRevShared;
 use crate::{
     merkle::{TrieHash, TRIE_HASH_LEN},
-    storage::{buffer::BufferWrite, AshRecord, StoreRevMut},
+    storage::{buffer::BufferWrite, StoreRevMut},
     v2::api::{self, Batch, BatchOp, KeyType, ValueType},
 };
 use async_trait::async_trait;
@@ -172,8 +172,8 @@ impl Proposal {
         };
 
         // clear the staging layer and apply changes to the CachedStore
-        let (merkle_payload_redo, merkle_payload_wal) = store.merkle.payload.delta();
-        let (merkle_meta_redo, merkle_meta_wal) = store.merkle.meta.delta();
+        let (merkle_payload_redo, _) = store.merkle.payload.delta();
+        let (merkle_meta_redo, _) = store.merkle.meta.delta();
 
         let mut rev_inner = m.write();
         #[allow(clippy::unwrap_used)]
@@ -225,33 +225,23 @@ impl Proposal {
         }
 
         rev_inner.root_hash_staging.write(0, &hash.0)?;
-        let (root_hash_redo, root_hash_wal) = rev_inner.root_hash_staging.delta();
+        let (root_hash_redo, _) = rev_inner.root_hash_staging.delta();
 
         // schedule writes to the disk
-        rev_inner.disk_requester.write(
-            Box::new([
-                BufferWrite {
-                    store_id: store.merkle.payload.id(),
-                    delta: merkle_payload_redo,
-                },
-                BufferWrite {
-                    store_id: store.merkle.meta.id(),
-                    delta: merkle_meta_redo,
-                },
-                BufferWrite {
-                    store_id: rev_inner.root_hash_staging.id(),
-                    delta: root_hash_redo,
-                },
-            ]),
-            AshRecord(
-                [
-                    (MERKLE_META_STORE_ID, merkle_meta_wal),
-                    (MERKLE_PAYLOAD_STORE_ID, merkle_payload_wal),
-                    (ROOT_HASH_STORE_ID, root_hash_wal),
-                ]
-                .into(),
-            ),
-        );
+        rev_inner.disk_requester.write(Box::new([
+            BufferWrite {
+                store_id: store.merkle.payload.id(),
+                delta: merkle_payload_redo,
+            },
+            BufferWrite {
+                store_id: store.merkle.meta.id(),
+                delta: merkle_meta_redo,
+            },
+            BufferWrite {
+                store_id: rev_inner.root_hash_staging.id(),
+                delta: root_hash_redo,
+            },
+        ]));
         *committed = true;
         Ok(())
     }
