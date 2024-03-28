@@ -38,7 +38,6 @@ use std::{
     fmt,
     io::{Cursor, ErrorKind, Write},
     mem::size_of,
-    num::NonZeroUsize,
     ops::Deref,
     os::fd::{AsFd, BorrowedFd},
     path::Path,
@@ -199,7 +198,8 @@ impl DbHeader {
 
     pub const fn new_empty() -> Self {
         Self {
-            kv_root: DiskAddress::null(),
+            // kv_root: DiskAddress::null(), // TODO remove
+            kv_root: DiskAddress(0), // TODO what should go here?
         }
     }
 }
@@ -678,8 +678,7 @@ impl Db {
         })
         .chain({
             // write out the StoreHeader
-            let store_reserved = NonZeroUsize::new(RESERVED_STORE_ID as usize)
-                .expect("RESERVED_STORE_ID is non-zero");
+            let store_reserved = RESERVED_STORE_ID as usize;
             csh = StoreHeader::new(store_reserved, store_reserved);
             bytemuck::bytes_of(&csh)
         })
@@ -711,9 +710,8 @@ impl Db {
             merkle_meta_store.write(
                 merkle_payload_header.into(),
                 &shale::to_dehydrated(&shale::compact::StoreHeader::new(
-                    NonZeroUsize::new(RESERVED_STORE_ID as usize).unwrap(),
-                    #[allow(clippy::unwrap_used)]
-                    NonZeroUsize::new(RESERVED_STORE_ID as usize).unwrap(),
+                    RESERVED_STORE_ID as usize,
+                    RESERVED_STORE_ID as usize,
                 ))?,
             )?;
             merkle_meta_store.write(

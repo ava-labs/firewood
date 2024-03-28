@@ -101,7 +101,7 @@ pub struct Obj<T: Storable> {
 impl<T: Storable> Obj<T> {
     #[inline(always)]
     pub const fn as_ptr(&self) -> DiskAddress {
-        DiskAddress(NonZeroUsize::new(self.value.get_offset()))
+        DiskAddress(self.value.get_offset())
     }
 
     /// Modifies the value of this object and marks it as dirty.

@@ -3,7 +3,6 @@
 
 use std::hash::Hash;
 use std::mem::size_of;
-use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut};
 
 use bytemuck::{Pod, Zeroable};
