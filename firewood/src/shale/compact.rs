@@ -368,6 +368,7 @@ impl<M: LinearStore> StoreInner<M> {
             assert!(!header.is_freed);
             header.chunk_size
         };
+        let mut freed_footer_offset = freed_addr + freed_chunk_size;
 
         if freed_header_offset & (region_size - 1) > 0 {
             // TODO danlaine: document what this condition means.
@@ -387,8 +388,6 @@ impl<M: LinearStore> StoreInner<M> {
                 self.delete_descriptor(prev_header.desc_addr)?;
             }
         }
-
-        let mut freed_footer_offset = freed_addr + freed_chunk_size;
 
         #[allow(clippy::unwrap_used)]
         if freed_footer_offset + ChunkFooter::SERIALIZED_LEN
