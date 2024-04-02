@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 
 use super::linear::{LinearStore, ReadOnlyLinearStore, ReadWriteLinearStore};
 
+/// [NodeStore] divides the linear store into blocks of different sizes.
+/// [BLOCK_SIZES] is every valid block size.
 const BLOCK_SIZES: [u64; 18] = [
     1 << 3, // Min block size is 8
     1 << 4,
@@ -135,11 +137,22 @@ impl<T: ReadWriteLinearStore + ReadOnlyLinearStore + std::fmt::Debug> NodeStore<
         // discarding the object
         let size = self.node_size(addr)?;
 
-        // place a pointer to the next freed block at old location
+        let free_space_heads_index = size_to_block_index(size).ok_or_else(|| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!("Node size {} is too large", size),
+            )
+        })?;
+
+        // The newly freed block points to the current head of the free list.
         let freed_block = FreedBlock {
             size,
-            next_free_block: self.header.free_space_head,
+            next_free_block: self.header.free_space_heads[free_space_heads_index],
         };
+
+        // The newly freed block is now the head of the free list.
+        self.header.free_space_heads[free_space_heads_index] = Some(addr);
+
         self.page_store
             .write(addr.into(), bytemuck::bytes_of(&freed_block))?;
 
@@ -157,11 +170,20 @@ impl<T: ReadWriteLinearStore + ReadOnlyLinearStore + std::fmt::Debug> NodeStore<
         page_store.write(0, bytemuck::bytes_of(&FileIdentifingMagic::new()))?;
 
         let header = FreeSpaceManagementHeader {
-            free_space_head: None,
+            free_space_heads: [None; NUM_BLOCK_SIZES],
         };
         page_store.write(FileIdentifingMagic::SIZE, bytemuck::bytes_of(&header))?;
         Ok(Self { header, page_store })
     }
+}
+
+/// Returns the index in [BLOCK_SIZES] of the smallest block size
+/// that can fit the given [size]. Returns None if the size is too large.
+/// TODO danlaine: This can probably be optimized.
+fn size_to_block_index(size: usize) -> Option<usize> {
+    BLOCK_SIZES
+        .iter()
+        .position(|&block_size| block_size >= size as u64)
 }
 
 #[derive(Debug)]
@@ -226,11 +248,12 @@ impl FileIdentifingMagic {
 }
 
 /// Immediately following the FileIdentifyingMagic is the FreeSpaceManagementHeader
-/// It contains a pointer to the beginning of the free space
+/// It points to the heads of the free block lists.
 #[repr(C)]
 #[derive(Debug, bytemuck::NoUninit, Clone, Copy)]
 struct FreeSpaceManagementHeader {
-    free_space_head: Option<DiskAddress>,
+    /// Element i is the first free block of size BLOCK_SIZES[i].
+    free_space_heads: [Option<DiskAddress>; NUM_BLOCK_SIZES],
 }
 
 /// A [FreedBlock] is the object stored where a node used to be when it has been
