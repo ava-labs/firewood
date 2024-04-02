@@ -102,11 +102,11 @@ mod tests {
     use std::io::Read;
 
     #[derive(Debug)]
-    struct InMemWriteLinearStore {
+    struct InMemReadWriteLinearStore {
         bytes: Vec<u8>,
     }
 
-    impl WriteLinearStore for InMemWriteLinearStore {
+    impl WriteLinearStore for InMemReadWriteLinearStore {
         fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, std::io::Error> {
             let offset = offset as usize;
             if offset + object.len() > self.bytes.len() {
@@ -121,7 +121,7 @@ mod tests {
         }
     }
 
-    impl ReadLinearStore for InMemWriteLinearStore {
+    impl ReadLinearStore for InMemReadWriteLinearStore {
         fn stream_from(&self, addr: u64) -> Result<impl Read, std::io::Error> {
             Ok(&self.bytes[addr as usize..])
         }
@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn test_in_mem_write_linear_store() {
-        let mut store = InMemWriteLinearStore { bytes: vec![] };
+        let mut store = InMemReadWriteLinearStore { bytes: vec![] };
         assert_eq!(store.size().unwrap(), 0);
 
         // Write to an empty store
