@@ -4,8 +4,8 @@
 // TODO: remove this once we have code that uses it
 #![allow(dead_code)]
 
-//! A [LinearStore] provides a view of a set of bytes at
-//! a given time. A [LinearStore] has three different types,
+//! A LinearStore provides a view of a set of bytes at
+//! a given time. A LinearStore has three different types,
 //! which refer to another base type, as follows:
 //! ```mermaid
 //! stateDiagram-v2
@@ -18,12 +18,12 @@
 //! Each type is described in more detail below.
 
 use std::fmt::Debug;
-use std::io::{Cursor, Error, Read};
+use std::io::{Error, Read};
 
 mod committed;
 /// A linear store used for proposals
 ///
-/// A [Proposed] [LinearStore] supports read operations which look for the
+/// A Proposed LinearStore supports read operations which look for the
 /// changed bytes in the `new` member, and if not present, delegate to
 /// their parent.
 ///
@@ -38,59 +38,51 @@ mod committed;
 /// not. Mutable proposals implement the [ReadWriteLinearStore] trait
 ///
 /// The possible combinations are:
-///  - `Proposed<Proposed, ReadWrite>`
-///  - `Proposed<Proposed, ReadOnly>`
-///  - `Proposed<FileBacked, ReadWrite>`
-///  - `Proposed<FileBacked, ReadOnly>`
+///  - `Proposed<Proposed, ReadWrite>` (in-progress nested proposal)
+///  - `Proposed<Proposed, ReadOnly>` (completed nested proposal)
+///  - `Proposed<FileBacked, ReadWrite>` (first proposal on base revision)
+///  - `Proposed<FileBacked, ReadOnly>` (completed first proposal on base)
 ///
 /// Transitioning from ReadWrite to ReadOnly just prevents future mutations to
-/// the proposal maps
+/// the proposal maps. ReadWrite proposals only exist during the application of
+/// a Batch to the proposal, and are subsequently changed to ReadOnly
 ///
-// As an example of how this works, lets say that you have a [FileBased] Layer
-// base: [0, 1, 2, 3, 4, 5, 6, 7, 8] <-- this is on disk AKA R2
-//   us: [0, 1, 2, 3, 4, 6, 6, 7, 9, 10] <-- part of a proposal AKA P1 this is the "virtual" state. Not stored in entirety in this struct.
-// changes: {old: 5:[5] 8:[8]}, new: {5:[6] : 8:[9 10]}   <-- this is what is actually is stored in this struct (in `changes`).
-// start streaming from index 4
-// first byte I read comes from base
-// second byte I read comes from change
-// third byte I read comes from base
+/// # How a commit works
+/// 
+/// Lets assume we have the following:
+///  - bytes "on disk":   [0, 1, 2] `LinearStore<FileBacked>`
+///  - bytes in proposal: [   3   ] `LinearStore<Proposed<FileBacked, ReadOnly>>`
+/// that is, we're changing the second byte (1) to (3)
+/// 
+/// To commit:
+///  - Convert the `LinearStore<FileBacked>` to `LinearStore<Committed>` taking the
+/// old pages from the `LinearStore<Proposed<FileBacked, Readonly>>`
+///  - Change any direct child proposals from `LinearStore<Proposed<Proposed, Readonly>>`
+/// into `LinearStore<FileBacked>`
+///  - Invalidate any other `LinearStore` that is a child of `LinearStore<FileBacked>`
+///  - Flush all the `Proposed<FileBacked, ReadOnly>::new` bytes to disk
+///  - Convert the `LinearStore<Proposed<FileBacked, Readonly>>` to `LinearStore<FileBacked>`
 
-// commit means: what is on disk is no longer actually R2 and vice versa
-// commit means: what is about to be on disk is in the changes list of P1 (specificially new regions)
-// commit means: what was on disk is in the changes list of P1 for changed byte indices of P1 (specificaly old regions)
-//  Every byte index is one of:
-// * Unchanged in P1
-// * Changed in P1
-
-// read 1 byte from R1:
-//  -- check and see if R2 has an "old" change at this index, if so, use that
-//  -- check and see if P1 (R3) has an "old" change at this index, if so use that
-//  -- not: read from disk (cache)
-
-// physical structure - set of linear bytes
-//   -- set of physical changes A
-// logical structure - set of nodes interconnected
-//   -- set of logical changes B
 mod filebacked;
 mod proposed;
 
 #[derive(Debug)]
-pub(super) struct LinearStore<T> {
-    state: T,
+pub(super) struct LinearStore<S: ReadLinearStore> {
+    state: S,
 }
 
 /// All linearstores support reads
-pub(super) trait ReadOnlyLinearStore: Debug {
+pub(super) trait ReadLinearStore: Debug {
     fn stream_from(&self, addr: u64) -> Result<impl Read, Error>;
 }
 
 /// Some linear stores support updates
-pub(super) trait ReadWriteLinearStore: Debug {
+pub(super) trait WriteLinearStore: Debug {
     fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error>;
     fn size(&self) -> Result<u64, Error>;
 }
 
-impl<ReadWrite: Debug> ReadWriteLinearStore for LinearStore<ReadWrite> {
+impl<ReadWrite: ReadLinearStore + Debug> WriteLinearStore for LinearStore<ReadWrite> {
     fn write(&mut self, _offset: u64, _bytes: &[u8]) -> Result<usize, Error> {
         todo!()
     }
@@ -100,10 +92,9 @@ impl<ReadWrite: Debug> ReadWriteLinearStore for LinearStore<ReadWrite> {
     }
 }
 
-/// TODO: remove this once all the ReadOnlyLinearStore implementations are complete
-impl<T: std::fmt::Debug> ReadOnlyLinearStore for LinearStore<T> {
-    fn stream_from(&self, _addr: u64) -> Result<impl Read, Error> {
-        Ok(Cursor::new([]))
+impl<S: ReadLinearStore> ReadLinearStore for LinearStore<S> {
+    fn stream_from(&self, addr: u64) -> Result<impl Read, Error> {
+        self.state.stream_from(addr)
     }
 }
 

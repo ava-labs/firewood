@@ -7,7 +7,6 @@
 /// free space management of nodes in the page store. It lays out the format
 /// of the [PageStore]. More specifically, it places a [FileIdentifyingMagic]
 /// and a [FreeSpaceHeader] at the beginning
-use std::fmt::Debug;
 use std::io::{Error, ErrorKind, Read, Write};
 use std::num::NonZeroU64;
 use std::sync::Arc;
@@ -15,7 +14,7 @@ use std::sync::Arc;
 use enum_as_inner::EnumAsInner;
 use serde::{Deserialize, Serialize};
 
-use super::linear::{LinearStore, ReadOnlyLinearStore, ReadWriteLinearStore};
+use super::linear::{LinearStore, ReadLinearStore, WriteLinearStore};
 
 /// Either a branch or leaf node
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner, Deserialize, Serialize)]
@@ -44,12 +43,12 @@ struct Leaf {
 }
 
 #[derive(Debug)]
-struct NodeStore<T> {
+struct NodeStore<T: ReadLinearStore> {
     header: FreeSpaceManagementHeader,
     page_store: LinearStore<T>,
 }
 
-impl<T: ReadOnlyLinearStore + std::fmt::Debug> NodeStore<T> {
+impl<T: ReadLinearStore> NodeStore<T> {
     /// Read a node from the provided [DiskAddress]
     ///
     /// A node on disk will consist of a header which both identifies the
@@ -74,7 +73,7 @@ impl<T: ReadOnlyLinearStore + std::fmt::Debug> NodeStore<T> {
     }
 }
 
-impl<T: ReadWriteLinearStore + ReadOnlyLinearStore + std::fmt::Debug> NodeStore<T> {
+impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     /// Allocate space for a [Node] in the [PageStore]
     fn create(&mut self, node: &Node) -> Result<DiskAddress, Error> {
         let serialized =
