@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::io::{Error, Read};
+use std::io::{Cursor, Error, Read};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use super::{LinearStore, ReadLinearStore};
+use super::{LinearStore, ReadLinearStore, WriteLinearStore};
 
 /// [Proposed] is a [LinearStore] state that contains a copy of the old and new data.
 /// The P type parameter indicates the state of the linear store for it's parent,
@@ -18,6 +18,16 @@ struct Proposed<P: ReadLinearStore, M> {
     phantom: PhantomData<M>,
 }
 
+impl<P: ReadLinearStore, M> Proposed<P, M> {
+    fn new(parent: Arc<LinearStore<P>>) -> Self {
+        Self {
+            new: Default::default(),
+            old: Default::default(),
+            parent,
+            phantom: PhantomData {},
+        }
+    }
+}
 
 /// A [LayeredReader] is obtained by calling [Proposed::stream_from]
 /// The P type parameter refers to the type of the parent of this layer
@@ -56,6 +66,21 @@ impl<P: ReadLinearStore, M: Debug> ReadLinearStore for Proposed<P, M> {
             layer: self,
         })
     }
+
+    fn size(&self) -> Result<u64, Error> {
+        // start with the parent size
+        let parent_size = self.parent.state.size()?;
+        // look at the last delta, if any, and see if it will extend the file
+        Ok(self
+            .new
+            .range(..)
+            .next_back()
+            .map(|(k, v)| *k + v.len() as u64)
+            .map_or_else(
+                || parent_size,
+                |delta_end| std::cmp::max(parent_size, delta_end),
+            ))
+    }
 }
 
 // TODO: DiffResolver should also be implemented by Committed
@@ -68,6 +93,23 @@ trait DiffResolver<'a> {
 impl<'a, P: ReadLinearStore, M: Debug> DiffResolver<'a> for Proposed<P, M> {
     fn diffs(&'a self) -> &'a BTreeMap<u64, Box<[u8]>> {
         &self.new
+    }
+}
+
+/// Marker that the Proposal is mutable
+#[derive(Debug)]
+struct Mutable;
+
+/// Marker that the Proposal is immutable
+#[derive(Debug)]
+struct Immutable;
+
+impl<P: ReadLinearStore> WriteLinearStore for Proposed<P, Mutable> {
+    fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
+        // TODO: naive implementation
+        self.new.insert(offset, Box::from(object));
+        //
+        Ok(object.len())
     }
 }
 
@@ -125,10 +167,89 @@ impl<'a, P: ReadLinearStore, M: Debug> Read for LayeredReader<'a, P, M> {
                 }
             }
             LayeredReaderState::InsideModifiedPart {
-                part: _,
-                offset_within: _,
-            } => todo!(),
-            LayeredReaderState::NoMoreModifiedParts => todo!(),
+                part,
+                offset_within,
+            } => {
+                let size = Cursor::new(
+                    part.get(offset_within..)
+                        .expect("bug: offset_within not in bounds"),
+                )
+                .read(buf)?;
+                self.offset += size as u64;
+                Ok(size)
+            }
+            LayeredReaderState::NoMoreModifiedParts => {
+                let size = self.layer.parent.stream_from(self.offset)?.read(buf)?;
+                self.offset += size as u64;
+                Ok(size)
+            }
         }
+    }
+}
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod test {
+    use super::*;
+
+    #[derive(Debug)]
+    struct ConstBacked;
+
+    impl ConstBacked {
+        const DATA: &'static [u8] = b"random data";
+    }
+
+    impl From<ConstBacked> for Arc<LinearStore<ConstBacked>> {
+        fn from(state: ConstBacked) -> Self {
+            Arc::new(LinearStore { state })
+        }
+    }
+
+    impl ReadLinearStore for ConstBacked {
+        fn stream_from(&self, addr: u64) -> Result<impl std::io::Read, std::io::Error> {
+            Ok(Cursor::new(Self::DATA.get(addr as usize..).unwrap()))
+        }
+
+        fn size(&self) -> Result<u64, Error> {
+            Ok(Self::DATA.len() as u64)
+        }
+    }
+
+    #[test]
+    fn smoke_read() -> Result<(), std::io::Error> {
+        let sut: Proposed<ConstBacked, Immutable> = Proposed::new(ConstBacked {}.into());
+
+        // read all
+        let mut data = [0u8; ConstBacked::DATA.len()];
+        sut.stream_from(0).unwrap().read_exact(&mut data).unwrap();
+        assert_eq!(data, ConstBacked::DATA);
+
+        // starting not at beginning
+        let mut data = [0u8; ConstBacked::DATA.len()];
+        sut.stream_from(1).unwrap().read_exact(&mut data[1..])?;
+        assert_eq!(data.get(1..), ConstBacked::DATA.get(1..));
+
+        // ending not at end
+        let mut data = [0u8; ConstBacked::DATA.len() - 1];
+        sut.stream_from(0).unwrap().read_exact(&mut data)?;
+        assert_eq!(Some(data.as_slice()), ConstBacked::DATA.get(..data.len()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn smoke_mutate() -> Result<(), std::io::Error> {
+        let mut sut: Proposed<ConstBacked, Mutable> = Proposed::new(ConstBacked {}.into());
+
+        const MUT_DATA: &[u8] = b"data random";
+
+        // mutate the whole thing
+        sut.write(0, MUT_DATA)?;
+
+        // read all the changed data
+        let mut data = [0u8; MUT_DATA.len()];
+        sut.stream_from(0).unwrap().read_exact(&mut data).unwrap();
+        assert_eq!(data, MUT_DATA);
+
+        Ok(())
     }
 }

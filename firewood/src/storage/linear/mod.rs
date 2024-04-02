@@ -48,12 +48,12 @@ mod committed;
 /// a Batch to the proposal, and are subsequently changed to ReadOnly
 ///
 /// # How a commit works
-/// 
+///
 /// Lets assume we have the following:
 ///  - bytes "on disk":   [0, 1, 2] `LinearStore<FileBacked>`
 ///  - bytes in proposal: [   3   ] `LinearStore<Proposed<FileBacked, ReadOnly>>`
 /// that is, we're changing the second byte (1) to (3)
-/// 
+///
 /// To commit:
 ///  - Convert the `LinearStore<FileBacked>` to `LinearStore<Committed>` taking the
 /// old pages from the `LinearStore<Proposed<FileBacked, Readonly>>`
@@ -62,7 +62,6 @@ mod committed;
 ///  - Invalidate any other `LinearStore` that is a child of `LinearStore<FileBacked>`
 ///  - Flush all the `Proposed<FileBacked, ReadOnly>::new` bytes to disk
 ///  - Convert the `LinearStore<Proposed<FileBacked, Readonly>>` to `LinearStore<FileBacked>`
-
 mod filebacked;
 mod proposed;
 
@@ -74,20 +73,16 @@ pub(super) struct LinearStore<S: ReadLinearStore> {
 /// All linearstores support reads
 pub(super) trait ReadLinearStore: Debug {
     fn stream_from(&self, addr: u64) -> Result<impl Read, Error>;
+    fn size(&self) -> Result<u64, Error>;
 }
 
 /// Some linear stores support updates
 pub(super) trait WriteLinearStore: Debug {
     fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error>;
-    fn size(&self) -> Result<u64, Error>;
 }
 
 impl<ReadWrite: ReadLinearStore + Debug> WriteLinearStore for LinearStore<ReadWrite> {
     fn write(&mut self, _offset: u64, _bytes: &[u8]) -> Result<usize, Error> {
-        todo!()
-    }
-
-    fn size(&self) -> Result<u64, Error> {
         todo!()
     }
 }
@@ -95,5 +90,9 @@ impl<ReadWrite: ReadLinearStore + Debug> WriteLinearStore for LinearStore<ReadWr
 impl<S: ReadLinearStore> ReadLinearStore for LinearStore<S> {
     fn stream_from(&self, addr: u64) -> Result<impl Read, Error> {
         self.state.stream_from(addr)
+    }
+
+    fn size(&self) -> Result<u64, Error> {
+        todo!()
     }
 }
