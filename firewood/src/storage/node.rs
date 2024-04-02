@@ -112,13 +112,13 @@ impl<T: ReadWriteLinearStore + ReadOnlyLinearStore + std::fmt::Debug> NodeStore<
         // discarding the object
         let size = self.node_size(addr)?;
 
-        // place a pointer to the next freed area at old location
-        let freed_area = FreedArea {
+        // place a pointer to the next freed block at old location
+        let freed_block = FreedBlock {
             size,
-            next_free_area: self.header.free_space_head,
+            next_free_block: self.header.free_space_head,
         };
         self.page_store
-            .write(addr.into(), bytemuck::bytes_of(&freed_area))?;
+            .write(addr.into(), bytemuck::bytes_of(&freed_block))?;
 
         // update the free space header
         self.page_store.write(
@@ -210,11 +210,11 @@ struct FreeSpaceManagementHeader {
     free_space_head: Option<DiskAddress>,
 }
 
-/// A [FreedArea] is the object stored where a node used to be when it has been
+/// A [FreedBlock] is the object stored where a node used to be when it has been
 /// freed
 #[repr(C)]
 #[derive(Debug, bytemuck::NoUninit, Clone, Copy)]
-struct FreedArea {
+struct FreedBlock {
     size: usize,
-    next_free_area: Option<DiskAddress>,
+    next_free_block: Option<DiskAddress>,
 }
