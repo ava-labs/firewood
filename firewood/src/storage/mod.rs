@@ -488,7 +488,7 @@ impl StoreRevMut {
     }
 
     #[must_use]
-    pub fn delta(&self) -> (StoreDelta, Ash) {
+    pub fn delta(&self) -> StoreDelta {
         let guard = self.deltas.read();
         let mut pages: Vec<DeltaPage> = guard
             .pages
@@ -496,7 +496,7 @@ impl StoreRevMut {
             .map(|page| DeltaPage(*page.0, page.1.clone()))
             .collect();
         pages.sort_by_key(|p| p.0);
-        (StoreDelta(pages), guard.plain.clone())
+        StoreDelta(pages)
     }
     pub fn reset_deltas(&self) {
         let mut guard = self.deltas.write();

@@ -732,7 +732,7 @@ mod tests {
 
         // Commit the change. Take the delta from cached store,
         // then apply changes to the CachedStore.
-        let (redo_delta, _) = mut_store.delta();
+        let redo_delta = mut_store.delta();
         state_cache.update(&redo_delta).unwrap();
 
         // page is not yet persisted to disk.
@@ -817,13 +817,11 @@ mod tests {
         assert_eq!(view.as_deref(), hash);
 
         // Commit the change. Take the delta from both stores.
-        let (redo_delta, wal) = store.delta();
+        let redo_delta = store.delta();
         assert_eq!(1, redo_delta.0.len());
-        assert_eq!(1, wal.undo.len());
 
-        let (another_redo_delta, another_wal) = another_store.delta();
+        let another_redo_delta = another_store.delta();
         assert_eq!(1, another_redo_delta.0.len());
-        assert_eq!(2, another_wal.undo.len());
 
         // Verify after the changes been applied to underlying CachedStore,
         // the newly created stores should see the previous changes.

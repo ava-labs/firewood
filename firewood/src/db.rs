@@ -207,14 +207,6 @@ struct Universe<T> {
     merkle: SubUniverse<T>,
 }
 
-impl Universe<StoreRevShared> {
-    // fn to_mem_store_r(&self) -> Universe<Arc<impl MemStoreR>> {
-    //     Universe {
-    //         merkle: self.merkle.to_mem_store_r(),
-    //     }
-    // }
-}
-
 impl Universe<StoreRevMut> {
     fn new_from_other(&self) -> Universe<StoreRevMut> {
         Universe {
@@ -830,8 +822,7 @@ impl Db {
         let inner_lock = self.inner.read();
 
         // Find the revision index with the given root hash.
-        let nback = revisions.root_hashes.iter().position(|r| r == root_hash);
-        let nback = nback?;
+        let nback = revisions.root_hashes.iter().position(|r| r == root_hash)?;
         let store = if nback == 0 {
             &revisions.base
         } else {

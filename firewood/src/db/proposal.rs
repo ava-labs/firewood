@@ -172,8 +172,8 @@ impl Proposal {
         };
 
         // clear the staging layer and apply changes to the CachedStore
-        let (merkle_payload_redo, _) = store.merkle.payload.delta();
-        let (merkle_meta_redo, _) = store.merkle.meta.delta();
+        let merkle_payload_redo = store.merkle.payload.delta();
+        let merkle_meta_redo = store.merkle.meta.delta();
 
         let mut rev_inner = m.write();
         #[allow(clippy::unwrap_used)]
@@ -225,7 +225,7 @@ impl Proposal {
         }
 
         rev_inner.root_hash_staging.write(0, &hash.0)?;
-        let (root_hash_redo, _) = rev_inner.root_hash_staging.delta();
+        let root_hash_redo = rev_inner.root_hash_staging.delta();
 
         // schedule writes to the disk
         rev_inner.disk_requester.write(Box::new([

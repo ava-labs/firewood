@@ -144,17 +144,6 @@ async fn test_revisions() {
                 assert_eq!(kv_dump!(rev), *dump, "not the same: Pass {i}");
             }
         }
-
-        // let db = db.reopen().await;
-        // for (dump, hash) in dumped.iter().zip(hashes.iter().cloned()) {
-        //     let rev = db.revision(hash).await.unwrap();
-        //     rev.root_hash().await.unwrap();
-        //     assert_eq!(
-        //         *dump,
-        //         block_in_place(|| kv_dump!(rev)),
-        //         "not the same: pass {i}"
-        //     );
-        // }
     }
 }
 
