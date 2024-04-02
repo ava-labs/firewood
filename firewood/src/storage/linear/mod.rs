@@ -48,12 +48,12 @@ mod committed;
 /// a Batch to the proposal, and are subsequently changed to ReadOnly
 ///
 /// # How a commit works
-/// 
+///
 /// Lets assume we have the following:
 ///  - bytes "on disk":   [0, 1, 2] `LinearStore<FileBacked>`
 ///  - bytes in proposal: [   3   ] `LinearStore<Proposed<FileBacked, ReadOnly>>`
 /// that is, we're changing the second byte (1) to (3)
-/// 
+///
 /// To commit:
 ///  - Convert the `LinearStore<FileBacked>` to `LinearStore<Committed>` taking the
 /// old pages from the `LinearStore<Proposed<FileBacked, Readonly>>`
@@ -62,7 +62,6 @@ mod committed;
 ///  - Invalidate any other `LinearStore` that is a child of `LinearStore<FileBacked>`
 ///  - Flush all the `Proposed<FileBacked, ReadOnly>::new` bytes to disk
 ///  - Convert the `LinearStore<Proposed<FileBacked, Readonly>>` to `LinearStore<FileBacked>`
-
 mod filebacked;
 mod proposed;
 
@@ -99,14 +98,15 @@ impl<S: ReadLinearStore> ReadLinearStore for LinearStore<S> {
 }
 
 mod tests {
-    use super::ReadWriteLinearStore;
+    use super::{ReadLinearStore, WriteLinearStore};
+    use std::io::Read;
 
     #[derive(Debug)]
-    struct InMemReadWriteLinearStore {
+    struct InMemWriteLinearStore {
         bytes: Vec<u8>,
     }
 
-    impl ReadWriteLinearStore for InMemReadWriteLinearStore {
+    impl WriteLinearStore for InMemWriteLinearStore {
         fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, std::io::Error> {
             let offset = offset as usize;
             if offset + object.len() > self.bytes.len() {
@@ -121,9 +121,15 @@ mod tests {
         }
     }
 
+    impl ReadLinearStore for InMemWriteLinearStore {
+        fn stream_from(&self, addr: u64) -> Result<impl Read, std::io::Error> {
+            Ok(&self.bytes[addr as usize..])
+        }
+    }
+
     #[test]
-    fn test_in_mem_read_write() {
-        let mut store = InMemReadWriteLinearStore { bytes: vec![] };
+    fn test_in_mem_write_linear_store() {
+        let mut store = InMemWriteLinearStore { bytes: vec![] };
         assert_eq!(store.size().unwrap(), 0);
 
         // Write to an empty store
@@ -150,5 +156,33 @@ mod tests {
         store.write(7, &[11, 12]).unwrap();
         assert_eq!(store.bytes, vec![7, 9, 10, 4, 5, 6, 0, 11, 12]);
         assert_eq!(store.size().unwrap(), 9);
+
+        // Read from the start of the store
+        let mut reader = store.stream_from(0).unwrap();
+        let mut read_bytes = vec![];
+        let num_read_bytes = reader.read_to_end(&mut read_bytes).unwrap();
+        assert_eq!(read_bytes, vec![7, 9, 10, 4, 5, 6, 0, 11, 12]);
+        assert_eq!(num_read_bytes, 9);
+
+        // Read from the middle of the store
+        let mut reader = store.stream_from(3).unwrap();
+        let mut read_bytes = vec![];
+        let num_read_bytes = reader.read_to_end(&mut read_bytes).unwrap();
+        assert_eq!(read_bytes, vec![4, 5, 6, 0, 11, 12]);
+        assert_eq!(num_read_bytes, 6);
+
+        // Read from the end of the store
+        let mut reader = store.stream_from(store.size().unwrap() - 1).unwrap();
+        let mut read_bytes = vec![];
+        let num_read_bytes = reader.read_to_end(&mut read_bytes).unwrap();
+        assert_eq!(read_bytes, vec![12]);
+        assert_eq!(num_read_bytes, 1);
+
+        // Read from past the end of the store
+        let mut reader = store.stream_from(store.size().unwrap()).unwrap();
+        let mut read_bytes = vec![];
+        let num_read_bytes = reader.read_to_end(&mut read_bytes).unwrap();
+        assert_eq!(read_bytes, vec![]);
+        assert_eq!(num_read_bytes, 0);
     }
 }
