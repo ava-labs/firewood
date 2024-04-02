@@ -20,7 +20,7 @@ a very fast storage layer for the EVM but could be used on any blockchain that
 requires an authenticated state.
 
 Firewood only attempts to store the latest state on-disk and will actively clean up
-unused states when state diffs are committed. To avoid reference counting trie nodes,
+unused data when state diffs are committed. To avoid reference counting trie nodes,
 Firewood does not copy-on-write (COW) the state trie and instead keeps
 the latest version of the trie index on disk and applies in-place updates to it.
 Firewood keeps some configurable number of previous states in memory to power
