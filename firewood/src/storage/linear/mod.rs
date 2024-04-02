@@ -106,3 +106,58 @@ impl<T: std::fmt::Debug> ReadOnlyLinearStore for LinearStore<T> {
         Ok(Cursor::new([]))
     }
 }
+
+mod tests {
+    use super::ReadWriteLinearStore;
+
+    #[derive(Debug)]
+    struct InMemReadWriteLinearStore {
+        bytes: Vec<u8>,
+    }
+
+    impl ReadWriteLinearStore for InMemReadWriteLinearStore {
+        fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, std::io::Error> {
+            let offset = offset as usize;
+            if offset + object.len() > self.bytes.len() {
+                self.bytes.resize(offset + object.len(), 0);
+            }
+            self.bytes[offset..offset + object.len()].copy_from_slice(object);
+            Ok(object.len())
+        }
+
+        fn size(&self) -> Result<u64, std::io::Error> {
+            Ok(self.bytes.len() as u64)
+        }
+    }
+
+    #[test]
+    fn test_in_mem_read_write() {
+        let mut store = InMemReadWriteLinearStore { bytes: vec![] };
+        assert_eq!(store.size().unwrap(), 0);
+
+        // Write to an empty store
+        store.write(0, &[1, 2, 3]).unwrap();
+        assert_eq!(store.bytes, vec![1, 2, 3]);
+        assert_eq!(store.size().unwrap(), 3);
+
+        // Write at the end of the store
+        store.write(3, &[4, 5, 6]).unwrap();
+        assert_eq!(store.bytes, vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(store.size().unwrap(), 6);
+
+        // Overwrite the beginning of the store
+        store.write(0, &[7, 8]).unwrap();
+        assert_eq!(store.bytes, vec![7, 8, 3, 4, 5, 6]);
+        assert_eq!(store.size().unwrap(), 6);
+
+        // Overwrite the middle of the store
+        store.write(1, &[9, 10]).unwrap();
+        assert_eq!(store.bytes, vec![7, 9, 10, 4, 5, 6]);
+        assert_eq!(store.size().unwrap(), 6);
+
+        // Write past the end of the store
+        store.write(7, &[11, 12]).unwrap();
+        assert_eq!(store.bytes, vec![7, 9, 10, 4, 5, 6, 0, 11, 12]);
+        assert_eq!(store.size().unwrap(), 9);
+    }
+}
