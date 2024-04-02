@@ -4,13 +4,13 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use super::LinearStore;
+use super::{LinearStore, ReadLinearStore};
 
 /// A linear store used for historical revisions
 ///
 /// A [Committed] [LinearStore] supports read operations only
 #[derive(Debug)]
-struct Committed<P> {
+struct Committed<P: ReadLinearStore> {
     old: BTreeMap<u64, Box<[u8]>>,
     parent: Arc<LinearStore<P>>,
 }
