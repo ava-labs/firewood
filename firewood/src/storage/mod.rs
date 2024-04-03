@@ -22,8 +22,8 @@ use tokio::sync::{mpsc::error::SendError, oneshot::error::RecvError};
 use typed_builder::TypedBuilder;
 
 pub mod buffer;
-pub mod node;
 pub mod linear;
+pub mod node;
 
 pub(crate) const PAGE_SIZE_NBIT: u64 = 12;
 pub(crate) const PAGE_SIZE: u64 = 1 << PAGE_SIZE_NBIT;

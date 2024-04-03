@@ -9,7 +9,7 @@
 // object. Instead, we probably should use an IO system that can perform multiple
 // read/write operations at once
 
-use super::{ReadOnlyLinearStore, ReadWriteLinearStore};
+use super::{ReadLinearStore, WriteLinearStore};
 use std::fs::File;
 use std::io::{Error, Read, Seek};
 use std::os::unix::fs::FileExt;
@@ -17,25 +17,16 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 #[derive(Debug)]
-struct FileBacked {
+pub(super) struct FileBacked {
     path: PathBuf,
     fd: Mutex<File>,
 }
 
-impl ReadOnlyLinearStore for FileBacked {
+impl ReadLinearStore for FileBacked {
     fn stream_from(&self, addr: u64) -> Result<impl Read, Error> {
         let mut fd = self.fd.lock().expect("p");
         fd.seek(std::io::SeekFrom::Start(addr))?;
         Ok(fd.try_clone().expect("poisoned lock"))
-    }
-}
-
-impl ReadWriteLinearStore for FileBacked {
-    fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
-        self.fd
-            .lock()
-            .expect("poisoned lock")
-            .write_at(object, offset)
     }
 
     fn size(&self) -> Result<u64, Error> {
@@ -43,5 +34,14 @@ impl ReadWriteLinearStore for FileBacked {
             .lock()
             .expect("poisoned lock")
             .seek(std::io::SeekFrom::End(0))
+    }
+}
+
+impl WriteLinearStore for FileBacked {
+    fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
+        self.fd
+            .lock()
+            .expect("poisoned lock")
+            .write_at(object, offset)
     }
 }
