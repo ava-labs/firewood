@@ -27,13 +27,13 @@ enum Node {
 const BRANCH_CHILDREN: usize = 16;
 
 type Path = Box<[u8]>;
-type DiskAddress = NonZeroU64;
+type LinearAddress = NonZeroU64;
 
 #[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
 struct Branch {
     path: Path,
     value: Option<Box<[u8]>>,
-    children: [Option<DiskAddress>; BRANCH_CHILDREN],
+    children: [Option<LinearAddress>; BRANCH_CHILDREN],
 }
 
 #[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
@@ -53,7 +53,7 @@ impl<T: ReadLinearStore> NodeStore<T> {
     ///
     /// A node on disk will consist of a header which both identifies the
     /// node type ([Branch] or [Leaf]) followed by the serialized data
-    fn read(&self, addr: DiskAddress) -> Result<Arc<Node>, Error> {
+    fn read(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
         let node_stream = self.page_store.stream_from(addr.get())?;
         let node: Node = bincode::deserialize_from(node_stream)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
@@ -63,7 +63,7 @@ impl<T: ReadLinearStore> NodeStore<T> {
     /// Determine the size of the existing node at the given address
     /// TODO: Let's write the length as a constant 4 bytes at the beginning of the block
     /// and skip forward when stream deserializing like this
-    fn node_size(&self, addr: DiskAddress) -> Result<usize, Error> {
+    fn node_size(&self, addr: LinearAddress) -> Result<usize, Error> {
         let node_stream = self.page_store.stream_from(addr.get())?;
         let mut reader = ReaderWrapperWithSize::new(Box::new(node_stream));
         bincode::deserialize_from(&mut reader)
@@ -75,7 +75,7 @@ impl<T: ReadLinearStore> NodeStore<T> {
 
 impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     /// Allocate space for a [Node] in the [LinearStore]
-    fn create(&mut self, node: &Node) -> Result<DiskAddress, Error> {
+    fn create(&mut self, node: &Node) -> Result<LinearAddress, Error> {
         let serialized =
             bincode::serialize(node).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
         // TODO: search for a free space block we can reuse
@@ -87,7 +87,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     /// Update a [Node] that was previously at the provided address.
     /// This is complicated by the fact that a node might grow and not be able to fit a the given
     /// address, in which case we return [UpdateError::NodeMoved]
-    fn update(&mut self, addr: DiskAddress, node: &Node) -> Result<(), UpdateError> {
+    fn update(&mut self, addr: LinearAddress, node: &Node) -> Result<(), UpdateError> {
         // figure out how large the object at this address is by deserializing and then
         // discarding the object
         let size = self.node_size(addr)?;
@@ -106,7 +106,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     }
 
     /// Delete a [Node] at a given address
-    fn delete(&mut self, addr: DiskAddress) -> Result<(), Error> {
+    fn delete(&mut self, addr: LinearAddress) -> Result<(), Error> {
         // figure out how large the object at this address is by deserializing and then
         // discarding the object
         let size = self.node_size(addr)?;
@@ -143,7 +143,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
 #[derive(Debug)]
 enum UpdateError {
     Io(Error),
-    NodeMoved(DiskAddress),
+    NodeMoved(LinearAddress),
 }
 
 impl From<Error> for UpdateError {
@@ -206,7 +206,7 @@ impl FileIdentifingMagic {
 #[repr(C)]
 #[derive(Debug, bytemuck::NoUninit, Clone, Copy)]
 struct FreeSpaceManagementHeader {
-    free_space_head: Option<DiskAddress>,
+    free_space_head: Option<LinearAddress>,
 }
 
 /// A [FreedArea] is the object stored where a node used to be when it has been
@@ -215,5 +215,5 @@ struct FreeSpaceManagementHeader {
 #[derive(Debug, bytemuck::NoUninit, Clone, Copy)]
 struct FreedArea {
     size: usize,
-    next_free_area: Option<DiskAddress>,
+    next_free_area: Option<LinearAddress>,
 }
