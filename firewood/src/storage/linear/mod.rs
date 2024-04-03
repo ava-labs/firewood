@@ -32,10 +32,10 @@ mod committed;
 /// beyond the end of the base linear store, in which case only new bytes
 /// exist
 ///
-/// The parent can either be another [Proposed] store or a [FileBacked] store.
+/// The parent can either be another `Proposed` store or a [FileBacked] store.
 ///
 /// The second generic parameter specifies whether this proposal is mutable or
-/// not. Mutable proposals implement the [ReadWriteLinearStore] trait
+/// not. Mutable proposals implement the `ReadWriteLinearStore` trait
 ///
 /// The possible combinations are:
 ///  - `Proposed<Proposed, ReadWrite>` (in-progress nested proposal)
@@ -50,8 +50,8 @@ mod committed;
 /// # How a commit works
 ///
 /// Lets assume we have the following:
-///  - bytes "on disk":   [0, 1, 2] `LinearStore<FileBacked>`
-///  - bytes in proposal: [   3   ] `LinearStore<Proposed<FileBacked, ReadOnly>>`
+///  - bytes "on disk":   (0, 1, 2) `LinearStore<FileBacked>`
+///  - bytes in proposal: (   3   ) `LinearStore<Proposed<FileBacked, ReadOnly>>`
 /// that is, we're changing the second byte (1) to (3)
 ///
 /// To commit:

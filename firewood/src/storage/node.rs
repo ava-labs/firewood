@@ -74,7 +74,7 @@ impl<T: ReadLinearStore> NodeStore<T> {
 }
 
 impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
-    /// Allocate space for a [Node] in the [PageStore]
+    /// Allocate space for a [Node] in the [LinearStore]
     fn create(&mut self, node: &Node) -> Result<DiskAddress, Error> {
         let serialized =
             bincode::serialize(node).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
@@ -186,8 +186,8 @@ struct FileIdentifingMagic {
 }
 
 impl FileIdentifingMagic {
-    /// The size of [FileIdentifyingMagic] also happens to be the offset
-    /// of the the [FreeSpaceManager]
+    /// The size of `FileIdentifyingMagic` also happens to be the offset
+    /// of the the `FreeSpaceManager`
     const SIZE: u64 = std::mem::size_of::<Self>() as u64;
 
     /// construct a FileIdentifyingMagic from the version of firewood
