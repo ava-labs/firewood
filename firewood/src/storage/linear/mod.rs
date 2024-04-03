@@ -115,15 +115,15 @@ mod tests {
             self.bytes[offset..offset + object.len()].copy_from_slice(object);
             Ok(object.len())
         }
-
-        fn size(&self) -> Result<u64, std::io::Error> {
-            Ok(self.bytes.len() as u64)
-        }
     }
 
     impl ReadLinearStore for InMemReadWriteLinearStore {
         fn stream_from(&self, addr: u64) -> Result<impl Read, std::io::Error> {
             Ok(&self.bytes[addr as usize..])
+        }
+
+        fn size(&self) -> Result<u64, std::io::Error> {
+            Ok(self.bytes.len() as u64)
         }
     }
 
