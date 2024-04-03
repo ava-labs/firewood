@@ -40,6 +40,8 @@ const BLOCK_SIZES: [u64; 18] = [
 ];
 
 const NUM_BLOCK_SIZES: usize = BLOCK_SIZES.len();
+const MIN_BLOCK_SIZE: u64 = BLOCK_SIZES[0];
+const MAX_BLOCK_SIZE: u64 = BLOCK_SIZES[NUM_BLOCK_SIZES - 1];
 
 /// Either a branch or leaf node
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner, Deserialize, Serialize)]
@@ -99,12 +101,48 @@ impl<T: ReadLinearStore> NodeStore<T> {
 }
 
 impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
+    /// Attempts to allocate `n` bytes from the free lists.
+    /// Returns Some(DiskAddress) if successful, None otherwise.
+    fn allocate_from_freed(&mut self, n: u64) -> Result<Option<DiskAddress>, Error> {
+        // Find the smallest free list that can fit this size.
+        let index = size_to_free_lists_index(n as usize)?;
+
+        for index in index..=NUM_BLOCK_SIZES {
+            // Get the first free block of sufficient size.
+            let free_head_addr = self.header.free_lists[index];
+            if let Some(free_head_addr) = free_head_addr {
+                // Update the free list head.
+                let free_head_stream = self.page_store.stream_from(free_head_addr.get())?;
+                let free_head: FreedArea = bincode::deserialize_from(free_head_stream)
+                    .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+
+                // Update the free list to point to the next free block.
+                self.header.free_lists[index] = free_head.next_free_block;
+
+                // Return the address of the newly allocated block.
+                return Ok(Some(free_head_addr));
+            }
+            // No free blocks in this list, try the next size up.
+        }
+
+        Ok(None)
+    }
+
     /// Allocate space for a [Node] in the [LinearStore]
     fn create(&mut self, node: &Node) -> Result<DiskAddress, Error> {
         let serialized =
             bincode::serialize(node).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-        // TODO: search for a free space block we can reuse
-        let addr = self.page_store.size()?;
+
+        let area_size = serialized.len() as u64;
+
+        // Attempt to allocate from the free list.
+        // If we can't allocate from the free list, allocate past the existing
+        // of the store.
+        let addr = match self.allocate_from_freed(area_size)? {
+            Some(addr) => addr.get(),
+            None => self.page_store.size()?,
+        };
+
         self.page_store.write(addr, serialized.as_slice())?;
         Ok(addr.try_into().expect("pageStore is never zero size"))
     }
@@ -134,26 +172,24 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     fn delete(&mut self, addr: DiskAddress) -> Result<(), Error> {
         // figure out how large the object at this address is by deserializing and then
         // discarding the object
-        let size = self.node_size(addr)?;
+        // TODO danlaine: Optimize this
+        let node_size = self.node_size(addr)?;
 
-        let free_space_heads_index = size_to_block_index(size).ok_or_else(|| {
-            Error::new(
-                ErrorKind::InvalidData,
-                format!("Node size {} is too large", size),
-            )
-        })?;
+        let index = size_to_free_lists_index(node_size)?;
+
+        let freed_area_size = BLOCK_SIZES[index];
 
         // The newly freed block points to the current head of the free list.
-        let freed_block = FreedArea {
-            size,
-            next_free_block: self.header.free_space_header[free_space_heads_index],
+        let freed_area = FreedArea {
+            size: freed_area_size,
+            next_free_block: self.header.free_lists[index],
         };
 
         // The newly freed block is now the head of the free list.
-        self.header.free_space_header[free_space_heads_index] = Some(addr);
+        self.header.free_lists[index] = Some(addr);
 
         self.page_store
-            .write(addr.into(), bytemuck::bytes_of(&freed_block))?;
+            .write(addr.into(), bytemuck::bytes_of(&freed_area))?;
 
         // update the free space header
         self.page_store.write(
@@ -166,7 +202,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     /// Initialize a new [NodeStore] by writing out the [NodeStoreHeader].
     fn init(mut page_store: LinearStore<T>) -> Result<Self, Error> {
         let header = NodeStoreHeader {
-            free_space_header: [None; NUM_BLOCK_SIZES],
+            free_lists: [None; NUM_BLOCK_SIZES],
             version_header: VersionHeader::new(),
         };
         page_store.write(VersionHeader::SIZE, bytemuck::bytes_of(&header))?;
@@ -176,11 +212,17 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
 
 /// Returns the index in [BLOCK_SIZES] of the smallest block size
 /// that can fit the given [size]. Returns None if the size is too large.
-/// TODO danlaine: This can probably be optimized.
-fn size_to_block_index(size: usize) -> Option<usize> {
+/// TODO danlaine: This can be optimized.
+fn size_to_free_lists_index(size: usize) -> Result<usize, Error> {
     BLOCK_SIZES
         .iter()
         .position(|&block_size| block_size >= size as u64)
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!("Node size {} is too large", size),
+            )
+        })
 }
 
 #[derive(Debug)]
@@ -221,7 +263,7 @@ impl<T: Read> Read for ReaderWrapperWithSize<T> {
 /// Can be used by filesystem tooling such as "file" to identify
 /// the version of firewood used to create this [NodeStore] file.
 #[repr(C)]
-#[derive(Debug, bytemuck::NoUninit, Clone, Copy)]
+#[derive(Debug, bytemuck::NoUninit, Clone, Copy, Deserialize)]
 struct VersionHeader {
     bytes: [u8; 16],
 }
@@ -245,19 +287,19 @@ impl VersionHeader {
 /// Persisted metadata for a [NodeStore].
 /// The [NodeStoreHeader] is at the start of the [LinearStore].
 #[repr(C)]
-#[derive(Debug, bytemuck::NoUninit, Clone, Copy)]
+#[derive(Debug, bytemuck::NoUninit, Clone, Copy, Deserialize)]
 struct NodeStoreHeader {
     /// Identifies the version of firewood used to create this [NodeStore].
     version_header: VersionHeader,
     /// Element i is the pointer to the first free block of size BLOCK_SIZES[i].
-    free_space_header: [Option<DiskAddress>; NUM_BLOCK_SIZES],
+    free_lists: [Option<DiskAddress>; NUM_BLOCK_SIZES],
 }
 
 /// A [FreedArea] is stored at the start of the area that contained a node that
 /// has been freed.
 #[repr(C)]
-#[derive(Debug, bytemuck::NoUninit, Clone, Copy)]
+#[derive(Debug, bytemuck::NoUninit, Clone, Copy, Deserialize)]
 struct FreedArea {
-    size: usize,
+    size: u64,
     next_free_block: Option<DiskAddress>,
 }
