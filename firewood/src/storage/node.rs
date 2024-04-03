@@ -69,7 +69,7 @@ struct Leaf {
 
 #[derive(Debug)]
 struct NodeStore<T: ReadLinearStore> {
-    header: FreeSpaceManagementHeader,
+    header: NodeStoreHeader,
     page_store: LinearStore<T>,
 }
 
@@ -144,34 +144,32 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
         })?;
 
         // The newly freed block points to the current head of the free list.
-        let freed_block = FreedBlock {
+        let freed_block = FreedArea {
             size,
-            next_free_block: self.header.free_space_heads[free_space_heads_index],
+            next_free_block: self.header.free_space_header[free_space_heads_index],
         };
 
         // The newly freed block is now the head of the free list.
-        self.header.free_space_heads[free_space_heads_index] = Some(addr);
+        self.header.free_space_header[free_space_heads_index] = Some(addr);
 
         self.page_store
             .write(addr.into(), bytemuck::bytes_of(&freed_block))?;
 
         // update the free space header
         self.page_store.write(
-            std::mem::size_of::<FileIdentifingMagic>() as u64,
+            std::mem::size_of::<VersionHeader>() as u64,
             bytemuck::bytes_of(&self.header),
         )?;
         Ok(())
     }
 
-    /// Initialize a new [NodeStore] by writing out the [FileIdentifingMagic] and [FreeSpaceManagementHeader]
+    /// Initialize a new [NodeStore] by writing out the [NodeStoreHeader].
     fn init(mut page_store: LinearStore<T>) -> Result<Self, Error> {
-        // Write the first 16 bytes of each [PageStore]
-        page_store.write(0, bytemuck::bytes_of(&FileIdentifingMagic::new()))?;
-
-        let header = FreeSpaceManagementHeader {
-            free_space_heads: [None; NUM_BLOCK_SIZES],
+        let header = NodeStoreHeader {
+            free_space_header: [None; NUM_BLOCK_SIZES],
+            version_header: VersionHeader::new(),
         };
-        page_store.write(FileIdentifingMagic::SIZE, bytemuck::bytes_of(&header))?;
+        page_store.write(VersionHeader::SIZE, bytemuck::bytes_of(&header))?;
         Ok(Self { header, page_store })
     }
 }
@@ -220,46 +218,46 @@ impl<T: Read> Read for ReaderWrapperWithSize<T> {
     }
 }
 
-/// This structure lives at the beginning of the PageStore and is a constant
-/// This makes it impossible to update() things at address 0 as a safety feature
-/// The header contents can be used by filesystem tooling such as "file" to identify
-/// the version of firewood used to create the file.
+/// Can be used by filesystem tooling such as "file" to identify
+/// the version of firewood used to create this [NodeStore] file.
 #[repr(C)]
 #[derive(Debug, bytemuck::NoUninit, Clone, Copy)]
-struct FileIdentifingMagic {
-    magic: [u8; 16],
+struct VersionHeader {
+    bytes: [u8; 16],
 }
 
-impl FileIdentifingMagic {
-    /// The size of `FileIdentifyingMagic` also happens to be the offset
-    /// of the the `FreeSpaceManager`
+impl VersionHeader {
     const SIZE: u64 = std::mem::size_of::<Self>() as u64;
 
-    /// construct a FileIdentifyingMagic from the version of firewood
+    /// construct a [VersionHeader] from the firewood version
     fn new() -> Self {
-        let mut magic: [u8; Self::SIZE as usize] = Default::default();
+        let mut version_bytes: [u8; Self::SIZE as usize] = Default::default();
         let version = env!("CARGO_PKG_VERSION");
-        let _ = magic
+        let _ = version_bytes
             .as_mut_slice()
             .write_all(format!("firewood {}", version).as_bytes());
-        Self { magic }
+        Self {
+            bytes: version_bytes,
+        }
     }
 }
 
-/// Immediately following the FileIdentifyingMagic is the FreeSpaceManagementHeader
-/// It points to the heads of the free block lists.
+/// Persisted metadata for a [NodeStore].
+/// The [NodeStoreHeader] is at the start of the [LinearStore].
 #[repr(C)]
 #[derive(Debug, bytemuck::NoUninit, Clone, Copy)]
-struct FreeSpaceManagementHeader {
-    /// Element i is the first free block of size BLOCK_SIZES[i].
-    free_space_heads: [Option<DiskAddress>; NUM_BLOCK_SIZES],
+struct NodeStoreHeader {
+    /// Identifies the version of firewood used to create this [NodeStore].
+    version_header: VersionHeader,
+    /// Element i is the pointer to the first free block of size BLOCK_SIZES[i].
+    free_space_header: [Option<DiskAddress>; NUM_BLOCK_SIZES],
 }
 
-/// A [FreedBlock] is the object stored where a node used to be when it has been
-/// freed
+/// A [FreedArea] is stored at the start of the area that contained a node that
+/// has been freed.
 #[repr(C)]
 #[derive(Debug, bytemuck::NoUninit, Clone, Copy)]
-struct FreedBlock {
+struct FreedArea {
     size: usize,
     next_free_block: Option<DiskAddress>,
 }
