@@ -49,7 +49,7 @@ struct NodeStore<T: ReadLinearStore> {
 }
 
 impl<T: ReadLinearStore> NodeStore<T> {
-    /// Read a node from the provided [DiskAddress]
+    /// Read a node from the provided [LinearAddress]
     ///
     /// A node on disk will consist of a header which both identifies the
     /// node type ([Branch] or [Leaf]) followed by the serialized data
