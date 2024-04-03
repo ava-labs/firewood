@@ -28,6 +28,13 @@ impl ReadLinearStore for FileBacked {
         fd.seek(std::io::SeekFrom::Start(addr))?;
         Ok(fd.try_clone().expect("poisoned lock"))
     }
+
+    fn size(&self) -> Result<u64, Error> {
+        self.fd
+            .lock()
+            .expect("poisoned lock")
+            .seek(std::io::SeekFrom::End(0))
+    }
 }
 
 impl WriteLinearStore for FileBacked {
@@ -36,12 +43,5 @@ impl WriteLinearStore for FileBacked {
             .lock()
             .expect("poisoned lock")
             .write_at(object, offset)
-    }
-
-    fn size(&self) -> Result<u64, Error> {
-        self.fd
-            .lock()
-            .expect("poisoned lock")
-            .seek(std::io::SeekFrom::End(0))
     }
 }
