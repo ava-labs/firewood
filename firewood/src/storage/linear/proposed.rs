@@ -24,10 +24,10 @@ struct Proposed<P: ReadLinearStore, M> {
 impl<P: ReadLinearStore, M> Proposed<P, M> {
     fn new(parent: Arc<LinearStore<P>>) -> Self {
         Self {
+            parent,
             new: Default::default(),
             old: Default::default(),
-            parent,
-            phantom: PhantomData {},
+            phantom: Default::default(),
         }
     }
 }
@@ -49,16 +49,20 @@ struct LayeredReader<'a, P: ReadLinearStore, M> {
 /// transition, you'll get what is left, and the state will change
 #[derive(Debug)]
 enum LayeredReaderState<'a> {
+    // we know nothing, we might already be inside a modified area, one might be coming, or there aren't any left
     InitialState,
-    BeforeModifiedPart {
+    // we know we are not in a modified area, so find the next modified area
+    FindNext,
+    // we know there are no more modified areas past our current offset
+    NoMoreModifiedAreas,
+    BeforeModifiedArea {
         next_offset: u64,
-        next_modified_part: &'a [u8],
+        next_modified_area: &'a [u8],
     },
-    InsideModifiedPart {
-        part: &'a [u8],
+    InsideModifiedArea {
+        area: &'a [u8],
         offset_within: usize,
     },
-    NoMoreModifiedParts,
 }
 
 impl<P: ReadLinearStore, M: Debug> ReadLinearStore for Proposed<P, M> {
@@ -111,21 +115,20 @@ impl<P: ReadLinearStore> WriteLinearStore for Proposed<P, Mutable> {
     fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
         // TODO: naive implementation
         self.new.insert(offset, Box::from(object));
-        //
+        // TODO: coalesce
         Ok(object.len())
     }
 }
 
-// TODO: This is not fully implemented as of this commit
-// it needs to work across Committed and Proposed types
+// TODO: make this work across Committed and Proposed types
 impl<'a, P: ReadLinearStore, M: Debug> Read for LayeredReader<'a, P, M> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self.state {
             LayeredReaderState::InitialState => {
                 // figure out which of these cases is true:
-                //  a. We are inside a delta [LayeredReaderState::InsideModifiedPart]
-                //  b. We are before an upcoming delta [LayeredReaderState::BeforeModifiedPart]
-                //  c. We are past the last delta [LayeredReaderState::NoMoreModifiedParts]
+                //  a. We are inside a delta [LayeredReaderState::InsideModifiedArea]
+                //  b. We are before an upcoming delta [LayeredReaderState::BeforeModifiedArea]
+                //  c. We are past the last delta [LayeredReaderState::NoMoreModifiedAreas]
                 self.state = 'state: {
                     // check for (a) - find the delta in front of (or at) our bytes offset
                     if let Some(delta) = self.layer.diffs().range(..=self.offset).next_back() {
@@ -133,55 +136,75 @@ impl<'a, P: ReadLinearStore, M: Debug> Read for LayeredReader<'a, P, M> {
                         let delta_start = *delta.0;
                         let delta_end = delta_start + delta.1.len() as u64;
                         if self.offset >= delta_start && self.offset < delta_end {
-                            // yes, we are inside a modified part
-                            break 'state LayeredReaderState::InsideModifiedPart {
-                                part: delta.1,
+                            // yes, we are inside a modified area
+                            break 'state LayeredReaderState::InsideModifiedArea {
+                                area: delta.1,
                                 offset_within: (self.offset - delta_start) as usize,
                             };
                         }
                     }
-                    // check for (b) - find the next delta and record it
-                    if let Some(delta) = self.layer.diffs().range(self.offset..).next() {
-                        // case (b) is true
-                        LayeredReaderState::BeforeModifiedPart {
-                            next_offset: *delta.0,
-                            next_modified_part: delta.1,
-                        }
-                    } else {
-                        // (c) nothing even coming up, so all remaining bytes are not in this layer
-                        LayeredReaderState::NoMoreModifiedParts
-                    }
+                    break 'state LayeredReaderState::FindNext;
                 };
                 self.read(buf)
             }
-            LayeredReaderState::BeforeModifiedPart {
-                next_offset,
-                next_modified_part: _,
-            } => {
-                // see how much we can read until we get to the next modified part
-                let remaining_passthrough: usize = (next_offset - self.offset) as usize;
-                match buf.len().cmp(&remaining_passthrough) {
-                    std::cmp::Ordering::Less => {
-                        // remaining_passthrough -= buf.len();
-                        todo!()
+            LayeredReaderState::FindNext => {
+                // check for (b) - find the next delta and record it
+                self.state = if let Some(delta) = self.layer.diffs().range(self.offset..).next() {
+                    // case (b) is true
+                    LayeredReaderState::BeforeModifiedArea {
+                        next_offset: *delta.0,
+                        next_modified_area: delta.1,
                     }
-                    std::cmp::Ordering::Equal => todo!(),
-                    std::cmp::Ordering::Greater => todo!(),
-                }
+                } else {
+                    // (c) nothing even coming up, so all remaining bytes are not in this layer
+                    LayeredReaderState::NoMoreModifiedAreas
+                };
+                self.read(buf)
             }
-            LayeredReaderState::InsideModifiedPart {
-                part,
+            LayeredReaderState::BeforeModifiedArea {
+                next_offset,
+                next_modified_area,
+            } => {
+                // if the buffer is smaller than the remaining bytes in this change, then
+                // restrict the read to only read up to the remaining areas
+                let remaining_passthrough: usize = (next_offset - self.offset) as usize;
+                let size = if buf.len() > remaining_passthrough {
+                    let read_size = self.layer.parent.stream_from(self.offset)?.read(
+                        buf.get_mut(0..remaining_passthrough)
+                            .expect("length already checked"),
+                    )?;
+                    if read_size == remaining_passthrough {
+                        // almost always true, unless a partial read happened
+                        self.state = LayeredReaderState::InsideModifiedArea {
+                            area: next_modified_area,
+                            offset_within: 0,
+                        };
+                    }
+                    read_size
+                } else {
+                    self.layer.parent.stream_from(self.offset)?.read(buf)?
+                };
+                self.offset += size as u64;
+                Ok(size)
+            }
+            LayeredReaderState::InsideModifiedArea {
+                area,
                 offset_within,
             } => {
                 let size = Cursor::new(
-                    part.get(offset_within..)
+                    area.get(offset_within..)
                         .expect("bug: offset_within not in bounds"),
                 )
                 .read(buf)?;
                 self.offset += size as u64;
+                debug_assert!(offset_within + size <= area.len());
+                if offset_within + size == area.len() {
+                    // read to the end of this area
+                    self.state = LayeredReaderState::FindNext;
+                }
                 Ok(size)
             }
-            LayeredReaderState::NoMoreModifiedParts => {
+            LayeredReaderState::NoMoreModifiedAreas => {
                 let size = self.layer.parent.stream_from(self.offset)?.read(buf)?;
                 self.offset += size as u64;
                 Ok(size)
@@ -192,6 +215,8 @@ impl<'a, P: ReadLinearStore, M: Debug> Read for LayeredReader<'a, P, M> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod test {
+    use test_case::test_case;
+
     use super::*;
 
     #[derive(Debug)]
@@ -199,11 +224,27 @@ mod test {
 
     impl ConstBacked {
         const DATA: &'static [u8] = b"random data";
+
+        const fn new() -> Self {
+            Self {}
+        }
     }
 
     impl From<ConstBacked> for Arc<LinearStore<ConstBacked>> {
         fn from(state: ConstBacked) -> Self {
             Arc::new(LinearStore { state })
+        }
+    }
+
+    impl From<ConstBacked> for Proposed<ConstBacked, Mutable> {
+        fn from(value: ConstBacked) -> Self {
+            Proposed::new(value.into())
+        }
+    }
+
+    impl From<ConstBacked> for Proposed<ConstBacked, Immutable> {
+        fn from(value: ConstBacked) -> Self {
+            Proposed::new(value.into())
         }
     }
 
@@ -219,7 +260,7 @@ mod test {
 
     #[test]
     fn smoke_read() -> Result<(), std::io::Error> {
-        let sut: Proposed<ConstBacked, Immutable> = Proposed::new(ConstBacked {}.into());
+        let sut: Proposed<ConstBacked, Immutable> = ConstBacked::new().into();
 
         // read all
         let mut data = [0u8; ConstBacked::DATA.len()];
@@ -241,7 +282,7 @@ mod test {
 
     #[test]
     fn smoke_mutate() -> Result<(), std::io::Error> {
-        let mut sut: Proposed<ConstBacked, Mutable> = Proposed::new(ConstBacked {}.into());
+        let mut sut: Proposed<ConstBacked, Mutable> = ConstBacked::new().into();
 
         const MUT_DATA: &[u8] = b"data random";
 
@@ -254,5 +295,35 @@ mod test {
         assert_eq!(data, MUT_DATA);
 
         Ok(())
+    }
+
+    #[test_case(0, b"1", b"1andom data")]
+    #[test_case(1, b"2", b"r2ndom data")]
+    #[test_case(10, b"3", b"random dat3")]
+    fn partial_mod_full_read(pos: u64, delta: &[u8], expected: &[u8]) -> Result<(), Error> {
+        let mut sut: Proposed<ConstBacked, Mutable> = ConstBacked::new().into();
+
+        sut.write(pos, delta)?;
+
+        let mut data = [0u8; ConstBacked::DATA.len()];
+        sut.stream_from(0).unwrap().read_exact(&mut data).unwrap();
+        assert_eq!(data, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn nested() {
+        let mut parent: Proposed<ConstBacked, Mutable> = ConstBacked::new().into();
+        parent.write(1, b"1").unwrap();
+
+        let parent: Arc<LinearStore<Proposed<ConstBacked, Mutable>>> =
+            Arc::new(LinearStore { state: parent });
+        let mut child: Proposed<Proposed<ConstBacked, Mutable>, Mutable> = Proposed::new(parent);
+        child.write(3, b"3").unwrap();
+
+        let mut data = [0u8; ConstBacked::DATA.len()];
+        child.stream_from(0).unwrap().read_exact(&mut data).unwrap();
+        assert_eq!(&data, b"r1n3om data");
     }
 }

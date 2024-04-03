@@ -32,7 +32,7 @@ mod committed;
 /// beyond the end of the base linear store, in which case only new bytes
 /// exist
 ///
-/// The parent can either be another `Proposed` store or a [FileBacked] store.
+/// The parent can either be another `Proposed` store or a `FileBacked` store.
 ///
 /// The second generic parameter specifies whether this proposal is mutable or
 /// not. Mutable proposals implement the `ReadWriteLinearStore` trait
