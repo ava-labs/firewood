@@ -218,7 +218,8 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
 
     /// Update a [Node] that was previously at the provided address.
     /// This is complicated by the fact that a node might grow and not be able to fit a the given
-    /// address, in which case we return [UpdateError::NodeMoved]
+    /// address, in which case we return [UpdateError::NodeMoved].
+    /// `addr` is the address of a [StoredArea] in the [LinearStore].
     fn update(&mut self, addr: DiskAddress, node: &Node) -> Result<(), UpdateError> {
         let (_, old_stored_area_size) = self.area_index_and_size(addr)?;
 
@@ -337,7 +338,7 @@ impl<T: Read> Read for ReaderWrapperWithSize<T> {
 
 /// Can be used by filesystem tooling such as "file" to identify
 /// the version of firewood used to create this [NodeStore] file.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 struct VersionHeader {
     bytes: [u8; 16],
 }
@@ -439,5 +440,37 @@ mod tests {
 
         node_store.delete(leaf_addr).unwrap();
         assert!(node_store.read(leaf_addr).is_err());
+    }
+
+    #[test]
+    fn test_node_store_header() {
+        let in_mem_store = InMemReadWriteLinearStore::new();
+        let linear_store = LinearStore::new(in_mem_store);
+        let mut node_store = NodeStore::init(linear_store).unwrap();
+
+        // Check the empty header is written at the start of the LinearStore.
+        {
+            let header_bytes = node_store.linear_store.stream_from(0).unwrap();
+            let mut reader = ReaderWrapperWithSize::new(Box::new(header_bytes));
+            let header: NodeStoreHeader = bincode::deserialize_from(&mut reader).unwrap();
+            assert_eq!(header.version_header, VersionHeader::new());
+            assert_eq!(header.free_lists, [None; NUM_AREA_SIZES]);
+        }
+
+        // Check that the header is written correctly after a write.
+        let leaf = Node::Leaf(Leaf {
+            path: vec![].into_boxed_slice(),
+            value: vec![1].into_boxed_slice(),
+        });
+
+        let leaf_addr = node_store.create(&leaf).unwrap();
+        node_store.delete(leaf_addr).unwrap();
+
+        // There should be an entry in the first free list now
+        let header_bytes = node_store.linear_store.stream_from(0).unwrap();
+        let mut reader = ReaderWrapperWithSize::new(Box::new(header_bytes));
+        let header: NodeStoreHeader = bincode::deserialize_from(&mut reader).unwrap();
+        assert_eq!(header.version_header, VersionHeader::new());
+        assert_eq!(header.free_lists[0], Some(leaf_addr));
     }
 }
