@@ -46,27 +46,6 @@ const NUM_AREA_SIZES: usize = AREA_SIZES.len();
 const MIN_AREA_SIZE: u64 = AREA_SIZES[0];
 const MAX_AREA_SIZE: u64 = AREA_SIZES[NUM_AREA_SIZES - 1];
 
-/// A branch, a leaf, or a freed area.
-#[repr(u8)]
-#[derive(PartialEq, Eq, Clone, Debug, EnumAsInner, Deserialize, Serialize)]
-enum Area {
-    Branch(Branch) = 1,
-    Leaf(Leaf) = 2,
-    Free(FreedArea) = 3,
-}
-
-#[derive(PartialEq, Eq, Clone, Debug, Serialize)]
-struct StoredArea<'a> {
-    /// Size of this area is at this index in [AREA_SIZES]
-    area_sizes_index: u8,
-    area: &'a Area,
-}
-
-//[discrim=2, serialized node].....................slot
-//[discrim=3, serialized_freeareaheader]...........slot
-
-// const BranchIdentifier: Discriminant<u8> = core::mem::discriminant(Node::Branch);
-
 /// Number of children in a branch
 const BRANCH_CHILDREN: usize = 16;
 
@@ -84,6 +63,22 @@ struct Branch {
 struct Leaf {
     path: Path,
     value: Box<[u8]>,
+}
+
+/// A branch, a leaf, or a freed area.
+#[repr(u8)]
+#[derive(PartialEq, Eq, Clone, Debug, EnumAsInner, Deserialize, Serialize)]
+enum Area {
+    Branch(Branch) = 1,
+    Leaf(Leaf) = 2,
+    Free(FreedArea) = 3,
+}
+
+#[derive(PartialEq, Eq, Clone, Debug, Serialize)]
+struct StoredArea<'a> {
+    /// Size of this area is at this index in [AREA_SIZES]
+    area_sizes_index: u8,
+    area: &'a Area,
 }
 
 #[derive(Debug)]
@@ -340,8 +335,7 @@ impl<T: Read> Read for ReaderWrapperWithSize<T> {
 
 /// Can be used by filesystem tooling such as "file" to identify
 /// the version of firewood used to create this [NodeStore] file.
-#[repr(C)]
-#[derive(Debug, bytemuck::NoUninit, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 struct VersionHeader {
     bytes: [u8; 16],
 }
@@ -364,8 +358,7 @@ impl VersionHeader {
 
 /// Persisted metadata for a [NodeStore].
 /// The [NodeStoreHeader] is at the start of the [LinearStore].
-#[repr(C)]
-#[derive(Debug, bytemuck::NoUninit, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 struct NodeStoreHeader {
     /// Identifies the version of firewood used to create this [NodeStore].
     version_header: VersionHeader,
@@ -375,8 +368,7 @@ struct NodeStoreHeader {
 
 /// A [FreedArea] is stored at the start of the area that contained a node that
 /// has been freed.
-#[repr(C)]
-#[derive(Debug, bytemuck::NoUninit, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 struct FreedArea {
     next_free_block: Option<DiskAddress>,
 }
