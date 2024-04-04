@@ -62,7 +62,7 @@ fn area_size_to_index(n: u64) -> Result<u8, Error> {
         return Ok(0);
     }
 
-    Ok(n.ilog2() as u8 - 2)
+    Ok(n.ilog2() as u8 - 3)
 }
 
 type Path = Box<[u8]>;
@@ -375,4 +375,25 @@ struct NodeStoreHeader {
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 struct FreedArea {
     next_free_block: Option<DiskAddress>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_area_size_to_index() {
+        for i in 0..NUM_AREA_SIZES {
+            // area size is at bottom of range
+            assert_eq!(area_size_to_index(AREA_SIZES[i]).unwrap(), i as u8);
+
+            if i > 0 {
+                // 1 less than bottom of range can go in previous area size
+                assert_eq!(
+                    area_size_to_index(AREA_SIZES[i] - 1).unwrap(),
+                    (i - 1) as u8
+                );
+            }
+        }
+    }
 }
