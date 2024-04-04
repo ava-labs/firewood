@@ -112,6 +112,12 @@ pub mod tests {
         bytes: Vec<u8>,
     }
 
+    impl InMemReadWriteLinearStore {
+        pub fn new() -> Self {
+            Self { bytes: vec![] }
+        }
+    }
+
     impl WriteLinearStore for InMemReadWriteLinearStore {
         fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, std::io::Error> {
             let offset = offset as usize;
