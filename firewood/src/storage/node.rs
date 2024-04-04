@@ -220,8 +220,6 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     /// This is complicated by the fact that a node might grow and not be able to fit a the given
     /// address, in which case we return [UpdateError::NodeMoved]
     fn update(&mut self, addr: DiskAddress, node: &Node) -> Result<(), UpdateError> {
-        // figure out how large the object at this address is by deserializing and then
-        // discarding the object
         let (_, old_stored_area_size) = self.area_index_and_size(addr)?;
 
         let new_node_bytes =
