@@ -155,7 +155,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
         // Find the smallest free list that can fit this size.
         let index = area_size_to_index(n)?;
 
-        for index in index as usize..=NUM_AREA_SIZES {
+        for index in index as usize..NUM_AREA_SIZES {
             // Get the first free block of sufficient size.
             let free_head_addr = self.header.free_lists[index];
             if let Some(free_head_addr) = free_head_addr {
