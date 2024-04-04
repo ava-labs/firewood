@@ -42,6 +42,8 @@ const AREA_SIZES: [u64; 21] = [
     1 << 23, // 16 MiB
 ];
 
+// TODO danlaine: have type for index in AREA_SIZES
+// Implement try_into() for it.
 const NUM_AREA_SIZES: usize = AREA_SIZES.len();
 const MIN_AREA_SIZE: u64 = AREA_SIZES[0];
 const MAX_AREA_SIZE: u64 = AREA_SIZES[NUM_AREA_SIZES - 1];
@@ -137,7 +139,8 @@ impl<T: ReadLinearStore> NodeStore<T> {
 
     /// Read a [Node] from the provided [DiskAddress].
     /// `addr` is the address of a [StoredArea] in the [LinearStore].
-    fn read(&self, addr: DiskAddress) -> Result<Arc<Node>, Error> {
+    fn read_node(&self, addr: DiskAddress) -> Result<Arc<Node>, Error> {
+        debug_assert!(addr.get() % 8 == 0);
         let addr = addr.get() + 1; // Skip the index byte
         let area_stream = self.linear_store.stream_from(addr)?;
         let area: Area<Node, FreedArea> = bincode::deserialize_from(area_stream)
@@ -157,6 +160,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     /// If successful returns the address of the newly allocated area
     /// and the index of the free list that was used.
     /// If there are no free areas big enough for `n` bytes, returns None.
+    /// TODO danlaine: If we return a larger area than requested, we should split it.
     fn allocate_from_freed(&mut self, n: u64) -> Result<Option<(DiskAddress, u8)>, Error> {
         // Find the smallest free list that can fit this size.
         let index = area_size_to_index(n)?;
@@ -172,8 +176,6 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
 
                 // Update the free list to point to the next free block.
                 self.header.free_lists[index] = free_head.next_free_block;
-
-                // self.page_store.write(offset, object);
 
                 // Return the address of the newly allocated block.
                 return Ok(Some((free_head_addr, index as u8)));
@@ -199,9 +201,9 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
         // If we can't allocate from a free list, allocate past the existing
         // of the LinearStore.
         let (addr, index) = match self.allocate_from_freed(stored_area_size)? {
-            Some((addr, index)) => (addr.get(), index),
+            Some((addr, index)) => (addr, index),
             None => (
-                self.linear_store.size()?,
+                DiskAddress::new(self.linear_store.size()?).expect("linear store size can't be 0"),
                 area_size_to_index(stored_area_size)? as u8,
             ),
         };
@@ -215,8 +217,8 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
             bincode::serialize(&stored_area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
         self.linear_store
-            .write(addr, stored_area_bytes.as_slice())?;
-        Ok(addr.try_into().expect("LinearStore is never zero size"))
+            .write(addr.get(), stored_area_bytes.as_slice())?;
+        Ok(addr)
     }
 
     /// Update a [Node] that was previously at the provided address.
@@ -420,7 +422,7 @@ mod tests {
         });
 
         let leaf_addr = node_store.create(&leaf).unwrap();
-        let read_leaf = node_store.read(leaf_addr).unwrap();
+        let read_leaf = node_store.read_node(leaf_addr).unwrap();
         assert_eq!(*read_leaf, leaf);
 
         let branch = Node::Branch(Branch {
@@ -430,7 +432,7 @@ mod tests {
         });
 
         let branch_addr = node_store.create(&branch).unwrap();
-        let read_branch = node_store.read(branch_addr).unwrap();
+        let read_branch = node_store.read_node(branch_addr).unwrap();
         assert_eq!(*read_branch, branch);
 
         let new_leaf = Node::Leaf(Leaf {
@@ -439,11 +441,11 @@ mod tests {
         });
 
         node_store.update(leaf_addr, &new_leaf).unwrap();
-        let read_new_leaf = node_store.read(leaf_addr).unwrap();
+        let read_new_leaf = node_store.read_node(leaf_addr).unwrap();
         assert_eq!(*read_new_leaf, new_leaf);
 
         node_store.delete(leaf_addr).unwrap();
-        assert!(node_store.read(leaf_addr).is_err());
+        assert!(node_store.read_node(leaf_addr).is_err());
     }
 
     #[test]
