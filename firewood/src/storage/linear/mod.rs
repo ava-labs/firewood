@@ -139,12 +139,6 @@ pub mod tests {
         }
     }
 
-    impl InMemReadWriteLinearStore {
-        pub fn new() -> Self {
-            InMemReadWriteLinearStore { bytes: vec![] }
-        }
-    }
-
     #[test]
     fn test_in_mem_write_linear_store() {
         let mut store = InMemReadWriteLinearStore { bytes: vec![] };
