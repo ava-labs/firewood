@@ -65,7 +65,7 @@ struct Leaf {
     value: Box<[u8]>,
 }
 
-/// A branch, a leaf, or a freed area.
+/// [NodeStore] divides [LinearStore] into [Area]s.
 #[repr(u8)]
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner, Deserialize, Serialize)]
 enum Area {
@@ -76,7 +76,7 @@ enum Area {
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize)]
 struct StoredArea<'a> {
-    /// Size of this area is at this index in [AREA_SIZES]
+    /// Index in [AREA_SIZES] of this area's size
     area_sizes_index: u8,
     area: &'a Area,
 }
@@ -84,38 +84,14 @@ struct StoredArea<'a> {
 #[derive(Debug)]
 struct NodeStore<T: ReadLinearStore> {
     header: NodeStoreHeader,
-    page_store: LinearStore<T>,
+    linear_store: LinearStore<T>,
 }
 
 impl<T: ReadLinearStore> NodeStore<T> {
-    /// Read a node from the provided [DiskAddress]
-    ///
-    /// A node on disk will consist of a header which both identifies the
-    /// node type ([Branch] or [Leaf]) followed by the serialized data
-    fn read(&self, addr: DiskAddress) -> Result<Arc<Area>, Error> {
-        let node_stream = self.page_store.stream_from(addr.get())?;
-        let node: Area = bincode::deserialize_from(node_stream)
-            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-        Ok(Arc::new(node))
-    }
-
-    /// Determine the size of the existing node at the given address
-    /// TODO: Let's write the length as a constant 4 bytes at the beginning of the block
-    /// and skip forward when stream deserializing like this
-    fn node_size(&self, addr: DiskAddress) -> Result<usize, Error> {
-        let node_stream = self.page_store.stream_from(addr.get())?;
-        let mut reader = ReaderWrapperWithSize::new(Box::new(node_stream));
-        bincode::deserialize_from(&mut reader)
-            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-
-        Ok(reader.bytes_read)
-    }
-
-    /// Returns (index, size) for the [StoredArea] at `addr`
-    /// where `index` is the index of the area size in [AREA_SIZES]
-    /// and `size` is the size of the area.
+    /// Returns (index, area_size) for the [StoredArea] at `addr`.
+    /// `index` is the index of `area_size` in [AREA_SIZES].
     fn stored_area_size(&self, addr: DiskAddress) -> Result<(u8, u64), Error> {
-        let node_stream = self.page_store.stream_from(addr.get())?;
+        let node_stream = self.linear_store.stream_from(addr.get())?;
         let mut reader = ReaderWrapperWithSize::new(Box::new(node_stream));
         let index: u8 = bincode::deserialize_from(&mut reader)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
@@ -128,6 +104,15 @@ impl<T: ReadLinearStore> NodeStore<T> {
 
         Ok((index, AREA_SIZES[index as usize]))
     }
+
+    /// Read an [Area] from the provided [DiskAddress].
+    fn read(&self, addr: DiskAddress) -> Result<Arc<Area>, Error> {
+        let addr = addr.get() + 1; // Skip the index byte
+        let area_stream = self.linear_store.stream_from(addr)?;
+        let area: Area = bincode::deserialize_from(area_stream)
+            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+        Ok(Arc::new(area))
+    }
 }
 
 impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
@@ -136,10 +121,6 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     /// and the index of the free list that was used.
     /// If there are no free areas big enough for `n` bytes, returns None.
     fn allocate_from_freed(&mut self, n: u64) -> Result<Option<(DiskAddress, u8)>, Error> {
-        // Add 1 to account for the discriminant byte that we will write
-        // to the beginning of the area.
-        let n = n + 1;
-
         // Find the smallest free list that can fit this size.
         let index = size_to_free_lists_index(n)?;
 
@@ -148,7 +129,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
             let free_head_addr = self.header.free_lists[index];
             if let Some(free_head_addr) = free_head_addr {
                 // Update the free list head.
-                let free_head_stream = self.page_store.stream_from(free_head_addr.get())?;
+                let free_head_stream = self.linear_store.stream_from(free_head_addr.get())?;
                 let free_head: FreedArea = bincode::deserialize_from(free_head_stream)
                     .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
@@ -166,33 +147,39 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
         Ok(None)
     }
 
-    /// Allocate space for a [Node] in the [LinearStore]
-    fn create(&mut self, node: &Area) -> Result<DiskAddress, Error> {
-        let serialized =
-            bincode::serialize(node).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+    /// Allocates an area in the [LinearStore] large enough for the provided [Area].
+    /// Returns the address of the allocated area.
+    fn create(&mut self, area: &Area) -> Result<DiskAddress, Error> {
+        let area_bytes =
+            bincode::serialize(area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
-        let node_size = serialized.len() as u64;
+        let area_size = area_bytes.len() as u64;
 
-        // Attempt to allocate from the free list.
-        // If we can't allocate from the free list, allocate past the existing
-        // of the store.
-        let (addr, index) = match self.allocate_from_freed(node_size)? {
+        // Add 1 to account for the index byte that we will write
+        // to the beginning of the StoredArea.
+        let area_size = area_size + 1;
+
+        // Attempt to allocate from a free list.
+        // If we can't allocate from a free list, allocate past the existing
+        // of the LinearStore.
+        let (addr, index) = match self.allocate_from_freed(area_size)? {
             Some((addr, index)) => (addr.get(), index),
             None => (
-                self.page_store.size()?,
-                size_to_free_lists_index(node_size)? as u8,
+                self.linear_store.size()?,
+                size_to_free_lists_index(area_size)? as u8,
             ),
         };
 
         let stored_area = StoredArea {
             area_sizes_index: index,
-            area: node,
+            area,
         };
 
         let stored_area_bytes =
             bincode::serialize(&stored_area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
-        self.page_store.write(addr, stored_area_bytes.as_slice())?;
+        self.linear_store
+            .write(addr, stored_area_bytes.as_slice())?;
         Ok(addr.try_into().expect("LinearStore is never zero size"))
     }
 
@@ -211,7 +198,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
 
         if new_stored_area_size <= old_stored_area_size {
             // the new node fits in the old node's area
-            self.page_store
+            self.linear_store
                 .write(addr.into(), new_node_bytes.as_slice())?;
             return Ok(());
         }
@@ -244,7 +231,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
         let stored_area_bytes =
             bincode::serialize(&stored_area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
-        self.page_store.write(addr.into(), &stored_area_bytes)?;
+        self.linear_store.write(addr.into(), &stored_area_bytes)?;
 
         self.write_free_lists_header()?;
         Ok(())
@@ -257,7 +244,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
                 format!("Failed to serialize free lists: {}", e),
             )
         })?;
-        self.page_store.write(
+        self.linear_store.write(
             std::mem::size_of::<VersionHeader>() as u64,
             header_bytes.as_slice(),
         )?;
@@ -277,7 +264,10 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
             )
         })?;
         page_store.write(0, header_bytes.as_slice())?;
-        Ok(Self { header, page_store })
+        Ok(Self {
+            header,
+            linear_store: page_store,
+        })
     }
 }
 
