@@ -223,15 +223,17 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     fn update(&mut self, addr: DiskAddress, node: &Node) -> Result<(), UpdateError> {
         let (_, old_stored_area_size) = self.area_index_and_size(addr)?;
 
-        let new_node_bytes =
-            bincode::serialize(node).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+        let new_area: Area<&Node, FreedArea> = Area::Node(node);
 
-        let new_stored_area_size = new_node_bytes.len() as u64 + 1; // +1 for the size index byte
+        let new_area_bytes =
+            bincode::serialize(&new_area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+
+        let new_stored_area_size = new_area_bytes.len() as u64 + 1; // +1 for the size index byte
 
         if new_stored_area_size <= old_stored_area_size {
             // the new node fits in the old node's area
             self.linear_store
-                .write(addr.into(), new_node_bytes.as_slice())?;
+                .write(addr.into(), new_area_bytes.as_slice())?;
             return Ok(());
         }
 
@@ -255,13 +257,13 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
             area,
         };
 
-        // The newly freed block is now the head of the free list.
-        self.header.free_lists[area_size_index as usize] = Some(addr);
-
         let stored_area_bytes =
             bincode::serialize(&stored_area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
         self.linear_store.write(addr.into(), &stored_area_bytes)?;
+
+        // The newly freed block is now the head of the free list.
+        self.header.free_lists[area_size_index as usize] = Some(addr);
 
         self.write_free_lists_header()?;
         Ok(())
