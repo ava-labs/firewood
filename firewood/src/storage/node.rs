@@ -395,5 +395,14 @@ mod tests {
                 );
             }
         }
+
+        for i in 0..MIN_AREA_SIZE {
+            assert_eq!(area_size_to_index(i).unwrap(), 0);
+        }
+
+        assert!(area_size_to_index(MAX_AREA_SIZE + 1).is_err());
     }
+
+    #[test]
+    fn test_area_size_to_index_errors() {}
 }
