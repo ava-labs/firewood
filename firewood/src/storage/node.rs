@@ -113,9 +113,10 @@ struct NodeStore<T: ReadLinearStore> {
 impl<T: ReadLinearStore> NodeStore<T> {
     /// Returns (index, area_size) for the [StoredArea] at `addr`.
     /// `index` is the index of `area_size` in [AREA_SIZES].
+    /// `addr` is the address of a [StoredArea] in the [LinearStore].
     fn area_index_and_size(&self, addr: DiskAddress) -> Result<(u8, u64), Error> {
-        let node_stream = self.linear_store.stream_from(addr.get())?;
-        let mut reader = ReaderWrapperWithSize::new(Box::new(node_stream));
+        let area_stream = self.linear_store.stream_from(addr.get())?;
+        let mut reader = ReaderWrapperWithSize::new(Box::new(area_stream));
         let index: u8 = bincode::deserialize_from(&mut reader)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
         if index as usize >= NUM_AREA_SIZES {
@@ -128,19 +129,26 @@ impl<T: ReadLinearStore> NodeStore<T> {
         Ok((index, AREA_SIZES[index as usize]))
     }
 
-    /// Read an [Area] from the provided [DiskAddress].
-    fn read(&self, addr: DiskAddress) -> Result<Arc<Area<Node, FreedArea>>, Error> {
+    /// Read a [Node] from the provided [DiskAddress].
+    /// `addr` is the address of a [StoredArea] in the [LinearStore].
+    fn read(&self, addr: DiskAddress) -> Result<Arc<Node>, Error> {
         let addr = addr.get() + 1; // Skip the index byte
         let area_stream = self.linear_store.stream_from(addr)?;
-        let area: StoredArea<Area<Node, FreedArea>> = bincode::deserialize_from(area_stream)
+        let area: Area<Node, FreedArea> = bincode::deserialize_from(area_stream)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-        Ok(Arc::new(area.area))
+        match area {
+            Area::Node(node) => Ok(Arc::new(node)),
+            Area::Free(_) => Err(Error::new(
+                ErrorKind::InvalidData,
+                "Attempted to read a freed area",
+            )),
+        }
     }
 }
 
 impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     /// Attempts to allocate `n` bytes from the free lists.
-    /// If successful return the address of the newly allocated area
+    /// If successful returns the address of the newly allocated area
     /// and the index of the free list that was used.
     /// If there are no free areas big enough for `n` bytes, returns None.
     fn allocate_from_freed(&mut self, n: u64) -> Result<Option<(DiskAddress, u8)>, Error> {
