@@ -70,6 +70,12 @@ pub(super) struct LinearStore<S: ReadLinearStore> {
     state: S,
 }
 
+impl<S: ReadLinearStore> LinearStore<S> {
+    pub fn new(state: S) -> Self {
+        LinearStore { state }
+    }
+}
+
 /// All linearstores support reads
 pub(super) trait ReadLinearStore: Debug {
     fn stream_from(&self, addr: u64) -> Result<impl Read, Error>;
@@ -97,12 +103,12 @@ impl<S: ReadLinearStore> ReadLinearStore for LinearStore<S> {
     }
 }
 
-mod tests {
+pub mod tests {
     use super::{ReadLinearStore, WriteLinearStore};
     use std::io::Read;
 
     #[derive(Debug)]
-    struct InMemReadWriteLinearStore {
+    pub struct InMemReadWriteLinearStore {
         bytes: Vec<u8>,
     }
 
@@ -124,6 +130,12 @@ mod tests {
 
         fn size(&self) -> Result<u64, std::io::Error> {
             Ok(self.bytes.len() as u64)
+        }
+    }
+
+    impl InMemReadWriteLinearStore {
+        pub fn new() -> Self {
+            InMemReadWriteLinearStore { bytes: vec![] }
         }
     }
 

@@ -379,6 +379,8 @@ struct FreedArea {
 
 #[cfg(test)]
 mod tests {
+    use crate::storage::linear::tests::InMemReadWriteLinearStore;
+
     use super::*;
 
     #[test]
@@ -404,5 +406,40 @@ mod tests {
     }
 
     #[test]
-    fn test_area_size_to_index_errors() {}
+    fn test_create_read_update_delete() {
+        let in_mem_store = InMemReadWriteLinearStore::new();
+        let linear_store = LinearStore::new(in_mem_store);
+        let mut node_store = NodeStore::init(linear_store).unwrap();
+
+        let leaf = Node::Leaf(Leaf {
+            path: vec![0, 1, 2].into_boxed_slice(),
+            value: vec![3, 4, 5].into_boxed_slice(),
+        });
+
+        let leaf_addr = node_store.create(&leaf).unwrap();
+        let read_leaf = node_store.read(leaf_addr).unwrap();
+        assert_eq!(*read_leaf, leaf);
+
+        let branch = Node::Branch(Branch {
+            path: vec![0, 1, 2].into_boxed_slice(),
+            value: None,
+            children: [None; BRANCH_CHILDREN],
+        });
+
+        let branch_addr = node_store.create(&branch).unwrap();
+        let read_branch = node_store.read(branch_addr).unwrap();
+        assert_eq!(*read_branch, branch);
+
+        let new_leaf = Node::Leaf(Leaf {
+            path: vec![0, 1, 2, 3].into_boxed_slice(),
+            value: vec![3, 4, 5, 6].into_boxed_slice(),
+        });
+
+        node_store.update(leaf_addr, &new_leaf).unwrap();
+        let read_new_leaf = node_store.read(leaf_addr).unwrap();
+        assert_eq!(*read_new_leaf, new_leaf);
+
+        node_store.delete(leaf_addr).unwrap();
+        assert!(node_store.read(leaf_addr).is_err());
+    }
 }
