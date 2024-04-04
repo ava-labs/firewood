@@ -8,7 +8,6 @@
 /// of the [PageStore]. More specifically, it places a [FileIdentifyingMagic]
 /// and a [FreeSpaceHeader] at the beginning
 use std::io::{Error, ErrorKind, Read, Write};
-use std::mem::Discriminant;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
@@ -56,11 +55,11 @@ enum Area {
     Free(FreedArea) = 3,
 }
 
-#[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
-struct StoredArea {
+#[derive(PartialEq, Eq, Clone, Debug, Serialize)]
+struct StoredArea<'a> {
     /// Size of this area is at this index in [AREA_SIZES]
     area_sizes_index: u8,
-    area: Area,
+    area: &'a Area,
 }
 
 //[discrim=2, serialized node].....................slot
@@ -208,7 +207,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     fn update(&mut self, addr: DiskAddress, node: &Area) -> Result<(), UpdateError> {
         // figure out how large the object at this address is by deserializing and then
         // discarding the object
-        let old_stored_area_size = self.stored_area_size(addr)?;
+        let (_, old_stored_area_size) = self.stored_area_size(addr)?;
 
         let new_node_bytes =
             bincode::serialize(node).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
@@ -237,13 +236,15 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
             next_free_block: self.header.free_lists[area_size_index as usize],
         };
 
+        let freed_area = Area::Free(freed_area);
+
         let stored_area = StoredArea {
             area_sizes_index: area_size_index,
-            area: Area::Free(freed_area),
+            area: &freed_area,
         };
 
         // The newly freed block is now the head of the free list.
-        self.header.free_lists[area_size_index] = Some(addr);
+        self.header.free_lists[area_size_index as usize] = Some(addr);
 
         let stored_area_bytes =
             bincode::serialize(&stored_area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
@@ -255,9 +256,16 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     }
 
     fn write_free_lists_header(&mut self) -> Result<(), Error> {
-        let header_bytes = bincode::serialize(&self.header.free_lists);
-        self.page_store
-            .write(std::mem::size_of::<VersionHeader>(), header_bytes)?;
+        let header_bytes = bincode::serialize(&self.header.free_lists).map_err(|e| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!("Failed to serialize free lists: {}", e),
+            )
+        })?;
+        self.page_store.write(
+            std::mem::size_of::<VersionHeader>() as u64,
+            header_bytes.as_slice(),
+        )?;
         Ok(())
     }
 
@@ -267,7 +275,13 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
             free_lists: [None; NUM_AREA_SIZES],
             version_header: VersionHeader::new(),
         };
-        page_store.write(0, bincode::serialize(&header))?;
+        let header_bytes = bincode::serialize(&header).map_err(|e| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!("Failed to serialize header: {}", e),
+            )
+        })?;
+        page_store.write(0, header_bytes.as_slice())?;
         Ok(Self { header, page_store })
     }
 }
@@ -282,7 +296,7 @@ fn size_to_free_lists_index(size: u64) -> Result<u8, Error> {
         ));
     }
 
-    if size < MIN_AREA_SIZE as usize {
+    if size < MIN_AREA_SIZE {
         return Ok(0);
     }
 
@@ -327,7 +341,7 @@ impl<T: Read> Read for ReaderWrapperWithSize<T> {
 /// Can be used by filesystem tooling such as "file" to identify
 /// the version of firewood used to create this [NodeStore] file.
 #[repr(C)]
-#[derive(Debug, bytemuck::NoUninit, Clone, Copy, Deserialize)]
+#[derive(Debug, bytemuck::NoUninit, Clone, Copy, Deserialize, Serialize)]
 struct VersionHeader {
     bytes: [u8; 16],
 }
@@ -351,7 +365,7 @@ impl VersionHeader {
 /// Persisted metadata for a [NodeStore].
 /// The [NodeStoreHeader] is at the start of the [LinearStore].
 #[repr(C)]
-#[derive(Debug, bytemuck::NoUninit, Clone, Copy, Deserialize)]
+#[derive(Debug, bytemuck::NoUninit, Clone, Copy, Deserialize, Serialize)]
 struct NodeStoreHeader {
     /// Identifies the version of firewood used to create this [NodeStore].
     version_header: VersionHeader,
