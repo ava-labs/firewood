@@ -8,6 +8,7 @@
 /// of the [PageStore]. More specifically, it places a [FileIdentifyingMagic]
 /// and a [FreeSpaceHeader] at the beginning
 use std::io::{Error, ErrorKind, Read, Write};
+use std::mem::Discriminant;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
@@ -17,8 +18,8 @@ use serde::{Deserialize, Serialize};
 use super::linear::{LinearStore, ReadLinearStore, WriteLinearStore};
 
 /// [NodeStore] divides the linear store into blocks of different sizes.
-/// [BLOCK_SIZES] is every valid block size.
-const BLOCK_SIZES: [u64; 18] = [
+/// [AREA_SIZES] is every valid block size.
+const AREA_SIZES: [u64; 21] = [
     1 << 3, // Min block size is 8
     1 << 4,
     1 << 5,
@@ -36,19 +37,36 @@ const BLOCK_SIZES: [u64; 18] = [
     1 << 17,
     1 << 18,
     1 << 19,
-    1 << 20, // Max block size is 1 MiB
+    1 << 20,
+    1 << 21,
+    1 << 22,
+    1 << 23, // 16 MiB
 ];
 
-const NUM_BLOCK_SIZES: usize = BLOCK_SIZES.len();
-const MIN_BLOCK_SIZE: u64 = BLOCK_SIZES[0];
-const MAX_BLOCK_SIZE: u64 = BLOCK_SIZES[NUM_BLOCK_SIZES - 1];
+const NUM_AREA_SIZES: usize = AREA_SIZES.len();
+const MIN_AREA_SIZE: u64 = AREA_SIZES[0];
+const MAX_AREA_SIZE: u64 = AREA_SIZES[NUM_AREA_SIZES - 1];
 
-/// Either a branch or leaf node
+/// A branch, a leaf, or a freed area.
+#[repr(u8)]
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner, Deserialize, Serialize)]
-enum Node {
-    Branch(Branch),
-    Leaf(Leaf),
+enum Area {
+    Branch(Branch) = 1,
+    Leaf(Leaf) = 2,
+    Free(FreedArea) = 3,
 }
+
+#[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
+struct StoredArea {
+    /// Size of this area is at this index in [AREA_SIZES]
+    area_sizes_index: u8,
+    area: Area,
+}
+
+//[discrim=2, serialized node].....................slot
+//[discrim=3, serialized_freeareaheader]...........slot
+
+// const BranchIdentifier: Discriminant<u8> = core::mem::discriminant(Node::Branch);
 
 /// Number of children in a branch
 const BRANCH_CHILDREN: usize = 16;
@@ -80,9 +98,9 @@ impl<T: ReadLinearStore> NodeStore<T> {
     ///
     /// A node on disk will consist of a header which both identifies the
     /// node type ([Branch] or [Leaf]) followed by the serialized data
-    fn read(&self, addr: DiskAddress) -> Result<Arc<Node>, Error> {
+    fn read(&self, addr: DiskAddress) -> Result<Arc<Area>, Error> {
         let node_stream = self.page_store.stream_from(addr.get())?;
-        let node: Node = bincode::deserialize_from(node_stream)
+        let node: Area = bincode::deserialize_from(node_stream)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
         Ok(Arc::new(node))
     }
@@ -98,16 +116,40 @@ impl<T: ReadLinearStore> NodeStore<T> {
 
         Ok(reader.bytes_read)
     }
+
+    /// Returns (index, size) for the [StoredArea] at `addr`
+    /// where `index` is the index of the area size in [AREA_SIZES]
+    /// and `size` is the size of the area.
+    fn stored_area_size(&self, addr: DiskAddress) -> Result<(u8, u64), Error> {
+        let node_stream = self.page_store.stream_from(addr.get())?;
+        let mut reader = ReaderWrapperWithSize::new(Box::new(node_stream));
+        let index: u8 = bincode::deserialize_from(&mut reader)
+            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+        if index as usize >= NUM_AREA_SIZES {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("Invalid area size index {}", index),
+            ));
+        }
+
+        Ok((index, AREA_SIZES[index as usize]))
+    }
 }
 
 impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     /// Attempts to allocate `n` bytes from the free lists.
-    /// Returns Some(DiskAddress) if successful, None otherwise.
-    fn allocate_from_freed(&mut self, n: u64) -> Result<Option<DiskAddress>, Error> {
-        // Find the smallest free list that can fit this size.
-        let index = size_to_free_lists_index(n as usize)?;
+    /// If successful return the address of the newly allocated area
+    /// and the index of the free list that was used.
+    /// If there are no free areas big enough for `n` bytes, returns None.
+    fn allocate_from_freed(&mut self, n: u64) -> Result<Option<(DiskAddress, u8)>, Error> {
+        // Add 1 to account for the discriminant byte that we will write
+        // to the beginning of the area.
+        let n = n + 1;
 
-        for index in index..=NUM_BLOCK_SIZES {
+        // Find the smallest free list that can fit this size.
+        let index = size_to_free_lists_index(n)?;
+
+        for index in index as usize..=NUM_AREA_SIZES {
             // Get the first free block of sufficient size.
             let free_head_addr = self.header.free_lists[index];
             if let Some(free_head_addr) = free_head_addr {
@@ -119,8 +161,10 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
                 // Update the free list to point to the next free block.
                 self.header.free_lists[index] = free_head.next_free_block;
 
+                // self.page_store.write(offset, object);
+
                 // Return the address of the newly allocated block.
-                return Ok(Some(free_head_addr));
+                return Ok(Some((free_head_addr, index as u8)));
             }
             // No free blocks in this list, try the next size up.
         }
@@ -129,100 +173,120 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     }
 
     /// Allocate space for a [Node] in the [LinearStore]
-    fn create(&mut self, node: &Node) -> Result<DiskAddress, Error> {
+    fn create(&mut self, node: &Area) -> Result<DiskAddress, Error> {
         let serialized =
             bincode::serialize(node).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
-        let area_size = serialized.len() as u64;
+        let node_size = serialized.len() as u64;
 
         // Attempt to allocate from the free list.
         // If we can't allocate from the free list, allocate past the existing
         // of the store.
-        let addr = match self.allocate_from_freed(area_size)? {
-            Some(addr) => addr.get(),
-            None => self.page_store.size()?,
+        let (addr, index) = match self.allocate_from_freed(node_size)? {
+            Some((addr, index)) => (addr.get(), index),
+            None => (
+                self.page_store.size()?,
+                size_to_free_lists_index(node_size)? as u8,
+            ),
         };
 
-        self.page_store.write(addr, serialized.as_slice())?;
-        Ok(addr.try_into().expect("pageStore is never zero size"))
+        let stored_area = StoredArea {
+            area_sizes_index: index,
+            area: node,
+        };
+
+        let stored_area_bytes =
+            bincode::serialize(&stored_area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+
+        self.page_store.write(addr, stored_area_bytes.as_slice())?;
+        Ok(addr.try_into().expect("LinearStore is never zero size"))
     }
 
     /// Update a [Node] that was previously at the provided address.
     /// This is complicated by the fact that a node might grow and not be able to fit a the given
     /// address, in which case we return [UpdateError::NodeMoved]
-    fn update(&mut self, addr: DiskAddress, node: &Node) -> Result<(), UpdateError> {
+    fn update(&mut self, addr: DiskAddress, node: &Area) -> Result<(), UpdateError> {
         // figure out how large the object at this address is by deserializing and then
         // discarding the object
-        let size = self.node_size(addr)?;
-        let serialized =
+        let old_stored_area_size = self.stored_area_size(addr)?;
+
+        let new_node_bytes =
             bincode::serialize(node).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-        if serialized.len() != size {
-            // this node is a different size, so allocate a new node
-            // TODO: we could do better if the new node is smaller
-            let new_address = self.create(node)?;
-            self.delete(addr)?;
-            Err(UpdateError::NodeMoved(new_address))
-        } else {
-            self.page_store.write(addr.into(), serialized.as_slice())?;
-            Ok(())
+
+        let new_stored_area_size = new_node_bytes.len() as u64 + 1; // +1 for the size index byte
+
+        if new_stored_area_size <= old_stored_area_size {
+            // the new node fits in the old node's area
+            self.page_store
+                .write(addr.into(), new_node_bytes.as_slice())?;
+            return Ok(());
         }
+
+        // the new node is larger than the old node, so we need to allocate a new area
+        let new_node_addr = self.create(node)?;
+        self.delete(addr)?;
+        Err(UpdateError::NodeMoved(new_node_addr))
     }
 
     /// Delete a [Node] at a given address
     fn delete(&mut self, addr: DiskAddress) -> Result<(), Error> {
-        // figure out how large the object at this address is by deserializing and then
-        // discarding the object
-        // TODO danlaine: Optimize this
-        let node_size = self.node_size(addr)?;
+        let (area_size_index, _) = self.stored_area_size(addr)?;
 
-        let index = size_to_free_lists_index(node_size)?;
-
-        let freed_area_size = BLOCK_SIZES[index];
-
-        // The newly freed block points to the current head of the free list.
+        // The area that contained the node is now free.
         let freed_area = FreedArea {
-            size: freed_area_size,
-            next_free_block: self.header.free_lists[index],
+            next_free_block: self.header.free_lists[area_size_index as usize],
+        };
+
+        let stored_area = StoredArea {
+            area_sizes_index: area_size_index,
+            area: Area::Free(freed_area),
         };
 
         // The newly freed block is now the head of the free list.
-        self.header.free_lists[index] = Some(addr);
+        self.header.free_lists[area_size_index] = Some(addr);
 
+        let stored_area_bytes =
+            bincode::serialize(&stored_area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+
+        self.page_store.write(addr.into(), &stored_area_bytes)?;
+
+        self.write_free_lists_header()?;
+        Ok(())
+    }
+
+    fn write_free_lists_header(&mut self) -> Result<(), Error> {
+        let header_bytes = bincode::serialize(&self.header.free_lists);
         self.page_store
-            .write(addr.into(), bytemuck::bytes_of(&freed_area))?;
-
-        // update the free space header
-        self.page_store.write(
-            std::mem::size_of::<VersionHeader>() as u64,
-            bytemuck::bytes_of(&self.header),
-        )?;
+            .write(std::mem::size_of::<VersionHeader>(), header_bytes)?;
         Ok(())
     }
 
     /// Initialize a new [NodeStore] by writing out the [NodeStoreHeader].
     fn init(mut page_store: LinearStore<T>) -> Result<Self, Error> {
         let header = NodeStoreHeader {
-            free_lists: [None; NUM_BLOCK_SIZES],
+            free_lists: [None; NUM_AREA_SIZES],
             version_header: VersionHeader::new(),
         };
-        page_store.write(VersionHeader::SIZE, bytemuck::bytes_of(&header))?;
+        page_store.write(0, bincode::serialize(&header))?;
         Ok(Self { header, page_store })
     }
 }
 
 /// Returns the index in [BLOCK_SIZES] of the smallest block size
-/// that can fit the given [size]. Returns None if the size is too large.
-/// TODO danlaine: This can be optimized.
-fn size_to_free_lists_index(size: usize) -> Result<usize, Error> {
-    BLOCK_SIZES
-        .iter()
-        .position(|&block_size| block_size >= size as u64)
-        .ok_or_else(|| {
-            Error::new(
-                ErrorKind::InvalidData,
-                format!("Node size {} is too large", size),
-            )
-        })
+/// that can fit the given [size].
+fn size_to_free_lists_index(size: u64) -> Result<u8, Error> {
+    if size > MAX_AREA_SIZE {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!("Node size {} is too large", size),
+        ));
+    }
+
+    if size < MIN_AREA_SIZE as usize {
+        return Ok(0);
+    }
+
+    Ok(size.ilog2() as u8 - 2)
 }
 
 #[derive(Debug)]
@@ -292,14 +356,13 @@ struct NodeStoreHeader {
     /// Identifies the version of firewood used to create this [NodeStore].
     version_header: VersionHeader,
     /// Element i is the pointer to the first free block of size BLOCK_SIZES[i].
-    free_lists: [Option<DiskAddress>; NUM_BLOCK_SIZES],
+    free_lists: [Option<DiskAddress>; NUM_AREA_SIZES],
 }
 
 /// A [FreedArea] is stored at the start of the area that contained a node that
 /// has been freed.
 #[repr(C)]
-#[derive(Debug, bytemuck::NoUninit, Clone, Copy, Deserialize)]
+#[derive(Debug, bytemuck::NoUninit, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 struct FreedArea {
-    size: u64,
     next_free_block: Option<DiskAddress>,
 }
