@@ -109,7 +109,7 @@ struct StoredArea<T> {
 /// The first thing written in the [LinearStore] is a [NodeStoreHeader],
 /// which contains the version and the heads of the free lists.
 /// Every subsequent write is a [StoredArea] containing a [Node] or a [FreedArea].
-/// Each allocation [NodeStore] makes from [LinearStore] is one of [AREA_SIZES].
+/// The size of each allocation [NodeStore] makes from [LinearStore] is one of [AREA_SIZES].
 #[derive(Debug)]
 struct NodeStore<T: ReadLinearStore> {
     header: NodeStoreHeader,
