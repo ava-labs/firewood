@@ -100,10 +100,16 @@ enum Area<T, U> {
 #[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
 struct StoredArea<T> {
     /// Index in [AREA_SIZES] of this area's size
-    area_sizes_index: u8,
+    area_size_index: u8,
     area: T,
 }
 
+/// [NodeStore] creates, reads, updates, and deletes [Node]s.
+/// It stores the nodes in a [LinearStore] that it manages.
+/// The first thing written in the [LinearStore] is a [NodeStoreHeader],
+/// which contains the version and the heads of the free lists.
+/// Every subsequent write is a [StoredArea] containing a [Node] or a [FreedArea].
+/// Each allocation [NodeStore] makes from [LinearStore] is one of [AREA_SIZES].
 #[derive(Debug)]
 struct NodeStore<T: ReadLinearStore> {
     header: NodeStoreHeader,
@@ -181,30 +187,27 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     /// Allocates an area in the [LinearStore] large enough for the provided [Area].
     /// Returns the address of the allocated area.
     fn create(&mut self, node: &Node) -> Result<DiskAddress, Error> {
+        let area: Area<&Node, FreedArea> = Area::Node(node);
+
         let area_bytes =
-            bincode::serialize(node).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+            bincode::serialize(&area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
-        let area_size = area_bytes.len() as u64;
-
-        // Add 1 to account for the index byte that we will write
-        // to the beginning of the StoredArea.
-        let area_size = area_size + 1;
+        // +1 for the size index byte
+        let stored_area_size = area_bytes.len() as u64 + 1;
 
         // Attempt to allocate from a free list.
         // If we can't allocate from a free list, allocate past the existing
         // of the LinearStore.
-        let (addr, index) = match self.allocate_from_freed(area_size)? {
+        let (addr, index) = match self.allocate_from_freed(stored_area_size)? {
             Some((addr, index)) => (addr.get(), index),
             None => (
                 self.linear_store.size()?,
-                area_size_to_index(area_size)? as u8,
+                area_size_to_index(stored_area_size)? as u8,
             ),
         };
 
-        let area: Area<&Node, FreedArea> = Area::Node(node);
-
         let stored_area = StoredArea {
-            area_sizes_index: index,
+            area_size_index: index,
             area,
         };
 
@@ -253,7 +256,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
         });
 
         let stored_area = StoredArea {
-            area_sizes_index: area_size_index,
+            area_size_index,
             area,
         };
 
@@ -283,8 +286,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
         Ok(())
     }
 
-    /// Initialize a new [NodeStore] by writing out the [NodeStoreHeader].
-    fn init(mut page_store: LinearStore<T>) -> Result<Self, Error> {
+    fn new(mut linear_store: LinearStore<T>) -> Result<Self, Error> {
         let header = NodeStoreHeader {
             free_lists: [None; NUM_AREA_SIZES],
             version_header: VersionHeader::new(),
@@ -295,10 +297,10 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
                 format!("Failed to serialize header: {}", e),
             )
         })?;
-        page_store.write(0, header_bytes.as_slice())?;
+        linear_store.write(0, header_bytes.as_slice())?;
         Ok(Self {
             header,
-            linear_store: page_store,
+            linear_store,
         })
     }
 }
@@ -410,7 +412,7 @@ mod tests {
     fn test_create_read_update_delete() {
         let in_mem_store = InMemReadWriteLinearStore::new();
         let linear_store = LinearStore::new(in_mem_store);
-        let mut node_store = NodeStore::init(linear_store).unwrap();
+        let mut node_store = NodeStore::new(linear_store).unwrap();
 
         let leaf = Node::Leaf(Leaf {
             path: vec![0, 1, 2].into_boxed_slice(),
@@ -448,7 +450,7 @@ mod tests {
     fn test_node_store_header() {
         let in_mem_store = InMemReadWriteLinearStore::new();
         let linear_store = LinearStore::new(in_mem_store);
-        let mut node_store = NodeStore::init(linear_store).unwrap();
+        let mut node_store = NodeStore::new(linear_store).unwrap();
 
         // Check the empty header is written at the start of the LinearStore.
         {
