@@ -49,6 +49,22 @@ const MAX_AREA_SIZE: u64 = AREA_SIZES[NUM_AREA_SIZES - 1];
 /// Number of children in a branch
 const BRANCH_CHILDREN: usize = 16;
 
+/// Returns the index in `BLOCK_SIZES` of the smallest block size >= `n`.
+fn area_size_to_index(n: u64) -> Result<u8, Error> {
+    if n > MAX_AREA_SIZE {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!("Node size {} is too large", n),
+        ));
+    }
+
+    if n < MIN_AREA_SIZE {
+        return Ok(0);
+    }
+
+    Ok(n.ilog2() as u8 - 2)
+}
+
 type Path = Box<[u8]>;
 type DiskAddress = NonZeroU64;
 
@@ -65,20 +81,27 @@ struct Leaf {
     value: Box<[u8]>,
 }
 
-/// [NodeStore] divides [LinearStore] into [Area]s.
-#[repr(u8)]
-#[derive(PartialEq, Eq, Clone, Debug, EnumAsInner, Deserialize, Serialize)]
-enum Area {
-    Branch(Branch) = 1,
-    Leaf(Leaf) = 2,
-    Free(FreedArea) = 3,
+#[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
+enum Node {
+    Branch(Branch),
+    Leaf(Leaf),
 }
 
-#[derive(PartialEq, Eq, Clone, Debug, Serialize)]
-struct StoredArea<'a> {
+/// [NodeStore] divides [LinearStore] into [StoredArea]s.
+/// Each [StoredArea] contains an [Area] which is either a [Node] or a [FreedArea].
+#[repr(u8)]
+#[derive(PartialEq, Eq, Clone, Debug, EnumAsInner, Deserialize, Serialize)]
+enum Area<T, U> {
+    Node(T) = 1,
+    Free(U) = 2,
+}
+
+/// Every item stored in the [NodeStore]'s [LinearStore] is a [StoredArea].
+#[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
+struct StoredArea<T> {
     /// Index in [AREA_SIZES] of this area's size
     area_sizes_index: u8,
-    area: &'a Area,
+    area: T,
 }
 
 #[derive(Debug)]
@@ -90,7 +113,7 @@ struct NodeStore<T: ReadLinearStore> {
 impl<T: ReadLinearStore> NodeStore<T> {
     /// Returns (index, area_size) for the [StoredArea] at `addr`.
     /// `index` is the index of `area_size` in [AREA_SIZES].
-    fn stored_area_size(&self, addr: DiskAddress) -> Result<(u8, u64), Error> {
+    fn area_index_and_size(&self, addr: DiskAddress) -> Result<(u8, u64), Error> {
         let node_stream = self.linear_store.stream_from(addr.get())?;
         let mut reader = ReaderWrapperWithSize::new(Box::new(node_stream));
         let index: u8 = bincode::deserialize_from(&mut reader)
@@ -106,12 +129,12 @@ impl<T: ReadLinearStore> NodeStore<T> {
     }
 
     /// Read an [Area] from the provided [DiskAddress].
-    fn read(&self, addr: DiskAddress) -> Result<Arc<Area>, Error> {
+    fn read(&self, addr: DiskAddress) -> Result<Arc<Area<Node, FreedArea>>, Error> {
         let addr = addr.get() + 1; // Skip the index byte
         let area_stream = self.linear_store.stream_from(addr)?;
-        let area: Area = bincode::deserialize_from(area_stream)
+        let area: StoredArea<Area<Node, FreedArea>> = bincode::deserialize_from(area_stream)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-        Ok(Arc::new(area))
+        Ok(Arc::new(area.area))
     }
 }
 
@@ -122,7 +145,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     /// If there are no free areas big enough for `n` bytes, returns None.
     fn allocate_from_freed(&mut self, n: u64) -> Result<Option<(DiskAddress, u8)>, Error> {
         // Find the smallest free list that can fit this size.
-        let index = size_to_free_lists_index(n)?;
+        let index = area_size_to_index(n)?;
 
         for index in index as usize..=NUM_AREA_SIZES {
             // Get the first free block of sufficient size.
@@ -149,9 +172,9 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
 
     /// Allocates an area in the [LinearStore] large enough for the provided [Area].
     /// Returns the address of the allocated area.
-    fn create(&mut self, area: &Area) -> Result<DiskAddress, Error> {
+    fn create(&mut self, node: &Node) -> Result<DiskAddress, Error> {
         let area_bytes =
-            bincode::serialize(area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+            bincode::serialize(node).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
         let area_size = area_bytes.len() as u64;
 
@@ -166,9 +189,11 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
             Some((addr, index)) => (addr.get(), index),
             None => (
                 self.linear_store.size()?,
-                size_to_free_lists_index(area_size)? as u8,
+                area_size_to_index(area_size)? as u8,
             ),
         };
+
+        let area: Area<&Node, FreedArea> = Area::Node(node);
 
         let stored_area = StoredArea {
             area_sizes_index: index,
@@ -186,10 +211,10 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     /// Update a [Node] that was previously at the provided address.
     /// This is complicated by the fact that a node might grow and not be able to fit a the given
     /// address, in which case we return [UpdateError::NodeMoved]
-    fn update(&mut self, addr: DiskAddress, node: &Area) -> Result<(), UpdateError> {
+    fn update(&mut self, addr: DiskAddress, node: &Node) -> Result<(), UpdateError> {
         // figure out how large the object at this address is by deserializing and then
         // discarding the object
-        let (_, old_stored_area_size) = self.stored_area_size(addr)?;
+        let (_, old_stored_area_size) = self.area_index_and_size(addr)?;
 
         let new_node_bytes =
             bincode::serialize(node).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
@@ -211,18 +236,16 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
 
     /// Delete a [Node] at a given address
     fn delete(&mut self, addr: DiskAddress) -> Result<(), Error> {
-        let (area_size_index, _) = self.stored_area_size(addr)?;
+        let (area_size_index, _) = self.area_index_and_size(addr)?;
 
         // The area that contained the node is now free.
-        let freed_area = FreedArea {
+        let area: Area<Node, FreedArea> = Area::Free(FreedArea {
             next_free_block: self.header.free_lists[area_size_index as usize],
-        };
-
-        let freed_area = Area::Free(freed_area);
+        });
 
         let stored_area = StoredArea {
             area_sizes_index: area_size_index,
-            area: &freed_area,
+            area,
         };
 
         // The newly freed block is now the head of the free list.
@@ -269,23 +292,6 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
             linear_store: page_store,
         })
     }
-}
-
-/// Returns the index in [BLOCK_SIZES] of the smallest block size
-/// that can fit the given [size].
-fn size_to_free_lists_index(size: u64) -> Result<u8, Error> {
-    if size > MAX_AREA_SIZE {
-        return Err(Error::new(
-            ErrorKind::InvalidData,
-            format!("Node size {} is too large", size),
-        ));
-    }
-
-    if size < MIN_AREA_SIZE {
-        return Ok(0);
-    }
-
-    Ok(size.ilog2() as u8 - 2)
 }
 
 #[derive(Debug)]
