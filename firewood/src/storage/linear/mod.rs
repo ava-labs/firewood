@@ -97,13 +97,19 @@ impl<S: ReadLinearStore> ReadLinearStore for LinearStore<S> {
     }
 }
 
-mod tests {
+pub mod tests {
     use super::{ReadLinearStore, WriteLinearStore};
     use std::io::Read;
 
     #[derive(Debug)]
-    struct InMemReadWriteLinearStore {
+    pub struct InMemReadWriteLinearStore {
         bytes: Vec<u8>,
+    }
+
+    impl InMemReadWriteLinearStore {
+        pub fn new() -> Self {
+            Self { bytes: vec![] }
+        }
     }
 
     impl WriteLinearStore for InMemReadWriteLinearStore {
