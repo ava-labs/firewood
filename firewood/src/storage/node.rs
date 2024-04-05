@@ -151,8 +151,8 @@ impl<T: ReadLinearStore> NodeStore<T> {
         debug_assert!(addr.get() % 8 == 0);
 
         let addr = addr.get() + 1; // Skip the index byte
-        let area_stream = self.linear_store.stream_from(addr)?;
 
+        let area_stream = self.linear_store.stream_from(addr)?;
         let area: Area<Node, FreedArea> = bincode::deserialize_from(area_stream)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
@@ -172,6 +172,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
             version: Version::new(),
             free_lists: FreeLists::new(),
         };
+
         let header_bytes = bincode::serialize(&header).map_err(|e| {
             Error::new(
                 ErrorKind::InvalidData,
@@ -180,6 +181,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
         })?;
 
         linear_store.write(0, header_bytes.as_slice())?;
+
         Ok(Self {
             size: NodeStoreHeader::SIZE,
             header,
@@ -197,6 +199,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
 
         self.linear_store
             .write(Version::SIZE, header_bytes.as_slice())?;
+
         Ok(())
     }
 
@@ -241,7 +244,14 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
 
     /// Allocates an area in the [LinearStore] large enough for the provided [Area].
     /// Returns the address of the allocated area.
-    fn create_node(&mut self, node: &Node) -> Result<DiskAddress, Error> {
+    pub fn create_node(&mut self, node: &Node) -> Result<DiskAddress, Error> {
+        let addr = self.create_node_inner(node)?;
+        self.write_free_lists_header()?;
+        Ok(addr)
+    }
+
+    /// The inner implementation of [create_node] that doesn't update the free lists.
+    fn create_node_inner(&mut self, node: &Node) -> Result<DiskAddress, Error> {
         let area: Area<&Node, FreedArea> = Area::Node(node);
 
         let area_bytes =
@@ -269,8 +279,6 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
         self.linear_store
             .write(addr.get(), stored_area_bytes.as_slice())?;
 
-        self.write_free_lists_header()?;
-
         Ok(addr)
     }
 
@@ -278,7 +286,9 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     /// This is complicated by the fact that a node might grow and not be able to fit a the given
     /// address, in which case we return [UpdateError::NodeMoved].
     /// `addr` is the address of a [StoredArea] in the [LinearStore].
-    fn update_node(&mut self, addr: DiskAddress, node: &Node) -> Result<(), UpdateError> {
+    pub fn update_node(&mut self, addr: DiskAddress, node: &Node) -> Result<(), UpdateError> {
+        debug_assert!(addr.get() % 8 == 0);
+
         let (_, old_stored_area_size) = self.area_index_and_size(addr)?;
 
         let new_area: Area<&Node, FreedArea> = Area::Node(node);
@@ -297,14 +307,15 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
         }
 
         // the new node is larger than the old node, so we need to allocate a new area
-        let new_node_addr = self.create_node(node)?;
+        let new_node_addr = self.create_node_inner(node)?;
         self.delete_node(addr)?;
         Err(UpdateError::NodeMoved(new_node_addr))
     }
 
-    /// Delete a [Node] at a given address
-    /// TODO danlaine: Coalesce adjacent free areas.
+    /// Deletes the [Node] at the given address.
     fn delete_node(&mut self, addr: DiskAddress) -> Result<(), Error> {
+        debug_assert!(addr.get() % 8 == 0);
+
         let (area_size_index, _) = self.area_index_and_size(addr)?;
 
         // The area that contained the node is now free.
@@ -326,6 +337,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
         self.header.free_lists.0[area_size_index as usize] = Some(addr);
 
         self.write_free_lists_header()?;
+
         Ok(())
     }
 }
@@ -481,7 +493,7 @@ mod tests {
             value: vec![3, 4, 5].into_boxed_slice(),
         });
 
-        let leaf_addr = node_store.create_node(&leaf).unwrap();
+        let leaf_addr = node_store.create_node_inner(&leaf).unwrap();
         let read_leaf = node_store.read_node(leaf_addr).unwrap();
         assert_eq!(*read_leaf, leaf);
 
@@ -491,7 +503,7 @@ mod tests {
             children: [None; BRANCH_CHILDREN],
         });
 
-        let branch_addr = node_store.create_node(&branch).unwrap();
+        let branch_addr = node_store.create_node_inner(&branch).unwrap();
         let read_branch = node_store.read_node(branch_addr).unwrap();
         assert_eq!(*read_branch, branch);
 
@@ -529,7 +541,7 @@ mod tests {
             value: vec![1].into_boxed_slice(),
         });
 
-        let leaf_addr = node_store.create_node(&leaf).unwrap();
+        let leaf_addr = node_store.create_node_inner(&leaf).unwrap();
         node_store.delete_node(leaf_addr).unwrap();
         let (index, _) = node_store.area_index_and_size(leaf_addr).unwrap();
 
