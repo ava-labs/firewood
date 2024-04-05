@@ -113,7 +113,7 @@ struct StoredArea<T> {
 /// Every subsequent write is a [StoredArea] containing a [Node] or a [FreedArea].
 /// The size of each allocation [NodeStore] makes from [LinearStore] is one of [AREA_SIZES].
 #[derive(Debug)]
-pub(crate) struct NodeStore<T: ReadLinearStore> {
+struct NodeStore<T: ReadLinearStore> {
     size: u64, // TODO comment
     header: NodeStoreHeader,
     linear_store: LinearStore<T>,

@@ -14,7 +14,7 @@ use super::{LinearStore, ReadLinearStore, WriteLinearStore};
 /// which could be a another [Proposed] or is [FileBacked](super::filebacked::FileBacked)
 /// The M type parameter indicates the mutability of the proposal, either read-write or readonly
 #[derive(Debug)]
-pub(crate) struct Proposed<P: ReadLinearStore, M> {
+struct Proposed<P: ReadLinearStore, M> {
     new: BTreeMap<u64, Box<[u8]>>,
     old: BTreeMap<u64, Box<[u8]>>,
     parent: Arc<LinearStore<P>>,
@@ -105,11 +105,11 @@ impl<'a, P: ReadLinearStore, M: Debug> DiffResolver<'a> for Proposed<P, M> {
 
 /// Marker that the Proposal is mutable
 #[derive(Debug)]
-pub(crate) struct Mutable;
+struct Mutable;
 
 /// Marker that the Proposal is immutable
 #[derive(Debug)]
-pub(crate) struct Immutable;
+struct Immutable;
 
 impl<P: ReadLinearStore> WriteLinearStore for Proposed<P, Mutable> {
     fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
