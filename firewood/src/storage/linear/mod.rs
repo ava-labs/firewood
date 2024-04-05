@@ -126,6 +126,13 @@ pub mod tests {
 
     impl ReadLinearStore for InMemReadWriteLinearStore {
         fn stream_from(&self, addr: u64) -> Result<impl Read, std::io::Error> {
+            if addr as usize >= self.bytes.len() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Address out of bounds",
+                ));
+            }
+
             Ok(&self.bytes[addr as usize..])
         }
 
