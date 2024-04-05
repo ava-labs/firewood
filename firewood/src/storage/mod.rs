@@ -24,6 +24,7 @@ use typed_builder::TypedBuilder;
 pub mod buffer;
 pub mod linear;
 pub mod node;
+pub mod persisted;
 
 pub(crate) const PAGE_SIZE_NBIT: u64 = 12;
 pub(crate) const PAGE_SIZE: u64 = 1 << PAGE_SIZE_NBIT;
