@@ -22,7 +22,7 @@ pub(crate) struct Proposed<P: ReadLinearStore, M> {
 }
 
 impl<P: ReadLinearStore, M> Proposed<P, M> {
-    pub(crate) fn new(parent: Arc<LinearStore<P>>) -> Self {
+    fn new(parent: Arc<LinearStore<P>>) -> Self {
         Self {
             parent,
             new: Default::default(),

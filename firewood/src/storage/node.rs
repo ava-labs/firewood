@@ -389,23 +389,6 @@ impl FreeLists {
     fn new() -> Self {
         Self([None; NUM_AREA_SIZES])
     }
-
-    fn serialized_size(&self) -> u64 {
-        self.0
-            .iter()
-            .map(|x| {
-                if x.is_some() {
-                    FreeLists::SOME_ELT_SIZE
-                } else {
-                    FreeLists::NONE_ELT_SIZE
-                }
-            })
-            .sum()
-    }
-
-    fn padding_size(&self) -> u64 {
-        NodeStoreHeader::SIZE - Version::SIZE - self.serialized_size()
-    }
 }
 
 /// Persisted metadata for a [NodeStore].
@@ -433,17 +416,6 @@ impl NodeStoreHeader {
             max_size + MIN_AREA_SIZE - remainder
         }
     };
-
-    /// Returns the bincode serialized size of the [NodeStoreHeader] without serializing it.
-    fn serialized_size(&self) -> u64 {
-        std::mem::size_of::<Version>() as u64 + self.free_lists.serialized_size()
-    }
-
-    /// Returns the number of bytes of padding to make the serialized [NodeStoreHeader]
-    /// the same size as [NodeStoreHeader::MAX_SIZE].
-    fn padding_size(&self) -> u64 {
-        Self::SIZE - self.serialized_size()
-    }
 }
 
 /// A [FreedArea] is stored at the start of the area that contained a node that
