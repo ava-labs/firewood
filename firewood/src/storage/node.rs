@@ -212,10 +212,12 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
 
         for index in index as usize..NUM_AREA_SIZES {
             // Get the first free block of sufficient size.
-            let free_head_addr = self.header.free_lists.0[index];
-            if let Some(free_head_addr) = free_head_addr {
+            let free_stored_area_addr = self.header.free_lists.0[index];
+            if let Some(free_stored_area_addr) = free_stored_area_addr {
                 // Update the free list head.
-                let free_head_stream = self.linear_store.stream_from(free_head_addr.get())?;
+                // Skip the index byte and Area discriminant byte
+                let free_area_addr = free_stored_area_addr.get() + 2;
+                let free_head_stream = self.linear_store.stream_from(free_area_addr)?;
                 let free_head: FreedArea = bincode::deserialize_from(free_head_stream)
                     .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
@@ -223,7 +225,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
                 self.header.free_lists.0[index] = free_head.next_free_block;
 
                 // Return the address of the newly allocated block.
-                return Ok(Some((free_head_addr, index as u8)));
+                return Ok(Some((free_stored_area_addr, index as u8)));
             }
             // No free blocks in this list, try the next size up.
         }
@@ -375,7 +377,7 @@ impl Version {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Deserialize, Serialize)]
 struct FreeLists([Option<DiskAddress>; NUM_AREA_SIZES]);
 
 impl FreeLists {
@@ -392,7 +394,7 @@ impl FreeLists {
 
 /// Persisted metadata for a [NodeStore].
 /// The [NodeStoreHeader] is at the start of the [LinearStore].
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Deserialize, Serialize)]
 struct NodeStoreHeader {
     /// Identifies the version of firewood used to create this [NodeStore].
     version: Version,
@@ -415,6 +417,13 @@ impl NodeStoreHeader {
             max_size + MIN_AREA_SIZE - remainder
         }
     };
+
+    fn new() -> Self {
+        Self {
+            version: Version::new(),
+            free_lists: FreeLists::new(),
+        }
+    }
 }
 
 /// A [FreedArea] is stored at the start of the area that contained a node that
@@ -458,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn test_create_read_update_delete() {
+    fn test_create() {
         let in_mem_store = InMemReadWriteLinearStore::new();
         let linear_store: LinearStore<InMemReadWriteLinearStore> = LinearStore::new(in_mem_store);
         let mut node_store = NodeStore::new(linear_store).unwrap();
@@ -468,61 +477,185 @@ mod tests {
             value: vec![3, 4, 5].into_boxed_slice(),
         });
 
-        let leaf_addr = node_store.create_node_inner(&leaf).unwrap();
-        let read_leaf = node_store.read_node(leaf_addr).unwrap();
-        assert_eq!(*read_leaf, leaf);
+        let leaf_addr = node_store.create_node(&leaf).unwrap();
+        let (_, leaf_area_size) = node_store.area_index_and_size(leaf_addr).unwrap();
 
+        {
+            // The header should be unchanged
+            let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
+            let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
+            assert_eq!(header, NodeStoreHeader::new());
+
+            // Leaf should go right after the header
+            assert_eq!(leaf_addr.get(), NodeStoreHeader::SIZE);
+
+            // Size should be updated
+            assert_eq!(node_store.size, NodeStoreHeader::SIZE + leaf_area_size);
+
+            // Should be able to read the leaf back
+            let read_leaf = node_store.read_node(leaf_addr).unwrap();
+            assert_eq!(*read_leaf, leaf);
+        }
+
+        // Create another node
         let branch = Node::Branch(Branch {
-            path: vec![0, 1, 2].into_boxed_slice(),
-            value: None,
+            path: vec![6, 7, 8].into_boxed_slice(),
+            value: Some(vec![9, 10, 11].into_boxed_slice()),
             children: [None; BRANCH_CHILDREN],
         });
 
-        let branch_addr = node_store.create_node_inner(&branch).unwrap();
-        let read_branch = node_store.read_node(branch_addr).unwrap();
-        assert_eq!(*read_branch, branch);
+        let branch_addr = node_store.create_node(&branch).unwrap();
 
-        let new_leaf = Node::Leaf(Leaf {
-            path: vec![1, 2, 3].into_boxed_slice(),
-            value: vec![4, 5, 6].into_boxed_slice(),
-        });
+        {
+            // The header should be unchanged
+            let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
+            let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
+            assert_eq!(header, NodeStoreHeader::new());
 
-        node_store.update_node(leaf_addr, &new_leaf).unwrap();
-        let read_new_leaf = node_store.read_node(leaf_addr).unwrap();
-        assert_eq!(*read_new_leaf, new_leaf);
+            // branch should go right after leaf
+            assert_eq!(branch_addr.get(), NodeStoreHeader::SIZE + leaf_area_size);
 
-        node_store.delete_node(leaf_addr).unwrap();
-        assert!(node_store.read_node(leaf_addr).is_err());
+            // Size should be updated
+            let (_, branch_area_size) = node_store.area_index_and_size(branch_addr).unwrap();
+            assert_eq!(
+                node_store.size,
+                NodeStoreHeader::SIZE + leaf_area_size + branch_area_size
+            );
+
+            // Should be able to read the branch back
+            let read_leaf2 = node_store.read_node(branch_addr).unwrap();
+            assert_eq!(*read_leaf2, branch);
+        }
     }
 
     #[test]
-    fn test_node_store_header() {
+    fn test_update_resize() {
         let in_mem_store = InMemReadWriteLinearStore::new();
-        let linear_store = LinearStore::new(in_mem_store);
+        let linear_store: LinearStore<InMemReadWriteLinearStore> = LinearStore::new(in_mem_store);
         let mut node_store = NodeStore::new(linear_store).unwrap();
 
-        // Check the empty header is written at the start of the LinearStore.
-        {
-            let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
-            let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
-            assert_eq!(header.version, Version::new());
-            assert_eq!(header.free_lists.0, [None; NUM_AREA_SIZES]);
-        }
-
-        // Check that the header is written correctly after a write.
+        // Create a leaf
         let leaf = Node::Leaf(Leaf {
             path: vec![].into_boxed_slice(),
             value: vec![1].into_boxed_slice(),
         });
+        let leaf_addr = node_store.create_node(&leaf).unwrap();
+        let (leaf_index, leaf_area_size) = node_store.area_index_and_size(leaf_addr).unwrap();
 
-        let leaf_addr = node_store.create_node_inner(&leaf).unwrap();
+        // Update the node
+        let branch = Node::Branch(Branch {
+            path: vec![6, 7, 8].into_boxed_slice(),
+            value: Some(vec![9, 10, 11].into_boxed_slice()),
+            children: [None; BRANCH_CHILDREN],
+        });
+
+        // The new node is larger than the old node, so we need to allocate a new area
+        let (branch_addr, _) = match node_store.update_node(leaf_addr, &branch) {
+            Ok(_) => panic!("Expected NodeMoved"),
+            Err(UpdateError::NodeMoved(new_addr)) => {
+                let (_, branch_area_size) = node_store.area_index_and_size(new_addr).unwrap();
+                (new_addr, branch_area_size)
+            }
+            Err(e) => panic!("Unexpected error: {:?}", e),
+        };
+
+        // The new area should be at the end of the store
+        assert_eq!(branch_addr.get(), NodeStoreHeader::SIZE + leaf_area_size);
+
+        // The free list should be updated
+        let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
+        let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
+        assert_eq!(header.free_lists.0[leaf_index as usize], Some(leaf_addr));
+
+        // The new node should be readable
+        let read_branch = node_store.read_node(branch_addr).unwrap();
+        assert_eq!(*read_branch, branch);
+
+        // The old node should be deleted
+        assert!(node_store.read_node(leaf_addr).is_err());
+    }
+
+    #[test]
+    fn test_update_dont_resize() {
+        let in_mem_store = InMemReadWriteLinearStore::new();
+        let linear_store: LinearStore<InMemReadWriteLinearStore> = LinearStore::new(in_mem_store);
+        let mut node_store = NodeStore::new(linear_store).unwrap();
+
+        // Create a leaf
+        let leaf1 = Node::Leaf(Leaf {
+            path: vec![].into_boxed_slice(),
+            value: vec![1].into_boxed_slice(),
+        });
+        let leaf1_addr = node_store.create_node(&leaf1).unwrap();
+
+        // Update the node
+        let leaf2 = Node::Leaf(Leaf {
+            path: vec![].into_boxed_slice(),
+            value: vec![2].into_boxed_slice(),
+        });
+
+        // The new node should fit in the old area
+        node_store.update_node(leaf1_addr, &leaf2).unwrap();
+
+        // The header should be unchanged
+        let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
+        let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
+        assert_eq!(header, NodeStoreHeader::new());
+
+        // The new node should be readable
+        let read_leaf2 = node_store.read_node(leaf1_addr).unwrap();
+        assert_eq!(*read_leaf2, leaf2);
+    }
+
+    #[test]
+    fn test_delete() {
+        let in_mem_store = InMemReadWriteLinearStore::new();
+        let linear_store: LinearStore<InMemReadWriteLinearStore> = LinearStore::new(in_mem_store);
+        let mut node_store = NodeStore::new(linear_store).unwrap();
+
+        // Create a leaf
+        let leaf = Node::Leaf(Leaf {
+            path: vec![].into_boxed_slice(),
+            value: vec![1].into_boxed_slice(),
+        });
+        let leaf_addr = node_store.create_node(&leaf).unwrap();
+        let (leaf_index, _) = node_store.area_index_and_size(leaf_addr).unwrap();
+
+        // Delete the node
         node_store.delete_node(leaf_addr).unwrap();
-        let (index, _) = node_store.area_index_and_size(leaf_addr).unwrap();
 
-        // There should be an entry in the first free list now
+        {
+            // The header should have the freed node in the free list
+            let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
+            let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
+            assert_eq!(header.free_lists.0[leaf_index as usize], Some(leaf_addr));
+        }
+
+        // The node shouldn't be readable
+        assert!(node_store.read_node(leaf_addr).is_err());
+
+        // Create a new node with the same size
+        let new_leaf_addr = node_store.create_node(&leaf).unwrap();
+
+        // The new node should be at the same address
+        assert_eq!(new_leaf_addr, leaf_addr);
+
+        // The header should be updated
+        let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
+        let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
+        assert_eq!(header.free_lists.0[leaf_index as usize], None);
+    }
+
+    #[test]
+    fn test_node_store_new() {
+        let in_mem_store = InMemReadWriteLinearStore::new();
+        let linear_store = LinearStore::new(in_mem_store);
+        let node_store = NodeStore::new(linear_store).unwrap();
+
+        // Check the empty header is written at the start of the LinearStore.
         let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
         let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
         assert_eq!(header.version, Version::new());
-        assert_eq!(header.free_lists.0[index as usize], Some(leaf_addr));
+        assert_eq!(header.free_lists, FreeLists::new());
     }
 }
