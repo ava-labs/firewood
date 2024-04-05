@@ -151,7 +151,7 @@ impl<T: ReadLinearStore> NodeStore<T> {
         let addr = addr.get() + 1; // Skip the index byte
 
         let area_stream = self.linear_store.stream_from(addr)?;
-        let area: Area<Node, FreedArea> = bincode::deserialize_from(area_stream)
+        let area: Area<Node, FreeArea> = bincode::deserialize_from(area_stream)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
         match area {
@@ -218,7 +218,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
                 // Skip the index byte and Area discriminant byte
                 let free_area_addr = free_stored_area_addr.get() + 2;
                 let free_head_stream = self.linear_store.stream_from(free_area_addr)?;
-                let free_head: FreedArea = bincode::deserialize_from(free_head_stream)
+                let free_head: FreeArea = bincode::deserialize_from(free_head_stream)
                     .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
                 // Update the free list to point to the next free block.
@@ -252,7 +252,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
 
     /// The inner implementation of [create_node] that doesn't update the free lists.
     fn create_node_inner(&mut self, node: &Node) -> Result<DiskAddress, Error> {
-        let area: Area<&Node, FreedArea> = Area::Node(node);
+        let area: Area<&Node, FreeArea> = Area::Node(node);
 
         let area_bytes =
             bincode::serialize(&area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
@@ -291,7 +291,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
 
         let (_, old_stored_area_size) = self.area_index_and_size(addr)?;
 
-        let new_area: Area<&Node, FreedArea> = Area::Node(node);
+        let new_area: Area<&Node, FreeArea> = Area::Node(node);
 
         let new_area_bytes =
             bincode::serialize(&new_area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
@@ -319,7 +319,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
         let (area_size_index, _) = self.area_index_and_size(addr)?;
 
         // The area that contained the node is now free.
-        let area: Area<Node, FreedArea> = Area::Free(FreedArea {
+        let area: Area<Node, FreeArea> = Area::Free(FreeArea {
             next_free_block: self.header.free_lists.0[area_size_index as usize],
         });
 
@@ -429,7 +429,7 @@ impl NodeStoreHeader {
 /// A [FreedArea] is stored at the start of the area that contained a node that
 /// has been freed.
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
-struct FreedArea {
+struct FreeArea {
     next_free_block: Option<DiskAddress>,
 }
 
