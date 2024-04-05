@@ -19,7 +19,7 @@ use super::linear::{LinearStore, ReadLinearStore, WriteLinearStore};
 /// [NodeStore] divides the linear store into blocks of different sizes.
 /// [AREA_SIZES] is every valid block size.
 const AREA_SIZES: [u64; 21] = [
-    1 << 3, // Min block size is 8
+    1 << MIN_AREA_SIZE_LOG, // Min block size is 8
     1 << 4,
     1 << 5,
     1 << 6,
@@ -44,6 +44,7 @@ const AREA_SIZES: [u64; 21] = [
 
 // TODO danlaine: have type for index in AREA_SIZES
 // Implement try_into() for it.
+const MIN_AREA_SIZE_LOG: u8 = 3;
 const NUM_AREA_SIZES: usize = AREA_SIZES.len();
 const MIN_AREA_SIZE: u64 = AREA_SIZES[0];
 const MAX_AREA_SIZE: u64 = AREA_SIZES[NUM_AREA_SIZES - 1];
@@ -70,7 +71,7 @@ fn area_size_to_index(n: u64) -> Result<u8, Error> {
         log += 1;
     }
 
-    Ok(log as u8 - 3)
+    Ok(log as u8 - MIN_AREA_SIZE_LOG)
 }
 
 type Path = Box<[u8]>;
@@ -95,7 +96,6 @@ enum Node {
     Leaf(Leaf),
 }
 
-/// [NodeStore] divides [LinearStore] into [StoredArea]s.
 /// Each [StoredArea] contains an [Area] which is either a [Node] or a [FreedArea].
 #[repr(u8)]
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner, Deserialize, Serialize)]
@@ -104,7 +104,8 @@ enum Area<T, U> {
     Free(U) = 2,
 }
 
-/// Every item stored in the [NodeStore]'s [LinearStore] is a [StoredArea].
+/// Every item stored in the [NodeStore]'s [LinearStore]  after the
+/// [NodeStoreHeader] is a [StoredArea].
 #[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
 struct StoredArea<T> {
     /// Index in [AREA_SIZES] of this area's size
@@ -130,8 +131,10 @@ impl<T: ReadLinearStore> NodeStore<T> {
     /// `index` is the index of `area_size` in [AREA_SIZES].
     fn area_index_and_size(&self, addr: DiskAddress) -> Result<(u8, u64), Error> {
         let mut area_stream = self.linear_store.stream_from(addr.get())?;
+
         let index: u8 = bincode::deserialize_from(&mut area_stream)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+
         if index as usize >= NUM_AREA_SIZES {
             return Err(Error::new(
                 ErrorKind::InvalidData,
@@ -146,10 +149,13 @@ impl<T: ReadLinearStore> NodeStore<T> {
     /// `addr` is the address of a [StoredArea] in the [LinearStore].
     fn read_node(&self, addr: DiskAddress) -> Result<Arc<Node>, Error> {
         debug_assert!(addr.get() % 8 == 0);
+
         let addr = addr.get() + 1; // Skip the index byte
         let area_stream = self.linear_store.stream_from(addr)?;
+
         let area: Area<Node, FreedArea> = bincode::deserialize_from(area_stream)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+
         match area {
             Area::Node(node) => Ok(Arc::new(node)),
             Area::Free(_) => Err(Error::new(
@@ -411,9 +417,9 @@ impl NodeStoreHeader {
     /// The serialized NodeStoreHeader may be less than SIZE bytes but we
     /// reserve this much space for it since it can grow and it must always be
     /// at the start of the [LinearStore] so it can't be moved in a resize.
-    /// The serialized NodeStoreHeader is padded with 0s if it is less than SIZE bytes.
     const SIZE: u64 = {
         let max_size = Version::SIZE + FreeLists::MAX_SIZE;
+        // Round up to the nearest multiple of MIN_AREA_SIZE
         let remainder = max_size % MIN_AREA_SIZE;
         if remainder == 0 {
             max_size
