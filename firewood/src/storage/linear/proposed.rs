@@ -120,7 +120,9 @@ impl<P: ReadLinearStore> WriteLinearStore for Proposed<P, Mutable> {
     }
 }
 
-// TODO: make this work across Committed and Proposed types
+// this is actually a clippy bug, works on nightly; see
+// https://github.com/rust-lang/rust-clippy/issues/12519
+#[allow(clippy::unused_io_amount)]
 impl<'a, P: ReadLinearStore, M: Debug> Read for LayeredReader<'a, P, M> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self.state {
@@ -182,6 +184,8 @@ impl<'a, P: ReadLinearStore, M: Debug> Read for LayeredReader<'a, P, M> {
                     }
                     read_size
                 } else {
+                    // TODO: make this work across Committed and Proposed types
+
                     self.layer.parent.stream_from(self.offset)?.read(buf)?
                 };
                 self.offset += size as u64;
@@ -300,6 +304,6 @@ mod test {
         let mut data = [0u8; ConstBacked::DATA.len()];
         child.stream_from(0).unwrap().read_exact(&mut data).unwrap();
         println!("{:?}", child);
-        assert_eq!(&data, b"random data");
+        assert_eq!(&data, b"r1ndom data");
     }
 }
