@@ -97,6 +97,7 @@ impl<S: ReadLinearStore> ReadLinearStore for LinearStore<S> {
     }
 }
 
+#[cfg(test)]
 pub mod tests {
     use super::{ReadLinearStore, WriteLinearStore};
     use std::io::Read;
