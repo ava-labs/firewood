@@ -14,7 +14,7 @@ use super::{LinearStore, ReadLinearStore, WriteLinearStore};
 /// which could be a another [Proposed] or is [FileBacked](super::filebacked::FileBacked)
 /// The M type parameter indicates the mutability of the proposal, either read-write or readonly
 #[derive(Debug)]
-struct Proposed<P: ReadLinearStore, M> {
+pub(crate) struct Proposed<P: ReadLinearStore, M> {
     new: BTreeMap<u64, Box<[u8]>>,
     old: BTreeMap<u64, Box<[u8]>>,
     parent: Arc<LinearStore<P>>,
@@ -22,7 +22,7 @@ struct Proposed<P: ReadLinearStore, M> {
 }
 
 impl<P: ReadLinearStore, M> Proposed<P, M> {
-    fn new(parent: Arc<LinearStore<P>>) -> Self {
+    pub(crate) fn new(parent: Arc<LinearStore<P>>) -> Self {
         Self {
             parent,
             new: Default::default(),
@@ -65,13 +65,13 @@ enum LayeredReaderState<'a> {
     },
 }
 
-impl<P: ReadLinearStore, M: Debug> ReadLinearStore for Proposed<P, M> {
-    fn stream_from(&self, addr: u64) -> Result<impl Read, Error> {
-        Ok(LayeredReader {
+impl<P: ReadLinearStore, M: Send + Sync + Debug> ReadLinearStore for Proposed<P, M> {
+    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
+        Ok(Box::new(LayeredReader {
             offset: addr,
             state: LayeredReaderState::InitialState,
             layer: self,
-        })
+        }))
     }
 
     fn size(&self) -> Result<u64, Error> {
@@ -105,11 +105,11 @@ impl<'a, P: ReadLinearStore, M: Debug> DiffResolver<'a> for Proposed<P, M> {
 
 /// Marker that the Proposal is mutable
 #[derive(Debug)]
-struct Mutable;
+pub(crate) struct Mutable;
 
 /// Marker that the Proposal is immutable
 #[derive(Debug)]
-struct Immutable;
+pub(crate) struct Immutable;
 
 impl<P: ReadLinearStore> WriteLinearStore for Proposed<P, Mutable> {
     fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
@@ -215,52 +215,14 @@ impl<'a, P: ReadLinearStore, M: Debug> Read for LayeredReader<'a, P, M> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod test {
+    use super::super::tests::ConstBacked;
     use test_case::test_case;
 
     use super::*;
 
-    #[derive(Debug)]
-    struct ConstBacked;
-
-    impl ConstBacked {
-        const DATA: &'static [u8] = b"random data";
-
-        const fn new() -> Self {
-            Self {}
-        }
-    }
-
-    impl From<ConstBacked> for Arc<LinearStore<ConstBacked>> {
-        fn from(state: ConstBacked) -> Self {
-            Arc::new(LinearStore { state })
-        }
-    }
-
-    impl From<ConstBacked> for Proposed<ConstBacked, Mutable> {
-        fn from(value: ConstBacked) -> Self {
-            Proposed::new(value.into())
-        }
-    }
-
-    impl From<ConstBacked> for Proposed<ConstBacked, Immutable> {
-        fn from(value: ConstBacked) -> Self {
-            Proposed::new(value.into())
-        }
-    }
-
-    impl ReadLinearStore for ConstBacked {
-        fn stream_from(&self, addr: u64) -> Result<impl std::io::Read, std::io::Error> {
-            Ok(Cursor::new(Self::DATA.get(addr as usize..).unwrap()))
-        }
-
-        fn size(&self) -> Result<u64, Error> {
-            Ok(Self::DATA.len() as u64)
-        }
-    }
-
     #[test]
     fn smoke_read() -> Result<(), std::io::Error> {
-        let sut: Proposed<ConstBacked, Immutable> = ConstBacked::new().into();
+        let sut: Proposed<ConstBacked, Immutable> = ConstBacked::new(ConstBacked::DATA).into();
 
         // read all
         let mut data = [0u8; ConstBacked::DATA.len()];
@@ -282,7 +244,7 @@ mod test {
 
     #[test]
     fn smoke_mutate() -> Result<(), std::io::Error> {
-        let mut sut: Proposed<ConstBacked, Mutable> = ConstBacked::new().into();
+        let mut sut: Proposed<ConstBacked, Mutable> = ConstBacked::new(ConstBacked::DATA).into();
 
         const MUT_DATA: &[u8] = b"data random";
 
@@ -301,7 +263,7 @@ mod test {
     #[test_case(1, b"2", b"r2ndom data")]
     #[test_case(10, b"3", b"random dat3")]
     fn partial_mod_full_read(pos: u64, delta: &[u8], expected: &[u8]) -> Result<(), Error> {
-        let mut sut: Proposed<ConstBacked, Mutable> = ConstBacked::new().into();
+        let mut sut: Proposed<ConstBacked, Mutable> = ConstBacked::new(ConstBacked::DATA).into();
 
         sut.write(pos, delta)?;
 
@@ -314,7 +276,7 @@ mod test {
 
     #[test]
     fn nested() {
-        let mut parent: Proposed<ConstBacked, Mutable> = ConstBacked::new().into();
+        let mut parent: Proposed<ConstBacked, Mutable> = ConstBacked::new(ConstBacked::DATA).into();
         parent.write(1, b"1").unwrap();
 
         let parent: Arc<LinearStore<Proposed<ConstBacked, Mutable>>> =
@@ -325,5 +287,19 @@ mod test {
         let mut data = [0u8; ConstBacked::DATA.len()];
         child.stream_from(0).unwrap().read_exact(&mut data).unwrap();
         assert_eq!(&data, b"r1n3om data");
+    }
+
+    #[test]
+    fn deep_nest() {
+        let mut parent: Proposed<ConstBacked, Mutable> = ConstBacked::new(ConstBacked::DATA).into();
+        parent.write(1, b"1").unwrap();
+        let mut child: Arc<dyn ReadLinearStore> = Arc::new(parent);
+        for _ in 0..=200 {
+            child = Arc::new(LinearStore { state: child });
+        }
+        let mut data = [0u8; ConstBacked::DATA.len()];
+        child.stream_from(0).unwrap().read_exact(&mut data).unwrap();
+        println!("{:?}", child);
+        assert_eq!(&data, b"random data");
     }
 }

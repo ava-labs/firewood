@@ -19,8 +19,10 @@
 
 use std::fmt::Debug;
 use std::io::{Error, Read};
+use std::ops::Deref;
+use std::sync::Arc;
 
-mod committed;
+mod current;
 /// A linear store used for proposals
 ///
 /// A Proposed LinearStore supports read operations which look for the
@@ -63,7 +65,10 @@ mod committed;
 ///  - Flush all the `Proposed<FileBacked, ReadOnly>::new` bytes to disk
 ///  - Convert the `LinearStore<Proposed<FileBacked, Readonly>>` to `LinearStore<FileBacked>`
 mod filebacked;
+mod historical;
 mod proposed;
+#[cfg(test)]
+mod tests;
 
 #[derive(Debug)]
 pub(super) struct LinearStore<S: ReadLinearStore> {
@@ -71,9 +76,19 @@ pub(super) struct LinearStore<S: ReadLinearStore> {
 }
 
 /// All linearstores support reads
-pub(super) trait ReadLinearStore: Debug {
-    fn stream_from(&self, addr: u64) -> Result<impl Read, Error>;
+pub(super) trait ReadLinearStore: Send + Sync + Debug {
+    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error>;
     fn size(&self) -> Result<u64, Error>;
+}
+
+impl ReadLinearStore for Arc<dyn ReadLinearStore> {
+    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
+        self.deref().stream_from(addr)
+    }
+
+    fn size(&self) -> Result<u64, Error> {
+        self.deref().size()
+    }
 }
 
 /// Some linear stores support updates
@@ -88,7 +103,7 @@ impl<ReadWrite: ReadLinearStore + Debug> WriteLinearStore for LinearStore<ReadWr
 }
 
 impl<S: ReadLinearStore> ReadLinearStore for LinearStore<S> {
-    fn stream_from(&self, addr: u64) -> Result<impl Read, Error> {
+    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
         self.state.stream_from(addr)
     }
 
