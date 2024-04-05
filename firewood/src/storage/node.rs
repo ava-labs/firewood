@@ -141,7 +141,6 @@ impl<T: ReadLinearStore> NodeStore<T> {
     /// Read a [Node] from the provided [DiskAddress].
     /// `addr` is the address of a [StoredArea] in the [LinearStore].
     fn read_node(&self, addr: DiskAddress) -> Result<Arc<Node>, Error> {
-        println!("addr: {:?}", addr.get()); // todo remove
         debug_assert!(addr.get() % 8 == 0);
         let addr = addr.get() + 1; // Skip the index byte
         let area_stream = self.linear_store.stream_from(addr)?;
@@ -543,12 +542,13 @@ mod tests {
 
         let leaf_addr = node_store.create_node(&leaf).unwrap();
         node_store.delete_node(leaf_addr).unwrap();
+        let (index, _) = node_store.area_index_and_size(leaf_addr).unwrap();
 
         // There should be an entry in the first free list now
         let header_bytes = node_store.linear_store.stream_from(0).unwrap();
         let mut reader = ReaderWrapperWithSize::new(Box::new(header_bytes));
         let header: NodeStoreHeader = bincode::deserialize_from(&mut reader).unwrap();
         assert_eq!(header.version, Version::new());
-        assert_eq!(header.free_lists.0[0], Some(leaf_addr));
+        assert_eq!(header.free_lists.0[index as usize], Some(leaf_addr));
     }
 }
