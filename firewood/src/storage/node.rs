@@ -7,7 +7,7 @@
 /// free space management of nodes in the page store. It lays out the format
 /// of the [PageStore]. More specifically, it places a [FileIdentifyingMagic]
 /// and a [FreeSpaceHeader] at the beginning
-use std::io::{Error, ErrorKind, Read, Write};
+use std::io::{Error, ErrorKind, Write};
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
@@ -354,29 +354,6 @@ impl From<Error> for UpdateError {
     }
 }
 
-#[derive(Debug)]
-struct ReaderWrapperWithSize<T> {
-    reader: T,
-    bytes_read: usize,
-}
-
-impl<T> ReaderWrapperWithSize<T> {
-    const fn new(reader: T) -> Self {
-        Self {
-            reader,
-            bytes_read: 0,
-        }
-    }
-}
-
-impl<T: Read> Read for ReaderWrapperWithSize<T> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let read_result = self.reader.read(buf)?;
-        self.bytes_read += read_result;
-        Ok(read_result)
-    }
-}
-
 /// Can be used by filesystem tooling such as "file" to identify
 /// the version of firewood used to create this [NodeStore] file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -528,9 +505,8 @@ mod tests {
 
         // Check the empty header is written at the start of the LinearStore.
         {
-            let header_bytes = node_store.linear_store.stream_from(0).unwrap();
-            let mut reader = ReaderWrapperWithSize::new(Box::new(header_bytes));
-            let header: NodeStoreHeader = bincode::deserialize_from(&mut reader).unwrap();
+            let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
+            let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
             assert_eq!(header.version, Version::new());
             assert_eq!(header.free_lists.0, [None; NUM_AREA_SIZES]);
         }
@@ -546,9 +522,8 @@ mod tests {
         let (index, _) = node_store.area_index_and_size(leaf_addr).unwrap();
 
         // There should be an entry in the first free list now
-        let header_bytes = node_store.linear_store.stream_from(0).unwrap();
-        let mut reader = ReaderWrapperWithSize::new(Box::new(header_bytes));
-        let header: NodeStoreHeader = bincode::deserialize_from(&mut reader).unwrap();
+        let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
+        let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
         assert_eq!(header.version, Version::new());
         assert_eq!(header.free_lists.0[index as usize], Some(leaf_addr));
     }
