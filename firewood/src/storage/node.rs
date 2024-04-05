@@ -167,6 +167,39 @@ impl<T: ReadLinearStore> NodeStore<T> {
 }
 
 impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
+    fn new(mut linear_store: LinearStore<T>) -> Result<Self, Error> {
+        let header = NodeStoreHeader {
+            version: Version::new(),
+            free_lists: FreeLists::new(),
+        };
+        let header_bytes = bincode::serialize(&header).map_err(|e| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!("Failed to serialize header: {}", e),
+            )
+        })?;
+
+        linear_store.write(0, header_bytes.as_slice())?;
+        Ok(Self {
+            size: NodeStoreHeader::SIZE,
+            header,
+            linear_store,
+        })
+    }
+
+    fn write_free_lists_header(&mut self) -> Result<(), Error> {
+        let header_bytes = bincode::serialize(&self.header.free_lists).map_err(|e| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!("Failed to serialize free lists: {}", e),
+            )
+        })?;
+
+        self.linear_store
+            .write(Version::SIZE, header_bytes.as_slice())?;
+        Ok(())
+    }
+
     /// Attempts to allocate `n` bytes from the free lists.
     /// If successful returns the address of the newly allocated area
     /// and the index of the free list that was used.
@@ -270,6 +303,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     }
 
     /// Delete a [Node] at a given address
+    /// TODO danlaine: Coalesce adjacent free areas.
     fn delete_node(&mut self, addr: DiskAddress) -> Result<(), Error> {
         let (area_size_index, _) = self.area_index_and_size(addr)?;
 
@@ -293,39 +327,6 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
 
         self.write_free_lists_header()?;
         Ok(())
-    }
-
-    fn write_free_lists_header(&mut self) -> Result<(), Error> {
-        let header_bytes = bincode::serialize(&self.header.free_lists).map_err(|e| {
-            Error::new(
-                ErrorKind::InvalidData,
-                format!("Failed to serialize free lists: {}", e),
-            )
-        })?;
-
-        self.linear_store
-            .write(Version::SIZE, header_bytes.as_slice())?;
-        Ok(())
-    }
-
-    fn new(mut linear_store: LinearStore<T>) -> Result<Self, Error> {
-        let header = NodeStoreHeader {
-            version: Version::new(),
-            free_lists: FreeLists::new(),
-        };
-        let header_bytes = bincode::serialize(&header).map_err(|e| {
-            Error::new(
-                ErrorKind::InvalidData,
-                format!("Failed to serialize header: {}", e),
-            )
-        })?;
-
-        linear_store.write(0, header_bytes.as_slice())?;
-        Ok(Self {
-            size: NodeStoreHeader::SIZE,
-            header,
-            linear_store,
-        })
     }
 }
 
