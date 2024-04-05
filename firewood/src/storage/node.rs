@@ -11,7 +11,6 @@ use std::io::{Error, ErrorKind, Write};
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
-use enum_as_inner::EnumAsInner;
 use serde::{Deserialize, Serialize};
 
 use super::linear::{LinearStore, ReadLinearStore, WriteLinearStore};
@@ -97,11 +96,10 @@ enum Node {
 }
 
 /// Each [StoredArea] contains an [Area] which is either a [Node] or a [FreedArea].
-#[repr(u8)]
-#[derive(PartialEq, Eq, Clone, Debug, EnumAsInner, Deserialize, Serialize)]
+#[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
 enum Area<T, U> {
-    Node(T) = 1,
-    Free(U) = 2,
+    Node(T),
+    Free(U),
 }
 
 /// Every item stored in the [NodeStore]'s [LinearStore]  after the
