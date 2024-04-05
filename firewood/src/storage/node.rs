@@ -196,6 +196,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
         let area_size = AREA_SIZES[index as usize];
         let addr = DiskAddress::new(self.size).expect("node store size can't be 0");
         self.size += area_size;
+        debug_assert!(addr.get() % 8 == 0);
         Ok((addr, index))
     }
 
