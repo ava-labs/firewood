@@ -97,6 +97,7 @@ impl<S: ReadLinearStore> ReadLinearStore for LinearStore<S> {
     }
 }
 
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 #[cfg(test)]
 pub mod tests {
     use super::{ReadLinearStore, WriteLinearStore};
@@ -109,7 +110,7 @@ pub mod tests {
     }
 
     impl InMemReadWriteLinearStore {
-        pub fn new() -> Self {
+        pub const fn new() -> Self {
             Self { bytes: vec![] }
         }
     }
