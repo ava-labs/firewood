@@ -101,6 +101,7 @@ impl<S: ReadLinearStore> ReadLinearStore for LinearStore<S> {
 pub mod tests {
     use super::{ReadLinearStore, WriteLinearStore};
     use std::io::Read;
+    use test_case::test_case;
 
     #[derive(Debug)]
     pub struct InMemReadWriteLinearStore {
@@ -141,62 +142,32 @@ pub mod tests {
         }
     }
 
-    #[test]
-    fn test_in_mem_write_linear_store() {
+    #[test_case(&[],0, &[1, 2, 3],&[1, 2, 3]; "write to empty store")]
+    #[test_case(&[1, 2, 3],3, &[4, 5, 6],&[1, 2, 3, 4, 5, 6]; "write at end of store")]
+    #[test_case(&[1, 2, 3],0, &[7, 8],&[7, 8, 3]; "overwrite beginning of store")]
+    #[test_case(&[1, 2, 3],1, &[9],&[1, 9, 3]; "overwrite middle of store")]
+    #[test_case(&[1, 2, 3],3, &[11, 12],&[1, 2, 3,  11, 12]; "write past end of store")]
+    fn test_in_mem_write_linear_store(
+        start_bytes: &[u8],
+        offset: u64,
+        new_bytes: &[u8],
+        expected_end_bytes: &[u8],
+    ) {
         let mut store = InMemReadWriteLinearStore { bytes: vec![] };
         assert_eq!(store.size().unwrap(), 0);
 
-        // Write to an empty store
-        store.write(0, &[1, 2, 3]).unwrap();
-        assert_eq!(store.bytes, vec![1, 2, 3]);
-        assert_eq!(store.size().unwrap(), 3);
+        store.write(0, start_bytes).unwrap();
+        assert_eq!(store.bytes, start_bytes);
 
-        // Write at the end of the store
-        store.write(3, &[4, 5, 6]).unwrap();
-        assert_eq!(store.bytes, vec![1, 2, 3, 4, 5, 6]);
-        assert_eq!(store.size().unwrap(), 6);
+        store.write(offset, new_bytes).unwrap();
+        assert_eq!(store.bytes, expected_end_bytes);
 
-        // Overwrite the beginning of the store
-        store.write(0, &[7, 8]).unwrap();
-        assert_eq!(store.bytes, vec![7, 8, 3, 4, 5, 6]);
-        assert_eq!(store.size().unwrap(), 6);
-
-        // Overwrite the middle of the store
-        store.write(1, &[9, 10]).unwrap();
-        assert_eq!(store.bytes, vec![7, 9, 10, 4, 5, 6]);
-        assert_eq!(store.size().unwrap(), 6);
-
-        // Write past the end of the store
-        store.write(7, &[11, 12]).unwrap();
-        assert_eq!(store.bytes, vec![7, 9, 10, 4, 5, 6, 0, 11, 12]);
-        assert_eq!(store.size().unwrap(), 9);
-
-        // Read from the start of the store
-        let mut reader = store.stream_from(0).unwrap();
-        let mut read_bytes = vec![];
-        let num_read_bytes = reader.read_to_end(&mut read_bytes).unwrap();
-        assert_eq!(read_bytes, vec![7, 9, 10, 4, 5, 6, 0, 11, 12]);
-        assert_eq!(num_read_bytes, 9);
-
-        // Read from the middle of the store
-        let mut reader = store.stream_from(3).unwrap();
-        let mut read_bytes = vec![];
-        let num_read_bytes = reader.read_to_end(&mut read_bytes).unwrap();
-        assert_eq!(read_bytes, vec![4, 5, 6, 0, 11, 12]);
-        assert_eq!(num_read_bytes, 6);
-
-        // Read from the end of the store
-        let mut reader = store.stream_from(store.size().unwrap() - 1).unwrap();
-        let mut read_bytes = vec![];
-        let num_read_bytes = reader.read_to_end(&mut read_bytes).unwrap();
-        assert_eq!(read_bytes, vec![12]);
-        assert_eq!(num_read_bytes, 1);
-
-        // Read from past the end of the store
-        let mut reader = store.stream_from(store.size().unwrap()).unwrap();
-        let mut read_bytes = vec![];
-        let num_read_bytes = reader.read_to_end(&mut read_bytes).unwrap();
-        assert_eq!(read_bytes, vec![]);
-        assert_eq!(num_read_bytes, 0);
+        for i in 0..store.size().unwrap() {
+            let mut reader = store.stream_from(i).unwrap();
+            let mut read_bytes = vec![];
+            let num_read_bytes = reader.read_to_end(&mut read_bytes).unwrap();
+            assert_eq!(read_bytes, expected_end_bytes[i as usize..]);
+            assert_eq!(num_read_bytes, expected_end_bytes.len() - i as usize);
+        }
     }
 }
