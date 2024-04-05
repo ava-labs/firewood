@@ -202,10 +202,15 @@ impl<'a, P: ReadLinearStore, M: Debug> Read for LayeredReader<'a, P, M> {
                 .read(buf)?;
                 self.offset += size as u64;
                 debug_assert!(offset_within + size <= area.len());
-                if offset_within + size == area.len() {
+                self.state = if offset_within + size == area.len() {
                     // read to the end of this area
-                    self.state = LayeredReaderState::FindNext;
-                }
+                    LayeredReaderState::FindNext
+                } else {
+                    LayeredReaderState::InsideModifiedArea {
+                        area,
+                        offset_within: offset_within + size,
+                    }
+                };
                 Ok(size)
             }
             LayeredReaderState::NoMoreModifiedAreas => {
