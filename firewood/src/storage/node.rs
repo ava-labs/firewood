@@ -60,11 +60,17 @@ fn area_size_to_index(n: u64) -> Result<u8, Error> {
         ));
     }
 
-    if n < MIN_AREA_SIZE {
+    if n <= MIN_AREA_SIZE {
         return Ok(0);
     }
 
-    Ok(n.ilog2() as u8 - 2)
+    let mut log = n.ilog2();
+    // If n is not a power of 2, we need to round up to the next power of 2.
+    if n != 1 << log {
+        log += 1;
+    }
+
+    Ok(log as u8 - 3)
 }
 
 type Path = Box<[u8]>;
@@ -109,12 +115,12 @@ struct StoredArea<T> {
 /// [NodeStore] creates, reads, updates, and deletes [Node]s.
 /// It stores the nodes in a [LinearStore] that it manages.
 /// The first thing written in the [LinearStore] is a [NodeStoreHeader],
-/// which contains the version and the heads of the free lists.
+/// which contains the version and the free area list heads.
 /// Every subsequent write is a [StoredArea] containing a [Node] or a [FreedArea].
 /// The size of each allocation [NodeStore] makes from [LinearStore] is one of [AREA_SIZES].
 #[derive(Debug)]
 struct NodeStore<T: ReadLinearStore> {
-    size: u64, // TODO comment
+    size: u64,
     header: NodeStoreHeader,
     linear_store: LinearStore<T>,
 }
@@ -122,11 +128,9 @@ struct NodeStore<T: ReadLinearStore> {
 impl<T: ReadLinearStore> NodeStore<T> {
     /// Returns (index, area_size) for the [StoredArea] at `addr`.
     /// `index` is the index of `area_size` in [AREA_SIZES].
-    /// `addr` is the address of a [StoredArea] in the [LinearStore].
     fn area_index_and_size(&self, addr: DiskAddress) -> Result<(u8, u64), Error> {
-        let area_stream = self.linear_store.stream_from(addr.get())?;
-        let mut reader = ReaderWrapperWithSize::new(Box::new(area_stream));
-        let index: u8 = bincode::deserialize_from(&mut reader)
+        let mut area_stream = self.linear_store.stream_from(addr.get())?;
+        let index: u8 = bincode::deserialize_from(&mut area_stream)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
         if index as usize >= NUM_AREA_SIZES {
             return Err(Error::new(
@@ -434,19 +438,24 @@ mod tests {
     #[test]
     fn test_area_size_to_index() {
         for i in 0..NUM_AREA_SIZES {
-            // area size is at bottom of range
+            // area size is at top of range
             assert_eq!(area_size_to_index(AREA_SIZES[i]).unwrap(), i as u8);
 
             if i > 0 {
-                // 1 less than bottom of range can go in previous area size
+                // 1 less than top of range stays in range
+                assert_eq!(area_size_to_index(AREA_SIZES[i] - 1).unwrap(), i as u8);
+            }
+
+            if i < NUM_AREA_SIZES - 1 {
+                // 1 more than top of range goes to next range
                 assert_eq!(
-                    area_size_to_index(AREA_SIZES[i] - 1).unwrap(),
-                    (i - 1) as u8
+                    area_size_to_index(AREA_SIZES[i] + 1).unwrap(),
+                    (i + 1) as u8
                 );
             }
         }
 
-        for i in 0..MIN_AREA_SIZE {
+        for i in 0..=MIN_AREA_SIZE {
             assert_eq!(area_size_to_index(i).unwrap(), 0);
         }
 
