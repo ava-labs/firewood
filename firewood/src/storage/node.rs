@@ -64,7 +64,7 @@ fn area_size_to_index(n: u64) -> Result<u8, Error> {
         return Ok(0);
     }
 
-    Ok(n.ilog2() as u8 - 3)
+    Ok(n.ilog2() as u8 - 2)
 }
 
 type Path = Box<[u8]>;
@@ -113,7 +113,8 @@ struct StoredArea<T> {
 /// Every subsequent write is a [StoredArea] containing a [Node] or a [FreedArea].
 /// The size of each allocation [NodeStore] makes from [LinearStore] is one of [AREA_SIZES].
 #[derive(Debug)]
-struct NodeStore<T: ReadLinearStore> {
+pub(crate) struct NodeStore<T: ReadLinearStore> {
+    size: u64, // TODO comment
     header: NodeStoreHeader,
     linear_store: LinearStore<T>,
 }
@@ -140,6 +141,7 @@ impl<T: ReadLinearStore> NodeStore<T> {
     /// Read a [Node] from the provided [DiskAddress].
     /// `addr` is the address of a [StoredArea] in the [LinearStore].
     fn read_node(&self, addr: DiskAddress) -> Result<Arc<Node>, Error> {
+        println!("addr: {:?}", addr.get()); // todo remove
         debug_assert!(addr.get() % 8 == 0);
         let addr = addr.get() + 1; // Skip the index byte
         let area_stream = self.linear_store.stream_from(addr)?;
@@ -167,7 +169,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
 
         for index in index as usize..NUM_AREA_SIZES {
             // Get the first free block of sufficient size.
-            let free_head_addr = self.header.free_lists[index];
+            let free_head_addr = self.header.free_lists.0[index];
             if let Some(free_head_addr) = free_head_addr {
                 // Update the free list head.
                 let free_head_stream = self.linear_store.stream_from(free_head_addr.get())?;
@@ -175,7 +177,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
                     .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
                 // Update the free list to point to the next free block.
-                self.header.free_lists[index] = free_head.next_free_block;
+                self.header.free_lists.0[index] = free_head.next_free_block;
 
                 // Return the address of the newly allocated block.
                 return Ok(Some((free_head_addr, index as u8)));
@@ -186,9 +188,17 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
         Ok(None)
     }
 
+    fn allocate_from_end(&mut self, n: u64) -> Result<(DiskAddress, u8), Error> {
+        let index = area_size_to_index(n)?;
+        let area_size = AREA_SIZES[index as usize];
+        let addr = DiskAddress::new(self.size).expect("node store size can't be 0");
+        self.size += area_size;
+        Ok((addr, index))
+    }
+
     /// Allocates an area in the [LinearStore] large enough for the provided [Area].
     /// Returns the address of the allocated area.
-    fn create(&mut self, node: &Node) -> Result<DiskAddress, Error> {
+    fn create_node(&mut self, node: &Node) -> Result<DiskAddress, Error> {
         let area: Area<&Node, FreedArea> = Area::Node(node);
 
         let area_bytes =
@@ -202,10 +212,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
         // of the LinearStore.
         let (addr, index) = match self.allocate_from_freed(stored_area_size)? {
             Some((addr, index)) => (addr, index),
-            None => (
-                DiskAddress::new(self.linear_store.size()?).expect("linear store size can't be 0"),
-                area_size_to_index(stored_area_size)? as u8,
-            ),
+            None => self.allocate_from_end(stored_area_size)?,
         };
 
         let stored_area = StoredArea {
@@ -218,6 +225,9 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
 
         self.linear_store
             .write(addr.get(), stored_area_bytes.as_slice())?;
+
+        self.write_free_lists_header()?;
+
         Ok(addr)
     }
 
@@ -225,7 +235,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     /// This is complicated by the fact that a node might grow and not be able to fit a the given
     /// address, in which case we return [UpdateError::NodeMoved].
     /// `addr` is the address of a [StoredArea] in the [LinearStore].
-    fn update(&mut self, addr: DiskAddress, node: &Node) -> Result<(), UpdateError> {
+    fn update_node(&mut self, addr: DiskAddress, node: &Node) -> Result<(), UpdateError> {
         let (_, old_stored_area_size) = self.area_index_and_size(addr)?;
 
         let new_area: Area<&Node, FreedArea> = Area::Node(node);
@@ -237,24 +247,25 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
 
         if new_stored_area_size <= old_stored_area_size {
             // the new node fits in the old node's area
+            let addr = addr.get() + 1; // Skip the index byte
             self.linear_store
                 .write(addr.into(), new_area_bytes.as_slice())?;
             return Ok(());
         }
 
         // the new node is larger than the old node, so we need to allocate a new area
-        let new_node_addr = self.create(node)?;
-        self.delete(addr)?;
+        let new_node_addr = self.create_node(node)?;
+        self.delete_node(addr)?;
         Err(UpdateError::NodeMoved(new_node_addr))
     }
 
     /// Delete a [Node] at a given address
-    fn delete(&mut self, addr: DiskAddress) -> Result<(), Error> {
+    fn delete_node(&mut self, addr: DiskAddress) -> Result<(), Error> {
         let (area_size_index, _) = self.area_index_and_size(addr)?;
 
         // The area that contained the node is now free.
         let area: Area<Node, FreedArea> = Area::Free(FreedArea {
-            next_free_block: self.header.free_lists[area_size_index as usize],
+            next_free_block: self.header.free_lists.0[area_size_index as usize],
         });
 
         let stored_area = StoredArea {
@@ -268,7 +279,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
         self.linear_store.write(addr.into(), &stored_area_bytes)?;
 
         // The newly freed block is now the head of the free list.
-        self.header.free_lists[area_size_index as usize] = Some(addr);
+        self.header.free_lists.0[area_size_index as usize] = Some(addr);
 
         self.write_free_lists_header()?;
         Ok(())
@@ -281,17 +292,16 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
                 format!("Failed to serialize free lists: {}", e),
             )
         })?;
-        self.linear_store.write(
-            std::mem::size_of::<VersionHeader>() as u64,
-            header_bytes.as_slice(),
-        )?;
+
+        self.linear_store
+            .write(Version::SIZE, header_bytes.as_slice())?;
         Ok(())
     }
 
     fn new(mut linear_store: LinearStore<T>) -> Result<Self, Error> {
         let header = NodeStoreHeader {
-            free_lists: [None; NUM_AREA_SIZES],
-            version_header: VersionHeader::new(),
+            version: Version::new(),
+            free_lists: FreeLists::new(),
         };
         let header_bytes = bincode::serialize(&header).map_err(|e| {
             Error::new(
@@ -299,8 +309,10 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
                 format!("Failed to serialize header: {}", e),
             )
         })?;
+
         linear_store.write(0, header_bytes.as_slice())?;
         Ok(Self {
+            size: NodeStoreHeader::SIZE,
             header,
             linear_store,
         })
@@ -345,11 +357,11 @@ impl<T: Read> Read for ReaderWrapperWithSize<T> {
 /// Can be used by filesystem tooling such as "file" to identify
 /// the version of firewood used to create this [NodeStore] file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-struct VersionHeader {
+struct Version {
     bytes: [u8; 16],
 }
 
-impl VersionHeader {
+impl Version {
     const SIZE: u64 = std::mem::size_of::<Self>() as u64;
 
     /// construct a [VersionHeader] from the firewood version
@@ -365,14 +377,74 @@ impl VersionHeader {
     }
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+struct FreeLists([Option<DiskAddress>; NUM_AREA_SIZES]);
+
+impl FreeLists {
+    // 1 for Some + 8 for DiskAddress
+    const SOME_ELT_SIZE: u64 = 1 + std::mem::size_of::<DiskAddress>() as u64;
+    const NONE_ELT_SIZE: u64 = 1;
+
+    const MAX_SIZE: u64 = NUM_AREA_SIZES as u64 * Self::SOME_ELT_SIZE;
+
+    fn new() -> Self {
+        Self([None; NUM_AREA_SIZES])
+    }
+
+    fn serialized_size(&self) -> u64 {
+        self.0
+            .iter()
+            .map(|x| {
+                if x.is_some() {
+                    FreeLists::SOME_ELT_SIZE
+                } else {
+                    FreeLists::NONE_ELT_SIZE
+                }
+            })
+            .sum()
+    }
+
+    fn padding_size(&self) -> u64 {
+        NodeStoreHeader::SIZE - Version::SIZE - self.serialized_size()
+    }
+}
+
 /// Persisted metadata for a [NodeStore].
 /// The [NodeStoreHeader] is at the start of the [LinearStore].
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 struct NodeStoreHeader {
     /// Identifies the version of firewood used to create this [NodeStore].
-    version_header: VersionHeader,
+    version: Version,
     /// Element i is the pointer to the first free block of size BLOCK_SIZES[i].
-    free_lists: [Option<DiskAddress>; NUM_AREA_SIZES],
+    free_lists: FreeLists,
+}
+
+impl NodeStoreHeader {
+    /// The first SIZE bytes of the [LinearStore] are the [NodeStoreHeader].
+    /// The serialized NodeStoreHeader may be less than SIZE bytes but we
+    /// reserve this much space for it since it can grow and it must always be
+    /// at the start of the [LinearStore] so it can't be moved in a resize.
+    /// The serialized NodeStoreHeader is padded with 0s if it is less than SIZE bytes.
+    const SIZE: u64 = {
+        let max_size = Version::SIZE + FreeLists::MAX_SIZE;
+        let remainder = max_size % MIN_AREA_SIZE;
+        if remainder == 0 {
+            max_size
+        } else {
+            max_size + MIN_AREA_SIZE - remainder
+        }
+    };
+
+    /// Returns the bincode serialized size of the [NodeStoreHeader] without serializing it.
+    fn serialized_size(&self) -> u64 {
+        std::mem::size_of::<Version>() as u64 + self.free_lists.serialized_size()
+    }
+
+    /// Returns the number of bytes of padding to make the serialized [NodeStoreHeader]
+    /// the same size as [NodeStoreHeader::MAX_SIZE].
+    fn padding_size(&self) -> u64 {
+        Self::SIZE - self.serialized_size()
+    }
 }
 
 /// A [FreedArea] is stored at the start of the area that contained a node that
@@ -413,7 +485,7 @@ mod tests {
     #[test]
     fn test_create_read_update_delete() {
         let in_mem_store = InMemReadWriteLinearStore::new();
-        let linear_store = LinearStore::new(in_mem_store);
+        let linear_store: LinearStore<InMemReadWriteLinearStore> = LinearStore::new(in_mem_store);
         let mut node_store = NodeStore::new(linear_store).unwrap();
 
         let leaf = Node::Leaf(Leaf {
@@ -421,7 +493,7 @@ mod tests {
             value: vec![3, 4, 5].into_boxed_slice(),
         });
 
-        let leaf_addr = node_store.create(&leaf).unwrap();
+        let leaf_addr = node_store.create_node(&leaf).unwrap();
         let read_leaf = node_store.read_node(leaf_addr).unwrap();
         assert_eq!(*read_leaf, leaf);
 
@@ -431,20 +503,20 @@ mod tests {
             children: [None; BRANCH_CHILDREN],
         });
 
-        let branch_addr = node_store.create(&branch).unwrap();
+        let branch_addr = node_store.create_node(&branch).unwrap();
         let read_branch = node_store.read_node(branch_addr).unwrap();
         assert_eq!(*read_branch, branch);
 
         let new_leaf = Node::Leaf(Leaf {
-            path: vec![0, 1, 2, 3].into_boxed_slice(),
-            value: vec![3, 4, 5, 6].into_boxed_slice(),
+            path: vec![1, 2, 3].into_boxed_slice(),
+            value: vec![4, 5, 6].into_boxed_slice(),
         });
 
-        node_store.update(leaf_addr, &new_leaf).unwrap();
+        node_store.update_node(leaf_addr, &new_leaf).unwrap();
         let read_new_leaf = node_store.read_node(leaf_addr).unwrap();
         assert_eq!(*read_new_leaf, new_leaf);
 
-        node_store.delete(leaf_addr).unwrap();
+        node_store.delete_node(leaf_addr).unwrap();
         assert!(node_store.read_node(leaf_addr).is_err());
     }
 
@@ -459,8 +531,8 @@ mod tests {
             let header_bytes = node_store.linear_store.stream_from(0).unwrap();
             let mut reader = ReaderWrapperWithSize::new(Box::new(header_bytes));
             let header: NodeStoreHeader = bincode::deserialize_from(&mut reader).unwrap();
-            assert_eq!(header.version_header, VersionHeader::new());
-            assert_eq!(header.free_lists, [None; NUM_AREA_SIZES]);
+            assert_eq!(header.version, Version::new());
+            assert_eq!(header.free_lists.0, [None; NUM_AREA_SIZES]);
         }
 
         // Check that the header is written correctly after a write.
@@ -469,14 +541,14 @@ mod tests {
             value: vec![1].into_boxed_slice(),
         });
 
-        let leaf_addr = node_store.create(&leaf).unwrap();
-        node_store.delete(leaf_addr).unwrap();
+        let leaf_addr = node_store.create_node(&leaf).unwrap();
+        node_store.delete_node(leaf_addr).unwrap();
 
         // There should be an entry in the first free list now
         let header_bytes = node_store.linear_store.stream_from(0).unwrap();
         let mut reader = ReaderWrapperWithSize::new(Box::new(header_bytes));
         let header: NodeStoreHeader = bincode::deserialize_from(&mut reader).unwrap();
-        assert_eq!(header.version_header, VersionHeader::new());
-        assert_eq!(header.free_lists[0], Some(leaf_addr));
+        assert_eq!(header.version, Version::new());
+        assert_eq!(header.free_lists.0[0], Some(leaf_addr));
     }
 }

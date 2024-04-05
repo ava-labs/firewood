@@ -62,8 +62,8 @@ mod committed;
 ///  - Invalidate any other `LinearStore` that is a child of `LinearStore<FileBacked>`
 ///  - Flush all the `Proposed<FileBacked, ReadOnly>::new` bytes to disk
 ///  - Convert the `LinearStore<Proposed<FileBacked, Readonly>>` to `LinearStore<FileBacked>`
-mod filebacked;
-mod proposed;
+pub(crate) mod filebacked;
+pub(crate) mod proposed;
 
 #[derive(Debug)]
 pub(super) struct LinearStore<S: ReadLinearStore> {
@@ -77,19 +77,21 @@ impl<S: ReadLinearStore> LinearStore<S> {
 }
 
 /// All linearstores support reads
-pub(super) trait ReadLinearStore: Debug {
+pub(crate) trait ReadLinearStore: Debug {
     fn stream_from(&self, addr: u64) -> Result<impl Read, Error>;
     fn size(&self) -> Result<u64, Error>;
 }
 
 /// Some linear stores support updates
-pub(super) trait WriteLinearStore: Debug {
+pub(crate) trait WriteLinearStore: Debug {
     fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error>;
 }
 
-impl<ReadWrite: ReadLinearStore + Debug> WriteLinearStore for LinearStore<ReadWrite> {
-    fn write(&mut self, _offset: u64, _bytes: &[u8]) -> Result<usize, Error> {
-        todo!()
+impl<ReadWrite: ReadLinearStore + WriteLinearStore + Debug> WriteLinearStore
+    for LinearStore<ReadWrite>
+{
+    fn write(&mut self, offset: u64, bytes: &[u8]) -> Result<usize, Error> {
+        self.state.write(offset, bytes)
     }
 }
 
@@ -99,7 +101,7 @@ impl<S: ReadLinearStore> ReadLinearStore for LinearStore<S> {
     }
 
     fn size(&self) -> Result<u64, Error> {
-        todo!()
+        self.state.size()
     }
 }
 
