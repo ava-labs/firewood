@@ -142,9 +142,7 @@ impl<P: ReadLinearStore> WriteLinearStore for Proposed<P, Mutable> {
                             *updated_object
                                 .get((offset - updated_offset) as usize)
                                 .expect("bounds checked above")
-                        } else if let Some(res) =
-                            existing.1.get((offset - *existing.0) as usize)
-                        {
+                        } else if let Some(res) = existing.1.get((offset - *existing.0) as usize) {
                             *res
                         } else {
                             break;
@@ -169,9 +167,7 @@ impl<P: ReadLinearStore> WriteLinearStore for Proposed<P, Mutable> {
                         *updated_object
                             .get((offset - updated_offset) as usize)
                             .expect("bounds checked above")
-                    } else if let Some(res) =
-                        existing.1.get((offset - *existing.0) as usize)
-                    {
+                    } else if let Some(res) = existing.1.get((offset - *existing.0) as usize) {
                         *res
                     } else {
                         break;
@@ -447,13 +443,10 @@ mod test {
     #[test_case(&[(1, 1),(3, 1), (5, 1)], (0, 4), b"MMMMom", 2)]
     // consume all, just but don't modify the last one
     #[test_case(&[(1, 1),(3, 1), (5, 1)], (0, 5), b"MMMMMm", 1)]
-
     // extend store from within original area
     #[test_case(&[(2, 2)], (5, 6), b"oommoMMMMMM", 2)]
-
     // extend store beyond original area
     #[test_case(&[(2, 2)], (6, 6), b"oommooMMMMMM", 2)]
-
     // consume multiple before us
     #[test_case(&[(1, 1), (3, 1)], (2, 3), b"omMMMo", 1)]
 
@@ -466,12 +459,9 @@ mod test {
         let mut proposal: Proposed<ConstBacked, Mutable> = ConstBacked::new(b"oooooo").into();
         for mods in original_mods {
             proposal.write(
-            mods.0,
-            (0..mods.1)
-                .map(|_| b'm')
-                .collect::<Vec<_>>()
-                .as_slice(),
-        )?;
+                mods.0,
+                (0..mods.1).map(|_| b'm').collect::<Vec<_>>().as_slice(),
+            )?;
         }
 
         proposal.write(
