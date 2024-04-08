@@ -42,9 +42,7 @@ impl From<ConstBacked> for Proposed<ConstBacked, Immutable> {
 impl ReadLinearStore for ConstBacked {
     fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, std::io::Error> {
         Ok(Box::new(Cursor::new(
-            self.data
-                .get(addr as usize..)
-                .unwrap_or(&[]),
+            self.data.get(addr as usize..).unwrap_or(&[]),
         )))
     }
 

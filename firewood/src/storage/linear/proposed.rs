@@ -50,7 +50,7 @@ struct LayeredReader<'a, P: ReadLinearStore, M> {
 #[derive(Debug)]
 enum LayeredReaderState<'a> {
     // we know nothing, we might already be inside a modified area, one might be coming, or there aren't any left
-    InitialState,
+    Initial,
     // we know we are not in a modified area, so find the next modified area
     FindNext,
     // we know there are no more modified areas past our current offset
@@ -69,7 +69,7 @@ impl<P: ReadLinearStore, M: Send + Sync + Debug> ReadLinearStore for Proposed<P,
     fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
         Ok(Box::new(LayeredReader {
             offset: addr,
-            state: LayeredReaderState::InitialState,
+            state: LayeredReaderState::Initial,
             layer: self,
         }))
     }
@@ -90,19 +90,6 @@ impl<P: ReadLinearStore, M: Send + Sync + Debug> ReadLinearStore for Proposed<P,
     }
 }
 
-// TODO: DiffResolver should also be implemented by Committed
-/// The [DiffResolver] trait indicates which field is used from the
-/// state of a [LinearStore] based on it's state.
-trait DiffResolver<'a> {
-    fn diffs(&'a self) -> &'a BTreeMap<u64, Box<[u8]>>;
-}
-
-impl<'a, P: ReadLinearStore, M: Debug> DiffResolver<'a> for Proposed<P, M> {
-    fn diffs(&'a self) -> &'a BTreeMap<u64, Box<[u8]>> {
-        &self.new
-    }
-}
-
 /// Marker that the Proposal is mutable
 #[derive(Debug)]
 pub(crate) struct Mutable;
@@ -112,38 +99,53 @@ pub(crate) struct Mutable;
 pub(crate) struct Immutable;
 
 impl<P: ReadLinearStore> WriteLinearStore for Proposed<P, Mutable> {
+    // TODO: we might be able to optimize the case where we keep adding data to
+    // the end of the file by not coalescing left. We'd have to change the assumption
+    // in the reader that when you reach the end of a modified region, you're always
+    // in an unmodified region
+
     fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
+        // the structure of what will eventually be inserted
+        struct InsertData {
+            offset: u64,
+            data: Box<[u8]>,
+        }
+
         debug_assert!(!object.is_empty());
-        // search the modifications in front of (or on) this one that can be merged
-        // into ours. If we merge, we move modify offset and object, so make mutable
-        // copies of them here
-        let mut updated_offset = offset;
-        let mut updated_object: Box<[u8]> = Box::from(object);
+        let mut insert = InsertData {
+            offset,
+            data: Box::from(object),
+        };
 
         // we track areas to delete here, which happens when we combine
         let mut merged_offsets_to_delete = Vec::new();
 
-        for existing in self.new.range(..=updated_offset).rev() {
+        // TODO: combining a change where we constantly append to a file might be too
+        // expensive, so consider skipping the relocations if they don't overlap at all
+        for existing in self.new.range(..=insert.offset).rev() {
             let old_end = *existing.0 + existing.1.len() as u64;
             // found    smme--------- s=existing.0 e=old_end
             // original ----smmme---- s=new_start e=new_start+object.len() [0 overlap]
             // original --smmmme----- with overlap
             // new      smmmmmmme----
-            if updated_offset <= old_end {
+            if insert.offset <= old_end {
                 // we have some overlap, so we'll have only one area when we're done
                 // mark the original area for deletion and recompute it
                 // TODO: can this be done with iter/zip?
-                let mut updated = vec![];
-                for offset in *existing.0.. {
-                    updated.push(
-                        if offset >= updated_offset
-                            && offset < updated_offset + updated_object.len() as u64
+                // TODO: can we avoid copying the mutating data?
+                let mut new_data = vec![];
+                for resulting_bytes_offset in *existing.0.. {
+                    new_data.push(
+                        if resulting_bytes_offset >= insert.offset
+                            && resulting_bytes_offset < insert.offset + insert.data.len() as u64
                         {
-                            *updated_object
-                                .get((offset - updated_offset) as usize)
+                            *insert
+                                .data
+                                .get((resulting_bytes_offset - insert.offset) as usize)
                                 .expect("bounds checked above")
-                        } else if let Some(res) =
-                            existing.1.get((offset - *existing.0) as usize)
+                        } else if let Some(res) = existing
+                            .1
+                            .get((resulting_bytes_offset - *existing.0) as usize)
                         {
                             *res
                         } else {
@@ -151,41 +153,47 @@ impl<P: ReadLinearStore> WriteLinearStore for Proposed<P, Mutable> {
                         },
                     );
                 }
-                updated_offset = *existing.0;
-                merged_offsets_to_delete.push(updated_offset);
-                updated_object = updated.into_boxed_slice();
+                insert.offset = *existing.0;
+                merged_offsets_to_delete.push(insert.offset);
+                insert.data = new_data.into_boxed_slice();
             }
         }
         // TODO: search for modifications after this one that can be merged
-        for existing in self.new.range(updated_offset + 1..) {
+        for existing in self.new.range(insert.offset + 1..) {
             // existing ----smme---- s=existing.0 e=existing.0+existing.1.len()
             // adding   --smme------ s=updated_offset e=new_end
-            let new_end = updated_offset + updated_object.len() as u64;
+            let new_end = insert.offset + insert.data.len() as u64;
             if new_end >= *existing.0 {
                 // we have some overlap
-                let mut updated = vec![];
-                for offset in updated_offset.. {
-                    updated.push(if offset >= updated_offset && offset < new_end {
-                        *updated_object
-                            .get((offset - updated_offset) as usize)
-                            .expect("bounds checked above")
-                    } else if let Some(res) =
-                        existing.1.get((offset - *existing.0) as usize)
-                    {
-                        *res
-                    } else {
-                        break;
-                    });
+                let mut new_data = vec![];
+                for resulting_bytes_offset in insert.offset.. {
+                    new_data.push(
+                        if resulting_bytes_offset >= insert.offset
+                            && resulting_bytes_offset < new_end
+                        {
+                            *insert
+                                .data
+                                .get((resulting_bytes_offset - insert.offset) as usize)
+                                .expect("bounds checked above")
+                        } else if let Some(res) = existing
+                            .1
+                            .get((resulting_bytes_offset - *existing.0) as usize)
+                        {
+                            *res
+                        } else {
+                            break;
+                        },
+                    );
                 }
                 merged_offsets_to_delete.push(*existing.0);
-                updated_object = updated.into_boxed_slice();
+                insert.data = new_data.into_boxed_slice();
             }
         }
         for delete_offset in merged_offsets_to_delete {
             self.new.remove(&delete_offset);
         }
 
-        self.new.insert(updated_offset, updated_object);
+        self.new.insert(insert.offset, insert.data);
         Ok(object.len())
     }
 }
@@ -196,14 +204,14 @@ impl<P: ReadLinearStore> WriteLinearStore for Proposed<P, Mutable> {
 impl<'a, P: ReadLinearStore, M: Debug> Read for LayeredReader<'a, P, M> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self.state {
-            LayeredReaderState::InitialState => {
+            LayeredReaderState::Initial => {
                 // figure out which of these cases is true:
                 //  a. We are inside a delta [LayeredReaderState::InsideModifiedArea]
                 //  b. We are before an upcoming delta [LayeredReaderState::BeforeModifiedArea]
                 //  c. We are past the last delta [LayeredReaderState::NoMoreModifiedAreas]
                 self.state = 'state: {
                     // check for (a) - find the delta in front of (or at) our bytes offset
-                    if let Some(delta) = self.layer.diffs().range(..=self.offset).next_back() {
+                    if let Some(delta) = self.layer.new.range(..=self.offset).next_back() {
                         // see if the length of the change is inside our address
                         let delta_start = *delta.0;
                         let delta_end = delta_start + delta.1.len() as u64;
@@ -221,11 +229,18 @@ impl<'a, P: ReadLinearStore, M: Debug> Read for LayeredReader<'a, P, M> {
             }
             LayeredReaderState::FindNext => {
                 // check for (b) - find the next delta and record it
-                self.state = if let Some(delta) = self.layer.diffs().range(self.offset..).next() {
-                    // case (b) is true
-                    LayeredReaderState::BeforeModifiedArea {
-                        next_offset: *delta.0,
-                        next_modified_area: delta.1,
+                self.state = if let Some(delta) = self.layer.new.range(self.offset..).next() {
+                    if self.offset == *delta.0 {
+                        LayeredReaderState::InsideModifiedArea {
+                            area: delta.1,
+                            offset_within: 0,
+                        }
+                    } else {
+                        // case (b) is true
+                        LayeredReaderState::BeforeModifiedArea {
+                            next_offset: *delta.0,
+                            next_modified_area: delta.1,
+                        }
                     }
                 } else {
                     // (c) nothing even coming up, so all remaining bytes are not in this layer
@@ -254,8 +269,6 @@ impl<'a, P: ReadLinearStore, M: Debug> Read for LayeredReader<'a, P, M> {
                     }
                     read_size
                 } else {
-                    // TODO: make this work across Committed and Proposed types
-
                     self.layer.parent.stream_from(self.offset)?.read(buf)?
                 };
                 self.offset += size as u64;
@@ -273,7 +286,7 @@ impl<'a, P: ReadLinearStore, M: Debug> Read for LayeredReader<'a, P, M> {
                 self.offset += size as u64;
                 debug_assert!(offset_within + size <= area.len());
                 self.state = if offset_within + size == area.len() {
-                    // read to the end of this area
+                    // we read to the end of this area
                     LayeredReaderState::FindNext
                 } else {
                     LayeredReaderState::InsideModifiedArea {
@@ -442,18 +455,15 @@ mod test {
     // MMMMMM result, one modified area
     #[test_case(&[(1, 1),(3, 1), (5, 1)], (0, 6), b"MMMMMM", 1)]
     // consume two
-    // MMMM-- modificatoin at offset 0, length 4
+    // MMMM-- modification at offset 0, length 4
     // MMMMom result, two modified areas
     #[test_case(&[(1, 1),(3, 1), (5, 1)], (0, 4), b"MMMMom", 2)]
     // consume all, just but don't modify the last one
     #[test_case(&[(1, 1),(3, 1), (5, 1)], (0, 5), b"MMMMMm", 1)]
-
     // extend store from within original area
     #[test_case(&[(2, 2)], (5, 6), b"oommoMMMMMM", 2)]
-
     // extend store beyond original area
     #[test_case(&[(2, 2)], (6, 6), b"oommooMMMMMM", 2)]
-
     // consume multiple before us
     #[test_case(&[(1, 1), (3, 1)], (2, 3), b"omMMMo", 1)]
 
@@ -466,12 +476,9 @@ mod test {
         let mut proposal: Proposed<ConstBacked, Mutable> = ConstBacked::new(b"oooooo").into();
         for mods in original_mods {
             proposal.write(
-            mods.0,
-            (0..mods.1)
-                .map(|_| b'm')
-                .collect::<Vec<_>>()
-                .as_slice(),
-        )?;
+                mods.0,
+                (0..mods.1).map(|_| b'm').collect::<Vec<_>>().as_slice(),
+            )?;
         }
 
         proposal.write(
