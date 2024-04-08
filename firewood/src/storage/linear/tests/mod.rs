@@ -42,14 +42,14 @@ impl From<ConstBacked> for Proposed<ConstBacked, Immutable> {
 impl ReadLinearStore for ConstBacked {
     fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, std::io::Error> {
         Ok(Box::new(Cursor::new(
-            Self::DATA
+            self.data
                 .get(addr as usize..)
-                .expect("invalid offset in test"),
+                .unwrap_or(&[]),
         )))
     }
 
     fn size(&self) -> Result<u64, Error> {
-        Ok(Self::DATA.len() as u64)
+        Ok(self.data.len() as u64)
     }
 }
 

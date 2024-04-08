@@ -113,9 +113,79 @@ pub(crate) struct Immutable;
 
 impl<P: ReadLinearStore> WriteLinearStore for Proposed<P, Mutable> {
     fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
-        // TODO: naive implementation
-        self.new.insert(offset, Box::from(object));
-        // TODO: coalesce
+        debug_assert!(!object.is_empty());
+        // search the modifications in front of (or on) this one that can be merged
+        // into ours. If we merge, we move modify offset and object, so make mutable
+        // copies of them here
+        let mut updated_offset = offset;
+        let mut updated_object: Box<[u8]> = Box::from(object);
+
+        // we track areas to delete here, which happens when we combine
+        let mut merged_offsets_to_delete = Vec::new();
+
+        for existing in self.new.range(..=updated_offset).rev() {
+            let old_end = *existing.0 + existing.1.len() as u64;
+            // found    smme--------- s=existing.0 e=old_end
+            // original ----smmme---- s=new_start e=new_start+object.len() [0 overlap]
+            // original --smmmme----- with overlap
+            // new      smmmmmmme----
+            if updated_offset <= old_end {
+                // we have some overlap, so we'll have only one area when we're done
+                // mark the original area for deletion and recompute it
+                // TODO: can this be done with iter/zip?
+                let mut updated = vec![];
+                for offset in *existing.0.. {
+                    updated.push(
+                        if offset >= updated_offset
+                            && offset < updated_offset + updated_object.len() as u64
+                        {
+                            *updated_object
+                                .get((offset - updated_offset) as usize)
+                                .expect("bounds checked above")
+                        } else if let Some(res) =
+                            existing.1.get((offset - *existing.0) as usize)
+                        {
+                            *res
+                        } else {
+                            break;
+                        },
+                    );
+                }
+                updated_offset = *existing.0;
+                merged_offsets_to_delete.push(updated_offset);
+                updated_object = updated.into_boxed_slice();
+            }
+        }
+        // TODO: search for modifications after this one that can be merged
+        for existing in self.new.range(updated_offset + 1..) {
+            // existing ----smme---- s=existing.0 e=existing.0+existing.1.len()
+            // adding   --smme------ s=updated_offset e=new_end
+            let new_end = updated_offset + updated_object.len() as u64;
+            if new_end >= *existing.0 {
+                // we have some overlap
+                let mut updated = vec![];
+                for offset in updated_offset.. {
+                    updated.push(if offset >= updated_offset && offset < new_end {
+                        *updated_object
+                            .get((offset - updated_offset) as usize)
+                            .expect("bounds checked above")
+                    } else if let Some(res) =
+                        existing.1.get((offset - *existing.0) as usize)
+                    {
+                        *res
+                    } else {
+                        break;
+                    });
+                }
+                merged_offsets_to_delete.push(*existing.0);
+                updated_object = updated.into_boxed_slice();
+            }
+        }
+        for delete_offset in merged_offsets_to_delete {
+            self.new.remove(&delete_offset);
+        }
+
+        self.new.insert(updated_offset, updated_object);
         Ok(object.len())
     }
 }
@@ -308,7 +378,119 @@ mod test {
         }
         let mut data = [0u8; ConstBacked::DATA.len()];
         child.stream_from(0).unwrap().read_exact(&mut data).unwrap();
-        println!("{:?}", child);
         assert_eq!(&data, b"r1ndom data");
+    }
+
+    // possible cases (o) represents unmodified data (m) is modified in first
+    // modification, M is new modification on top of old
+    // oommoo < original state, one modification at offset 2 length 2 (2,2)
+    //
+    // entire contents before first modified store, space between it
+    // oooooo original (this note is not repeated below)
+    // oommoo original with first modification (this note is not repeated below)
+    // M----- modification at offset 0, length 1
+    // Mommoo result: two modified areas (0, 1) and (2, 2)
+    #[test_case(&[(2, 2)], (0, 1), b"Mommoo", 2)]
+    // adjoints the first modified store, no overlap
+    // MM---- modification at offset 0, length 2
+    // MMmmoo result: one enlarged modified area (0, 4)
+    #[test_case(&[(2, 2)], (0, 2), b"MMmmoo", 1)]
+    // starts before and overlaps some of the first modified store
+    // MMM--- modification at offset 0, length 3
+    // MMMmoo result: one enlarged modified area (0, 4)
+    #[test_case(&[(2, 2)], (0, 3), b"MMMmoo", 1)]
+    // still starts before and overlaps, modifies all of it
+    // MMMM-- modification at offset 0, length 4
+    // MMMMoo same result (0, 4)
+    #[test_case(&[(2,2)], (0, 4), b"MMMMoo", 1)]
+    // starts at same offset, modifies some of it
+    // --M--- modification at offset 2, length 1
+    // ooMmoo result: one modified area (2, 2)
+    #[test_case(&[(2, 2)], (2, 1), b"ooMmoo", 1)]
+    // same offset, exact fit
+    // --MM-- modification at offset 2, length 2
+    // ooMMoo result: one modified area (2, 2)
+    #[test_case(&[(2, 2)], (2, 2), b"ooMMoo", 1)]
+    // starts at same offset, enlarges
+    // --MMM- modification at offset 2, length 3
+    // ooMMMo result: one enlarged modified area (2, 3)
+    #[test_case(&[(2, 2)], (2, 3), b"ooMMMo", 1)]
+    // within existing offset
+    // ---M-- modification at offset 3, length 1
+    // oomMoo result: one modified area (2, 2)
+    #[test_case(&[(2, 2)], (3, 1), b"oomMoo", 1)]
+    // starts within original offset, becomes larger
+    // ---MM- modification at offset 3, length 2
+    // oomMMo result: one modified area (2, 3)
+    #[test_case(&[(2, 2)], (3, 2), b"oomMMo", 1)]
+    // starts immediately after modified area
+    // ----M- modification at offset 4, length 1
+    // oommMo result: one modified area (2, 3)
+    #[test_case(&[(2, 2)], (4, 1), b"oommMo", 1)]
+    // disjoint from modified area
+    // -----M modification at offset 5, length 1
+    // oommoM result: two modified areas (2, 2) and (5, 1)
+    #[test_case(&[(2, 2)], (5, 1), b"oommoM", 2)]
+    // consume it all
+    // MMMMMM modification at offset 0, length 6
+    // MMMMMM result: one modified area
+    #[test_case(&[(2, 2)], (0, 6), b"MMMMMM", 1)]
+    // consume all
+    // starting mods are:
+    // omomom
+    // MMMMMM modification at offset 0 length 6
+    // MMMMMM result, one modified area
+    #[test_case(&[(1, 1),(3, 1), (5, 1)], (0, 6), b"MMMMMM", 1)]
+    // consume two
+    // MMMM-- modificatoin at offset 0, length 4
+    // MMMMom result, two modified areas
+    #[test_case(&[(1, 1),(3, 1), (5, 1)], (0, 4), b"MMMMom", 2)]
+    // consume all, just but don't modify the last one
+    #[test_case(&[(1, 1),(3, 1), (5, 1)], (0, 5), b"MMMMMm", 1)]
+
+    // extend store from within original area
+    #[test_case(&[(2, 2)], (5, 6), b"oommoMMMMMM", 2)]
+
+    // extend store beyond original area
+    #[test_case(&[(2, 2)], (6, 6), b"oommooMMMMMM", 2)]
+
+    // consume multiple before us
+    #[test_case(&[(1, 1), (3, 1)], (2, 3), b"omMMMo", 1)]
+
+    fn test_combiner(
+        original_mods: &[(u64, usize)],
+        new_mod: (u64, usize),
+        result: &'static [u8],
+        segments: usize,
+    ) -> Result<(), Error> {
+        let mut proposal: Proposed<ConstBacked, Mutable> = ConstBacked::new(b"oooooo").into();
+        for mods in original_mods {
+            proposal.write(
+            mods.0,
+            (0..mods.1)
+                .map(|_| b'm')
+                .collect::<Vec<_>>()
+                .as_slice(),
+        )?;
+        }
+
+        proposal.write(
+            new_mod.0,
+            (0..new_mod.1).map(|_| b'M').collect::<Vec<_>>().as_slice(),
+        )?;
+
+        // this bleeds the implementation, but I this made debugging the tests way easier...
+        assert_eq!(proposal.new.len(), segments);
+
+        let mut data = vec![];
+        proposal
+            .stream_from(0)
+            .unwrap()
+            .read_to_end(&mut data)
+            .unwrap();
+
+        assert_eq!(data, result);
+
+        Ok(())
     }
 }
