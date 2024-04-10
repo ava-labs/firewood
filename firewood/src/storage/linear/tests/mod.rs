@@ -69,10 +69,6 @@ fn reparent() {
     // current becomes Arc<LinearStore<ConstBacked>>
 }
 
-// use crate::storage::linear::WriteLinearStore;
-
-//
-
 #[derive(Debug)]
 pub struct InMemReadWriteLinearStore {
     bytes: Vec<u8>,
