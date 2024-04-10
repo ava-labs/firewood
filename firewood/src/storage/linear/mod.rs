@@ -109,7 +109,7 @@ impl<S: ReadLinearStore> ReadLinearStore for LinearStore<S> {
 #[cfg(test)]
 pub mod tests {
     use super::{ReadLinearStore, WriteLinearStore};
-    use std::io::Read;
+    use std::io::{Cursor, Read};
     use test_case::test_case;
 
     #[derive(Debug)]
@@ -136,14 +136,13 @@ pub mod tests {
 
     impl ReadLinearStore for InMemReadWriteLinearStore {
         fn stream_from(&self, addr: u64) -> Result<impl Read, std::io::Error> {
-            if addr as usize >= self.bytes.len() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "Address out of bounds",
-                ));
-            }
-
-            Ok(&self.bytes[addr as usize..])
+            let cursor = if addr as usize >= self.bytes.len() {
+                // Out of bounds. Return an empty cursor.
+                Cursor::new(&self.bytes[0..0])
+            } else {
+                Cursor::new(&self.bytes[addr as usize..])
+            };
+            Ok(cursor)
         }
 
         fn size(&self) -> Result<u64, std::io::Error> {
