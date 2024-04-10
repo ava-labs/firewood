@@ -70,6 +70,12 @@ pub(super) struct LinearStore<S: ReadLinearStore> {
     state: S,
 }
 
+impl<S: ReadLinearStore> LinearStore<S> {
+    pub fn new(state: S) -> Self {
+        LinearStore { state }
+    }
+}
+
 /// All linearstores support reads
 pub(super) trait ReadLinearStore: Debug {
     fn stream_from(&self, addr: u64) -> Result<impl Read, Error>;
@@ -81,9 +87,11 @@ pub(super) trait WriteLinearStore: Debug {
     fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error>;
 }
 
-impl<ReadWrite: ReadLinearStore + Debug> WriteLinearStore for LinearStore<ReadWrite> {
-    fn write(&mut self, _offset: u64, _bytes: &[u8]) -> Result<usize, Error> {
-        todo!()
+impl<ReadWrite: ReadLinearStore + WriteLinearStore + Debug> WriteLinearStore
+    for LinearStore<ReadWrite>
+{
+    fn write(&mut self, offset: u64, bytes: &[u8]) -> Result<usize, Error> {
+        self.state.write(offset, bytes)
     }
 }
 
@@ -93,7 +101,7 @@ impl<S: ReadLinearStore> ReadLinearStore for LinearStore<S> {
     }
 
     fn size(&self) -> Result<u64, Error> {
-        todo!()
+        self.state.size()
     }
 }
 
