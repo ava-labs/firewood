@@ -23,10 +23,10 @@ pub(super) struct FileBacked {
 }
 
 impl ReadLinearStore for FileBacked {
-    fn stream_from(&self, addr: u64) -> Result<impl Read, Error> {
+    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, Error> {
         let mut fd = self.fd.lock().expect("p");
         fd.seek(std::io::SeekFrom::Start(addr))?;
-        Ok(fd.try_clone().expect("poisoned lock"))
+        Ok(Box::new(fd.try_clone().expect("poisoned lock")))
     }
 
     fn size(&self) -> Result<u64, Error> {

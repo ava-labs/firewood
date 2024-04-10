@@ -19,8 +19,10 @@
 
 use std::fmt::Debug;
 use std::io::{Error, Read};
+use std::ops::Deref;
+use std::sync::Arc;
 
-mod committed;
+mod current;
 /// A linear store used for proposals
 ///
 /// A Proposed LinearStore supports read operations which look for the
@@ -63,7 +65,10 @@ mod committed;
 ///  - Flush all the `Proposed<FileBacked, ReadOnly>::new` bytes to disk
 ///  - Convert the `LinearStore<Proposed<FileBacked, Readonly>>` to `LinearStore<FileBacked>`
 mod filebacked;
+mod historical;
 mod proposed;
+#[cfg(test)]
+pub mod tests;
 
 #[derive(Debug)]
 pub(super) struct LinearStore<S: ReadLinearStore> {
@@ -77,9 +82,19 @@ impl<S: ReadLinearStore> LinearStore<S> {
 }
 
 /// All linearstores support reads
-pub(super) trait ReadLinearStore: Debug {
-    fn stream_from(&self, addr: u64) -> Result<impl Read, Error>;
+pub(super) trait ReadLinearStore: Send + Sync + Debug {
+    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error>;
     fn size(&self) -> Result<u64, Error>;
+}
+
+impl ReadLinearStore for Arc<dyn ReadLinearStore> {
+    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
+        self.deref().stream_from(addr)
+    }
+
+    fn size(&self) -> Result<u64, Error> {
+        self.deref().size()
+    }
 }
 
 /// Some linear stores support updates
@@ -96,80 +111,11 @@ impl<ReadWrite: ReadLinearStore + WriteLinearStore + Debug> WriteLinearStore
 }
 
 impl<S: ReadLinearStore> ReadLinearStore for LinearStore<S> {
-    fn stream_from(&self, addr: u64) -> Result<impl Read, Error> {
+    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
         self.state.stream_from(addr)
     }
 
     fn size(&self) -> Result<u64, Error> {
         self.state.size()
-    }
-}
-
-#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
-#[cfg(test)]
-pub mod tests {
-    use super::{ReadLinearStore, WriteLinearStore};
-    use std::io::{Cursor, Read};
-    use test_case::test_case;
-
-    #[derive(Debug)]
-    pub struct InMemReadWriteLinearStore {
-        bytes: Vec<u8>,
-    }
-
-    impl InMemReadWriteLinearStore {
-        pub const fn new() -> Self {
-            Self { bytes: vec![] }
-        }
-    }
-
-    impl WriteLinearStore for InMemReadWriteLinearStore {
-        fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, std::io::Error> {
-            let offset = offset as usize;
-            if offset + object.len() > self.bytes.len() {
-                self.bytes.resize(offset + object.len(), 0);
-            }
-            self.bytes[offset..offset + object.len()].copy_from_slice(object);
-            Ok(object.len())
-        }
-    }
-
-    impl ReadLinearStore for InMemReadWriteLinearStore {
-        fn stream_from(&self, addr: u64) -> Result<impl Read, std::io::Error> {
-            let cursor = if addr as usize >= self.bytes.len() {
-                // Out of bounds. Return an empty cursor.
-                Cursor::new(&self.bytes[0..0])
-            } else {
-                Cursor::new(&self.bytes[addr as usize..])
-            };
-            Ok(cursor)
-        }
-
-        fn size(&self) -> Result<u64, std::io::Error> {
-            Ok(self.bytes.len() as u64)
-        }
-    }
-
-    #[test_case(&[(0,&[1, 2, 3])],(0,&[1, 2, 3]); "write to empty store")]
-    #[test_case(&[(0,&[1, 2, 3])],(1,&[2, 3]); "read from middle of store")]
-    #[test_case(&[(0,&[1, 2, 3])],(2,&[3]); "read from end of store")]
-    #[test_case(&[(0,&[1, 2, 3])],(3,&[]); "read past end of store")]
-    #[test_case(&[(0,&[1, 2, 3]),(3,&[4,5,6])],(0,&[1, 2, 3,4,5,6]); "write to end of store")]
-    #[test_case(&[(0,&[1, 2, 3]),(0,&[4])],(0,&[4,2,3]); "overwrite start of store")]
-    #[test_case(&[(0,&[1, 2, 3]),(1,&[4])],(0,&[1,4,3]); "overwrite middle of store")]
-    #[test_case(&[(0,&[1, 2, 3]),(2,&[4])],(0,&[1,2,4]); "overwrite end of store")]
-    #[test_case(&[(0,&[1, 2, 3]),(2,&[4,5])],(0,&[1,2,4,5]); "overwrite/extend end of store")]
-    fn test_in_mem_write_linear_store(writes: &[(u64, &[u8])], expected: (u64, &[u8])) {
-        let mut store = InMemReadWriteLinearStore { bytes: vec![] };
-        assert_eq!(store.size().unwrap(), 0);
-
-        for write in writes {
-            store.write(write.0, write.1).unwrap();
-        }
-
-        let mut reader = store.stream_from(expected.0).unwrap();
-        let mut read_bytes = vec![];
-        reader.read_to_end(&mut read_bytes).unwrap();
-        assert_eq!(read_bytes, expected.1);
     }
 }

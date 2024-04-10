@@ -74,13 +74,13 @@ fn area_size_to_index(n: u64) -> Result<u8, Error> {
 }
 
 type Path = Box<[u8]>;
-type DiskAddress = NonZeroU64;
+type LinearAddress = NonZeroU64;
 
 #[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
 struct Branch {
     path: Path,
     value: Option<Box<[u8]>>,
-    children: [Option<DiskAddress>; BRANCH_CHILDREN],
+    children: [Option<LinearAddress>; BRANCH_CHILDREN],
 }
 
 #[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
@@ -127,7 +127,7 @@ struct NodeStore<T: ReadLinearStore> {
 impl<T: ReadLinearStore> NodeStore<T> {
     /// Returns (index, area_size) for the [StoredArea] at `addr`.
     /// `index` is the index of `area_size` in [AREA_SIZES].
-    fn area_index_and_size(&self, addr: DiskAddress) -> Result<(u8, u64), Error> {
+    fn area_index_and_size(&self, addr: LinearAddress) -> Result<(u8, u64), Error> {
         let mut area_stream = self.linear_store.stream_from(addr.get())?;
 
         let index: u8 = bincode::deserialize_from(&mut area_stream)
@@ -143,9 +143,9 @@ impl<T: ReadLinearStore> NodeStore<T> {
         Ok((index, AREA_SIZES[index as usize]))
     }
 
-    /// Read a [Node] from the provided [DiskAddress].
+    /// Read a [Node] from the provided [LinearAddress].
     /// `addr` is the address of a [StoredArea] in the [LinearStore].
-    fn read_node(&self, addr: DiskAddress) -> Result<Arc<Node>, Error> {
+    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
         debug_assert!(addr.get() % 8 == 0);
 
         let addr = addr.get() + 1; // Skip the index byte
@@ -206,7 +206,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     /// and the index of the free list that was used.
     /// If there are no free areas big enough for `n` bytes, returns None.
     /// TODO danlaine: If we return a larger area than requested, we should split it.
-    fn allocate_from_freed(&mut self, n: u64) -> Result<Option<(DiskAddress, u8)>, Error> {
+    fn allocate_from_freed(&mut self, n: u64) -> Result<Option<(LinearAddress, u8)>, Error> {
         // Find the smallest free list that can fit this size.
         let index = area_size_to_index(n)?;
 
@@ -233,10 +233,10 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
         Ok(None)
     }
 
-    fn allocate_from_end(&mut self, n: u64) -> Result<(DiskAddress, u8), Error> {
+    fn allocate_from_end(&mut self, n: u64) -> Result<(LinearAddress, u8), Error> {
         let index = area_size_to_index(n)?;
         let area_size = AREA_SIZES[index as usize];
-        let addr = DiskAddress::new(self.size).expect("node store size can't be 0");
+        let addr = LinearAddress::new(self.size).expect("node store size can't be 0");
         self.size += area_size;
         debug_assert!(addr.get() % 8 == 0);
         Ok((addr, index))
@@ -244,14 +244,14 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
 
     /// Allocates an area in the [LinearStore] large enough for the provided [Area].
     /// Returns the address of the allocated area.
-    pub fn create_node(&mut self, node: &Node) -> Result<DiskAddress, Error> {
+    pub fn create_node(&mut self, node: &Node) -> Result<LinearAddress, Error> {
         let addr = self.create_node_inner(node)?;
         self.write_free_lists_header()?;
         Ok(addr)
     }
 
     /// The inner implementation of [create_node] that doesn't update the free lists.
-    fn create_node_inner(&mut self, node: &Node) -> Result<DiskAddress, Error> {
+    fn create_node_inner(&mut self, node: &Node) -> Result<LinearAddress, Error> {
         let area: Area<&Node, FreeArea> = Area::Node(node);
 
         let area_bytes =
@@ -286,7 +286,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     /// This is complicated by the fact that a node might grow and not be able to fit a the given
     /// address, in which case we return [UpdateError::NodeMoved].
     /// `addr` is the address of a [StoredArea] in the [LinearStore].
-    pub fn update_node(&mut self, addr: DiskAddress, node: &Node) -> Result<(), UpdateError> {
+    pub fn update_node(&mut self, addr: LinearAddress, node: &Node) -> Result<(), UpdateError> {
         debug_assert!(addr.get() % 8 == 0);
 
         let (_, old_stored_area_size) = self.area_index_and_size(addr)?;
@@ -313,7 +313,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     }
 
     /// Deletes the [Node] at the given address.
-    fn delete_node(&mut self, addr: DiskAddress) -> Result<(), Error> {
+    fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error> {
         debug_assert!(addr.get() % 8 == 0);
 
         let (area_size_index, _) = self.area_index_and_size(addr)?;
@@ -345,7 +345,7 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
 #[derive(Debug)]
 enum UpdateError {
     Io(Error),
-    NodeMoved(DiskAddress),
+    NodeMoved(LinearAddress),
 }
 
 impl From<Error> for UpdateError {
@@ -378,11 +378,11 @@ impl Version {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Deserialize, Serialize)]
-struct FreeLists([Option<DiskAddress>; NUM_AREA_SIZES]);
+struct FreeLists([Option<LinearAddress>; NUM_AREA_SIZES]);
 
 impl FreeLists {
-    // 1 for Some + 8 for DiskAddress
-    const SOME_ELT_SIZE: u64 = 1 + std::mem::size_of::<DiskAddress>() as u64;
+    // 1 for Some + 8 for LinearAddress
+    const SOME_ELT_SIZE: u64 = 1 + std::mem::size_of::<LinearAddress>() as u64;
     const NONE_ELT_SIZE: u64 = 1;
 
     const MAX_SIZE: u64 = NUM_AREA_SIZES as u64 * Self::SOME_ELT_SIZE;
@@ -430,11 +430,12 @@ impl NodeStoreHeader {
 /// has been freed.
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 struct FreeArea {
-    next_free_block: Option<DiskAddress>,
+    next_free_block: Option<LinearAddress>,
 }
 
 #[cfg(test)]
 mod tests {
+
     use crate::storage::linear::tests::InMemReadWriteLinearStore;
 
     use super::*;
