@@ -108,6 +108,6 @@ impl<S: ReadLinearStore> ReadLinearStore for LinearStore<S> {
     }
 
     fn size(&self) -> Result<u64, Error> {
-        todo!()
+        self.state.size()
     }
 }

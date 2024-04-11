@@ -41,7 +41,7 @@ impl<P: ReadLinearStore> ReadLinearStore for Current<P> {
     }
 
     fn size(&self) -> Result<u64, std::io::Error> {
-        todo!()
+        self.parent.lock().expect("poisoned lock").size()
     }
 }
 
@@ -60,10 +60,10 @@ impl<P: ReadLinearStore> std::io::prelude::Read for CurrentStream<P> {
 
 #[cfg(test)]
 mod tests {
-    use crate::storage::linear::tests::ConstBacked;
-
     use super::*;
+    use crate::storage::linear::tests::ConstBacked;
     use std::io::prelude::*;
+    use test_case::test_case;
 
     #[test]
     fn test_current_stream_from() {
@@ -87,5 +87,18 @@ mod tests {
         // Read past the end of the stream
         let mut buf = vec![0; 1];
         assert_eq!(stream.read(&mut buf).unwrap(), 0);
+    }
+
+    #[test_case(&[]; "0 elements")]
+    #[test_case(&[1]; "1 element")]
+    #[test_case(&[1,2]; "2 elements")]
+    fn test_current_size(data: &'static [u8]) {
+        let inner_store = ConstBacked::new(data);
+
+        let parent = Arc::new(LinearStore { state: inner_store });
+
+        let current = Current::new(parent);
+
+        assert_eq!(current.size().unwrap(), data.len() as u64);
     }
 }
