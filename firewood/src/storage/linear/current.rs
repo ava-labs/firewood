@@ -52,6 +52,8 @@ struct CurrentStream<P: ReadLinearStore> {
 
 impl<P: ReadLinearStore> std::io::prelude::Read for CurrentStream<P> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.parent.stream_from(self.addr)?.read(buf)
+        let size = self.parent.stream_from(self.addr)?.read(buf)?;
+        self.addr += size as u64;
+        Ok(size)
     }
 }
