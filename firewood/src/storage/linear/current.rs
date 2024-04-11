@@ -57,3 +57,35 @@ impl<P: ReadLinearStore> std::io::prelude::Read for CurrentStream<P> {
         Ok(size)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::storage::linear::tests::ConstBacked;
+
+    use super::*;
+    use std::io::prelude::*;
+
+    #[test]
+    fn test_current_stream_from() {
+        let parent = Arc::new(LinearStore::<ConstBacked> {
+            state: ConstBacked { data: &[0, 1, 2] },
+        });
+
+        let current = Current::new(parent.clone());
+        let mut stream = current.stream_from(0).unwrap();
+
+        // Read the first byte
+        let mut buf = vec![0; 1];
+        stream.read_exact(&mut buf).unwrap();
+        assert_eq!(buf, vec![0]);
+
+        // Read the last two bytes
+        let mut buf = vec![0; 2];
+        stream.read_exact(&mut buf).unwrap();
+        assert_eq!(buf, vec![1, 2]);
+
+        // Read past the end of the stream
+        let mut buf = vec![0; 1];
+        assert_eq!(stream.read(&mut buf).unwrap(), 0);
+    }
+}

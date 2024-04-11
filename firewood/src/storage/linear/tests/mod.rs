@@ -10,7 +10,7 @@ use super::{LinearStore, ReadLinearStore};
 
 #[derive(Debug)]
 pub(crate) struct ConstBacked {
-    data: &'static [u8],
+    pub(crate) data: &'static [u8],
 }
 
 impl ConstBacked {
