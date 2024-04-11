@@ -32,16 +32,22 @@ impl<P: ReadLinearStore, M> Proposed<P, M> {
     }
 }
 
+#[derive(Debug)]
+struct Layer<'a, P: ReadLinearStore> {
+    parent: Arc<LinearStore<P>>,
+    diffs: &'a BTreeMap<u64, Box<[u8]>>,
+}
+
 /// A [LayeredReader] is obtained by calling [Proposed::stream_from]
 /// The P type parameter refers to the type of the parent of this layer
 /// The M type parameter is not specified here, but should always be
 /// read-only, since we do not support mutating parents of another
 /// proposal
 #[derive(Debug)]
-struct LayeredReader<'a, P: ReadLinearStore, M> {
+struct LayeredReader<'a, P: ReadLinearStore> {
     offset: u64,
     state: LayeredReaderState<'a>,
-    layer: &'a Proposed<P, M>,
+    layer: Layer<'a, P>,
 }
 
 /// A [LayeredReaderState] keeps track of when the next transition
@@ -70,7 +76,10 @@ impl<P: ReadLinearStore, M: Send + Sync + Debug> ReadLinearStore for Proposed<P,
         Ok(Box::new(LayeredReader {
             offset: addr,
             state: LayeredReaderState::Initial,
-            layer: self,
+            layer: Layer {
+                parent: self.parent.clone(),
+                diffs: &self.new,
+            },
         }))
     }
 
@@ -201,7 +210,7 @@ impl<P: ReadLinearStore> WriteLinearStore for Proposed<P, Mutable> {
 // this is actually a clippy bug, works on nightly; see
 // https://github.com/rust-lang/rust-clippy/issues/12519
 #[allow(clippy::unused_io_amount)]
-impl<'a, P: ReadLinearStore, M: Debug> Read for LayeredReader<'a, P, M> {
+impl<'a, P: ReadLinearStore> Read for LayeredReader<'a, P> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self.state {
             LayeredReaderState::Initial => {
@@ -211,7 +220,7 @@ impl<'a, P: ReadLinearStore, M: Debug> Read for LayeredReader<'a, P, M> {
                 //  c. We are past the last delta [LayeredReaderState::NoMoreModifiedAreas]
                 self.state = 'state: {
                     // check for (a) - find the delta in front of (or at) our bytes offset
-                    if let Some(delta) = self.layer.new.range(..=self.offset).next_back() {
+                    if let Some(delta) = self.layer.diffs.range(..=self.offset).next_back() {
                         // see if the length of the change is inside our address
                         let delta_start = *delta.0;
                         let delta_end = delta_start + delta.1.len() as u64;
@@ -229,7 +238,7 @@ impl<'a, P: ReadLinearStore, M: Debug> Read for LayeredReader<'a, P, M> {
             }
             LayeredReaderState::FindNext => {
                 // check for (b) - find the next delta and record it
-                self.state = if let Some(delta) = self.layer.new.range(self.offset..).next() {
+                self.state = if let Some(delta) = self.layer.diffs.range(self.offset..).next() {
                     if self.offset == *delta.0 {
                         LayeredReaderState::InsideModifiedArea {
                             area: delta.1,
