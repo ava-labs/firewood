@@ -308,9 +308,10 @@ impl<'a, P: ReadLinearStore, M: Debug> Read for LayeredReader<'a, P, M> {
 #[allow(clippy::unwrap_used)]
 mod test {
     use super::super::tests::ConstBacked;
-    use test_case::test_case;
-
     use super::*;
+    use rand::Rng;
+    use std::time::Instant;
+    use test_case::test_case;
 
     #[test]
     fn smoke_read() -> Result<(), std::io::Error> {
@@ -498,6 +499,28 @@ mod test {
 
         assert_eq!(data, result);
 
+        Ok(())
+    }
+
+    #[test]
+    fn bench_combiner() -> Result<(), Error> {
+        const COUNT: usize = 100000;
+        const DATALEN: usize = 32;
+        const MODIFICATION_AREA_SIZE: u64 = 2048;
+
+        let mut proposal: Proposed<ConstBacked, Mutable> = ConstBacked::new(b"oooooo").into();
+        let mut rng = rand::thread_rng();
+        let start = Instant::now();
+        for _ in 0..COUNT {
+            let data = rng.gen::<[u8; DATALEN]>();
+            proposal.write(rng.gen_range(0..MODIFICATION_AREA_SIZE), &data)?;
+        }
+        println!(
+            "inserted {} of size {} in {}ms",
+            COUNT,
+            DATALEN,
+            Instant::now().duration_since(start).as_millis()
+        );
         Ok(())
     }
 }
