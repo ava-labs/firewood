@@ -20,3 +20,13 @@ impl<P: ReadLinearStore> Historical<P> {
         Self { old, parent }
     }
 }
+
+impl<P: ReadLinearStore> ReadLinearStore for Historical<P> {
+    fn stream_from(&self, _addr: u64) -> Result<Box<dyn std::io::Read + '_>, std::io::Error> {
+        todo!()
+    }
+
+    fn size(&self) -> Result<u64, std::io::Error> {
+        todo!()
+    }
+}
