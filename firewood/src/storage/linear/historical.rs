@@ -11,8 +11,8 @@ use super::{LinearStore, ReadLinearStore};
 /// A [Historical] [LinearStore] supports read operations only
 #[derive(Debug)]
 pub(crate) struct Historical<P: ReadLinearStore> {
-    old: BTreeMap<u64, Box<[u8]>>,
-    parent: Arc<LinearStore<P>>,
+    pub(crate) old: BTreeMap<u64, Box<[u8]>>,
+    pub(crate) parent: Arc<LinearStore<P>>,
 }
 
 impl<P: ReadLinearStore> Historical<P> {

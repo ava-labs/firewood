@@ -7,6 +7,7 @@ use std::io::{Cursor, Error, Read};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
+use super::historical::Historical;
 use super::{LinearStore, ReadLinearStore, WriteLinearStore};
 
 /// [Proposed] is a [LinearStore] state that contains a copy of the old and new data.
@@ -36,6 +37,24 @@ impl<P: ReadLinearStore, M> Proposed<P, M> {
 struct Layer<'a, P: ReadLinearStore> {
     parent: Arc<LinearStore<P>>,
     diffs: &'a BTreeMap<u64, Box<[u8]>>,
+}
+
+impl<'a, P: ReadLinearStore, M> From<&'a Proposed<P, M>> for Layer<'a, P> {
+    fn from(state: &'a Proposed<P, M>) -> Self {
+        Self {
+            parent: state.parent.clone(),
+            diffs: &state.new,
+        }
+    }
+}
+
+impl<'a, P: ReadLinearStore> From<&'a Historical<P>> for Layer<'a, P> {
+    fn from(state: &'a Historical<P>) -> Self {
+        Self {
+            parent: state.parent.clone(),
+            diffs: &state.old,
+        }
+    }
 }
 
 /// A [LayeredReader] is obtained by calling [Proposed::stream_from]
@@ -76,10 +95,7 @@ impl<P: ReadLinearStore, M: Send + Sync + Debug> ReadLinearStore for Proposed<P,
         Ok(Box::new(LayeredReader {
             offset: addr,
             state: LayeredReaderState::Initial,
-            layer: Layer {
-                parent: self.parent.clone(),
-                diffs: &self.new,
-            },
+            layer: self.into(),
         }))
     }
 
