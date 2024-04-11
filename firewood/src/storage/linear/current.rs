@@ -68,7 +68,7 @@ mod tests {
     #[test]
     fn test_current_stream_from() {
         let parent = Arc::new(LinearStore::<ConstBacked> {
-            state: ConstBacked { data: &[0, 1, 2] },
+            state: ConstBacked::new(&[0, 1, 2]),
         });
 
         let current = Current::new(parent.clone());
