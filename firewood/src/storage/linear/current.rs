@@ -34,12 +34,24 @@ impl<P: ReadLinearStore> Current<P> {
 impl<P: ReadLinearStore> ReadLinearStore for Current<P> {
     fn stream_from(
         &self,
-        _addr: u64,
+        addr: u64,
     ) -> Result<Box<dyn std::io::prelude::Read + '_>, std::io::Error> {
-        todo!()
+        let parent = self.parent.lock().expect("poisoned lock").clone();
+        Ok(Box::new(CurrentStream { parent, addr }))
     }
 
     fn size(&self) -> Result<u64, std::io::Error> {
         todo!()
+    }
+}
+
+struct CurrentStream<P: ReadLinearStore> {
+    parent: Arc<LinearStore<P>>,
+    addr: u64,
+}
+
+impl<P: ReadLinearStore> std::io::prelude::Read for CurrentStream<P> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.parent.stream_from(self.addr)?.read(buf)
     }
 }
