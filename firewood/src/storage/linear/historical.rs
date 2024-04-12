@@ -19,16 +19,19 @@ pub(crate) struct Historical<P: ReadLinearStore> {
     pub(crate) changed_in_parent: BTreeMap<u64, Box<[u8]>>,
     /// The state of the revision after this one.
     pub(crate) parent: Arc<LinearStore<P>>,
+    size: u64,
 }
 
 impl<P: ReadLinearStore> Historical<P> {
     pub(crate) fn from_current(
         changed_in_parent: BTreeMap<u64, Box<[u8]>>,
         parent: Arc<LinearStore<P>>,
+        size: u64,
     ) -> Self {
         Self {
             changed_in_parent,
             parent,
+            size,
         }
     }
 }
@@ -63,12 +66,13 @@ mod tests {
             state: ConstBacked::new(parent_state),
         };
 
-        let mut diffs_map = BTreeMap::<u64, Box<[u8]>>::new();
+        let mut changed_in_parent = BTreeMap::<u64, Box<[u8]>>::new();
         for (addr, data) in diffs {
-            diffs_map.insert(*addr, data.to_vec().into_boxed_slice());
+            changed_in_parent.insert(*addr, data.to_vec().into_boxed_slice());
         }
 
-        let historical = Historical::from_current(diffs_map, Arc::new(parent));
+        let historical =
+            Historical::from_current(changed_in_parent, Arc::new(parent), expected.len() as u64);
 
         for i in 0..expected.len() {
             let mut stream = historical.stream_from(i as u64).unwrap();
