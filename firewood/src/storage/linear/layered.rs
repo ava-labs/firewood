@@ -11,6 +11,9 @@ pub(crate) struct Layer<'a, P: ReadLinearStore> {
     diffs: &'a BTreeMap<u64, Box<[u8]>>,
 }
 
+// TODO danlaine: These From methods require us to pub(crate) fields of Proposed
+// and Historical. Should we instead make Layer.parent and Layer.diffs public
+// and remove these From methods? i.e. layer creation logic moves out of here.
 impl<'a, P: ReadLinearStore, M> From<&'a Proposed<P, M>> for Layer<'a, P> {
     fn from(state: &'a Proposed<P, M>) -> Self {
         Self {
