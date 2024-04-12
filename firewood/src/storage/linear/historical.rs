@@ -42,7 +42,7 @@ impl<P: ReadLinearStore> ReadLinearStore for Historical<P> {
     }
 
     fn size(&self) -> Result<u64, std::io::Error> {
-        todo!()
+        Ok(self.size)
     }
 }
 
