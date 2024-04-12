@@ -2,16 +2,20 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::collections::BTreeMap;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+
+use futures::Future;
+use tokio::io::AsyncRead;
 
 use super::historical::Historical;
 use super::{LinearStore, ReadLinearStore};
 
-/// A linear store used for the current revision. The difference betwen this
-/// and a historical revision is that it has a mutable parent. It is reparented
-/// when another proposal commits
+/// A linear store used for the current revision. The difference between [Current]
+/// and [Historical] is that [Current] can change parents. It is reparented
+/// when another proposal commits.
 ///
-/// A [Current] [LinearStore] supports read operations only
+/// This [LinearStore] supports read operations only
 #[derive(Debug)]
 pub(crate) struct Current<P: ReadLinearStore> {
     old: BTreeMap<u64, Box<[u8]>>,
@@ -32,14 +36,11 @@ impl<P: ReadLinearStore> Current<P> {
 }
 
 impl<P: ReadLinearStore> ReadLinearStore for Current<P> {
-    fn stream_from(
-        &self,
-        _addr: u64,
-    ) -> Result<Box<dyn std::io::prelude::Read + '_>, std::io::Error> {
+    fn stream_from(&self, _addr: u64) -> Result<Pin<Box<dyn AsyncRead + '_>>, std::io::Error> {
         todo!()
     }
 
-    fn size(&self) -> Result<u64, std::io::Error> {
+    fn size(&self) -> Pin<Box<dyn Future<Output = Result<u64, std::io::Error>>>> {
         todo!()
     }
 }

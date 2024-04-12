@@ -9,39 +9,43 @@
 // object. Instead, we probably should use an IO system that can perform multiple
 // read/write operations at once
 
+use futures::Future;
+use tokio::fs::File;
+use tokio::io::{AsyncRead, AsyncSeekExt};
+use tokio::task::spawn_blocking;
+
 use super::{ReadLinearStore, WriteLinearStore};
-use std::fs::File;
-use std::io::{Error, Read, Seek};
+use std::io::Error;
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::pin::Pin;
 
 #[derive(Debug)]
 pub(super) struct FileBacked {
     path: PathBuf,
-    fd: Mutex<File>,
+    fd: File,
 }
 
 impl ReadLinearStore for FileBacked {
-    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, Error> {
-        let mut fd = self.fd.lock().expect("p");
-        fd.seek(std::io::SeekFrom::Start(addr))?;
-        Ok(Box::new(fd.try_clone().expect("poisoned lock")))
+    fn stream_from(&self, addr: u64) -> Result<Pin<Box<dyn AsyncRead + '_>>, Error> {
+        let mut fd = self.fd;
+        fd.seek(std::io::SeekFrom::Start(addr));
+        Ok(Box::pin(fd))
     }
 
-    fn size(&self) -> Result<u64, Error> {
-        self.fd
-            .lock()
-            .expect("poisoned lock")
-            .seek(std::io::SeekFrom::End(0))
+    fn size(&self) -> Pin<Box<dyn Future<Output = Result<u64, Error>>>> {
+        Pin::from(Box::from(self.fd.seek(std::io::SeekFrom::End(0))))
     }
 }
 
 impl WriteLinearStore for FileBacked {
-    fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
-        self.fd
-            .lock()
-            .expect("poisoned lock")
-            .write_at(object, offset)
+    async fn write(&mut self, offset: u64, object: Box<[u8]>) -> Result<usize, Error> {
+        let std_file = self.fd.try_clone().await?.into_std().await;
+        spawn_blocking(move || {
+            std_file.write_at(&object, offset).unwrap();
+        })
+        .await
+        .expect("Failed to run blocking task");
+        Ok(0)
     }
 }
