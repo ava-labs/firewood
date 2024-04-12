@@ -52,7 +52,7 @@ impl<'a, P: ReadLinearStore> From<&'a Historical<P>> for Layer<'a, P> {
     fn from(state: &'a Historical<P>) -> Self {
         Self {
             parent: state.parent.clone(),
-            diffs: &state.old,
+            diffs: &state.parent_old,
         }
     }
 }
