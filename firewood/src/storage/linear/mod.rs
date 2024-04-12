@@ -66,6 +66,7 @@ mod current;
 ///  - Convert the `LinearStore<Proposed<FileBacked, Readonly>>` to `LinearStore<FileBacked>`
 mod filebacked;
 mod historical;
+mod layered;
 mod proposed;
 #[cfg(test)]
 mod tests;

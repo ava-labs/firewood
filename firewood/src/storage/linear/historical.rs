@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use super::{proposed::LayeredReader, LinearStore, ReadLinearStore};
+use super::{layered::LayeredReader, LinearStore, ReadLinearStore};
 
 /// A linear store used for historical revisions
 ///
