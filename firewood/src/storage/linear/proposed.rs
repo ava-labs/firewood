@@ -34,7 +34,7 @@ impl<P: ReadLinearStore, M> Proposed<P, M> {
 }
 
 #[derive(Debug)]
-struct Layer<'a, P: ReadLinearStore> {
+pub(crate) struct Layer<'a, P: ReadLinearStore> {
     parent: Arc<LinearStore<P>>,
     diffs: &'a BTreeMap<u64, Box<[u8]>>,
 }
@@ -63,10 +63,20 @@ impl<'a, P: ReadLinearStore> From<&'a Historical<P>> for Layer<'a, P> {
 /// read-only, since we do not support mutating parents of another
 /// proposal
 #[derive(Debug)]
-struct LayeredReader<'a, P: ReadLinearStore> {
+pub(crate) struct LayeredReader<'a, P: ReadLinearStore> {
     offset: u64,
     state: LayeredReaderState<'a>,
     layer: Layer<'a, P>,
+}
+
+impl<'a, P: ReadLinearStore> LayeredReader<'a, P> {
+    pub(crate) fn new(offset: u64, layer: Layer<'a, P>) -> Self {
+        Self {
+            offset,
+            state: LayeredReaderState::Initial,
+            layer,
+        }
+    }
 }
 
 /// A [LayeredReaderState] keeps track of when the next transition
