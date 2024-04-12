@@ -13,11 +13,16 @@ use super::{LinearStore, ReadLinearStore};
 pub(crate) struct Historical<P: ReadLinearStore> {
     old: BTreeMap<u64, Box<[u8]>>,
     parent: Arc<LinearStore<P>>,
+    size: u64,
 }
 
 impl<P: ReadLinearStore> Historical<P> {
-    pub(crate) fn from_current(old: BTreeMap<u64, Box<[u8]>>, parent: Arc<LinearStore<P>>) -> Self {
-        Self { old, parent }
+    pub(crate) fn from_current(
+        old: BTreeMap<u64, Box<[u8]>>,
+        parent: Arc<LinearStore<P>>,
+        size: u64,
+    ) -> Self {
+        Self { old, parent, size }
     }
 }
 
@@ -27,6 +32,6 @@ impl<P: ReadLinearStore> ReadLinearStore for Historical<P> {
     }
 
     fn size(&self) -> Result<u64, std::io::Error> {
-        todo!()
+        Ok(self.size)
     }
 }

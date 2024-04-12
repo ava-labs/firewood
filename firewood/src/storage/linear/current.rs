@@ -27,7 +27,8 @@ impl<P: ReadLinearStore> Current<P> {
     }
 
     pub(crate) fn reparent(self, parent: Arc<LinearStore<P>>) -> Historical<P> {
-        Historical::from_current(self.old, parent)
+        let size = self.size().unwrap();
+        Historical::from_current(self.old, parent, size)
     }
 }
 
