@@ -17,10 +17,14 @@
 //!
 //! Each type is described in more detail below.
 
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::io::{Error, Read};
 use std::ops::Deref;
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+use tokio::fs::File;
 
 /// A linear store used for proposals
 ///
@@ -72,6 +76,48 @@ mod proposed;
 
 #[cfg(test)]
 mod tests;
+
+pub(super) enum LinearStore2 {
+    Historical {
+        /// (offset, value) for every area of this LinearStore that is modified in
+        /// the revision after this one (i.e. `parent`).
+        /// For example, if the first 3 bytes of this revision are [0,1,2] and the
+        /// first 3 bytes of the next revision are [4,5,6] then this map would
+        /// contain [(0, [0,1,2])].
+        changed_in_parent: BTreeMap<u64, Box<[u8]>>,
+        /// The state of the revision after this one.
+        parent: Box<LinearStore2>,
+        size: u64,
+    },
+    Proposed {
+        new: BTreeMap<u64, Box<[u8]>>,
+        old: BTreeMap<u64, Box<[u8]>>,
+        parent: Box<LinearStore2>,
+        // phantom: PhantomData<M>, TODO how to handle mutability?
+    },
+    FileBacked {
+        path: PathBuf,
+        fd: Mutex<File>,
+    },
+}
+
+impl LinearStore2 {
+    pub fn stream_from(&self, _addr: u64) -> Result<Box<dyn Read + '_>, Error> {
+        match self {
+            LinearStore2::Historical { .. } => todo!(),
+            LinearStore2::Proposed { .. } => todo!(),
+            LinearStore2::FileBacked { .. } => todo!(),
+        }
+    }
+
+    pub fn size(&self) -> Result<u64, Error> {
+        match self {
+            LinearStore2::Historical { .. } => todo!(),
+            LinearStore2::Proposed { .. } => todo!(),
+            LinearStore2::FileBacked { .. } => todo!(),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub(super) struct LinearStore<S: ReadLinearStore> {
