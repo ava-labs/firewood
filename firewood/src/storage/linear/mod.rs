@@ -26,6 +26,8 @@ use std::sync::{Arc, Mutex};
 
 use std::fs::File;
 
+use self::layered::{Layer, LayeredReader};
+
 /// A linear store used for proposals
 ///
 /// A Proposed LinearStore supports read operations which look for the
@@ -77,6 +79,7 @@ mod proposed;
 #[cfg(test)]
 mod tests;
 
+#[derive(Debug)]
 pub(super) enum LinearStore2 {
     Historical {
         /// (offset, value) for every area of this LinearStore that is modified in
@@ -86,13 +89,13 @@ pub(super) enum LinearStore2 {
         /// contain [(0, [0,1,2])].
         changed_in_parent: BTreeMap<u64, Box<[u8]>>,
         /// The state of the revision after this one.
-        parent: Box<LinearStore2>,
+        parent: Arc<LinearStore2>,
         size: u64,
     },
     Proposed {
         new: BTreeMap<u64, Box<[u8]>>,
         old: BTreeMap<u64, Box<[u8]>>,
-        parent: Box<LinearStore2>,
+        parent: Arc<LinearStore2>,
         // phantom: PhantomData<M>, TODO how to handle mutability?
     },
     FileBacked {
@@ -104,8 +107,30 @@ pub(super) enum LinearStore2 {
 impl LinearStore2 {
     pub fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
         match self {
-            LinearStore2::Historical { .. } => todo!(),
-            LinearStore2::Proposed { .. } => todo!(),
+            LinearStore2::Historical {
+                changed_in_parent,
+                parent,
+                size: _,
+            } => Ok(Box::new(LayeredReader::new(
+                addr,
+                Layer {
+                    parent: parent.clone(),
+                    diffs: changed_in_parent,
+                },
+            ))),
+
+            LinearStore2::Proposed {
+                new,
+                old: _,
+                parent,
+            } => Ok(Box::new(LayeredReader::new(
+                addr,
+                Layer {
+                    parent: parent.clone(),
+                    diffs: new,
+                },
+            ))),
+
             LinearStore2::FileBacked { path: _, fd } => {
                 let mut fd = fd.lock().expect("p");
                 fd.seek(std::io::SeekFrom::Start(addr))?;

@@ -34,7 +34,8 @@ impl<P: ReadLinearStore, M> Proposed<P, M> {
 
 impl<P: ReadLinearStore, M: Send + Sync + Debug> ReadLinearStore for Proposed<P, M> {
     fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
-        Ok(Box::new(LayeredReader::new(addr, self.into())))
+        todo!()
+        //        Ok(Box::new(LayeredReader::new(addr, self.into())))
     }
 
     fn size(&self) -> Result<u64, Error> {

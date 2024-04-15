@@ -38,7 +38,8 @@ impl<P: ReadLinearStore> Historical<P> {
 
 impl<P: ReadLinearStore> ReadLinearStore for Historical<P> {
     fn stream_from(&self, addr: u64) -> Result<Box<dyn std::io::Read + '_>, std::io::Error> {
-        Ok(Box::new(LayeredReader::new(addr, self.into())))
+        // Ok(Box::new(LayeredReader::new(addr, self.into())))
+        todo!()
     }
 
     fn size(&self) -> Result<u64, std::io::Error> {
