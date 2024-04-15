@@ -1,9 +1,11 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::proposal::ProposalID;
+use super::{filebacked::FileBacked, proposal::ProposalID};
 
-pub struct Manager {}
+pub struct Manager {
+    filebacked: FileBacked,
+}
 
 pub type CommitError = (); // TODO implement
 

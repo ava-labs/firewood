@@ -66,7 +66,10 @@ use std::sync::Arc;
 mod filebacked;
 mod historical;
 mod layered;
+mod manager;
+mod proposal;
 mod proposed;
+
 #[cfg(test)]
 mod tests;
 

@@ -185,7 +185,6 @@ pub mod db;
 pub(crate) mod file;
 pub mod merkle;
 pub mod merkle_util;
-pub mod revision;
 pub mod storage;
 
 pub mod config;
