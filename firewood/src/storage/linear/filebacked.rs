@@ -18,8 +18,8 @@ use std::sync::Mutex;
 
 #[derive(Debug)]
 pub(super) struct FileBacked {
-    path: PathBuf,
-    fd: Mutex<File>,
+    pub(super) path: PathBuf,
+    pub(super) fd: Mutex<File>,
 }
 
 impl ReadLinearStore for FileBacked {

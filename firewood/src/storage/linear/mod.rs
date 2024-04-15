@@ -19,12 +19,12 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::io::{Error, Read};
+use std::io::{Error, Read, Seek};
 use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use tokio::fs::File;
+use std::fs::File;
 
 /// A linear store used for proposals
 ///
@@ -102,19 +102,42 @@ pub(super) enum LinearStore2 {
 }
 
 impl LinearStore2 {
-    pub fn stream_from(&self, _addr: u64) -> Result<Box<dyn Read + '_>, Error> {
+    pub fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
         match self {
             LinearStore2::Historical { .. } => todo!(),
             LinearStore2::Proposed { .. } => todo!(),
-            LinearStore2::FileBacked { .. } => todo!(),
+            LinearStore2::FileBacked { path: _, fd } => {
+                let mut fd = fd.lock().expect("p");
+                fd.seek(std::io::SeekFrom::Start(addr))?;
+                Ok(Box::new(fd.try_clone().expect("poisoned lock")))
+            }
         }
     }
 
     pub fn size(&self) -> Result<u64, Error> {
         match self {
-            LinearStore2::Historical { .. } => todo!(),
-            LinearStore2::Proposed { .. } => todo!(),
-            LinearStore2::FileBacked { .. } => todo!(),
+            LinearStore2::Historical { size, .. } => Ok(*size),
+            LinearStore2::Proposed {
+                new,
+                old: _,
+                parent,
+            } => {
+                // start with the parent size
+                let parent_size = parent.size()?;
+                // look at the last delta, if any, and see if it will extend the file
+                Ok(new
+                    .range(..)
+                    .next_back()
+                    .map(|(k, v)| *k + v.len() as u64)
+                    .map_or_else(
+                        || parent_size,
+                        |delta_end| std::cmp::max(parent_size, delta_end),
+                    ))
+            }
+            LinearStore2::FileBacked { path: _, fd } => fd
+                .lock()
+                .expect("poisoned lock")
+                .seek(std::io::SeekFrom::End(0)),
         }
     }
 }
