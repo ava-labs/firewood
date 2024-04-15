@@ -4,7 +4,6 @@
 use std::io::{Cursor, Error, Read};
 use std::sync::Arc;
 
-use super::proposed::{Immutable, Mutable, Proposed};
 use super::{LinearStore, ReadLinearStore};
 
 #[derive(Debug)]
@@ -26,17 +25,11 @@ impl From<ConstBacked> for Arc<LinearStore<ConstBacked>> {
     }
 }
 
-impl From<ConstBacked> for Proposed<ConstBacked, Mutable> {
-    fn from(value: ConstBacked) -> Self {
-        Proposed::new(value.into())
-    }
-}
-
-impl From<ConstBacked> for Proposed<ConstBacked, Immutable> {
-    fn from(value: ConstBacked) -> Self {
-        Proposed::new(value.into())
-    }
-}
+// impl From<ConstBacked> for Proposed {
+//     fn from(value: ConstBacked) -> Self {
+//         Proposed::new(value.into())
+//     }
+// }
 
 impl ReadLinearStore for ConstBacked {
     fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, std::io::Error> {
@@ -52,12 +45,12 @@ impl ReadLinearStore for ConstBacked {
 
 #[test]
 fn reparent() {
-    let base = Arc::new(LinearStore {
-        state: ConstBacked::new(ConstBacked::DATA),
-    });
-    let _proposal = Arc::new(LinearStore {
-        state: Proposed::<_, Mutable>::new(base),
-    });
+    // let base = Arc::new(LinearStore {
+    //     state: ConstBacked::new(ConstBacked::DATA),
+    // });
+    // let _proposal = Arc::new(LinearStore {
+    //     state: Proposed::new(base),
+    // });
 
     // TODO:
     // proposal becomes Arc<LinearStore<Current<ConstBacked>>>

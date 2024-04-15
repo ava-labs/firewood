@@ -21,12 +21,11 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::io::{Error, Read, Seek};
 use std::ops::Deref;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use std::fs::File;
-
+use self::filebacked::FileBacked;
 use self::layered::{Layer, LayeredReader};
+use self::proposed::Proposed;
 
 /// A linear store used for proposals
 ///
@@ -80,7 +79,7 @@ mod proposed;
 mod tests;
 
 #[derive(Debug)]
-pub(super) enum LinearStore2 {
+pub(super) enum ImmutableLinearStore {
     Historical {
         /// (offset, value) for every area of this LinearStore that is modified in
         /// the revision after this one (i.e. `parent`).
@@ -89,25 +88,17 @@ pub(super) enum LinearStore2 {
         /// contain [(0, [0,1,2])].
         changed_in_parent: BTreeMap<u64, Box<[u8]>>,
         /// The state of the revision after this one.
-        parent: Arc<LinearStore2>,
+        parent: Arc<ImmutableLinearStore>,
         size: u64,
     },
-    Proposed {
-        new: BTreeMap<u64, Box<[u8]>>,
-        old: BTreeMap<u64, Box<[u8]>>,
-        parent: Arc<LinearStore2>,
-        // phantom: PhantomData<M>, TODO how to handle mutability?
-    },
-    FileBacked {
-        path: PathBuf,
-        fd: Mutex<File>,
-    },
+    Proposed(Proposed),
+    FileBacked(FileBacked),
 }
 
-impl LinearStore2 {
+impl ImmutableLinearStore {
     pub fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
         match self {
-            LinearStore2::Historical {
+            ImmutableLinearStore::Historical {
                 changed_in_parent,
                 parent,
                 size: _,
@@ -119,20 +110,16 @@ impl LinearStore2 {
                 },
             ))),
 
-            LinearStore2::Proposed {
-                new,
-                old: _,
-                parent,
-            } => Ok(Box::new(LayeredReader::new(
+            ImmutableLinearStore::Proposed(proposed) => Ok(Box::new(LayeredReader::new(
                 addr,
                 Layer {
-                    parent: parent.clone(),
-                    diffs: new,
+                    parent: proposed.parent.clone(),
+                    diffs: &proposed.new,
                 },
             ))),
 
-            LinearStore2::FileBacked { path: _, fd } => {
-                let mut fd = fd.lock().expect("p");
+            ImmutableLinearStore::FileBacked(filebacked) => {
+                let mut fd = filebacked.fd.lock().expect("p");
                 fd.seek(std::io::SeekFrom::Start(addr))?;
                 Ok(Box::new(fd.try_clone().expect("poisoned lock")))
             }
@@ -141,16 +128,13 @@ impl LinearStore2 {
 
     pub fn size(&self) -> Result<u64, Error> {
         match self {
-            LinearStore2::Historical { size, .. } => Ok(*size),
-            LinearStore2::Proposed {
-                new,
-                old: _,
-                parent,
-            } => {
+            ImmutableLinearStore::Historical { size, .. } => Ok(*size),
+            ImmutableLinearStore::Proposed(proposed) => {
                 // start with the parent size
-                let parent_size = parent.size()?;
+                let parent_size = proposed.parent.size()?;
                 // look at the last delta, if any, and see if it will extend the file
-                Ok(new
+                Ok(proposed
+                    .new
                     .range(..)
                     .next_back()
                     .map(|(k, v)| *k + v.len() as u64)
@@ -159,12 +143,19 @@ impl LinearStore2 {
                         |delta_end| std::cmp::max(parent_size, delta_end),
                     ))
             }
-            LinearStore2::FileBacked { path: _, fd } => fd
+            ImmutableLinearStore::FileBacked(filebacked) => filebacked
+                .fd
                 .lock()
                 .expect("poisoned lock")
                 .seek(std::io::SeekFrom::End(0)),
         }
     }
+}
+
+#[derive(Debug)]
+pub(super) enum MutableLinearStore {
+    Proposed(Proposed),
+    FileBacked(FileBacked),
 }
 
 #[derive(Debug)]

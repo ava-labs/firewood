@@ -3,13 +3,11 @@
 
 use std::{collections::BTreeMap, io::Cursor, sync::Arc};
 
-use super::{
-    historical::Historical, proposed::Proposed, LinearStore, LinearStore2, ReadLinearStore,
-};
+use super::ImmutableLinearStore;
 
 #[derive(Debug)]
 pub(crate) struct Layer<'a> {
-    pub(crate) parent: Arc<LinearStore2>,
+    pub(crate) parent: Arc<ImmutableLinearStore>,
     pub(crate) diffs: &'a BTreeMap<u64, Box<[u8]>>,
 }
 

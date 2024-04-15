@@ -1,10 +1,11 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::{filebacked::FileBacked, proposal::ProposalID};
+use super::{filebacked::FileBacked, proposal::ProposalID, ImmutableLinearStore};
 
 pub struct Manager {
     filebacked: FileBacked,
+    historical: Vec<ImmutableLinearStore>,
 }
 
 pub type CommitError = (); // TODO implement

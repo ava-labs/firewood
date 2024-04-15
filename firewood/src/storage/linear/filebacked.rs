@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 #[derive(Debug)]
-pub(super) struct FileBacked {
+pub(crate) struct FileBacked {
     pub(super) path: PathBuf,
     pub(super) fd: Mutex<File>,
 }
