@@ -22,7 +22,6 @@ use std::io::{Error, Read};
 use std::ops::Deref;
 use std::sync::Arc;
 
-mod current;
 /// A linear store used for proposals
 ///
 /// A Proposed LinearStore supports read operations which look for the

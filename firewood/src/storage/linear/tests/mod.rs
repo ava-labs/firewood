@@ -4,7 +4,6 @@
 use std::io::{Cursor, Error, Read};
 use std::sync::Arc;
 
-use super::current::Current;
 use super::proposed::{Immutable, Mutable, Proposed};
 use super::{LinearStore, ReadLinearStore};
 
@@ -56,11 +55,8 @@ fn reparent() {
     let base = Arc::new(LinearStore {
         state: ConstBacked::new(ConstBacked::DATA),
     });
-    let current = Arc::new(LinearStore {
-        state: Current::new(base),
-    });
     let _proposal = Arc::new(LinearStore {
-        state: Proposed::<_, Mutable>::new(current),
+        state: Proposed::<_, Mutable>::new(base),
     });
 
     // TODO:
