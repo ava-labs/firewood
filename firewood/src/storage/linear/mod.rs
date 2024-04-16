@@ -93,6 +93,7 @@ pub(super) enum ImmutableLinearStore {
     },
     Proposed(Proposed),
     FileBacked(FileBacked),
+    Invalid,
 }
 
 impl ImmutableLinearStore {
@@ -123,6 +124,8 @@ impl ImmutableLinearStore {
                 fd.seek(std::io::SeekFrom::Start(addr))?;
                 Ok(Box::new(fd.try_clone().expect("poisoned lock")))
             }
+
+            ImmutableLinearStore::Invalid => Err(std::io::ErrorKind::InvalidData.into()),
         }
     }
 
@@ -148,6 +151,7 @@ impl ImmutableLinearStore {
                 .lock()
                 .expect("poisoned lock")
                 .seek(std::io::SeekFrom::End(0)),
+            ImmutableLinearStore::Invalid => Err(std::io::ErrorKind::InvalidData.into()),
         }
     }
 }
@@ -155,7 +159,7 @@ impl ImmutableLinearStore {
 #[derive(Debug)]
 pub(super) enum MutableLinearStore {
     Proposed(Proposed),
-    FileBacked(FileBacked),
+    Invalid,
 }
 
 #[derive(Debug)]
