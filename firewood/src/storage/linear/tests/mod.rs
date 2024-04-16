@@ -2,7 +2,11 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::io::{Cursor, Error, Read};
+use std::pin::Pin;
 use std::sync::Arc;
+
+use futures::Future;
+use tokio::io::AsyncRead;
 
 use super::current::Current;
 use super::proposed::{Immutable, Mutable, Proposed};
@@ -40,14 +44,14 @@ impl From<ConstBacked> for Proposed<ConstBacked, Immutable> {
 }
 
 impl ReadLinearStore for ConstBacked {
-    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, std::io::Error> {
-        Ok(Box::new(Cursor::new(
+    fn stream_from(&self, addr: u64) -> Result<Pin<Box<dyn tokio::io::AsyncRead>>, std::io::Error> {
+        Ok(Box::pin(Cursor::new(
             self.data.get(addr as usize..).unwrap_or(&[]),
         )))
     }
 
-    fn size(&self) -> Result<u64, Error> {
-        Ok(self.data.len() as u64)
+    fn size(&self) -> Pin<Box<dyn Future<Output = Result<u64, Error>>>> {
+        Box::pin(async { Ok(self.data.len() as u64) })
     }
 }
 
