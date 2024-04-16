@@ -1,51 +1,59 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-// use std::collections::BTreeMap;
-// use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
-// use super::{layered::LayeredReader, LinearStore, ReadLinearStore};
+use super::{
+    layered::{Layer, LayeredReader},
+    ImmutableLinearStore, ReadLinearStore,
+};
 
-// /// A linear store used for historical revisions
-// ///
-// /// A [Historical] [LinearStore] supports read operations only
-// #[derive(Debug)]
-// pub(crate) struct Historical<P: ReadLinearStore> {
-//     /// (offset, value) for every area of this LinearStore that is modified in
-//     /// the revision after this one (i.e. `parent`).
-//     /// For example, if the first 3 bytes of this revision are [0,1,2] and the
-//     /// first 3 bytes of the next revision are [4,5,6] then this map would
-//     /// contain [(0, [0,1,2])].
-//     pub(crate) changed_in_parent: BTreeMap<u64, Box<[u8]>>,
-//     /// The state of the revision after this one.
-//     pub(crate) parent: Arc<LinearStore<P>>,
-//     size: u64,
-// }
+/// A linear store used for historical revisions
+///
+/// A [Historical] [LinearStore] supports read operations only
+#[derive(Debug)]
+pub(crate) struct Historical {
+    /// (offset, value) for every area of this LinearStore that is modified in
+    /// the revision after this one (i.e. `parent`).
+    /// For example, if the first 3 bytes of this revision are [0,1,2] and the
+    /// first 3 bytes of the next revision are [4,5,6] then this map would
+    /// contain [(0, [0,1,2])].
+    pub(crate) changed_in_parent: BTreeMap<u64, Box<[u8]>>,
+    /// The state of the revision after this one.
+    pub(crate) parent: Arc<ImmutableLinearStore>,
+    pub(crate) size: u64,
+}
 
-// impl<P: ReadLinearStore> Historical<P> {
-//     pub(crate) fn from_current(
-//         changed_in_parent: BTreeMap<u64, Box<[u8]>>,
-//         parent: Arc<LinearStore<P>>,
-//         size: u64,
-//     ) -> Self {
-//         Self {
-//             changed_in_parent,
-//             parent,
-//             size,
-//         }
-//     }
-// }
+impl Historical {
+    pub(crate) fn from_current(
+        changed_in_parent: BTreeMap<u64, Box<[u8]>>,
+        parent: Arc<ImmutableLinearStore>,
+        size: u64,
+    ) -> Self {
+        Self {
+            changed_in_parent,
+            parent,
+            size,
+        }
+    }
+}
 
-// impl<P: ReadLinearStore> ReadLinearStore for Historical<P> {
-//     fn stream_from(&self, addr: u64) -> Result<Box<dyn std::io::Read + '_>, std::io::Error> {
-//         // Ok(Box::new(LayeredReader::new(addr, self.into())))
-//         todo!()
-//     }
+impl ReadLinearStore for Historical {
+    fn stream_from(&self, addr: u64) -> Result<Box<dyn std::io::Read + '_>, std::io::Error> {
+        Ok(Box::new(LayeredReader::new(
+            addr,
+            Layer {
+                parent: self.parent.clone(),
+                diffs: &self.changed_in_parent,
+            },
+        )))
+    }
 
-//     fn size(&self) -> Result<u64, std::io::Error> {
-//         Ok(self.size)
-//     }
-// }
+    fn size(&self) -> Result<u64, std::io::Error> {
+        Ok(self.size)
+    }
+}
 
 // #[cfg(test)]
 // mod tests {

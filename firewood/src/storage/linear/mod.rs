@@ -17,15 +17,14 @@
 //!
 //! Each type is described in more detail below.
 
-use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::io::{Error, Read, Seek};
+use std::io::{Error, Read};
 use std::ops::Deref;
 use std::sync::Arc;
 
 use self::filebacked::FileBacked;
-use self::layered::{Layer, LayeredReader};
-use self::proposed::Proposed;
+use self::historical::Historical;
+use self::proposed::{Immutable, Mutable, Proposed};
 
 /// A linear store used for proposals
 ///
@@ -80,18 +79,8 @@ mod tests;
 
 #[derive(Debug)]
 pub(super) enum ImmutableLinearStore {
-    Historical {
-        /// (offset, value) for every area of this LinearStore that is modified in
-        /// the revision after this one (i.e. `parent`).
-        /// For example, if the first 3 bytes of this revision are [0,1,2] and the
-        /// first 3 bytes of the next revision are [4,5,6] then this map would
-        /// contain [(0, [0,1,2])].
-        changed_in_parent: BTreeMap<u64, Box<[u8]>>,
-        /// The state of the revision after this one.
-        parent: Arc<ImmutableLinearStore>,
-        size: u64,
-    },
-    Proposed(Proposed),
+    Historical(Historical),
+    Proposed(Arc<Proposed<Immutable>>),
     FileBacked(FileBacked),
     Invalid,
 }
@@ -99,58 +88,18 @@ pub(super) enum ImmutableLinearStore {
 impl ImmutableLinearStore {
     pub fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
         match self {
-            ImmutableLinearStore::Historical {
-                changed_in_parent,
-                parent,
-                size: _,
-            } => Ok(Box::new(LayeredReader::new(
-                addr,
-                Layer {
-                    parent: parent.clone(),
-                    diffs: changed_in_parent,
-                },
-            ))),
-
-            ImmutableLinearStore::Proposed(proposed) => Ok(Box::new(LayeredReader::new(
-                addr,
-                Layer {
-                    parent: proposed.parent.clone(),
-                    diffs: &proposed.new,
-                },
-            ))),
-
-            ImmutableLinearStore::FileBacked(filebacked) => {
-                let mut fd = filebacked.fd.lock().expect("p");
-                fd.seek(std::io::SeekFrom::Start(addr))?;
-                Ok(Box::new(fd.try_clone().expect("poisoned lock")))
-            }
-
+            ImmutableLinearStore::Historical(historical) => historical.stream_from(addr),
+            ImmutableLinearStore::Proposed(proposed) => proposed.stream_from(addr),
+            ImmutableLinearStore::FileBacked(filebacked) => filebacked.stream_from(addr),
             ImmutableLinearStore::Invalid => Err(std::io::ErrorKind::InvalidData.into()),
         }
     }
 
     pub fn size(&self) -> Result<u64, Error> {
         match self {
-            ImmutableLinearStore::Historical { size, .. } => Ok(*size),
-            ImmutableLinearStore::Proposed(proposed) => {
-                // start with the parent size
-                let parent_size = proposed.parent.size()?;
-                // look at the last delta, if any, and see if it will extend the file
-                Ok(proposed
-                    .new
-                    .range(..)
-                    .next_back()
-                    .map(|(k, v)| *k + v.len() as u64)
-                    .map_or_else(
-                        || parent_size,
-                        |delta_end| std::cmp::max(parent_size, delta_end),
-                    ))
-            }
-            ImmutableLinearStore::FileBacked(filebacked) => filebacked
-                .fd
-                .lock()
-                .expect("poisoned lock")
-                .seek(std::io::SeekFrom::End(0)),
+            ImmutableLinearStore::Historical(historical) => historical.size(),
+            ImmutableLinearStore::Proposed(proposed) => proposed.size(),
+            ImmutableLinearStore::FileBacked(filebacked) => filebacked.size(),
             ImmutableLinearStore::Invalid => Err(std::io::ErrorKind::InvalidData.into()),
         }
     }
@@ -158,8 +107,31 @@ impl ImmutableLinearStore {
 
 #[derive(Debug)]
 pub(super) enum MutableLinearStore {
-    Proposed(Proposed),
+    Proposed(Proposed<Mutable>),
     Invalid,
+}
+
+impl MutableLinearStore {
+    pub fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
+        match self {
+            MutableLinearStore::Proposed(proposed) => proposed.stream_from(addr),
+            MutableLinearStore::Invalid => Err(std::io::ErrorKind::InvalidData.into()),
+        }
+    }
+
+    pub fn size(&self) -> Result<u64, Error> {
+        match self {
+            MutableLinearStore::Proposed(proposed) => proposed.size(),
+            MutableLinearStore::Invalid => Err(std::io::ErrorKind::InvalidData.into()),
+        }
+    }
+
+    pub fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
+        match self {
+            MutableLinearStore::Proposed(proposed) => proposed.write(offset, object),
+            MutableLinearStore::Invalid => Err(std::io::ErrorKind::InvalidData.into()),
+        }
+    }
 }
 
 #[derive(Debug)]

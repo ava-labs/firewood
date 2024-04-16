@@ -4,35 +4,56 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::io::{Error, Read};
+use std::marker::PhantomData;
 use std::sync::Arc;
 
+use super::layered::{Layer, LayeredReader};
 use super::{ImmutableLinearStore, ReadLinearStore, WriteLinearStore};
 
 /// [Proposed] is a [LinearStore] state that contains a copy of the old and new data.
 /// The P type parameter indicates the state of the linear store for it's parent,
 /// which could be a another [Proposed] or is [FileBacked](super::filebacked::FileBacked)
 /// The M type parameter indicates the mutability of the proposal, either read-write or readonly
+/// TODO update comment
 #[derive(Debug)]
-pub(crate) struct Proposed {
+pub struct Proposed<T> {
     pub(crate) new: BTreeMap<u64, Box<[u8]>>,
-    old: BTreeMap<u64, Box<[u8]>>,
+    pub old: BTreeMap<u64, Box<[u8]>>,
     pub(crate) parent: Arc<ImmutableLinearStore>,
+    state: PhantomData<T>,
 }
 
-impl Proposed {
+impl From<Proposed<Mutable>> for Proposed<Immutable> {
+    fn from(proposal: Proposed<Mutable>) -> Self {
+        Self {
+            new: proposal.new,
+            old: proposal.old,
+            parent: proposal.parent,
+            state: PhantomData::default(),
+        }
+    }
+}
+
+impl Proposed<Mutable> {
     pub(crate) fn new(parent: Arc<ImmutableLinearStore>) -> Self {
         Self {
             parent,
             new: Default::default(),
             old: Default::default(),
+            state: Default::default(),
         }
     }
 }
 
-impl ReadLinearStore for Proposed {
-    fn stream_from(&self, _addr: u64) -> Result<Box<dyn Read + '_>, Error> {
-        todo!()
-        //        Ok(Box::new(LayeredReader::new(addr, self.into())))
+impl<T: Debug + Send + Sync> ReadLinearStore for Proposed<T> {
+    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
+        Ok(Box::new(LayeredReader::new(
+            addr,
+            Layer {
+                parent: self.parent.clone(),
+                diffs: &self.new,
+            },
+        )))
     }
 
     fn size(&self) -> Result<u64, Error> {
@@ -59,7 +80,7 @@ pub(crate) struct Mutable;
 #[derive(Debug)]
 pub(crate) struct Immutable;
 
-impl WriteLinearStore for Proposed {
+impl WriteLinearStore for Proposed<Mutable> {
     // TODO: we might be able to optimize the case where we keep adding data to
     // the end of the file by not coalescing left. We'd have to change the assumption
     // in the reader that when you reach the end of a modified region, you're always
