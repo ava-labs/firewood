@@ -2,9 +2,6 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::io::{Cursor, Error, Read};
-use std::sync::Arc;
-
-use super::{LinearStore, ReadLinearStore};
 
 #[derive(Debug)]
 pub(crate) struct ConstBacked {
@@ -19,11 +16,11 @@ impl ConstBacked {
     }
 }
 
-impl From<ConstBacked> for Arc<LinearStore<ConstBacked>> {
-    fn from(state: ConstBacked) -> Self {
-        Arc::new(LinearStore { state })
-    }
-}
+// impl From<ConstBacked> for Arc<LinearStore<ConstBacked>> {
+//     fn from(state: ConstBacked) -> Self {
+//         Arc::new(LinearStore { state })
+//     }
+// }
 
 // impl From<ConstBacked> for Proposed {
 //     fn from(value: ConstBacked) -> Self {
@@ -31,14 +28,14 @@ impl From<ConstBacked> for Arc<LinearStore<ConstBacked>> {
 //     }
 // }
 
-impl ReadLinearStore for ConstBacked {
-    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, std::io::Error> {
+impl ConstBacked {
+    pub(crate) fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, std::io::Error> {
         Ok(Box::new(Cursor::new(
             self.data.get(addr as usize..).unwrap_or(&[]),
         )))
     }
 
-    fn size(&self) -> Result<u64, Error> {
+    pub(crate) fn size(&self) -> Result<u64, Error> {
         Ok(self.data.len() as u64)
     }
 }

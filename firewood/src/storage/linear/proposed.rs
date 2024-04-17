@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use super::layered::{Layer, LayeredReader};
-use super::{ImmutableLinearStore, ReadLinearStore, WriteLinearStore};
+use super::ImmutableLinearStore;
 
 /// [Proposed] is a [LinearStore] state that contains a copy of the old and new data.
 /// The P type parameter indicates the state of the linear store for it's parent,
@@ -45,8 +45,8 @@ impl Proposed<Mutable> {
     }
 }
 
-impl<T: Debug + Send + Sync> ReadLinearStore for Proposed<T> {
-    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
+impl<T: Debug + Send + Sync> Proposed<T> {
+    pub(crate) fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
         Ok(Box::new(LayeredReader::new(
             addr,
             Layer {
@@ -56,7 +56,7 @@ impl<T: Debug + Send + Sync> ReadLinearStore for Proposed<T> {
         )))
     }
 
-    fn size(&self) -> Result<u64, Error> {
+    pub(crate) fn size(&self) -> Result<u64, Error> {
         // start with the parent size
         let parent_size = self.parent.size()?;
         // look at the last delta, if any, and see if it will extend the file
@@ -80,13 +80,13 @@ pub(crate) struct Mutable;
 #[derive(Debug)]
 pub(crate) struct Immutable;
 
-impl WriteLinearStore for Proposed<Mutable> {
+impl Proposed<Mutable> {
     // TODO: we might be able to optimize the case where we keep adding data to
     // the end of the file by not coalescing left. We'd have to change the assumption
     // in the reader that when you reach the end of a modified region, you're always
     // in an unmodified region
 
-    fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
+    pub(crate) fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
         // the structure of what will eventually be inserted
         struct InsertData {
             offset: u64,

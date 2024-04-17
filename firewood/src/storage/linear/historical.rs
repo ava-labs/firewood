@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use super::{
     layered::{Layer, LayeredReader},
-    ImmutableLinearStore, ReadLinearStore,
+    ImmutableLinearStore,
 };
 
 /// A linear store used for historical revisions
@@ -37,10 +37,11 @@ impl Historical {
             size,
         }
     }
-}
 
-impl ReadLinearStore for Historical {
-    fn stream_from(&self, addr: u64) -> Result<Box<dyn std::io::Read + '_>, std::io::Error> {
+    pub(crate) fn stream_from(
+        &self,
+        addr: u64,
+    ) -> Result<Box<dyn std::io::Read + '_>, std::io::Error> {
         Ok(Box::new(LayeredReader::new(
             addr,
             Layer {
@@ -50,7 +51,7 @@ impl ReadLinearStore for Historical {
         )))
     }
 
-    fn size(&self) -> Result<u64, std::io::Error> {
+    pub(crate) fn size(&self) -> Result<u64, std::io::Error> {
         Ok(self.size)
     }
 }

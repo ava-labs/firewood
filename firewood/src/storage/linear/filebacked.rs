@@ -9,7 +9,6 @@
 // object. Instead, we probably should use an IO system that can perform multiple
 // read/write operations at once
 
-use super::{ReadLinearStore, WriteLinearStore};
 use std::fs::File;
 use std::io::{Error, Read, Seek};
 use std::os::unix::fs::FileExt;
@@ -22,23 +21,21 @@ pub(crate) struct FileBacked {
     pub(super) fd: Mutex<File>,
 }
 
-impl ReadLinearStore for FileBacked {
-    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, Error> {
+impl FileBacked {
+    pub(crate) fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, Error> {
         let mut fd = self.fd.lock().expect("p");
         fd.seek(std::io::SeekFrom::Start(addr))?;
         Ok(Box::new(fd.try_clone().expect("poisoned lock")))
     }
 
-    fn size(&self) -> Result<u64, Error> {
+    pub(crate) fn size(&self) -> Result<u64, Error> {
         self.fd
             .lock()
             .expect("poisoned lock")
             .seek(std::io::SeekFrom::End(0))
     }
-}
 
-impl WriteLinearStore for FileBacked {
-    fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
+    pub(crate) fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
         self.fd
             .lock()
             .expect("poisoned lock")

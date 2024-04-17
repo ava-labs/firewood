@@ -7,7 +7,7 @@ use super::{
     filebacked::FileBacked,
     historical::Historical,
     proposed::{Immutable, Mutable, Proposed},
-    ImmutableLinearStore, ReadLinearStore,
+    ImmutableLinearStore,
 };
 
 pub struct LinearStorePool {
