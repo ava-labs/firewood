@@ -18,13 +18,9 @@
 //! Each type is described in more detail below.
 
 use std::fmt::Debug;
-use std::io::Error;
+use std::io::{Error, Read};
 use std::ops::Deref;
-use std::pin::Pin;
 use std::sync::Arc;
-
-use futures::Future;
-use tokio::io::AsyncRead;
 
 mod current;
 /// A linear store used for proposals
@@ -81,37 +77,37 @@ pub(super) struct LinearStore<S: ReadLinearStore> {
 
 /// All linearstores support reads
 pub(super) trait ReadLinearStore: Send + Sync + Debug {
-    fn stream_from(&self, addr: u64) -> Result<Pin<Box<dyn AsyncRead + '_>>, Error>;
-    fn size(&self) -> Pin<Box<dyn Future<Output = Result<u64, Error>>>>;
+    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error>;
+    fn size(&self) -> Result<u64, Error>;
 }
 
 impl ReadLinearStore for Arc<dyn ReadLinearStore> {
-    fn stream_from(&self, addr: u64) -> Result<Pin<Box<dyn AsyncRead + '_>>, Error> {
+    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
         self.deref().stream_from(addr)
     }
 
-    fn size(&self) -> Pin<Box<dyn Future<Output = Result<u64, Error>>>> {
+    fn size(&self) -> Result<u64, Error> {
         self.deref().size()
     }
 }
 
 /// Some linear stores support updates
 pub(super) trait WriteLinearStore: Debug {
-    async fn write(&mut self, offset: u64, object: Box<[u8]>) -> Result<usize, Error>;
+    fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error>;
 }
 
 impl<ReadWrite: ReadLinearStore + Debug> WriteLinearStore for LinearStore<ReadWrite> {
-    async fn write(&mut self, _offset: u64, _bytes: Box<[u8]>) -> Result<usize, Error> {
+    fn write(&mut self, _offset: u64, _bytes: &[u8]) -> Result<usize, Error> {
         todo!()
     }
 }
 
 impl<S: ReadLinearStore> ReadLinearStore for LinearStore<S> {
-    fn stream_from(&self, addr: u64) -> Result<Pin<Box<dyn AsyncRead + '_>>, Error> {
+    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
         self.state.stream_from(addr)
     }
 
-    fn size(&self) -> Pin<Box<dyn Future<Output = Result<u64, Error>>>> {
+    fn size(&self) -> Result<u64, Error> {
         todo!()
     }
 }
