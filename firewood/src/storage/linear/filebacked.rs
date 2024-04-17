@@ -21,7 +21,7 @@ pub(crate) struct FileBacked {
 }
 
 impl FileBacked {
-    pub(crate) fn new(path: PathBuf) -> Result<Self, Error> {
+    pub(super) fn new(path: PathBuf) -> Result<Self, Error> {
         let fd = OpenOptions::new()
             .read(true)
             .write(true)

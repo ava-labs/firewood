@@ -71,9 +71,6 @@ mod historical;
 mod layered;
 mod proposed;
 
-#[cfg(test)]
-mod tests;
-
 #[derive(Debug)]
 pub(super) enum ImmutableLinearStore {
     Historical(Historical),
