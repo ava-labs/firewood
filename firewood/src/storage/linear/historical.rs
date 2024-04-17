@@ -58,10 +58,8 @@ impl Historical {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
-    use crate::storage::linear::filebacked::FileBacked;
-    use tempdir::TempDir;
+    use crate::storage::linear::filebacked::tests::new_temp_filebacked;
     use test_case::test_case;
 
     #[test_case(&[0,1,2,3],&[(0,&[4,5,6])],&[4,5,6,3];"read diff, parent")]
@@ -74,9 +72,7 @@ mod tests {
         diffs: &[(u64, &[u8])],
         expected: &'static [u8],
     ) {
-        let temp_dir = TempDir::new("test_historical_stream_from").unwrap();
-        let db_path = temp_dir.path().join("db");
-        let mut parent = FileBacked::new(db_path).unwrap();
+        let mut parent = new_temp_filebacked();
         parent.write(0, parent_state).unwrap();
 
         let parent = ImmutableLinearStore::FileBacked(parent);

@@ -180,228 +180,278 @@ impl Proposed<Mutable> {
     }
 }
 
-// // this is actually a clippy bug, works on nightly; see
-// // https://github.com/rust-lang/rust-clippy/issues/12519
-// #[allow(clippy::unused_io_amount)]
-// use crate::storage::linear::layered::LayeredReader;
+// this is actually a clippy bug, works on nightly; see
+// https://github.com/rust-lang/rust-clippy/issues/12519
+#[allow(clippy::unused_io_amount)]
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod test {
+    use crate::storage::linear::filebacked::tests::new_temp_filebacked;
 
-// #[cfg(test)]
-// #[allow(clippy::unwrap_used)]
-// mod test {
-//     use super::super::tests::ConstBacked;
-//     use super::*;
-//     use rand::Rng;
-//     use std::time::Instant;
-//     use test_case::test_case;
+    use super::*;
+    use rand::Rng;
+    use std::time::Instant;
+    use test_case::test_case;
 
-//     #[test]
-//     fn smoke_read() -> Result<(), std::io::Error> {
-//         let sut: Proposed<ConstBacked, Immutable> = ConstBacked::new(ConstBacked::DATA).into();
+    const TEST_DATA: &[u8] = b"random data";
 
-//         // read all
-//         let mut data = [0u8; ConstBacked::DATA.len()];
-//         sut.stream_from(0).unwrap().read_exact(&mut data).unwrap();
-//         assert_eq!(data, ConstBacked::DATA);
+    #[test]
+    fn smoke_read() -> Result<(), std::io::Error> {
+        let mut parent = new_temp_filebacked();
+        parent.write(0, TEST_DATA)?;
 
-//         // starting not at beginning
-//         let mut data = [0u8; ConstBacked::DATA.len()];
-//         sut.stream_from(1).unwrap().read_exact(&mut data[1..])?;
-//         assert_eq!(data.get(1..), ConstBacked::DATA.get(1..));
+        let proposed = Proposed::new(Arc::new(ImmutableLinearStore::FileBacked(parent)));
 
-//         // ending not at end
-//         let mut data = [0u8; ConstBacked::DATA.len() - 1];
-//         sut.stream_from(0).unwrap().read_exact(&mut data)?;
-//         assert_eq!(Some(data.as_slice()), ConstBacked::DATA.get(..data.len()));
+        // read all
+        let mut data = [0u8; TEST_DATA.len()];
+        proposed
+            .stream_from(0)
+            .unwrap()
+            .read_exact(&mut data)
+            .unwrap();
+        assert_eq!(data, TEST_DATA);
 
-//         Ok(())
-//     }
+        // starting not at beginning
+        let mut data = [0u8; TEST_DATA.len()];
+        proposed
+            .stream_from(1)
+            .unwrap()
+            .read_exact(&mut data[1..])?;
+        assert_eq!(data.get(1..), TEST_DATA.get(1..));
 
-//     #[test]
-//     fn smoke_mutate() -> Result<(), std::io::Error> {
-//         let mut sut: Proposed<ConstBacked, Mutable> = ConstBacked::new(ConstBacked::DATA).into();
+        // ending not at end
+        let mut data = [0u8; TEST_DATA.len() - 1];
+        proposed.stream_from(0).unwrap().read_exact(&mut data)?;
+        assert_eq!(Some(data.as_slice()), TEST_DATA.get(..data.len()));
 
-//         const MUT_DATA: &[u8] = b"data random";
+        Ok(())
+    }
 
-//         // mutate the whole thing
-//         sut.write(0, MUT_DATA)?;
+    #[test]
+    fn smoke_mutate() -> Result<(), std::io::Error> {
+        let mut parent = new_temp_filebacked();
+        parent.write(0, TEST_DATA)?;
 
-//         // read all the changed data
-//         let mut data = [0u8; MUT_DATA.len()];
-//         sut.stream_from(0).unwrap().read_exact(&mut data).unwrap();
-//         assert_eq!(data, MUT_DATA);
+        const MUT_DATA: &[u8] = b"data random";
 
-//         Ok(())
-//     }
+        let mut proposed = Proposed::new(Arc::new(ImmutableLinearStore::FileBacked(parent)));
 
-//     #[test_case(0, b"1", b"1andom data")]
-//     #[test_case(1, b"2", b"r2ndom data")]
-//     #[test_case(10, b"3", b"random dat3")]
-//     fn partial_mod_full_read(pos: u64, delta: &[u8], expected: &[u8]) -> Result<(), Error> {
-//         let mut sut: Proposed<ConstBacked, Mutable> = ConstBacked::new(ConstBacked::DATA).into();
+        // mutate the whole thing
+        proposed.write(0, MUT_DATA)?;
 
-//         sut.write(pos, delta)?;
+        // read all the changed data
+        let mut data = [0u8; MUT_DATA.len()];
+        proposed
+            .stream_from(0)
+            .unwrap()
+            .read_exact(&mut data)
+            .unwrap();
+        assert_eq!(data, MUT_DATA);
 
-//         let mut data = [0u8; ConstBacked::DATA.len()];
-//         sut.stream_from(0).unwrap().read_exact(&mut data).unwrap();
-//         assert_eq!(data, expected);
+        Ok(())
+    }
 
-//         Ok(())
-//     }
+    #[test_case(0, b"1", b"1andom data")]
+    #[test_case(1, b"2", b"r2ndom data")]
+    #[test_case(10, b"3", b"random dat3")]
+    fn partial_mod_full_read(pos: u64, delta: &[u8], expected: &[u8]) -> Result<(), Error> {
+        let mut parent = new_temp_filebacked();
+        parent.write(0, TEST_DATA)?;
 
-//     #[test]
-//     fn nested() {
-//         let mut parent: Proposed<ConstBacked, Mutable> = ConstBacked::new(ConstBacked::DATA).into();
-//         parent.write(1, b"1").unwrap();
+        let mut proposed = Proposed::new(Arc::new(ImmutableLinearStore::FileBacked(parent)));
 
-//         let parent: Arc<LinearStore<Proposed<ConstBacked, Mutable>>> =
-//             Arc::new(LinearStore { state: parent });
-//         let mut child: Proposed<Proposed<ConstBacked, Mutable>, Mutable> = Proposed::new(parent);
-//         child.write(3, b"3").unwrap();
+        proposed.write(pos, delta)?;
 
-//         let mut data = [0u8; ConstBacked::DATA.len()];
-//         child.stream_from(0).unwrap().read_exact(&mut data).unwrap();
-//         assert_eq!(&data, b"r1n3om data");
-//     }
+        let mut data = [0u8; TEST_DATA.len()];
+        proposed
+            .stream_from(0)
+            .unwrap()
+            .read_exact(&mut data)
+            .unwrap();
+        assert_eq!(data, expected);
 
-//     #[test]
-//     fn deep_nest() {
-//         let mut parent: Proposed<ConstBacked, Mutable> = ConstBacked::new(ConstBacked::DATA).into();
-//         parent.write(1, b"1").unwrap();
-//         let mut child: Arc<dyn ReadLinearStore> = Arc::new(parent);
-//         for _ in 0..=200 {
-//             child = Arc::new(LinearStore { state: child });
-//         }
-//         let mut data = [0u8; ConstBacked::DATA.len()];
-//         child.stream_from(0).unwrap().read_exact(&mut data).unwrap();
-//         assert_eq!(&data, b"r1ndom data");
-//     }
+        Ok(())
+    }
 
-//     // possible cases (o) represents unmodified data (m) is modified in first
-//     // modification, M is new modification on top of old
-//     // oommoo < original state, one modification at offset 2 length 2 (2,2)
-//     //
-//     // entire contents before first modified store, space between it
-//     // oooooo original (this note is not repeated below)
-//     // oommoo original with first modification (this note is not repeated below)
-//     // M----- modification at offset 0, length 1
-//     // Mommoo result: two modified areas (0, 1) and (2, 2)
-//     #[test_case(&[(2, 2)], (0, 1), b"Mommoo", 2)]
-//     // adjoints the first modified store, no overlap
-//     // MM---- modification at offset 0, length 2
-//     // MMmmoo result: one enlarged modified area (0, 4)
-//     #[test_case(&[(2, 2)], (0, 2), b"MMmmoo", 1)]
-//     // starts before and overlaps some of the first modified store
-//     // MMM--- modification at offset 0, length 3
-//     // MMMmoo result: one enlarged modified area (0, 4)
-//     #[test_case(&[(2, 2)], (0, 3), b"MMMmoo", 1)]
-//     // still starts before and overlaps, modifies all of it
-//     // MMMM-- modification at offset 0, length 4
-//     // MMMMoo same result (0, 4)
-//     #[test_case(&[(2,2)], (0, 4), b"MMMMoo", 1)]
-//     // starts at same offset, modifies some of it
-//     // --M--- modification at offset 2, length 1
-//     // ooMmoo result: one modified area (2, 2)
-//     #[test_case(&[(2, 2)], (2, 1), b"ooMmoo", 1)]
-//     // same offset, exact fit
-//     // --MM-- modification at offset 2, length 2
-//     // ooMMoo result: one modified area (2, 2)
-//     #[test_case(&[(2, 2)], (2, 2), b"ooMMoo", 1)]
-//     // starts at same offset, enlarges
-//     // --MMM- modification at offset 2, length 3
-//     // ooMMMo result: one enlarged modified area (2, 3)
-//     #[test_case(&[(2, 2)], (2, 3), b"ooMMMo", 1)]
-//     // within existing offset
-//     // ---M-- modification at offset 3, length 1
-//     // oomMoo result: one modified area (2, 2)
-//     #[test_case(&[(2, 2)], (3, 1), b"oomMoo", 1)]
-//     // starts within original offset, becomes larger
-//     // ---MM- modification at offset 3, length 2
-//     // oomMMo result: one modified area (2, 3)
-//     #[test_case(&[(2, 2)], (3, 2), b"oomMMo", 1)]
-//     // starts immediately after modified area
-//     // ----M- modification at offset 4, length 1
-//     // oommMo result: one modified area (2, 3)
-//     #[test_case(&[(2, 2)], (4, 1), b"oommMo", 1)]
-//     // disjoint from modified area
-//     // -----M modification at offset 5, length 1
-//     // oommoM result: two modified areas (2, 2) and (5, 1)
-//     #[test_case(&[(2, 2)], (5, 1), b"oommoM", 2)]
-//     // consume it all
-//     // MMMMMM modification at offset 0, length 6
-//     // MMMMMM result: one modified area
-//     #[test_case(&[(2, 2)], (0, 6), b"MMMMMM", 1)]
-//     // consume all
-//     // starting mods are:
-//     // omomom
-//     // MMMMMM modification at offset 0 length 6
-//     // MMMMMM result, one modified area
-//     #[test_case(&[(1, 1),(3, 1), (5, 1)], (0, 6), b"MMMMMM", 1)]
-//     // consume two
-//     // MMMM-- modification at offset 0, length 4
-//     // MMMMom result, two modified areas
-//     #[test_case(&[(1, 1),(3, 1), (5, 1)], (0, 4), b"MMMMom", 2)]
-//     // consume all, just but don't modify the last one
-//     #[test_case(&[(1, 1),(3, 1), (5, 1)], (0, 5), b"MMMMMm", 1)]
-//     // extend store from within original area
-//     #[test_case(&[(2, 2)], (5, 6), b"oommoMMMMMM", 2)]
-//     // extend store beyond original area
-//     #[test_case(&[(2, 2)], (6, 6), b"oommooMMMMMM", 2)]
-//     // consume multiple before us
-//     #[test_case(&[(1, 1), (3, 1)], (2, 3), b"omMMMo", 1)]
+    #[test]
+    fn nested() {
+        let mut parent = new_temp_filebacked();
+        parent.write(0, TEST_DATA).unwrap();
 
-//     fn test_combiner(
-//         original_mods: &[(u64, usize)],
-//         new_mod: (u64, usize),
-//         result: &'static [u8],
-//         segments: usize,
-//     ) -> Result<(), Error> {
-//         let mut proposal: Proposed<ConstBacked, Mutable> = ConstBacked::new(b"oooooo").into();
-//         for mods in original_mods {
-//             proposal.write(
-//                 mods.0,
-//                 (0..mods.1).map(|_| b'm').collect::<Vec<_>>().as_slice(),
-//             )?;
-//         }
+        let mut proposed = Proposed::new(Arc::new(ImmutableLinearStore::FileBacked(parent)));
+        proposed.write(1, b"1").unwrap();
 
-//         proposal.write(
-//             new_mod.0,
-//             (0..new_mod.1).map(|_| b'M').collect::<Vec<_>>().as_slice(),
-//         )?;
+        // Make immutable
+        let proposed: Proposed<Immutable> = proposed.into();
 
-//         // this bleeds the implementation, but I this made debugging the tests way easier...
-//         assert_eq!(proposal.new.len(), segments);
+        let mut proposed2 =
+            Proposed::new(Arc::new(ImmutableLinearStore::Proposed(proposed.into())));
 
-//         let mut data = vec![];
-//         proposal
-//             .stream_from(0)
-//             .unwrap()
-//             .read_to_end(&mut data)
-//             .unwrap();
+        proposed2.write(3, b"3").unwrap();
 
-//         assert_eq!(data, result);
+        let mut data = [0u8; TEST_DATA.len()];
+        proposed2
+            .stream_from(0)
+            .unwrap()
+            .read_exact(&mut data)
+            .unwrap();
+        assert_eq!(&data, b"r1n3om data");
+    }
 
-//         Ok(())
-//     }
+    #[test]
+    fn deep_nest() {
+        let mut parent = new_temp_filebacked();
+        parent.write(0, TEST_DATA).unwrap();
 
-//     #[test]
-//     fn bench_combiner() -> Result<(), Error> {
-//         const COUNT: usize = 100000;
-//         const DATALEN: usize = 32;
-//         const MODIFICATION_AREA_SIZE: u64 = 2048;
+        let mut proposed = Proposed::new(Arc::new(ImmutableLinearStore::FileBacked(parent)));
+        proposed.write(1, b"1").unwrap();
+        let proposed: Proposed<Immutable> = proposed.into();
 
-//         let mut proposal: Proposed<ConstBacked, Mutable> = ConstBacked::new(b"oooooo").into();
-//         let mut rng = rand::thread_rng();
-//         let start = Instant::now();
-//         for _ in 0..COUNT {
-//             let data = rng.gen::<[u8; DATALEN]>();
-//             proposal.write(rng.gen_range(0..MODIFICATION_AREA_SIZE), &data)?;
-//         }
-//         println!(
-//             "inserted {} of size {} in {}ms",
-//             COUNT,
-//             DATALEN,
-//             Instant::now().duration_since(start).as_millis()
-//         );
-//         Ok(())
-//     }
-// }
+        let mut child = Proposed::new(Arc::new(ImmutableLinearStore::Proposed(proposed.into())));
+        for _ in 0..=200 {
+            let child_immutable: Proposed<Immutable> = child.into();
+            child = Proposed::new(Arc::new(ImmutableLinearStore::Proposed(
+                child_immutable.into(),
+            )))
+            .into();
+        }
+        let mut data = [0u8; TEST_DATA.len()];
+        child.stream_from(0).unwrap().read_exact(&mut data).unwrap();
+        assert_eq!(&data, b"r1ndom data");
+    }
+
+    // possible cases (o) represents unmodified data (m) is modified in first
+    // modification, M is new modification on top of old
+    // oommoo < original state, one modification at offset 2 length 2 (2,2)
+    //
+    // entire contents before first modified store, space between it
+    // oooooo original (this note is not repeated below)
+    // oommoo original with first modification (this note is not repeated below)
+    // M----- modification at offset 0, length 1
+    // Mommoo result: two modified areas (0, 1) and (2, 2)
+    #[test_case(&[(2, 2)], (0, 1), b"Mommoo", 2)]
+    // adjoints the first modified store, no overlap
+    // MM---- modification at offset 0, length 2
+    // MMmmoo result: one enlarged modified area (0, 4)
+    #[test_case(&[(2, 2)], (0, 2), b"MMmmoo", 1)]
+    // starts before and overlaps some of the first modified store
+    // MMM--- modification at offset 0, length 3
+    // MMMmoo result: one enlarged modified area (0, 4)
+    #[test_case(&[(2, 2)], (0, 3), b"MMMmoo", 1)]
+    // still starts before and overlaps, modifies all of it
+    // MMMM-- modification at offset 0, length 4
+    // MMMMoo same result (0, 4)
+    #[test_case(&[(2,2)], (0, 4), b"MMMMoo", 1)]
+    // starts at same offset, modifies some of it
+    // --M--- modification at offset 2, length 1
+    // ooMmoo result: one modified area (2, 2)
+    #[test_case(&[(2, 2)], (2, 1), b"ooMmoo", 1)]
+    // same offset, exact fit
+    // --MM-- modification at offset 2, length 2
+    // ooMMoo result: one modified area (2, 2)
+    #[test_case(&[(2, 2)], (2, 2), b"ooMMoo", 1)]
+    // starts at same offset, enlarges
+    // --MMM- modification at offset 2, length 3
+    // ooMMMo result: one enlarged modified area (2, 3)
+    #[test_case(&[(2, 2)], (2, 3), b"ooMMMo", 1)]
+    // within existing offset
+    // ---M-- modification at offset 3, length 1
+    // oomMoo result: one modified area (2, 2)
+    #[test_case(&[(2, 2)], (3, 1), b"oomMoo", 1)]
+    // starts within original offset, becomes larger
+    // ---MM- modification at offset 3, length 2
+    // oomMMo result: one modified area (2, 3)
+    #[test_case(&[(2, 2)], (3, 2), b"oomMMo", 1)]
+    // starts immediately after modified area
+    // ----M- modification at offset 4, length 1
+    // oommMo result: one modified area (2, 3)
+    #[test_case(&[(2, 2)], (4, 1), b"oommMo", 1)]
+    // disjoint from modified area
+    // -----M modification at offset 5, length 1
+    // oommoM result: two modified areas (2, 2) and (5, 1)
+    #[test_case(&[(2, 2)], (5, 1), b"oommoM", 2)]
+    // consume it all
+    // MMMMMM modification at offset 0, length 6
+    // MMMMMM result: one modified area
+    #[test_case(&[(2, 2)], (0, 6), b"MMMMMM", 1)]
+    // consume all
+    // starting mods are:
+    // omomom
+    // MMMMMM modification at offset 0 length 6
+    // MMMMMM result, one modified area
+    #[test_case(&[(1, 1),(3, 1), (5, 1)], (0, 6), b"MMMMMM", 1)]
+    // consume two
+    // MMMM-- modification at offset 0, length 4
+    // MMMMom result, two modified areas
+    #[test_case(&[(1, 1),(3, 1), (5, 1)], (0, 4), b"MMMMom", 2)]
+    // consume all, just but don't modify the last one
+    #[test_case(&[(1, 1),(3, 1), (5, 1)], (0, 5), b"MMMMMm", 1)]
+    // extend store from within original area
+    #[test_case(&[(2, 2)], (5, 6), b"oommoMMMMMM", 2)]
+    // extend store beyond original area
+    #[test_case(&[(2, 2)], (6, 6), b"oommooMMMMMM", 2)]
+    // consume multiple before us
+    #[test_case(&[(1, 1), (3, 1)], (2, 3), b"omMMMo", 1)]
+
+    fn test_combiner(
+        original_mods: &[(u64, usize)],
+        new_mod: (u64, usize),
+        result: &'static [u8],
+        segments: usize,
+    ) -> Result<(), Error> {
+        let mut parent = new_temp_filebacked();
+        parent.write(0, b"oooooo")?;
+
+        let mut proposal = Proposed::new(Arc::new(ImmutableLinearStore::FileBacked(parent)));
+        for mods in original_mods {
+            proposal.write(
+                mods.0,
+                (0..mods.1).map(|_| b'm').collect::<Vec<_>>().as_slice(),
+            )?;
+        }
+
+        proposal.write(
+            new_mod.0,
+            (0..new_mod.1).map(|_| b'M').collect::<Vec<_>>().as_slice(),
+        )?;
+
+        // this bleeds the implementation, but I this made debugging the tests way easier...
+        assert_eq!(proposal.new.len(), segments);
+
+        let mut data = vec![];
+        proposal
+            .stream_from(0)
+            .unwrap()
+            .read_to_end(&mut data)
+            .unwrap();
+
+        assert_eq!(data, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn bench_combiner() -> Result<(), Error> {
+        const COUNT: usize = 100000;
+        const DATALEN: usize = 32;
+        const MODIFICATION_AREA_SIZE: u64 = 2048;
+
+        let mut parent = new_temp_filebacked();
+        parent.write(0, b"oooooo")?;
+
+        let mut proposal = Proposed::new(Arc::new(ImmutableLinearStore::FileBacked(parent)));
+        let mut rng = rand::thread_rng();
+        let start = Instant::now();
+        for _ in 0..COUNT {
+            let data = rng.gen::<[u8; DATALEN]>();
+            proposal.write(rng.gen_range(0..MODIFICATION_AREA_SIZE), &data)?;
+        }
+        println!(
+            "inserted {} of size {} in {}ms",
+            COUNT,
+            DATALEN,
+            Instant::now().duration_since(start).as_millis()
+        );
+        Ok(())
+    }
+}
