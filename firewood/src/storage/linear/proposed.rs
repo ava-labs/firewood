@@ -3,9 +3,14 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::io::{Cursor, Error, Read};
+use std::io::Error;
 use std::marker::PhantomData;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
+
+use futures::Future;
+use tokio::io::AsyncRead;
 
 use super::{LinearStore, ReadLinearStore, WriteLinearStore};
 
@@ -66,27 +71,30 @@ enum LayeredReaderState<'a> {
 }
 
 impl<P: ReadLinearStore, M: Send + Sync + Debug> ReadLinearStore for Proposed<P, M> {
-    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
-        Ok(Box::new(LayeredReader {
+    fn stream_from(&self, addr: u64) -> Result<Pin<Box<dyn AsyncRead + '_>>, Error> {
+        Ok(Box::pin(LayeredReader {
             offset: addr,
             state: LayeredReaderState::Initial,
             layer: self,
         }))
     }
 
-    fn size(&self) -> Result<u64, Error> {
+    fn size(&self) -> Pin<Box<dyn Future<Output = Result<u64, Error>>>> {
         // start with the parent size
-        let parent_size = self.parent.state.size()?;
-        // look at the last delta, if any, and see if it will extend the file
-        Ok(self
-            .new
-            .range(..)
-            .next_back()
-            .map(|(k, v)| *k + v.len() as u64)
-            .map_or_else(
-                || parent_size,
-                |delta_end| std::cmp::max(parent_size, delta_end),
-            ))
+        Box::pin(async {
+            let parent_size = self.parent.state.size().await?;
+            // look at the last delta, if any, and see if it will extend the file
+            let size = self
+                .new
+                .range(..)
+                .next_back()
+                .map(|(k, v)| *k + v.len() as u64)
+                .map_or_else(
+                    || parent_size,
+                    |delta_end| std::cmp::max(parent_size, delta_end),
+                );
+            Ok(size)
+        })
     }
 }
 
@@ -104,12 +112,14 @@ impl<P: ReadLinearStore> WriteLinearStore for Proposed<P, Mutable> {
     // in the reader that when you reach the end of a modified region, you're always
     // in an unmodified region
 
-    fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
+    async fn write(&mut self, offset: u64, object: Box<[u8]>) -> Result<usize, Error> {
         // the structure of what will eventually be inserted
         struct InsertData {
             offset: u64,
             data: Box<[u8]>,
         }
+
+        let saved_length = object.len();
 
         debug_assert!(!object.is_empty());
         let mut insert = InsertData {
@@ -167,23 +177,19 @@ impl<P: ReadLinearStore> WriteLinearStore for Proposed<P, Mutable> {
                 // we have some overlap
                 let mut new_data = vec![];
                 for resulting_bytes_offset in insert.offset.. {
-                    new_data.push(
-                        if resulting_bytes_offset >= insert.offset
-                            && resulting_bytes_offset < new_end
-                        {
-                            *insert
-                                .data
-                                .get((resulting_bytes_offset - insert.offset) as usize)
-                                .expect("bounds checked above")
-                        } else if let Some(res) = existing
-                            .1
-                            .get((resulting_bytes_offset - *existing.0) as usize)
-                        {
-                            *res
-                        } else {
-                            break;
-                        },
-                    );
+                    new_data.push(if resulting_bytes_offset < new_end {
+                        *insert
+                            .data
+                            .get((resulting_bytes_offset - insert.offset) as usize)
+                            .expect("bounds checked above")
+                    } else if let Some(res) = existing
+                        .1
+                        .get((resulting_bytes_offset - *existing.0) as usize)
+                    {
+                        *res
+                    } else {
+                        break;
+                    });
                 }
                 merged_offsets_to_delete.push(*existing.0);
                 insert.data = new_data.into_boxed_slice();
@@ -194,15 +200,18 @@ impl<P: ReadLinearStore> WriteLinearStore for Proposed<P, Mutable> {
         }
 
         self.new.insert(insert.offset, insert.data);
-        Ok(object.len())
+        Ok(saved_length)
     }
 }
 
-// this is actually a clippy bug, works on nightly; see
-// https://github.com/rust-lang/rust-clippy/issues/12519
-#[allow(clippy::unused_io_amount)]
-impl<'a, P: ReadLinearStore, M: Debug> Read for LayeredReader<'a, P, M> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+impl<'a, P: ReadLinearStore, M: Debug> AsyncRead for LayeredReader<'a, P, M> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        ctx: &mut Context<'_>,
+        dst: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        todo!()
+        /*
         match self.state {
             LayeredReaderState::Initial => {
                 // figure out which of these cases is true:
@@ -225,7 +234,8 @@ impl<'a, P: ReadLinearStore, M: Debug> Read for LayeredReader<'a, P, M> {
                     }
                     break 'state LayeredReaderState::FindNext;
                 };
-                self.read(buf)
+                //self.read(buf)
+                todo!()
             }
             LayeredReaderState::FindNext => {
                 // check for (b) - find the next delta and record it
@@ -246,7 +256,7 @@ impl<'a, P: ReadLinearStore, M: Debug> Read for LayeredReader<'a, P, M> {
                     // (c) nothing even coming up, so all remaining bytes are not in this layer
                     LayeredReaderState::NoMoreModifiedAreas
                 };
-                self.read(buf)
+                todo!() //self.read(buf)
             }
             LayeredReaderState::BeforeModifiedArea {
                 next_offset,
@@ -297,11 +307,17 @@ impl<'a, P: ReadLinearStore, M: Debug> Read for LayeredReader<'a, P, M> {
                 Ok(size)
             }
             LayeredReaderState::NoMoreModifiedAreas => {
-                let size = self.layer.parent.stream_from(self.offset)?.read(buf)?;
+                let size = self
+                    .layer
+                    .parent
+                    .stream_from(self.offset)?
+                    .read(buf)
+                    .await?;
                 self.offset += size as u64;
                 Ok(size)
             }
         }
+        */
     }
 }
 #[cfg(test)]
@@ -312,41 +328,42 @@ mod test {
     use rand::Rng;
     use std::time::Instant;
     use test_case::test_case;
+    use tokio::io::AsyncReadExt as _;
 
-    #[test]
-    fn smoke_read() -> Result<(), std::io::Error> {
+    #[tokio::test]
+    async fn smoke_read() -> Result<(), std::io::Error> {
         let sut: Proposed<ConstBacked, Immutable> = ConstBacked::new(ConstBacked::DATA).into();
 
         // read all
         let mut data = [0u8; ConstBacked::DATA.len()];
-        sut.stream_from(0).unwrap().read_exact(&mut data).unwrap();
+        sut.stream_from(0).unwrap().read_exact(&mut data);
         assert_eq!(data, ConstBacked::DATA);
 
         // starting not at beginning
         let mut data = [0u8; ConstBacked::DATA.len()];
-        sut.stream_from(1).unwrap().read_exact(&mut data[1..])?;
+        sut.stream_from(1).unwrap().read_exact(&mut data[1..]);
         assert_eq!(data.get(1..), ConstBacked::DATA.get(1..));
 
         // ending not at end
         let mut data = [0u8; ConstBacked::DATA.len() - 1];
-        sut.stream_from(0).unwrap().read_exact(&mut data)?;
+        sut.stream_from(0).unwrap().read_exact(&mut data);
         assert_eq!(Some(data.as_slice()), ConstBacked::DATA.get(..data.len()));
 
         Ok(())
     }
 
-    #[test]
-    fn smoke_mutate() -> Result<(), std::io::Error> {
+    #[tokio::test]
+    async fn smoke_mutate() -> Result<(), std::io::Error> {
         let mut sut: Proposed<ConstBacked, Mutable> = ConstBacked::new(ConstBacked::DATA).into();
 
         const MUT_DATA: &[u8] = b"data random";
 
         // mutate the whole thing
-        sut.write(0, MUT_DATA)?;
+        sut.write(0, MUT_DATA.into());
 
         // read all the changed data
         let mut data = [0u8; MUT_DATA.len()];
-        sut.stream_from(0).unwrap().read_exact(&mut data).unwrap();
+        sut.stream_from(0).unwrap().read_exact(&mut data);
         assert_eq!(data, MUT_DATA);
 
         Ok(())
@@ -358,10 +375,10 @@ mod test {
     fn partial_mod_full_read(pos: u64, delta: &[u8], expected: &[u8]) -> Result<(), Error> {
         let mut sut: Proposed<ConstBacked, Mutable> = ConstBacked::new(ConstBacked::DATA).into();
 
-        sut.write(pos, delta)?;
+        sut.write(pos, delta.into());
 
         let mut data = [0u8; ConstBacked::DATA.len()];
-        sut.stream_from(0).unwrap().read_exact(&mut data).unwrap();
+        sut.stream_from(0).unwrap().read_exact(&mut data);
         assert_eq!(data, expected);
 
         Ok(())
@@ -370,28 +387,28 @@ mod test {
     #[test]
     fn nested() {
         let mut parent: Proposed<ConstBacked, Mutable> = ConstBacked::new(ConstBacked::DATA).into();
-        parent.write(1, b"1").unwrap();
+        parent.write(1, Box::new([b'1']));
 
         let parent: Arc<LinearStore<Proposed<ConstBacked, Mutable>>> =
             Arc::new(LinearStore { state: parent });
         let mut child: Proposed<Proposed<ConstBacked, Mutable>, Mutable> = Proposed::new(parent);
-        child.write(3, b"3").unwrap();
+        child.write(3, [b'1'].into());
 
         let mut data = [0u8; ConstBacked::DATA.len()];
-        child.stream_from(0).unwrap().read_exact(&mut data).unwrap();
+        child.stream_from(0).unwrap().read_exact(&mut data);
         assert_eq!(&data, b"r1n3om data");
     }
 
     #[test]
     fn deep_nest() {
         let mut parent: Proposed<ConstBacked, Mutable> = ConstBacked::new(ConstBacked::DATA).into();
-        parent.write(1, b"1").unwrap();
+        parent.write(1, [b'1'].into());
         let mut child: Arc<dyn ReadLinearStore> = Arc::new(parent);
         for _ in 0..=200 {
             child = Arc::new(LinearStore { state: child });
         }
         let mut data = [0u8; ConstBacked::DATA.len()];
-        child.stream_from(0).unwrap().read_exact(&mut data).unwrap();
+        child.stream_from(0).unwrap().read_exact(&mut data);
         assert_eq!(&data, b"r1ndom data");
     }
 
@@ -478,24 +495,28 @@ mod test {
         for mods in original_mods {
             proposal.write(
                 mods.0,
-                (0..mods.1).map(|_| b'm').collect::<Vec<_>>().as_slice(),
-            )?;
+                (0..mods.1)
+                    .map(|_| b'm')
+                    .collect::<Vec<_>>()
+                    .as_slice()
+                    .into(),
+            );
         }
 
         proposal.write(
             new_mod.0,
-            (0..new_mod.1).map(|_| b'M').collect::<Vec<_>>().as_slice(),
-        )?;
+            (0..new_mod.1)
+                .map(|_| b'M')
+                .collect::<Vec<_>>()
+                .as_slice()
+                .into(),
+        );
 
         // this bleeds the implementation, but I this made debugging the tests way easier...
         assert_eq!(proposal.new.len(), segments);
 
         let mut data = vec![];
-        proposal
-            .stream_from(0)
-            .unwrap()
-            .read_to_end(&mut data)
-            .unwrap();
+        proposal.stream_from(0).unwrap().read_to_end(&mut data);
 
         assert_eq!(data, result);
 
@@ -513,7 +534,7 @@ mod test {
         let start = Instant::now();
         for _ in 0..COUNT {
             let data = rng.gen::<[u8; DATALEN]>();
-            proposal.write(rng.gen_range(0..MODIFICATION_AREA_SIZE), &data)?;
+            proposal.write(rng.gen_range(0..MODIFICATION_AREA_SIZE), data.into());
         }
         println!(
             "inserted {} of size {} in {}ms",
