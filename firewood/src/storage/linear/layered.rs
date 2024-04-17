@@ -7,8 +7,17 @@ use super::ImmutableLinearStore;
 
 #[derive(Debug)]
 pub(super) struct Layer<'a> {
-    pub(super) parent: Arc<ImmutableLinearStore>,
-    pub(super) diffs: &'a BTreeMap<u64, Box<[u8]>>,
+    parent: Arc<ImmutableLinearStore>,
+    diffs: &'a BTreeMap<u64, Box<[u8]>>,
+}
+
+impl<'a> Layer<'a> {
+    pub(super) fn new(
+        parent: Arc<ImmutableLinearStore>,
+        diffs: &'a BTreeMap<u64, Box<[u8]>>,
+    ) -> Self {
+        Self { parent, diffs }
+    }
 }
 
 /// A [LayeredReader] is obtained by calling [Proposed::stream_from]

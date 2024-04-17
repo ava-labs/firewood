@@ -44,10 +44,7 @@ impl Historical {
     ) -> Result<Box<dyn std::io::Read + '_>, std::io::Error> {
         Ok(Box::new(LayeredReader::new(
             addr,
-            Layer {
-                parent: self.parent.clone(),
-                diffs: &self.changed_in_parent,
-            },
+            Layer::new(self.parent.clone(), &self.changed_in_parent),
         )))
     }
 

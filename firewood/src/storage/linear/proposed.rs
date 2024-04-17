@@ -49,10 +49,7 @@ impl<T> Proposed<T> {
     pub(super) fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
         Ok(Box::new(LayeredReader::new(
             addr,
-            Layer {
-                parent: self.parent.clone(),
-                diffs: &self.new,
-            },
+            Layer::new(self.parent.clone(), &self.new),
         )))
     }
 
