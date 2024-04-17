@@ -69,7 +69,6 @@ use self::proposed::{Immutable, Mutable, Proposed};
 mod filebacked;
 mod historical;
 mod layered;
-mod manager;
 mod proposed;
 
 #[cfg(test)]
@@ -80,7 +79,7 @@ pub(super) enum ImmutableLinearStore {
     Historical(Historical),
     Proposed(Arc<Proposed<Immutable>>),
     FileBacked(FileBacked),
-    Invalid,
+    Invalid, // TODO do we need this variant?
 }
 
 impl ImmutableLinearStore {
@@ -106,7 +105,7 @@ impl ImmutableLinearStore {
 #[derive(Debug)]
 pub(super) enum MutableLinearStore {
     Proposed(Proposed<Mutable>),
-    Invalid,
+    Invalid, // TODO do we need this variant? If not we can remove MutableLinearStore
 }
 
 impl MutableLinearStore {

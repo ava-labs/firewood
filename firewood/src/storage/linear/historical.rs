@@ -72,7 +72,7 @@ impl Historical {
 //         diffs: &[(u64, &[u8])],
 //         expected: &'static [u8],
 //     ) {
-//         let parent = LinearStore {
+//         let parent = ImmutableLinearStore:: {
 //             state: ConstBacked::new(parent_state),
 //         };
 
@@ -82,7 +82,7 @@ impl Historical {
 //         }
 
 //         let historical =
-//             Historical::from_current(changed_in_parent, Arc::new(parent), expected.len() as u64);
+//             Historical::new(changed_in_parent, Arc::new(parent), expected.len() as u64);
 
 //         for i in 0..expected.len() {
 //             let mut stream = historical.stream_from(i as u64).unwrap();
