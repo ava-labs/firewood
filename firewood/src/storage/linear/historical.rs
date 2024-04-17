@@ -48,12 +48,13 @@ impl Historical {
         )))
     }
 
-    pub(super) fn size(&self) -> Result<u64, std::io::Error> {
+    pub(super) const fn size(&self) -> Result<u64, std::io::Error> {
         Ok(self.size)
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
     use crate::storage::linear::filebacked::tests::new_temp_filebacked;

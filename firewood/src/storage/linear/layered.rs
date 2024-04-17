@@ -33,7 +33,7 @@ pub(super) struct LayeredReader<'a> {
 }
 
 impl<'a> LayeredReader<'a> {
-    pub(super) fn new(offset: u64, layer: Layer<'a>) -> Self {
+    pub(super) const fn new(offset: u64, layer: Layer<'a>) -> Self {
         Self {
             offset,
             state: LayeredReaderState::Initial,

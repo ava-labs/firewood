@@ -26,6 +26,7 @@ impl FileBacked {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(path)?;
 
         Ok(Self { fd: Mutex::new(fd) })
@@ -52,6 +53,8 @@ impl FileBacked {
     }
 }
 
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
 pub(super) mod tests {
     use super::*;
     use tempdir::TempDir;

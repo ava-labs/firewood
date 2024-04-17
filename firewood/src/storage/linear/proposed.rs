@@ -29,7 +29,7 @@ impl From<Proposed<Mutable>> for Proposed<Immutable> {
             new: proposal.new,
             old: proposal.old,
             parent: proposal.parent,
-            state: PhantomData::default(),
+            state: PhantomData,
         }
     }
 }
@@ -40,7 +40,7 @@ impl Proposed<Mutable> {
             parent,
             new: Default::default(),
             old: Default::default(),
-            state: Default::default(),
+            state: PhantomData,
         }
     }
 }
@@ -304,8 +304,7 @@ mod test {
             let child_immutable: Proposed<Immutable> = child.into();
             child = Proposed::new(Arc::new(ImmutableLinearStore::Proposed(
                 child_immutable.into(),
-            )))
-            .into();
+            )));
         }
         let mut data = [0u8; TEST_DATA.len()];
         child.stream_from(0).unwrap().read_exact(&mut data).unwrap();
