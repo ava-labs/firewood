@@ -9,7 +9,7 @@
 // object. Instead, we probably should use an IO system that can perform multiple
 // read/write operations at once
 
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{Error, Read, Seek};
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
@@ -17,11 +17,20 @@ use std::sync::Mutex;
 
 #[derive(Debug)]
 pub(crate) struct FileBacked {
-    path: PathBuf,
     fd: Mutex<File>,
 }
 
 impl FileBacked {
+    pub(crate) fn new(path: PathBuf) -> Result<Self, Error> {
+        let fd = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(path)?;
+
+        Ok(Self { fd: Mutex::new(fd) })
+    }
+
     pub(super) fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, Error> {
         let mut fd = self.fd.lock().expect("p");
         fd.seek(std::io::SeekFrom::Start(addr))?;
