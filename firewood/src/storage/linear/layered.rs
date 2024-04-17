@@ -6,31 +6,10 @@ use std::{collections::BTreeMap, io::Cursor, sync::Arc};
 use super::ImmutableLinearStore;
 
 #[derive(Debug)]
-pub(crate) struct Layer<'a> {
-    pub(crate) parent: Arc<ImmutableLinearStore>,
-    pub(crate) diffs: &'a BTreeMap<u64, Box<[u8]>>,
+pub(super) struct Layer<'a> {
+    pub(super) parent: Arc<ImmutableLinearStore>,
+    pub(super) diffs: &'a BTreeMap<u64, Box<[u8]>>,
 }
-
-// TODO danlaine: These From methods require us to pub(crate) fields of Proposed
-// and Historical. Should we instead make Layer.parent and Layer.diffs public
-// and remove these From methods? i.e. layer creation logic moves out of here.
-// impl<'a, P: ReadLinearStore, M> From<&'a Proposed<P, M>> for Layer<'a> {
-//     fn from(state: &'a Proposed<P, M>) -> Self {
-//         Self {
-//             parent: state.parent.clone(),
-//             diffs: &state.new,
-//         }
-//     }
-// }
-
-// impl<'a, P: ReadLinearStore> From<&'a Historical<P>> for Layer<'a> {
-//     fn from(state: &'a Historical<P>) -> Self {
-//         Self {
-//             parent: state.parent.clone(),
-//             diffs: &state.changed_in_parent,
-//         }
-//     }
-// }
 
 /// A [LayeredReader] is obtained by calling [Proposed::stream_from]
 /// The P type parameter refers to the type of the parent of this layer
