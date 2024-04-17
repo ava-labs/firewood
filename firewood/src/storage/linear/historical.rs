@@ -72,8 +72,7 @@ mod tests {
         diffs: &[(u64, &[u8])],
         expected: &'static [u8],
     ) {
-        let mut parent = new_temp_filebacked();
-        parent.write(0, parent_state).unwrap();
+        let parent = new_temp_filebacked(parent_state);
 
         let parent = ImmutableLinearStore::FileBacked(parent);
 

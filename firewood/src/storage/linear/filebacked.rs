@@ -56,9 +56,11 @@ pub(super) mod tests {
     use super::*;
     use tempdir::TempDir;
 
-    pub fn new_temp_filebacked() -> FileBacked {
+    pub fn new_temp_filebacked(data: &[u8]) -> FileBacked {
         let temp_dir = TempDir::new("test_historical_stream_from").unwrap();
         let db_path = temp_dir.path().join("db");
-        FileBacked::new(db_path).unwrap()
+        let mut store = FileBacked::new(db_path).unwrap();
+        store.write(0, data).unwrap();
+        store
     }
 }

@@ -197,8 +197,7 @@ mod test {
 
     #[test]
     fn smoke_read() -> Result<(), std::io::Error> {
-        let mut parent = new_temp_filebacked();
-        parent.write(0, TEST_DATA)?;
+        let parent = new_temp_filebacked(TEST_DATA);
 
         let proposed = Proposed::new(Arc::new(ImmutableLinearStore::FileBacked(parent)));
 
@@ -229,8 +228,7 @@ mod test {
 
     #[test]
     fn smoke_mutate() -> Result<(), std::io::Error> {
-        let mut parent = new_temp_filebacked();
-        parent.write(0, TEST_DATA)?;
+        let parent = new_temp_filebacked(TEST_DATA);
 
         const MUT_DATA: &[u8] = b"data random";
 
@@ -255,8 +253,7 @@ mod test {
     #[test_case(1, b"2", b"r2ndom data")]
     #[test_case(10, b"3", b"random dat3")]
     fn partial_mod_full_read(pos: u64, delta: &[u8], expected: &[u8]) -> Result<(), Error> {
-        let mut parent = new_temp_filebacked();
-        parent.write(0, TEST_DATA)?;
+        let parent = new_temp_filebacked(TEST_DATA);
 
         let mut proposed = Proposed::new(Arc::new(ImmutableLinearStore::FileBacked(parent)));
 
@@ -275,8 +272,7 @@ mod test {
 
     #[test]
     fn nested() {
-        let mut parent = new_temp_filebacked();
-        parent.write(0, TEST_DATA).unwrap();
+        let parent = new_temp_filebacked(TEST_DATA);
 
         let mut proposed = Proposed::new(Arc::new(ImmutableLinearStore::FileBacked(parent)));
         proposed.write(1, b"1").unwrap();
@@ -300,8 +296,7 @@ mod test {
 
     #[test]
     fn deep_nest() {
-        let mut parent = new_temp_filebacked();
-        parent.write(0, TEST_DATA).unwrap();
+        let parent = new_temp_filebacked(TEST_DATA);
 
         let mut proposed = Proposed::new(Arc::new(ImmutableLinearStore::FileBacked(parent)));
         proposed.write(1, b"1").unwrap();
@@ -399,8 +394,7 @@ mod test {
         result: &'static [u8],
         segments: usize,
     ) -> Result<(), Error> {
-        let mut parent = new_temp_filebacked();
-        parent.write(0, b"oooooo")?;
+        let parent = new_temp_filebacked(b"oooooo");
 
         let mut proposal = Proposed::new(Arc::new(ImmutableLinearStore::FileBacked(parent)));
         for mods in original_mods {
@@ -436,8 +430,7 @@ mod test {
         const DATALEN: usize = 32;
         const MODIFICATION_AREA_SIZE: u64 = 2048;
 
-        let mut parent = new_temp_filebacked();
-        parent.write(0, b"oooooo")?;
+        let parent = new_temp_filebacked(TEST_DATA);
 
         let mut proposal = Proposed::new(Arc::new(ImmutableLinearStore::FileBacked(parent)));
         let mut rng = rand::thread_rng();
