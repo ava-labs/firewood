@@ -210,8 +210,6 @@ impl<'a, P: ReadLinearStore, M: Debug> AsyncRead for LayeredReader<'a, P, M> {
         ctx: &mut Context<'_>,
         dst: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        todo!()
-        /*
         match self.state {
             LayeredReaderState::Initial => {
                 // figure out which of these cases is true:
@@ -234,8 +232,7 @@ impl<'a, P: ReadLinearStore, M: Debug> AsyncRead for LayeredReader<'a, P, M> {
                     }
                     break 'state LayeredReaderState::FindNext;
                 };
-                //self.read(buf)
-                todo!()
+                self.poll_read(ctx, dst)
             }
             LayeredReaderState::FindNext => {
                 // check for (b) - find the next delta and record it
@@ -256,7 +253,7 @@ impl<'a, P: ReadLinearStore, M: Debug> AsyncRead for LayeredReader<'a, P, M> {
                     // (c) nothing even coming up, so all remaining bytes are not in this layer
                     LayeredReaderState::NoMoreModifiedAreas
                 };
-                todo!() //self.read(buf)
+                self.poll_read(ctx, dst)
             }
             LayeredReaderState::BeforeModifiedArea {
                 next_offset,
@@ -265,8 +262,9 @@ impl<'a, P: ReadLinearStore, M: Debug> AsyncRead for LayeredReader<'a, P, M> {
                 // if the buffer is smaller than the remaining bytes in this change, then
                 // restrict the read to only read up to the remaining areas
                 let remaining_passthrough: usize = (next_offset - self.offset) as usize;
-                let size = if buf.len() > remaining_passthrough {
-                    let read_size = self.layer.parent.stream_from(self.offset)?.read(
+                let size = if dst.remaining() > remaining_passthrough {
+                    let parent_stream = pin!(self.layer.parent.stream_from(self.offset))?;
+                    let read_size = parent_stream.poll_read(ctx, 
                         buf.get_mut(0..remaining_passthrough)
                             .expect("length already checked"),
                     )?;
@@ -317,7 +315,6 @@ impl<'a, P: ReadLinearStore, M: Debug> AsyncRead for LayeredReader<'a, P, M> {
                 Ok(size)
             }
         }
-        */
     }
 }
 #[cfg(test)]
