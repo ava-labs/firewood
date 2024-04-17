@@ -38,14 +38,14 @@ pub(crate) struct Layer<'a> {
 /// read-only, since we do not support mutating parents of another
 /// proposal
 #[derive(Debug)]
-pub(crate) struct LayeredReader<'a> {
+pub(super) struct LayeredReader<'a> {
     offset: u64,
     state: LayeredReaderState<'a>,
     layer: Layer<'a>,
 }
 
 impl<'a> LayeredReader<'a> {
-    pub(crate) fn new(offset: u64, layer: Layer<'a>) -> Self {
+    pub(super) fn new(offset: u64, layer: Layer<'a>) -> Self {
         Self {
             offset,
             state: LayeredReaderState::Initial,

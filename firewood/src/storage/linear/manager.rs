@@ -10,7 +10,7 @@ use super::{
     ImmutableLinearStore,
 };
 
-pub struct LinearStorePool {
+pub(super) struct LinearStorePool {
     filebacked: Arc<FileBacked>,
     historical: VecDeque<Arc<Historical>>,
     proposals: Vec<Arc<Proposed<Immutable>>>,
@@ -54,7 +54,7 @@ impl LinearStorePool {
         }
         // safe to commit
 
-        let new_historical = ImmutableLinearStore::Historical(Historical::from_current(
+        let new_historical = ImmutableLinearStore::Historical(Historical::new(
             proposal.old.clone(),
             proposal.parent.clone(),
             proposal.size().unwrap(), // todo remove unwrap

@@ -17,25 +17,25 @@ use std::sync::Mutex;
 
 #[derive(Debug)]
 pub(crate) struct FileBacked {
-    pub(super) path: PathBuf,
-    pub(super) fd: Mutex<File>,
+    path: PathBuf,
+    fd: Mutex<File>,
 }
 
 impl FileBacked {
-    pub(crate) fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, Error> {
+    pub(super) fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, Error> {
         let mut fd = self.fd.lock().expect("p");
         fd.seek(std::io::SeekFrom::Start(addr))?;
         Ok(Box::new(fd.try_clone().expect("poisoned lock")))
     }
 
-    pub(crate) fn size(&self) -> Result<u64, Error> {
+    pub(super) fn size(&self) -> Result<u64, Error> {
         self.fd
             .lock()
             .expect("poisoned lock")
             .seek(std::io::SeekFrom::End(0))
     }
 
-    pub(crate) fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
+    pub(super) fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
         self.fd
             .lock()
             .expect("poisoned lock")

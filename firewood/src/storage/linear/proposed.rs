@@ -16,10 +16,10 @@ use super::ImmutableLinearStore;
 /// The M type parameter indicates the mutability of the proposal, either read-write or readonly
 /// TODO update comment
 #[derive(Debug)]
-pub struct Proposed<T> {
-    pub(crate) new: BTreeMap<u64, Box<[u8]>>,
-    pub old: BTreeMap<u64, Box<[u8]>>,
-    pub(crate) parent: Arc<ImmutableLinearStore>,
+pub(crate) struct Proposed<T> {
+    new: BTreeMap<u64, Box<[u8]>>,
+    pub(super) old: BTreeMap<u64, Box<[u8]>>,
+    pub(super) parent: Arc<ImmutableLinearStore>,
     state: PhantomData<T>,
 }
 
@@ -35,7 +35,7 @@ impl From<Proposed<Mutable>> for Proposed<Immutable> {
 }
 
 impl Proposed<Mutable> {
-    pub(crate) fn new(parent: Arc<ImmutableLinearStore>) -> Self {
+    pub(super) fn new(parent: Arc<ImmutableLinearStore>) -> Self {
         Self {
             parent,
             new: Default::default(),
@@ -45,8 +45,8 @@ impl Proposed<Mutable> {
     }
 }
 
-impl<T: Debug + Send + Sync> Proposed<T> {
-    pub(crate) fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
+impl<T> Proposed<T> {
+    pub(super) fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
         Ok(Box::new(LayeredReader::new(
             addr,
             Layer {
@@ -56,7 +56,7 @@ impl<T: Debug + Send + Sync> Proposed<T> {
         )))
     }
 
-    pub(crate) fn size(&self) -> Result<u64, Error> {
+    pub(super) fn size(&self) -> Result<u64, Error> {
         // start with the parent size
         let parent_size = self.parent.size()?;
         // look at the last delta, if any, and see if it will extend the file
@@ -86,7 +86,7 @@ impl Proposed<Mutable> {
     // in the reader that when you reach the end of a modified region, you're always
     // in an unmodified region
 
-    pub(crate) fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
+    pub(super) fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
         // the structure of what will eventually be inserted
         struct InsertData {
             offset: u64,

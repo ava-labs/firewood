@@ -19,14 +19,14 @@ pub(crate) struct Historical {
     /// For example, if the first 3 bytes of this revision are [0,1,2] and the
     /// first 3 bytes of the next revision are [4,5,6] then this map would
     /// contain [(0, [0,1,2])].
-    pub(crate) changed_in_parent: BTreeMap<u64, Box<[u8]>>,
+    changed_in_parent: BTreeMap<u64, Box<[u8]>>,
     /// The state of the revision after this one.
-    pub(crate) parent: Arc<ImmutableLinearStore>,
-    pub(crate) size: u64,
+    parent: Arc<ImmutableLinearStore>,
+    size: u64,
 }
 
 impl Historical {
-    pub(crate) fn from_current(
+    pub(super) fn new(
         changed_in_parent: BTreeMap<u64, Box<[u8]>>,
         parent: Arc<ImmutableLinearStore>,
         size: u64,
@@ -38,7 +38,7 @@ impl Historical {
         }
     }
 
-    pub(crate) fn stream_from(
+    pub(super) fn stream_from(
         &self,
         addr: u64,
     ) -> Result<Box<dyn std::io::Read + '_>, std::io::Error> {
@@ -51,7 +51,7 @@ impl Historical {
         )))
     }
 
-    pub(crate) fn size(&self) -> Result<u64, std::io::Error> {
+    pub(super) fn size(&self) -> Result<u64, std::io::Error> {
         Ok(self.size)
     }
 }
