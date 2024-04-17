@@ -18,7 +18,7 @@
 //! Each type is described in more detail below.
 
 use std::fmt::Debug;
-use std::io::{Error, Read};
+use std::io::{Error, ErrorKind, Read};
 use std::sync::Arc;
 
 use self::filebacked::FileBacked;
@@ -112,21 +112,21 @@ impl MutableLinearStore {
     pub fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
         match self {
             MutableLinearStore::Proposed(proposed) => proposed.stream_from(addr),
-            MutableLinearStore::Invalid => Err(std::io::ErrorKind::InvalidData.into()),
+            MutableLinearStore::Invalid => Err(ErrorKind::InvalidData.into()),
         }
     }
 
     pub fn size(&self) -> Result<u64, Error> {
         match self {
             MutableLinearStore::Proposed(proposed) => proposed.size(),
-            MutableLinearStore::Invalid => Err(std::io::ErrorKind::InvalidData.into()),
+            MutableLinearStore::Invalid => Err(ErrorKind::InvalidData.into()),
         }
     }
 
     pub fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
         match self {
             MutableLinearStore::Proposed(proposed) => proposed.write(offset, object),
-            MutableLinearStore::Invalid => Err(std::io::ErrorKind::InvalidData.into()),
+            MutableLinearStore::Invalid => Err(ErrorKind::InvalidData.into()),
         }
     }
 }
