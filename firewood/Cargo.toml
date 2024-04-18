@@ -51,7 +51,6 @@ predicates = "3.1.0"
 clap = { version = "4.5.0", features = ['derive'] }
 test-case = "3.3.1"
 pprof = { version = "0.13.0", features = ["flamegraph"] }
-tempdir = "0.3.7"
 
 [[bench]]
 name = "hashops"
