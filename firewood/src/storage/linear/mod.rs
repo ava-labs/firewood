@@ -18,12 +18,7 @@
 //! Each type is described in more detail below.
 
 use std::fmt::Debug;
-use std::io::{Error, ErrorKind, Read};
-use std::sync::Arc;
-
-use self::filebacked::FileBacked;
-use self::historical::Historical;
-use self::proposed::Proposed;
+use std::io::{Error, Read};
 
 /// A linear store used for proposals
 ///
@@ -71,56 +66,15 @@ mod historical;
 mod layered;
 mod proposed;
 
-#[derive(Debug)]
-pub(super) enum LinearStore {
-    Historical(Historical),
-    Proposed(Arc<Proposed>),
-    FileBacked(FileBacked),
+/// All linearstores support reads
+pub(super) trait ReadLinearStore: Debug {
+    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error>;
+    fn size(&self) -> Result<u64, Error>;
 }
 
-impl LinearStore {
-    pub fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
-        match self {
-            LinearStore::Historical(historical) => historical.stream_from(addr),
-            LinearStore::Proposed(proposed) => proposed.stream_from(addr),
-            LinearStore::FileBacked(filebacked) => filebacked.stream_from(addr),
-        }
-    }
-
-    pub fn size(&self) -> Result<u64, Error> {
-        match self {
-            LinearStore::Historical(historical) => historical.size(),
-            LinearStore::Proposed(proposed) => proposed.size(),
-            LinearStore::FileBacked(filebacked) => filebacked.size(),
-        }
-    }
+/// Some linear stores support updates
+pub(super) trait WriteLinearStore: Debug {
+    fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error>;
 }
 
-#[derive(Debug)]
-pub(super) enum MutableLinearStore {
-    Proposed(Proposed),
-    Invalid, // TODO do we need this variant? If not we can remove MutableLinearStore
-}
-
-impl MutableLinearStore {
-    pub fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
-        match self {
-            MutableLinearStore::Proposed(proposed) => proposed.stream_from(addr),
-            MutableLinearStore::Invalid => Err(ErrorKind::InvalidData.into()),
-        }
-    }
-
-    pub fn size(&self) -> Result<u64, Error> {
-        match self {
-            MutableLinearStore::Proposed(proposed) => proposed.size(),
-            MutableLinearStore::Invalid => Err(ErrorKind::InvalidData.into()),
-        }
-    }
-
-    pub fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
-        match self {
-            MutableLinearStore::Proposed(proposed) => proposed.write(offset, object),
-            MutableLinearStore::Invalid => Err(ErrorKind::InvalidData.into()),
-        }
-    }
-}
+pub(super) trait ReadWriteLinearStore: ReadLinearStore + WriteLinearStore + Debug {}

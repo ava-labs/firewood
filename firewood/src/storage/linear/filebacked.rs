@@ -15,6 +15,8 @@ use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use super::{ReadLinearStore, WriteLinearStore};
+
 #[derive(Debug)]
 pub(crate) struct FileBacked {
     fd: Mutex<File>,
@@ -31,21 +33,25 @@ impl FileBacked {
 
         Ok(Self { fd: Mutex::new(fd) })
     }
+}
 
-    pub(super) fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, Error> {
+impl ReadLinearStore for FileBacked {
+    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, Error> {
         let mut fd = self.fd.lock().expect("p");
         fd.seek(std::io::SeekFrom::Start(addr))?;
         Ok(Box::new(fd.try_clone().expect("poisoned lock")))
     }
 
-    pub(super) fn size(&self) -> Result<u64, Error> {
+    fn size(&self) -> Result<u64, Error> {
         self.fd
             .lock()
             .expect("poisoned lock")
             .seek(std::io::SeekFrom::End(0))
     }
+}
 
-    pub(super) fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
+impl WriteLinearStore for FileBacked {
+    fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
         self.fd
             .lock()
             .expect("poisoned lock")

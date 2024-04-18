@@ -7,7 +7,7 @@ use std::io::{Error, Read};
 use std::sync::Arc;
 
 use super::layered::{Layer, LayeredReader};
-use super::LinearStore;
+use super::{ReadLinearStore, WriteLinearStore};
 
 /// [Proposed] is a [LinearStore] state that contains a copy of the old and new data.
 /// The P type parameter indicates the state of the linear store for it's parent,
@@ -18,11 +18,11 @@ use super::LinearStore;
 pub(crate) struct Proposed {
     new: BTreeMap<u64, Box<[u8]>>,
     pub(super) old: BTreeMap<u64, Box<[u8]>>,
-    pub(super) parent: Arc<LinearStore>,
+    pub(super) parent: Arc<Box<dyn ReadLinearStore>>,
 }
 
 impl Proposed {
-    pub(super) fn new(parent: Arc<LinearStore>) -> Self {
+    pub(super) fn new(parent: Arc<Box<dyn ReadLinearStore>>) -> Self {
         Self {
             parent,
             new: Default::default(),
@@ -31,15 +31,15 @@ impl Proposed {
     }
 }
 
-impl Proposed {
-    pub(super) fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
+impl ReadLinearStore for Proposed {
+    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
         Ok(Box::new(LayeredReader::new(
             addr,
             Layer::new(self.parent.clone(), &self.new),
         )))
     }
 
-    pub(super) fn size(&self) -> Result<u64, Error> {
+    fn size(&self) -> Result<u64, Error> {
         // start with the parent size
         let parent_size = self.parent.size()?;
         // look at the last delta, if any, and see if it will extend the file
@@ -63,13 +63,13 @@ pub(crate) struct Mutable;
 #[derive(Debug)]
 pub(crate) struct Immutable;
 
-impl Proposed {
+impl WriteLinearStore for Proposed {
     // TODO: we might be able to optimize the case where we keep adding data to
     // the end of the file by not coalescing left. We'd have to change the assumption
     // in the reader that when you reach the end of a modified region, you're always
     // in an unmodified region
 
-    pub(super) fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
+    fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
         // the structure of what will eventually be inserted
         struct InsertData {
             offset: u64,
@@ -182,7 +182,7 @@ mod test {
     fn smoke_read() -> Result<(), std::io::Error> {
         let parent = new_temp_filebacked(TEST_DATA);
 
-        let proposed = Proposed::new(Arc::new(LinearStore::FileBacked(parent)));
+        let proposed = Proposed::new(Arc::new(Box::new(parent)));
 
         // read all
         let mut data = [0u8; TEST_DATA.len()];
@@ -215,7 +215,7 @@ mod test {
 
         const MUT_DATA: &[u8] = b"data random";
 
-        let mut proposed = Proposed::new(Arc::new(LinearStore::FileBacked(parent)));
+        let mut proposed = Proposed::new(Arc::new(Box::new(parent)));
 
         // mutate the whole thing
         proposed.write(0, MUT_DATA)?;
@@ -238,7 +238,7 @@ mod test {
     fn partial_mod_full_read(pos: u64, delta: &[u8], expected: &[u8]) -> Result<(), Error> {
         let parent = new_temp_filebacked(TEST_DATA);
 
-        let mut proposed = Proposed::new(Arc::new(LinearStore::FileBacked(parent)));
+        let mut proposed = Proposed::new(Arc::new(Box::new(parent)));
 
         proposed.write(pos, delta)?;
 
@@ -257,10 +257,10 @@ mod test {
     fn nested() {
         let parent = new_temp_filebacked(TEST_DATA);
 
-        let mut proposed = Proposed::new(Arc::new(LinearStore::FileBacked(parent)));
+        let mut proposed = Proposed::new(Arc::new(Box::new(parent)));
         proposed.write(1, b"1").unwrap();
 
-        let mut proposed2 = Proposed::new(Arc::new(LinearStore::Proposed(proposed.into())));
+        let mut proposed2 = Proposed::new(Arc::new(Box::new(proposed)));
 
         proposed2.write(3, b"3").unwrap();
 
@@ -277,12 +277,12 @@ mod test {
     fn deep_nest() {
         let parent = new_temp_filebacked(TEST_DATA);
 
-        let mut proposed = Proposed::new(Arc::new(LinearStore::FileBacked(parent)));
+        let mut proposed = Proposed::new(Arc::new(Box::new(parent)));
         proposed.write(1, b"1").unwrap();
 
-        let mut child = Proposed::new(Arc::new(LinearStore::Proposed(proposed.into())));
+        let mut child = Proposed::new(Arc::new(Box::new(proposed)));
         for _ in 0..=200 {
-            child = Proposed::new(Arc::new(LinearStore::Proposed(child.into())));
+            child = Proposed::new(Arc::new(Box::new(child)));
         }
         let mut data = [0u8; TEST_DATA.len()];
         child.stream_from(0).unwrap().read_exact(&mut data).unwrap();
@@ -370,7 +370,7 @@ mod test {
     ) -> Result<(), Error> {
         let parent = new_temp_filebacked(b"oooooo");
 
-        let mut proposal = Proposed::new(Arc::new(LinearStore::FileBacked(parent)));
+        let mut proposal = Proposed::new(Arc::new(Box::new(parent)));
         for mods in original_mods {
             proposal.write(
                 mods.0,
@@ -406,7 +406,7 @@ mod test {
 
         let parent = new_temp_filebacked(TEST_DATA);
 
-        let mut proposal = Proposed::new(Arc::new(LinearStore::FileBacked(parent)));
+        let mut proposal = Proposed::new(Arc::new(Box::new(parent)));
         let mut rng = rand::thread_rng();
         let start = Instant::now();
         for _ in 0..COUNT {

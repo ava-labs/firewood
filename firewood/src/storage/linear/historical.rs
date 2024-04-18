@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use super::{
     layered::{Layer, LayeredReader},
-    LinearStore,
+    ReadLinearStore,
 };
 
 /// A linear store used for historical revisions
@@ -22,12 +22,16 @@ pub(crate) struct Historical {
     /// `[(0, [0,1,2])]`.
     was: BTreeMap<u64, Box<[u8]>>,
     /// The state of the revision after this one.
-    parent: Arc<LinearStore>,
+    parent: Arc<Box<dyn ReadLinearStore>>,
     size: u64,
 }
 
 impl Historical {
-    pub(super) fn new(was: BTreeMap<u64, Box<[u8]>>, parent: Arc<LinearStore>, size: u64) -> Self {
+    pub(super) fn new(
+        was: BTreeMap<u64, Box<[u8]>>,
+        parent: Arc<Box<dyn ReadLinearStore>>,
+        size: u64,
+    ) -> Self {
         Self { was, parent, size }
     }
 
@@ -65,14 +69,12 @@ mod tests {
     ) {
         let parent = new_temp_filebacked(parent_state);
 
-        let parent = LinearStore::FileBacked(parent);
-
         let mut was = BTreeMap::<u64, Box<[u8]>>::new();
         for (addr, data) in diffs {
             was.insert(*addr, data.to_vec().into_boxed_slice());
         }
 
-        let historical = Historical::new(was, Arc::new(parent), expected.len() as u64);
+        let historical = Historical::new(was, Arc::new(Box::new(parent)), expected.len() as u64);
 
         for i in 0..expected.len() {
             let mut stream = historical.stream_from(i as u64).unwrap();

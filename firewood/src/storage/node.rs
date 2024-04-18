@@ -14,7 +14,7 @@ use std::sync::Arc;
 use enum_as_inner::EnumAsInner;
 use serde::{Deserialize, Serialize};
 
-use super::linear::MutableLinearStore;
+use super::linear::{ReadLinearStore, ReadWriteLinearStore};
 
 /// Either a branch or leaf node
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner, Deserialize, Serialize)]
@@ -43,12 +43,12 @@ struct Leaf {
 }
 
 #[derive(Debug)]
-struct NodeStore {
+struct NodeStore<T> {
     header: FreeSpaceManagementHeader,
-    linear_store: MutableLinearStore,
+    linear_store: T,
 }
 
-impl NodeStore {
+impl<T: ReadLinearStore> NodeStore<T> {
     /// Read a node from the provided [LinearAddress]
     ///
     /// A node on disk will consist of a header which both identifies the
@@ -71,7 +71,9 @@ impl NodeStore {
 
         Ok(reader.bytes_read)
     }
+}
 
+impl<T: ReadWriteLinearStore> NodeStore<T> {
     /// Allocate space for a [Node] in the [LinearStore]
     fn create(&mut self, node: &Node) -> Result<LinearAddress, Error> {
         let serialized =
@@ -126,8 +128,8 @@ impl NodeStore {
         Ok(())
     }
 
-    /// Initialize a new [NodeStore] by writing out the [FileIdentifingMagic] and [FreeSpaceManagementHeader]
-    fn init(mut linear_store: MutableLinearStore) -> Result<Self, Error> {
+    /// Create a new [NodeStore] by writing out the [FileIdentifingMagic] and [FreeSpaceManagementHeader]
+    fn new(mut linear_store: T) -> Result<Self, Error> {
         // Write the first 16 bytes of each [PageStore]
         linear_store.write(0, bytemuck::bytes_of(&FileIdentifingMagic::new()))?;
 
