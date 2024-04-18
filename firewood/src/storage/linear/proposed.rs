@@ -10,10 +10,6 @@ use super::layered::{Layer, LayeredReader};
 use super::{ReadLinearStore, WriteLinearStore};
 
 /// [Proposed] is a [LinearStore] state that contains a copy of the old and new data.
-/// The P type parameter indicates the state of the linear store for it's parent,
-/// which could be a another [Proposed] or is [FileBacked](super::filebacked::FileBacked)
-/// The M type parameter indicates the mutability of the proposal, either read-write or readonly
-/// TODO update comment
 #[derive(Debug)]
 pub(crate) struct Proposed {
     new: BTreeMap<u64, Box<[u8]>>,
