@@ -34,18 +34,17 @@ impl Historical {
     ) -> Self {
         Self { was, parent, size }
     }
+}
 
-    pub(super) fn stream_from(
-        &self,
-        addr: u64,
-    ) -> Result<Box<dyn std::io::Read + '_>, std::io::Error> {
+impl ReadLinearStore for Historical {
+    fn stream_from(&self, addr: u64) -> Result<Box<dyn std::io::Read + '_>, std::io::Error> {
         Ok(Box::new(LayeredReader::new(
             addr,
             Layer::new(self.parent.clone(), &self.was),
         )))
     }
 
-    pub(super) const fn size(&self) -> Result<u64, std::io::Error> {
+    fn size(&self) -> Result<u64, std::io::Error> {
         Ok(self.size)
     }
 }

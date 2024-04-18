@@ -55,20 +55,11 @@ impl ReadLinearStore for Proposed {
     }
 }
 
-/// Marker that the Proposal is mutable
-#[derive(Debug)]
-pub(crate) struct Mutable;
-
-/// Marker that the Proposal is immutable
-#[derive(Debug)]
-pub(crate) struct Immutable;
-
 impl WriteLinearStore for Proposed {
     // TODO: we might be able to optimize the case where we keep adding data to
     // the end of the file by not coalescing left. We'd have to change the assumption
     // in the reader that when you reach the end of a modified region, you're always
     // in an unmodified region
-
     fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
         // the structure of what will eventually be inserted
         struct InsertData {
