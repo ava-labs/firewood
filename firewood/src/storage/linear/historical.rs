@@ -11,12 +11,13 @@ use super::{layered::LayeredReader, LinearStore, ReadLinearStore};
 /// A [Historical] [LinearStore] supports read operations only
 #[derive(Debug)]
 pub(crate) struct Historical<P: ReadLinearStore> {
-    /// (offset, value) for every area of this LinearStore that is modified in
+    /// (offset, value) for every area of this LinearStore modified in
     /// the revision after this one (i.e. `parent`).
+    /// That is, what each area `was` in this revision.
     /// For example, if the first 3 bytes of this revision are [0,1,2] and the
-    /// first 3 bytes of the next revision are [4,5,6] then this map would
-    /// contain [(0, [0,1,2])].
-    pub(crate) changed_in_parent: BTreeMap<u64, Box<[u8]>>,
+    /// first 3 bytes of the next revision are [4,5,6] then this map contains
+    /// [(0, [0,1,2])].
+    pub(crate) was: BTreeMap<u64, Box<[u8]>>,
     /// The state of the revision after this one.
     pub(crate) parent: Arc<LinearStore<P>>,
     size: u64,
@@ -24,15 +25,11 @@ pub(crate) struct Historical<P: ReadLinearStore> {
 
 impl<P: ReadLinearStore> Historical<P> {
     pub(crate) fn from_current(
-        changed_in_parent: BTreeMap<u64, Box<[u8]>>,
+        was: BTreeMap<u64, Box<[u8]>>,
         parent: Arc<LinearStore<P>>,
         size: u64,
     ) -> Self {
-        Self {
-            changed_in_parent,
-            parent,
-            size,
-        }
+        Self { was, parent, size }
     }
 }
 
@@ -66,13 +63,12 @@ mod tests {
             state: ConstBacked::new(parent_state),
         };
 
-        let mut changed_in_parent = BTreeMap::<u64, Box<[u8]>>::new();
+        let mut was = BTreeMap::<u64, Box<[u8]>>::new();
         for (addr, data) in diffs {
-            changed_in_parent.insert(*addr, data.to_vec().into_boxed_slice());
+            was.insert(*addr, data.to_vec().into_boxed_slice());
         }
 
-        let historical =
-            Historical::from_current(changed_in_parent, Arc::new(parent), expected.len() as u64);
+        let historical = Historical::from_current(was, Arc::new(parent), expected.len() as u64);
 
         for i in 0..expected.len() {
             let mut stream = historical.stream_from(i as u64).unwrap();
