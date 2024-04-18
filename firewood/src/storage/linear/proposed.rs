@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::io::Error;
+use std::io::{Error, Read};
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -20,9 +20,9 @@ use super::{LinearStore, ReadLinearStore, WriteLinearStore};
 /// The M type parameter indicates the mutability of the proposal, either read-write or readonly
 #[derive(Debug)]
 pub(crate) struct Proposed<P: ReadLinearStore, M> {
-    new: BTreeMap<u64, Box<[u8]>>,
+    pub(crate) new: BTreeMap<u64, Box<[u8]>>,
     old: BTreeMap<u64, Box<[u8]>>,
-    parent: Arc<LinearStore<P>>,
+    pub(crate) parent: Arc<LinearStore<P>>,
     phantom: PhantomData<M>,
 }
 
@@ -37,46 +37,9 @@ impl<P: ReadLinearStore, M> Proposed<P, M> {
     }
 }
 
-/// A [LayeredReader] is obtained by calling [Proposed::stream_from]
-/// The P type parameter refers to the type of the parent of this layer
-/// The M type parameter is not specified here, but should always be
-/// read-only, since we do not support mutating parents of another
-/// proposal
-#[derive(Debug)]
-struct LayeredReader<'a, P: ReadLinearStore, M> {
-    offset: u64,
-    state: LayeredReaderState<'a>,
-    layer: &'a Proposed<P, M>,
-}
-
-/// A [LayeredReaderState] keeps track of when the next transition
-/// happens for a layer. If you attempt to read bytes past the
-/// transition, you'll get what is left, and the state will change
-#[derive(Debug)]
-enum LayeredReaderState<'a> {
-    // we know nothing, we might already be inside a modified area, one might be coming, or there aren't any left
-    Initial,
-    // we know we are not in a modified area, so find the next modified area
-    FindNext,
-    // we know there are no more modified areas past our current offset
-    NoMoreModifiedAreas,
-    BeforeModifiedArea {
-        next_offset: u64,
-        next_modified_area: &'a [u8],
-    },
-    InsideModifiedArea {
-        area: &'a [u8],
-        offset_within: usize,
-    },
-}
-
 impl<P: ReadLinearStore, M: Send + Sync + Debug> ReadLinearStore for Proposed<P, M> {
-    fn stream_from(&self, addr: u64) -> Result<Pin<Box<dyn AsyncRead + '_>>, Error> {
-        Ok(Box::pin(LayeredReader {
-            offset: addr,
-            state: LayeredReaderState::Initial,
-            layer: self,
-        }))
+    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
+        Ok(Box::new(LayeredReader::new(addr, self.into())))
     }
 
     fn size(&self) -> Pin<Box<dyn Future<Output = Result<u64, Error>>>> {
@@ -203,6 +166,10 @@ impl<P: ReadLinearStore> WriteLinearStore for Proposed<P, Mutable> {
         Ok(saved_length)
     }
 }
+
+// this is actually a clippy bug, works on nightly; see
+// https://github.com/rust-lang/rust-clippy/issues/12519
+use crate::storage::linear::layered::LayeredReader;
 
 impl<'a, P: ReadLinearStore, M: Debug> AsyncRead for LayeredReader<'a, P, M> {
     fn poll_read(
