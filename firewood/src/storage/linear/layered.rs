@@ -45,7 +45,7 @@ pub(crate) struct LayeredReader<'a, P: ReadLinearStore> {
 }
 
 impl<'a, P: ReadLinearStore> LayeredReader<'a, P> {
-    pub(crate) fn new(offset: u64, layer: Layer<'a, P>) -> Self {
+    pub(crate) const fn new(offset: u64, layer: Layer<'a, P>) -> Self {
         Self {
             offset,
             state: LayeredReaderState::Initial,
@@ -143,6 +143,9 @@ impl<'a, P: ReadLinearStore> std::io::Read for LayeredReader<'a, P> {
                     }
                     read_size
                 } else {
+                    // TODO danlaine: Why does clippy complain without this allow?
+                    // We are using the read amount here, aren't we?
+                    #[allow(clippy::unused_io_amount)]
                     self.layer.parent.stream_from(self.offset)?.read(buf)?
                 };
                 self.offset += size as u64;

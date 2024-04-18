@@ -14,9 +14,9 @@ pub(crate) struct Historical<P: ReadLinearStore> {
     /// (offset, value) for every area of this LinearStore modified in
     /// the revision after this one (i.e. `parent`).
     /// That is, what each area `was` in this revision.
-    /// For example, if the first 3 bytes of this revision are [0,1,2] and the
-    /// first 3 bytes of the next revision are [4,5,6] then this map contains
-    /// [(0, [0,1,2])].
+    /// For example, if the first 3 bytes of this revision are `[0,1,2]` and the
+    /// first 3 bytes of the next revision are `[4,5,6]` then this map contains
+    /// `[(0, [0,1,2])]`.
     pub(crate) was: BTreeMap<u64, Box<[u8]>>,
     /// The state of the revision after this one.
     pub(crate) parent: Arc<LinearStore<P>>,
@@ -44,6 +44,7 @@ impl<P: ReadLinearStore> ReadLinearStore for Historical<P> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
     use crate::storage::linear::tests::ConstBacked;

@@ -163,7 +163,6 @@ impl<P: ReadLinearStore> WriteLinearStore for Proposed<P, Mutable> {
 
 // this is actually a clippy bug, works on nightly; see
 // https://github.com/rust-lang/rust-clippy/issues/12519
-#[allow(clippy::unused_io_amount)]
 use crate::storage::linear::layered::LayeredReader;
 
 #[cfg(test)]
