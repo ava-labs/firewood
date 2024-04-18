@@ -4,7 +4,6 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::io::{Error, Read};
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use super::layered::{Layer, LayeredReader};
@@ -16,36 +15,23 @@ use super::ImmutableLinearStore;
 /// The M type parameter indicates the mutability of the proposal, either read-write or readonly
 /// TODO update comment
 #[derive(Debug)]
-pub(crate) struct Proposed<T> {
+pub(crate) struct Proposed {
     new: BTreeMap<u64, Box<[u8]>>,
     pub(super) old: BTreeMap<u64, Box<[u8]>>,
     pub(super) parent: Arc<ImmutableLinearStore>,
-    state: PhantomData<T>,
 }
 
-impl From<Proposed<Mutable>> for Proposed<Immutable> {
-    fn from(proposal: Proposed<Mutable>) -> Self {
-        Self {
-            new: proposal.new,
-            old: proposal.old,
-            parent: proposal.parent,
-            state: PhantomData,
-        }
-    }
-}
-
-impl Proposed<Mutable> {
+impl Proposed {
     pub(super) fn new(parent: Arc<ImmutableLinearStore>) -> Self {
         Self {
             parent,
             new: Default::default(),
             old: Default::default(),
-            state: PhantomData,
         }
     }
 }
 
-impl<T> Proposed<T> {
+impl Proposed {
     pub(super) fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
         Ok(Box::new(LayeredReader::new(
             addr,
@@ -77,7 +63,7 @@ pub(crate) struct Mutable;
 #[derive(Debug)]
 pub(crate) struct Immutable;
 
-impl Proposed<Mutable> {
+impl Proposed {
     // TODO: we might be able to optimize the case where we keep adding data to
     // the end of the file by not coalescing left. We'd have to change the assumption
     // in the reader that when you reach the end of a modified region, you're always
@@ -274,9 +260,6 @@ mod test {
         let mut proposed = Proposed::new(Arc::new(ImmutableLinearStore::FileBacked(parent)));
         proposed.write(1, b"1").unwrap();
 
-        // Make immutable
-        let proposed: Proposed<Immutable> = proposed.into();
-
         let mut proposed2 =
             Proposed::new(Arc::new(ImmutableLinearStore::Proposed(proposed.into())));
 
@@ -297,14 +280,10 @@ mod test {
 
         let mut proposed = Proposed::new(Arc::new(ImmutableLinearStore::FileBacked(parent)));
         proposed.write(1, b"1").unwrap();
-        let proposed: Proposed<Immutable> = proposed.into();
 
         let mut child = Proposed::new(Arc::new(ImmutableLinearStore::Proposed(proposed.into())));
         for _ in 0..=200 {
-            let child_immutable: Proposed<Immutable> = child.into();
-            child = Proposed::new(Arc::new(ImmutableLinearStore::Proposed(
-                child_immutable.into(),
-            )));
+            child = Proposed::new(Arc::new(ImmutableLinearStore::Proposed(child.into())));
         }
         let mut data = [0u8; TEST_DATA.len()];
         child.stream_from(0).unwrap().read_exact(&mut data).unwrap();

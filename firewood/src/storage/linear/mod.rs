@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use self::filebacked::FileBacked;
 use self::historical::Historical;
-use self::proposed::{Immutable, Mutable, Proposed};
+use self::proposed::Proposed;
 
 /// A linear store used for proposals
 ///
@@ -74,7 +74,7 @@ mod proposed;
 #[derive(Debug)]
 pub(super) enum ImmutableLinearStore {
     Historical(Historical),
-    Proposed(Arc<Proposed<Immutable>>),
+    Proposed(Arc<Proposed>),
     FileBacked(FileBacked),
 }
 
@@ -98,7 +98,7 @@ impl ImmutableLinearStore {
 
 #[derive(Debug)]
 pub(super) enum MutableLinearStore {
-    Proposed(Proposed<Mutable>),
+    Proposed(Proposed),
     Invalid, // TODO do we need this variant? If not we can remove MutableLinearStore
 }
 
