@@ -24,7 +24,7 @@ pub(crate) struct Historical<P: ReadLinearStore> {
 }
 
 impl<P: ReadLinearStore> Historical<P> {
-    pub(crate) fn from_current(
+    pub(crate) fn new(
         was: BTreeMap<u64, Box<[u8]>>,
         parent: Arc<LinearStore<P>>,
         size: u64,
@@ -68,7 +68,7 @@ mod tests {
             was.insert(*addr, data.to_vec().into_boxed_slice());
         }
 
-        let historical = Historical::from_current(was, Arc::new(parent), expected.len() as u64);
+        let historical = Historical::new(was, Arc::new(parent), expected.len() as u64);
 
         for i in 0..expected.len() {
             let mut stream = historical.stream_from(i as u64).unwrap();
