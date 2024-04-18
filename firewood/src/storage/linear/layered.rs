@@ -7,13 +7,13 @@ use super::ReadLinearStore;
 
 #[derive(Debug)]
 pub(super) struct Layer<'a> {
-    parent: Arc<Box<dyn ReadLinearStore>>,
+    parent: Arc<dyn ReadLinearStore>,
     diffs: &'a BTreeMap<u64, Box<[u8]>>,
 }
 
 impl<'a> Layer<'a> {
     pub(super) fn new(
-        parent: Arc<Box<dyn ReadLinearStore>>,
+        parent: Arc<dyn ReadLinearStore>,
         diffs: &'a BTreeMap<u64, Box<[u8]>>,
     ) -> Self {
         Self { parent, diffs }

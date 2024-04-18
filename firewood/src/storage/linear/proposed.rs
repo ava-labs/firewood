@@ -18,11 +18,11 @@ use super::{ReadLinearStore, WriteLinearStore};
 pub(crate) struct Proposed {
     new: BTreeMap<u64, Box<[u8]>>,
     pub(super) old: BTreeMap<u64, Box<[u8]>>,
-    pub(super) parent: Arc<Box<dyn ReadLinearStore>>,
+    pub(super) parent: Arc<dyn ReadLinearStore>,
 }
 
 impl Proposed {
-    pub(super) fn new(parent: Arc<Box<dyn ReadLinearStore>>) -> Self {
+    pub(super) fn new(parent: Arc<dyn ReadLinearStore>) -> Self {
         Self {
             parent,
             new: Default::default(),
@@ -182,7 +182,7 @@ mod test {
     fn smoke_read() -> Result<(), std::io::Error> {
         let parent = new_temp_filebacked(TEST_DATA);
 
-        let proposed = Proposed::new(Arc::new(Box::new(parent)));
+        let proposed = Proposed::new(Arc::new(parent));
 
         // read all
         let mut data = [0u8; TEST_DATA.len()];
@@ -215,7 +215,7 @@ mod test {
 
         const MUT_DATA: &[u8] = b"data random";
 
-        let mut proposed = Proposed::new(Arc::new(Box::new(parent)));
+        let mut proposed = Proposed::new(Arc::new(parent));
 
         // mutate the whole thing
         proposed.write(0, MUT_DATA)?;
@@ -238,7 +238,7 @@ mod test {
     fn partial_mod_full_read(pos: u64, delta: &[u8], expected: &[u8]) -> Result<(), Error> {
         let parent = new_temp_filebacked(TEST_DATA);
 
-        let mut proposed = Proposed::new(Arc::new(Box::new(parent)));
+        let mut proposed = Proposed::new(Arc::new(parent));
 
         proposed.write(pos, delta)?;
 
@@ -257,10 +257,10 @@ mod test {
     fn nested() {
         let parent = new_temp_filebacked(TEST_DATA);
 
-        let mut proposed = Proposed::new(Arc::new(Box::new(parent)));
+        let mut proposed = Proposed::new(Arc::new(parent));
         proposed.write(1, b"1").unwrap();
 
-        let mut proposed2 = Proposed::new(Arc::new(Box::new(proposed)));
+        let mut proposed2 = Proposed::new(Arc::new(proposed));
 
         proposed2.write(3, b"3").unwrap();
 
@@ -277,12 +277,12 @@ mod test {
     fn deep_nest() {
         let parent = new_temp_filebacked(TEST_DATA);
 
-        let mut proposed = Proposed::new(Arc::new(Box::new(parent)));
+        let mut proposed = Proposed::new(Arc::new(parent));
         proposed.write(1, b"1").unwrap();
 
-        let mut child = Proposed::new(Arc::new(Box::new(proposed)));
+        let mut child = Proposed::new(Arc::new(proposed));
         for _ in 0..=200 {
-            child = Proposed::new(Arc::new(Box::new(child)));
+            child = Proposed::new(Arc::new(child));
         }
         let mut data = [0u8; TEST_DATA.len()];
         child.stream_from(0).unwrap().read_exact(&mut data).unwrap();
@@ -370,7 +370,7 @@ mod test {
     ) -> Result<(), Error> {
         let parent = new_temp_filebacked(b"oooooo");
 
-        let mut proposal = Proposed::new(Arc::new(Box::new(parent)));
+        let mut proposal = Proposed::new(Arc::new(parent));
         for mods in original_mods {
             proposal.write(
                 mods.0,
@@ -406,7 +406,7 @@ mod test {
 
         let parent = new_temp_filebacked(TEST_DATA);
 
-        let mut proposal = Proposed::new(Arc::new(Box::new(parent)));
+        let mut proposal = Proposed::new(Arc::new(parent));
         let mut rng = rand::thread_rng();
         let start = Instant::now();
         for _ in 0..COUNT {

@@ -22,14 +22,14 @@ pub(crate) struct Historical {
     /// `[(0, [0,1,2])]`.
     was: BTreeMap<u64, Box<[u8]>>,
     /// The state of the revision after this one.
-    parent: Arc<Box<dyn ReadLinearStore>>,
+    parent: Arc<dyn ReadLinearStore>,
     size: u64,
 }
 
 impl Historical {
     pub(super) fn new(
         was: BTreeMap<u64, Box<[u8]>>,
-        parent: Arc<Box<dyn ReadLinearStore>>,
+        parent: Arc<dyn ReadLinearStore>,
         size: u64,
     ) -> Self {
         Self { was, parent, size }
@@ -74,7 +74,7 @@ mod tests {
             was.insert(*addr, data.to_vec().into_boxed_slice());
         }
 
-        let historical = Historical::new(was, Arc::new(Box::new(parent)), expected.len() as u64);
+        let historical = Historical::new(was, Arc::new(parent), expected.len() as u64);
 
         for i in 0..expected.len() {
             let mut stream = historical.stream_from(i as u64).unwrap();
