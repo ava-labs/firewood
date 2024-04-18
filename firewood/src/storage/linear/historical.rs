@@ -54,7 +54,7 @@ impl Historical {
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
-    use crate::storage::linear::filebacked::tests::new_temp_filebacked;
+    use crate::storage::linear::tests::ConstBacked;
     use test_case::test_case;
 
     #[test_case(&[0,1,2,3],&[(0,&[4,5,6])],&[4,5,6,3];"read diff, parent")]
@@ -67,7 +67,7 @@ mod tests {
         diffs: &[(u64, &[u8])],
         expected: &'static [u8],
     ) {
-        let parent = new_temp_filebacked(parent_state);
+        let parent = ConstBacked::new(parent_state);
 
         let mut was = BTreeMap::<u64, Box<[u8]>>::new();
         for (addr, data) in diffs {

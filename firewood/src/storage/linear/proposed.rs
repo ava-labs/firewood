@@ -169,7 +169,7 @@ impl WriteLinearStore for Proposed {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod test {
-    use crate::storage::linear::filebacked::tests::new_temp_filebacked;
+    use crate::storage::linear::tests::ConstBacked;
 
     use super::*;
     use rand::Rng;
@@ -180,7 +180,7 @@ mod test {
 
     #[test]
     fn smoke_read() -> Result<(), std::io::Error> {
-        let parent = new_temp_filebacked(TEST_DATA);
+        let parent = ConstBacked::new(TEST_DATA);
 
         let proposed = Proposed::new(Arc::new(parent));
 
@@ -211,7 +211,7 @@ mod test {
 
     #[test]
     fn smoke_mutate() -> Result<(), std::io::Error> {
-        let parent = new_temp_filebacked(TEST_DATA);
+        let parent = ConstBacked::new(TEST_DATA);
 
         const MUT_DATA: &[u8] = b"data random";
 
@@ -236,7 +236,7 @@ mod test {
     #[test_case(1, b"2", b"r2ndom data")]
     #[test_case(10, b"3", b"random dat3")]
     fn partial_mod_full_read(pos: u64, delta: &[u8], expected: &[u8]) -> Result<(), Error> {
-        let parent = new_temp_filebacked(TEST_DATA);
+        let parent = ConstBacked::new(TEST_DATA);
 
         let mut proposed = Proposed::new(Arc::new(parent));
 
@@ -255,7 +255,7 @@ mod test {
 
     #[test]
     fn nested() {
-        let parent = new_temp_filebacked(TEST_DATA);
+        let parent = ConstBacked::new(TEST_DATA);
 
         let mut proposed = Proposed::new(Arc::new(parent));
         proposed.write(1, b"1").unwrap();
@@ -275,7 +275,7 @@ mod test {
 
     #[test]
     fn deep_nest() {
-        let parent = new_temp_filebacked(TEST_DATA);
+        let parent = ConstBacked::new(TEST_DATA);
 
         let mut proposed = Proposed::new(Arc::new(parent));
         proposed.write(1, b"1").unwrap();
@@ -368,7 +368,7 @@ mod test {
         result: &'static [u8],
         segments: usize,
     ) -> Result<(), Error> {
-        let parent = new_temp_filebacked(b"oooooo");
+        let parent = ConstBacked::new(b"oooooo");
 
         let mut proposal = Proposed::new(Arc::new(parent));
         for mods in original_mods {
@@ -404,7 +404,7 @@ mod test {
         const DATALEN: usize = 32;
         const MODIFICATION_AREA_SIZE: u64 = 2048;
 
-        let parent = new_temp_filebacked(TEST_DATA);
+        let parent = ConstBacked::new(TEST_DATA);
 
         let mut proposal = Proposed::new(Arc::new(parent));
         let mut rng = rand::thread_rng();

@@ -58,18 +58,3 @@ impl WriteLinearStore for FileBacked {
             .write_at(object, offset)
     }
 }
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-pub(super) mod tests {
-    use super::*;
-    use tempdir::TempDir;
-
-    pub fn new_temp_filebacked(data: &[u8]) -> FileBacked {
-        let temp_dir = TempDir::new("test_historical_stream_from").unwrap();
-        let db_path = temp_dir.path().join("db");
-        let mut store = FileBacked::new(db_path).unwrap();
-        store.write(0, data).unwrap();
-        store
-    }
-}

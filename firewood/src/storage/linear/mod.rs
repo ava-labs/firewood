@@ -65,6 +65,8 @@ mod filebacked;
 mod historical;
 mod layered;
 mod proposed;
+#[cfg(test)]
+mod tests;
 
 /// All linearstores support reads
 pub(super) trait ReadLinearStore: Debug {
