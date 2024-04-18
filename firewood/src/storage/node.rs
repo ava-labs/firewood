@@ -43,7 +43,7 @@ struct Leaf {
 }
 
 #[derive(Debug)]
-struct NodeStore<T> {
+struct NodeStore<T: ReadLinearStore> {
     header: FreeSpaceManagementHeader,
     linear_store: T,
 }
