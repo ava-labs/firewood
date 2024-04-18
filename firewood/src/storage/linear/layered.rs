@@ -3,19 +3,16 @@
 
 use std::{collections::BTreeMap, io::Cursor, sync::Arc};
 
-use super::ImmutableLinearStore;
+use super::LinearStore;
 
 #[derive(Debug)]
 pub(super) struct Layer<'a> {
-    parent: Arc<ImmutableLinearStore>,
+    parent: Arc<LinearStore>,
     diffs: &'a BTreeMap<u64, Box<[u8]>>,
 }
 
 impl<'a> Layer<'a> {
-    pub(super) fn new(
-        parent: Arc<ImmutableLinearStore>,
-        diffs: &'a BTreeMap<u64, Box<[u8]>>,
-    ) -> Self {
+    pub(super) fn new(parent: Arc<LinearStore>, diffs: &'a BTreeMap<u64, Box<[u8]>>) -> Self {
         Self { parent, diffs }
     }
 }

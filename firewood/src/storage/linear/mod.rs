@@ -72,26 +72,26 @@ mod layered;
 mod proposed;
 
 #[derive(Debug)]
-pub(super) enum ImmutableLinearStore {
+pub(super) enum LinearStore {
     Historical(Historical),
     Proposed(Arc<Proposed>),
     FileBacked(FileBacked),
 }
 
-impl ImmutableLinearStore {
+impl LinearStore {
     pub fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
         match self {
-            ImmutableLinearStore::Historical(historical) => historical.stream_from(addr),
-            ImmutableLinearStore::Proposed(proposed) => proposed.stream_from(addr),
-            ImmutableLinearStore::FileBacked(filebacked) => filebacked.stream_from(addr),
+            LinearStore::Historical(historical) => historical.stream_from(addr),
+            LinearStore::Proposed(proposed) => proposed.stream_from(addr),
+            LinearStore::FileBacked(filebacked) => filebacked.stream_from(addr),
         }
     }
 
     pub fn size(&self) -> Result<u64, Error> {
         match self {
-            ImmutableLinearStore::Historical(historical) => historical.size(),
-            ImmutableLinearStore::Proposed(proposed) => proposed.size(),
-            ImmutableLinearStore::FileBacked(filebacked) => filebacked.size(),
+            LinearStore::Historical(historical) => historical.size(),
+            LinearStore::Proposed(proposed) => proposed.size(),
+            LinearStore::FileBacked(filebacked) => filebacked.size(),
         }
     }
 }
