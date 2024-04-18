@@ -37,7 +37,6 @@ bincode = "1.3.3"
 bitflags = { version = "2.4.2", features = ["bytemuck"] }
 env_logger = { version = "0.11.2", optional = true }
 log = { version = "0.4.20", optional = true }
-tempdir = "0.3.7"
 
 [features]
 logger = ["dep:env_logger", "log"]
@@ -52,6 +51,7 @@ predicates = "3.1.0"
 clap = { version = "4.5.0", features = ['derive'] }
 test-case = "3.3.1"
 pprof = { version = "0.13.0", features = ["flamegraph"] }
+tempdir = "0.3.7"
 
 [[bench]]
 name = "hashops"
