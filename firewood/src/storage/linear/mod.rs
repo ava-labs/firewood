@@ -76,7 +76,6 @@ pub(super) enum ImmutableLinearStore {
     Historical(Historical),
     Proposed(Arc<Proposed<Immutable>>),
     FileBacked(FileBacked),
-    Invalid, // TODO do we need this variant?
 }
 
 impl ImmutableLinearStore {
@@ -85,7 +84,6 @@ impl ImmutableLinearStore {
             ImmutableLinearStore::Historical(historical) => historical.stream_from(addr),
             ImmutableLinearStore::Proposed(proposed) => proposed.stream_from(addr),
             ImmutableLinearStore::FileBacked(filebacked) => filebacked.stream_from(addr),
-            ImmutableLinearStore::Invalid => Err(std::io::ErrorKind::InvalidData.into()),
         }
     }
 
@@ -94,7 +92,6 @@ impl ImmutableLinearStore {
             ImmutableLinearStore::Historical(historical) => historical.size(),
             ImmutableLinearStore::Proposed(proposed) => proposed.size(),
             ImmutableLinearStore::FileBacked(filebacked) => filebacked.size(),
-            ImmutableLinearStore::Invalid => Err(std::io::ErrorKind::InvalidData.into()),
         }
     }
 }
