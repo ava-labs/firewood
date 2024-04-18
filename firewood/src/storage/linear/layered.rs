@@ -129,6 +129,7 @@ impl<'a, P: ReadLinearStore> std::io::Read for LayeredReader<'a, P> {
                 // if the buffer is smaller than the remaining bytes in this change, then
                 // restrict the read to only read up to the remaining areas
                 let remaining_passthrough: usize = (next_offset - self.offset) as usize;
+                #[allow(clippy::unused_io_amount)]
                 let size = if buf.len() > remaining_passthrough {
                     let read_size = self.layer.parent.stream_from(self.offset)?.read(
                         buf.get_mut(0..remaining_passthrough)
@@ -143,9 +144,8 @@ impl<'a, P: ReadLinearStore> std::io::Read for LayeredReader<'a, P> {
                     }
                     read_size
                 } else {
-                    // TODO danlaine: Why does clippy complain without this allow?
+                    // TODO danlaine: Why does clippy complain without the #allow?
                     // We are using the read amount here, aren't we?
-                    #[allow(clippy::unused_io_amount)]
                     self.layer.parent.stream_from(self.offset)?.read(buf)?
                 };
                 self.offset += size as u64;
