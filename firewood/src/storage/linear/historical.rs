@@ -14,12 +14,13 @@ use super::{
 /// A [Historical] [LinearStore] supports read operations only
 #[derive(Debug)]
 pub(crate) struct Historical {
-    /// (offset, value) for every area of this LinearStore that is modified in
+    /// (offset, value) for every area of this LinearStore modified in
     /// the revision after this one (i.e. `parent`).
-    /// For example, if the first 3 bytes of this revision are [0,1,2] and the
-    /// first 3 bytes of the next revision are [4,5,6] then this map would
-    /// contain [(0, [0,1,2])].
-    changed_in_parent: BTreeMap<u64, Box<[u8]>>,
+    /// That is, what each area `was` in this revision.
+    /// For example, if the first 3 bytes of this revision are `[0,1,2]` and the
+    /// first 3 bytes of the next revision are `[4,5,6]` then this map contains
+    /// `[(0, [0,1,2])]`.
+    was: BTreeMap<u64, Box<[u8]>>,
     /// The state of the revision after this one.
     parent: Arc<ImmutableLinearStore>,
     size: u64,
@@ -27,15 +28,11 @@ pub(crate) struct Historical {
 
 impl Historical {
     pub(super) fn new(
-        changed_in_parent: BTreeMap<u64, Box<[u8]>>,
+        was: BTreeMap<u64, Box<[u8]>>,
         parent: Arc<ImmutableLinearStore>,
         size: u64,
     ) -> Self {
-        Self {
-            changed_in_parent,
-            parent,
-            size,
-        }
+        Self { was, parent, size }
     }
 
     pub(super) fn stream_from(
@@ -44,7 +41,7 @@ impl Historical {
     ) -> Result<Box<dyn std::io::Read + '_>, std::io::Error> {
         Ok(Box::new(LayeredReader::new(
             addr,
-            Layer::new(self.parent.clone(), &self.changed_in_parent),
+            Layer::new(self.parent.clone(), &self.was),
         )))
     }
 
@@ -74,13 +71,12 @@ mod tests {
 
         let parent = ImmutableLinearStore::FileBacked(parent);
 
-        let mut changed_in_parent = BTreeMap::<u64, Box<[u8]>>::new();
+        let mut was = BTreeMap::<u64, Box<[u8]>>::new();
         for (addr, data) in diffs {
-            changed_in_parent.insert(*addr, data.to_vec().into_boxed_slice());
+            was.insert(*addr, data.to_vec().into_boxed_slice());
         }
 
-        let historical =
-            Historical::new(changed_in_parent, Arc::new(parent), expected.len() as u64);
+        let historical = Historical::new(was, Arc::new(parent), expected.len() as u64);
 
         for i in 0..expected.len() {
             let mut stream = historical.stream_from(i as u64).unwrap();
