@@ -3,12 +3,14 @@
 
 use std::{collections::BTreeMap, io::Cursor, sync::Arc};
 
+use bytes::Bytes;
+
 use super::{historical::Historical, proposed::Proposed, LinearStore, ReadLinearStore};
 
 #[derive(Debug)]
 pub(crate) struct Layer<'a, P: ReadLinearStore> {
     parent: Arc<LinearStore<P>>,
-    diffs: &'a BTreeMap<u64, Box<[u8]>>,
+    diffs: &'a BTreeMap<u64, Bytes>,
 }
 
 // TODO danlaine: These From methods require us to pub(crate) fields of Proposed

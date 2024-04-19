@@ -7,6 +7,8 @@ use std::io::{Error, Read};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
+use bytes::Bytes;
+
 use super::{LinearStore, ReadLinearStore, WriteLinearStore};
 
 /// [Proposed] is a [LinearStore] state that contains a copy of the old and new data.
@@ -15,8 +17,8 @@ use super::{LinearStore, ReadLinearStore, WriteLinearStore};
 /// The M type parameter indicates the mutability of the proposal, either read-write or readonly
 #[derive(Debug)]
 pub(crate) struct Proposed<P: ReadLinearStore, M> {
-    pub(crate) new: BTreeMap<u64, Box<[u8]>>,
-    old: BTreeMap<u64, Box<[u8]>>,
+    pub(crate) new: BTreeMap<u64, Bytes>,
+    old: BTreeMap<u64, Bytes>,
     pub(crate) parent: Arc<LinearStore<P>>,
     phantom: PhantomData<M>,
 }
@@ -67,18 +69,16 @@ impl<P: ReadLinearStore> WriteLinearStore for Proposed<P, Mutable> {
     // in the reader that when you reach the end of a modified region, you're always
     // in an unmodified region
 
-    fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
+    fn write(&mut self, offset: u64, data: Bytes) -> Result<usize, Error> {
         // the structure of what will eventually be inserted
         struct InsertData {
             offset: u64,
-            data: Box<[u8]>,
+            data: Bytes,
         }
 
-        debug_assert!(!object.is_empty());
-        let mut insert = InsertData {
-            offset,
-            data: Box::from(object),
-        };
+        debug_assert!(!data.is_empty());
+        let inserted_len = data.len();
+        let mut insert = InsertData { offset, data };
 
         // we track areas to delete here, which happens when we combine
         let mut merged_offsets_to_delete = Vec::new();
@@ -118,7 +118,7 @@ impl<P: ReadLinearStore> WriteLinearStore for Proposed<P, Mutable> {
                 }
                 insert.offset = *existing.0;
                 merged_offsets_to_delete.push(insert.offset);
-                insert.data = new_data.into_boxed_slice();
+                insert.data = Bytes::from(new_data);
             }
         }
         // TODO: search for modifications after this one that can be merged
@@ -149,7 +149,7 @@ impl<P: ReadLinearStore> WriteLinearStore for Proposed<P, Mutable> {
                     );
                 }
                 merged_offsets_to_delete.push(*existing.0);
-                insert.data = new_data.into_boxed_slice();
+                insert.data = Bytes::from(new_data);
             }
         }
         for delete_offset in merged_offsets_to_delete {
@@ -157,7 +157,7 @@ impl<P: ReadLinearStore> WriteLinearStore for Proposed<P, Mutable> {
         }
 
         self.new.insert(insert.offset, insert.data);
-        Ok(object.len())
+        Ok(inserted_len)
     }
 }
 
@@ -203,7 +203,7 @@ mod test {
         const MUT_DATA: &[u8] = b"data random";
 
         // mutate the whole thing
-        sut.write(0, MUT_DATA)?;
+        sut.write(0, MUT_DATA.into())?;
 
         // read all the changed data
         let mut data = [0u8; MUT_DATA.len()];
@@ -216,10 +216,10 @@ mod test {
     #[test_case(0, b"1", b"1andom data")]
     #[test_case(1, b"2", b"r2ndom data")]
     #[test_case(10, b"3", b"random dat3")]
-    fn partial_mod_full_read(pos: u64, delta: &[u8], expected: &[u8]) -> Result<(), Error> {
+    fn partial_mod_full_read(pos: u64, delta: &'static [u8], expected: &[u8]) -> Result<(), Error> {
         let mut sut: Proposed<ConstBacked, Mutable> = ConstBacked::new(ConstBacked::DATA).into();
 
-        sut.write(pos, delta)?;
+        sut.write(pos, delta.into())?;
 
         let mut data = [0u8; ConstBacked::DATA.len()];
         sut.stream_from(0).unwrap().read_exact(&mut data).unwrap();
@@ -231,12 +231,12 @@ mod test {
     #[test]
     fn nested() {
         let mut parent: Proposed<ConstBacked, Mutable> = ConstBacked::new(ConstBacked::DATA).into();
-        parent.write(1, b"1").unwrap();
+        parent.write(1, b"1".as_slice().into()).unwrap();
 
         let parent: Arc<LinearStore<Proposed<ConstBacked, Mutable>>> =
             Arc::new(LinearStore { state: parent });
         let mut child: Proposed<Proposed<ConstBacked, Mutable>, Mutable> = Proposed::new(parent);
-        child.write(3, b"3").unwrap();
+        child.write(3, b"3".as_slice().into()).unwrap();
 
         let mut data = [0u8; ConstBacked::DATA.len()];
         child.stream_from(0).unwrap().read_exact(&mut data).unwrap();
@@ -246,7 +246,7 @@ mod test {
     #[test]
     fn deep_nest() {
         let mut parent: Proposed<ConstBacked, Mutable> = ConstBacked::new(ConstBacked::DATA).into();
-        parent.write(1, b"1").unwrap();
+        parent.write(1, b"1".as_slice().into()).unwrap();
         let mut child: Arc<dyn ReadLinearStore> = Arc::new(parent);
         for _ in 0..=200 {
             child = Arc::new(LinearStore { state: child });
@@ -330,22 +330,25 @@ mod test {
     #[test_case(&[(1, 1), (3, 1)], (2, 3), b"omMMMo", 1)]
 
     fn test_combiner(
-        original_mods: &[(u64, usize)],
+        original_mods: &'static [(u64, usize)],
         new_mod: (u64, usize),
         result: &'static [u8],
         segments: usize,
     ) -> Result<(), Error> {
         let mut proposal: Proposed<ConstBacked, Mutable> = ConstBacked::new(b"oooooo").into();
         for mods in original_mods {
-            proposal.write(
-                mods.0,
-                (0..mods.1).map(|_| b'm').collect::<Vec<_>>().as_slice(),
-            )?;
+            let to_write = std::iter::repeat(b'm').take(mods.1).collect::<Vec<_>>();
+            proposal.write(mods.0, Bytes::copy_from_slice(to_write.as_slice()))?;
         }
 
         proposal.write(
             new_mod.0,
-            (0..new_mod.1).map(|_| b'M').collect::<Vec<_>>().as_slice(),
+            Bytes::copy_from_slice(
+                std::iter::repeat(b'M')
+                    .take(new_mod.1)
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+            ),
         )?;
 
         // this bleeds the implementation, but I this made debugging the tests way easier...
@@ -374,7 +377,10 @@ mod test {
         let start = Instant::now();
         for _ in 0..COUNT {
             let data = rng.gen::<[u8; DATALEN]>();
-            proposal.write(rng.gen_range(0..MODIFICATION_AREA_SIZE), &data)?;
+            proposal.write(
+                rng.gen_range(0..MODIFICATION_AREA_SIZE),
+                Bytes::copy_from_slice(data.as_slice()),
+            )?;
         }
         println!(
             "inserted {} of size {} in {}ms",

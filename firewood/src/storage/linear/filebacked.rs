@@ -9,6 +9,8 @@
 // object. Instead, we probably should use an IO system that can perform multiple
 // read/write operations at once
 
+use bytes::Bytes;
+
 use super::{ReadLinearStore, WriteLinearStore};
 use std::fs::File;
 use std::io::{Error, Read, Seek};
@@ -38,10 +40,10 @@ impl ReadLinearStore for FileBacked {
 }
 
 impl WriteLinearStore for FileBacked {
-    fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
+    fn write(&mut self, offset: u64, object: Bytes) -> Result<usize, Error> {
         self.fd
             .lock()
             .expect("poisoned lock")
-            .write_at(object, offset)
+            .write_at(&object, offset)
     }
 }

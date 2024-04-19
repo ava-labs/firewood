@@ -4,6 +4,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use bytes::Bytes;
+
 use super::{layered::LayeredReader, LinearStore, ReadLinearStore};
 
 /// A linear store used for historical revisions
@@ -17,18 +19,14 @@ pub(crate) struct Historical<P: ReadLinearStore> {
     /// For example, if the first 3 bytes of this revision are `[0,1,2]` and the
     /// first 3 bytes of the next revision are `[4,5,6]` then this map contains
     /// `[(0, [0,1,2])]`.
-    pub(crate) was: BTreeMap<u64, Box<[u8]>>,
+    pub(crate) was: BTreeMap<u64, Bytes>,
     /// The state of the revision after this one.
     pub(crate) parent: Arc<LinearStore<P>>,
     size: u64,
 }
 
 impl<P: ReadLinearStore> Historical<P> {
-    pub(crate) fn new(
-        was: BTreeMap<u64, Box<[u8]>>,
-        parent: Arc<LinearStore<P>>,
-        size: u64,
-    ) -> Self {
+    pub(crate) fn new(was: BTreeMap<u64, Bytes>, parent: Arc<LinearStore<P>>, size: u64) -> Self {
         Self { was, parent, size }
     }
 }
@@ -48,6 +46,7 @@ impl<P: ReadLinearStore> ReadLinearStore for Historical<P> {
 mod tests {
     use super::*;
     use crate::storage::linear::tests::ConstBacked;
+    use bytes::Bytes;
     use test_case::test_case;
 
     #[test_case(&[0,1,2,3],&[(0,&[4,5,6])],&[4,5,6,3];"read diff, parent")]
@@ -57,16 +56,16 @@ mod tests {
     #[test_case(&[0,1,2,3,4,5],&[(0,&[6,7]),(3,&[8,9])],&[6,7,2,8,9,5]; "read diff, parent, diff, parent")]
     fn test_historical_stream_from(
         parent_state: &'static [u8],
-        diffs: &[(u64, &[u8])],
+        diffs: &'static [(u64, &[u8])],
         expected: &'static [u8],
     ) {
         let parent = LinearStore {
             state: ConstBacked::new(parent_state),
         };
 
-        let mut was = BTreeMap::<u64, Box<[u8]>>::new();
+        let mut was = BTreeMap::<u64, Bytes>::new();
         for (addr, data) in diffs {
-            was.insert(*addr, data.to_vec().into_boxed_slice());
+            was.insert(*addr, (*data).into());
         }
 
         let historical = Historical::new(was, Arc::new(parent), expected.len() as u64);

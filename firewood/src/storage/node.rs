@@ -11,6 +11,7 @@ use std::io::{Error, ErrorKind, Read, Write};
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
+use bytes::Bytes;
 use enum_as_inner::EnumAsInner;
 use serde::{Deserialize, Serialize};
 
@@ -80,7 +81,8 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
             bincode::serialize(node).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
         // TODO: search for a free space block we can reuse
         let addr = self.page_store.size()?;
-        self.page_store.write(addr, serialized.as_slice())?;
+        self.page_store
+            .write(addr, Bytes::copy_from_slice(&serialized))?;
         Ok(addr.try_into().expect("pageStore is never zero size"))
     }
 
@@ -100,7 +102,8 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
             self.delete(addr)?;
             Err(UpdateError::NodeMoved(new_address))
         } else {
-            self.page_store.write(addr.into(), serialized.as_slice())?;
+            self.page_store
+                .write(addr.into(), Bytes::copy_from_slice(&serialized))?;
             Ok(())
         }
     }
@@ -116,13 +119,15 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
             size,
             next_free_area: self.header.free_space_head,
         };
-        self.page_store
-            .write(addr.into(), bytemuck::bytes_of(&freed_area))?;
+        self.page_store.write(
+            addr.into(),
+            Bytes::copy_from_slice(bytemuck::bytes_of(&freed_area)),
+        )?;
 
         // update the free space header
         self.page_store.write(
             std::mem::size_of::<FileIdentifingMagic>() as u64,
-            bytemuck::bytes_of(&self.header),
+            Bytes::copy_from_slice(bytemuck::bytes_of(&self.header)),
         )?;
         Ok(())
     }
@@ -130,12 +135,18 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
     /// Initialize a new [NodeStore] by writing out the [FileIdentifingMagic] and [FreeSpaceManagementHeader]
     fn init(mut page_store: LinearStore<T>) -> Result<Self, Error> {
         // Write the first 16 bytes of each [PageStore]
-        page_store.write(0, bytemuck::bytes_of(&FileIdentifingMagic::new()))?;
+        page_store.write(
+            0,
+            Bytes::copy_from_slice(bytemuck::bytes_of(&FileIdentifingMagic::new())),
+        )?;
 
         let header = FreeSpaceManagementHeader {
             free_space_head: None,
         };
-        page_store.write(FileIdentifingMagic::SIZE, bytemuck::bytes_of(&header))?;
+        page_store.write(
+            FileIdentifingMagic::SIZE,
+            Bytes::copy_from_slice(bytemuck::bytes_of(&header)),
+        )?;
         Ok(Self { header, page_store })
     }
 }

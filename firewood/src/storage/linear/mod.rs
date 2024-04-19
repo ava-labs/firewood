@@ -22,6 +22,8 @@ use std::io::{Error, Read};
 use std::ops::Deref;
 use std::sync::Arc;
 
+use bytes::Bytes;
+
 mod current;
 /// A linear store used for proposals
 ///
@@ -94,11 +96,11 @@ impl ReadLinearStore for Arc<dyn ReadLinearStore> {
 
 /// Some linear stores support updates
 pub(super) trait WriteLinearStore: Debug {
-    fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error>;
+    fn write(&mut self, offset: u64, object: Bytes) -> Result<usize, Error>;
 }
 
 impl<ReadWrite: ReadLinearStore + Debug> WriteLinearStore for LinearStore<ReadWrite> {
-    fn write(&mut self, _offset: u64, _bytes: &[u8]) -> Result<usize, Error> {
+    fn write(&mut self, _offset: u64, _bytes: Bytes) -> Result<usize, Error> {
         todo!()
     }
 }

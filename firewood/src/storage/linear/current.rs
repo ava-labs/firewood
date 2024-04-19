@@ -4,6 +4,8 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+use bytes::Bytes;
+
 use super::historical::Historical;
 use super::{LinearStore, ReadLinearStore};
 
@@ -14,7 +16,7 @@ use super::{LinearStore, ReadLinearStore};
 /// A [Current] [LinearStore] supports read operations only
 #[derive(Debug)]
 pub(crate) struct Current<P: ReadLinearStore> {
-    old: BTreeMap<u64, Box<[u8]>>,
+    old: BTreeMap<u64, Bytes>,
     parent: Mutex<Arc<LinearStore<P>>>,
 }
 
