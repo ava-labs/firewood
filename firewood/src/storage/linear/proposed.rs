@@ -18,7 +18,7 @@ pub(crate) type ProposedMutable = Proposed<Mutable>;
 pub(crate) type ProposedImmutable = Proposed<Immutable>;
 
 #[derive(Debug)]
-pub(crate) struct Proposed<M> {
+pub(crate) struct Proposed<M: Send + Sync + Debug> {
     new: BTreeMap<u64, Box<[u8]>>,
     pub(super) old: BTreeMap<u64, Box<[u8]>>,
     pub(super) parent: Arc<dyn ReadLinearStore>,
