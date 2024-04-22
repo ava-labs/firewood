@@ -9,17 +9,30 @@
 // object. Instead, we probably should use an IO system that can perform multiple
 // read/write operations at once
 
-use super::{ReadLinearStore, WriteLinearStore};
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{Error, Read, Seek};
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use super::{ReadLinearStore, WriteLinearStore};
+
 #[derive(Debug)]
-pub(super) struct FileBacked {
-    path: PathBuf,
+pub(crate) struct FileBacked {
     fd: Mutex<File>,
+}
+
+impl FileBacked {
+    pub(super) fn new(path: PathBuf) -> Result<Self, Error> {
+        let fd = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)?;
+
+        Ok(Self { fd: Mutex::new(fd) })
+    }
 }
 
 impl ReadLinearStore for FileBacked {

@@ -14,7 +14,7 @@ use std::sync::Arc;
 use enum_as_inner::EnumAsInner;
 use serde::{Deserialize, Serialize};
 
-use super::linear::{LinearStore, ReadLinearStore, WriteLinearStore};
+use super::linear::{ReadLinearStore, WriteLinearStore};
 
 /// Either a branch or leaf node
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner, Deserialize, Serialize)]
@@ -45,7 +45,7 @@ struct Leaf {
 #[derive(Debug)]
 struct NodeStore<T: ReadLinearStore> {
     header: FreeSpaceManagementHeader,
-    page_store: LinearStore<T>,
+    linear_store: T,
 }
 
 impl<T: ReadLinearStore> NodeStore<T> {
@@ -54,7 +54,7 @@ impl<T: ReadLinearStore> NodeStore<T> {
     /// A node on disk will consist of a header which both identifies the
     /// node type ([Branch] or [Leaf]) followed by the serialized data
     fn read(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
-        let node_stream = self.page_store.stream_from(addr.get())?;
+        let node_stream = self.linear_store.stream_from(addr.get())?;
         let node: Node = bincode::deserialize_from(node_stream)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
         Ok(Arc::new(node))
@@ -64,7 +64,7 @@ impl<T: ReadLinearStore> NodeStore<T> {
     /// TODO: Let's write the length as a constant 4 bytes at the beginning of the block
     /// and skip forward when stream deserializing like this
     fn node_size(&self, addr: LinearAddress) -> Result<usize, Error> {
-        let node_stream = self.page_store.stream_from(addr.get())?;
+        let node_stream = self.linear_store.stream_from(addr.get())?;
         let mut reader = ReaderWrapperWithSize::new(Box::new(node_stream));
         bincode::deserialize_from(&mut reader)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
@@ -73,14 +73,14 @@ impl<T: ReadLinearStore> NodeStore<T> {
     }
 }
 
-impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
+impl<T: WriteLinearStore> NodeStore<T> {
     /// Allocate space for a [Node] in the [LinearStore]
     fn create(&mut self, node: &Node) -> Result<LinearAddress, Error> {
         let serialized =
             bincode::serialize(node).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
         // TODO: search for a free space block we can reuse
-        let addr = self.page_store.size()?;
-        self.page_store.write(addr, serialized.as_slice())?;
+        let addr = self.linear_store.size()?;
+        self.linear_store.write(addr, serialized.as_slice())?;
         Ok(addr.try_into().expect("pageStore is never zero size"))
     }
 
@@ -100,7 +100,8 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
             self.delete(addr)?;
             Err(UpdateError::NodeMoved(new_address))
         } else {
-            self.page_store.write(addr.into(), serialized.as_slice())?;
+            self.linear_store
+                .write(addr.into(), serialized.as_slice())?;
             Ok(())
         }
     }
@@ -116,27 +117,30 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
             size,
             next_free_area: self.header.free_space_head,
         };
-        self.page_store
+        self.linear_store
             .write(addr.into(), bytemuck::bytes_of(&freed_area))?;
 
         // update the free space header
-        self.page_store.write(
+        self.linear_store.write(
             std::mem::size_of::<FileIdentifingMagic>() as u64,
             bytemuck::bytes_of(&self.header),
         )?;
         Ok(())
     }
 
-    /// Initialize a new [NodeStore] by writing out the [FileIdentifingMagic] and [FreeSpaceManagementHeader]
-    fn init(mut page_store: LinearStore<T>) -> Result<Self, Error> {
+    /// Create a new [NodeStore] by writing out the [FileIdentifingMagic] and [FreeSpaceManagementHeader]
+    fn new(mut linear_store: T) -> Result<Self, Error> {
         // Write the first 16 bytes of each [PageStore]
-        page_store.write(0, bytemuck::bytes_of(&FileIdentifingMagic::new()))?;
+        linear_store.write(0, bytemuck::bytes_of(&FileIdentifingMagic::new()))?;
 
         let header = FreeSpaceManagementHeader {
             free_space_head: None,
         };
-        page_store.write(FileIdentifingMagic::SIZE, bytemuck::bytes_of(&header))?;
-        Ok(Self { header, page_store })
+        linear_store.write(FileIdentifingMagic::SIZE, bytemuck::bytes_of(&header))?;
+        Ok(Self {
+            header,
+            linear_store,
+        })
     }
 }
 
