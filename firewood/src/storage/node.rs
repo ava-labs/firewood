@@ -14,7 +14,7 @@ use std::sync::Arc;
 use enum_as_inner::EnumAsInner;
 use serde::{Deserialize, Serialize};
 
-use super::linear::{ReadLinearStore, ReadWriteLinearStore};
+use super::linear::{ReadLinearStore, WriteLinearStore};
 
 /// Either a branch or leaf node
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner, Deserialize, Serialize)]
@@ -73,7 +73,7 @@ impl<T: ReadLinearStore> NodeStore<T> {
     }
 }
 
-impl<T: ReadWriteLinearStore> NodeStore<T> {
+impl<T: WriteLinearStore> NodeStore<T> {
     /// Allocate space for a [Node] in the [LinearStore]
     fn create(&mut self, node: &Node) -> Result<LinearAddress, Error> {
         let serialized =

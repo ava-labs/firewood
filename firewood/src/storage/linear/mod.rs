@@ -68,15 +68,13 @@ mod proposed;
 #[cfg(test)]
 mod tests;
 
-/// All linearstores support reads
-pub(super) trait ReadLinearStore: Debug {
+/// All linear stores support reads
+pub(super) trait ReadLinearStore: Send + Sync + Debug {
     fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error>;
     fn size(&self) -> Result<u64, Error>;
 }
 
-/// Some linear stores support updates
-pub(super) trait WriteLinearStore: Debug {
+/// Some linear stores support writes
+pub(super) trait WriteLinearStore: ReadLinearStore {
     fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error>;
 }
-
-pub(super) trait ReadWriteLinearStore: ReadLinearStore + WriteLinearStore + Debug {}
