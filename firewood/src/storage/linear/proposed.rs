@@ -4,30 +4,38 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::io::{Error, Read};
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use super::layered::{Layer, LayeredReader};
 use super::{ReadLinearStore, WriteLinearStore};
 
-/// [Proposed] is a [LinearStore] state that contains a copy of the old and new data.
 #[derive(Debug)]
-pub(crate) struct Proposed {
+pub(super) struct Immutable;
+#[derive(Debug)]
+pub(super) struct Mutable;
+pub(crate) type ProposedMutable = Proposed<Mutable>;
+pub(crate) type ProposedImmutable = Proposed<Immutable>;
+
+#[derive(Debug)]
+pub(crate) struct Proposed<M> {
     new: BTreeMap<u64, Box<[u8]>>,
     pub(super) old: BTreeMap<u64, Box<[u8]>>,
     pub(super) parent: Arc<dyn ReadLinearStore>,
+    phantom_data: PhantomData<M>,
 }
-
-impl Proposed {
+impl ProposedMutable {
     pub(super) fn new(parent: Arc<dyn ReadLinearStore>) -> Self {
         Self {
             parent,
             new: Default::default(),
             old: Default::default(),
+            phantom_data: PhantomData,
         }
     }
 }
 
-impl ReadLinearStore for Proposed {
+impl<M: Debug + Send + Sync> ReadLinearStore for Proposed<M> {
     fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
         Ok(Box::new(LayeredReader::new(
             addr,
@@ -51,7 +59,7 @@ impl ReadLinearStore for Proposed {
     }
 }
 
-impl WriteLinearStore for Proposed {
+impl WriteLinearStore for ProposedMutable {
     // TODO: we might be able to optimize the case where we keep adding data to
     // the end of the file by not coalescing left. We'd have to change the assumption
     // in the reader that when you reach the end of a modified region, you're always
