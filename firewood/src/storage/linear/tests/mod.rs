@@ -93,12 +93,11 @@ impl WriteLinearStore for InMemReadWriteLinearStore {
 
 impl ReadLinearStore for InMemReadWriteLinearStore {
     fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, std::io::Error> {
-        let bytes = if addr as usize >= self.bytes.len() {
-            // Out of bounds. Return an empty cursor.
-            self.bytes[0..0].to_owned()
-        } else {
-            self.bytes[addr as usize..].to_owned()
-        };
+        let bytes = self
+            .bytes
+            .get(addr as usize..)
+            .unwrap_or_default()
+            .to_owned();
 
         Ok(Box::new(Cursor::new(bytes)))
     }
