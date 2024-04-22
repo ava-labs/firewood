@@ -24,20 +24,7 @@ macro_rules! kv_dump {
 #[tokio::test(flavor = "multi_thread")]
 #[allow(clippy::unwrap_used)]
 async fn test_basic_metrics() {
-    let cfg = DbConfig::builder()
-        .meta_ncached_pages(1024)
-        .meta_ncached_files(128)
-        .payload_ncached_pages(1024)
-        .payload_ncached_files(128)
-        .payload_file_nbit(16)
-        .payload_regn_nbit(16)
-        .wal(
-            WalConfig::builder()
-                .file_nbit(15)
-                .block_nbit(8)
-                .max_revisions(10)
-                .build(),
-        );
+    let cfg = DbConfig::builder();
 
     let db = TestDbCreator::builder()
         .cfg(cfg.build())
@@ -73,21 +60,7 @@ async fn test_basic_metrics() {
 #[allow(clippy::unwrap_used)]
 async fn test_revisions() {
     use rand::{rngs::StdRng, Rng, SeedableRng};
-    let cfg = DbConfig::builder()
-        .meta_ncached_pages(1024)
-        .meta_ncached_files(128)
-        .payload_ncached_pages(1024)
-        .payload_ncached_files(128)
-        .payload_file_nbit(16)
-        .payload_regn_nbit(16)
-        .wal(
-            WalConfig::builder()
-                .file_nbit(15)
-                .block_nbit(8)
-                .max_revisions(10)
-                .build(),
-        )
-        .build();
+    let cfg = DbConfig::builder().build();
 
     let rng = std::cell::RefCell::new(StdRng::seed_from_u64(42));
     let max_len0 = 8;
@@ -162,20 +135,7 @@ async fn test_revisions() {
 #[tokio::test(flavor = "multi_thread")]
 #[allow(clippy::unwrap_used)]
 async fn create_db_issue_proof() {
-    let cfg = DbConfig::builder()
-        .meta_ncached_pages(1024)
-        .meta_ncached_files(128)
-        .payload_ncached_pages(1024)
-        .payload_ncached_files(128)
-        .payload_file_nbit(16)
-        .payload_regn_nbit(16)
-        .wal(
-            WalConfig::builder()
-                .file_nbit(15)
-                .block_nbit(8)
-                .max_revisions(10)
-                .build(),
-        );
+    let cfg = DbConfig::builder();
 
     let mut tmpdir: PathBuf = std::env::var_os("CARGO_TARGET_DIR")
         .unwrap_or(temp_dir().into())
@@ -251,9 +211,7 @@ macro_rules! assert_val {
 #[tokio::test(flavor = "multi_thread")]
 #[allow(clippy::unwrap_used)]
 async fn db_proposal() -> Result<(), api::Error> {
-    let cfg = DbConfig::builder()
-        .wal(WalConfig::builder().max_revisions(10).build())
-        .build();
+    let cfg = DbConfig::builder().build();
 
     let db = TestDbCreator::builder()
         .cfg(cfg)

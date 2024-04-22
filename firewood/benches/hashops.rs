@@ -13,7 +13,6 @@ use firewood::{
         in_mem::InMemLinearStore,
         LinearStore, ObjCache, Storable, StoredView,
     },
-    storage::WalConfig,
     v2::api::{Db, Proposal},
 };
 use pprof::ProfilerGuard;
@@ -167,8 +166,7 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
                     |batch_ops| async {
                         let db_path = std::env::temp_dir();
                         let db_path = db_path.join("benchmark_db");
-                        let cfg =
-                            DbConfig::builder().wal(WalConfig::builder().max_revisions(10).build());
+                        let cfg = DbConfig::builder().build();
 
                         #[allow(clippy::unwrap_used)]
                         let db =
