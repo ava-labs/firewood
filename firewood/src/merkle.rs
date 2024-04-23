@@ -1,7 +1,6 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
-use crate::shale::disk_address::DiskAddress;
-use crate::v2::api;
+use crate::{storage::node::LinearAddress, v2::api};
 use futures::{StreamExt, TryStreamExt};
 use std::{future::ready, io::Write, marker::PhantomData};
 use thiserror::Error;
@@ -43,7 +42,7 @@ pub struct Merkle<T> {
 }
 
 impl<T> Merkle<T> {
-    pub fn get_node(&self, _addr: DiskAddress) -> Result<&NodeType, MerkleError> {
+    pub fn get_node(&self, _addr: LinearAddress) -> Result<&NodeType, MerkleError> {
         todo!()
     }
 
@@ -51,11 +50,11 @@ impl<T> Merkle<T> {
         todo!()
     }
 
-    fn _delete_node(&mut self, _addr: DiskAddress) -> Result<(), MerkleError> {
+    fn _delete_node(&mut self, _addr: LinearAddress) -> Result<(), MerkleError> {
         todo!()
     }
 
-    fn _init_sentinel(&mut self) -> Result<DiskAddress, MerkleError> {
+    fn _init_sentinel(&mut self) -> Result<LinearAddress, MerkleError> {
         todo!()
     }
 }
@@ -87,7 +86,7 @@ where
             }
 
             NodeType::Branch(n) => {
-                // pair up DiskAddresses with encoded children and pick the right one
+                // pair up LinearAddresses with encoded children and pick the right one
                 let encoded_children = n.chd().iter().zip(n.children_encoded.iter());
                 let children = encoded_children
                     .map(|(child_addr, encoded_child)| {
@@ -130,7 +129,7 @@ where
         Ok(NodeType::Branch(
             BranchNode {
                 partial_path: encoded.partial_path,
-                children: [None; BranchNode::MAX_CHILDREN],
+                children: [None::<LinearAddress>; BranchNode::MAX_CHILDREN],
                 value: encoded.value,
                 children_encoded: encoded.children,
             }
@@ -140,28 +139,23 @@ where
 }
 
 impl<T> Merkle<T> {
-    pub fn root_hash(&self, _sentinel_addr: DiskAddress) -> Result<TrieHash, MerkleError> {
+    pub fn root_hash(&self, _sentinel_addr: LinearAddress) -> Result<TrieHash, MerkleError> {
         todo!()
     }
 
-    fn dump_(&self, _addr: DiskAddress, _w: &mut dyn Write) -> Result<(), MerkleError> {
+    pub fn dump(
+        &self,
+        _sentinel_addr: LinearAddress,
+        _w: &mut dyn Write,
+    ) -> Result<(), MerkleError> {
         todo!()
-    }
-
-    pub fn dump(&self, sentinel_addr: DiskAddress, w: &mut dyn Write) -> Result<(), MerkleError> {
-        if sentinel_addr.is_null() {
-            write!(w, "<Empty>")?;
-        } else {
-            self.dump_(sentinel_addr, w)?;
-        };
-        Ok(())
     }
 
     pub fn insert<K: AsRef<[u8]>>(
         &mut self,
         _key: K,
         _val: Vec<u8>,
-        _sentinel_addr: DiskAddress,
+        _sentinel_addr: LinearAddress,
     ) -> Result<(), MerkleError> {
         todo!()
     }
@@ -169,7 +163,7 @@ impl<T> Merkle<T> {
     pub fn remove<K: AsRef<[u8]>>(
         &mut self,
         _key: K,
-        _sentinel_addr: DiskAddress,
+        _sentinel_addr: LinearAddress,
     ) -> Result<Option<Vec<u8>>, MerkleError> {
         todo!()
     }
@@ -188,7 +182,7 @@ impl<T> Merkle<T> {
     pub fn prove<K>(
         &self,
         _key: K,
-        _sentinel_addr: DiskAddress,
+        _sentinel_addr: LinearAddress,
     ) -> Result<Proof<Vec<u8>>, MerkleError>
     where
         K: AsRef<[u8]>,
@@ -219,7 +213,7 @@ impl<T> Merkle<T> {
     pub fn get<K: AsRef<[u8]>>(
         &self,
         _key: K,
-        _sentinel_addr: DiskAddress,
+        _sentinel_addr: LinearAddress,
     ) -> Result<Option<Box<[u8]>>, MerkleError> {
         todo!()
     }
@@ -234,14 +228,14 @@ impl<T> Merkle<T> {
 
     pub(crate) fn _key_value_iter(
         &self,
-        sentinel_addr: DiskAddress,
+        sentinel_addr: LinearAddress,
     ) -> MerkleKeyValueStream<'_, T> {
         MerkleKeyValueStream::_new(self, sentinel_addr)
     }
 
     pub(crate) fn _key_value_iter_from_key(
         &self,
-        sentinel_addr: DiskAddress,
+        sentinel_addr: LinearAddress,
         key: Key,
     ) -> MerkleKeyValueStream<'_, T> {
         MerkleKeyValueStream::_from_key(self, sentinel_addr, key)
@@ -249,7 +243,7 @@ impl<T> Merkle<T> {
 
     pub(super) async fn _range_proof<K: api::KeyType + Send + Sync>(
         &self,
-        sentinel_addr: DiskAddress,
+        sentinel_addr: LinearAddress,
         first_key: Option<K>,
         last_key: Option<K>,
         limit: Option<usize>,

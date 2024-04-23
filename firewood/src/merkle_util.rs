@@ -6,7 +6,7 @@ use crate::{
         proof::{Proof, ProofError},
         BinarySerde, EncodedNode, Merkle, TrieHash,
     },
-    shale::disk_address::DiskAddress,
+    storage::node::LinearAddress,
 };
 use thiserror::Error;
 
@@ -33,7 +33,7 @@ pub enum DataStoreError {
 }
 
 pub struct InMemoryMerkle<T> {
-    sentinel_addr: DiskAddress,
+    sentinel_addr: LinearAddress,
     merkle: Merkle<T>,
 }
 
@@ -64,7 +64,7 @@ where
             .map_err(|_err| DataStoreError::GetError)
     }
 
-    pub const fn get_sentinel_address(&self) -> DiskAddress {
+    pub const fn get_sentinel_address(&self) -> LinearAddress {
         self.sentinel_addr
     }
 

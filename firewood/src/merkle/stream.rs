@@ -4,7 +4,7 @@
 use super::{BranchNode, Key, Merkle, MerkleError, NodeType, Value};
 use crate::{
     nibbles::{Nibbles, NibblesIterator},
-    shale::DiskAddress,
+    storage::node::LinearAddress,
     v2::api,
 };
 use futures::{stream::FusedStream, Stream, StreamExt};
@@ -25,7 +25,7 @@ enum IterationNode<'a> {
         key: Key,
         /// Returns the non-empty children of this node and their positions
         /// in the node's children array.
-        children_iter: Box<dyn Iterator<Item = (u8, DiskAddress)> + Send>,
+        children_iter: Box<dyn Iterator<Item = (u8, LinearAddress)> + Send>,
     },
 }
 
@@ -69,7 +69,7 @@ impl NodeStreamState<'_> {
 #[derive(Debug)]
 pub struct MerkleNodeStream<'a, T> {
     state: NodeStreamState<'a>,
-    sentinel_addr: DiskAddress,
+    sentinel_addr: LinearAddress,
     merkle: &'a Merkle<T>,
 }
 
@@ -84,7 +84,7 @@ impl<'a, T> FusedStream for MerkleNodeStream<'a, T> {
 impl<'a, T> MerkleNodeStream<'a, T> {
     /// Returns a new iterator that will iterate over all the nodes in `merkle`
     /// with keys greater than or equal to `key`.
-    pub(super) fn new(merkle: &'a Merkle<T>, sentinel_addr: DiskAddress, key: Key) -> Self {
+    pub(super) fn new(merkle: &'a Merkle<T>, sentinel_addr: LinearAddress, key: Key) -> Self {
         Self {
             state: NodeStreamState::new(key),
             sentinel_addr,
@@ -179,7 +179,7 @@ impl<'a, T> Stream for MerkleNodeStream<'a, T> {
 /// Returns the initial state for an iterator over the given `merkle` which starts at `key`.
 fn get_iterator_intial_state<'a, T>(
     merkle: &'a Merkle<T>,
-    sentinel_addr: DiskAddress,
+    sentinel_addr: LinearAddress,
     key: &[u8],
 ) -> Result<NodeStreamState<'a>, api::Error> {
     // Invariant: `node`'s key is a prefix of `key`.
@@ -314,7 +314,7 @@ impl<'a, T> MerkleKeyValueStreamState<'a, T> {
 #[derive(Debug)]
 pub struct MerkleKeyValueStream<'a, T> {
     state: MerkleKeyValueStreamState<'a, T>,
-    sentinel_addr: DiskAddress,
+    sentinel_addr: LinearAddress,
     merkle: &'a Merkle<T>,
 }
 
@@ -325,7 +325,7 @@ impl<'a, T> FusedStream for MerkleKeyValueStream<'a, T> {
 }
 
 impl<'a, T> MerkleKeyValueStream<'a, T> {
-    pub(super) fn _new(merkle: &'a Merkle<T>, sentinel_addr: DiskAddress) -> Self {
+    pub(super) fn _new(merkle: &'a Merkle<T>, sentinel_addr: LinearAddress) -> Self {
         Self {
             state: MerkleKeyValueStreamState::_new(),
             sentinel_addr,
@@ -333,7 +333,7 @@ impl<'a, T> MerkleKeyValueStream<'a, T> {
         }
     }
 
-    pub(super) fn _from_key(merkle: &'a Merkle<T>, sentinel_addr: DiskAddress, key: Key) -> Self {
+    pub(super) fn _from_key(merkle: &'a Merkle<T>, sentinel_addr: LinearAddress, key: Key) -> Self {
         Self {
             state: MerkleKeyValueStreamState::_with_key(key),
             sentinel_addr,
@@ -402,7 +402,7 @@ enum PathIteratorState<'a> {
         /// prefix of the key we're traversing to.
         matched_key: Vec<u8>,
         unmatched_key: NibblesIterator<'a, 0>,
-        address: DiskAddress,
+        address: LinearAddress,
     },
     Exhausted,
 }
@@ -551,7 +551,7 @@ where
 
 /// Returns an iterator that returns (`pos`,`child_addr`) for each non-empty child of `branch`,
 /// where `pos` is the position of the child in `branch`'s children array.
-fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (u8, DiskAddress)> {
+fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (u8, LinearAddress)> {
     branch
         .children
         .into_iter()
@@ -581,13 +581,13 @@ mod tests {
     use test_case::test_case;
 
     impl<T> Merkle<T> {
-        pub(crate) fn node_iter(&self, sentinel_addr: DiskAddress) -> MerkleNodeStream<'_, T> {
+        pub(crate) fn node_iter(&self, sentinel_addr: LinearAddress) -> MerkleNodeStream<'_, T> {
             MerkleNodeStream::new(self, sentinel_addr, Box::new([]))
         }
 
         pub(crate) fn node_iter_from(
             &self,
-            sentinel_addr: DiskAddress,
+            sentinel_addr: LinearAddress,
             key: Key,
         ) -> MerkleNodeStream<'_, T> {
             MerkleNodeStream::new(self, sentinel_addr, key)
@@ -763,7 +763,7 @@ mod tests {
     ///
     /// Note the 0000 branch has no value and the F0F0
     /// The number next to each branch is the position of the child in the branch's children array.
-    fn created_populated_merkle() -> (Merkle<Bincode>, DiskAddress) {
+    fn created_populated_merkle() -> (Merkle<Bincode>, LinearAddress) {
         let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
 

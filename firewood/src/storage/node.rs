@@ -27,7 +27,7 @@ enum Node {
 const BRANCH_CHILDREN: usize = 16;
 
 type Path = Box<[u8]>;
-type LinearAddress = NonZeroU64;
+pub(crate) type LinearAddress = NonZeroU64;
 
 #[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
 struct Branch {

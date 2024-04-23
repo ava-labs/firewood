@@ -5,7 +5,7 @@ pub use crate::{
     config::DbConfig,
     v2::api::{Batch, BatchOp},
 };
-use crate::{merkle, shale::disk_address::DiskAddress};
+use crate::{merkle, storage::node::LinearAddress};
 use crate::{
     merkle::{
         Bincode, Key, Merkle, MerkleError, MerkleKeyValueStream, Proof, ProofError, TrieHash,
@@ -69,7 +69,7 @@ struct DbParams {}
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct DbHeader {
-    sentinel_addr: DiskAddress,
+    sentinel_addr: Option<LinearAddress>,
 }
 
 #[derive(Debug)]

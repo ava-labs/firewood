@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{merkle::Path, nibbles::Nibbles, shale::DiskAddress};
+use crate::{merkle::Path, nibbles::Nibbles, storage::node::LinearAddress};
 use bincode::{Error, Options};
 use serde::de::Error as DeError;
 use std::{
@@ -14,7 +14,7 @@ const MAX_CHILDREN: usize = 16;
 #[derive(PartialEq, Eq, Clone)]
 pub struct BranchNode {
     pub(crate) partial_path: Path,
-    pub(crate) children: [Option<DiskAddress>; MAX_CHILDREN],
+    pub(crate) children: [Option<LinearAddress>; MAX_CHILDREN],
     pub(crate) value: Option<Vec<u8>>,
     pub(crate) children_encoded: [Option<Vec<u8>>; MAX_CHILDREN],
 }
@@ -55,11 +55,11 @@ impl BranchNode {
         &self.value
     }
 
-    pub const fn chd(&self) -> &[Option<DiskAddress>; Self::MAX_CHILDREN] {
+    pub const fn chd(&self) -> &[Option<LinearAddress>; Self::MAX_CHILDREN] {
         &self.children
     }
 
-    pub fn chd_mut(&mut self) -> &mut [Option<DiskAddress>; Self::MAX_CHILDREN] {
+    pub fn chd_mut(&mut self) -> &mut [Option<LinearAddress>; Self::MAX_CHILDREN] {
         &mut self.children
     }
 
