@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::{BranchNode, Key, Merkle, MerkleError, NodeType, Value};
+use super::{BranchNode, Key, Merkle, MerkleError, Node, Value};
 use crate::{
     nibbles::{Nibbles, NibblesIterator},
     storage::node::LinearAddress,
@@ -17,7 +17,7 @@ enum IterationNode<'a> {
     Unvisited {
         /// The key (as nibbles) of this node.
         key: Key,
-        node: &'a NodeType,
+        node: &'a Node,
     },
     /// This node has been returned. Track which child to visit next.
     Visited {
@@ -94,7 +94,7 @@ impl<'a, T> MerkleNodeStream<'a, T> {
 }
 
 impl<'a, T> Stream for MerkleNodeStream<'a, T> {
-    type Item = Result<(Key, &'a NodeType), api::Error>;
+    type Item = Result<(Key, &'a Node), api::Error>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
@@ -118,7 +118,7 @@ impl<'a, T> Stream for MerkleNodeStream<'a, T> {
                     match iter_node {
                         IterationNode::Unvisited { key, node } => {
                             match node {
-                                NodeType::Branch(branch) => {
+                                Node::Branch(branch) => {
                                     // `node` is a branch node. Visit its children next.
                                     iter_stack.push(IterationNode::Visited {
                                         key: key.clone(),
@@ -127,7 +127,7 @@ impl<'a, T> Stream for MerkleNodeStream<'a, T> {
                                         )),
                                     });
                                 }
-                                NodeType::Leaf(_) => {}
+                                Node::Leaf(_) => {}
                             }
 
                             let key = key_from_nibble_iter(key.iter().copied().skip(1));
@@ -146,8 +146,8 @@ impl<'a, T> Stream for MerkleNodeStream<'a, T> {
                             let child = merkle.get_node(child_addr)?;
 
                             let partial_path = match child {
-                                NodeType::Branch(branch) => branch.partial_path.iter().copied(),
-                                NodeType::Leaf(leaf) => leaf.partial_path.iter().copied(),
+                                Node::Branch(branch) => branch.partial_path.iter().copied(),
+                                Node::Leaf(leaf) => leaf.partial_path.iter().copied(),
                             };
 
                             // The child's key is its parent's key, followed by the child's index,
@@ -200,7 +200,7 @@ fn get_iterator_intial_state<'a, T>(
             // There is no more `key` left so `node` must be at `key`.
             // Visit and return `node` first.
             match &node {
-                NodeType::Branch(_) | NodeType::Leaf(_) => {
+                Node::Branch(_) | Node::Leaf(_) => {
                     iter_stack.push(IterationNode::Unvisited {
                         key: Box::from(matched_key_nibbles),
                         node,
@@ -212,7 +212,7 @@ fn get_iterator_intial_state<'a, T>(
         };
 
         match &node {
-            NodeType::Branch(branch) => {
+            Node::Branch(branch) => {
                 // The next nibble in `key` is `next_unmatched_key_nibble`,
                 // so all children of `node` with a position > `next_unmatched_key_nibble`
                 // should be visited since they are after `key`.
@@ -239,8 +239,8 @@ fn get_iterator_intial_state<'a, T>(
                 let child = merkle.get_node(child_addr)?;
 
                 let partial_key = match child {
-                    NodeType::Branch(branch) => &branch.partial_path,
-                    NodeType::Leaf(leaf) => &leaf.partial_path,
+                    Node::Branch(branch) => &branch.partial_path,
+                    Node::Leaf(leaf) => &leaf.partial_path,
                 };
 
                 let (comparison, new_unmatched_key_nibbles) =
@@ -270,7 +270,7 @@ fn get_iterator_intial_state<'a, T>(
                     }
                 }
             }
-            NodeType::Leaf(leaf) => {
+            Node::Leaf(leaf) => {
                 if compare_partial_path(leaf.partial_path.iter(), unmatched_key_nibbles).0
                     == Ordering::Greater
                 {
@@ -367,7 +367,7 @@ impl<'a, T> Stream for MerkleKeyValueStream<'a, T> {
                 match iter.poll_next_unpin(_cx) {
                     Poll::Ready(node) => match node {
                         Some(Ok((key, node))) => match node {
-                            NodeType::Branch(branch) => {
+                            Node::Branch(branch) => {
                                 let Some(value) = branch.value.as_ref() else {
                                     // This node doesn't have a value to return.
                                     // Continue to the next node.
@@ -377,7 +377,7 @@ impl<'a, T> Stream for MerkleKeyValueStream<'a, T> {
                                 let value = value.to_vec();
                                 Poll::Ready(Some(Ok((key, value))))
                             }
-                            NodeType::Leaf(leaf) => {
+                            Node::Leaf(leaf) => {
                                 let value = leaf.value.to_vec();
                                 Poll::Ready(Some(Ok((key, value))))
                             }
@@ -424,9 +424,9 @@ pub struct PathIterator<'a, 'b, T> {
 }
 
 impl<'a, 'b, T> PathIterator<'a, 'b, T> {
-    pub(super) fn new(merkle: &'a Merkle<T>, sentinel_node: &'a NodeType, key: &'b [u8]) -> Self {
+    pub(super) fn new(merkle: &'a Merkle<T>, sentinel_node: &'a Node, key: &'b [u8]) -> Self {
         let sentinel_addr = match sentinel_node {
-            NodeType::Branch(branch) => match branch.children[0] {
+            Node::Branch(branch) => match branch.children[0] {
                 Some(sentinel_addr) => sentinel_addr,
                 None => {
                     return Self {
@@ -450,7 +450,7 @@ impl<'a, 'b, T> PathIterator<'a, 'b, T> {
 }
 
 impl<'a, 'b, T> Iterator for PathIterator<'a, 'b, T> {
-    type Item = Result<(Key, &'a NodeType), MerkleError>;
+    type Item = Result<(Key, &'a Node), MerkleError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // destructuring is necessary here because we need mutable access to `state`
@@ -470,8 +470,8 @@ impl<'a, 'b, T> Iterator for PathIterator<'a, 'b, T> {
                 };
 
                 let partial_path = match node {
-                    NodeType::Branch(branch) => &branch.partial_path,
-                    NodeType::Leaf(leaf) => &leaf.partial_path,
+                    Node::Branch(branch) => &branch.partial_path,
+                    Node::Leaf(leaf) => &leaf.partial_path,
                 };
 
                 let (comparison, unmatched_key) =
@@ -486,11 +486,11 @@ impl<'a, 'b, T> Iterator for PathIterator<'a, 'b, T> {
                         Some(Ok((node_key, node)))
                     }
                     Ordering::Equal => match node {
-                        NodeType::Leaf(_) => {
+                        Node::Leaf(_) => {
                             self.state = PathIteratorState::Exhausted;
                             Some(Ok((node_key, node)))
                         }
-                        NodeType::Branch(branch) => {
+                        Node::Branch(branch) => {
                             let Some(next_unmatched_key_nibble) = unmatched_key.next() else {
                                 // There's no more key to match. We're done.
                                 self.state = PathIteratorState::Exhausted;

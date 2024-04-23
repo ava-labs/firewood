@@ -10,7 +10,7 @@ pub mod proof;
 mod stream;
 mod trie_hash;
 
-pub use node::{BinarySerde, Bincode, BranchNode, EncodedNode, LeafNode, NodeType, Path};
+pub use node::{BinarySerde, Bincode, BranchNode, EncodedNode, LeafNode, Node, Path};
 pub use proof::{Proof, ProofError};
 pub use stream::MerkleKeyValueStream;
 pub use trie_hash::{TrieHash, TRIE_HASH_LEN};
@@ -42,11 +42,11 @@ pub struct Merkle<T> {
 }
 
 impl<T> Merkle<T> {
-    pub fn get_node(&self, _addr: LinearAddress) -> Result<&NodeType, MerkleError> {
+    pub fn get_node(&self, _addr: LinearAddress) -> Result<&Node, MerkleError> {
         todo!()
     }
 
-    pub fn put_node(&self, _node: NodeType) -> Result<(), MerkleError> {
+    pub fn put_node(&self, _node: Node) -> Result<(), MerkleError> {
         todo!()
     }
 
@@ -73,9 +73,9 @@ where
 
     // TODO: use `encode` / `decode` instead of `node.encode` / `node.decode` after extention node removal.
     #[allow(dead_code)]
-    fn encode(&self, node: &NodeType) -> Result<Vec<u8>, MerkleError> {
+    fn encode(&self, node: &Node) -> Result<Vec<u8>, MerkleError> {
         let encoded = match node {
-            NodeType::Leaf(n) => {
+            Node::Leaf(n) => {
                 let children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
                 EncodedNode {
                     partial_path: n.partial_path.clone(),
@@ -85,7 +85,7 @@ where
                 }
             }
 
-            NodeType::Branch(n) => {
+            Node::Branch(n) => {
                 // pair up LinearAddresses with encoded children and pick the right one
                 let encoded_children = n.chd().iter().zip(n.children_encoded.iter());
                 let children = encoded_children
@@ -114,19 +114,19 @@ where
     }
 
     #[allow(dead_code)]
-    fn decode(&self, buf: &'de [u8]) -> Result<NodeType, MerkleError> {
+    fn decode(&self, buf: &'de [u8]) -> Result<Node, MerkleError> {
         let encoded: EncodedNode<T> =
             T::deserialize(buf).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))?;
 
         if encoded.children.iter().all(|b| b.is_none()) {
             // This is a leaf node
-            return Ok(NodeType::Leaf(LeafNode::new(
+            return Ok(Node::Leaf(LeafNode::new(
                 encoded.partial_path,
                 encoded.value.expect("leaf nodes must always have a value"),
             )));
         }
 
-        Ok(NodeType::Branch(
+        Ok(Node::Branch(
             BranchNode {
                 partial_path: encoded.partial_path,
                 children: [None::<LinearAddress>; BranchNode::MAX_CHILDREN],
@@ -168,7 +168,7 @@ impl<T> Merkle<T> {
         todo!()
     }
 
-    fn _get_node_by_key<K: AsRef<[u8]>>(&self, _key: K) -> Result<Option<&NodeType>, MerkleError> {
+    fn _get_node_by_key<K: AsRef<[u8]>>(&self, _key: K) -> Result<Option<&Node>, MerkleError> {
         todo!()
     }
 
@@ -220,7 +220,7 @@ impl<T> Merkle<T> {
 
     pub fn path_iter<'a, 'b>(
         &'a self,
-        sentinel_node: &'a NodeType,
+        sentinel_node: &'a Node,
         key: &'b [u8],
     ) -> PathIterator<'_, 'b, T> {
         PathIterator::new(self, sentinel_node, key)
@@ -383,24 +383,20 @@ pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
 //     }
 // }
 
-// #[cfg(test)]
-// #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
+#[cfg(test)]
+#[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
     use super::*;
     //     use crate::merkle::node::PlainCodec;
     //     use shale::in_mem::InMemLinearStore;
-    //     use test_case::test_case;
+    use test_case::test_case;
 
-    //     fn leaf(path: Vec<u8>, value: Vec<u8>) -> Node {
-    //         Node::from_leaf(LeafNode::new(Path(path), value))
-    //     }
-
-    //     #[test_case(vec![0x12, 0x34, 0x56], &[0x1, 0x2, 0x3, 0x4, 0x5, 0x6])]
-    //     #[test_case(vec![0xc0, 0xff], &[0xc, 0x0, 0xf, 0xf])]
-    //     fn to_nibbles(bytes: Vec<u8>, nibbles: &[u8]) {
-    //         let n: Vec<_> = bytes.into_iter().flat_map(to_nibble_array).collect();
-    //         assert_eq!(n, nibbles);
-    //     }
+    #[test_case(vec![0x12, 0x34, 0x56], &[0x1, 0x2, 0x3, 0x4, 0x5, 0x6])]
+    #[test_case(vec![0xc0, 0xff], &[0xc, 0x0, 0xf, 0xf])]
+    fn to_nibbles(bytes: Vec<u8>, nibbles: &[u8]) {
+        let n: Vec<_> = bytes.into_iter().flat_map(to_nibble_array).collect();
+        assert_eq!(n, nibbles);
+    }
 
     fn _create_generic_test_merkle<'de, T>() -> Merkle<T>
     where
@@ -414,6 +410,7 @@ mod tests {
         _create_generic_test_merkle::<Bincode>()
     }
 
+    // TODO danlaine: uncomment or remove tests
     //     fn branch(path: &[u8], value: &[u8], encoded_child: Option<Vec<u8>>) -> Node {
     //         let (path, value) = (path.to_vec(), value.to_vec());
     //         let path = Nibbles::<0>::new(&path);

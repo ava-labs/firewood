@@ -13,7 +13,7 @@ use crate::nibbles::Nibbles;
 use crate::nibbles::NibblesIterator;
 use crate::{
     db::DbError,
-    merkle::{MerkleError, NodeType},
+    merkle::{MerkleError, Node},
     merkle_util::{DataStoreError, InMemoryMerkle},
 };
 
@@ -124,7 +124,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
                 .get(&cur_hash)
                 .ok_or(ProofError::ProofNodeMissing)?;
 
-            let node = NodeType::decode(cur_proof.as_ref())?;
+            let node = Node::decode(cur_proof.as_ref())?;
             // TODO: I think this will currently fail if the key is &[];
             let (sub_proof, traversed_nibbles) = locate_subproof(key_nibbles, node)?;
             key_nibbles = traversed_nibbles;
@@ -196,7 +196,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
 
 fn locate_subproof(
     _key_nibbles: NibblesIterator<'_, 0>,
-    _node: NodeType,
+    _node: Node,
 ) -> Result<(Option<SubProof>, NibblesIterator<'_, 0>), ProofError> {
     todo!()
 }

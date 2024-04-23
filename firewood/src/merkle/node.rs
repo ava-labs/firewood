@@ -33,13 +33,13 @@ bitflags! {
 }
 
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner)]
-pub enum NodeType {
+pub enum Node {
     Branch(Box<BranchNode>),
     Leaf(LeafNode),
 }
 
-impl NodeType {
-    pub fn decode(buf: &[u8]) -> Result<NodeType, Error> {
+impl Node {
+    pub fn decode(buf: &[u8]) -> Result<Node, Error> {
         let items: Vec<Vec<u8>> = bincode::DefaultOptions::new().deserialize(buf)?;
 
         match items.len() {
@@ -57,10 +57,10 @@ impl NodeType {
                 #[allow(clippy::unwrap_used)]
                 let value: Vec<u8> = items.next().unwrap();
 
-                Ok(NodeType::Leaf(LeafNode::new(cur_key, value)))
+                Ok(Node::Leaf(LeafNode::new(cur_key, value)))
             }
             // TODO: add path
-            BranchNode::MSIZE => Ok(NodeType::Branch(BranchNode::decode(buf)?.into())),
+            BranchNode::MSIZE => Ok(Node::Branch(BranchNode::decode(buf)?.into())),
             size => Err(Box::new(bincode::ErrorKind::Custom(format!(
                 "invalid size: {size}"
             )))),
@@ -69,29 +69,29 @@ impl NodeType {
 
     pub fn encode<S>(&self) -> Vec<u8> {
         match &self {
-            NodeType::Leaf(n) => n.encode(),
-            NodeType::Branch(_n) => todo!(),
+            Node::Leaf(n) => n.encode(),
+            Node::Branch(_n) => todo!(),
         }
     }
 
     pub fn path_mut(&mut self) -> &mut Path {
         match self {
-            NodeType::Branch(u) => &mut u.partial_path,
-            NodeType::Leaf(node) => &mut node.partial_path,
+            Node::Branch(u) => &mut u.partial_path,
+            Node::Leaf(node) => &mut node.partial_path,
         }
     }
 
     pub fn set_path(&mut self, path: Path) {
         match self {
-            NodeType::Branch(u) => u.partial_path = path,
-            NodeType::Leaf(node) => node.partial_path = path,
+            Node::Branch(u) => u.partial_path = path,
+            Node::Leaf(node) => node.partial_path = path,
         }
     }
 
     pub fn set_value(&mut self, value: Vec<u8>) {
         match self {
-            NodeType::Branch(u) => u.value = Some(value),
-            NodeType::Leaf(node) => node.value = value,
+            Node::Branch(u) => u.value = Some(value),
+            Node::Leaf(node) => node.value = value,
         }
     }
 }
