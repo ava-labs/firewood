@@ -7,19 +7,14 @@ use criterion::{criterion_group, criterion_main, profiler::Profiler, BatchSize, 
 use firewood::{
     db::{BatchOp, DbConfig},
     merkle::{Bincode, Merkle, TrieHash, TRIE_HASH_LEN},
-    shale::{
-        compact::{ChunkHeader, Store},
-        disk_address::DiskAddress,
-        in_mem::InMemLinearStore,
-        LinearStore, ObjCache, Storable, StoredView,
-    },
+    shale::{in_mem::InMemLinearStore, LinearStore, Storable},
     v2::api::{Db, Proposal},
 };
 use pprof::ProfilerGuard;
 use rand::{distributions::Alphanumeric, rngs::StdRng, Rng, SeedableRng};
 use std::{fs::File, iter::repeat_with, os::raw::c_int, path::Path, sync::Arc};
 
-pub type MerkleWithEncoder = Merkle<InMemLinearStore, Bincode>;
+pub type MerkleWithEncoder = Merkle<Bincode>;
 
 const ZERO_HASH: TrieHash = TrieHash([0u8; TRIE_HASH_LEN]);
 
@@ -80,61 +75,64 @@ fn bench_trie_hash(criterion: &mut Criterion) {
         });
 }
 
-fn bench_merkle<const N: usize>(criterion: &mut Criterion) {
-    const TEST_MEM_SIZE: u64 = 20_000_000;
-    const KEY_LEN: usize = 4;
-    let mut rng = StdRng::seed_from_u64(1234);
+fn bench_merkle<const N: usize>(_criterion: &mut Criterion) {
+    todo!();
 
-    criterion
-        .benchmark_group("Merkle")
-        .sample_size(30)
-        .bench_function("insert", |b| {
-            b.iter_batched(
-                || {
-                    let merkle_payload_header = DiskAddress::from(0);
+    // TODO danlaine: uncomment or remove
+    // const TEST_MEM_SIZE: u64 = 20_000_000;
+    // const KEY_LEN: usize = 4;
+    // let mut rng = StdRng::seed_from_u64(1234);
 
-                    #[allow(clippy::unwrap_used)]
-                    let merkle_payload_header_ref = StoredView::addr_to_obj(
-                        &InMemLinearStore::new(2 * ChunkHeader::SERIALIZED_LEN, 9),
-                        merkle_payload_header,
-                        ChunkHeader::SERIALIZED_LEN,
-                    )
-                    .unwrap();
+    // criterion
+    //     .benchmark_group("Merkle")
+    //     .sample_size(30)
+    //     .bench_function("insert", |b| {
+    //         b.iter_batched(
+    //             || {
+    //                 let merkle_payload_header = DiskAddress::from(0);
 
-                    #[allow(clippy::unwrap_used)]
-                    let store = Store::new(
-                        InMemLinearStore::new(TEST_MEM_SIZE, 0),
-                        InMemLinearStore::new(TEST_MEM_SIZE, 1),
-                        merkle_payload_header_ref,
-                        ObjCache::new(1 << 20),
-                        4096,
-                        4096,
-                    )
-                    .unwrap();
+    //                 #[allow(clippy::unwrap_used)]
+    //                 let merkle_payload_header_ref = StoredView::addr_to_obj(
+    //                     &InMemLinearStore::new(2 * ChunkHeader::SERIALIZED_LEN, 9),
+    //                     merkle_payload_header,
+    //                     ChunkHeader::SERIALIZED_LEN,
+    //                 )
+    //                 .unwrap();
 
-                    let merkle = MerkleWithEncoder::new(store);
-                    #[allow(clippy::unwrap_used)]
-                    let sentinel_addr = merkle.init_sentinel().unwrap();
+    //                 #[allow(clippy::unwrap_used)]
+    //                 let store = Store::new(
+    //                     InMemLinearStore::new(TEST_MEM_SIZE, 0),
+    //                     InMemLinearStore::new(TEST_MEM_SIZE, 1),
+    //                     merkle_payload_header_ref,
+    //                     ObjCache::new(1 << 20),
+    //                     4096,
+    //                     4096,
+    //                 )
+    //                 .unwrap();
 
-                    let keys: Vec<Vec<u8>> = repeat_with(|| {
-                        (&mut rng)
-                            .sample_iter(&Alphanumeric)
-                            .take(KEY_LEN)
-                            .collect()
-                    })
-                    .take(N)
-                    .collect();
+    //                 let merkle = MerkleWithEncoder::new(store);
+    //                 #[allow(clippy::unwrap_used)]
+    //                 let sentinel_addr = merkle.init_sentinel().unwrap();
 
-                    (merkle, sentinel_addr, keys)
-                },
-                #[allow(clippy::unwrap_used)]
-                |(mut merkle, sentinel_addr, keys)| {
-                    keys.into_iter()
-                        .for_each(|key| merkle.insert(key, vec![b'v'], sentinel_addr).unwrap())
-                },
-                BatchSize::SmallInput,
-            );
-        });
+    //                 let keys: Vec<Vec<u8>> = repeat_with(|| {
+    //                     (&mut rng)
+    //                         .sample_iter(&Alphanumeric)
+    //                         .take(KEY_LEN)
+    //                         .collect()
+    //                 })
+    //                 .take(N)
+    //                 .collect();
+
+    //                 (merkle, sentinel_addr, keys)
+    //             },
+    //             #[allow(clippy::unwrap_used)]
+    //             |(mut merkle, sentinel_addr, keys)| {
+    //                 keys.into_iter()
+    //                     .for_each(|key| merkle.insert(key, vec![b'v'], sentinel_addr).unwrap())
+    //             },
+    //             BatchSize::SmallInput,
+    //         );
+    //     });
 }
 
 fn bench_db<const N: usize>(criterion: &mut Criterion) {

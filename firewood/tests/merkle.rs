@@ -13,10 +13,8 @@ fn merkle_build_test<
     V: AsRef<[u8]> + Clone,
 >(
     items: Vec<(K, V)>,
-    meta_size: u64,
-    compact_size: u64,
 ) -> Result<InMemoryMerkle<Bincode>, DataStoreError> {
-    let mut merkle = InMemoryMerkle::new(meta_size, compact_size);
+    let mut merkle = InMemoryMerkle::new();
     for (k, v) in items.iter() {
         merkle.insert(k, v.as_ref().to_vec())?;
     }
@@ -34,7 +32,7 @@ fn test_root_hash_simple_insertions() -> Result<(), DataStoreError> {
         ("horse", "stallion"),
         ("ddd", "ok"),
     ];
-    let merkle = merkle_build_test(items, 0x10000, 0x10000)?;
+    let merkle = merkle_build_test(items)?;
 
     merkle.dump()?;
 
@@ -70,7 +68,7 @@ fn test_root_hash_fuzz_insertions() -> Result<(), DataStoreError> {
             items.push((keygen(), val));
         }
 
-        merkle_build_test(items, 0x1000000, 0x1000000)?;
+        merkle_build_test(items)?;
     }
 
     Ok(())
@@ -109,7 +107,7 @@ fn test_root_hash_reversed_deletions() -> Result<(), DataStoreError> {
 
         items.sort();
 
-        let mut merkle: InMemoryMerkle<Bincode> = InMemoryMerkle::new(0x100000, 0x100000);
+        let mut merkle: InMemoryMerkle<Bincode> = InMemoryMerkle::new();
 
         let mut hashes = Vec::new();
 
@@ -178,7 +176,7 @@ fn test_root_hash_random_deletions() -> Result<(), DataStoreError> {
         let mut items_ordered: Vec<_> = items.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         items_ordered.sort();
         items_ordered.shuffle(&mut *rng.borrow_mut());
-        let mut merkle: InMemoryMerkle<Bincode> = InMemoryMerkle::new(0x100000, 0x100000);
+        let mut merkle: InMemoryMerkle<Bincode> = InMemoryMerkle::new();
 
         for (k, v) in items.iter() {
             merkle.insert(k, v.to_vec())?;
@@ -186,23 +184,19 @@ fn test_root_hash_random_deletions() -> Result<(), DataStoreError> {
 
         for (k, v) in items.iter() {
             assert_eq!(&*merkle.get(k)?.unwrap(), &v[..]);
-            assert_eq!(&*merkle.get_mut(k)?.unwrap().get(), &v[..]);
         }
 
         for (k, _) in items_ordered.into_iter() {
             assert!(merkle.get(&k)?.is_some());
-            assert!(merkle.get_mut(&k)?.is_some());
 
             merkle.remove(&k)?;
 
             assert!(merkle.get(&k)?.is_none());
-            assert!(merkle.get_mut(&k)?.is_none());
 
             items.remove(&k);
 
             for (k, v) in items.iter() {
                 assert_eq!(&*merkle.get(k)?.unwrap(), &v[..]);
-                assert_eq!(&*merkle.get_mut(k)?.unwrap().get(), &v[..]);
             }
 
             let h = triehash::trie_root::<keccak_hasher::KeccakHasher, Vec<_>, _, _>(
@@ -227,7 +221,7 @@ fn test_proof() -> Result<(), DataStoreError> {
     let set = fixed_and_pseudorandom_data(500);
     let mut items = Vec::from_iter(set.iter());
     items.sort();
-    let merkle = merkle_build_test(items.clone(), 0x10000, 0x10000)?;
+    let merkle = merkle_build_test(items.clone())?;
     let (keys, vals): (Vec<&[u8; 32]>, Vec<&[u8; 20]>) = items.into_iter().unzip();
 
     for (i, key) in keys.iter().enumerate() {
@@ -252,7 +246,7 @@ fn test_proof_end_with_leaf() -> Result<(), DataStoreError> {
         ("horse", "stallion"),
         ("ddd", "ok"),
     ];
-    let merkle = merkle_build_test(items, 0x10000, 0x10000)?;
+    let merkle = merkle_build_test(items)?;
     let key = "doe";
 
     let proof = merkle.prove(key)?;
@@ -273,7 +267,7 @@ fn test_proof_end_with_branch() -> Result<(), DataStoreError> {
         ("doe", "reindeer"),
         ("e", "coin"),
     ];
-    let merkle = merkle_build_test(items, 0x10000, 0x10000)?;
+    let merkle = merkle_build_test(items)?;
     let key = "d";
 
     let proof = merkle.prove(key)?;
@@ -290,7 +284,7 @@ fn test_bad_proof() -> Result<(), DataStoreError> {
     let set = fixed_and_pseudorandom_data(800);
     let mut items = Vec::from_iter(set.iter());
     items.sort();
-    let merkle = merkle_build_test(items.clone(), 0x10000, 0x10000)?;
+    let merkle = merkle_build_test(items.clone())?;
     let (keys, _): (Vec<&[u8; 32]>, Vec<&[u8; 20]>) = items.into_iter().unzip();
 
     for key in keys.iter() {
@@ -311,7 +305,7 @@ fn test_bad_proof() -> Result<(), DataStoreError> {
 // entry trie and checks for missing keys both before and after the single entry.
 fn test_missing_key_proof() -> Result<(), DataStoreError> {
     let items = vec![("k", "v")];
-    let merkle = merkle_build_test(items, 0x10000, 0x10000)?;
+    let merkle = merkle_build_test(items)?;
     for key in &["a", "j", "l", "z"] {
         let proof = merkle.prove(key)?;
         assert!(!proof.0.is_empty());
@@ -327,7 +321,7 @@ fn test_missing_key_proof() -> Result<(), DataStoreError> {
 #[test]
 fn test_empty_tree_proof() -> Result<(), DataStoreError> {
     let items: Vec<(&str, &str)> = Vec::new();
-    let merkle = merkle_build_test(items, 0x10000, 0x10000)?;
+    let merkle = merkle_build_test(items)?;
     let key = "x";
 
     let proof = merkle.prove(key)?;
@@ -344,7 +338,7 @@ fn test_range_proof() -> Result<(), ProofError> {
     let set = fixed_and_pseudorandom_data(4096);
     let mut items = Vec::from_iter(set.iter());
     items.sort();
-    let merkle = merkle_build_test(items.clone(), 0x10000, 0x10000)?;
+    let merkle = merkle_build_test(items.clone())?;
 
     for _ in 0..10 {
         let start = rand::thread_rng().gen_range(0..items.len());
@@ -380,7 +374,7 @@ fn test_bad_range_proof() -> Result<(), ProofError> {
     let set = fixed_and_pseudorandom_data(4096);
     let mut items = Vec::from_iter(set.iter());
     items.sort();
-    let merkle = merkle_build_test(items.clone(), 0x10000, 0x10000)?;
+    let merkle = merkle_build_test(items.clone())?;
 
     for _ in 0..10 {
         let start = rand::thread_rng().gen_range(0..items.len());
@@ -458,7 +452,7 @@ fn test_range_proof_with_non_existent_proof() -> Result<(), ProofError> {
     let set = fixed_and_pseudorandom_data(4096);
     let mut items = Vec::from_iter(set.iter());
     items.sort();
-    let merkle = merkle_build_test(items.clone(), 0x10000, 0x10000)?;
+    let merkle = merkle_build_test(items.clone())?;
 
     for _ in 0..10 {
         let start = rand::thread_rng().gen_range(0..items.len());
@@ -527,7 +521,7 @@ fn test_range_proof_with_invalid_non_existent_proof() -> Result<(), ProofError> 
     let set = fixed_and_pseudorandom_data(4096);
     let mut items = Vec::from_iter(set.iter());
     items.sort();
-    let merkle = merkle_build_test(items.clone(), 0x10000, 0x10000)?;
+    let merkle = merkle_build_test(items.clone())?;
 
     // Case 1
     let mut start = 100;
@@ -586,7 +580,7 @@ fn test_one_element_range_proof() -> Result<(), ProofError> {
     let set = fixed_and_pseudorandom_data(4096);
     let mut items = Vec::from_iter(set.iter());
     items.sort();
-    let merkle = merkle_build_test(items.clone(), 0x10000, 0x10000)?;
+    let merkle = merkle_build_test(items.clone())?;
 
     // One element with existent edge proof, both edge proofs
     // point to the SAME key.
@@ -652,7 +646,7 @@ fn test_one_element_range_proof() -> Result<(), ProofError> {
     // Test the mini trie with only a single element.
     let key = rand::thread_rng().gen::<[u8; 32]>();
     let val = rand::thread_rng().gen::<[u8; 20]>();
-    let merkle = merkle_build_test(vec![(key, val)], 0x10000, 0x10000)?;
+    let merkle = merkle_build_test(vec![(key, val)])?;
 
     let first: [u8; 32] = [0; 32];
     let mut proof = merkle.prove(first)?;
@@ -674,7 +668,7 @@ fn test_all_elements_proof() -> Result<(), ProofError> {
     let set = fixed_and_pseudorandom_data(4096);
     let mut items = Vec::from_iter(set.iter());
     items.sort();
-    let merkle = merkle_build_test(items.clone(), 0x10000, 0x10000)?;
+    let merkle = merkle_build_test(items.clone())?;
 
     let item_iter = items.clone().into_iter();
     let keys: Vec<&[u8; 32]> = item_iter.clone().map(|item| item.0).collect();
@@ -730,7 +724,7 @@ fn test_empty_range_proof() -> Result<(), ProofError> {
     let set = fixed_and_pseudorandom_data(4096);
     let mut items = Vec::from_iter(set.iter());
     items.sort();
-    let merkle = merkle_build_test(items.clone(), 0x10000, 0x10000)?;
+    let merkle = merkle_build_test(items.clone())?;
 
     let cases = [(items.len() - 1, false)];
     for c in cases.iter() {
@@ -768,7 +762,7 @@ fn test_gapped_range_proof() -> Result<(), ProofError> {
         }
         items.push((key, i.to_be_bytes()));
     }
-    let merkle = merkle_build_test(items.clone(), 0x10000, 0x10000)?;
+    let merkle = merkle_build_test(items.clone())?;
 
     let first = 2;
     let last = 8;
@@ -801,7 +795,7 @@ fn test_same_side_proof() -> Result<(), DataStoreError> {
     let set = fixed_and_pseudorandom_data(4096);
     let mut items = Vec::from_iter(set.iter());
     items.sort();
-    let merkle = merkle_build_test(items.clone(), 0x10000, 0x10000)?;
+    let merkle = merkle_build_test(items.clone())?;
 
     let pos = 1000;
     let mut last = decrease_key(items[pos].0);
@@ -848,7 +842,7 @@ fn test_single_side_range_proof() -> Result<(), ProofError> {
         }
         let mut items = Vec::from_iter(set.iter());
         items.sort();
-        let merkle = merkle_build_test(items.clone(), 0x10000, 0x10000)?;
+        let merkle = merkle_build_test(items.clone())?;
 
         let cases = vec![0, 1, 100, 1000, items.len() - 1];
         for case in cases {
@@ -882,7 +876,7 @@ fn test_reverse_single_side_range_proof() -> Result<(), ProofError> {
         }
         let mut items = Vec::from_iter(set.iter());
         items.sort();
-        let merkle = merkle_build_test(items.clone(), 0x10000, 0x10000)?;
+        let merkle = merkle_build_test(items.clone())?;
 
         let cases = vec![0, 1, 100, 1000, items.len() - 1];
         for case in cases {
@@ -915,7 +909,7 @@ fn test_both_sides_range_proof() -> Result<(), ProofError> {
         }
         let mut items = Vec::from_iter(set.iter());
         items.sort();
-        let merkle = merkle_build_test(items.clone(), 0x10000, 0x10000)?;
+        let merkle = merkle_build_test(items.clone())?;
 
         let start: [u8; 32] = [0; 32];
         let end: [u8; 32] = [255; 32];
@@ -941,7 +935,7 @@ fn test_empty_value_range_proof() -> Result<(), ProofError> {
     let set = fixed_and_pseudorandom_data(512);
     let mut items = Vec::from_iter(set.iter());
     items.sort();
-    let merkle = merkle_build_test(items.clone(), 0x10000, 0x10000)?;
+    let merkle = merkle_build_test(items.clone())?;
 
     // Create a new entry with a slightly modified key
     let mid_index = items.len() / 2;
@@ -977,7 +971,7 @@ fn test_all_elements_empty_value_range_proof() -> Result<(), ProofError> {
     let set = fixed_and_pseudorandom_data(512);
     let mut items = Vec::from_iter(set.iter());
     items.sort();
-    let merkle = merkle_build_test(items.clone(), 0x10000, 0x10000)?;
+    let merkle = merkle_build_test(items.clone())?;
 
     // Create a new entry with a slightly modified key
     let mid_index = items.len() / 2;
@@ -1018,7 +1012,7 @@ fn test_range_proof_keys_with_shared_prefix() -> Result<(), ProofError> {
             hex::decode("03").expect("Decoding failed"),
         ),
     ];
-    let merkle = merkle_build_test(items.clone(), 0x10000, 0x10000)?;
+    let merkle = merkle_build_test(items.clone())?;
 
     let start = hex::decode("0000000000000000000000000000000000000000000000000000000000000000")
         .expect("Decoding failed");
@@ -1056,7 +1050,7 @@ fn test_bloadted_range_proof() -> Result<(), ProofError> {
         }
         items.push((key, value));
     }
-    let merkle = merkle_build_test(items.clone(), 0x10000, 0x10000)?;
+    let merkle = merkle_build_test(items.clone())?;
 
     // In the 'malicious' case, we add proofs for every single item
     // (but only one key/value pair used as leaf)

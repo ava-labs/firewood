@@ -14,7 +14,7 @@ use crate::{
     merkle::{
         Bincode, Key, Merkle, MerkleError, MerkleKeyValueStream, Proof, ProofError, TrieHash,
     },
-    storage::{StoreRevMut, StoreRevShared},
+    storage::StoreRevShared,
     v2::api::{self, HashKey, KeyType, ValueType},
 };
 use aiofut::AioError;
@@ -25,9 +25,8 @@ use metered::metered;
 use std::{
     error::Error,
     fmt,
-    io::{Cursor, ErrorKind, Write},
+    io::{Cursor, Write},
     mem::size_of,
-    ops::Deref,
     path::Path,
     sync::Arc,
 };
@@ -103,12 +102,6 @@ struct DbHeader {
 
 impl DbHeader {
     pub const MSIZE: u64 = std::mem::size_of::<Self>() as u64;
-
-    pub const fn new_empty() -> Self {
-        Self {
-            sentinel_addr: DiskAddress::null(),
-        }
-    }
 }
 
 impl Storable for DbHeader {
@@ -143,49 +136,36 @@ impl Storable for DbHeader {
 /// Some readable version of the DB.
 #[derive(Debug)]
 pub struct DbRev<T> {
-    header: shale::Obj<DbHeader>,
-    merkle: Merkle<T, Bincode>,
+    header: DbHeader,
+    merkle: Merkle<T>,
 }
 
 #[async_trait]
-impl<T: LinearStore> api::DbView for DbRev<T> {
-    type Stream<'a> = MerkleKeyValueStream<'a, T, Bincode> where Self: 'a;
+impl<T: Sync> api::DbView for DbRev<T> {
+    type Stream<'a> = MerkleKeyValueStream<'a,  T> where Self: 'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
-        self.merkle
-            .root_hash(self.header.sentinel_addr)
-            .map(|h| *h)
-            .map_err(|e| api::Error::IO(std::io::Error::new(ErrorKind::Other, e)))
+        todo!()
     }
 
-    async fn val<K: api::KeyType>(&self, key: K) -> Result<Option<Vec<u8>>, api::Error> {
-        let obj_ref = self.merkle.get(key, self.header.sentinel_addr);
-        match obj_ref {
-            Err(e) => Err(api::Error::IO(std::io::Error::new(ErrorKind::Other, e))),
-            Ok(obj) => Ok(obj.map(|inner| inner.deref().to_owned())),
-        }
+    async fn val<K: api::KeyType>(&self, _key: K) -> Result<Option<Vec<u8>>, api::Error> {
+        todo!()
     }
 
     async fn single_key_proof<K: api::KeyType>(
         &self,
-        key: K,
+        _key: K,
     ) -> Result<Option<Proof<Vec<u8>>>, api::Error> {
-        self.merkle
-            .prove(key, self.header.sentinel_addr)
-            .map(Some)
-            .map_err(|e| api::Error::IO(std::io::Error::new(ErrorKind::Other, e)))
+        todo!()
     }
 
     async fn range_proof<K: api::KeyType, V>(
         &self,
-        first_key: Option<K>,
-        last_key: Option<K>,
-        limit: Option<usize>,
+        _first_key: Option<K>,
+        _last_key: Option<K>,
+        _limit: Option<usize>,
     ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>>>, api::Error> {
-        self.merkle
-            .range_proof(self.header.sentinel_addr, first_key, last_key, limit)
-            .await
-            .map_err(|e| api::Error::InternalError(Box::new(e)))
+        todo!()
     }
 
     fn iter_option<K: KeyType>(
@@ -201,12 +181,12 @@ impl<T: LinearStore> api::DbView for DbRev<T> {
     }
 }
 
-impl<T: LinearStore> DbRev<T> {
-    pub fn stream(&self) -> merkle::MerkleKeyValueStream<'_, T, Bincode> {
+impl<T> DbRev<T> {
+    pub fn stream(&self) -> merkle::MerkleKeyValueStream<'_, T> {
         self.merkle.key_value_iter(self.header.sentinel_addr)
     }
 
-    pub fn stream_from(&self, start_key: Key) -> merkle::MerkleKeyValueStream<'_, T, Bincode> {
+    pub fn stream_from(&self, start_key: Key) -> merkle::MerkleKeyValueStream<'_, T> {
         self.merkle
             .key_value_iter_from_key(self.header.sentinel_addr, start_key)
     }
@@ -254,28 +234,6 @@ impl<T: LinearStore> DbRev<T> {
     }
 }
 
-impl DbRev<StoreRevMut> {
-    fn borrow_split(&mut self) -> (&mut shale::Obj<DbHeader>, &mut Merkle<StoreRevMut, Bincode>) {
-        (&mut self.header, &mut self.merkle)
-    }
-
-    fn flush_dirty(&mut self) -> Option<()> {
-        self.header.flush_dirty();
-        self.merkle.flush_dirty()?;
-        Some(())
-    }
-}
-
-impl From<DbRev<StoreRevMut>> for DbRev<StoreRevShared> {
-    fn from(mut value: DbRev<StoreRevMut>) -> Self {
-        value.flush_dirty();
-        DbRev {
-            header: value.header,
-            merkle: value.merkle.into(),
-        }
-    }
-}
-
 pub struct Proposal {}
 
 #[async_trait]
@@ -297,7 +255,7 @@ impl api::Proposal for Proposal {
 
 #[async_trait]
 impl api::DbView for Proposal {
-    type Stream<'a> = MerkleKeyValueStream<'a, StoreRevMut, Bincode>;
+    type Stream<'a> = MerkleKeyValueStream<'a, Bincode>;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         todo!()
@@ -331,7 +289,7 @@ impl api::DbView for Proposal {
 
     fn iter_option<K: KeyType>(
         &self,
-        first_key: Option<K>,
+        _first_key: Option<K>,
     ) -> Result<Self::Stream<'_>, api::Error> {
         todo!()
     }
@@ -363,7 +321,7 @@ impl api::Db for Db {
 
     async fn propose<K: KeyType, V: ValueType>(
         &self,
-        batch: api::Batch<K, V>,
+        _batch: api::Batch<K, V>,
     ) -> Result<Self::Proposal, api::Error> {
         todo!()
         // self.new_proposal(batch).map_err(Into::into)
@@ -374,7 +332,7 @@ impl api::Db for Db {
 #[derive(Debug)]
 pub struct Db {
     metrics: Arc<DbMetrics>,
-    cfg: DbConfig,
+    _cfg: DbConfig,
 }
 
 #[metered(registry = DbMetrics, visibility = pub)]
@@ -387,7 +345,7 @@ impl Db {
     }
 
     /// Create a proposal.
-    pub(crate) fn new_proposal<K: KeyType, V: ValueType>(
+    pub(crate) fn _new_proposal<K: KeyType, V: ValueType>(
         &self,
         _data: Batch<K, V>,
     ) -> Result<Proposal, DbError> {
@@ -395,12 +353,12 @@ impl Db {
     }
 
     /// Dump the Trie of the latest revision.
-    pub fn kv_dump(&self, w: &mut dyn Write) -> Result<(), DbError> {
+    pub fn kv_dump(&self, _w: &mut dyn Write) -> Result<(), DbError> {
         todo!()
     }
 
     /// Get root hash of the latest revision.
-    pub(crate) fn kv_root_hash(&self) -> Result<TrieHash, DbError> {
+    pub(crate) fn _kv_root_hash(&self) -> Result<TrieHash, DbError> {
         todo!()
     }
 

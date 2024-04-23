@@ -4,12 +4,7 @@
 use criterion::{
     black_box, criterion_group, criterion_main, profiler::Profiler, Bencher, Criterion,
 };
-use firewood::shale::{
-    compact::{ChunkHeader, StoreHeader},
-    disk_address::DiskAddress,
-    in_mem::InMemLinearStore,
-    LinearStore, Obj, StoredView,
-};
+use firewood::shale::{in_mem::InMemLinearStore, LinearStore};
 use pprof::ProfilerGuard;
 use rand::Rng;
 use std::{fs::File, os::raw::c_int, path::Path};
@@ -73,16 +68,8 @@ fn get_view<C: LinearStore>(b: &mut Bencher, mut cached: C) {
             .get_view(offset, rdata.len().try_into().unwrap())
             .unwrap();
 
-        serialize(&cached);
         assert_eq!(view.as_deref(), rdata);
     });
-}
-
-fn serialize<T: LinearStore>(m: &T) {
-    let compact_header_obj: DiskAddress = DiskAddress::from(0x0);
-    #[allow(clippy::unwrap_used)]
-    let _: Obj<StoreHeader> =
-        StoredView::addr_to_obj(m, compact_header_obj, ChunkHeader::SERIALIZED_LEN).unwrap();
 }
 
 fn bench_cursors(c: &mut Criterion) {

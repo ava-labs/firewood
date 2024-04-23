@@ -4,11 +4,10 @@
 use crate::{
     merkle::{
         proof::{Proof, ProofError},
-        BinarySerde, EncodedNode, Merkle, Ref, RefMut, TrieHash,
+        BinarySerde, EncodedNode, Merkle, TrieHash,
     },
-    shale::{self, disk_address::DiskAddress, in_mem::InMemLinearStore, LinearStore, StoredView},
+    shale::disk_address::DiskAddress,
 };
-use std::num::NonZeroUsize;
 use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq)]
@@ -35,7 +34,7 @@ pub enum DataStoreError {
 
 pub struct InMemoryMerkle<T> {
     sentinel_addr: DiskAddress,
-    merkle: Merkle<InMemLinearStore, T>,
+    merkle: Merkle<T>,
 }
 
 impl<T> InMemoryMerkle<T>
@@ -43,46 +42,8 @@ where
     T: BinarySerde,
     EncodedNode<T>: serde::Serialize + serde::de::DeserializeOwned,
 {
-    pub fn new(meta_size: u64, compact_size: u64) -> Self {
-        const RESERVED: usize = 0x1000;
-        assert!(meta_size as usize > RESERVED);
-        assert!(compact_size as usize > RESERVED);
-        let mut dm = InMemLinearStore::new(meta_size, 0);
-        let compact_header = DiskAddress::null();
-        #[allow(clippy::unwrap_used)]
-        dm.write(
-            compact_header.into(),
-            &shale::to_dehydrated(&shale::compact::StoreHeader::new(
-                NonZeroUsize::new(RESERVED).unwrap(),
-                #[allow(clippy::unwrap_used)]
-                NonZeroUsize::new(RESERVED).unwrap(),
-            ))
-            .unwrap(),
-        )
-        .expect("write should succeed");
-        #[allow(clippy::unwrap_used)]
-        let compact_header = StoredView::addr_to_obj(
-            &dm,
-            compact_header,
-            shale::compact::ChunkHeader::SERIALIZED_LEN,
-        )
-        .unwrap();
-        let mem_meta = dm;
-        let mem_payload = InMemLinearStore::new(compact_size, 0x1);
-
-        let cache = shale::ObjCache::new(1);
-        let store =
-            shale::compact::Store::new(mem_meta, mem_payload, compact_header, cache, 10, 16)
-                .expect("Store init fail");
-
-        let merkle = Merkle::new(store);
-        #[allow(clippy::unwrap_used)]
-        let sentinel_addr = merkle.init_sentinel().unwrap();
-
-        InMemoryMerkle {
-            sentinel_addr,
-            merkle,
-        }
+    pub fn new() -> Self {
+        todo!()
     }
 
     pub fn insert<K: AsRef<[u8]>>(&mut self, key: K, val: Vec<u8>) -> Result<(), DataStoreError> {
@@ -97,18 +58,9 @@ where
             .map_err(|_err| DataStoreError::RemovalError)
     }
 
-    pub fn get<K: AsRef<[u8]>>(&self, key: K) -> Result<Option<Ref>, DataStoreError> {
+    pub fn get<K: AsRef<[u8]>>(&self, key: K) -> Result<Option<Box<[u8]>>, DataStoreError> {
         self.merkle
             .get(key, self.sentinel_addr)
-            .map_err(|_err| DataStoreError::GetError)
-    }
-
-    pub fn get_mut<K: AsRef<[u8]>>(
-        &mut self,
-        key: K,
-    ) -> Result<Option<RefMut<InMemLinearStore, T>>, DataStoreError> {
-        self.merkle
-            .get_mut(key, self.sentinel_addr)
             .map_err(|_err| DataStoreError::GetError)
     }
 
@@ -116,7 +68,7 @@ where
         self.sentinel_addr
     }
 
-    pub fn get_merkle_mut(&mut self) -> &mut Merkle<InMemLinearStore, T> {
+    pub fn get_merkle_mut(&mut self) -> &mut Merkle<T> {
         &mut self.merkle
     }
 
