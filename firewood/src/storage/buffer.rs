@@ -3,7 +3,7 @@
 
 //! Disk buffer for staging in memory pages and flushing them to disk.
 
-// TODO use or rmoeve this code
+// TODO danlaine use or remove this code
 // type BufferWrites = Box<[BufferWrite]>;
 
 // #[derive(Debug)]
