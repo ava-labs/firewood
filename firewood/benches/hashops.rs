@@ -166,7 +166,7 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
                     |batch_ops| async {
                         let db_path = std::env::temp_dir();
                         let db_path = db_path.join("benchmark_db");
-                        let cfg = DbConfig::builder().build();
+                        let cfg = DbConfig::builder();
 
                         #[allow(clippy::unwrap_used)]
                         let db =

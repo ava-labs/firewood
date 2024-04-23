@@ -3,7 +3,7 @@
 
 use clap::Args;
 use firewood::{
-    db::{Db, DbConfig, WalConfig},
+    db::{Db, DbConfig},
     merkle::Key,
     v2::api::{self, Db as _},
 };
@@ -34,9 +34,7 @@ pub struct Options {
 
 pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     log::debug!("dump database {:?}", opts);
-    let cfg = DbConfig::builder()
-        .truncate(false)
-        .wal(WalConfig::builder().max_revisions(10).build());
+    let cfg = DbConfig::builder().truncate(false);
 
     let db = Db::new(opts.db.clone(), &cfg.build()).await?;
     let latest_hash = db.root_hash().await?;

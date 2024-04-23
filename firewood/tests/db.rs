@@ -2,7 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use firewood::{
-    db::{DbConfig, WalConfig},
+    db::DbConfig,
     v2::api::{self, BatchOp, Db as _, DbView, Proposal},
 };
 use tokio::task::block_in_place;
@@ -200,102 +200,104 @@ async fn create_db_issue_proof() {
     }
 }
 
-macro_rules! assert_val {
-    ($rev: ident, $key:literal, $expected_val:literal) => {
-        let actual = $rev.val($key.as_bytes()).await.unwrap().unwrap();
-        assert_eq!(actual, $expected_val.as_bytes().to_vec());
-    };
-}
+// TODO danlaine: fix or remove this macro
+// macro_rules! assert_val {
+//     ($rev: ident, $key:literal, $expected_val:literal) => {
+//         let actual = $rev.val($key.as_bytes()).await.unwrap().unwrap();
+//         assert_eq!(actual, $expected_val.as_bytes().to_vec());
+//     };
+// }
 
-#[ignore = "ref: https://github.com/ava-labs/firewood/issues/457"]
-#[tokio::test(flavor = "multi_thread")]
-#[allow(clippy::unwrap_used)]
-async fn db_proposal() -> Result<(), api::Error> {
-    let cfg = DbConfig::builder().build();
+// TODO danlaine: fix or remove this test
+// #[ignore = "ref: https://github.com/ava-labs/firewood/issues/457"]
+// #[tokio::test(flavor = "multi_thread")]
+// #[allow(clippy::unwrap_used)]
+// async fn db_proposal() -> Result<(), api::Error> {
+//     let cfg = DbConfig::builder().build();
 
-    let db = TestDbCreator::builder()
-        .cfg(cfg)
-        .test_name("db_proposal")
-        .build()
-        .create()
-        .await;
+//     let db = TestDbCreator::builder()
+//         .cfg(cfg)
+//         .test_name("db_proposal")
+//         .build()
+//         .create()
+//         .await;
 
-    let batch = vec![
-        BatchOp::Put {
-            key: b"k",
-            value: "v".as_bytes().to_vec(),
-        },
-        BatchOp::Delete { key: b"z" },
-    ];
+//     let batch = vec![
+//         BatchOp::Put {
+//             key: b"k",
+//             value: "v".as_bytes().to_vec(),
+//         },
+//         BatchOp::Delete { key: b"z" },
+//     ];
 
-    let proposal = Arc::new(db.propose(batch).await?);
-    assert_val!(proposal, "k", "v");
+//     let proposal = Arc::new(db.propose(batch).await?);
+//     assert_val!(proposal, "k", "v");
 
-    let batch_2 = vec![BatchOp::Put {
-        key: b"k2",
-        value: "v2".as_bytes().to_vec(),
-    }];
-    let proposal_2 = Arc::new(proposal.clone().propose(batch_2).await?);
-    assert_val!(proposal_2, "k", "v");
-    assert_val!(proposal_2, "k2", "v2");
+//     let batch_2 = vec![BatchOp::Put {
+//         key: b"k2",
+//         value: "v2".as_bytes().to_vec(),
+//     }];
+//     let proposal_2 = Arc::new(proposal.clone().propose(batch_2).await?);
+//     assert_val!(proposal_2, "k", "v");
+//     assert_val!(proposal_2, "k2", "v2");
 
-    proposal.clone().commit().await?;
-    proposal_2.commit().await?;
+//     proposal.clone().commit().await?;
+//     proposal_2.commit().await?;
 
-    let t1 = tokio::spawn({
-        let proposal = proposal.clone();
-        async move {
-            let another_batch = vec![BatchOp::Put {
-                key: b"another_k_t1",
-                value: "another_v_t1".as_bytes().to_vec(),
-            }];
-            let another_proposal = proposal.clone().propose(another_batch).await.unwrap();
-            let rev = another_proposal.get_revision();
-            assert_val!(rev, "k", "v");
-            assert_val!(rev, "another_k_t1", "another_v_t1");
-            // The proposal is invalid and cannot be committed
-            assert!(Arc::new(another_proposal).commit().await.is_err());
-        }
-    });
-    let t2 = tokio::spawn({
-        let proposal = proposal.clone();
-        async move {
-            let another_batch = vec![BatchOp::Put {
-                key: b"another_k_t2",
-                value: "another_v_t2".as_bytes().to_vec(),
-            }];
-            let another_proposal = proposal.clone().propose(another_batch).await.unwrap();
-            let rev = another_proposal.get_revision();
-            assert_val!(rev, "k", "v");
-            assert_val!(rev, "another_k_t2", "another_v_t2");
-            assert!(Arc::new(another_proposal).commit().await.is_err());
-        }
-    });
-    let (first, second) = tokio::join!(t1, t2);
-    first.unwrap();
-    second.unwrap();
+//     let t1 = tokio::spawn({
+//         let proposal = proposal.clone();
+//         async move {
+//             let another_batch = vec![BatchOp::Put {
+//                 key: b"another_k_t1",
+//                 value: "another_v_t1".as_bytes().to_vec(),
+//             }];
+//             let another_proposal = proposal.clone().propose(another_batch).await.unwrap();
+//             let rev = another_proposal.get_revision();
+//             assert_val!(rev, "k", "v");
+//             assert_val!(rev, "another_k_t1", "another_v_t1");
+//             // The proposal is invalid and cannot be committed
+//             assert!(Arc::new(another_proposal).commit().await.is_err());
+//         }
+//     });
+//     let t2 = tokio::spawn({
+//         let proposal = proposal.clone();
+//         async move {
+//             let another_batch = vec![BatchOp::Put {
+//                 key: b"another_k_t2",
+//                 value: "another_v_t2".as_bytes().to_vec(),
+//             }];
+//             let another_proposal = proposal.clone().propose(another_batch).await.unwrap();
+//             let rev = another_proposal.get_revision();
+//             assert_val!(rev, "k", "v");
+//             assert_val!(rev, "another_k_t2", "another_v_t2");
+//             assert!(Arc::new(another_proposal).commit().await.is_err());
+//         }
+//     });
+//     let (first, second) = tokio::join!(t1, t2);
+//     first.unwrap();
+//     second.unwrap();
 
-    // Recursive commit
+//     // Recursive commit
 
-    let batch = vec![BatchOp::Put {
-        key: b"k3",
-        value: "v3".as_bytes().to_vec(),
-    }];
-    let proposal = Arc::new(db.propose(batch).await?);
-    assert_val!(proposal, "k", "v");
-    assert_val!(proposal, "k2", "v2");
-    assert_val!(proposal, "k3", "v3");
+//     let batch = vec![BatchOp::Put {
+//         key: b"k3",
+//         value: "v3".as_bytes().to_vec(),
+//     }];
+//     let proposal = Arc::new(db.propose(batch).await?);
+//     assert_val!(proposal, "k", "v");
+//     assert_val!(proposal, "k2", "v2");
+//     assert_val!(proposal, "k3", "v3");
 
-    let batch_2 = vec![BatchOp::Put {
-        key: b"k4",
-        value: "v4".as_bytes().to_vec(),
-    }];
-    let proposal_2 = Arc::new(proposal.clone().propose(batch_2).await?);
-    assert_val!(proposal_2, "k", "v");
-    assert_val!(proposal_2, "k2", "v2");
-    assert_val!(proposal_2, "k3", "v3");
-    assert_val!(proposal_2, "k4", "v4");
+//     let batch_2 = vec![BatchOp::Put {
+//         key: b"k4",
+//         value: "v4".as_bytes().to_vec(),
+//     }];
+//     let proposal_2 = Arc::new(proposal.clone().propose(batch_2).await?);
+//     assert_val!(proposal_2, "k", "v");
+//     assert_val!(proposal_2, "k2", "v2");
+//     assert_val!(proposal_2, "k3", "v3");
+//     assert_val!(proposal_2, "k4", "v4");
 
-    proposal_2.commit().await?;
-    Ok(())
-}
+//     proposal_2.commit().await?;
+//     Ok(())
+// }

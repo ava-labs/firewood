@@ -4,7 +4,7 @@
 use clap::Args;
 use firewood::v2::api::Db as _;
 use firewood::{
-    db::{Db, DbConfig, WalConfig},
+    db::{Db, DbConfig},
     v2::api,
 };
 use std::str;
@@ -24,9 +24,7 @@ pub struct Options {
 
 pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     log::debug!("root hash {:?}", opts);
-    let cfg = DbConfig::builder()
-        .truncate(false)
-        .wal(WalConfig::builder().max_revisions(10).build());
+    let cfg = DbConfig::builder().truncate(false);
 
     let db = Db::new(opts.db.clone(), &cfg.build()).await?;
 

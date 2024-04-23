@@ -4,17 +4,17 @@
 pub use crate::{
     config::DbConfig,
     storage::{buffer::DiskBufferConfig, WalConfig},
-    v2::api::{Batch, BatchOp, Proposal},
+    v2::api::{Batch, BatchOp},
 };
 use crate::{
     merkle,
-    shale::{self, disk_address::DiskAddress, LinearStore, ShaleError, Storable, StoreId},
+    shale::{self, disk_address::DiskAddress, LinearStore, ShaleError, Storable},
 };
 use crate::{
     merkle::{
         Bincode, Key, Merkle, MerkleError, MerkleKeyValueStream, Proof, ProofError, TrieHash,
     },
-    storage::{CachedStore, MemStoreR, StoreDelta, StoreRevMut, StoreRevShared, StoreWrite},
+    storage::{StoreRevMut, StoreRevShared},
     v2::api::{self, HashKey, KeyType, ValueType},
 };
 use aiofut::AioError;
@@ -32,12 +32,8 @@ use std::{
     sync::Arc,
 };
 
-const MERKLE_META_STORE_ID: StoreId = 0x0;
-const MERKLE_PAYLOAD_STORE_ID: StoreId = 0x1;
-const ROOT_HASH_STORE_ID: StoreId = 0x2;
-const RESERVED_STORE_ID: u64 = 0x1000;
-
-const MAGIC_STR: &[u8; 16] = b"firewood v0.1\0\0\0";
+// TODO use or remove
+const _MAGIC_STR: &[u8; 16] = b"firewood v0.1\0\0\0";
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -96,76 +92,6 @@ struct DbParams {
     wal_file_nbit: u64,
     wal_block_nbit: u64,
     root_hash_file_nbit: u64,
-}
-
-#[derive(Clone, Debug)]
-/// Necessary linear store instances bundled for a `Store`.
-struct SubUniverse<T> {
-    meta: T,
-    payload: T,
-}
-
-impl<T> SubUniverse<T> {
-    const fn new(meta: T, payload: T) -> Self {
-        Self { meta, payload }
-    }
-}
-
-impl SubUniverse<StoreRevShared> {
-    fn to_mem_store_r(&self) -> SubUniverse<Arc<impl MemStoreR>> {
-        SubUniverse {
-            meta: self.meta.inner().clone(),
-            payload: self.payload.inner().clone(),
-        }
-    }
-}
-
-impl SubUniverse<StoreRevMut> {
-    fn new_from_other(&self) -> SubUniverse<StoreRevMut> {
-        SubUniverse {
-            meta: StoreRevMut::new_from_other(&self.meta),
-            payload: StoreRevMut::new_from_other(&self.payload),
-        }
-    }
-}
-
-impl<T: MemStoreR + 'static> SubUniverse<Arc<T>> {
-    fn rewind(
-        &self,
-        meta_writes: &[StoreWrite],
-        payload_writes: &[StoreWrite],
-    ) -> SubUniverse<StoreRevShared> {
-        SubUniverse::new(
-            StoreRevShared::from_ash(self.meta.clone(), meta_writes),
-            StoreRevShared::from_ash(self.payload.clone(), payload_writes),
-        )
-    }
-}
-
-impl SubUniverse<Arc<CachedStore>> {
-    fn to_mem_store_r(&self) -> SubUniverse<Arc<impl MemStoreR>> {
-        SubUniverse {
-            meta: self.meta.clone(),
-            payload: self.payload.clone(),
-        }
-    }
-}
-
-fn get_sub_universe_from_deltas(
-    sub_universe: &SubUniverse<Arc<CachedStore>>,
-    meta_delta: StoreDelta,
-    payload_delta: StoreDelta,
-) -> SubUniverse<StoreRevShared> {
-    SubUniverse::new(
-        StoreRevShared::from_delta(sub_universe.meta.clone(), meta_delta),
-        StoreRevShared::from_delta(sub_universe.payload.clone(), payload_delta),
-    )
-}
-
-fn get_sub_universe_from_empty_delta(
-    sub_universe: &SubUniverse<Arc<CachedStore>>,
-) -> SubUniverse<StoreRevShared> {
-    get_sub_universe_from_deltas(sub_universe, StoreDelta::default(), StoreDelta::default())
 }
 
 /// mutable DB-wide metadata, it keeps track of the root of the top-level trie.
@@ -350,17 +276,75 @@ impl From<DbRev<StoreRevMut>> for DbRev<StoreRevShared> {
     }
 }
 
-// TODO danlaine: delete or implement
-type proposal = ();
+pub struct Proposal {}
+
+#[async_trait]
+impl api::Proposal for Proposal {
+    type Proposal = Proposal;
+
+    #[allow(clippy::unwrap_used)]
+    async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
+        todo!()
+    }
+
+    async fn propose<K: api::KeyType, V: api::ValueType>(
+        self: Arc<Self>,
+        _data: api::Batch<K, V>,
+    ) -> Result<Self::Proposal, api::Error> {
+        todo!()
+    }
+}
+
+#[async_trait]
+impl api::DbView for Proposal {
+    type Stream<'a> = MerkleKeyValueStream<'a, StoreRevMut, Bincode>;
+
+    async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
+        todo!()
+    }
+
+    async fn val<K>(&self, _key: K) -> Result<Option<Vec<u8>>, api::Error>
+    where
+        K: api::KeyType,
+    {
+        todo!()
+    }
+
+    async fn single_key_proof<K>(&self, _key: K) -> Result<Option<Proof<Vec<u8>>>, api::Error>
+    where
+        K: api::KeyType,
+    {
+        todo!()
+    }
+
+    async fn range_proof<K, V>(
+        &self,
+        _first_key: Option<K>,
+        _last_key: Option<K>,
+        _limit: Option<usize>,
+    ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>>>, api::Error>
+    where
+        K: api::KeyType,
+    {
+        todo!();
+    }
+
+    fn iter_option<K: KeyType>(
+        &self,
+        first_key: Option<K>,
+    ) -> Result<Self::Stream<'_>, api::Error> {
+        todo!()
+    }
+}
 
 #[async_trait]
 impl api::Db for Db {
     type Historical = DbRev<StoreRevShared>;
 
-    type Proposal = proposal;
+    type Proposal = Proposal;
 
     /// TODO danlaine: delete or implement
-    async fn revision(&self, root_hash: HashKey) -> Result<Arc<Self::Historical>, api::Error> {
+    async fn revision(&self, _root_hash: HashKey) -> Result<Arc<Self::Historical>, api::Error> {
         todo!()
         // let rev = self.get_revision(&TrieHash(root_hash));
         // if let Some(rev) = rev {
@@ -373,14 +357,16 @@ impl api::Db for Db {
     }
 
     async fn root_hash(&self) -> Result<HashKey, api::Error> {
-        self.kv_root_hash().map(|hash| hash.0).map_err(Into::into)
+        todo!()
+        // self.kv_root_hash().map(|hash| hash.0).map_err(Into::into)
     }
 
     async fn propose<K: KeyType, V: ValueType>(
         &self,
         batch: api::Batch<K, V>,
     ) -> Result<Self::Proposal, api::Error> {
-        self.new_proposal(batch).map_err(Into::into)
+        todo!()
+        // self.new_proposal(batch).map_err(Into::into)
     }
 }
 
@@ -393,7 +379,8 @@ pub struct Db {
 
 #[metered(registry = DbMetrics, visibility = pub)]
 impl Db {
-    const PARAM_SIZE: u64 = size_of::<DbParams>() as u64;
+    // TODO danlaine: use or remove
+    const _PARAM_SIZE: u64 = size_of::<DbParams>() as u64;
 
     pub async fn new<P: AsRef<Path>>(_db_path: P, _cfg: &DbConfig) -> Result<Self, api::Error> {
         todo!()
@@ -402,8 +389,8 @@ impl Db {
     /// Create a proposal.
     pub(crate) fn new_proposal<K: KeyType, V: ValueType>(
         &self,
-        data: Batch<K, V>,
-    ) -> Result<proposal::Proposal, DbError> {
+        _data: Batch<K, V>,
+    ) -> Result<Proposal, DbError> {
         todo!()
     }
 
