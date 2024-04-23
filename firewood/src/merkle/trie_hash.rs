@@ -1,7 +1,6 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::shale::{ShaleError, Storable};
 use std::{
     fmt::{self, Debug},
     io::Write,
@@ -20,39 +19,8 @@ impl std::ops::Deref for TrieHash {
     }
 }
 
-impl Storable for TrieHash {
-    fn deserialize<T>(addr: usize, mem: &T) -> Result<Self, ShaleError> {
-        todo!()
-    }
-
-    fn serialized_len(&self) -> u64 {
-        U64_TRIE_HASH_LEN
-    }
-
-    fn serialize(&self, mut to: &mut [u8]) -> Result<(), ShaleError> {
-        to.write_all(&self.0).map_err(ShaleError::Io)
-    }
-}
-
 impl Debug for TrieHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         write!(f, "{}", hex::encode(self.0))
-    }
-}
-
-#[cfg(test)]
-#[allow(clippy::indexing_slicing)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_dehydrate() {
-        let zero_hash = TrieHash([0u8; TRIE_HASH_LEN]);
-
-        let mut to = [1u8; TRIE_HASH_LEN];
-        #[allow(clippy::unwrap_used)]
-        zero_hash.serialize(&mut to).unwrap();
-
-        assert_eq!(&to, &zero_hash.0);
     }
 }

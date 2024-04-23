@@ -5,10 +5,7 @@ pub use crate::{
     config::DbConfig,
     v2::api::{Batch, BatchOp},
 };
-use crate::{
-    merkle,
-    shale::{self, disk_address::DiskAddress, ShaleError, Storable},
-};
+use crate::{merkle, shale::disk_address::DiskAddress};
 use crate::{
     merkle::{
         Bincode, Key, Merkle, MerkleError, MerkleKeyValueStream, Proof, ProofError, TrieHash,
@@ -20,14 +17,7 @@ use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
 
 use metered::metered;
-use std::{
-    error::Error,
-    fmt,
-    io::{Cursor, Write},
-    mem::size_of,
-    path::Path,
-    sync::Arc,
-};
+use std::{error::Error, fmt, io::Write, path::Path, sync::Arc};
 
 // TODO use or remove
 const _MAGIC_STR: &[u8; 16] = b"firewood v0.1\0\0\0";
@@ -41,7 +31,6 @@ pub enum DbError {
     System(nix::Error),
     KeyNotFound,
     CreateError,
-    Shale(ShaleError),
     IO(std::io::Error),
     InvalidProposal,
 }
@@ -56,7 +45,6 @@ impl fmt::Display for DbError {
             DbError::KeyNotFound => write!(f, "not found"),
             DbError::CreateError => write!(f, "database create error"),
             DbError::IO(e) => write!(f, "I/O error: {e:?}"),
-            DbError::Shale(e) => write!(f, "shale error: {e:?}"),
             DbError::InvalidProposal => write!(f, "invalid proposal"),
         }
     }
@@ -65,12 +53,6 @@ impl fmt::Display for DbError {
 impl From<std::io::Error> for DbError {
     fn from(e: std::io::Error) -> Self {
         DbError::IO(e)
-    }
-}
-
-impl From<ShaleError> for DbError {
-    fn from(e: ShaleError) -> Self {
-        DbError::Shale(e)
     }
 }
 

@@ -1,6 +1,6 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
-use crate::shale::{disk_address::DiskAddress, ObjWriteSizeError, ShaleError};
+use crate::shale::disk_address::DiskAddress;
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
 use std::{future::ready, io::Write, marker::PhantomData};
@@ -23,8 +23,6 @@ type Value = Vec<u8>;
 
 #[derive(Debug, Error)]
 pub enum MerkleError {
-    #[error("merkle datastore error: {0:?}")]
-    Shale(#[from] ShaleError),
     #[error("read only")]
     ReadOnly,
     #[error("node not a branch node")]
@@ -35,8 +33,6 @@ pub enum MerkleError {
     ParentLeafBranch,
     #[error("removing internal node references failed")]
     UnsetInternal,
-    #[error("error updating nodes: {0}")]
-    WriteError(#[from] ObjWriteSizeError),
     #[error("merkle serde error: {0}")]
     BinarySerdeError(String),
 }

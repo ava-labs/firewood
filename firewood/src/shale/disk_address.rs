@@ -8,8 +8,6 @@ use std::ops::{Deref, DerefMut};
 
 use bytemuck::{Pod, Zeroable};
 
-use crate::shale::{ShaleError, Storable};
-
 /// The virtual disk address of an object
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, Eq, Hash, Ord, PartialOrd, PartialEq, Pod, Zeroable)]
@@ -161,19 +159,5 @@ impl std::ops::BitAnd<usize> for DiskAddress {
 
     fn bitand(self, rhs: usize) -> Self::Output {
         (self.get() & rhs).into()
-    }
-}
-
-impl Storable for DiskAddress {
-    fn serialized_len(&self) -> u64 {
-        Self::SERIALIZED_LEN
-    }
-
-    fn serialize(&self, to: &mut [u8]) -> Result<(), ShaleError> {
-        todo!()
-    }
-
-    fn deserialize<U>(addr: usize, mem: &U) -> Result<Self, ShaleError> {
-        todo!()
     }
 }

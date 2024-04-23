@@ -24,7 +24,6 @@ impl From<DbError> for api::Error {
             DbError::KeyNotFound | DbError::CreateError => {
                 api::Error::InternalError(Box::new(value))
             }
-            DbError::Shale(e) => api::Error::InternalError(Box::new(e)),
             DbError::IO(e) => api::Error::IO(e),
             DbError::InvalidProposal => api::Error::InvalidProposal,
         }

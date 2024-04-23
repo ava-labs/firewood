@@ -3,8 +3,6 @@
 
 use std::collections::HashMap;
 
-use crate::shale::ObjWriteSizeError;
-use crate::shale::ShaleError;
 use crate::v2::api::HashKey;
 use aiofut::AioError;
 use nix::errno::Errno;
@@ -55,12 +53,8 @@ pub enum ProofError {
     ForkRight,
     #[error("system error: {0:?}")]
     SystemError(Errno),
-    #[error("shale error: {0:?}")]
-    Shale(ShaleError),
     #[error("invalid root hash")]
     InvalidRootHash,
-    #[error("{0}")]
-    WriteError(#[from] ObjWriteSizeError),
 }
 
 impl From<DataStoreError> for ProofError {
@@ -87,7 +81,6 @@ impl From<DbError> for ProofError {
             DbError::IO(e) => {
                 ProofError::SystemError(nix::errno::Errno::from_raw(e.raw_os_error().unwrap()))
             }
-            DbError::Shale(e) => ProofError::Shale(e),
             DbError::InvalidProposal => ProofError::InvalidProof,
         }
     }

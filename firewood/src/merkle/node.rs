@@ -102,43 +102,11 @@ struct Meta {
     root_hash: [u8; TRIE_HASH_LEN],
     encoded_len: u64,
     encoded: [u8; TRIE_HASH_LEN],
-    type_id: NodeTypeId,
 }
 
 impl Meta {
     const SIZE: usize = size_of::<Self>();
 }
-
-mod type_id {
-    use super::{CheckedBitPattern, NoUninit, NodeType};
-    use crate::shale::ShaleError;
-
-    #[derive(Clone, Copy, CheckedBitPattern, NoUninit)]
-    #[repr(u8)]
-    pub enum NodeTypeId {
-        Branch = 0,
-        Leaf = 1,
-    }
-
-    impl TryFrom<u8> for NodeTypeId {
-        type Error = ShaleError;
-
-        fn try_from(value: u8) -> Result<Self, Self::Error> {
-            bytemuck::checked::try_cast::<_, Self>(value).map_err(|_| ShaleError::InvalidNodeType)
-        }
-    }
-
-    impl From<&NodeType> for NodeTypeId {
-        fn from(node_type: &NodeType) -> Self {
-            match node_type {
-                NodeType::Branch(_) => NodeTypeId::Branch,
-                NodeType::Leaf(_) => NodeTypeId::Leaf,
-            }
-        }
-    }
-}
-
-use type_id::NodeTypeId;
 
 /// Contains the fields that we include in a node's hash.
 /// If this is a leaf node, `children` is empty and `value` is Some.
