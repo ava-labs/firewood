@@ -81,15 +81,7 @@ impl Error for DbError {}
 /// parameters in [DbConfig] if the DB already exists).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
-struct DbParams {
-    magic: [u8; 16],
-    meta_file_nbit: u64,
-    payload_file_nbit: u64,
-    payload_regn_nbit: u64,
-    wal_file_nbit: u64,
-    wal_block_nbit: u64,
-    root_hash_file_nbit: u64,
-}
+struct DbParams {}
 
 /// mutable DB-wide metadata, it keeps track of the root of the top-level trie.
 #[repr(C)]
@@ -98,35 +90,13 @@ struct DbHeader {
     sentinel_addr: DiskAddress,
 }
 
-impl DbHeader {
-    pub const MSIZE: u64 = std::mem::size_of::<Self>() as u64;
-}
-
-impl Storable for DbHeader {
-    fn deserialize<T>(addr: usize, mem: &T) -> Result<Self, shale::ShaleError> {
-        todo!()
-    }
-
-    fn serialized_len(&self) -> u64 {
-        Self::MSIZE
-    }
-
-    fn serialize(&self, to: &mut [u8]) -> Result<(), ShaleError> {
-        let mut cur = Cursor::new(to);
-        cur.write_all(&self.sentinel_addr.to_le_bytes())?;
-        Ok(())
-    }
-}
-
-/// Some readable version of the DB.
 #[derive(Debug)]
-pub struct DbRev<T> {
-    header: DbHeader,
-    merkle: Merkle<T>,
+pub struct Historical<T> {
+    _merkle: Merkle<T>,
 }
 
 #[async_trait]
-impl<T: Sync> api::DbView for DbRev<T> {
+impl<T: Sync> api::DbView for Historical<T> {
     type Stream<'a> = MerkleKeyValueStream<'a,  T> where Self: 'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
@@ -155,67 +125,50 @@ impl<T: Sync> api::DbView for DbRev<T> {
 
     fn iter_option<K: KeyType>(
         &self,
-        first_key: Option<K>,
+        _first_key: Option<K>,
     ) -> Result<Self::Stream<'_>, api::Error> {
-        Ok(match first_key {
-            None => self.merkle.key_value_iter(self.header.sentinel_addr),
-            Some(key) => self
-                .merkle
-                .key_value_iter_from_key(self.header.sentinel_addr, key.as_ref().into()),
-        })
+        todo!()
     }
 }
 
-impl<T> DbRev<T> {
+impl<T> Historical<T> {
     pub fn stream(&self) -> merkle::MerkleKeyValueStream<'_, T> {
-        self.merkle.key_value_iter(self.header.sentinel_addr)
+        todo!()
     }
 
-    pub fn stream_from(&self, start_key: Key) -> merkle::MerkleKeyValueStream<'_, T> {
-        self.merkle
-            .key_value_iter_from_key(self.header.sentinel_addr, start_key)
+    pub fn stream_from(&self, _start_key: Key) -> merkle::MerkleKeyValueStream<'_, T> {
+        todo!()
     }
 
     /// Get root hash of the generic key-value storage.
     pub fn kv_root_hash(&self) -> Result<TrieHash, DbError> {
-        self.merkle
-            .root_hash(self.header.sentinel_addr)
-            .map_err(DbError::Merkle)
+        todo!()
     }
 
     /// Get a value associated with a key.
-    pub fn kv_get<K: AsRef<[u8]>>(&self, key: K) -> Option<Vec<u8>> {
-        let obj_ref = self.merkle.get(key, self.header.sentinel_addr);
-        match obj_ref {
-            Err(_) => None,
-            Ok(obj) => obj.map(|o| o.to_vec()),
-        }
+    pub fn kv_get<K: AsRef<[u8]>>(&self, _key: K) -> Option<Vec<u8>> {
+        todo!()
     }
 
     /// Dump the Trie of the generic key-value storage.
-    pub fn kv_dump(&self, w: &mut dyn Write) -> Result<(), DbError> {
-        self.merkle
-            .dump(self.header.sentinel_addr, w)
-            .map_err(DbError::Merkle)
+    pub fn kv_dump(&self, _w: &mut dyn Write) -> Result<(), DbError> {
+        todo!()
     }
 
-    pub fn prove<K: AsRef<[u8]>>(&self, key: K) -> Result<Proof<Vec<u8>>, MerkleError> {
-        self.merkle.prove::<K>(key, self.header.sentinel_addr)
+    pub fn prove<K: AsRef<[u8]>>(&self, _key: K) -> Result<Proof<Vec<u8>>, MerkleError> {
+        todo!()
     }
 
     /// Verifies a range proof is valid for a set of keys.
     pub fn verify_range_proof<N: AsRef<[u8]> + Send, K: AsRef<[u8]>, V: AsRef<[u8]>>(
         &self,
-        proof: Proof<N>,
-        first_key: K,
-        last_key: K,
-        keys: Vec<K>,
-        values: Vec<V>,
+        _proof: Proof<N>,
+        _first_key: K,
+        _last_key: K,
+        _keys: Vec<K>,
+        _values: Vec<V>,
     ) -> Result<bool, ProofError> {
-        let hash: [u8; 32] = *self.kv_root_hash()?;
-        let valid =
-            proof.verify_range_proof::<K, V, Bincode>(hash, first_key, last_key, keys, values)?;
-        Ok(valid)
+        todo!()
     }
 }
 
@@ -282,11 +235,10 @@ impl api::DbView for Proposal {
 
 #[async_trait]
 impl api::Db for Db {
-    type Historical = DbRev<Bincode>;
+    type Historical = Historical<Bincode>;
 
     type Proposal = Proposal;
 
-    /// TODO danlaine: delete or implement
     async fn revision(&self, _root_hash: HashKey) -> Result<Arc<Self::Historical>, api::Error> {
         todo!()
     }
@@ -312,9 +264,6 @@ pub struct Db {
 
 #[metered(registry = DbMetrics, visibility = pub)]
 impl Db {
-    // TODO danlaine: use or remove
-    const _PARAM_SIZE: u64 = size_of::<DbParams>() as u64;
-
     pub async fn new<P: AsRef<Path>>(_db_path: P, _cfg: &DbConfig) -> Result<Self, api::Error> {
         todo!()
     }

@@ -59,7 +59,7 @@ impl<T> Merkle<T> {
         todo!()
     }
 
-    fn init_sentinel(&mut self) -> Result<DiskAddress, MerkleError> {
+    fn _init_sentinel(&mut self) -> Result<DiskAddress, MerkleError> {
         todo!()
     }
 }
