@@ -174,10 +174,7 @@ impl<T> Merkle<T> {
         todo!()
     }
 
-    fn _get_node_by_key<'a, K: AsRef<[u8]>>(
-        &'a self,
-        _key: K,
-    ) -> Result<Option<&'a NodeType>, MerkleError> {
+    fn _get_node_by_key<K: AsRef<[u8]>>(&self, _key: K) -> Result<Option<&NodeType>, MerkleError> {
         todo!()
     }
 
@@ -235,19 +232,22 @@ impl<T> Merkle<T> {
         PathIterator::new(self, sentinel_node, key)
     }
 
-    pub(crate) fn key_value_iter(&self, sentinel_addr: DiskAddress) -> MerkleKeyValueStream<'_, T> {
-        MerkleKeyValueStream::new(self, sentinel_addr)
+    pub(crate) fn _key_value_iter(
+        &self,
+        sentinel_addr: DiskAddress,
+    ) -> MerkleKeyValueStream<'_, T> {
+        MerkleKeyValueStream::_new(self, sentinel_addr)
     }
 
-    pub(crate) fn key_value_iter_from_key(
+    pub(crate) fn _key_value_iter_from_key(
         &self,
         sentinel_addr: DiskAddress,
         key: Key,
     ) -> MerkleKeyValueStream<'_, T> {
-        MerkleKeyValueStream::from_key(self, sentinel_addr, key)
+        MerkleKeyValueStream::_from_key(self, sentinel_addr, key)
     }
 
-    pub(super) async fn range_proof<K: api::KeyType + Send + Sync>(
+    pub(super) async fn _range_proof<K: api::KeyType + Send + Sync>(
         &self,
         sentinel_addr: DiskAddress,
         first_key: Option<K>,
@@ -271,8 +271,8 @@ impl<T> Merkle<T> {
         let mut stream = match first_key {
             // TODO: fix the call-site to force the caller to do the allocation
             Some(key) => self
-                .key_value_iter_from_key(sentinel_addr, key.as_ref().to_vec().into_boxed_slice()),
-            None => self.key_value_iter(sentinel_addr),
+                ._key_value_iter_from_key(sentinel_addr, key.as_ref().to_vec().into_boxed_slice()),
+            None => self._key_value_iter(sentinel_addr),
         };
 
         // fetch the first key from the stream
@@ -353,40 +353,41 @@ pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
     nibbles.chunks_exact(2).map(|p| (p[0] << 4) | p[1])
 }
 
+/// TODO danlaine: use or remove PrefixOverlap
 /// The [`PrefixOverlap`] type represents the _shared_ and _unique_ parts of two potentially overlapping slices.
 /// As the type-name implies, the `shared` property only constitues a shared *prefix*.
 /// The `unique_*` properties, [`unique_a`][`PrefixOverlap::unique_a`] and [`unique_b`][`PrefixOverlap::unique_b`]
 /// are set based on the argument order passed into the [`from`][`PrefixOverlap::from`] constructor.
-#[derive(Debug)]
-struct PrefixOverlap<'a, T> {
-    shared: &'a [T],
-    unique_a: &'a [T],
-    unique_b: &'a [T],
-}
+// #[derive(Debug)]
+// struct PrefixOverlap<'a, T> {
+//     shared: &'a [T],
+//     unique_a: &'a [T],
+//     unique_b: &'a [T],
+// }
 
-impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
-    fn from(a: &'a [T], b: &'a [T]) -> Self {
-        let mut split_index = 0;
+// impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
+//     fn from(a: &'a [T], b: &'a [T]) -> Self {
+//         let mut split_index = 0;
 
-        #[allow(clippy::indexing_slicing)]
-        for i in 0..std::cmp::min(a.len(), b.len()) {
-            if a[i] != b[i] {
-                break;
-            }
+//         #[allow(clippy::indexing_slicing)]
+//         for i in 0..std::cmp::min(a.len(), b.len()) {
+//             if a[i] != b[i] {
+//                 break;
+//             }
 
-            split_index += 1;
-        }
+//             split_index += 1;
+//         }
 
-        let (shared, unique_a) = a.split_at(split_index);
-        let (_, unique_b) = b.split_at(split_index);
+//         let (shared, unique_a) = a.split_at(split_index);
+//         let (_, unique_b) = b.split_at(split_index);
 
-        Self {
-            shared,
-            unique_a,
-            unique_b,
-        }
-    }
-}
+//         Self {
+//             shared,
+//             unique_a,
+//             unique_b,
+//         }
+//     }
+// }
 
 // #[cfg(test)]
 // #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
@@ -407,7 +408,7 @@ mod tests {
     //         assert_eq!(n, nibbles);
     //     }
 
-    fn create_generic_test_merkle<'de, T>() -> Merkle<T>
+    fn _create_generic_test_merkle<'de, T>() -> Merkle<T>
     where
         T: BinarySerde,
         EncodedNode<T>: serde::Serialize + serde::Deserialize<'de>,
@@ -415,8 +416,8 @@ mod tests {
         todo!()
     }
 
-    pub(super) fn create_test_merkle() -> Merkle<Bincode> {
-        create_generic_test_merkle::<Bincode>()
+    pub(super) fn _create_test_merkle() -> Merkle<Bincode> {
+        _create_generic_test_merkle::<Bincode>()
     }
 
     //     fn branch(path: &[u8], value: &[u8], encoded_child: Option<Vec<u8>>) -> Node {

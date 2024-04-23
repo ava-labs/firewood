@@ -70,7 +70,7 @@ impl NodeType {
     pub fn encode<S>(&self) -> Vec<u8> {
         match &self {
             NodeType::Leaf(n) => n.encode(),
-            NodeType::Branch(n) => todo!(),
+            NodeType::Branch(_n) => todo!(),
         }
     }
 
@@ -105,7 +105,7 @@ struct Meta {
 }
 
 impl Meta {
-    const SIZE: usize = size_of::<Self>();
+    const _SIZE: usize = size_of::<Self>();
 }
 
 /// Contains the fields that we include in a node's hash.

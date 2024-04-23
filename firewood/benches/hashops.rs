@@ -15,7 +15,7 @@ use std::{fs::File, iter::repeat_with, os::raw::c_int, path::Path, sync::Arc};
 
 pub type MerkleWithEncoder = Merkle<Bincode>;
 
-const ZERO_HASH: TrieHash = TrieHash([0u8; TRIE_HASH_LEN]);
+const _ZERO_HASH: TrieHash = TrieHash([0u8; TRIE_HASH_LEN]);
 
 // To enable flamegraph output
 // cargo bench --bench shale-bench -- --profile-time=N

@@ -97,6 +97,7 @@ pub struct Proof<N>(pub HashMap<HashKey, N>);
 /// the `SubProof` should be the `Value` variant.
 
 #[derive(Debug)]
+#[allow(dead_code)] // TODO use or remove this type
 enum SubProof {
     Value(Vec<u8>),
     Hash(HashKey),
@@ -200,7 +201,7 @@ fn locate_subproof(
     todo!()
 }
 
-fn generate_subproof_hash(encoded: &[u8]) -> Result<HashKey, ProofError> {
+fn _generate_subproof_hash(encoded: &[u8]) -> Result<HashKey, ProofError> {
     match encoded.len() {
         0..=31 => {
             let sub_hash = sha3::Keccak256::digest(encoded).into();
@@ -221,6 +222,6 @@ fn generate_subproof_hash(encoded: &[u8]) -> Result<HashKey, ProofError> {
     }
 }
 
-fn generate_subproof(encoded: &[u8]) -> Result<SubProof, ProofError> {
-    Ok(SubProof::Hash(generate_subproof_hash(encoded)?))
+fn _generate_subproof(encoded: &[u8]) -> Result<SubProof, ProofError> {
+    Ok(SubProof::Hash(_generate_subproof_hash(encoded)?))
 }

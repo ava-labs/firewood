@@ -1,22 +1,13 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{
-    merkle::{nibbles_to_bytes_iter, Path},
-    nibbles::Nibbles,
-    shale::DiskAddress,
-};
+use crate::{merkle::Path, nibbles::Nibbles, shale::DiskAddress};
 use bincode::{Error, Options};
 use serde::de::Error as DeError;
 use std::{
     fmt::{Debug, Error as FmtError, Formatter},
-    io::{Cursor, Write},
     mem::size_of,
 };
-
-type PathLen = u8;
-pub type ValueLen = u32;
-pub type EncodedChildLen = u8;
 
 const MAX_CHILDREN: usize = 16;
 
@@ -110,12 +101,12 @@ impl BranchNode {
         })
     }
 
-    pub(super) fn encode<S>(&self) -> Vec<u8> {
+    pub(super) fn _encode(&self) -> Vec<u8> {
         todo!()
     }
 }
 
-fn optional_value_len<Len, T: AsRef<[u8]>>(value: Option<T>) -> u64 {
+fn _optional_value_len<Len, T: AsRef<[u8]>>(value: Option<T>) -> u64 {
     size_of::<Len>() as u64
         + value
             .as_ref()

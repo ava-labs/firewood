@@ -1,13 +1,9 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::{
-    fmt::{self, Debug},
-    io::Write,
-};
+use std::fmt::{self, Debug};
 
 pub const TRIE_HASH_LEN: usize = 32;
-const U64_TRIE_HASH_LEN: u64 = TRIE_HASH_LEN as u64;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub struct TrieHash(pub [u8; TRIE_HASH_LEN]);

@@ -27,13 +27,14 @@ impl AsRawFd for File {
 unsafe impl Flockable for File {}
 
 #[derive(PartialEq, Eq)]
+#[allow(dead_code)] // TODO remove or use this code
 pub enum Options {
     Truncate,
     NoTruncate,
 }
 
 impl File {
-    pub fn open_file(
+    pub fn _open_file(
         rootpath: PathBuf,
         fname: &str,
         options: Options,
@@ -49,7 +50,7 @@ impl File {
             .into())
     }
 
-    pub fn create_file(rootpath: PathBuf, fname: &str) -> Result<OwnedFd, std::io::Error> {
+    pub fn _create_file(rootpath: PathBuf, fname: &str) -> Result<OwnedFd, std::io::Error> {
         let mut filepath = rootpath;
         filepath.push(fname);
         Ok(std::fs::File::options()
@@ -66,13 +67,13 @@ impl File {
         format!("{fid:08x}.fw")
     }
 
-    pub fn new<P: AsRef<Path>>(fid: u64, _flen: u64, rootdir: P) -> Result<Self, std::io::Error> {
+    pub fn _new<P: AsRef<Path>>(fid: u64, _flen: u64, rootdir: P) -> Result<Self, std::io::Error> {
         let fname = Self::_get_fname(fid);
-        let fd = match Self::open_file(rootdir.as_ref().to_path_buf(), &fname, Options::NoTruncate)
+        let fd = match Self::_open_file(rootdir.as_ref().to_path_buf(), &fname, Options::NoTruncate)
         {
             Ok(fd) => fd,
             Err(e) => match e.kind() {
-                ErrorKind::NotFound => Self::create_file(rootdir.as_ref().to_path_buf(), &fname)?,
+                ErrorKind::NotFound => Self::_create_file(rootdir.as_ref().to_path_buf(), &fname)?,
                 _ => return Err(e),
             },
         };
@@ -88,7 +89,7 @@ impl Deref for File {
     }
 }
 
-pub(crate) fn touch_dir(dirname: &str, rootdir: &Path) -> Result<PathBuf, std::io::Error> {
+pub(crate) fn _touch_dir(dirname: &str, rootdir: &Path) -> Result<PathBuf, std::io::Error> {
     let path = rootdir.join(dirname);
     if let Err(e) = std::fs::create_dir(&path) {
         // ignore already-exists error
@@ -99,7 +100,7 @@ pub(crate) fn touch_dir(dirname: &str, rootdir: &Path) -> Result<PathBuf, std::i
     Ok(path)
 }
 
-pub(crate) fn open_dir<P: AsRef<Path>>(
+pub(crate) fn _open_dir<P: AsRef<Path>>(
     path: P,
     options: Options,
 ) -> Result<(PathBuf, bool), std::io::Error> {

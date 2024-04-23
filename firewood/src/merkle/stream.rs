@@ -292,7 +292,7 @@ fn get_iterator_intial_state<'a, T>(
 enum MerkleKeyValueStreamState<'a, T> {
     /// The iterator state is lazily initialized when poll_next is called
     /// for the first time. The iteration start key is stored here.
-    Uninitialized(Key),
+    _Uninitialized(Key),
     /// The iterator works by iterating over the nodes in the merkle trie
     /// and returning the key-value pairs for nodes that have values.
     Initialized { node_iter: MerkleNodeStream<'a, T> },
@@ -300,14 +300,14 @@ enum MerkleKeyValueStreamState<'a, T> {
 
 impl<'a, T> MerkleKeyValueStreamState<'a, T> {
     /// Returns a new iterator that will iterate over all the key-value pairs in `merkle`.
-    fn new() -> Self {
-        Self::Uninitialized(Box::new([]))
+    fn _new() -> Self {
+        Self::_Uninitialized(Box::new([]))
     }
 
     /// Returns a new iterator that will iterate over all the key-value pairs in `merkle`
     /// with keys greater than or equal to `key`.
-    fn with_key(key: Key) -> Self {
-        Self::Uninitialized(key)
+    fn _with_key(key: Key) -> Self {
+        Self::_Uninitialized(key)
     }
 }
 
@@ -325,17 +325,17 @@ impl<'a, T> FusedStream for MerkleKeyValueStream<'a, T> {
 }
 
 impl<'a, T> MerkleKeyValueStream<'a, T> {
-    pub(super) fn new(merkle: &'a Merkle<T>, sentinel_addr: DiskAddress) -> Self {
+    pub(super) fn _new(merkle: &'a Merkle<T>, sentinel_addr: DiskAddress) -> Self {
         Self {
-            state: MerkleKeyValueStreamState::new(),
+            state: MerkleKeyValueStreamState::_new(),
             sentinel_addr,
             merkle,
         }
     }
 
-    pub(super) fn from_key(merkle: &'a Merkle<T>, sentinel_addr: DiskAddress, key: Key) -> Self {
+    pub(super) fn _from_key(merkle: &'a Merkle<T>, sentinel_addr: DiskAddress, key: Key) -> Self {
         Self {
-            state: MerkleKeyValueStreamState::with_key(key),
+            state: MerkleKeyValueStreamState::_with_key(key),
             sentinel_addr,
             merkle,
         }
@@ -358,7 +358,7 @@ impl<'a, T> Stream for MerkleKeyValueStream<'a, T> {
         } = &mut *self;
 
         match state {
-            MerkleKeyValueStreamState::Uninitialized(key) => {
+            MerkleKeyValueStreamState::_Uninitialized(key) => {
                 let iter = MerkleNodeStream::new(merkle, *sentinel_addr, key.clone());
                 self.state = MerkleKeyValueStreamState::Initialized { node_iter: iter };
                 self.poll_next(_cx)
@@ -570,7 +570,7 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
 }
 
 #[cfg(test)]
-use super::tests::create_test_merkle;
+use super::tests::_create_test_merkle;
 
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
@@ -598,7 +598,7 @@ mod tests {
     #[test_case(&[1]; "non-empty key")]
     #[tokio::test]
     async fn path_iterate_empty_merkle_empty_key(key: &[u8]) {
-        let mut merkle = create_test_merkle();
+        let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
         let sentinel_node = merkle.get_node(sentinel_addr).unwrap();
         let mut stream = merkle.path_iter(sentinel_node, key);
@@ -612,7 +612,7 @@ mod tests {
     #[test_case(&[255]; "no key nibbles match singleton key")]
     #[tokio::test]
     async fn path_iterate_singleton_merkle(key: &[u8]) {
-        let mut merkle = create_test_merkle();
+        let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
 
         merkle
@@ -717,16 +717,16 @@ mod tests {
 
     #[tokio::test]
     async fn key_value_iterate_empty() {
-        let mut merkle = create_test_merkle();
+        let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
         let stream =
-            merkle.key_value_iter_from_key(sentinel_addr, b"x".to_vec().into_boxed_slice());
+            merkle._key_value_iter_from_key(sentinel_addr, b"x".to_vec().into_boxed_slice());
         check_stream_is_done(stream).await;
     }
 
     #[tokio::test]
     async fn node_iterate_empty() {
-        let mut merkle = create_test_merkle();
+        let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
         let stream = merkle.node_iter(sentinel_addr);
         check_stream_is_done(stream).await;
@@ -734,7 +734,7 @@ mod tests {
 
     #[tokio::test]
     async fn node_iterate_root_only() {
-        let mut merkle = create_test_merkle();
+        let mut merkle = _create_test_merkle();
 
         let sentinel_addr = merkle._init_sentinel().unwrap();
 
@@ -764,7 +764,7 @@ mod tests {
     /// Note the 0000 branch has no value and the F0F0
     /// The number next to each branch is the position of the child in the branch's children array.
     fn created_populated_merkle() -> (Merkle<Bincode>, DiskAddress) {
-        let mut merkle = create_test_merkle();
+        let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
 
         merkle
@@ -915,7 +915,7 @@ mod tests {
     #[test_case(Some(&[u8::MAX]); "Starting at last key")]
     #[tokio::test]
     async fn key_value_iterate_many(start: Option<&[u8]>) {
-        let mut merkle = create_test_merkle();
+        let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
 
         // insert all values from u8::MIN to u8::MAX, with the key and value the same
@@ -925,9 +925,9 @@ mod tests {
 
         let mut stream = match start {
             Some(start) => {
-                merkle.key_value_iter_from_key(sentinel_addr, start.to_vec().into_boxed_slice())
+                merkle._key_value_iter_from_key(sentinel_addr, start.to_vec().into_boxed_slice())
             }
-            None => merkle.key_value_iter(sentinel_addr),
+            None => merkle._key_value_iter(sentinel_addr),
         };
 
         // we iterate twice because we should get a None then start over
@@ -947,14 +947,14 @@ mod tests {
 
     #[tokio::test]
     async fn key_value_fused_empty() {
-        let mut merkle = create_test_merkle();
+        let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
-        check_stream_is_done(merkle.key_value_iter(sentinel_addr)).await;
+        check_stream_is_done(merkle._key_value_iter(sentinel_addr)).await;
     }
 
     #[tokio::test]
     async fn key_value_table_test() {
-        let mut merkle = create_test_merkle();
+        let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
 
         // Insert key-values in reverse order to ensure iterator
@@ -969,7 +969,7 @@ mod tests {
         }
 
         // Test with no start key
-        let mut stream = merkle.key_value_iter(sentinel_addr);
+        let mut stream = merkle._key_value_iter(sentinel_addr);
         for i in 0..=u8::MAX {
             for j in 0..=u8::MAX {
                 let expected_key = vec![i, j];
@@ -989,7 +989,7 @@ mod tests {
         // Test with start key
         for i in 0..=u8::MAX {
             let mut stream =
-                merkle.key_value_iter_from_key(sentinel_addr, vec![i].into_boxed_slice());
+                merkle._key_value_iter_from_key(sentinel_addr, vec![i].into_boxed_slice());
             for j in 0..=u8::MAX {
                 let expected_key = vec![i, j];
                 let expected_value = vec![i, j];
@@ -1016,7 +1016,7 @@ mod tests {
 
     #[tokio::test]
     async fn key_value_fused_full() {
-        let mut merkle = create_test_merkle();
+        let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
 
         let last = vec![0x00, 0x00, 0x00];
@@ -1034,7 +1034,7 @@ mod tests {
             merkle.insert(kv, kv.clone(), sentinel_addr).unwrap();
         }
 
-        let mut stream = merkle.key_value_iter(sentinel_addr);
+        let mut stream = merkle._key_value_iter(sentinel_addr);
 
         for kv in key_values.iter() {
             let next = stream.next().await.unwrap().unwrap();
@@ -1047,7 +1047,7 @@ mod tests {
 
     #[tokio::test]
     async fn key_value_root_with_empty_value() {
-        let mut merkle = create_test_merkle();
+        let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
 
         let key = vec![].into_boxed_slice();
@@ -1055,14 +1055,14 @@ mod tests {
 
         merkle.insert(&key, value.clone(), sentinel_addr).unwrap();
 
-        let mut stream = merkle.key_value_iter(sentinel_addr);
+        let mut stream = merkle._key_value_iter(sentinel_addr);
 
         assert_eq!(stream.next().await.unwrap().unwrap(), (key, value));
     }
 
     #[tokio::test]
     async fn key_value_get_branch_and_leaf() {
-        let mut merkle = create_test_merkle();
+        let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
 
         let first_leaf = &[0x00, 0x00];
@@ -1080,7 +1080,7 @@ mod tests {
             .insert(branch, branch.to_vec(), sentinel_addr)
             .unwrap();
 
-        let mut stream = merkle.key_value_iter(sentinel_addr);
+        let mut stream = merkle._key_value_iter(sentinel_addr);
 
         assert_eq!(
             stream.next().await.unwrap().unwrap(),
@@ -1103,7 +1103,7 @@ mod tests {
 
     #[tokio::test]
     async fn key_value_start_at_key_not_in_trie() {
-        let mut merkle = create_test_merkle();
+        let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
 
         let first_key = 0x00;
@@ -1124,7 +1124,7 @@ mod tests {
         }
 
         let mut stream =
-            merkle.key_value_iter_from_key(sentinel_addr, vec![intermediate].into_boxed_slice());
+            merkle._key_value_iter_from_key(sentinel_addr, vec![intermediate].into_boxed_slice());
 
         let first_expected = key_values[1].as_slice();
         let first = stream.next().await.unwrap().unwrap();
@@ -1147,7 +1147,7 @@ mod tests {
         let branch_path = 0x0f;
         let children = 0..=0x0f;
 
-        let mut merkle = create_test_merkle();
+        let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
 
         children.clone().for_each(|child_path| {
@@ -1172,7 +1172,7 @@ mod tests {
         let keys = &keys[start..];
 
         let mut stream =
-            merkle.key_value_iter_from_key(sentinel_addr, vec![branch_path].into_boxed_slice());
+            merkle._key_value_iter_from_key(sentinel_addr, vec![branch_path].into_boxed_slice());
 
         for key in keys {
             let next = stream.next().await.unwrap().unwrap();
@@ -1192,7 +1192,7 @@ mod tests {
 
         let children = (0..=0xf).map(|val| (val << 4) + val); // 0x00, 0x11, ... 0xff
 
-        let mut merkle = create_test_merkle();
+        let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
 
         merkle
@@ -1222,7 +1222,7 @@ mod tests {
         let keys = &keys[start..];
 
         let mut stream =
-            merkle.key_value_iter_from_key(sentinel_addr, branch_key.into_boxed_slice());
+            merkle._key_value_iter_from_key(sentinel_addr, branch_key.into_boxed_slice());
 
         for key in keys {
             let next = stream.next().await.unwrap().unwrap();
@@ -1238,7 +1238,7 @@ mod tests {
     async fn key_value_start_at_key_on_extension() {
         let missing = 0x0a;
         let children = (0..=0x0f).filter(|x| *x != missing);
-        let mut merkle = create_test_merkle();
+        let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
 
         let keys: Vec<_> = children
@@ -1254,7 +1254,7 @@ mod tests {
         let keys = &keys[(missing as usize)..];
 
         let mut stream =
-            merkle.key_value_iter_from_key(sentinel_addr, vec![missing].into_boxed_slice());
+            merkle._key_value_iter_from_key(sentinel_addr, vec![missing].into_boxed_slice());
 
         for key in keys {
             let next = stream.next().await.unwrap().unwrap();
@@ -1274,7 +1274,7 @@ mod tests {
         // path extension is 0x090
         let children = (0..=0x0f).map(|val| vec![shared_path, val]);
 
-        let mut merkle = create_test_merkle();
+        let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
 
         children.for_each(|key| {
@@ -1282,7 +1282,7 @@ mod tests {
         });
 
         let stream =
-            merkle.key_value_iter_from_key(sentinel_addr, vec![start_key].into_boxed_slice());
+            merkle._key_value_iter_from_key(sentinel_addr, vec![start_key].into_boxed_slice());
 
         check_stream_is_done(stream).await;
     }
@@ -1295,7 +1295,7 @@ mod tests {
         // path extension is 0x090
         let children = (0..=0x0f).map(|val| vec![shared_path, val]);
 
-        let mut merkle = create_test_merkle();
+        let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
 
         let keys: Vec<_> = children
@@ -1306,7 +1306,7 @@ mod tests {
             .collect();
 
         let mut stream =
-            merkle.key_value_iter_from_key(sentinel_addr, vec![start_key].into_boxed_slice());
+            merkle._key_value_iter_from_key(sentinel_addr, vec![start_key].into_boxed_slice());
 
         for key in keys {
             let next = stream.next().await.unwrap().unwrap();
@@ -1324,7 +1324,7 @@ mod tests {
         let children = (0..=0xf)
             .map(|val| (val << 4) + val) // 0x00, 0x11, ... 0xff
             .filter(|x| *x != missing);
-        let mut merkle = create_test_merkle();
+        let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
 
         let keys: Vec<_> = children
@@ -1340,7 +1340,7 @@ mod tests {
         let keys = &keys[((missing >> 4) as usize)..];
 
         let mut stream =
-            merkle.key_value_iter_from_key(sentinel_addr, vec![missing].into_boxed_slice());
+            merkle._key_value_iter_from_key(sentinel_addr, vec![missing].into_boxed_slice());
 
         for key in keys {
             let next = stream.next().await.unwrap().unwrap();
@@ -1356,10 +1356,10 @@ mod tests {
     async fn key_value_start_at_key_greater_than_all_others_leaf() {
         let key = vec![0x00];
         let greater_key = vec![0xff];
-        let mut merkle = create_test_merkle();
+        let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
         merkle.insert(key.clone(), key, sentinel_addr).unwrap();
-        let stream = merkle.key_value_iter_from_key(sentinel_addr, greater_key.into_boxed_slice());
+        let stream = merkle._key_value_iter_from_key(sentinel_addr, greater_key.into_boxed_slice());
 
         check_stream_is_done(stream).await;
     }
@@ -1370,7 +1370,7 @@ mod tests {
         let children = (0..=0xf)
             .map(|val| (val << 4) + val) // 0x00, 0x11, ... 0xff
             .filter(|x| *x != greatest);
-        let mut merkle = create_test_merkle();
+        let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
 
         let keys: Vec<_> = children
@@ -1386,7 +1386,7 @@ mod tests {
         let keys = &keys[((greatest >> 4) as usize)..];
 
         let mut stream =
-            merkle.key_value_iter_from_key(sentinel_addr, vec![greatest].into_boxed_slice());
+            merkle._key_value_iter_from_key(sentinel_addr, vec![greatest].into_boxed_slice());
 
         for key in keys {
             let next = stream.next().await.unwrap().unwrap();

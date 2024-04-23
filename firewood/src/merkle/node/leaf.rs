@@ -6,7 +6,6 @@ use bincode::Options;
 use bytemuck::{Pod, Zeroable};
 use std::{
     fmt::{Debug, Error as FmtError, Formatter},
-    io::{Cursor, Write},
     mem::size_of,
 };
 
@@ -70,7 +69,7 @@ struct Meta {
 }
 
 impl Meta {
-    const SIZE: usize = size_of::<Self>();
+    const _SIZE: usize = size_of::<Self>();
 }
 
 #[cfg(test)]

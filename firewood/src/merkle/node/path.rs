@@ -84,7 +84,7 @@ impl Path {
         Self(iter.collect())
     }
 
-    pub(super) fn serialized_len(&self) -> u64 {
+    pub(super) fn _serialized_len(&self) -> u64 {
         let len = self.0.len();
 
         // if len is even the prefix takes an extra byte
@@ -113,7 +113,7 @@ mod tests {
         let path = Path(steps.to_vec());
         let encoded = path.encode();
 
-        assert_eq!(encoded.len(), path.serialized_len() as usize * 2);
+        assert_eq!(encoded.len(), path._serialized_len() as usize * 2);
 
         let decoded = Path::decode(&encoded);
 

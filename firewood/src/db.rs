@@ -154,13 +154,13 @@ impl<T> Historical<T> {
     }
 }
 
+/// TODO danlaine: implement
 pub struct Proposal {}
 
 #[async_trait]
 impl api::Proposal for Proposal {
     type Proposal = Proposal;
 
-    #[allow(clippy::unwrap_used)]
     async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
         todo!()
     }
@@ -237,7 +237,7 @@ impl api::Db for Db {
     }
 }
 
-/// Firewood database handle.
+/// TODO danlaine: implement
 #[derive(Debug)]
 pub struct Db {
     metrics: Arc<DbMetrics>,
