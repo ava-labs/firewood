@@ -4,6 +4,8 @@
 // TODO: remove this once we have code that uses it
 #![allow(dead_code)]
 
+mod scheduler;
+
 use bytes::Bytes;
 use std::io::{Error, SeekFrom};
 use std::path::PathBuf;
