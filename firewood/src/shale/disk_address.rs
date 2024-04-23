@@ -8,7 +8,7 @@ use std::ops::{Deref, DerefMut};
 
 use bytemuck::{Pod, Zeroable};
 
-use crate::shale::{LinearStore, ShaleError, Storable};
+use crate::shale::{ShaleError, Storable};
 
 /// The virtual disk address of an object
 #[repr(transparent)]
@@ -170,24 +170,10 @@ impl Storable for DiskAddress {
     }
 
     fn serialize(&self, to: &mut [u8]) -> Result<(), ShaleError> {
-        use std::io::{Cursor, Write};
-        #[allow(clippy::unwrap_used)]
-        Cursor::new(to).write_all(&self.0.unwrap().get().to_le_bytes())?;
-        Ok(())
+        todo!()
     }
 
-    fn deserialize<U: LinearStore>(addr: usize, mem: &U) -> Result<Self, ShaleError> {
-        let raw = mem
-            .get_view(addr, Self::SERIALIZED_LEN)
-            .ok_or(ShaleError::InvalidCacheView {
-                offset: addr,
-                size: Self::SERIALIZED_LEN,
-            })?;
-        let addrdyn = &*raw;
-        let addrvec = addrdyn.as_deref();
-        #[allow(clippy::unwrap_used)]
-        Ok(Self(NonZeroUsize::new(usize::from_le_bytes(
-            addrvec.try_into().unwrap(),
-        ))))
+    fn deserialize<U>(addr: usize, mem: &U) -> Result<Self, ShaleError> {
+        todo!()
     }
 }

@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::shale::{LinearStore, ShaleError, Storable};
+use crate::shale::{ShaleError, Storable};
 use std::{
     fmt::{self, Debug},
     io::Write,
@@ -21,15 +21,8 @@ impl std::ops::Deref for TrieHash {
 }
 
 impl Storable for TrieHash {
-    fn deserialize<T: LinearStore>(addr: usize, mem: &T) -> Result<Self, ShaleError> {
-        let raw = mem
-            .get_view(addr, U64_TRIE_HASH_LEN)
-            .ok_or(ShaleError::InvalidCacheView {
-                offset: addr,
-                size: U64_TRIE_HASH_LEN,
-            })?;
-        #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
-        Ok(Self(raw.as_deref()[..TRIE_HASH_LEN].try_into().unwrap()))
+    fn deserialize<T>(addr: usize, mem: &T) -> Result<Self, ShaleError> {
+        todo!()
     }
 
     fn serialized_len(&self) -> u64 {

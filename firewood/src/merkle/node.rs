@@ -1,31 +1,17 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{
-    logger::trace,
-    merkle::nibbles_to_bytes_iter,
-    shale::{disk_address::DiskAddress, LinearStore, ShaleError, Storable},
-};
+use crate::merkle::nibbles_to_bytes_iter;
 use bincode::{Error, Options};
 use bitflags::bitflags;
-use bytemuck::{CheckedBitPattern, NoUninit, Pod, Zeroable};
+use bytemuck::{CheckedBitPattern, NoUninit};
 use enum_as_inner::EnumAsInner;
 use serde::{
     ser::{SerializeSeq, SerializeTuple},
     Deserialize, Serialize,
 };
 use sha3::{Digest, Keccak256};
-use std::{
-    fmt::Debug,
-    io::{Cursor, Write},
-    marker::PhantomData,
-    mem::size_of,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        OnceLock,
-    },
-    vec,
-};
+use std::{fmt::Debug, marker::PhantomData, mem::size_of};
 
 mod branch;
 mod leaf;
@@ -37,7 +23,7 @@ pub use path::Path;
 
 use crate::nibbles::Nibbles;
 
-use super::{TrieHash, TRIE_HASH_LEN};
+use super::TRIE_HASH_LEN;
 
 bitflags! {
     // should only ever be the size of a nibble

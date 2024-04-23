@@ -3,18 +3,16 @@
 
 pub use crate::{
     config::DbConfig,
-    storage::{buffer::DiskBufferConfig, WalConfig},
     v2::api::{Batch, BatchOp},
 };
 use crate::{
     merkle,
-    shale::{self, disk_address::DiskAddress, LinearStore, ShaleError, Storable},
+    shale::{self, disk_address::DiskAddress, ShaleError, Storable},
 };
 use crate::{
     merkle::{
         Bincode, Key, Merkle, MerkleError, MerkleKeyValueStream, Proof, ProofError, TrieHash,
     },
-    storage::StoreRevShared,
     v2::api::{self, HashKey, KeyType, ValueType},
 };
 use aiofut::AioError;
@@ -105,21 +103,8 @@ impl DbHeader {
 }
 
 impl Storable for DbHeader {
-    fn deserialize<T: LinearStore>(addr: usize, mem: &T) -> Result<Self, shale::ShaleError> {
-        let root_bytes = mem
-            .get_view(addr, Self::MSIZE)
-            .ok_or(ShaleError::InvalidCacheView {
-                offset: addr,
-                size: Self::MSIZE,
-            })?;
-        let root_bytes = root_bytes.as_deref();
-        let root_bytes = root_bytes.as_slice();
-
-        Ok(Self {
-            sentinel_addr: root_bytes
-                .try_into()
-                .expect("Self::MSIZE == DiskAddress:MSIZE"),
-        })
+    fn deserialize<T>(addr: usize, mem: &T) -> Result<Self, shale::ShaleError> {
+        todo!()
     }
 
     fn serialized_len(&self) -> u64 {
@@ -297,26 +282,17 @@ impl api::DbView for Proposal {
 
 #[async_trait]
 impl api::Db for Db {
-    type Historical = DbRev<StoreRevShared>;
+    type Historical = DbRev<Bincode>;
 
     type Proposal = Proposal;
 
     /// TODO danlaine: delete or implement
     async fn revision(&self, _root_hash: HashKey) -> Result<Arc<Self::Historical>, api::Error> {
         todo!()
-        // let rev = self.get_revision(&TrieHash(root_hash));
-        // if let Some(rev) = rev {
-        //     Ok(Arc::new(rev))
-        // } else {
-        //     Err(api::Error::HashNotFound {
-        //         provided: root_hash,
-        //     })
-        // }
     }
 
     async fn root_hash(&self) -> Result<HashKey, api::Error> {
         todo!()
-        // self.kv_root_hash().map(|hash| hash.0).map_err(Into::into)
     }
 
     async fn propose<K: KeyType, V: ValueType>(
@@ -324,7 +300,6 @@ impl api::Db for Db {
         _batch: api::Batch<K, V>,
     ) -> Result<Self::Proposal, api::Error> {
         todo!()
-        // self.new_proposal(batch).map_err(Into::into)
     }
 }
 

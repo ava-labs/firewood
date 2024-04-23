@@ -4,13 +4,13 @@
 use crate::{
     merkle::{nibbles_to_bytes_iter, to_nibble_array, Path},
     nibbles::Nibbles,
-    shale::{DiskAddress, LinearStore, ShaleError, Storable},
+    shale::{DiskAddress, ShaleError, Storable},
 };
 use bincode::{Error, Options};
 use serde::de::Error as DeError;
 use std::{
     fmt::{Debug, Error as FmtError, Formatter},
-    io::{Cursor, Read, Write},
+    io::{Cursor, Write},
     mem::size_of,
 };
 
@@ -110,7 +110,7 @@ impl BranchNode {
         })
     }
 
-    pub(super) fn encode<S: LinearStore>(&self) -> Vec<u8> {
+    pub(super) fn encode<S>(&self) -> Vec<u8> {
         todo!()
     }
 }
@@ -162,138 +162,136 @@ impl Storable for BranchNode {
         Ok(())
     }
 
-    fn deserialize<T: crate::shale::LinearStore>(
-        mut addr: usize,
-        mem: &T,
-    ) -> Result<Self, crate::shale::ShaleError> {
-        const PATH_LEN_SIZE: u64 = size_of::<PathLen>() as u64;
-        const VALUE_LEN_SIZE: usize = size_of::<ValueLen>();
-        const BRANCH_HEADER_SIZE: u64 =
-            BranchNode::MAX_CHILDREN as u64 * DiskAddress::SERIALIZED_LEN + VALUE_LEN_SIZE as u64;
+    fn deserialize<T>(mut addr: usize, mem: &T) -> Result<Self, crate::shale::ShaleError> {
+        todo!()
+        // const PATH_LEN_SIZE: u64 = size_of::<PathLen>() as u64;
+        // const VALUE_LEN_SIZE: usize = size_of::<ValueLen>();
+        // const BRANCH_HEADER_SIZE: u64 =
+        //     BranchNode::MAX_CHILDREN as u64 * DiskAddress::SERIALIZED_LEN + VALUE_LEN_SIZE as u64;
 
-        let path_len = mem
-            .get_view(addr, PATH_LEN_SIZE)
-            .ok_or(ShaleError::InvalidCacheView {
-                offset: addr,
-                size: PATH_LEN_SIZE,
-            })?
-            .as_deref();
+        // let path_len = mem
+        //     .get_view(addr, PATH_LEN_SIZE)
+        //     .ok_or(ShaleError::InvalidCacheView {
+        //         offset: addr,
+        //         size: PATH_LEN_SIZE,
+        //     })?
+        //     .as_deref();
 
-        addr += PATH_LEN_SIZE as usize;
+        // addr += PATH_LEN_SIZE as usize;
 
-        let path_len = {
-            let mut buf = [0u8; PATH_LEN_SIZE as usize];
-            let mut cursor = Cursor::new(path_len);
-            cursor.read_exact(buf.as_mut())?;
+        // let path_len = {
+        //     let mut buf = [0u8; PATH_LEN_SIZE as usize];
+        //     let mut cursor = Cursor::new(path_len);
+        //     cursor.read_exact(buf.as_mut())?;
 
-            PathLen::from_le_bytes(buf) as u64
-        };
+        //     PathLen::from_le_bytes(buf) as u64
+        // };
 
-        let path = mem
-            .get_view(addr, path_len)
-            .ok_or(ShaleError::InvalidCacheView {
-                offset: addr,
-                size: path_len,
-            })?
-            .as_deref();
+        // let path = mem
+        //     .get_view(addr, path_len)
+        //     .ok_or(ShaleError::InvalidCacheView {
+        //         offset: addr,
+        //         size: path_len,
+        //     })?
+        //     .as_deref();
 
-        addr += path_len as usize;
+        // addr += path_len as usize;
 
-        let path: Vec<u8> = path.into_iter().flat_map(to_nibble_array).collect();
-        let path = Path::decode(&path);
+        // let path: Vec<u8> = path.into_iter().flat_map(to_nibble_array).collect();
+        // let path = Path::decode(&path);
 
-        let node_raw =
-            mem.get_view(addr, BRANCH_HEADER_SIZE)
-                .ok_or(ShaleError::InvalidCacheView {
-                    offset: addr,
-                    size: BRANCH_HEADER_SIZE,
-                })?;
+        // let node_raw =
+        //     mem.get_view(addr, BRANCH_HEADER_SIZE)
+        //         .ok_or(ShaleError::InvalidCacheView {
+        //             offset: addr,
+        //             size: BRANCH_HEADER_SIZE,
+        //         })?;
 
-        addr += BRANCH_HEADER_SIZE as usize;
+        // addr += BRANCH_HEADER_SIZE as usize;
 
-        let mut cursor = Cursor::new(node_raw.as_deref());
-        let mut children = [None; BranchNode::MAX_CHILDREN];
-        let mut buf = [0u8; DiskAddress::SERIALIZED_LEN as usize];
+        // let mut cursor = Cursor::new(node_raw.as_deref());
+        // let mut children = [None; BranchNode::MAX_CHILDREN];
+        // let mut buf = [0u8; DiskAddress::SERIALIZED_LEN as usize];
 
-        for child in &mut children {
-            cursor.read_exact(&mut buf)?;
-            *child = Some(usize::from_le_bytes(buf))
-                .filter(|addr| *addr != 0)
-                .map(DiskAddress::from);
-        }
+        // for child in &mut children {
+        //     cursor.read_exact(&mut buf)?;
+        //     *child = Some(usize::from_le_bytes(buf))
+        //         .filter(|addr| *addr != 0)
+        //         .map(DiskAddress::from);
+        // }
 
-        let raw_len = {
-            let mut buf = [0; VALUE_LEN_SIZE];
-            cursor.read_exact(&mut buf)?;
-            Some(ValueLen::from_le_bytes(buf))
-                .filter(|len| *len != ValueLen::MAX)
-                .map(|len| len as u64)
-        };
+        // let raw_len = {
+        //     let mut buf = [0; VALUE_LEN_SIZE];
+        //     cursor.read_exact(&mut buf)?;
+        //     Some(ValueLen::from_le_bytes(buf))
+        //         .filter(|len| *len != ValueLen::MAX)
+        //         .map(|len| len as u64)
+        // };
 
-        let value = match raw_len {
-            Some(len) => {
-                let value = mem
-                    .get_view(addr, len)
-                    .ok_or(ShaleError::InvalidCacheView {
-                        offset: addr,
-                        size: len,
-                    })?;
+        // let value = match raw_len {
+        //     Some(len) => {
+        //         let value = mem
+        //             .get_view(addr, len)
+        //             .ok_or(ShaleError::InvalidCacheView {
+        //                 offset: addr,
+        //                 size: len,
+        //             })?;
 
-                addr += len as usize;
+        //         addr += len as usize;
 
-                Some(value.as_deref())
-            }
-            None => None,
-        };
+        //         Some(value.as_deref())
+        //     }
+        //     None => None,
+        // };
 
-        let mut children_encoded: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
+        // let mut children_encoded: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
 
-        for child in &mut children_encoded {
-            const ENCODED_CHILD_LEN_SIZE: u64 = size_of::<EncodedChildLen>() as u64;
+        // for child in &mut children_encoded {
+        //     const ENCODED_CHILD_LEN_SIZE: u64 = size_of::<EncodedChildLen>() as u64;
 
-            let len_raw = mem
-                .get_view(addr, ENCODED_CHILD_LEN_SIZE)
-                .ok_or(ShaleError::InvalidCacheView {
-                    offset: addr,
-                    size: ENCODED_CHILD_LEN_SIZE,
-                })?
-                .as_deref();
+        //     let len_raw = mem
+        //         .get_view(addr, ENCODED_CHILD_LEN_SIZE)
+        //         .ok_or(ShaleError::InvalidCacheView {
+        //             offset: addr,
+        //             size: ENCODED_CHILD_LEN_SIZE,
+        //         })?
+        //         .as_deref();
 
-            let mut cursor = Cursor::new(len_raw);
+        //     let mut cursor = Cursor::new(len_raw);
 
-            let len = {
-                let mut buf = [0; ENCODED_CHILD_LEN_SIZE as usize];
-                cursor.read_exact(buf.as_mut())?;
-                EncodedChildLen::from_le_bytes(buf) as u64
-            };
+        //     let len = {
+        //         let mut buf = [0; ENCODED_CHILD_LEN_SIZE as usize];
+        //         cursor.read_exact(buf.as_mut())?;
+        //         EncodedChildLen::from_le_bytes(buf) as u64
+        //     };
 
-            addr += ENCODED_CHILD_LEN_SIZE as usize;
+        //     addr += ENCODED_CHILD_LEN_SIZE as usize;
 
-            if len == 0 {
-                continue;
-            }
+        //     if len == 0 {
+        //         continue;
+        //     }
 
-            let encoded = mem
-                .get_view(addr, len)
-                .ok_or(ShaleError::InvalidCacheView {
-                    offset: addr,
-                    size: len,
-                })?
-                .as_deref();
+        //     let encoded = mem
+        //         .get_view(addr, len)
+        //         .ok_or(ShaleError::InvalidCacheView {
+        //             offset: addr,
+        //             size: len,
+        //         })?
+        //         .as_deref();
 
-            addr += len as usize;
+        //     addr += len as usize;
 
-            *child = Some(encoded);
-        }
+        //     *child = Some(encoded);
+        // }
 
-        let node = BranchNode {
-            partial_path: path,
-            children,
-            value,
-            children_encoded,
-        };
+        // let node = BranchNode {
+        //     partial_path: path,
+        //     children,
+        //     value,
+        //     children_encoded,
+        // };
 
-        Ok(node)
+        // Ok(node)
     }
 }
 

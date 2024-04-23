@@ -112,43 +112,41 @@ impl Storable for LeafNode {
         Ok(())
     }
 
-    fn deserialize<T: crate::shale::LinearStore>(
-        offset: usize,
-        mem: &T,
-    ) -> Result<Self, crate::shale::ShaleError>
+    fn deserialize<T>(offset: usize, mem: &T) -> Result<Self, crate::shale::ShaleError>
     where
         Self: Sized,
     {
-        let node_header_raw = mem
-            .get_view(offset, Meta::SIZE as u64)
-            .ok_or(InvalidCacheView {
-                offset,
-                size: Meta::SIZE as u64,
-            })?
-            .as_deref();
+        todo!()
+        // let node_header_raw = mem
+        //     .get_view(offset, Meta::SIZE as u64)
+        //     .ok_or(InvalidCacheView {
+        //         offset,
+        //         size: Meta::SIZE as u64,
+        //     })?
+        //     .as_deref();
 
-        let offset = offset + Meta::SIZE;
-        let Meta {
-            path_len,
-            value_len,
-        } = *bytemuck::from_bytes(&node_header_raw);
-        let size = path_len as u64 + value_len as u64;
+        // let offset = offset + Meta::SIZE;
+        // let Meta {
+        //     path_len,
+        //     value_len,
+        // } = *bytemuck::from_bytes(&node_header_raw);
+        // let size = path_len as u64 + value_len as u64;
 
-        let remainder = mem
-            .get_view(offset, size)
-            .ok_or(InvalidCacheView { offset, size })?
-            .as_deref();
+        // let remainder = mem
+        //     .get_view(offset, size)
+        //     .ok_or(InvalidCacheView { offset, size })?
+        //     .as_deref();
 
-        let (path, value) = remainder.split_at(path_len as usize);
+        // let (path, value) = remainder.split_at(path_len as usize);
 
-        let path = {
-            let nibbles = Nibbles::<0>::new(path).into_iter();
-            Path::from_nibbles(nibbles).0
-        };
+        // let path = {
+        //     let nibbles = Nibbles::<0>::new(path).into_iter();
+        //     Path::from_nibbles(nibbles).0
+        // };
 
-        let value = value.to_vec();
+        // let value = value.to_vec();
 
-        Ok(Self::new(path, value))
+        // Ok(Self::new(path, value))
     }
 }
 

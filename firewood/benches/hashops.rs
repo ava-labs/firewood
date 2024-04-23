@@ -7,7 +7,6 @@ use criterion::{criterion_group, criterion_main, profiler::Profiler, BatchSize, 
 use firewood::{
     db::{BatchOp, DbConfig},
     merkle::{Bincode, Merkle, TrieHash, TRIE_HASH_LEN},
-    shale::{in_mem::InMemLinearStore, LinearStore, Storable},
     v2::api::{Db, Proposal},
 };
 use pprof::ProfilerGuard;
@@ -59,21 +58,22 @@ impl Profiler for FlamegraphProfiler {
     }
 }
 
-fn bench_trie_hash(criterion: &mut Criterion) {
-    let mut to = [1u8; TRIE_HASH_LEN];
-    let mut store = InMemLinearStore::new(TRIE_HASH_LEN as u64, 0u8);
-    store.write(0, &*ZERO_HASH).expect("write should succeed");
+// TODO danlaine use or remove
+// fn bench_trie_hash(criterion: &mut Criterion) {
+//     let mut to = [1u8; TRIE_HASH_LEN];
+//     let mut store = InMemLinearStore::new(TRIE_HASH_LEN as u64, 0u8);
+//     store.write(0, &*ZERO_HASH).expect("write should succeed");
 
-    #[allow(clippy::unwrap_used)]
-    criterion
-        .benchmark_group("TrieHash")
-        .bench_function("dehydrate", |b| {
-            b.iter(|| ZERO_HASH.serialize(&mut to).unwrap());
-        })
-        .bench_function("hydrate", |b| {
-            b.iter(|| TrieHash::deserialize(0, &store).unwrap());
-        });
-}
+//     #[allow(clippy::unwrap_used)]
+//     criterion
+//         .benchmark_group("TrieHash")
+//         .bench_function("dehydrate", |b| {
+//             b.iter(|| ZERO_HASH.serialize(&mut to).unwrap());
+//         })
+//         .bench_function("hydrate", |b| {
+//             b.iter(|| TrieHash::deserialize(0, &store).unwrap());
+//         });
+// }
 
 fn bench_merkle<const N: usize>(_criterion: &mut Criterion) {
     todo!();
@@ -186,7 +186,7 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = Criterion::default().with_profiler(FlamegraphProfiler::Init(100));
-    targets = bench_trie_hash, bench_merkle::<3>, bench_db::<100>
+    targets = /*bench_trie_hash, TODO danlaine use or remove*/ bench_merkle::<3>, bench_db::<100>
 }
 
 criterion_main!(benches);

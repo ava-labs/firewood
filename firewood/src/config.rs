@@ -3,8 +3,6 @@
 
 use typed_builder::TypedBuilder;
 
-pub use crate::storage::{buffer::DiskBufferConfig, WalConfig};
-
 /// Database configuration.
 #[derive(Clone, TypedBuilder, Debug)]
 pub struct DbConfig {
