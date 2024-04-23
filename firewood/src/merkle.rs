@@ -11,7 +11,7 @@ pub mod proof;
 mod stream;
 mod trie_hash;
 
-pub use node::{BinarySerde, Bincode, BranchNode, EncodedNode, LeafNode, Node, NodeType, Path};
+pub use node::{BinarySerde, Bincode, BranchNode, EncodedNode, LeafNode, NodeType, Path};
 pub use proof::{Proof, ProofError};
 pub use stream::MerkleKeyValueStream;
 pub use trie_hash::{TrieHash, TRIE_HASH_LEN};
