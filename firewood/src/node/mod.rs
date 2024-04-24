@@ -30,7 +30,7 @@ pub enum Node {
 /// If this is a leaf node, `children` is empty and `value` is Some.
 /// If this is a branch node, `children` is non-empty.
 #[derive(Debug, Eq, PartialEq)]
-pub struct EncodedNode {
+pub(crate) struct EncodedNode {
     pub(crate) partial_path: Path,
     /// If a child is None, it doesn't exist.
     /// If it's Some, it's the value or value hash of the child.
