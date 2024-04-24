@@ -7,7 +7,7 @@ use firewood::{
 };
 use tokio::task::block_in_place;
 
-use std::{collections::VecDeque, env::temp_dir, path::PathBuf, sync::Arc};
+use std::{collections::VecDeque, env::temp_dir, path::PathBuf};
 
 mod common;
 use common::TestDbCreator;
