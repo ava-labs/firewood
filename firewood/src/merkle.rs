@@ -10,7 +10,6 @@ use std::{future::ready, io::Write, marker::PhantomData};
 use thiserror::Error;
 
 pub mod codec;
-pub(crate) mod path;
 pub mod proof;
 mod stream;
 mod trie_hash;

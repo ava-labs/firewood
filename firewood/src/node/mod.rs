@@ -4,7 +4,6 @@
 use crate::merkle::codec::Bincode;
 use crate::merkle::codec::PlainCodec;
 use crate::merkle::nibbles_to_bytes_iter;
-use crate::merkle::path::Path;
 use crate::merkle::TRIE_HASH_LEN;
 use enum_as_inner::EnumAsInner;
 use serde::{
@@ -16,11 +15,14 @@ use std::{fmt::Debug, marker::PhantomData};
 
 mod branch;
 mod leaf;
+mod path;
 
 pub use branch::BranchNode;
 pub use leaf::{LeafNode, SIZE as LEAF_NODE_SIZE};
 
 use crate::nibbles::Nibbles;
+
+use self::path::Path;
 
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner)]
 pub enum Node {

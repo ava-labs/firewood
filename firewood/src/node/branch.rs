@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{merkle::path::Path, storage::node::LinearAddress};
+use crate::{node::Path, storage::node::LinearAddress};
 use std::fmt::{Debug, Error as FmtError, Formatter};
 
 const MAX_CHILDREN: usize = 16;

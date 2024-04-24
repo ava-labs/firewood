@@ -9,7 +9,6 @@ use std::{
 
 use crate::nibbles::NibblesIterator;
 
-// TODO clean up the path code and move to src/node/path.rs
 // TODO: use smallvec
 /// Path is part or all of a node's path in the trie.
 /// Each element is a nibble.
