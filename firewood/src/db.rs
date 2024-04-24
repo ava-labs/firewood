@@ -7,7 +7,7 @@ pub use crate::{
     v2::api::{Batch, BatchOp},
 };
 use crate::{
-    merkle::{Key, Merkle, MerkleError, MerkleKeyValueStream, Proof, ProofError, TrieHash},
+    merkle::{Merkle, MerkleError, MerkleKeyValueStream, Proof, ProofError, TrieHash},
     v2::api::{self, HashKey, KeyType, ValueType},
 };
 use aiofut::AioError;

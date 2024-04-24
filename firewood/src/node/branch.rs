@@ -1,12 +1,14 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use serde::{Deserialize, Serialize};
+
 use crate::{node::Path, storage::node::LinearAddress};
 use std::fmt::{Debug, Error as FmtError, Formatter};
 
 const MAX_CHILDREN: usize = 16;
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct BranchNode {
     pub(crate) path: Path,
     pub(crate) value: Option<Box<[u8]>>,

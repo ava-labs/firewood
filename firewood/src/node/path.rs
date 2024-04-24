@@ -2,6 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use bitflags::bitflags;
+use serde::{Deserialize, Serialize};
 use std::{
     fmt::{self, Debug},
     iter::once,
@@ -12,7 +13,7 @@ use crate::nibbles::NibblesIterator;
 // TODO: use smallvec
 /// Path is part or all of a node's path in the trie.
 /// Each element is a nibble.
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct Path(pub Vec<u8>);
 
 impl Debug for Path {

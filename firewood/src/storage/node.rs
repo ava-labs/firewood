@@ -3,8 +3,6 @@
 
 #![allow(dead_code)]
 
-use serde::{Deserialize, Serialize, Serializer};
-
 use crate::node::Node;
 /// The [NodeStore] handles the serialization of nodes and
 /// free space management of nodes in the page store. It lays out the format
@@ -16,44 +14,12 @@ use std::sync::Arc;
 
 use super::linear::{ReadLinearStore, WriteLinearStore};
 
-type Path = Box<[u8]>;
 pub(crate) type LinearAddress = NonZeroU64;
 
 #[derive(Debug)]
 struct NodeStore<T: ReadLinearStore> {
     header: FreeSpaceManagementHeader,
     linear_store: T,
-}
-
-#[derive(Debug)]
-struct StoredNode<'a>(&'a Node);
-
-impl<'a> Serialize for StoredNode<'a> {
-    fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match &self.0 {
-            Node::Branch(..) => {
-                todo!()
-            }
-            Node::Leaf(..) => {
-                todo!()
-            }
-        }
-    }
-}
-
-#[derive(Debug)]
-struct StoredNode2(Node);
-
-impl<'de> Deserialize<'de> for StoredNode2 {
-    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        todo!()
-    }
 }
 
 impl<T: ReadLinearStore> NodeStore<T> {
@@ -63,9 +29,9 @@ impl<T: ReadLinearStore> NodeStore<T> {
     /// node type ([Branch] or [Leaf]) followed by the serialized data
     fn read(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
         let node_stream = self.linear_store.stream_from(addr.get())?;
-        let node: StoredNode2 = bincode::deserialize_from(node_stream)
+        let node: Node = bincode::deserialize_from(node_stream)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-        Ok(Arc::new(node.0))
+        Ok(Arc::new(node))
     }
 
     /// Determine the size of the existing node at the given address
@@ -84,8 +50,8 @@ impl<T: ReadLinearStore> NodeStore<T> {
 impl<T: WriteLinearStore> NodeStore<T> {
     /// Allocate space for a [Node] in the [LinearStore]
     fn create(&mut self, node: &Node) -> Result<LinearAddress, Error> {
-        let serialized = bincode::serialize(&StoredNode(node))
-            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+        let serialized =
+            bincode::serialize(&node).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
         // TODO: search for a free space block we can reuse
         let addr = self.linear_store.size()?;
         self.linear_store.write(addr, serialized.as_slice())?;
@@ -99,8 +65,8 @@ impl<T: WriteLinearStore> NodeStore<T> {
         // figure out how large the object at this address is by deserializing and then
         // discarding the object
         let size = self.node_size(addr)?;
-        let serialized = bincode::serialize(&StoredNode(node))
-            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+        let serialized =
+            bincode::serialize(&node).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
         if serialized.len() != size {
             // this node is a different size, so allocate a new node
             // TODO: we could do better if the new node is smaller

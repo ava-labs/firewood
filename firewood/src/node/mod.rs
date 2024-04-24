@@ -24,7 +24,7 @@ use crate::nibbles::Nibbles;
 
 use self::path::Path;
 
-#[derive(PartialEq, Eq, Clone, Debug, EnumAsInner)]
+#[derive(PartialEq, Eq, Clone, Debug, EnumAsInner, Serialize, Deserialize)]
 pub enum Node {
     Branch(Box<BranchNode>),
     Leaf(LeafNode),
