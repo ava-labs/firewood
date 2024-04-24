@@ -108,6 +108,7 @@ impl<T> PartialEq for EncodedNode<T> {
     }
 }
 
+// TODO danlaine: move node serialization (for persistence and for hashing) somewhere else.
 // Note that the serializer passed in should always be the same type as T in EncodedNode<T>.
 impl Serialize for EncodedNode<PlainCodec> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
