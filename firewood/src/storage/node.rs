@@ -56,15 +56,6 @@ impl<'de> Deserialize<'de> for StoredNode2 {
     }
 }
 
-// impl<'de> Deserialize<'de> for StoredNode {
-//     fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
-//     where
-//         D: serde::Deserializer<'de>,
-//     {
-//         todo!()
-//     }
-// }
-
 impl<T: ReadLinearStore> NodeStore<T> {
     /// Read a node from the provided [LinearAddress]
     ///

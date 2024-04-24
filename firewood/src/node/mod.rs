@@ -28,6 +28,7 @@ pub enum Node {
     Leaf(LeafNode),
 }
 
+/// TODO remove generic on this type and just implement serialize/deserialize once.
 /// Contains the fields that we include in a node's hash.
 /// If this is a leaf node, `children` is empty and `value` is Some.
 /// If this is a branch node, `children` is non-empty.
