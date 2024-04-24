@@ -67,13 +67,13 @@ impl NodeStreamState<'_> {
 }
 
 #[derive(Debug)]
-pub struct MerkleNodeStream<'a, T> {
+pub struct MerkleNodeStream<'a> {
     state: NodeStreamState<'a>,
     sentinel_addr: LinearAddress,
-    merkle: &'a Merkle<T>,
+    merkle: &'a Merkle,
 }
 
-impl<'a, T> FusedStream for MerkleNodeStream<'a, T> {
+impl<'a> FusedStream for MerkleNodeStream<'a> {
     fn is_terminated(&self) -> bool {
         // The top of `iter_stack` is the next node to return.
         // If `iter_stack` is empty, there are no more nodes to visit.
@@ -81,10 +81,10 @@ impl<'a, T> FusedStream for MerkleNodeStream<'a, T> {
     }
 }
 
-impl<'a, T> MerkleNodeStream<'a, T> {
+impl<'a> MerkleNodeStream<'a> {
     /// Returns a new iterator that will iterate over all the nodes in `merkle`
     /// with keys greater than or equal to `key`.
-    pub(super) fn new(merkle: &'a Merkle<T>, sentinel_addr: LinearAddress, key: Key) -> Self {
+    pub(super) fn new(merkle: &'a Merkle, sentinel_addr: LinearAddress, key: Key) -> Self {
         Self {
             state: NodeStreamState::new(key),
             sentinel_addr,
@@ -93,7 +93,7 @@ impl<'a, T> MerkleNodeStream<'a, T> {
     }
 }
 
-impl<'a, T> Stream for MerkleNodeStream<'a, T> {
+impl<'a> Stream for MerkleNodeStream<'a> {
     type Item = Result<(Key, &'a Node), api::Error>;
 
     fn poll_next(
@@ -177,8 +177,8 @@ impl<'a, T> Stream for MerkleNodeStream<'a, T> {
 }
 
 /// Returns the initial state for an iterator over the given `merkle` which starts at `key`.
-fn get_iterator_intial_state<'a, T>(
-    merkle: &'a Merkle<T>,
+fn get_iterator_intial_state<'a>(
+    merkle: &'a Merkle,
     sentinel_addr: LinearAddress,
     key: &[u8],
 ) -> Result<NodeStreamState<'a>, api::Error> {
@@ -289,16 +289,16 @@ fn get_iterator_intial_state<'a, T>(
 }
 
 #[derive(Debug)]
-enum MerkleKeyValueStreamState<'a, T> {
+enum MerkleKeyValueStreamState<'a> {
     /// The iterator state is lazily initialized when poll_next is called
     /// for the first time. The iteration start key is stored here.
     _Uninitialized(Key),
     /// The iterator works by iterating over the nodes in the merkle trie
     /// and returning the key-value pairs for nodes that have values.
-    Initialized { node_iter: MerkleNodeStream<'a, T> },
+    Initialized { node_iter: MerkleNodeStream<'a> },
 }
 
-impl<'a, T> MerkleKeyValueStreamState<'a, T> {
+impl<'a> MerkleKeyValueStreamState<'a> {
     /// Returns a new iterator that will iterate over all the key-value pairs in `merkle`.
     fn _new() -> Self {
         Self::_Uninitialized(Box::new([]))
@@ -312,20 +312,20 @@ impl<'a, T> MerkleKeyValueStreamState<'a, T> {
 }
 
 #[derive(Debug)]
-pub struct MerkleKeyValueStream<'a, T> {
-    state: MerkleKeyValueStreamState<'a, T>,
+pub struct MerkleKeyValueStream<'a> {
+    state: MerkleKeyValueStreamState<'a>,
     sentinel_addr: LinearAddress,
-    merkle: &'a Merkle<T>,
+    merkle: &'a Merkle,
 }
 
-impl<'a, T> FusedStream for MerkleKeyValueStream<'a, T> {
+impl<'a> FusedStream for MerkleKeyValueStream<'a> {
     fn is_terminated(&self) -> bool {
         matches!(&self.state, MerkleKeyValueStreamState::Initialized { node_iter } if node_iter.is_terminated())
     }
 }
 
-impl<'a, T> MerkleKeyValueStream<'a, T> {
-    pub(super) fn _new(merkle: &'a Merkle<T>, sentinel_addr: LinearAddress) -> Self {
+impl<'a> MerkleKeyValueStream<'a> {
+    pub(super) fn _new(merkle: &'a Merkle, sentinel_addr: LinearAddress) -> Self {
         Self {
             state: MerkleKeyValueStreamState::_new(),
             sentinel_addr,
@@ -333,7 +333,7 @@ impl<'a, T> MerkleKeyValueStream<'a, T> {
         }
     }
 
-    pub(super) fn _from_key(merkle: &'a Merkle<T>, sentinel_addr: LinearAddress, key: Key) -> Self {
+    pub(super) fn _from_key(merkle: &'a Merkle, sentinel_addr: LinearAddress, key: Key) -> Self {
         Self {
             state: MerkleKeyValueStreamState::_with_key(key),
             sentinel_addr,
@@ -342,7 +342,7 @@ impl<'a, T> MerkleKeyValueStream<'a, T> {
     }
 }
 
-impl<'a, T> Stream for MerkleKeyValueStream<'a, T> {
+impl<'a> Stream for MerkleKeyValueStream<'a> {
     type Item = Result<(Key, Value), api::Error>;
 
     fn poll_next(
@@ -418,13 +418,13 @@ enum PathIteratorState<'a> {
 ///   remaining unmatched key, the node proves the non-existence of the key.
 /// Note that thi means that the last node's key isn't necessarily a prefix of
 /// the key we're traversing to.
-pub struct PathIterator<'a, 'b, T> {
+pub struct PathIterator<'a, 'b> {
     state: PathIteratorState<'b>,
-    merkle: &'a Merkle<T>,
+    merkle: &'a Merkle,
 }
 
-impl<'a, 'b, T> PathIterator<'a, 'b, T> {
-    pub(super) fn new(merkle: &'a Merkle<T>, sentinel_node: &'a Node, key: &'b [u8]) -> Self {
+impl<'a, 'b> PathIterator<'a, 'b> {
+    pub(super) fn new(merkle: &'a Merkle, sentinel_node: &'a Node, key: &'b [u8]) -> Self {
         let sentinel_addr = match sentinel_node {
             Node::Branch(branch) => match branch.children[0] {
                 Some(sentinel_addr) => sentinel_addr,
@@ -449,7 +449,7 @@ impl<'a, 'b, T> PathIterator<'a, 'b, T> {
     }
 }
 
-impl<'a, 'b, T> Iterator for PathIterator<'a, 'b, T> {
+impl<'a, 'b> Iterator for PathIterator<'a, 'b> {
     type Item = Result<(Key, &'a Node), MerkleError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -575,13 +575,11 @@ use super::tests::_create_test_merkle;
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
-    use crate::merkle::codec::Bincode;
-
     use super::*;
     use test_case::test_case;
 
-    impl<T> Merkle<T> {
-        pub(crate) fn node_iter(&self, sentinel_addr: LinearAddress) -> MerkleNodeStream<'_, T> {
+    impl Merkle {
+        pub(crate) fn node_iter(&self, sentinel_addr: LinearAddress) -> MerkleNodeStream<'_> {
             MerkleNodeStream::new(self, sentinel_addr, Box::new([]))
         }
 
@@ -589,7 +587,7 @@ mod tests {
             &self,
             sentinel_addr: LinearAddress,
             key: Key,
-        ) -> MerkleNodeStream<'_, T> {
+        ) -> MerkleNodeStream<'_> {
             MerkleNodeStream::new(self, sentinel_addr, key)
         }
     }
@@ -763,7 +761,7 @@ mod tests {
     ///
     /// Note the 0000 branch has no value and the F0F0
     /// The number next to each branch is the position of the child in the branch's children array.
-    fn created_populated_merkle() -> (Merkle<Bincode>, LinearAddress) {
+    fn created_populated_merkle() -> (Merkle, LinearAddress) {
         let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
 

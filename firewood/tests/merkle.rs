@@ -2,7 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use firewood::{
-    merkle::{codec::Bincode, Proof, ProofError},
+    merkle::{Proof, ProofError},
     merkle_util::{DataStoreError, InMemoryMerkle},
 };
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng as _};
@@ -14,7 +14,7 @@ fn merkle_build_test<
     V: AsRef<[u8]> + Clone,
 >(
     items: Vec<(K, V)>,
-) -> Result<InMemoryMerkle<Bincode>, DataStoreError> {
+) -> Result<InMemoryMerkle, DataStoreError> {
     let mut merkle = InMemoryMerkle::new();
     for (k, v) in items.iter() {
         merkle.insert(k, v.as_ref().to_vec())?;
@@ -108,7 +108,7 @@ fn test_root_hash_reversed_deletions() -> Result<(), DataStoreError> {
 
         items.sort();
 
-        let mut merkle: InMemoryMerkle<Bincode> = InMemoryMerkle::new();
+        let mut merkle = InMemoryMerkle::new();
 
         let mut hashes = Vec::new();
 
@@ -177,7 +177,7 @@ fn test_root_hash_random_deletions() -> Result<(), DataStoreError> {
         let mut items_ordered: Vec<_> = items.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         items_ordered.sort();
         items_ordered.shuffle(&mut *rng.borrow_mut());
-        let mut merkle: InMemoryMerkle<Bincode> = InMemoryMerkle::new();
+        let mut merkle = InMemoryMerkle::new();
 
         for (k, v) in items.iter() {
             merkle.insert(k, v.to_vec())?;

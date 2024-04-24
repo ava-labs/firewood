@@ -4,8 +4,6 @@
 use crate::node::Path;
 use std::fmt::{Debug, Error as FmtError, Formatter};
 
-pub const SIZE: usize = 2;
-
 #[derive(PartialEq, Eq, Clone)]
 pub struct LeafNode {
     pub(crate) partial_path: Path,

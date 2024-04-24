@@ -1,13 +1,13 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::merkle::{self, codec::Bincode};
+use crate::merkle::{self};
 pub use crate::{
     config::DbConfig,
     v2::api::{Batch, BatchOp},
 };
 use crate::{
-    merkle::{Key, Merkle, MerkleError, MerkleKeyValueStream, Proof, ProofError, TrieHash},
+    merkle::{MerkleError, MerkleKeyValueStream, Proof, ProofError, TrieHash},
     v2::api::{self, HashKey, KeyType, ValueType},
 };
 use aiofut::AioError;
@@ -56,13 +56,11 @@ impl From<std::io::Error> for DbError {
 impl Error for DbError {}
 
 #[derive(Debug)]
-pub struct Historical<T> {
-    _merkle: Merkle<T>,
-}
+pub struct Historical {}
 
 #[async_trait]
-impl<T: Sync> api::DbView for Historical<T> {
-    type Stream<'a> = MerkleKeyValueStream<'a,  T> where Self: 'a;
+impl api::DbView for Historical {
+    type Stream<'a> = MerkleKeyValueStream<'a> where Self: 'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         todo!()
@@ -96,12 +94,12 @@ impl<T: Sync> api::DbView for Historical<T> {
     }
 }
 
-impl<T> Historical<T> {
-    pub fn stream(&self) -> merkle::MerkleKeyValueStream<'_, T> {
+impl Historical {
+    pub fn stream(&self) -> merkle::MerkleKeyValueStream<'_> {
         todo!()
     }
 
-    pub fn stream_from(&self, _start_key: &[u8]) -> merkle::MerkleKeyValueStream<'_, T> {
+    pub fn stream_from(&self, _start_key: &[u8]) -> merkle::MerkleKeyValueStream<'_> {
         todo!()
     }
 
@@ -158,7 +156,7 @@ impl api::Proposal for Proposal {
 
 #[async_trait]
 impl api::DbView for Proposal {
-    type Stream<'a> = MerkleKeyValueStream<'a, Bincode>;
+    type Stream<'a> = MerkleKeyValueStream<'a>;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         todo!()
@@ -207,7 +205,7 @@ pub struct Db {
 
 #[async_trait]
 impl api::Db for Db {
-    type Historical = Historical<Bincode>;
+    type Historical = Historical;
 
     type Proposal = Proposal;
 
