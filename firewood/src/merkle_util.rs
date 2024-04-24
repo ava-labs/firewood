@@ -32,12 +32,12 @@ pub enum DataStoreError {
     ProofEmptyKeyValuesError,
 }
 
-pub struct InMemoryMerkle<T> {
+pub struct InMemoryMerkle {
     sentinel_addr: LinearAddress,
-    merkle: Merkle<T>,
+    merkle: Merkle,
 }
 
-impl<T> InMemoryMerkle<T> {
+impl InMemoryMerkle {
     pub fn new() -> Self {
         todo!()
     }
@@ -64,7 +64,7 @@ impl<T> InMemoryMerkle<T> {
         self.sentinel_addr
     }
 
-    pub fn get_merkle_mut(&mut self) -> &mut Merkle<T> {
+    pub fn get_merkle_mut(&mut self) -> &mut Merkle {
         &mut self.merkle
     }
 

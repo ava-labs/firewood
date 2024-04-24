@@ -6,10 +6,9 @@ use crate::{
     v2::api,
 };
 use futures::{StreamExt, TryStreamExt};
-use std::{future::ready, io::Write, marker::PhantomData};
+use std::{future::ready, io::Write};
 use thiserror::Error;
 
-pub mod codec;
 pub mod proof;
 mod stream;
 mod trie_hash;
@@ -40,11 +39,9 @@ pub enum MerkleError {
 }
 
 #[derive(Debug)]
-pub struct Merkle<T> {
-    phantom_data: PhantomData<T>,
-}
+pub struct Merkle {}
 
-impl<T> Merkle<T> {
+impl Merkle {
     pub fn get_node(&self, _addr: LinearAddress) -> Result<&Node, MerkleError> {
         todo!()
     }
@@ -60,14 +57,10 @@ impl<T> Merkle<T> {
     fn _init_sentinel(&mut self) -> Result<LinearAddress, MerkleError> {
         todo!()
     }
-}
 
-impl<T> Merkle<T> {
     /// TODO danlaine: implement
     pub const fn new() -> Self {
-        Self {
-            phantom_data: PhantomData,
-        }
+        Self {}
     }
 
     pub fn root_hash(&self, _sentinel_addr: LinearAddress) -> Result<TrieHash, MerkleError> {
@@ -164,14 +157,11 @@ impl<T> Merkle<T> {
         &'a self,
         sentinel_node: &'a Node,
         key: &'b [u8],
-    ) -> PathIterator<'_, 'b, T> {
+    ) -> PathIterator<'_, 'b> {
         PathIterator::new(self, sentinel_node, key)
     }
 
-    pub(crate) fn _key_value_iter(
-        &self,
-        sentinel_addr: LinearAddress,
-    ) -> MerkleKeyValueStream<'_, T> {
+    pub(crate) fn _key_value_iter(&self, sentinel_addr: LinearAddress) -> MerkleKeyValueStream<'_> {
         MerkleKeyValueStream::_new(self, sentinel_addr)
     }
 
@@ -179,7 +169,7 @@ impl<T> Merkle<T> {
         &self,
         sentinel_addr: LinearAddress,
         key: Key,
-    ) -> MerkleKeyValueStream<'_, T> {
+    ) -> MerkleKeyValueStream<'_> {
         MerkleKeyValueStream::_from_key(self, sentinel_addr, key)
     }
 
@@ -328,8 +318,6 @@ pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
-    use self::codec::Bincode;
-
     use super::*;
     use test_case::test_case;
 
@@ -340,15 +328,10 @@ mod tests {
         assert_eq!(n, nibbles);
     }
 
-    fn _create_generic_test_merkle<'de, T>() -> Merkle<T> {
+    pub(super) fn _create_test_merkle<'de>() -> Merkle {
         todo!()
     }
 
-    pub(super) fn _create_test_merkle() -> Merkle<Bincode> {
-        _create_generic_test_merkle::<Bincode>()
-    }
-
-    // TODO danlaine: uncomment or remove tests
     //     fn branch(path: &[u8], value: &[u8], encoded_child: Option<Vec<u8>>) -> Node {
     //         let (path, value) = (path.to_vec(), value.to_vec());
     //         let path = Nibbles::<0>::new(&path);

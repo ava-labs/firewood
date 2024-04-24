@@ -6,14 +6,12 @@
 use criterion::{criterion_group, criterion_main, profiler::Profiler, BatchSize, Criterion};
 use firewood::{
     db::{BatchOp, DbConfig},
-    merkle::{codec::Bincode, Merkle, TrieHash, TRIE_HASH_LEN},
+    merkle::{TrieHash, TRIE_HASH_LEN},
     v2::api::{Db, Proposal},
 };
 use pprof::ProfilerGuard;
 use rand::{distributions::Alphanumeric, rngs::StdRng, Rng, SeedableRng};
 use std::{fs::File, iter::repeat_with, os::raw::c_int, path::Path, sync::Arc};
-
-pub type MerkleWithEncoder = Merkle<Bincode>;
 
 const _ZERO_HASH: TrieHash = TrieHash([0u8; TRIE_HASH_LEN]);
 

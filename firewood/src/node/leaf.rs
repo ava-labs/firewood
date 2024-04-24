@@ -6,8 +6,6 @@ use serde::{Deserialize, Serialize};
 use crate::node::Path;
 use std::fmt::{Debug, Error as FmtError, Formatter};
 
-pub const SIZE: usize = 2;
-
 #[derive(PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct LeafNode {
     pub(crate) partial_path: Path,
