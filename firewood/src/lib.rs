@@ -182,7 +182,6 @@
 //! some very old ghost store to keep the size of the rolling window invariant.
 //!
 pub mod db;
-pub(crate) mod file;
 pub mod merkle;
 pub mod merkle_util;
 pub(crate) mod node;
