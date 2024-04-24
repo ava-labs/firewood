@@ -5,7 +5,7 @@ pub use crate::{
     config::DbConfig,
     v2::api::{Batch, BatchOp},
 };
-use crate::{file, merkle, storage::node::LinearAddress};
+use crate::{merkle, storage::node::LinearAddress};
 use crate::{
     merkle::{
         Bincode, Key, Merkle, MerkleError, MerkleKeyValueStream, Proof, ProofError, TrieHash,
