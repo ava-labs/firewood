@@ -1,21 +1,18 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::{collections::BTreeMap, io::Cursor, sync::Arc};
+use std::{collections::BTreeMap, io::Cursor};
 
-use super::ReadLinearStore;
+use super::{LinearStoreParent, ReadLinearStore};
 
 #[derive(Debug)]
 pub(super) struct Layer<'a> {
-    parent: Arc<dyn ReadLinearStore>,
+    parent: LinearStoreParent,
     diffs: &'a BTreeMap<u64, Box<[u8]>>,
 }
 
 impl<'a> Layer<'a> {
-    pub(super) fn new(
-        parent: Arc<dyn ReadLinearStore>,
-        diffs: &'a BTreeMap<u64, Box<[u8]>>,
-    ) -> Self {
+    pub(super) fn new(parent: LinearStoreParent, diffs: &'a BTreeMap<u64, Box<[u8]>>) -> Self {
         Self { parent, diffs }
     }
 }

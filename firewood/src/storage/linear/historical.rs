@@ -2,11 +2,10 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use super::{
     layered::{Layer, LayeredReader},
-    ReadLinearStore,
+    LinearStoreParent, ReadLinearStore,
 };
 
 /// A linear store used for historical revisions
@@ -22,16 +21,12 @@ pub(crate) struct Historical {
     /// `[(0, [0,1,2])]`.
     was: BTreeMap<u64, Box<[u8]>>,
     /// The state of the revision after this one.
-    parent: Arc<dyn ReadLinearStore>,
+    parent: LinearStoreParent,
     size: u64,
 }
 
 impl Historical {
-    pub(super) fn new(
-        was: BTreeMap<u64, Box<[u8]>>,
-        parent: Arc<dyn ReadLinearStore>,
-        size: u64,
-    ) -> Self {
+    pub(crate) fn new(was: BTreeMap<u64, Box<[u8]>>, parent: LinearStoreParent, size: u64) -> Self {
         Self { was, parent, size }
     }
 }
@@ -73,7 +68,7 @@ mod tests {
             was.insert(*addr, data.to_vec().into_boxed_slice());
         }
 
-        let historical = Historical::new(was, Arc::new(parent), expected.len() as u64);
+        let historical = Historical::new(was, parent.into(), expected.len() as u64);
 
         for i in 0..expected.len() {
             let mut stream = historical.stream_from(i as u64).unwrap();

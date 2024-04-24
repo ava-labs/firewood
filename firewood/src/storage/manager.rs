@@ -3,11 +3,11 @@
 
 use std::{collections::VecDeque, sync::Arc};
 
-use super::{
+use super::linear::{
     filebacked::FileBacked,
     historical::Historical,
-    proposed::{Immutable, Mutable, Proposed},
-    ImmutableLinearStore,
+    proposed::{Proposed, ProposedImmutable},
+    Immutable, LinearStoreParent, Mutable, ReadLinearStore,
 };
 
 pub(super) struct LinearStorePool {
@@ -30,35 +30,31 @@ impl LinearStorePool {
     fn prepare_for_writes(
         &mut self,
         proposal: Arc<Proposed<Immutable>>,
-    ) -> Result<Arc<ImmutableLinearStore>, CommitError> {
+    ) -> Result<Arc<Historical>, CommitError> {
         // check to see if we can commit this proposal
-        match proposal.parent.as_ref() {
-            ImmutableLinearStore::FileBacked(_) => {
+        match proposal.parent {
+            LinearStoreParent::FileBacked(_) => {
                 if !self.committing_proposals.is_empty() {
                     return Err(());
                 }
             }
-            ImmutableLinearStore::Proposed(parent_proposal) => {
-                // this proposal must be parented by the latest committing_proposal
-                let Some(last_commiting_proposal) = self.committing_proposals.back().clone() else {
+            LinearStoreParent::Proposed(ref parent_proposal) => {
+                let Some(last_commiting_proposal) = self.committing_proposals.back() else {
                     return Err(());
                 };
-
                 if !Arc::ptr_eq(parent_proposal, last_commiting_proposal) {
                     return Err(());
                 }
-                // ok to commit
             }
-            ImmutableLinearStore::Historical(_) => return Err(()),
-            ImmutableLinearStore::Invalid => return Err(()),
+            _ => return Err(()),
         }
         // safe to commit
 
-        let new_historical = ImmutableLinearStore::Historical(Historical::new(
-            proposal.old.clone(),
+        let new_historical = Historical::new(
+            std::mem::take(&mut proposal.old.clone()), // TODO: remove clone
             proposal.parent.clone(),
-            proposal.size().unwrap(), // todo remove unwrap
-        ));
+            proposal.size().map_err(|_| ())?,
+        );
 
         // todo:
         // tell revision manager R4 is now backed by new_historical instead of FileBacked
@@ -66,15 +62,15 @@ impl LinearStorePool {
         // reparent all existing proposals as needed
         // tell revision manager P1 is R5
 
-        Ok(new_historical.into())
+        Ok(Arc::new(new_historical))
     }
 }
 
 pub type NewProposalError = (); // TODO implement
 
 impl LinearStorePool {
-    pub fn add_proposal(&mut self, proposal: Proposed<Mutable>) {
-        self.proposals.push(Arc::new(proposal.into()));
+    pub fn add_proposal(&mut self, proposal: Arc<ProposedImmutable>) {
+        self.proposals.push(proposal);
     }
 }
 

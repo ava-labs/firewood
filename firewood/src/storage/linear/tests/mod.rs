@@ -5,7 +5,7 @@ use std::io::{Cursor, Error, Read};
 
 use super::ReadLinearStore;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ConstBacked {
     data: &'static [u8],
 }

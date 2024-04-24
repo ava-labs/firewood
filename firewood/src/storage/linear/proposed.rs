@@ -5,31 +5,45 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::io::{Error, Read};
 use std::marker::PhantomData;
-use std::sync::Arc;
 
 use super::layered::{Layer, LayeredReader};
-use super::{ReadLinearStore, WriteLinearStore};
+use super::{LinearStoreParent, ReadLinearStore, WriteLinearStore};
 
 #[derive(Debug)]
-pub(super) struct Immutable;
+pub(crate) struct Immutable;
 #[derive(Debug)]
-pub(super) struct Mutable;
+pub(crate) struct Mutable;
 pub(crate) type ProposedMutable = Proposed<Mutable>;
 pub(crate) type ProposedImmutable = Proposed<Immutable>;
 
 #[derive(Debug)]
 pub(crate) struct Proposed<M: Send + Sync + Debug> {
     new: BTreeMap<u64, Box<[u8]>>,
-    pub(super) old: BTreeMap<u64, Box<[u8]>>,
-    pub(super) parent: Arc<dyn ReadLinearStore>,
+    pub(crate) old: BTreeMap<u64, Box<[u8]>>,
+    pub(crate) parent: LinearStoreParent,
     phantom_data: PhantomData<M>,
 }
+
+impl ProposedImmutable {
+    pub(crate) fn parent(&self) -> &LinearStoreParent {
+        &self.parent
+    }
+}
+
 impl ProposedMutable {
-    pub(super) fn new(parent: Arc<dyn ReadLinearStore>) -> Self {
+    pub(super) fn new(parent: LinearStoreParent) -> Self {
         Self {
             parent,
             new: Default::default(),
             old: Default::default(),
+            phantom_data: PhantomData,
+        }
+    }
+    pub(super) fn freeze(self) -> ProposedImmutable {
+        ProposedImmutable {
+            old: self.old,
+            new: self.new,
+            parent: self.parent,
             phantom_data: PhantomData,
         }
     }
@@ -177,7 +191,7 @@ mod test {
     fn smoke_read() -> Result<(), std::io::Error> {
         let parent = ConstBacked::new(TEST_DATA);
 
-        let proposed = Proposed::new(Arc::new(parent));
+        let proposed = Proposed::new(parent.into());
 
         // read all
         let mut data = [0u8; TEST_DATA.len()];
@@ -210,7 +224,7 @@ mod test {
 
         const MUT_DATA: &[u8] = b"data random";
 
-        let mut proposed = Proposed::new(Arc::new(parent));
+        let mut proposed = Proposed::new(parent.into());
 
         // mutate the whole thing
         proposed.write(0, MUT_DATA)?;
@@ -233,7 +247,7 @@ mod test {
     fn partial_mod_full_read(pos: u64, delta: &[u8], expected: &[u8]) -> Result<(), Error> {
         let parent = ConstBacked::new(TEST_DATA);
 
-        let mut proposed = Proposed::new(Arc::new(parent));
+        let mut proposed = Proposed::new(parent.into());
 
         proposed.write(pos, delta)?;
 
@@ -252,10 +266,10 @@ mod test {
     fn nested() {
         let parent = ConstBacked::new(TEST_DATA);
 
-        let mut proposed = Proposed::new(Arc::new(parent));
+        let mut proposed = Proposed::new(parent.clone().into());
         proposed.write(1, b"1").unwrap();
 
-        let mut proposed2 = Proposed::new(Arc::new(proposed));
+        let mut proposed2 = Proposed::new(parent.into());
 
         proposed2.write(3, b"3").unwrap();
 
@@ -272,12 +286,12 @@ mod test {
     fn deep_nest() {
         let parent = ConstBacked::new(TEST_DATA);
 
-        let mut proposed = Proposed::new(Arc::new(parent));
+        let mut proposed = Proposed::new(parent.clone().into());
         proposed.write(1, b"1").unwrap();
 
-        let mut child = Proposed::new(Arc::new(proposed));
+        let mut child = Proposed::new(parent.into()).freeze();
         for _ in 0..=200 {
-            child = Proposed::new(Arc::new(child));
+            child = Proposed::new(child.into()).freeze();
         }
         let mut data = [0u8; TEST_DATA.len()];
         child.stream_from(0).unwrap().read_exact(&mut data).unwrap();
@@ -365,7 +379,7 @@ mod test {
     ) -> Result<(), Error> {
         let parent = ConstBacked::new(b"oooooo");
 
-        let mut proposal = Proposed::new(Arc::new(parent));
+        let mut proposal = Proposed::new(parent.into());
         for mods in original_mods {
             proposal.write(
                 mods.0,
@@ -401,7 +415,7 @@ mod test {
 
         let parent = ConstBacked::new(TEST_DATA);
 
-        let mut proposal = Proposed::new(Arc::new(parent));
+        let mut proposal = Proposed::new(parent.into());
         let mut rng = rand::thread_rng();
         let start = Instant::now();
         for _ in 0..COUNT {

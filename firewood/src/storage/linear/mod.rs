@@ -19,6 +19,7 @@
 
 use std::fmt::Debug;
 use std::io::{Error, Read};
+use std::sync::Arc;
 
 /// A linear store used for proposals
 ///
@@ -61,10 +62,19 @@ use std::io::{Error, Read};
 ///  - Invalidate any other `LinearStore` that is a child of `LinearStore<FileBacked>`
 ///  - Flush all the `Proposed<FileBacked, ReadOnly>::new` bytes to disk
 ///  - Convert the `LinearStore<Proposed<FileBacked, Readonly>>` to `LinearStore<FileBacked>`
-mod filebacked;
-mod historical;
+pub(super) mod filebacked;
+pub(super) mod historical;
+pub(super) mod proposed;
+
+pub(super) use proposed::{Immutable, Mutable};
+
+use self::filebacked::FileBacked;
+use self::historical::Historical;
+use self::proposed::ProposedImmutable;
+#[cfg(test)]
+use self::tests::ConstBacked;
+
 mod layered;
-mod proposed;
 #[cfg(test)]
 mod tests;
 
@@ -77,4 +87,59 @@ pub(super) trait ReadLinearStore: Send + Sync + Debug {
 /// Some linear stores support writes
 pub(super) trait WriteLinearStore: ReadLinearStore {
     fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error>;
+}
+
+#[derive(Debug, Clone)]
+pub(super) enum LinearStoreParent {
+    FileBacked(Arc<FileBacked>),
+    Proposed(Arc<ProposedImmutable>),
+    Historical(Arc<historical::Historical>),
+    #[cfg(test)]
+    ConstBacked(Arc<ConstBacked>),
+}
+
+impl From<FileBacked> for LinearStoreParent {
+    fn from(value: FileBacked) -> Self {
+        LinearStoreParent::FileBacked(value.into())
+    }
+}
+impl From<ProposedImmutable> for LinearStoreParent {
+    fn from(value: ProposedImmutable) -> Self {
+        LinearStoreParent::Proposed(value.into())
+    }
+}
+
+impl From<Historical> for LinearStoreParent {
+    fn from(value: Historical) -> Self {
+        LinearStoreParent::Historical(value.into())
+    }
+}
+
+#[cfg(test)]
+impl Into<LinearStoreParent> for ConstBacked {
+    fn into(self) -> LinearStoreParent {
+        LinearStoreParent::ConstBacked(self.into())
+    }
+}
+
+impl ReadLinearStore for LinearStoreParent {
+    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
+        match self {
+            LinearStoreParent::FileBacked(filebacked) => filebacked.stream_from(addr),
+            LinearStoreParent::Proposed(proposed) => proposed.stream_from(addr),
+            LinearStoreParent::Historical(historical) => historical.stream_from(addr),
+            #[cfg(test)]
+            LinearStoreParent::ConstBacked(constbacked) => constbacked.stream_from(addr),
+        }
+    }
+
+    fn size(&self) -> Result<u64, Error> {
+        match self {
+            LinearStoreParent::FileBacked(filebacked) => filebacked.size(),
+            LinearStoreParent::Proposed(proposed) => proposed.size(),
+            LinearStoreParent::Historical(historical) => historical.size(),
+            #[cfg(test)]
+            LinearStoreParent::ConstBacked(constbacked) => constbacked.size(),
+        }
+    }
 }
