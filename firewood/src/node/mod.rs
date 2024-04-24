@@ -29,26 +29,13 @@ pub enum Node {
 /// Contains the fields that we include in a node's hash.
 /// If this is a leaf node, `children` is empty and `value` is Some.
 /// If this is a branch node, `children` is non-empty.
-#[derive(Debug, Eq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct EncodedNode {
     pub(crate) partial_path: Path,
     /// If a child is None, it doesn't exist.
     /// If it's Some, it's the value or value hash of the child.
     pub(crate) children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN],
     pub(crate) value: Option<Vec<u8>>,
-}
-
-// driving this adds an unnecessary bound, T: PartialEq
-// PhantomData<T> is PartialEq for all T
-impl PartialEq for EncodedNode {
-    fn eq(&self, other: &Self) -> bool {
-        let Self {
-            partial_path,
-            children,
-            value,
-        } = self;
-        partial_path == &other.partial_path && children == &other.children && value == &other.value
-    }
 }
 
 // TODO danlaine: move node serialization (for persistence and for hashing) somewhere else.
