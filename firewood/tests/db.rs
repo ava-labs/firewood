@@ -16,7 +16,7 @@ use common::TestDbCreator;
 macro_rules! kv_dump {
     ($e: ident) => {{
         let mut s = Vec::new();
-        $e.kv_dump(&mut s).unwrap();
+        $e.dump(&mut s).unwrap();
         String::from_utf8(s).unwrap()
     }};
 }

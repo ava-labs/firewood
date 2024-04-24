@@ -121,12 +121,12 @@ impl<T> Historical<T> {
     }
 
     /// Get a value associated with a key.
-    pub fn kv_get<K: AsRef<[u8]>>(&self, _key: K) -> Option<Vec<u8>> {
+    pub fn get<K: AsRef<[u8]>>(&self, _key: K) -> Option<Vec<u8>> {
         todo!()
     }
 
     /// Dump the Trie of the generic key-value storage.
-    pub fn kv_dump(&self, _w: &mut dyn Write) -> Result<(), DbError> {
+    pub fn dump(&self, _w: &mut dyn Write) -> Result<(), DbError> {
         todo!()
     }
 
@@ -245,7 +245,7 @@ impl Db {
     }
 
     /// Create a proposal.
-    pub(crate) fn _new_proposal<K: KeyType, V: ValueType>(
+    pub fn new_proposal<K: KeyType, V: ValueType>(
         &self,
         _data: Batch<K, V>,
     ) -> Result<Proposal, DbError> {
@@ -253,12 +253,7 @@ impl Db {
     }
 
     /// Dump the Trie of the latest revision.
-    pub fn kv_dump(&self, _w: &mut dyn Write) -> Result<(), DbError> {
-        todo!()
-    }
-
-    /// Get root hash of the latest revision.
-    pub(crate) fn _kv_root_hash(&self) -> Result<TrieHash, DbError> {
+    pub fn dump(&self, _w: &mut dyn Write) -> Result<(), DbError> {
         todo!()
     }
 
