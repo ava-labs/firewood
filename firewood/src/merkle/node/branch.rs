@@ -101,7 +101,7 @@ impl BranchNode {
         })
     }
 
-    pub(super) fn _encode(&self) -> Vec<u8> {
+    pub(super) fn encode(&self) -> Vec<u8> {
         todo!()
     }
 }

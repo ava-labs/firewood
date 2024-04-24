@@ -64,28 +64,7 @@ impl Node {
     pub fn encode<S>(&self) -> Vec<u8> {
         match &self {
             Node::Leaf(n) => n.encode(),
-            Node::Branch(_n) => todo!(),
-        }
-    }
-
-    pub fn path_mut(&mut self) -> &mut Path {
-        match self {
-            Node::Branch(u) => &mut u.partial_path,
-            Node::Leaf(node) => &mut node.partial_path,
-        }
-    }
-
-    pub fn set_path(&mut self, path: Path) {
-        match self {
-            Node::Branch(u) => u.partial_path = path,
-            Node::Leaf(node) => node.partial_path = path,
-        }
-    }
-
-    pub fn set_value(&mut self, value: Vec<u8>) {
-        match self {
-            Node::Branch(u) => u.value = Some(value),
-            Node::Leaf(node) => node.value = value,
+            Node::Branch(n) => n.encode(),
         }
     }
 }
