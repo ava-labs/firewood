@@ -2,8 +2,8 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::merkle::nibbles_to_bytes_iter;
+use crate::merkle::path;
 use bincode::{Error, Options};
-use bitflags::bitflags;
 use bytemuck::{CheckedBitPattern, NoUninit};
 use enum_as_inner::EnumAsInner;
 use serde::{
@@ -15,22 +15,14 @@ use std::{fmt::Debug, marker::PhantomData, mem::size_of};
 
 mod branch;
 mod leaf;
-mod path;
 
 pub use branch::BranchNode;
 pub use leaf::{LeafNode, SIZE as LEAF_NODE_SIZE};
-pub use path::Path;
 
 use crate::nibbles::Nibbles;
 
+use super::path::Path;
 use super::TRIE_HASH_LEN;
-
-bitflags! {
-    // should only ever be the size of a nibble
-    struct Flags: u8 {
-        const ODD_LEN  = 0b0001;
-    }
-}
 
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner)]
 pub enum Node {
@@ -51,7 +43,7 @@ impl Node {
 
                 let decoded_key_nibbles = Nibbles::<0>::new(&decoded_key);
 
-                let cur_key_path = Path::from_nibbles(decoded_key_nibbles.into_iter());
+                let cur_key_path = path::Path::from_nibbles(decoded_key_nibbles.into_iter());
 
                 let cur_key = cur_key_path.into_inner();
                 #[allow(clippy::unwrap_used)]

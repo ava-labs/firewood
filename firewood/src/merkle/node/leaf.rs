@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::merkle::{nibbles_to_bytes_iter, Path};
+use crate::merkle::{nibbles_to_bytes_iter, path::Path};
 use bincode::Options;
 use bytemuck::{Pod, Zeroable};
 use std::{

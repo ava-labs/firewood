@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{merkle::Path, nibbles::Nibbles, storage::node::LinearAddress};
+use crate::{merkle::path::Path, nibbles::Nibbles, storage::node::LinearAddress};
 use bincode::{Error, Options};
 use serde::de::Error as DeError;
 use std::{

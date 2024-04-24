@@ -5,7 +5,7 @@ pub use crate::{
     config::DbConfig,
     v2::api::{Batch, BatchOp},
 };
-use crate::{merkle, storage::node::LinearAddress};
+use crate::{file, merkle, storage::node::LinearAddress};
 use crate::{
     merkle::{
         Bincode, Key, Merkle, MerkleError, MerkleKeyValueStream, Proof, ProofError, TrieHash,
@@ -247,6 +247,7 @@ pub struct Db {
 #[metered(registry = DbMetrics, visibility = pub)]
 impl Db {
     pub async fn new<P: AsRef<Path>>(_db_path: P, _cfg: &DbConfig) -> Result<Self, api::Error> {
+        // TODO danlaine: Do intialization here and return Ok(Self { ... })
         todo!()
     }
 

@@ -6,11 +6,12 @@ use std::{future::ready, io::Write, marker::PhantomData};
 use thiserror::Error;
 
 mod node;
+mod path;
 pub mod proof;
 mod stream;
 mod trie_hash;
 
-pub use node::{BinarySerde, Bincode, BranchNode, EncodedNode, LeafNode, Node, Path};
+pub use node::{BinarySerde, Bincode, BranchNode, EncodedNode, LeafNode, Node};
 pub use proof::{Proof, ProofError};
 pub use stream::MerkleKeyValueStream;
 pub use trie_hash::{TrieHash, TRIE_HASH_LEN};

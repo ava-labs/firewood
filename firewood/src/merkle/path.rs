@@ -1,12 +1,13 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::Flags;
-use crate::nibbles::NibblesIterator;
+use bitflags::bitflags;
 use std::{
     fmt::{self, Debug},
     iter::once,
 };
+
+use crate::nibbles::NibblesIterator;
 
 // TODO: use smallvec
 /// Path is part or all of a node's path in the trie.
@@ -33,6 +34,13 @@ impl std::ops::Deref for Path {
 impl From<Vec<u8>> for Path {
     fn from(value: Vec<u8>) -> Self {
         Self(value)
+    }
+}
+
+bitflags! {
+    // should only ever be the size of a nibble
+    struct Flags: u8 {
+        const ODD_LEN  = 0b0001;
     }
 }
 
