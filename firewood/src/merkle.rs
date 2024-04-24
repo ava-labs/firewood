@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 use crate::{
-    node::{BranchNode, EncodedNode, Node},
+    node::{BranchNode, Node},
     storage::node::LinearAddress,
     v2::api,
 };
@@ -19,7 +19,7 @@ pub use proof::{Proof, ProofError};
 pub use stream::MerkleKeyValueStream;
 pub use trie_hash::{TrieHash, TRIE_HASH_LEN};
 
-use self::{codec::BinarySerde, stream::PathIterator};
+use self::stream::PathIterator;
 
 pub type Key = Box<[u8]>;
 type Value = Vec<u8>;
@@ -63,20 +63,14 @@ impl<T> Merkle<T> {
     }
 }
 
-impl<'de, T> Merkle<T>
-where
-    T: BinarySerde,
-    EncodedNode<T>: serde::Serialize + serde::Deserialize<'de>,
-{
+impl<T> Merkle<T> {
     /// TODO danlaine: implement
     pub const fn new() -> Self {
         Self {
             phantom_data: PhantomData,
         }
     }
-}
 
-impl<T> Merkle<T> {
     pub fn root_hash(&self, _sentinel_addr: LinearAddress) -> Result<TrieHash, MerkleError> {
         todo!()
     }
@@ -349,11 +343,7 @@ mod tests {
         assert_eq!(n, nibbles);
     }
 
-    fn _create_generic_test_merkle<'de, T>() -> Merkle<T>
-    where
-        T: BinarySerde,
-        EncodedNode<T>: serde::Serialize + serde::Deserialize<'de>,
-    {
+    fn _create_generic_test_merkle<'de, T>() -> Merkle<T> {
         todo!()
     }
 

@@ -15,8 +15,6 @@ use crate::{
     merkle_util::{DataStoreError, InMemoryMerkle},
 };
 
-use super::{BinarySerde, EncodedNode};
-
 #[derive(Debug, Error)]
 pub enum ProofError {
     #[error("aio error: {0:?}")]
@@ -119,7 +117,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
         self.0.extend(other.0)
     }
 
-    pub fn verify_range_proof<K, V, T>(
+    pub fn verify_range_proof<K, V>(
         &self,
         _root_hash: HashKey,
         _first_key: K,
@@ -130,8 +128,6 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     where
         K: AsRef<[u8]>,
         V: AsRef<[u8]>,
-        T: BinarySerde,
-        EncodedNode<T>: serde::Serialize + serde::de::DeserializeOwned,
     {
         if keys.len() != vals.len() {
             return Err(ProofError::InconsistentProofData);
@@ -143,10 +139,8 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
             return Err(ProofError::NonMonotonicIncreaseRange);
         }
 
-        // Use in-memory merkle
-        let _in_mem_merkle = InMemoryMerkle::new();
-
-        todo!()
+        // create an empty merkle trie in memory
+        todo!();
     }
 
     /// proofToPath converts a merkle proof to trie node path. The main purpose of
@@ -163,8 +157,6 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     ) -> Result<Option<Vec<u8>>, ProofError>
     where
         K: AsRef<[u8]>,
-        T: BinarySerde,
-        EncodedNode<T>: serde::Serialize + serde::de::DeserializeOwned,
     {
         todo!()
     }

@@ -3,11 +3,9 @@
 
 use crate::{
     merkle::{
-        codec::BinarySerde,
         proof::{Proof, ProofError},
         Merkle, TrieHash,
     },
-    node::EncodedNode,
     storage::node::LinearAddress,
 };
 use thiserror::Error;
@@ -39,11 +37,7 @@ pub struct InMemoryMerkle<T> {
     merkle: Merkle<T>,
 }
 
-impl<T> InMemoryMerkle<T>
-where
-    T: BinarySerde,
-    EncodedNode<T>: serde::Serialize + serde::de::DeserializeOwned,
-{
+impl<T> InMemoryMerkle<T> {
     pub fn new() -> Self {
         todo!()
     }
