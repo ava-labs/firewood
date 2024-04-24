@@ -4,13 +4,11 @@
 use crate::{node::Path, storage::node::LinearAddress};
 use std::fmt::{Debug, Error as FmtError, Formatter};
 
-const MAX_CHILDREN: usize = 16;
-
 #[derive(PartialEq, Eq, Clone)]
 pub struct BranchNode {
     pub(crate) partial_path: Path,
     pub(crate) value: Option<Box<[u8]>>,
-    pub(crate) children: [Option<LinearAddress>; MAX_CHILDREN],
+    pub(crate) children: [Option<LinearAddress>; Self::MAX_CHILDREN],
 }
 
 impl Debug for BranchNode {
@@ -36,6 +34,5 @@ impl Debug for BranchNode {
 }
 
 impl BranchNode {
-    pub const MAX_CHILDREN: usize = MAX_CHILDREN;
-    pub const MSIZE: usize = Self::MAX_CHILDREN + 2;
+    pub const MAX_CHILDREN: usize = 16;
 }
