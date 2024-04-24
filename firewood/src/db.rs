@@ -20,7 +20,7 @@ use metered::metered;
 use std::{error::Error, fmt, io::Write, path::Path, sync::Arc};
 
 // TODO use or remove
-const _MAGIC_STR: &[u8; 16] = b"firewood v0.1\0\0\0";
+const _VERSION_STR: &[u8; 16] = b"firewood v0.1\0\0\0";
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -57,13 +57,6 @@ impl From<std::io::Error> for DbError {
 }
 
 impl Error for DbError {}
-
-/// DbParams contains the constants that are fixed upon the creation of the DB, this ensures the
-/// correct parameters are used when the DB is opened later (the parameters here will override the
-/// parameters in [DbConfig] if the DB already exists).
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
-struct DbParams {}
 
 /// mutable DB-wide metadata, it keeps track of the root of the top-level trie.
 #[repr(C)]
