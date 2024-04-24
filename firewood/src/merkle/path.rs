@@ -46,10 +46,6 @@ bitflags! {
 }
 
 impl Path {
-    pub fn into_inner(self) -> Vec<u8> {
-        self.0
-    }
-
     pub(crate) fn encode(&self) -> Vec<u8> {
         let mut flags = Flags::empty();
 
@@ -69,14 +65,6 @@ impl Path {
             .collect()
     }
 
-    // TODO: remove all non `Nibbles` usages and delete this function.
-    // I also think `Path` could probably borrow instead of own data.
-    //
-    /// Returns the decoded path.
-    pub fn decode(raw: &[u8]) -> Self {
-        Self::from_iter(raw.iter().copied())
-    }
-
     /// Returns the decoded path.
     pub fn from_nibbles<const N: usize>(nibbles: NibblesIterator<'_, N>) -> Self {
         Self::from_iter(nibbles)
@@ -91,41 +79,5 @@ impl Path {
         }
 
         Self(iter.collect())
-    }
-
-    pub(super) fn _serialized_len(&self) -> u64 {
-        let len = self.0.len();
-
-        // if len is even the prefix takes an extra byte
-        // otherwise is combined with the first nibble
-        let len = if len & 1 == 1 {
-            (len + 1) / 2
-        } else {
-            len / 2 + 1
-        };
-
-        len as u64
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use test_case::test_case;
-
-    #[test_case(&[1, 2, 3, 4])]
-    #[test_case(&[1, 2, 3])]
-    #[test_case(&[0, 1, 2])]
-    #[test_case(&[1, 2])]
-    #[test_case(&[1])]
-    fn test_encoding(steps: &[u8]) {
-        let path = Path(steps.to_vec());
-        let encoded = path.encode();
-
-        assert_eq!(encoded.len(), path._serialized_len() as usize * 2);
-
-        let decoded = Path::decode(&encoded);
-
-        assert_eq!(&&*decoded, &steps);
     }
 }

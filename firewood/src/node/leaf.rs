@@ -22,20 +22,3 @@ impl Debug for LeafNode {
         )
     }
 }
-
-impl LeafNode {
-    pub fn new<P: Into<Path>, V: Into<Vec<u8>>>(partial_path: P, value: V) -> Self {
-        Self {
-            partial_path: partial_path.into(),
-            value: value.into(),
-        }
-    }
-
-    pub const fn path(&self) -> &Path {
-        &self.partial_path
-    }
-
-    pub const fn value(&self) -> &Vec<u8> {
-        &self.value
-    }
-}
