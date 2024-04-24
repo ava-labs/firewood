@@ -1,17 +1,18 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use crate::merkle::codec::Bincode;
+use crate::merkle::codec::PlainCodec;
 use crate::merkle::nibbles_to_bytes_iter;
-use crate::merkle::path;
-use bincode::{Error, Options};
-use bytemuck::{CheckedBitPattern, NoUninit};
+use crate::merkle::path::Path;
+use crate::merkle::TRIE_HASH_LEN;
 use enum_as_inner::EnumAsInner;
 use serde::{
     ser::{SerializeSeq, SerializeTuple},
     Deserialize, Serialize,
 };
 use sha3::{Digest, Keccak256};
-use std::{fmt::Debug, marker::PhantomData, mem::size_of};
+use std::{fmt::Debug, marker::PhantomData};
 
 mod branch;
 mod leaf;
@@ -21,64 +22,10 @@ pub use leaf::{LeafNode, SIZE as LEAF_NODE_SIZE};
 
 use crate::nibbles::Nibbles;
 
-use super::codec::Bincode;
-use super::codec::PlainCodec;
-use super::path::Path;
-use super::TRIE_HASH_LEN;
-
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner)]
 pub enum Node {
     Branch(Box<BranchNode>),
     Leaf(LeafNode),
-}
-
-impl Node {
-    pub fn decode(buf: &[u8]) -> Result<Node, Error> {
-        let items: Vec<Vec<u8>> = bincode::DefaultOptions::new().deserialize(buf)?;
-
-        match items.len() {
-            LEAF_NODE_SIZE => {
-                let mut items = items.into_iter();
-
-                #[allow(clippy::unwrap_used)]
-                let decoded_key: Vec<u8> = items.next().unwrap();
-
-                let decoded_key_nibbles = Nibbles::<0>::new(&decoded_key);
-
-                let cur_key_path = path::Path::from_nibbles(decoded_key_nibbles.into_iter());
-
-                let cur_key = cur_key_path.into_inner();
-                #[allow(clippy::unwrap_used)]
-                let value: Vec<u8> = items.next().unwrap();
-
-                Ok(Node::Leaf(LeafNode::new(cur_key, value)))
-            }
-            // TODO: add path
-            BranchNode::MSIZE => Ok(Node::Branch(BranchNode::decode(buf)?.into())),
-            size => Err(Box::new(bincode::ErrorKind::Custom(format!(
-                "invalid size: {size}"
-            )))),
-        }
-    }
-
-    pub fn encode<S>(&self) -> Vec<u8> {
-        match &self {
-            Node::Leaf(n) => n.encode(),
-            Node::Branch(n) => n.encode(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, CheckedBitPattern, NoUninit)]
-#[repr(C, packed)]
-struct Meta {
-    root_hash: [u8; TRIE_HASH_LEN],
-    encoded_len: u64,
-    encoded: [u8; TRIE_HASH_LEN],
-}
-
-impl Meta {
-    const _SIZE: usize = size_of::<Self>();
 }
 
 /// Contains the fields that we include in a node's hash.
@@ -282,7 +229,7 @@ mod tests {
     #[test_case(&[0x00,0x0F])]
     #[test_case(&[0x0F,0x0F])]
     #[test_case(&[0x0F,0x01,0x0F])]
-    fn encoded_branch_node_bincode_serialize(path_nibbles: &[u8]) -> Result<(), Error> {
+    fn encoded_branch_node_bincode_serialize(path_nibbles: &[u8]) -> Result<(), bincode::Error> {
         let node = EncodedNode::<Bincode> {
             partial_path: Path(path_nibbles.to_vec()),
             children: Default::default(),

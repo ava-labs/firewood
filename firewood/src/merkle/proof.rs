@@ -9,11 +9,9 @@ use nix::errno::Errno;
 use sha3::Digest;
 use thiserror::Error;
 
-use crate::nibbles::Nibbles;
-use crate::nibbles::NibblesIterator;
 use crate::{
     db::DbError,
-    merkle::{MerkleError, Node},
+    merkle::MerkleError,
     merkle_util::{DataStoreError, InMemoryMerkle},
 };
 
@@ -111,32 +109,10 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     /// The generic N represents the storage for the node
     pub fn verify<K: AsRef<[u8]>>(
         &self,
-        key: K,
-        root_hash: HashKey,
+        _key: K,
+        _root_hash: HashKey,
     ) -> Result<Option<Vec<u8>>, ProofError> {
-        let mut key_nibbles = Nibbles::<0>::new(key.as_ref()).into_iter();
-
-        let mut cur_hash = root_hash;
-        let proofs_map = &self.0;
-
-        loop {
-            let cur_proof = proofs_map
-                .get(&cur_hash)
-                .ok_or(ProofError::ProofNodeMissing)?;
-
-            let node = Node::decode(cur_proof.as_ref())?;
-            // TODO: I think this will currently fail if the key is &[];
-            let (sub_proof, traversed_nibbles) = locate_subproof(key_nibbles, node)?;
-            key_nibbles = traversed_nibbles;
-
-            cur_hash = match sub_proof {
-                // Return when reaching the end of the key.
-                Some(SubProof::Value(value)) if key_nibbles.is_empty() => return Ok(Some(value)),
-                // The trie doesn't contain the key.
-                Some(SubProof::Hash(hash)) => hash,
-                _ => return Ok(None),
-            };
-        }
+        todo!()
     }
 
     pub fn extend(&mut self, other: Proof<N>) {
@@ -192,13 +168,6 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     {
         todo!()
     }
-}
-
-fn locate_subproof(
-    _key_nibbles: NibblesIterator<'_, 0>,
-    _node: Node,
-) -> Result<(Option<SubProof>, NibblesIterator<'_, 0>), ProofError> {
-    todo!()
 }
 
 fn _generate_subproof_hash(encoded: &[u8]) -> Result<HashKey, ProofError> {

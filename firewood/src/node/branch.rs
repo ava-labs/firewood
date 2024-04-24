@@ -13,26 +13,19 @@ const MAX_CHILDREN: usize = 16;
 
 #[derive(PartialEq, Eq, Clone)]
 pub struct BranchNode {
-    pub(crate) partial_path: Path,
+    pub(crate) path: Path,
+    pub(crate) value: Option<Box<[u8]>>,
     pub(crate) children: [Option<LinearAddress>; MAX_CHILDREN],
-    pub(crate) value: Option<Vec<u8>>,
-    pub(crate) children_encoded: [Option<Vec<u8>>; MAX_CHILDREN],
 }
 
 impl Debug for BranchNode {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), FmtError> {
         write!(f, "[Branch")?;
-        write!(f, r#" path="{:?}""#, self.partial_path)?;
+        write!(f, r#" path="{:?}""#, self.path)?;
 
         for (i, c) in self.children.iter().enumerate() {
             if let Some(c) = c {
                 write!(f, " ({i:x} {c:?})")?;
-            }
-        }
-
-        for (i, c) in self.children_encoded.iter().enumerate() {
-            if let Some(c) = c {
-                write!(f, " ({i:x} {:?})", c)?;
             }
         }
 
@@ -51,27 +44,7 @@ impl BranchNode {
     pub const MAX_CHILDREN: usize = MAX_CHILDREN;
     pub const MSIZE: usize = Self::MAX_CHILDREN + 2;
 
-    pub const fn value(&self) -> &Option<Vec<u8>> {
-        &self.value
-    }
-
-    pub const fn chd(&self) -> &[Option<LinearAddress>; Self::MAX_CHILDREN] {
-        &self.children
-    }
-
-    pub fn chd_mut(&mut self) -> &mut [Option<LinearAddress>; Self::MAX_CHILDREN] {
-        &mut self.children
-    }
-
-    pub const fn chd_encode(&self) -> &[Option<Vec<u8>>; Self::MAX_CHILDREN] {
-        &self.children_encoded
-    }
-
-    pub fn chd_encoded_mut(&mut self) -> &mut [Option<Vec<u8>>; Self::MAX_CHILDREN] {
-        &mut self.children_encoded
-    }
-
-    pub(super) fn decode(buf: &[u8]) -> Result<Self, Error> {
+    pub(super) fn _decode(buf: &[u8]) -> Result<Self, Error> {
         let mut items: Vec<Vec<u8>> = bincode::DefaultOptions::new().deserialize(buf)?;
 
         let path = items.pop().ok_or(Error::custom("Invalid Branch Node"))?;
@@ -94,14 +67,13 @@ impl BranchNode {
         }
 
         Ok(BranchNode {
-            partial_path: path,
+            path,
             children: [None; Self::MAX_CHILDREN],
-            value,
-            children_encoded: chd_encoded,
+            value: value.map(|value| value.into_boxed_slice()),
         })
     }
 
-    pub(super) fn encode(&self) -> Vec<u8> {
+    pub(super) fn _encode(&self) -> Vec<u8> {
         todo!()
     }
 }

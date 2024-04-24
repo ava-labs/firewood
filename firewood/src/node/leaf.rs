@@ -47,7 +47,7 @@ impl LeafNode {
         &self.value
     }
 
-    pub(super) fn encode(&self) -> Vec<u8> {
+    pub(super) fn _encode(&self) -> Vec<u8> {
         #[allow(clippy::unwrap_used)]
         bincode::DefaultOptions::new()
             .serialize(
@@ -96,6 +96,6 @@ mod tests {
 
         let node = LeafNode::new(nibbles, value.clone());
 
-        assert_eq!(node.encode(), serialized);
+        assert_eq!(node._encode(), serialized);
     }
 }

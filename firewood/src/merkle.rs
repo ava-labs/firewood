@@ -1,18 +1,20 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
-use crate::{storage::node::LinearAddress, v2::api};
+use crate::{
+    node::{BranchNode, EncodedNode, Node},
+    storage::node::LinearAddress,
+    v2::api,
+};
 use futures::{StreamExt, TryStreamExt};
 use std::{future::ready, io::Write, marker::PhantomData};
 use thiserror::Error;
 
 pub mod codec;
-mod node;
-mod path;
+pub(crate) mod path;
 pub mod proof;
 mod stream;
 mod trie_hash;
 
-pub use node::{BranchNode, EncodedNode, LeafNode, Node};
 pub use proof::{Proof, ProofError};
 pub use stream::MerkleKeyValueStream;
 pub use trie_hash::{TrieHash, TRIE_HASH_LEN};
@@ -71,72 +73,6 @@ where
         Self {
             phantom_data: PhantomData,
         }
-    }
-
-    // TODO: use `encode` / `decode` instead of `node.encode` / `node.decode` after extention node removal.
-    #[allow(dead_code)]
-    fn encode(&self, node: &Node) -> Result<Vec<u8>, MerkleError> {
-        let encoded = match node {
-            Node::Leaf(n) => {
-                let children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
-                EncodedNode {
-                    partial_path: n.partial_path.clone(),
-                    children,
-                    value: n.value.clone().into(),
-                    phantom: PhantomData,
-                }
-            }
-
-            Node::Branch(n) => {
-                // pair up LinearAddresses with encoded children and pick the right one
-                let encoded_children = n.chd().iter().zip(n.children_encoded.iter());
-                let children = encoded_children
-                    .map(|(child_addr, encoded_child)| {
-                        child_addr
-                            // if there's a child disk address here, get the encoded bytes
-                            .map(|addr| self.get_node(addr).and_then(|node| self.encode(node)))
-                            // or look for the pre-fetched bytes
-                            .or_else(|| encoded_child.as_ref().map(|child| Ok(child.to_vec())))
-                            .transpose()
-                    })
-                    .collect::<Result<Vec<Option<Vec<u8>>>, MerkleError>>()?
-                    .try_into()
-                    .expect("MAX_CHILDREN will always be yielded");
-
-                EncodedNode {
-                    partial_path: n.partial_path.clone(),
-                    children,
-                    value: n.value.clone(),
-                    phantom: PhantomData,
-                }
-            }
-        };
-
-        T::serialize(&encoded).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))
-    }
-
-    #[allow(dead_code)]
-    fn decode(&self, buf: &'de [u8]) -> Result<Node, MerkleError> {
-        let encoded: EncodedNode<T> =
-            T::deserialize(buf).map_err(|e| MerkleError::BinarySerdeError(e.to_string()))?;
-
-        if encoded.children.iter().all(|b| b.is_none()) {
-            // This is a leaf node
-            return Ok(Node::Leaf(LeafNode::new(
-                encoded.partial_path,
-                encoded.value.expect("leaf nodes must always have a value"),
-            )));
-        }
-
-        Ok(Node::Branch(
-            BranchNode {
-                partial_path: encoded.partial_path,
-                children: [None::<LinearAddress>; BranchNode::MAX_CHILDREN],
-                value: encoded.value,
-                children_encoded: encoded.children,
-            }
-            .into(),
-        ))
     }
 }
 

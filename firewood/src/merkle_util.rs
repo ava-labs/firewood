@@ -5,8 +5,9 @@ use crate::{
     merkle::{
         codec::BinarySerde,
         proof::{Proof, ProofError},
-        EncodedNode, Merkle, TrieHash,
+        Merkle, TrieHash,
     },
+    node::EncodedNode,
     storage::node::LinearAddress,
 };
 use thiserror::Error;
