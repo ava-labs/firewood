@@ -13,7 +13,7 @@ use crate::nibbles::NibblesIterator;
 /// Path is part or all of a node's path in the trie.
 /// Each element is a nibble.
 #[derive(PartialEq, Eq, Clone)]
-pub struct Path(pub Vec<u8>);
+pub struct Path(Vec<u8>);
 
 impl Debug for Path {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
