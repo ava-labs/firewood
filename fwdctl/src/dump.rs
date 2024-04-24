@@ -40,7 +40,7 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     let latest_hash = db.root_hash().await?;
     let latest_rev = db.revision(latest_hash).await?;
     let start_key = opts.start_key.clone().unwrap_or(Box::new([]));
-    let mut stream = latest_rev.stream_from(start_key);
+    let mut stream = latest_rev.stream_from(&start_key);
     loop {
         match stream.next().await {
             None => break,

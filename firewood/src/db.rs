@@ -101,7 +101,7 @@ impl<T> Historical<T> {
         todo!()
     }
 
-    pub fn stream_from(&self, _start_key: Key) -> merkle::MerkleKeyValueStream<'_, T> {
+    pub fn stream_from(&self, _start_key: &[u8]) -> merkle::MerkleKeyValueStream<'_, T> {
         todo!()
     }
 
