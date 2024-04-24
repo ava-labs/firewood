@@ -5,18 +5,19 @@ use futures::{StreamExt, TryStreamExt};
 use std::{future::ready, io::Write, marker::PhantomData};
 use thiserror::Error;
 
+pub mod codec;
 mod node;
 mod path;
 pub mod proof;
 mod stream;
 mod trie_hash;
 
-pub use node::{BinarySerde, Bincode, BranchNode, EncodedNode, LeafNode, Node};
+pub use node::{BranchNode, EncodedNode, LeafNode, Node};
 pub use proof::{Proof, ProofError};
 pub use stream::MerkleKeyValueStream;
 pub use trie_hash::{TrieHash, TRIE_HASH_LEN};
 
-use self::stream::PathIterator;
+use self::{codec::BinarySerde, stream::PathIterator};
 
 pub type Key = Box<[u8]>;
 type Value = Vec<u8>;
@@ -65,7 +66,7 @@ where
     T: BinarySerde,
     EncodedNode<T>: serde::Serialize + serde::Deserialize<'de>,
 {
-    /// TODO danlaine: add args
+    /// TODO danlaine: implement
     pub const fn new() -> Self {
         Self {
             phantom_data: PhantomData,
@@ -217,8 +218,19 @@ impl<T> Merkle<T> {
         _sentinel_addr: LinearAddress,
     ) -> Result<Option<Box<[u8]>>, MerkleError> {
         todo!()
+        // TODO danlaine use or remove the code below
+        // if sentinel_addr.is_null() {
+        //     todo!()
+        //         return Ok(None);
+        //     }
+
+        //     let root_node = self.get_node(sentinel_addr)?;
+        //     let node_ref = self.get_node_by_key(root_node, key)?;
+
+        //     Ok(node_ref.map(Ref))
     }
 
+    // TODO danlaine: can we use the LinearAddress of the sentinel_node instead?
     pub fn path_iter<'a, 'b>(
         &'a self,
         sentinel_node: &'a Node,
@@ -387,6 +399,8 @@ pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
+    use self::codec::Bincode;
+
     use super::*;
     //     use crate::merkle::node::PlainCodec;
     //     use shale::in_mem::InMemLinearStore;

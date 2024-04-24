@@ -575,7 +575,7 @@ use super::tests::_create_test_merkle;
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
-    use crate::merkle::Bincode;
+    use crate::merkle::codec::Bincode;
 
     use super::*;
     use test_case::test_case;

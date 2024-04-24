@@ -2,11 +2,12 @@
 // See the file LICENSE.md for licensing terms.
 
 use firewood::{
-    merkle::{Bincode, Proof, ProofError},
+    merkle::{codec::Bincode, Proof, ProofError},
     merkle_util::{DataStoreError, InMemoryMerkle},
 };
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng as _};
-use std::{collections::HashMap, fmt::Write};
+use std::collections::HashMap;
+use std::fmt::Write;
 
 fn merkle_build_test<
     K: AsRef<[u8]> + std::cmp::Ord + Clone + std::fmt::Debug,

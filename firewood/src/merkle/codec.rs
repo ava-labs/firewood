@@ -3,6 +3,7 @@
 
 use std::fmt::Debug;
 
+use bincode::Options;
 use serde::{Deserialize, Serialize};
 
 pub trait BinarySerde {

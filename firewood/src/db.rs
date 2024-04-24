@@ -1,20 +1,17 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use crate::merkle::{self, codec::Bincode};
 pub use crate::{
     config::DbConfig,
     v2::api::{Batch, BatchOp},
 };
-use crate::{merkle, storage::node::LinearAddress};
 use crate::{
-    merkle::{
-        Bincode, Key, Merkle, MerkleError, MerkleKeyValueStream, Proof, ProofError, TrieHash,
-    },
+    merkle::{Key, Merkle, MerkleError, MerkleKeyValueStream, Proof, ProofError, TrieHash},
     v2::api::{self, HashKey, KeyType, ValueType},
 };
 use aiofut::AioError;
 use async_trait::async_trait;
-use bytemuck::{Pod, Zeroable};
 
 use metered::metered;
 use std::{error::Error, fmt, io::Write, path::Path, sync::Arc};
@@ -57,13 +54,6 @@ impl From<std::io::Error> for DbError {
 }
 
 impl Error for DbError {}
-
-/// mutable DB-wide metadata, it keeps track of the root of the top-level trie.
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
-struct DbHeader {
-    sentinel_addr: Option<LinearAddress>,
-}
 
 #[derive(Debug)]
 pub struct Historical<T> {
@@ -208,6 +198,13 @@ impl api::DbView for Proposal {
     }
 }
 
+/// TODO danlaine: implement
+#[derive(Debug)]
+pub struct Db {
+    metrics: Arc<DbMetrics>,
+    _cfg: DbConfig,
+}
+
 #[async_trait]
 impl api::Db for Db {
     type Historical = Historical<Bincode>;
@@ -228,13 +225,6 @@ impl api::Db for Db {
     ) -> Result<Self::Proposal, api::Error> {
         todo!()
     }
-}
-
-/// TODO danlaine: implement
-#[derive(Debug)]
-pub struct Db {
-    metrics: Arc<DbMetrics>,
-    _cfg: DbConfig,
 }
 
 #[metered(registry = DbMetrics, visibility = pub)]

@@ -3,8 +3,9 @@
 
 use crate::{
     merkle::{
+        codec::BinarySerde,
         proof::{Proof, ProofError},
-        BinarySerde, EncodedNode, Merkle, TrieHash,
+        EncodedNode, Merkle, TrieHash,
     },
     storage::node::LinearAddress,
 };
