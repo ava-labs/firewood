@@ -149,7 +149,7 @@ impl api::Proposal for Proposal {
     async fn propose<K: api::KeyType, V: api::ValueType>(
         self: Arc<Self>,
         _data: api::Batch<K, V>,
-    ) -> Result<Self::Proposal, api::Error> {
+    ) -> Result<Arc<Self::Proposal>, api::Error> {
         todo!()
     }
 }
@@ -220,7 +220,7 @@ impl api::Db for Db {
     async fn propose<K: KeyType, V: ValueType>(
         &self,
         _batch: api::Batch<K, V>,
-    ) -> Result<Self::Proposal, api::Error> {
+    ) -> Result<Arc<Self::Proposal>, api::Error> {
         todo!()
     }
 }

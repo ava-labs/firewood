@@ -6,8 +6,7 @@
 
 use clap::Parser;
 use std::{
-    borrow::BorrowMut as _, collections::HashMap, error::Error, ops::RangeInclusive, sync::Arc,
-    time::Instant,
+    borrow::BorrowMut as _, collections::HashMap, error::Error, ops::RangeInclusive, time::Instant,
 };
 
 use firewood::{
@@ -85,7 +84,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let verify = get_keys_to_verify(&batch, args.read_verify_percent);
 
         #[allow(clippy::unwrap_used)]
-        let proposal = Arc::new(db.propose(batch).await.unwrap());
+        let proposal = db.propose(batch).await.unwrap();
         proposal.commit().await?;
         verify_keys(&db, verify).await?;
     }

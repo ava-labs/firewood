@@ -134,7 +134,7 @@ pub trait Db {
     async fn propose<K: KeyType, V: ValueType>(
         &self,
         data: Batch<K, V>,
-    ) -> Result<Self::Proposal, Error>;
+    ) -> Result<Arc<Self::Proposal>, Error>;
 }
 
 /// A view of the database at a specific time. These are wrapped with
@@ -231,5 +231,5 @@ pub trait Proposal: DbView + Send + Sync {
     async fn propose<K: KeyType, V: ValueType>(
         self: Arc<Self>,
         data: Batch<K, V>,
-    ) -> Result<Self::Proposal, Error>;
+    ) -> Result<Arc<Self::Proposal>, Error>;
 }

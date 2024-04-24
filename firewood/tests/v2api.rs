@@ -1,8 +1,6 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::sync::Arc;
-
 use firewood::{
     db::{BatchOp, DbConfig},
     v2::api::{Db, DbView, Proposal},
@@ -28,7 +26,7 @@ async fn smoke() -> Result<(), Box<dyn std::error::Error>> {
     // insert a single key/value
     let (key, value) = (b"smoke", b"test");
     let batch_put = BatchOp::Put { key, value };
-    let proposal = Arc::new(db.propose(vec![batch_put]).await?);
+    let proposal = db.propose(vec![batch_put]).await?;
     proposal.commit().await?;
 
     // ensure the latest hash is different

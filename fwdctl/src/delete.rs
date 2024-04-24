@@ -1,8 +1,6 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::sync::Arc;
-
 use clap::Args;
 use firewood::{
     db::{BatchOp, Db, DbConfig},
@@ -35,7 +33,7 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     let batch: Vec<BatchOp<String, String>> = vec![BatchOp::Delete {
         key: opts.key.clone(),
     }];
-    let proposal = Arc::new(db.propose(batch).await?);
+    let proposal = db.propose(batch).await?;
     proposal.commit().await?;
 
     println!("key {} deleted successfully", opts.key);

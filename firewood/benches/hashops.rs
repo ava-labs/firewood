@@ -11,7 +11,7 @@ use firewood::{
 };
 use pprof::ProfilerGuard;
 use rand::{distributions::Alphanumeric, rngs::StdRng, Rng, SeedableRng};
-use std::{fs::File, iter::repeat_with, os::raw::c_int, path::Path, sync::Arc};
+use std::{fs::File, iter::repeat_with, os::raw::c_int, path::Path};
 
 const _ZERO_HASH: TrieHash = TrieHash([0u8; TRIE_HASH_LEN]);
 
@@ -171,10 +171,7 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
                                 .unwrap();
 
                         #[allow(clippy::unwrap_used)]
-                        Arc::new(db.propose(batch_ops).await.unwrap())
-                            .commit()
-                            .await
-                            .unwrap()
+                        db.propose(batch_ops).await.unwrap().commit().await.unwrap()
                     },
                     BatchSize::SmallInput,
                 );
