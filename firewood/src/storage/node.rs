@@ -45,6 +45,10 @@ impl<T: ReadLinearStore> NodeStore<T> {
 
         Ok(reader.bytes_read)
     }
+
+    const fn sentinel_address(&self) -> Option<LinearAddress> {
+        self.header.sentinel_address
+    }
 }
 
 impl<T: WriteLinearStore> NodeStore<T> {
@@ -108,6 +112,7 @@ impl<T: WriteLinearStore> NodeStore<T> {
         linear_store.write(0, bytemuck::bytes_of(&FileIdentifingMagic::new()))?;
 
         let header = FreeSpaceManagementHeader {
+            sentinel_address: None,
             free_space_head: None,
         };
         linear_store.write(FileIdentifingMagic::SIZE, bytemuck::bytes_of(&header))?;
@@ -115,6 +120,13 @@ impl<T: WriteLinearStore> NodeStore<T> {
             header,
             linear_store,
         })
+    }
+    fn set_sentinel(&mut self, mut linear_store: T) -> Result<(), Error> {
+        if self.header.sentinel_address.is_some() {
+            unimplemented!("cannot move sentinel address")
+        }
+        linear_store.write(FileIdentifingMagic::SIZE, bytemuck::bytes_of(&self.header))?;
+        Ok(())
     }
 }
 
@@ -184,6 +196,7 @@ impl FileIdentifingMagic {
 #[repr(C)]
 #[derive(Debug, bytemuck::NoUninit, Clone, Copy)]
 struct FreeSpaceManagementHeader {
+    sentinel_address: Option<LinearAddress>,
     free_space_head: Option<LinearAddress>,
 }
 
