@@ -3,6 +3,7 @@
 
 use std::fmt::Debug;
 
+// TODO remove this code
 #[derive(Default)]
 pub struct Bincode(pub bincode::DefaultOptions);
 

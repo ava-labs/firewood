@@ -332,8 +332,6 @@ mod tests {
     use self::codec::Bincode;
 
     use super::*;
-    //     use crate::merkle::node::PlainCodec;
-    //     use shale::in_mem::InMemLinearStore;
     use test_case::test_case;
 
     #[test_case(vec![0x12, 0x34, 0x56], &[0x1, 0x2, 0x3, 0x4, 0x5, 0x6])]
