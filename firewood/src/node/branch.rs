@@ -8,7 +8,7 @@ const MAX_CHILDREN: usize = 16;
 
 #[derive(PartialEq, Eq, Clone)]
 pub struct BranchNode {
-    pub(crate) path: Path,
+    pub(crate) partial_path: Path,
     pub(crate) value: Option<Box<[u8]>>,
     pub(crate) children: [Option<LinearAddress>; MAX_CHILDREN],
 }
@@ -16,7 +16,7 @@ pub struct BranchNode {
 impl Debug for BranchNode {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), FmtError> {
         write!(f, "[Branch")?;
-        write!(f, r#" path="{:?}""#, self.path)?;
+        write!(f, r#" path="{:?}""#, self.partial_path)?;
 
         for (i, c) in self.children.iter().enumerate() {
             if let Some(c) = c {
