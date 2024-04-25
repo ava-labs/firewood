@@ -127,9 +127,9 @@ impl From<Historical> for LinearStoreParent {
 }
 
 #[cfg(test)]
-impl Into<LinearStoreParent> for ConstBacked {
-    fn into(self) -> LinearStoreParent {
-        LinearStoreParent::ConstBacked(self.into())
+impl From<ConstBacked> for LinearStoreParent {
+    fn from(value: ConstBacked) -> Self {
+        LinearStoreParent::ConstBacked(value.into())
     }
 }
 
