@@ -51,6 +51,17 @@ impl<T: ReadLinearStore> NodeStore<T> {
     const fn sentinel_address(&self) -> Option<LinearAddress> {
         self.header.sentinel_address
     }
+
+    pub(crate) fn open(linear_store: T) -> Result<Self, Error> {
+        let mut stream = linear_store.stream_from(FileIdentifingMagic::SIZE)?;
+        let mut header_bytes = [0u8; std::mem::size_of::<FreeSpaceManagementHeader>()];
+        stream.read_exact(&mut header_bytes[..])?;
+        let header = bytemuck::cast(header_bytes);
+        Ok(Self {
+            header,
+            linear_store,
+        })
+    }
 }
 
 impl<T: WriteLinearStore> NodeStore<T> {
@@ -118,17 +129,6 @@ impl<T: WriteLinearStore> NodeStore<T> {
             free_space_head: None,
         };
         linear_store.write(FileIdentifingMagic::SIZE, bytemuck::bytes_of(&header))?;
-        Ok(Self {
-            header,
-            linear_store,
-        })
-    }
-
-    pub(crate) fn open(linear_store: T) -> Result<Self, Error> {
-        let mut stream = linear_store.stream_from(FileIdentifingMagic::SIZE)?;
-        let mut header_bytes = [0u8; std::mem::size_of::<FreeSpaceManagementHeader>()];
-        stream.read_exact(&mut header_bytes[..])?;
-        let header = bytemuck::cast(header_bytes);
         Ok(Self {
             header,
             linear_store,
