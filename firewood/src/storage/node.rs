@@ -103,7 +103,7 @@ struct StoredArea<T> {
 /// Every subsequent write is a [StoredArea] containing a [Node] or a [FreedArea].
 /// The size of each allocation [NodeStore] makes from [LinearStore] is one of [AREA_SIZES].
 #[derive(Debug)]
-struct NodeStore<T: ReadLinearStore> {
+pub struct NodeStore<T: ReadLinearStore> {
     header: NodeStoreHeader,
     linear_store: T,
 }
@@ -118,16 +118,16 @@ impl<T: ReadLinearStore> NodeStore<T> {
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
         let size = *AREA_SIZES.get(index as usize).ok_or(Error::new(
-                ErrorKind::InvalidData,
-                format!("Invalid area size index {}", index),
-            ))?;
+            ErrorKind::InvalidData,
+            format!("Invalid area size index {}", index),
+        ))?;
 
         Ok((index, size))
     }
 
     /// Read a [Node] from the provided [LinearAddress].
     /// `addr` is the address of a [StoredArea] in the [LinearStore].
-    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
+    pub fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
         debug_assert!(addr.get() % 8 == 0);
 
         let addr = addr.get() + 1; // Skip the index byte
@@ -165,7 +165,7 @@ impl<T: ReadLinearStore> NodeStore<T> {
 }
 
 impl<T: WriteLinearStore> NodeStore<T> {
-    fn new(mut linear_store: T) -> Result<Self, Error> {
+    pub fn initialize(mut linear_store: T) -> Result<Self, Error> {
         let header = NodeStoreHeader {
             version: Version::new(),
             free_lists: Default::default(),
@@ -303,8 +303,7 @@ impl<T: WriteLinearStore> NodeStore<T> {
         if new_stored_area_size <= old_stored_area_size {
             // the new node fits in the old node's area
             let addr = addr.get() + 1; // Skip the index byte
-            self.linear_store
-                .write(addr, new_area_bytes.as_slice())?;
+            self.linear_store.write(addr, new_area_bytes.as_slice())?;
             return Ok(());
         }
 
@@ -434,10 +433,9 @@ struct FreeArea {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use crate::{
-        node::{path::Path, BranchNode, LeafNode},
-        storage::linear::tests::MemStore,
-    };
+    use crate::node::path::Path;
+    use crate::node::{BranchNode, LeafNode};
+    use crate::storage::linear::tests::MemStore;
 
     use super::*;
 
@@ -455,10 +453,7 @@ mod tests {
 
             if i < NUM_AREA_SIZES - 1 {
                 // 1 more than top of range goes to next range
-                assert_eq!(
-                    area_size_to_index(area_size + 1).unwrap(),
-                    (i + 1) as u8
-                );
+                assert_eq!(area_size_to_index(area_size + 1).unwrap(), (i + 1) as u8);
             }
         }
 
@@ -472,7 +467,7 @@ mod tests {
     #[test]
     fn test_create() {
         let linear_store = MemStore::new(vec![]);
-        let mut node_store = NodeStore::new(linear_store).unwrap();
+        let mut node_store = NodeStore::initialize(linear_store).unwrap();
 
         let leaf = Node::Leaf(LeafNode {
             partial_path: Path(vec![0, 1, 2]),
@@ -544,7 +539,7 @@ mod tests {
     #[test]
     fn test_update_resize() {
         let linear_store = MemStore::new(vec![]);
-        let mut node_store = NodeStore::new(linear_store).unwrap();
+        let mut node_store = NodeStore::initialize(linear_store).unwrap();
 
         // Create a leaf
         let leaf = Node::Leaf(LeafNode {
@@ -590,7 +585,7 @@ mod tests {
     #[test]
     fn test_update_dont_resize() {
         let linear_store = MemStore::new(vec![]);
-        let mut node_store = NodeStore::new(linear_store).unwrap();
+        let mut node_store = NodeStore::initialize(linear_store).unwrap();
 
         // Create a leaf
         let leaf1 = Node::Leaf(LeafNode {
@@ -626,7 +621,7 @@ mod tests {
     #[test]
     fn test_delete() {
         let linear_store = MemStore::new(vec![]);
-        let mut node_store = NodeStore::new(linear_store).unwrap();
+        let mut node_store = NodeStore::initialize(linear_store).unwrap();
 
         // Create a leaf
         let leaf = Node::Leaf(LeafNode {
@@ -664,7 +659,7 @@ mod tests {
     #[test]
     fn test_node_store_new() {
         let linear_store = MemStore::new(vec![]);
-        let node_store = NodeStore::new(linear_store).unwrap();
+        let node_store = NodeStore::initialize(linear_store).unwrap();
 
         // Check the empty header is written at the start of the LinearStore.
         let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
