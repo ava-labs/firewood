@@ -50,6 +50,9 @@ const NUM_AREA_SIZES: usize = AREA_SIZES.len();
 const MIN_AREA_SIZE: u64 = AREA_SIZES[0];
 const MAX_AREA_SIZE: u64 = AREA_SIZES[NUM_AREA_SIZES - 1];
 
+const SOME_FREE_LIST_ELT_SIZE: u64 = 1 + std::mem::size_of::<LinearAddress>() as u64;
+const FREE_LIST_MAX_SIZE: u64 = NUM_AREA_SIZES as u64 * SOME_FREE_LIST_ELT_SIZE;
+
 /// Number of children in a branch
 const BRANCH_CHILDREN: usize = 16;
 
@@ -166,9 +169,10 @@ impl<T: ReadLinearStore> NodeStore<T> {
 impl<T: WriteLinearStore> NodeStore<T> {
     fn new(mut linear_store: T) -> Result<Self, Error> {
         let header = NodeStoreHeader {
-            sentinel_address: None,
             version: Version::new(),
-            free_lists: FreeLists::new(),
+            free_lists: Default::default(),
+            sentinel_address: None,
+            size: NodeStoreHeader::SIZE,
         };
 
         let header_bytes = bincode::serialize(&header).map_err(|e| {
@@ -211,7 +215,7 @@ impl<T: WriteLinearStore> NodeStore<T> {
 
         for index in index as usize..NUM_AREA_SIZES {
             // Get the first free block of sufficient size.
-            let free_stored_area_addr = self.header.free_lists.0[index];
+            let free_stored_area_addr = self.header.free_lists[index];
             if let Some(free_stored_area_addr) = free_stored_area_addr {
                 // Update the free list head.
                 // Skip the index byte and Area discriminant byte
@@ -221,7 +225,7 @@ impl<T: WriteLinearStore> NodeStore<T> {
                     .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
                 // Update the free list to point to the next free block.
-                self.header.free_lists.0[index] = free_head.next_free_block;
+                self.header.free_lists[index] = free_head.next_free_block;
 
                 // Return the address of the newly allocated block.
                 return Ok(Some((free_stored_area_addr, index as u8)));
@@ -235,8 +239,8 @@ impl<T: WriteLinearStore> NodeStore<T> {
     fn allocate_from_end(&mut self, n: u64) -> Result<(LinearAddress, u8), Error> {
         let index = area_size_to_index(n)?;
         let area_size = AREA_SIZES[index as usize];
-        let addr =
-            LinearAddress::new(self.linear_store.size()?).expect("node store size can't be 0");
+        let addr = LinearAddress::new(self.header.size).expect("node store size can't be 0");
+        self.header.size += area_size;
         debug_assert!(addr.get() % 8 == 0);
         Ok((addr, index))
     }
@@ -319,7 +323,7 @@ impl<T: WriteLinearStore> NodeStore<T> {
 
         // The area that contained the node is now free.
         let area: Area<Node, FreeArea> = Area::Free(FreeArea {
-            next_free_block: self.header.free_lists.0[area_size_index as usize],
+            next_free_block: self.header.free_lists[area_size_index as usize],
         });
 
         let stored_area = StoredArea {
@@ -333,7 +337,7 @@ impl<T: WriteLinearStore> NodeStore<T> {
         self.linear_store.write(addr.into(), &stored_area_bytes)?;
 
         // The newly freed block is now the head of the free list.
-        self.header.free_lists.0[area_size_index as usize] = Some(addr);
+        self.header.free_lists[area_size_index as usize] = Some(addr);
 
         self.write_free_lists_header()?;
 
@@ -385,30 +389,18 @@ impl Version {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy, Deserialize, Serialize)]
-struct FreeLists([Option<LinearAddress>; NUM_AREA_SIZES]);
-
-impl FreeLists {
-    // 1 for Some + 8 for LinearAddress
-    const SOME_ELT_SIZE: u64 = 1 + std::mem::size_of::<LinearAddress>() as u64;
-    const NONE_ELT_SIZE: u64 = 1;
-
-    const MAX_SIZE: u64 = NUM_AREA_SIZES as u64 * Self::SOME_ELT_SIZE;
-
-    fn new() -> Self {
-        Self([None; NUM_AREA_SIZES])
-    }
-}
+type FreeLists = [Option<LinearAddress>; NUM_AREA_SIZES];
 
 /// Persisted metadata for a [NodeStore].
 /// The [NodeStoreHeader] is at the start of the [LinearStore].
-#[derive(Debug, Clone, PartialEq, Eq, Copy, Deserialize, Serialize)]
+#[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
 struct NodeStoreHeader {
     /// Identifies the version of firewood used to create this [NodeStore].
     version: Version,
-    sentinel_address: Option<LinearAddress>,
     /// Element i is the pointer to the first free block of size BLOCK_SIZES[i].
     free_lists: FreeLists,
+    size: u64,
+    sentinel_address: Option<LinearAddress>,
 }
 
 impl NodeStoreHeader {
@@ -417,7 +409,7 @@ impl NodeStoreHeader {
     /// reserve this much space for it since it can grow and it must always be
     /// at the start of the [LinearStore] so it can't be moved in a resize.
     const SIZE: u64 = {
-        let max_size = Version::SIZE + FreeLists::MAX_SIZE;
+        let max_size = Version::SIZE + 8 + 9 + FREE_LIST_MAX_SIZE;
         // Round up to the nearest multiple of MIN_AREA_SIZE
         let remainder = max_size % MIN_AREA_SIZE;
         if remainder == 0 {
@@ -429,9 +421,10 @@ impl NodeStoreHeader {
 
     fn new() -> Self {
         Self {
+            size: 0,
             sentinel_address: None,
             version: Version::new(),
-            free_lists: FreeLists::new(),
+            free_lists: Default::default(),
         }
     }
 }
@@ -445,7 +438,6 @@ struct FreeArea {
 
 #[cfg(test)]
 mod tests {
-
     use crate::{
         node::{path::Path, BranchNode, LeafNode},
         storage::linear::tests::InMemReadWriteLinearStore,
@@ -502,6 +494,12 @@ mod tests {
             // Leaf should go right after the header
             assert_eq!(leaf_addr.get(), NodeStoreHeader::SIZE);
 
+            // Size should be updated
+            assert_eq!(
+                node_store.header.size,
+                NodeStoreHeader::SIZE + leaf_area_size
+            );
+
             // Should be able to read the leaf back
             let read_leaf = node_store.read_node(leaf_addr).unwrap();
             assert_eq!(*read_leaf, leaf);
@@ -524,6 +522,13 @@ mod tests {
 
             // branch should go right after leaf
             assert_eq!(branch_addr.get(), NodeStoreHeader::SIZE + leaf_area_size);
+
+            // Size should be updated
+            let (_, branch_area_size) = node_store.area_index_and_size(branch_addr).unwrap();
+            assert_eq!(
+                node_store.header.size,
+                NodeStoreHeader::SIZE + leaf_area_size + branch_area_size
+            );
 
             // Should be able to read the branch back
             let read_leaf2 = node_store.read_node(branch_addr).unwrap();
@@ -567,7 +572,7 @@ mod tests {
         // The free list should be updated
         let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
         let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
-        assert_eq!(header.free_lists.0[leaf_index as usize], Some(leaf_addr));
+        assert_eq!(header.free_lists[leaf_index as usize], Some(leaf_addr));
 
         // The new node should be readable
         let read_branch = node_store.read_node(branch_addr).unwrap();
@@ -628,7 +633,7 @@ mod tests {
             // The header should have the freed node in the free list
             let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
             let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
-            assert_eq!(header.free_lists.0[leaf_index as usize], Some(leaf_addr));
+            assert_eq!(header.free_lists[leaf_index as usize], Some(leaf_addr));
         }
 
         // The node shouldn't be readable
@@ -643,7 +648,7 @@ mod tests {
         // The header should be updated
         let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
         let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
-        assert_eq!(header.free_lists.0[leaf_index as usize], None);
+        assert_eq!(header.free_lists[leaf_index as usize], None);
     }
 
     #[test]
@@ -655,6 +660,7 @@ mod tests {
         let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
         let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
         assert_eq!(header.version, Version::new());
-        assert_eq!(header.free_lists, FreeLists::new());
+        let empty_free_list: FreeLists = Default::default();
+        assert_eq!(header.free_lists, empty_free_list);
     }
 }
