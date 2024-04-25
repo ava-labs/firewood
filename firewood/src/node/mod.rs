@@ -10,7 +10,7 @@ use std::fmt::Debug;
 
 mod branch;
 mod leaf;
-mod path;
+pub(crate) mod path;
 
 pub use branch::BranchNode;
 pub use leaf::LeafNode;

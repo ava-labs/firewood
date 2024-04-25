@@ -74,7 +74,7 @@ use self::tests::ConstBacked;
 
 mod layered;
 #[cfg(test)]
-mod tests;
+pub mod tests;
 
 /// All linear stores support reads
 pub(super) trait ReadLinearStore: Send + Sync + Debug {
