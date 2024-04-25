@@ -9,11 +9,9 @@ use nix::errno::Errno;
 use sha3::Digest;
 use thiserror::Error;
 
-use crate::{
-    db::DbError,
-    merkle::MerkleError,
-    merkle_util::{DataStoreError, InMemoryMerkle},
-};
+use crate::{db::DbError, merkle::MerkleError};
+
+use super::Merkle;
 
 #[derive(Debug, Error)]
 pub enum ProofError {
@@ -51,16 +49,6 @@ pub enum ProofError {
     SystemError(Errno),
     #[error("invalid root hash")]
     InvalidRootHash,
-}
-
-impl From<DataStoreError> for ProofError {
-    fn from(d: DataStoreError) -> ProofError {
-        match d {
-            DataStoreError::InsertionError => ProofError::NodesInsertionError,
-            DataStoreError::RootHashError => ProofError::InvalidRootHash,
-            _ => ProofError::InvalidProof,
-        }
-    }
 }
 
 impl From<DbError> for ProofError {
@@ -152,7 +140,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
         &self,
         _key: K,
         _root_hash: HashKey,
-        _in_mem_merkle: &mut InMemoryMerkle,
+        _in_mem_merkle: &mut Merkle,
         _allow_non_existent_node: bool,
     ) -> Result<Option<Vec<u8>>, ProofError>
     where

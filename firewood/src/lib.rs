@@ -183,7 +183,6 @@
 //!
 pub mod db;
 pub mod merkle;
-pub mod merkle_util;
 pub(crate) mod node;
 pub mod storage;
 

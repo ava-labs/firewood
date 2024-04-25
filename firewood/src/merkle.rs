@@ -39,7 +39,10 @@ pub enum MerkleError {
 }
 
 #[derive(Debug)]
-pub struct Merkle {}
+pub struct Merkle {
+    // Get the sentinel addr from the NodeStore
+    sentinel_addr: LinearAddress,
+}
 
 impl Merkle {
     pub fn get_node(&self, _addr: LinearAddress) -> Result<&Node, MerkleError> {
@@ -60,35 +63,22 @@ impl Merkle {
 
     /// TODO danlaine: implement
     pub const fn new() -> Self {
-        Self {}
-    }
-
-    pub fn root_hash(&self, _sentinel_addr: LinearAddress) -> Result<TrieHash, MerkleError> {
         todo!()
     }
 
-    pub fn dump(
-        &self,
-        _sentinel_addr: LinearAddress,
-        _w: &mut dyn Write,
-    ) -> Result<(), MerkleError> {
+    pub fn root_hash(&self) -> Result<TrieHash, MerkleError> {
         todo!()
     }
 
-    pub fn insert<K: AsRef<[u8]>>(
-        &mut self,
-        _key: K,
-        _val: Vec<u8>,
-        _sentinel_addr: LinearAddress,
-    ) -> Result<(), MerkleError> {
+    pub fn dump(&self, _w: &mut dyn Write) -> Result<(), MerkleError> {
         todo!()
     }
 
-    pub fn remove<K: AsRef<[u8]>>(
-        &mut self,
-        _key: K,
-        _sentinel_addr: LinearAddress,
-    ) -> Result<Option<Vec<u8>>, MerkleError> {
+    pub fn insert<K: AsRef<[u8]>>(&mut self, _key: K, _val: Vec<u8>) -> Result<(), MerkleError> {
+        todo!()
+    }
+
+    pub fn remove<K: AsRef<[u8]>>(&mut self, _key: K) -> Result<Option<Vec<u8>>, MerkleError> {
         todo!()
     }
 
@@ -103,11 +93,7 @@ impl Merkle {
     /// If the trie does not contain a value for key, the returned proof contains
     /// all nodes of the longest existing prefix of the key, ending with the node
     /// that proves the absence of the key (at least the root node).
-    pub fn prove<K>(
-        &self,
-        _key: K,
-        _sentinel_addr: LinearAddress,
-    ) -> Result<Proof<Vec<u8>>, MerkleError>
+    pub fn prove<K>(&self, _key: K) -> Result<Proof<Vec<u8>>, MerkleError>
     where
         K: AsRef<[u8]>,
     {
@@ -134,11 +120,7 @@ impl Merkle {
         // Ok(Proof(proofs))
     }
 
-    pub fn get<K: AsRef<[u8]>>(
-        &self,
-        _key: K,
-        _sentinel_addr: LinearAddress,
-    ) -> Result<Option<Box<[u8]>>, MerkleError> {
+    pub fn get<K: AsRef<[u8]>>(&self, _key: K) -> Result<Option<Box<[u8]>>, MerkleError> {
         todo!()
         // TODO danlaine use or remove the code below
         // if sentinel_addr.is_null() {
@@ -161,21 +143,16 @@ impl Merkle {
         PathIterator::new(self, sentinel_node, key)
     }
 
-    pub(crate) fn _key_value_iter(&self, sentinel_addr: LinearAddress) -> MerkleKeyValueStream<'_> {
-        MerkleKeyValueStream::_new(self, sentinel_addr)
+    pub(crate) fn _key_value_iter(&self) -> MerkleKeyValueStream<'_> {
+        MerkleKeyValueStream::_new(self, self.sentinel_addr)
     }
 
-    pub(crate) fn _key_value_iter_from_key(
-        &self,
-        sentinel_addr: LinearAddress,
-        key: Key,
-    ) -> MerkleKeyValueStream<'_> {
-        MerkleKeyValueStream::_from_key(self, sentinel_addr, key)
+    pub(crate) fn _key_value_iter_from_key(&self, key: Key) -> MerkleKeyValueStream<'_> {
+        MerkleKeyValueStream::_from_key(self, self.sentinel_addr, key)
     }
 
     pub(super) async fn _range_proof<K: api::KeyType + Send + Sync>(
         &self,
-        sentinel_addr: LinearAddress,
         first_key: Option<K>,
         last_key: Option<K>,
         limit: Option<usize>,
@@ -196,9 +173,8 @@ impl Merkle {
 
         let mut stream = match first_key {
             // TODO: fix the call-site to force the caller to do the allocation
-            Some(key) => self
-                ._key_value_iter_from_key(sentinel_addr, key.as_ref().to_vec().into_boxed_slice()),
-            None => self._key_value_iter(sentinel_addr),
+            Some(key) => self._key_value_iter_from_key(key.as_ref().to_vec().into_boxed_slice()),
+            None => self._key_value_iter(),
         };
 
         // fetch the first key from the stream
@@ -212,7 +188,7 @@ impl Merkle {
         };
 
         let first_key_proof = self
-            .prove(&first_key, sentinel_addr)
+            .prove(&first_key)
             .map_err(|e| api::Error::InternalError(Box::new(e)))?;
         let limit = limit.map(|old_limit| old_limit - 1);
 
@@ -253,7 +229,7 @@ impl Merkle {
                 }))
             }
             Some((last_key, _)) => self
-                .prove(last_key, sentinel_addr)
+                .prove(last_key)
                 .map_err(|e| api::Error::InternalError(Box::new(e)))?,
         };
 

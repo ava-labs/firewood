@@ -1,10 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood::{
-    merkle::{Proof, ProofError},
-    merkle_util::{DataStoreError, InMemoryMerkle},
-};
+use firewood::merkle::{Merkle, MerkleError, Proof, ProofError};
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng as _};
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -14,8 +11,8 @@ fn merkle_build_test<
     V: AsRef<[u8]> + Clone,
 >(
     items: Vec<(K, V)>,
-) -> Result<InMemoryMerkle, DataStoreError> {
-    let mut merkle = InMemoryMerkle::new();
+) -> Result<Merkle, MerkleError> {
+    let mut merkle = Merkle::new();
     for (k, v) in items.iter() {
         merkle.insert(k, v.as_ref().to_vec())?;
     }
@@ -24,7 +21,7 @@ fn merkle_build_test<
 }
 
 #[test]
-fn test_root_hash_simple_insertions() -> Result<(), DataStoreError> {
+fn test_root_hash_simple_insertions() -> Result<(), MerkleError> {
     let items = vec![
         ("do", "verb"),
         ("doe", "reindeer"),
@@ -41,7 +38,7 @@ fn test_root_hash_simple_insertions() -> Result<(), DataStoreError> {
 }
 
 #[test]
-fn test_root_hash_fuzz_insertions() -> Result<(), DataStoreError> {
+fn test_root_hash_fuzz_insertions() -> Result<(), MerkleError> {
     use rand::{rngs::StdRng, Rng, SeedableRng};
     let rng = std::cell::RefCell::new(StdRng::seed_from_u64(42));
     let max_len0 = 8;
@@ -77,7 +74,7 @@ fn test_root_hash_fuzz_insertions() -> Result<(), DataStoreError> {
 
 #[test]
 #[allow(clippy::unwrap_used)]
-fn test_root_hash_reversed_deletions() -> Result<(), DataStoreError> {
+fn test_root_hash_reversed_deletions() -> Result<(), MerkleError> {
     use rand::{rngs::StdRng, Rng, SeedableRng};
     let rng = std::cell::RefCell::new(StdRng::seed_from_u64(42));
     let max_len0 = 8;
@@ -108,12 +105,13 @@ fn test_root_hash_reversed_deletions() -> Result<(), DataStoreError> {
 
         items.sort();
 
-        let mut merkle = InMemoryMerkle::new();
+        let mut merkle = Merkle::new();
 
         let mut hashes = Vec::new();
 
         for (k, v) in items.iter() {
-            hashes.push((merkle.root_hash()?, merkle.dump()?));
+            let sentinel_addr: LinearAddress = None;
+            hashes.push((merkle.root_hash(sentinel_addr))?, merkle.dump()?);
             merkle.insert(k, v.to_vec())?;
         }
 
@@ -146,7 +144,7 @@ fn test_root_hash_reversed_deletions() -> Result<(), DataStoreError> {
 
 #[test]
 #[allow(clippy::unwrap_used)]
-fn test_root_hash_random_deletions() -> Result<(), DataStoreError> {
+fn test_root_hash_random_deletions() -> Result<(), MerkleError> {
     use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
     let rng = std::cell::RefCell::new(StdRng::seed_from_u64(42));
     let max_len0 = 8;
@@ -177,7 +175,7 @@ fn test_root_hash_random_deletions() -> Result<(), DataStoreError> {
         let mut items_ordered: Vec<_> = items.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         items_ordered.sort();
         items_ordered.shuffle(&mut *rng.borrow_mut());
-        let mut merkle = InMemoryMerkle::new();
+        let mut merkle = Merkle::new();
 
         for (k, v) in items.iter() {
             merkle.insert(k, v.to_vec())?;
@@ -218,7 +216,7 @@ fn test_root_hash_random_deletions() -> Result<(), DataStoreError> {
 
 #[test]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
-fn test_proof() -> Result<(), DataStoreError> {
+fn test_proof() -> Result<(), MerkleError> {
     let set = fixed_and_pseudorandom_data(500);
     let mut items = Vec::from_iter(set.iter());
     items.sort();
@@ -304,7 +302,7 @@ fn test_bad_proof() -> Result<(), DataStoreError> {
 #[test]
 // Tests that missing keys can also be proven. The test explicitly uses a single
 // entry trie and checks for missing keys both before and after the single entry.
-fn test_missing_key_proof() -> Result<(), DataStoreError> {
+fn test_missing_key_proof() -> Result<(), MerkleError> {
     let items = vec![("k", "v")];
     let merkle = merkle_build_test(items)?;
     for key in &["a", "j", "l", "z"] {
@@ -320,7 +318,7 @@ fn test_missing_key_proof() -> Result<(), DataStoreError> {
 }
 
 #[test]
-fn test_empty_tree_proof() -> Result<(), DataStoreError> {
+fn test_empty_tree_proof() -> Result<(), MerkleError> {
     let items: Vec<(&str, &str)> = Vec::new();
     let merkle = merkle_build_test(items)?;
     let key = "x";
