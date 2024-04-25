@@ -50,8 +50,8 @@ impl ReadLinearStore for FileBacked {
     }
 }
 
-impl WriteLinearStore for FileBacked {
-    fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
+impl FileBacked {
+    pub(crate) fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
         self.fd
             .lock()
             .expect("poisoned lock")
