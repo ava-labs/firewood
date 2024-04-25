@@ -128,13 +128,13 @@ fn test_root_hash_reversed_deletions() -> Result<(), MerkleError> {
             #[allow(clippy::indexing_slicing)]
             let (new_hash, key, before_removal, after_removal) = &new_hashes[i];
             #[allow(clippy::indexing_slicing)]
-            let (expected_hash) = &hashes[i];
+            let expected_hash = &hashes[i];
             let key = key.iter().fold(String::new(), |mut s, b| {
                 let _ = write!(s, "{:02x}", b);
                 s
             });
 
-           // assert_eq!(new_hash, expected_hash, "\n\nkey: {key}\nbefore:\n{before_removal}\nafter:\n{after_removal}\n\nexpected:\n{expected_dump}\n");
+            // assert_eq!(new_hash, expected_hash, "\n\nkey: {key}\nbefore:\n{before_removal}\nafter:\n{after_removal}\n\nexpected:\n{expected_dump}\n");
         }
     }
 
