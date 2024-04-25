@@ -11,7 +11,6 @@ use std::io::{Error, ErrorKind, Write};
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
-use serde::ser::SerializeTuple;
 use serde::{Deserialize, Serialize};
 
 use crate::node::Node;
