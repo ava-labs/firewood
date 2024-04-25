@@ -70,7 +70,7 @@ impl Merkle {
         todo!()
     }
 
-    pub fn dump(&self, _w: &mut dyn Write) -> Result<(), MerkleError> {
+    pub fn dump(&self) -> Result<(), MerkleError> {
         todo!()
     }
 
@@ -132,6 +132,25 @@ impl Merkle {
         //     let node_ref = self.get_node_by_key(root_node, key)?;
 
         //     Ok(node_ref.map(Ref))
+    }
+
+    pub fn verify_proof<N: AsRef<[u8]> + Send, K: AsRef<[u8]>>(
+        &self,
+        _key: K,
+        _proof: &Proof<N>,
+    ) -> Result<Option<Vec<u8>>, MerkleError> {
+        todo!()
+    }
+
+    pub fn verify_range_proof<N: AsRef<[u8]> + Send, K: AsRef<[u8]>, V: AsRef<[u8]>>(
+        &self,
+        _proof: &Proof<N>,
+        _first_key: K,
+        _last_key: K,
+        _keys: Vec<K>,
+        _vals: Vec<V>,
+    ) -> Result<bool, ProofError> {
+        todo!()
     }
 
     // TODO danlaine: can we use the LinearAddress of the sentinel_node instead?
