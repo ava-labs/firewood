@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::io::{Error, Read};
 use std::marker::PhantomData;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use super::layered::{Layer, LayeredReader};
 use super::{LinearStoreParent, ReadLinearStore, WriteLinearStore};
@@ -21,7 +21,7 @@ pub(crate) type ProposedImmutable = Proposed<Immutable>;
 pub(crate) struct Proposed<M: Send + Sync + Debug> {
     pub(crate) new: BTreeMap<u64, Box<[u8]>>,
     pub(crate) old: BTreeMap<u64, Box<[u8]>>,
-    pub(crate) parent: RwLock<LinearStoreParent>,
+    parent: RwLock<LinearStoreParent>,
     phantom_data: PhantomData<M>,
 }
 
@@ -41,6 +41,20 @@ impl ProposedMutable {
             parent: self.parent,
             phantom_data: PhantomData,
         }
+    }
+}
+
+impl ProposedImmutable {
+    pub(crate) fn reparent(self: &Arc<Self>, parent: LinearStoreParent) {
+        *self.parent.write().expect("poisoned lock") = parent;
+    }
+
+    pub(crate) fn parent(&self) -> LinearStoreParent {
+        self.parent.read().expect("poisoned lock").clone()
+    }
+
+    pub(crate) fn has_parent(&self, candidate: &LinearStoreParent) -> bool {
+        *self.parent.read().expect("poisoned lock") == *candidate
     }
 }
 

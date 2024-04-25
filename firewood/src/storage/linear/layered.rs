@@ -1,7 +1,8 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::{collections::BTreeMap, io::Cursor};
+use std::collections::BTreeMap;
+use std::io::Cursor;
 
 use super::{LinearStoreParent, ReadLinearStore};
 
