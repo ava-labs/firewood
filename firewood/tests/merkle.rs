@@ -4,7 +4,6 @@
 use firewood::merkle::{Merkle, MerkleError, Proof, ProofError};
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng as _};
 use std::collections::HashMap;
-use std::fmt::Write;
 
 fn merkle_build_test<
     K: AsRef<[u8]> + std::cmp::Ord + Clone + std::fmt::Debug,
@@ -124,18 +123,18 @@ fn test_root_hash_reversed_deletions() -> Result<(), MerkleError> {
 
         hashes.reverse();
 
-        for i in 0..hashes.len() {
-            #[allow(clippy::indexing_slicing)]
-            let (new_hash, key, before_removal, after_removal) = &new_hashes[i];
-            #[allow(clippy::indexing_slicing)]
-            let (expected_hash) = &hashes[i];
-            let key = key.iter().fold(String::new(), |mut s, b| {
-                let _ = write!(s, "{:02x}", b);
-                s
-            });
-
-           // assert_eq!(new_hash, expected_hash, "\n\nkey: {key}\nbefore:\n{before_removal}\nafter:\n{after_removal}\n\nexpected:\n{expected_dump}\n");
-        }
+        // TODO danlaine: uncomment below or remove this test
+        // for i in 0..hashes.len() {
+        //     #[allow(clippy::indexing_slicing)]
+        //     let (new_hash, key, before_removal, after_removal) = &new_hashes[i];
+        //     #[allow(clippy::indexing_slicing)]
+        //     let expected_hash = &hashes[i];
+        //     let key = key.iter().fold(String::new(), |mut s, b| {
+        //         let _ = write!(s, "{:02x}", b);
+        //         s
+        //     });
+        //     // assert_eq!(new_hash, expected_hash, "\n\nkey: {key}\nbefore:\n{before_removal}\nafter:\n{after_removal}\n\nexpected:\n{expected_dump}\n");
+        // }
     }
 
     Ok(())

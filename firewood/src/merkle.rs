@@ -6,7 +6,7 @@ use crate::{
     v2::api,
 };
 use futures::{StreamExt, TryStreamExt};
-use std::{future::ready, io::Write};
+use std::future::ready;
 use thiserror::Error;
 
 pub mod proof;
@@ -41,7 +41,7 @@ pub enum MerkleError {
 #[derive(Debug)]
 pub struct Merkle {
     // Get the sentinel addr from the NodeStore
-    sentinel_addr: LinearAddress,
+    _sentinel_addr: LinearAddress,
 }
 
 impl Merkle {
@@ -163,11 +163,11 @@ impl Merkle {
     }
 
     pub(crate) fn _key_value_iter(&self) -> MerkleKeyValueStream<'_> {
-        MerkleKeyValueStream::_new(self, self.sentinel_addr)
+        MerkleKeyValueStream::_new(self, self._sentinel_addr)
     }
 
     pub(crate) fn _key_value_iter_from_key(&self, key: Key) -> MerkleKeyValueStream<'_> {
-        MerkleKeyValueStream::_from_key(self, self.sentinel_addr, key)
+        MerkleKeyValueStream::_from_key(self, self._sentinel_addr, key)
     }
 
     pub(super) async fn _range_proof<K: api::KeyType + Send + Sync>(
