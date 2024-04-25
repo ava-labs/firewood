@@ -614,7 +614,7 @@ mod tests {
         let sentinel_addr = merkle._init_sentinel().unwrap();
 
         merkle
-            .insert(vec![0x13, 0x37], vec![0x42], sentinel_addr)
+            .insert(vec![0x13, 0x37], vec![0x42])
             .unwrap();
 
         let sentinel_node = merkle.get_node(sentinel_addr).unwrap();
@@ -718,7 +718,7 @@ mod tests {
         let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
         let stream =
-            merkle._key_value_iter_from_key(sentinel_addr, b"x".to_vec().into_boxed_slice());
+            merkle._key_value_iter_from_key(b"x".to_vec().into_boxed_slice());
         check_stream_is_done(stream).await;
     }
 
@@ -737,7 +737,7 @@ mod tests {
         let sentinel_addr = merkle._init_sentinel().unwrap();
 
         merkle
-            .insert(vec![0x00], vec![0x00], sentinel_addr)
+            .insert(vec![0x00], vec![0x00])
             .unwrap();
 
         let mut stream = merkle.node_iter(sentinel_addr);
@@ -769,32 +769,28 @@ mod tests {
             .insert(
                 vec![0x00, 0x00, 0x00],
                 vec![0x00, 0x00, 0x00],
-                sentinel_addr,
             )
             .unwrap();
         merkle
             .insert(
                 vec![0x00, 0x00, 0x00, 0x01],
                 vec![0x00, 0x00, 0x00, 0x01],
-                sentinel_addr,
             )
             .unwrap();
         merkle
             .insert(
                 vec![0x00, 0x00, 0x00, 0xFF],
                 vec![0x00, 0x00, 0x00, 0xFF],
-                sentinel_addr,
             )
             .unwrap();
         merkle
             .insert(
                 vec![0x00, 0xD0, 0xD0],
                 vec![0x00, 0xD0, 0xD0],
-                sentinel_addr,
             )
             .unwrap();
         merkle
-            .insert(vec![0x00, 0xFF], vec![0x00, 0xFF], sentinel_addr)
+            .insert(vec![0x00, 0xFF], vec![0x00, 0xFF])
             .unwrap();
         (merkle, sentinel_addr)
     }
@@ -918,14 +914,14 @@ mod tests {
 
         // insert all values from u8::MIN to u8::MAX, with the key and value the same
         for k in u8::MIN..=u8::MAX {
-            merkle.insert([k], vec![k], sentinel_addr).unwrap();
+            merkle.insert([k], vec![k]).unwrap();
         }
 
         let mut stream = match start {
             Some(start) => {
-                merkle._key_value_iter_from_key(sentinel_addr, start.to_vec().into_boxed_slice())
+                merkle._key_value_iter_from_key(start.to_vec().into_boxed_slice())
             }
-            None => merkle._key_value_iter(sentinel_addr),
+            None => merkle._key_value_iter(),
         };
 
         // we iterate twice because we should get a None then start over
@@ -947,7 +943,7 @@ mod tests {
     async fn key_value_fused_empty() {
         let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
-        check_stream_is_done(merkle._key_value_iter(sentinel_addr)).await;
+        check_stream_is_done(merkle._key_value_iter()).await;
     }
 
     #[tokio::test]
@@ -962,12 +958,12 @@ mod tests {
                 let key = vec![i, j];
                 let value = vec![i, j];
 
-                merkle.insert(key, value, sentinel_addr).unwrap();
+                merkle.insert(key, value).unwrap();
             }
         }
 
         // Test with no start key
-        let mut stream = merkle._key_value_iter(sentinel_addr);
+        let mut stream = merkle._key_value_iter();
         for i in 0..=u8::MAX {
             for j in 0..=u8::MAX {
                 let expected_key = vec![i, j];
@@ -987,7 +983,7 @@ mod tests {
         // Test with start key
         for i in 0..=u8::MAX {
             let mut stream =
-                merkle._key_value_iter_from_key(sentinel_addr, vec![i].into_boxed_slice());
+                merkle._key_value_iter_from_key(vec![i].into_boxed_slice());
             for j in 0..=u8::MAX {
                 let expected_key = vec![i, j];
                 let expected_value = vec![i, j];
@@ -1029,10 +1025,10 @@ mod tests {
         }
 
         for kv in key_values.iter() {
-            merkle.insert(kv, kv.clone(), sentinel_addr).unwrap();
+            merkle.insert(kv, kv.clone()).unwrap();
         }
 
-        let mut stream = merkle._key_value_iter(sentinel_addr);
+        let mut stream = merkle._key_value_iter();
 
         for kv in key_values.iter() {
             let next = stream.next().await.unwrap().unwrap();
@@ -1051,9 +1047,9 @@ mod tests {
         let key = vec![].into_boxed_slice();
         let value = vec![0x00];
 
-        merkle.insert(&key, value.clone(), sentinel_addr).unwrap();
+        merkle.insert(&key, value.clone()).unwrap();
 
-        let mut stream = merkle._key_value_iter(sentinel_addr);
+        let mut stream = merkle._key_value_iter();
 
         assert_eq!(stream.next().await.unwrap().unwrap(), (key, value));
     }
@@ -1068,17 +1064,17 @@ mod tests {
         let branch = &[0x00];
 
         merkle
-            .insert(first_leaf, first_leaf.to_vec(), sentinel_addr)
+            .insert(first_leaf, first_leaf.to_vec())
             .unwrap();
         merkle
-            .insert(second_leaf, second_leaf.to_vec(), sentinel_addr)
+            .insert(second_leaf, second_leaf.to_vec())
             .unwrap();
 
         merkle
-            .insert(branch, branch.to_vec(), sentinel_addr)
+            .insert(branch, branch.to_vec())
             .unwrap();
 
-        let mut stream = merkle._key_value_iter(sentinel_addr);
+        let mut stream = merkle._key_value_iter();
 
         assert_eq!(
             stream.next().await.unwrap().unwrap(),
@@ -1118,11 +1114,11 @@ mod tests {
         assert!(key_values[1] < key_values[2]);
 
         for key in key_values.iter() {
-            merkle.insert(key, key.to_vec(), sentinel_addr).unwrap();
+            merkle.insert(key, key.to_vec()).unwrap();
         }
 
         let mut stream =
-            merkle._key_value_iter_from_key(sentinel_addr, vec![intermediate].into_boxed_slice());
+            merkle._key_value_iter_from_key(vec![intermediate].into_boxed_slice());
 
         let first_expected = key_values[1].as_slice();
         let first = stream.next().await.unwrap().unwrap();
@@ -1151,14 +1147,14 @@ mod tests {
         children.clone().for_each(|child_path| {
             let key = vec![sibling_path, child_path];
 
-            merkle.insert(&key, key.clone(), sentinel_addr).unwrap();
+            merkle.insert(&key, key.clone()).unwrap();
         });
 
         let mut keys: Vec<_> = children
             .map(|child_path| {
                 let key = vec![branch_path, child_path];
 
-                merkle.insert(&key, key.clone(), sentinel_addr).unwrap();
+                merkle.insert(&key, key.clone()).unwrap();
 
                 key
             })
@@ -1170,7 +1166,7 @@ mod tests {
         let keys = &keys[start..];
 
         let mut stream =
-            merkle._key_value_iter_from_key(sentinel_addr, vec![branch_path].into_boxed_slice());
+            merkle._key_value_iter_from_key(vec![branch_path].into_boxed_slice());
 
         for key in keys {
             let next = stream.next().await.unwrap().unwrap();
@@ -1194,20 +1190,20 @@ mod tests {
         let sentinel_addr = merkle._init_sentinel().unwrap();
 
         merkle
-            .insert(&branch_key, branch_key.clone(), sentinel_addr)
+            .insert(&branch_key, branch_key.clone())
             .unwrap();
 
         children.clone().for_each(|child_path| {
             let key = vec![sibling_path, child_path];
 
-            merkle.insert(&key, key.clone(), sentinel_addr).unwrap();
+            merkle.insert(&key, key.clone()).unwrap();
         });
 
         let mut keys: Vec<_> = children
             .map(|child_path| {
                 let key = vec![branch_path, child_path];
 
-                merkle.insert(&key, key.clone(), sentinel_addr).unwrap();
+                merkle.insert(&key, key.clone()).unwrap();
 
                 key
             })
@@ -1220,7 +1216,7 @@ mod tests {
         let keys = &keys[start..];
 
         let mut stream =
-            merkle._key_value_iter_from_key(sentinel_addr, branch_key.into_boxed_slice());
+            merkle._key_value_iter_from_key(branch_key.into_boxed_slice());
 
         for key in keys {
             let next = stream.next().await.unwrap().unwrap();
@@ -1243,7 +1239,7 @@ mod tests {
             .map(|child_path| {
                 let key = vec![child_path];
 
-                merkle.insert(&key, key.clone(), sentinel_addr).unwrap();
+                merkle.insert(&key, key.clone()).unwrap();
 
                 key
             })
@@ -1252,7 +1248,7 @@ mod tests {
         let keys = &keys[(missing as usize)..];
 
         let mut stream =
-            merkle._key_value_iter_from_key(sentinel_addr, vec![missing].into_boxed_slice());
+            merkle._key_value_iter_from_key(vec![missing].into_boxed_slice());
 
         for key in keys {
             let next = stream.next().await.unwrap().unwrap();
@@ -1276,11 +1272,11 @@ mod tests {
         let sentinel_addr = merkle._init_sentinel().unwrap();
 
         children.for_each(|key| {
-            merkle.insert(&key, key.clone(), sentinel_addr).unwrap();
+            merkle.insert(&key, key.clone()).unwrap();
         });
 
         let stream =
-            merkle._key_value_iter_from_key(sentinel_addr, vec![start_key].into_boxed_slice());
+            merkle._key_value_iter_from_key(vec![start_key].into_boxed_slice());
 
         check_stream_is_done(stream).await;
     }
@@ -1298,13 +1294,13 @@ mod tests {
 
         let keys: Vec<_> = children
             .map(|key| {
-                merkle.insert(&key, key.clone(), sentinel_addr).unwrap();
+                merkle.insert(&key, key.clone()).unwrap();
                 key
             })
             .collect();
 
         let mut stream =
-            merkle._key_value_iter_from_key(sentinel_addr, vec![start_key].into_boxed_slice());
+            merkle._key_value_iter_from_key(vec![start_key].into_boxed_slice());
 
         for key in keys {
             let next = stream.next().await.unwrap().unwrap();
@@ -1329,7 +1325,7 @@ mod tests {
             .map(|child_path| {
                 let key = vec![child_path];
 
-                merkle.insert(&key, key.clone(), sentinel_addr).unwrap();
+                merkle.insert(&key, key.clone()).unwrap();
 
                 key
             })
@@ -1338,7 +1334,7 @@ mod tests {
         let keys = &keys[((missing >> 4) as usize)..];
 
         let mut stream =
-            merkle._key_value_iter_from_key(sentinel_addr, vec![missing].into_boxed_slice());
+            merkle._key_value_iter_from_key(vec![missing].into_boxed_slice());
 
         for key in keys {
             let next = stream.next().await.unwrap().unwrap();
@@ -1356,8 +1352,8 @@ mod tests {
         let greater_key = vec![0xff];
         let mut merkle = _create_test_merkle();
         let sentinel_addr = merkle._init_sentinel().unwrap();
-        merkle.insert(key.clone(), key, sentinel_addr).unwrap();
-        let stream = merkle._key_value_iter_from_key(sentinel_addr, greater_key.into_boxed_slice());
+        merkle.insert(key.clone(), key).unwrap();
+        let stream = merkle._key_value_iter_from_key(greater_key.into_boxed_slice());
 
         check_stream_is_done(stream).await;
     }
@@ -1375,7 +1371,7 @@ mod tests {
             .map(|child_path| {
                 let key = vec![child_path];
 
-                merkle.insert(&key, key.clone(), sentinel_addr).unwrap();
+                merkle.insert(&key, key.clone()).unwrap();
 
                 key
             })
@@ -1384,7 +1380,7 @@ mod tests {
         let keys = &keys[((greatest >> 4) as usize)..];
 
         let mut stream =
-            merkle._key_value_iter_from_key(sentinel_addr, vec![greatest].into_boxed_slice());
+            merkle._key_value_iter_from_key(vec![greatest].into_boxed_slice());
 
         for key in keys {
             let next = stream.next().await.unwrap().unwrap();
