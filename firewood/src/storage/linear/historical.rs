@@ -58,7 +58,7 @@ impl ReadLinearStore for Historical {
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
-    use crate::storage::linear::tests::ConstBacked;
+    use crate::storage::linear::tests::MemStore;
     use test_case::test_case;
 
     #[test_case(&[0,1,2,3],&[(0,&[4,5,6])],&[4,5,6,3];"read diff, parent")]
@@ -71,7 +71,7 @@ mod tests {
         diffs: &[(u64, &[u8])],
         expected: &'static [u8],
     ) {
-        let parent = ConstBacked::new(parent_state);
+        let parent = MemStore::new(parent_state.into());
 
         let mut was = BTreeMap::<u64, Box<[u8]>>::new();
         for (addr, data) in diffs {

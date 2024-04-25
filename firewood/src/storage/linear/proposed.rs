@@ -190,7 +190,7 @@ impl WriteLinearStore for ProposedMutable {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod test {
-    use crate::storage::linear::tests::ConstBacked;
+    use crate::storage::linear::tests::MemStore;
 
     use super::*;
     use rand::Rng;
@@ -201,7 +201,7 @@ mod test {
 
     #[test]
     fn smoke_read() -> Result<(), std::io::Error> {
-        let parent = ConstBacked::new(TEST_DATA);
+        let parent = MemStore::new(TEST_DATA.into());
 
         let proposed = Proposed::new(parent.into());
 
@@ -232,7 +232,7 @@ mod test {
 
     #[test]
     fn smoke_mutate() -> Result<(), std::io::Error> {
-        let parent = ConstBacked::new(TEST_DATA);
+        let parent = MemStore::new(TEST_DATA.into());
 
         const MUT_DATA: &[u8] = b"data random";
 
@@ -257,7 +257,7 @@ mod test {
     #[test_case(1, b"2", b"r2ndom data")]
     #[test_case(10, b"3", b"random dat3")]
     fn partial_mod_full_read(pos: u64, delta: &[u8], expected: &[u8]) -> Result<(), Error> {
-        let parent = ConstBacked::new(TEST_DATA);
+        let parent = MemStore::new(TEST_DATA.into());
 
         let mut proposed = Proposed::new(parent.into());
 
@@ -276,7 +276,7 @@ mod test {
 
     #[test]
     fn nested() {
-        let parent = ConstBacked::new(TEST_DATA);
+        let parent = MemStore::new(TEST_DATA.into());
 
         let mut proposed = Proposed::new(parent.clone().into());
         proposed.write(1, b"1").unwrap();
@@ -296,7 +296,7 @@ mod test {
 
     #[test]
     fn deep_nest() {
-        let parent = ConstBacked::new(TEST_DATA);
+        let parent = MemStore::new(TEST_DATA.into());
 
         let mut proposed = Proposed::new(parent.clone().into());
         proposed.write(1, b"1").unwrap();
@@ -389,7 +389,7 @@ mod test {
         result: &'static [u8],
         segments: usize,
     ) -> Result<(), Error> {
-        let parent = ConstBacked::new(b"oooooo");
+        let parent = MemStore::new(b"oooooo".into());
 
         let mut proposal = Proposed::new(parent.into());
         for mods in original_mods {
@@ -425,7 +425,7 @@ mod test {
         const DATALEN: usize = 32;
         const MODIFICATION_AREA_SIZE: u64 = 2048;
 
-        let parent = ConstBacked::new(TEST_DATA);
+        let parent = MemStore::new(TEST_DATA.into());
 
         let mut proposal = Proposed::new(parent.into());
         let mut rng = rand::thread_rng();

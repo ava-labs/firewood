@@ -170,3 +170,39 @@ impl<'a> std::io::Read for LayeredReader<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Layer;
+    use crate::storage::linear::tests::MemStore;
+    use std::{collections::BTreeMap, io::Read};
+    use test_case::test_case;
+
+    #[test_case(vec![], &[],vec![];"empty")]
+    #[test_case(vec![], &[(0,vec![0,1])],vec![];"1 diff; no parent")]
+    #[test_case(vec![], &[(0,vec![0,1]),(2,vec![3,4])],vec![0,1,3,4];"2 diffs; no parent")]
+    #[test_case(vec![0,1,2], &[],vec![0,1,2];"no diff")]
+    #[test_case(vec![0,1,2], &[(0, vec![3,4])],vec![3,4,2];"1 diff at start")]
+    #[test_case(vec![0,1,2], &[(1, vec![3,4])],vec![0,3,4];"1 diff at middle")]
+    #[test_case(vec![0,1,2], &[(2, vec![3,4])],vec![0,1,3,4];"1 diff at end")]
+    #[test_case(vec![0,1,2], &[(3, vec![3,4])],vec![0,1,2,3,4];"1 diff past end")]
+    #[test_case(vec![0,1,2], &[(3, vec![3,4]),(5,vec![5,6])],vec![0,1,2,3,4,5,6];"multiple diffs past end")]
+    #[test_case(vec![0,1,2,3], &[(1, vec![4,5]),(3,vec![6,7]),(5,vec![8,9])],vec![0,4,5,6,7,8,9];"1 diff in middle; 1 at end; 1 diff past end")]
+
+    fn test_layered_reader(parent_state: Vec<u8>, diffs: &[(u64, Vec<u8>)], expected: Vec<u8>) {
+        for i in 0..parent_state.len() as u64 {
+            let parent = MemStore::new(parent_state.clone());
+            let diffs = BTreeMap::from_iter(
+                diffs
+                    .iter()
+                    .map(|(addr, data)| (*addr, data.clone().into_boxed_slice())),
+            );
+            let layer = Layer::new(parent.into(), &diffs);
+            let mut reader = super::LayeredReader::new(i, layer);
+            let mut buf = vec![];
+            let num_read = reader.read_to_end(&mut buf).expect("read failed");
+            assert_eq!(num_read, expected.len() - i as usize);
+            assert_eq!(buf, expected[i as usize..]);
+        }
+    }
+}

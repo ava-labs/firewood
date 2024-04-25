@@ -2,10 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::merkle::{self};
-pub use crate::{
-    config::DbConfig,
-    v2::api::{Batch, BatchOp},
-};
+pub use crate::v2::api::{Batch, BatchOp};
 use crate::{
     merkle::{MerkleError, MerkleKeyValueStream, Proof, ProofError, TrieHash},
     v2::api::{self, HashKey, KeyType, ValueType},
@@ -15,6 +12,7 @@ use async_trait::async_trait;
 
 use metered::metered;
 use std::{error::Error, fmt, io::Write, path::Path, sync::Arc};
+use typed_builder::TypedBuilder;
 
 // TODO use or remove
 const _VERSION_STR: &[u8; 16] = b"firewood v0.1\0\0\0";
@@ -194,6 +192,15 @@ impl api::DbView for Proposal {
     ) -> Result<Self::Stream<'_>, api::Error> {
         todo!()
     }
+}
+
+/// Database configuration.
+#[derive(Clone, TypedBuilder, Debug)]
+pub struct DbConfig {
+    /// Whether to truncate the DB when opening it. If set, the DB will be reset and all its
+    /// existing contents will be lost.
+    #[builder(default = false)]
+    pub truncate: bool,
 }
 
 /// TODO danlaine: implement

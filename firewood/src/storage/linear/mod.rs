@@ -70,11 +70,11 @@ use self::filebacked::FileBacked;
 use self::historical::Historical;
 use self::proposed::ProposedImmutable;
 #[cfg(test)]
-use self::tests::ConstBacked;
+use self::tests::MemStore;
 
 mod layered;
 #[cfg(test)]
-mod tests;
+pub mod tests;
 
 /// All linear stores support reads
 pub trait ReadLinearStore: Send + Sync + Debug {
@@ -93,7 +93,7 @@ pub(super) enum LinearStoreParent {
     Proposed(Arc<ProposedImmutable>),
     Historical(Arc<historical::Historical>),
     #[cfg(test)]
-    ConstBacked(Arc<ConstBacked>),
+    MemBacked(Arc<MemStore>),
 }
 
 impl PartialEq for LinearStoreParent {
@@ -103,7 +103,7 @@ impl PartialEq for LinearStoreParent {
             (Self::Proposed(l0), Self::Proposed(r0)) => Arc::ptr_eq(l0, r0),
             (Self::Historical(l0), Self::Historical(r0)) => Arc::ptr_eq(l0, r0),
             #[cfg(test)]
-            (Self::ConstBacked(l0), Self::ConstBacked(r0)) => Arc::ptr_eq(l0, r0),
+            (Self::MemBacked(l0), Self::MemBacked(r0)) => Arc::ptr_eq(l0, r0),
             _ => false,
         }
     }
@@ -133,9 +133,9 @@ impl From<Arc<Historical>> for LinearStoreParent {
 }
 
 #[cfg(test)]
-impl From<ConstBacked> for LinearStoreParent {
-    fn from(value: ConstBacked) -> Self {
-        LinearStoreParent::ConstBacked(value.into())
+impl From<MemStore> for LinearStoreParent {
+    fn from(value: MemStore) -> Self {
+        LinearStoreParent::MemBacked(value.into())
     }
 }
 
@@ -146,7 +146,7 @@ impl ReadLinearStore for LinearStoreParent {
             LinearStoreParent::Proposed(proposed) => proposed.stream_from(addr),
             LinearStoreParent::Historical(historical) => historical.stream_from(addr),
             #[cfg(test)]
-            LinearStoreParent::ConstBacked(constbacked) => constbacked.stream_from(addr),
+            LinearStoreParent::MemBacked(memstore) => memstore.stream_from(addr),
         }
     }
 
@@ -156,7 +156,7 @@ impl ReadLinearStore for LinearStoreParent {
             LinearStoreParent::Proposed(proposed) => proposed.size(),
             LinearStoreParent::Historical(historical) => historical.size(),
             #[cfg(test)]
-            LinearStoreParent::ConstBacked(constbacked) => constbacked.size(),
+            LinearStoreParent::MemBacked(memstore) => memstore.size(),
         }
     }
 }

@@ -8,10 +8,19 @@ use std::io::Error;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use typed_builder::TypedBuilder;
+
 use super::linear::filebacked::FileBacked;
 use super::linear::historical::Historical;
 use super::linear::proposed::ProposedImmutable;
 use super::linear::{LinearStoreParent, ReadLinearStore};
+
+#[derive(Debug, TypedBuilder)]
+pub(super) struct RevisionManagerConfig {
+    /// The number of historical revisions to keep in memory.
+    #[builder(default = 64)]
+    max_revisions: usize,
+}
 
 #[derive(Debug)]
 pub(super) struct RevisionManager {
@@ -24,12 +33,9 @@ pub(super) struct RevisionManager {
 }
 
 impl RevisionManager {
-    // TODO: This should be configurable
-    const CONFIGURED_MAX_REVISIONS: usize = 100;
-
-    fn new(filename: PathBuf) -> Result<Self, Error> {
+    fn new(filename: PathBuf, config: RevisionManagerConfig) -> Result<Self, Error> {
         Ok(Self {
-            max_revisions: Self::CONFIGURED_MAX_REVISIONS,
+            max_revisions: config.max_revisions,
             filebacked: FileBacked::new(filename)?,
             historical: Default::default(),
             proposals: Default::default(),
