@@ -3,6 +3,8 @@
 
 #![allow(dead_code)]
 
+use bytemuck::{Pod, Zeroable};
+
 use crate::node::Node;
 /// The [NodeStore] handles the serialization of nodes and
 /// free space management of nodes in the page store. It lays out the format
@@ -17,7 +19,7 @@ use super::linear::{ReadLinearStore, WriteLinearStore};
 pub(crate) type LinearAddress = NonZeroU64;
 
 #[derive(Debug)]
-struct NodeStore<T: ReadLinearStore> {
+pub(crate) struct NodeStore<T: ReadLinearStore> {
     header: FreeSpaceManagementHeader,
     linear_store: T,
 }
@@ -27,7 +29,7 @@ impl<T: ReadLinearStore> NodeStore<T> {
     ///
     /// A node on disk will consist of a header which both identifies the
     /// node type ([Branch] or [Leaf]) followed by the serialized data
-    fn read(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
+    pub(crate) fn read(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
         let node_stream = self.linear_store.stream_from(addr.get())?;
         let node: Node = bincode::deserialize_from(node_stream)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
@@ -107,7 +109,7 @@ impl<T: WriteLinearStore> NodeStore<T> {
     }
 
     /// Create a new [NodeStore] by writing out the [FileIdentifingMagic] and [FreeSpaceManagementHeader]
-    fn new(mut linear_store: T) -> Result<Self, Error> {
+    pub(crate) fn initialize(mut linear_store: T) -> Result<Self, Error> {
         // Write the first 16 bytes of each [PageStore]
         linear_store.write(0, bytemuck::bytes_of(&FileIdentifingMagic::new()))?;
 
@@ -121,6 +123,18 @@ impl<T: WriteLinearStore> NodeStore<T> {
             linear_store,
         })
     }
+
+    pub(crate) fn open(linear_store: T) -> Result<Self, Error> {
+        let mut stream = linear_store.stream_from(FileIdentifingMagic::SIZE)?;
+        let mut header_bytes = [0u8; std::mem::size_of::<FreeSpaceManagementHeader>()];
+        stream.read_exact(&mut header_bytes[..])?;
+        let header = bytemuck::cast(header_bytes);
+        Ok(Self {
+            header,
+            linear_store,
+        })
+    }
+
     fn set_sentinel(&mut self, mut linear_store: T) -> Result<(), Error> {
         if self.header.sentinel_address.is_some() {
             unimplemented!("cannot move sentinel address")
@@ -194,7 +208,7 @@ impl FileIdentifingMagic {
 /// Immediately following the FileIdentifyingMagic is the FreeSpaceManagementHeader
 /// It contains a pointer to the beginning of the free space
 #[repr(C)]
-#[derive(Debug, bytemuck::NoUninit, Clone, Copy)]
+#[derive(Debug, Pod, Zeroable, Clone, Copy)]
 struct FreeSpaceManagementHeader {
     sentinel_address: Option<LinearAddress>,
     free_space_head: Option<LinearAddress>,
