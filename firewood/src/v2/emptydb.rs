@@ -42,7 +42,7 @@ impl Db for EmptyDb {
         Ok(ROOT_HASH)
     }
 
-    async fn propose<K, V>(&self, data: Batch<K, V>) -> Result<Self::Proposal, Error>
+    async fn propose<K, V>(&self, data: Batch<K, V>) -> Result<Arc<Self::Proposal>, Error>
     where
         K: KeyType,
         V: ValueType,
@@ -139,7 +139,7 @@ mod tests {
             BatchOp::Delete { key: b"z" },
         ];
 
-        let proposal1 = Arc::new(db.propose(batch).await?);
+        let proposal1 = db.propose(batch).await?;
 
         // create proposal2 which adds key "z" with value "undo"
         let proposal2 = proposal1
@@ -149,7 +149,6 @@ mod tests {
                 value: "undo",
             }])
             .await?;
-        let proposal2 = Arc::new(proposal2);
         // both proposals still have (k,v)
         assert_eq!(proposal1.val(b"k").await.unwrap().unwrap(), b"v");
         assert_eq!(proposal2.val(b"k").await.unwrap().unwrap(), b"v");
@@ -159,9 +158,10 @@ mod tests {
         assert_eq!(proposal2.val(b"z").await.unwrap().unwrap(), b"undo");
 
         // create a proposal3 by adding the two proposals together, keeping the originals
-        let proposal3 = proposal1.as_ref() + proposal2.as_ref();
-        assert_eq!(proposal3.val(b"k").await.unwrap().unwrap(), b"v");
-        assert_eq!(proposal3.val(b"z").await.unwrap().unwrap(), b"undo");
+        // TODO: consider making this possible again
+        // let proposal3 = proposal1.as_ref() + proposal2.as_ref();
+        // assert_eq!(proposal3.val(b"k").await.unwrap().unwrap(), b"v");
+        // assert_eq!(proposal3.val(b"z").await.unwrap().unwrap(), b"undo");
 
         // now consume proposal1 and proposal2
         proposal2.commit().await?;

@@ -2,7 +2,6 @@
 // See the file LICENSE.md for licensing terms.
 
 use firewood::db::{Db, DbConfig};
-use firewood::storage::WalConfig;
 use firewood::v2::{api::Db as _, api::Error};
 
 use std::path::Path;
@@ -47,15 +46,12 @@ pub struct Database {
 }
 
 impl Database {
-    pub async fn new<P: AsRef<Path>>(path: P, history_length: u32) -> Result<Self, Error> {
+    pub async fn new<P: AsRef<Path>>(path: P, _history_length: u32) -> Result<Self, Error> {
         // try to create the parents for this directory, but it's okay if it fails; it will get caught in Db::new
         std::fs::create_dir_all(&path).ok();
         // TODO: truncate should be false
         // see https://github.com/ava-labs/firewood/issues/418
-        let cfg = DbConfig::builder()
-            .wal(WalConfig::builder().max_revisions(history_length).build())
-            .truncate(true)
-            .build();
+        let cfg = DbConfig::builder().truncate(true).build();
 
         let db = Db::new(path, &cfg).await?;
 

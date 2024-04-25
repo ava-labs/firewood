@@ -13,7 +13,9 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use super::linear::{LinearStore, ReadLinearStore, WriteLinearStore};
+use crate::node::Node;
+
+use super::linear::{ReadLinearStore, WriteLinearStore};
 
 /// [NodeStore] divides the linear store into blocks of different sizes.
 /// [AREA_SIZES] is every valid block size.
@@ -73,27 +75,7 @@ fn area_size_to_index(n: u64) -> Result<u8, Error> {
     Ok(log as u8 - MIN_AREA_SIZE_LOG)
 }
 
-type Path = Box<[u8]>;
-type LinearAddress = NonZeroU64;
-
-#[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
-struct Branch {
-    path: Path,
-    value: Option<Box<[u8]>>,
-    children: [Option<LinearAddress>; BRANCH_CHILDREN],
-}
-
-#[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
-struct Leaf {
-    path: Path,
-    value: Box<[u8]>,
-}
-
-#[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
-enum Node {
-    Branch(Branch),
-    Leaf(Leaf),
-}
+pub(crate) type LinearAddress = NonZeroU64;
 
 /// Each [StoredArea] contains an [Area] which is either a [Node] or a [FreedArea].
 #[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
@@ -121,7 +103,7 @@ struct StoredArea<T> {
 struct NodeStore<T: ReadLinearStore> {
     size: u64,
     header: NodeStoreHeader,
-    linear_store: LinearStore<T>,
+    linear_store: T,
 }
 
 impl<T: ReadLinearStore> NodeStore<T> {
@@ -162,11 +144,16 @@ impl<T: ReadLinearStore> NodeStore<T> {
             )),
         }
     }
+
+    const fn sentinel_address(&self) -> Option<LinearAddress> {
+        self.header.sentinel_address
+    }
 }
 
-impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
-    fn new(mut linear_store: LinearStore<T>) -> Result<Self, Error> {
+impl<T: WriteLinearStore> NodeStore<T> {
+    fn new(mut linear_store: T) -> Result<Self, Error> {
         let header = NodeStoreHeader {
+            sentinel_address: None,
             version: Version::new(),
             free_lists: FreeLists::new(),
         };
@@ -340,6 +327,15 @@ impl<T: WriteLinearStore + ReadLinearStore> NodeStore<T> {
 
         Ok(())
     }
+
+    fn set_sentinel(&mut self, mut linear_store: T) -> Result<(), Error> {
+        if self.header.sentinel_address.is_some() {
+            unimplemented!("cannot move sentinel address")
+        }
+        // TODO danlaine: fix/uncomment below
+        // linear_store.write(FileIdentifingMagic::SIZE, bytemuck::bytes_of(&self.header))?;
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -398,6 +394,7 @@ impl FreeLists {
 struct NodeStoreHeader {
     /// Identifies the version of firewood used to create this [NodeStore].
     version: Version,
+    sentinel_address: Option<LinearAddress>,
     /// Element i is the pointer to the first free block of size BLOCK_SIZES[i].
     free_lists: FreeLists,
 }
@@ -420,6 +417,7 @@ impl NodeStoreHeader {
 
     fn new() -> Self {
         Self {
+            sentinel_address: None,
             version: Version::new(),
             free_lists: FreeLists::new(),
         }
@@ -436,7 +434,10 @@ struct FreeArea {
 #[cfg(test)]
 mod tests {
 
-    use crate::storage::linear::tests::InMemReadWriteLinearStore;
+    use crate::{
+        node::{path::Path, BranchNode, LeafNode},
+        storage::linear::tests::InMemReadWriteLinearStore,
+    };
 
     use super::*;
 
@@ -469,13 +470,12 @@ mod tests {
 
     #[test]
     fn test_create() {
-        let in_mem_store = InMemReadWriteLinearStore::new();
-        let linear_store: LinearStore<InMemReadWriteLinearStore> = LinearStore::new(in_mem_store);
+        let linear_store = InMemReadWriteLinearStore::new();
         let mut node_store = NodeStore::new(linear_store).unwrap();
 
-        let leaf = Node::Leaf(Leaf {
-            path: vec![0, 1, 2].into_boxed_slice(),
-            value: vec![3, 4, 5].into_boxed_slice(),
+        let leaf = Node::Leaf(LeafNode {
+            partial_path: Path(vec![0, 1, 2]),
+            value: vec![3, 4, 5],
         });
 
         let leaf_addr = node_store.create_node(&leaf).unwrap();
@@ -499,11 +499,11 @@ mod tests {
         }
 
         // Create another node
-        let branch = Node::Branch(Branch {
-            path: vec![6, 7, 8].into_boxed_slice(),
+        let branch = Node::Branch(Box::new(BranchNode {
+            partial_path: Path(vec![6, 7, 8]),
             value: Some(vec![9, 10, 11].into_boxed_slice()),
             children: [None; BRANCH_CHILDREN],
-        });
+        }));
 
         let branch_addr = node_store.create_node(&branch).unwrap();
 
@@ -531,24 +531,23 @@ mod tests {
 
     #[test]
     fn test_update_resize() {
-        let in_mem_store = InMemReadWriteLinearStore::new();
-        let linear_store: LinearStore<InMemReadWriteLinearStore> = LinearStore::new(in_mem_store);
+        let linear_store = InMemReadWriteLinearStore::new();
         let mut node_store = NodeStore::new(linear_store).unwrap();
 
         // Create a leaf
-        let leaf = Node::Leaf(Leaf {
-            path: vec![].into_boxed_slice(),
-            value: vec![1].into_boxed_slice(),
+        let leaf = Node::Leaf(LeafNode {
+            partial_path: Path(vec![]),
+            value: vec![1],
         });
         let leaf_addr = node_store.create_node(&leaf).unwrap();
         let (leaf_index, leaf_area_size) = node_store.area_index_and_size(leaf_addr).unwrap();
 
         // Update the node
-        let branch = Node::Branch(Branch {
-            path: vec![6, 7, 8].into_boxed_slice(),
+        let branch = Node::Branch(Box::new(BranchNode {
+            partial_path: Path(vec![6, 7, 8]),
             value: Some(vec![9, 10, 11].into_boxed_slice()),
             children: [None; BRANCH_CHILDREN],
-        });
+        }));
 
         // The new node is larger than the old node, so we need to allocate a new area
         let (branch_addr, _) = match node_store.update_node(leaf_addr, &branch) {
@@ -578,21 +577,20 @@ mod tests {
 
     #[test]
     fn test_update_dont_resize() {
-        let in_mem_store = InMemReadWriteLinearStore::new();
-        let linear_store: LinearStore<InMemReadWriteLinearStore> = LinearStore::new(in_mem_store);
+        let linear_store = InMemReadWriteLinearStore::new();
         let mut node_store = NodeStore::new(linear_store).unwrap();
 
         // Create a leaf
-        let leaf1 = Node::Leaf(Leaf {
-            path: vec![].into_boxed_slice(),
-            value: vec![1].into_boxed_slice(),
+        let leaf1 = Node::Leaf(LeafNode {
+            partial_path: Path(vec![]),
+            value: vec![1],
         });
         let leaf1_addr = node_store.create_node(&leaf1).unwrap();
 
         // Update the node
-        let leaf2 = Node::Leaf(Leaf {
-            path: vec![].into_boxed_slice(),
-            value: vec![2].into_boxed_slice(),
+        let leaf2 = Node::Leaf(LeafNode {
+            partial_path: Path(vec![]),
+            value: vec![2],
         });
 
         // The new node should fit in the old area
@@ -610,14 +608,13 @@ mod tests {
 
     #[test]
     fn test_delete() {
-        let in_mem_store = InMemReadWriteLinearStore::new();
-        let linear_store: LinearStore<InMemReadWriteLinearStore> = LinearStore::new(in_mem_store);
+        let linear_store = InMemReadWriteLinearStore::new();
         let mut node_store = NodeStore::new(linear_store).unwrap();
 
         // Create a leaf
-        let leaf = Node::Leaf(Leaf {
-            path: vec![].into_boxed_slice(),
-            value: vec![1].into_boxed_slice(),
+        let leaf = Node::Leaf(LeafNode {
+            partial_path: Path(vec![]),
+            value: vec![1],
         });
         let leaf_addr = node_store.create_node(&leaf).unwrap();
         let (leaf_index, _) = node_store.area_index_and_size(leaf_addr).unwrap();
@@ -649,8 +646,7 @@ mod tests {
 
     #[test]
     fn test_node_store_new() {
-        let in_mem_store = InMemReadWriteLinearStore::new();
-        let linear_store = LinearStore::new(in_mem_store);
+        let linear_store = InMemReadWriteLinearStore::new();
         let node_store = NodeStore::new(linear_store).unwrap();
 
         // Check the empty header is written at the start of the LinearStore.

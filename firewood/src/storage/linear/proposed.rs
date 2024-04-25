@@ -5,41 +5,59 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::io::{Error, Read};
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::sync::RwLock;
 
-use super::{LinearStore, ReadLinearStore, WriteLinearStore};
+use super::layered::{Layer, LayeredReader};
+use super::{LinearStoreParent, ReadLinearStore, WriteLinearStore};
 
-/// [Proposed] is a [LinearStore] state that contains a copy of the old and new data.
-/// The P type parameter indicates the state of the linear store for it's parent,
-/// which could be a another [Proposed] or is [FileBacked](super::filebacked::FileBacked)
-/// The M type parameter indicates the mutability of the proposal, either read-write or readonly
 #[derive(Debug)]
-pub(crate) struct Proposed<P: ReadLinearStore, M> {
+pub(crate) struct Immutable;
+#[derive(Debug)]
+pub(crate) struct Mutable;
+pub(crate) type ProposedMutable = Proposed<Mutable>;
+pub(crate) type ProposedImmutable = Proposed<Immutable>;
+
+#[derive(Debug)]
+pub(crate) struct Proposed<M: Send + Sync + Debug> {
     pub(crate) new: BTreeMap<u64, Box<[u8]>>,
-    old: BTreeMap<u64, Box<[u8]>>,
-    pub(crate) parent: Arc<LinearStore<P>>,
-    phantom: PhantomData<M>,
+    pub(crate) old: BTreeMap<u64, Box<[u8]>>,
+    pub(crate) parent: RwLock<LinearStoreParent>,
+    phantom_data: PhantomData<M>,
 }
 
-impl<P: ReadLinearStore, M> Proposed<P, M> {
-    pub(crate) fn new(parent: Arc<LinearStore<P>>) -> Self {
+impl ProposedMutable {
+    pub(super) fn new(parent: LinearStoreParent) -> Self {
         Self {
-            parent,
+            parent: RwLock::new(parent),
             new: Default::default(),
             old: Default::default(),
-            phantom: Default::default(),
+            phantom_data: PhantomData,
+        }
+    }
+    pub(super) fn freeze(self) -> ProposedImmutable {
+        ProposedImmutable {
+            old: self.old,
+            new: self.new,
+            parent: self.parent,
+            phantom_data: PhantomData,
         }
     }
 }
 
-impl<P: ReadLinearStore, M: Send + Sync + Debug> ReadLinearStore for Proposed<P, M> {
+impl<M: Debug + Send + Sync> ReadLinearStore for Proposed<M> {
     fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
-        Ok(Box::new(LayeredReader::new(addr, self.into())))
+        Ok(Box::new(LayeredReader::new(
+            addr,
+            Layer::new(
+                self.parent.read().expect("poisoned lock").clone(),
+                &self.new,
+            ),
+        )))
     }
 
     fn size(&self) -> Result<u64, Error> {
         // start with the parent size
-        let parent_size = self.parent.state.size()?;
+        let parent_size = self.parent.read().expect("poisoned lock").size()?;
         // look at the last delta, if any, and see if it will extend the file
         Ok(self
             .new
@@ -53,20 +71,11 @@ impl<P: ReadLinearStore, M: Send + Sync + Debug> ReadLinearStore for Proposed<P,
     }
 }
 
-/// Marker that the Proposal is mutable
-#[derive(Debug)]
-pub(crate) struct Mutable;
-
-/// Marker that the Proposal is immutable
-#[derive(Debug)]
-pub(crate) struct Immutable;
-
-impl<P: ReadLinearStore> WriteLinearStore for Proposed<P, Mutable> {
+impl WriteLinearStore for ProposedMutable {
     // TODO: we might be able to optimize the case where we keep adding data to
     // the end of the file by not coalescing left. We'd have to change the assumption
     // in the reader that when you reach the end of a modified region, you're always
     // in an unmodified region
-
     fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
         // the structure of what will eventually be inserted
         struct InsertData {
@@ -163,51 +172,68 @@ impl<P: ReadLinearStore> WriteLinearStore for Proposed<P, Mutable> {
 
 // this is actually a clippy bug, works on nightly; see
 // https://github.com/rust-lang/rust-clippy/issues/12519
-use crate::storage::linear::layered::LayeredReader;
-
+#[allow(clippy::unused_io_amount)]
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod test {
-    use super::super::tests::ConstBacked;
+    use crate::storage::linear::tests::ConstBacked;
+
     use super::*;
     use rand::Rng;
     use std::time::Instant;
     use test_case::test_case;
 
+    const TEST_DATA: &[u8] = b"random data";
+
     #[test]
     fn smoke_read() -> Result<(), std::io::Error> {
-        let sut: Proposed<ConstBacked, Immutable> = ConstBacked::new(ConstBacked::DATA).into();
+        let parent = ConstBacked::new(TEST_DATA);
+
+        let proposed = Proposed::new(parent.into());
 
         // read all
-        let mut data = [0u8; ConstBacked::DATA.len()];
-        sut.stream_from(0).unwrap().read_exact(&mut data).unwrap();
-        assert_eq!(data, ConstBacked::DATA);
+        let mut data = [0u8; TEST_DATA.len()];
+        proposed
+            .stream_from(0)
+            .unwrap()
+            .read_exact(&mut data)
+            .unwrap();
+        assert_eq!(data, TEST_DATA);
 
         // starting not at beginning
-        let mut data = [0u8; ConstBacked::DATA.len()];
-        sut.stream_from(1).unwrap().read_exact(&mut data[1..])?;
-        assert_eq!(data.get(1..), ConstBacked::DATA.get(1..));
+        let mut data = [0u8; TEST_DATA.len()];
+        proposed
+            .stream_from(1)
+            .unwrap()
+            .read_exact(&mut data[1..])?;
+        assert_eq!(data.get(1..), TEST_DATA.get(1..));
 
         // ending not at end
-        let mut data = [0u8; ConstBacked::DATA.len() - 1];
-        sut.stream_from(0).unwrap().read_exact(&mut data)?;
-        assert_eq!(Some(data.as_slice()), ConstBacked::DATA.get(..data.len()));
+        let mut data = [0u8; TEST_DATA.len() - 1];
+        proposed.stream_from(0).unwrap().read_exact(&mut data)?;
+        assert_eq!(Some(data.as_slice()), TEST_DATA.get(..data.len()));
 
         Ok(())
     }
 
     #[test]
     fn smoke_mutate() -> Result<(), std::io::Error> {
-        let mut sut: Proposed<ConstBacked, Mutable> = ConstBacked::new(ConstBacked::DATA).into();
+        let parent = ConstBacked::new(TEST_DATA);
 
         const MUT_DATA: &[u8] = b"data random";
 
+        let mut proposed = Proposed::new(parent.into());
+
         // mutate the whole thing
-        sut.write(0, MUT_DATA)?;
+        proposed.write(0, MUT_DATA)?;
 
         // read all the changed data
         let mut data = [0u8; MUT_DATA.len()];
-        sut.stream_from(0).unwrap().read_exact(&mut data).unwrap();
+        proposed
+            .stream_from(0)
+            .unwrap()
+            .read_exact(&mut data)
+            .unwrap();
         assert_eq!(data, MUT_DATA);
 
         Ok(())
@@ -217,12 +243,18 @@ mod test {
     #[test_case(1, b"2", b"r2ndom data")]
     #[test_case(10, b"3", b"random dat3")]
     fn partial_mod_full_read(pos: u64, delta: &[u8], expected: &[u8]) -> Result<(), Error> {
-        let mut sut: Proposed<ConstBacked, Mutable> = ConstBacked::new(ConstBacked::DATA).into();
+        let parent = ConstBacked::new(TEST_DATA);
 
-        sut.write(pos, delta)?;
+        let mut proposed = Proposed::new(parent.into());
 
-        let mut data = [0u8; ConstBacked::DATA.len()];
-        sut.stream_from(0).unwrap().read_exact(&mut data).unwrap();
+        proposed.write(pos, delta)?;
+
+        let mut data = [0u8; TEST_DATA.len()];
+        proposed
+            .stream_from(0)
+            .unwrap()
+            .read_exact(&mut data)
+            .unwrap();
         assert_eq!(data, expected);
 
         Ok(())
@@ -230,28 +262,36 @@ mod test {
 
     #[test]
     fn nested() {
-        let mut parent: Proposed<ConstBacked, Mutable> = ConstBacked::new(ConstBacked::DATA).into();
-        parent.write(1, b"1").unwrap();
+        let parent = ConstBacked::new(TEST_DATA);
 
-        let parent: Arc<LinearStore<Proposed<ConstBacked, Mutable>>> =
-            Arc::new(LinearStore { state: parent });
-        let mut child: Proposed<Proposed<ConstBacked, Mutable>, Mutable> = Proposed::new(parent);
-        child.write(3, b"3").unwrap();
+        let mut proposed = Proposed::new(parent.clone().into());
+        proposed.write(1, b"1").unwrap();
 
-        let mut data = [0u8; ConstBacked::DATA.len()];
-        child.stream_from(0).unwrap().read_exact(&mut data).unwrap();
+        let mut proposed2 = Proposed::new(parent.into());
+
+        proposed2.write(3, b"3").unwrap();
+
+        let mut data = [0u8; TEST_DATA.len()];
+        proposed2
+            .stream_from(0)
+            .unwrap()
+            .read_exact(&mut data)
+            .unwrap();
         assert_eq!(&data, b"r1n3om data");
     }
 
     #[test]
     fn deep_nest() {
-        let mut parent: Proposed<ConstBacked, Mutable> = ConstBacked::new(ConstBacked::DATA).into();
-        parent.write(1, b"1").unwrap();
-        let mut child: Arc<dyn ReadLinearStore> = Arc::new(parent);
+        let parent = ConstBacked::new(TEST_DATA);
+
+        let mut proposed = Proposed::new(parent.clone().into());
+        proposed.write(1, b"1").unwrap();
+
+        let mut child = Proposed::new(parent.into()).freeze();
         for _ in 0..=200 {
-            child = Arc::new(LinearStore { state: child });
+            child = Proposed::new(child.into()).freeze();
         }
-        let mut data = [0u8; ConstBacked::DATA.len()];
+        let mut data = [0u8; TEST_DATA.len()];
         child.stream_from(0).unwrap().read_exact(&mut data).unwrap();
         assert_eq!(&data, b"r1ndom data");
     }
@@ -335,7 +375,9 @@ mod test {
         result: &'static [u8],
         segments: usize,
     ) -> Result<(), Error> {
-        let mut proposal: Proposed<ConstBacked, Mutable> = ConstBacked::new(b"oooooo").into();
+        let parent = ConstBacked::new(b"oooooo");
+
+        let mut proposal = Proposed::new(parent.into());
         for mods in original_mods {
             proposal.write(
                 mods.0,
@@ -369,7 +411,9 @@ mod test {
         const DATALEN: usize = 32;
         const MODIFICATION_AREA_SIZE: u64 = 2048;
 
-        let mut proposal: Proposed<ConstBacked, Mutable> = ConstBacked::new(b"oooooo").into();
+        let parent = ConstBacked::new(TEST_DATA);
+
+        let mut proposal = Proposed::new(parent.into());
         let mut rng = rand::thread_rng();
         let start = Instant::now();
         for _ in 0..COUNT {

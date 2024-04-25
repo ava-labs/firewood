@@ -6,23 +6,14 @@
 use criterion::{criterion_group, criterion_main, profiler::Profiler, BatchSize, Criterion};
 use firewood::{
     db::{BatchOp, DbConfig},
-    merkle::{Bincode, Merkle, TrieHash, TRIE_HASH_LEN},
-    shale::{
-        compact::{ChunkHeader, Store},
-        disk_address::DiskAddress,
-        in_mem::InMemLinearStore,
-        LinearStore, ObjCache, Storable, StoredView,
-    },
-    storage::WalConfig,
+    merkle::{TrieHash, TRIE_HASH_LEN},
     v2::api::{Db, Proposal},
 };
 use pprof::ProfilerGuard;
 use rand::{distributions::Alphanumeric, rngs::StdRng, Rng, SeedableRng};
-use std::{fs::File, iter::repeat_with, os::raw::c_int, path::Path, sync::Arc};
+use std::{fs::File, iter::repeat_with, os::raw::c_int, path::Path};
 
-pub type MerkleWithEncoder = Merkle<InMemLinearStore, Bincode>;
-
-const ZERO_HASH: TrieHash = TrieHash([0u8; TRIE_HASH_LEN]);
+const _ZERO_HASH: TrieHash = TrieHash([0u8; TRIE_HASH_LEN]);
 
 // To enable flamegraph output
 // cargo bench --bench shale-bench -- --profile-time=N
@@ -65,77 +56,81 @@ impl Profiler for FlamegraphProfiler {
     }
 }
 
-fn bench_trie_hash(criterion: &mut Criterion) {
-    let mut to = [1u8; TRIE_HASH_LEN];
-    let mut store = InMemLinearStore::new(TRIE_HASH_LEN as u64, 0u8);
-    store.write(0, &*ZERO_HASH).expect("write should succeed");
+// TODO danlaine use or remove
+// fn bench_trie_hash(criterion: &mut Criterion) {
+//     let mut to = [1u8; TRIE_HASH_LEN];
+//     let mut store = InMemLinearStore::new(TRIE_HASH_LEN as u64, 0u8);
+//     store.write(0, &*ZERO_HASH).expect("write should succeed");
 
-    #[allow(clippy::unwrap_used)]
-    criterion
-        .benchmark_group("TrieHash")
-        .bench_function("dehydrate", |b| {
-            b.iter(|| ZERO_HASH.serialize(&mut to).unwrap());
-        })
-        .bench_function("hydrate", |b| {
-            b.iter(|| TrieHash::deserialize(0, &store).unwrap());
-        });
-}
+//     #[allow(clippy::unwrap_used)]
+//     criterion
+//         .benchmark_group("TrieHash")
+//         .bench_function("dehydrate", |b| {
+//             b.iter(|| ZERO_HASH.serialize(&mut to).unwrap());
+//         })
+//         .bench_function("hydrate", |b| {
+//             b.iter(|| TrieHash::deserialize(0, &store).unwrap());
+//         });
+// }
 
-fn bench_merkle<const N: usize>(criterion: &mut Criterion) {
-    const TEST_MEM_SIZE: u64 = 20_000_000;
-    const KEY_LEN: usize = 4;
-    let mut rng = StdRng::seed_from_u64(1234);
+fn bench_merkle<const N: usize>(_criterion: &mut Criterion) {
+    todo!();
 
-    criterion
-        .benchmark_group("Merkle")
-        .sample_size(30)
-        .bench_function("insert", |b| {
-            b.iter_batched(
-                || {
-                    let merkle_payload_header = DiskAddress::from(0);
+    // TODO danlaine: uncomment or remove
+    // const TEST_MEM_SIZE: u64 = 20_000_000;
+    // const KEY_LEN: usize = 4;
+    // let mut rng = StdRng::seed_from_u64(1234);
 
-                    #[allow(clippy::unwrap_used)]
-                    let merkle_payload_header_ref = StoredView::addr_to_obj(
-                        &InMemLinearStore::new(2 * ChunkHeader::SERIALIZED_LEN, 9),
-                        merkle_payload_header,
-                        ChunkHeader::SERIALIZED_LEN,
-                    )
-                    .unwrap();
+    // criterion
+    //     .benchmark_group("Merkle")
+    //     .sample_size(30)
+    //     .bench_function("insert", |b| {
+    //         b.iter_batched(
+    //             || {
+    //                 let merkle_payload_header = DiskAddress::from(0);
 
-                    #[allow(clippy::unwrap_used)]
-                    let store = Store::new(
-                        InMemLinearStore::new(TEST_MEM_SIZE, 0),
-                        InMemLinearStore::new(TEST_MEM_SIZE, 1),
-                        merkle_payload_header_ref,
-                        ObjCache::new(1 << 20),
-                        4096,
-                        4096,
-                    )
-                    .unwrap();
+    //                 #[allow(clippy::unwrap_used)]
+    //                 let merkle_payload_header_ref = StoredView::addr_to_obj(
+    //                     &InMemLinearStore::new(2 * ChunkHeader::SERIALIZED_LEN, 9),
+    //                     merkle_payload_header,
+    //                     ChunkHeader::SERIALIZED_LEN,
+    //                 )
+    //                 .unwrap();
 
-                    let merkle = MerkleWithEncoder::new(store);
-                    #[allow(clippy::unwrap_used)]
-                    let sentinel_addr = merkle.init_sentinel().unwrap();
+    //                 #[allow(clippy::unwrap_used)]
+    //                 let store = Store::new(
+    //                     InMemLinearStore::new(TEST_MEM_SIZE, 0),
+    //                     InMemLinearStore::new(TEST_MEM_SIZE, 1),
+    //                     merkle_payload_header_ref,
+    //                     ObjCache::new(1 << 20),
+    //                     4096,
+    //                     4096,
+    //                 )
+    //                 .unwrap();
 
-                    let keys: Vec<Vec<u8>> = repeat_with(|| {
-                        (&mut rng)
-                            .sample_iter(&Alphanumeric)
-                            .take(KEY_LEN)
-                            .collect()
-                    })
-                    .take(N)
-                    .collect();
+    //                 let merkle = MerkleWithEncoder::new(store);
+    //                 #[allow(clippy::unwrap_used)]
+    //                 let sentinel_addr = merkle.init_sentinel().unwrap();
 
-                    (merkle, sentinel_addr, keys)
-                },
-                #[allow(clippy::unwrap_used)]
-                |(mut merkle, sentinel_addr, keys)| {
-                    keys.into_iter()
-                        .for_each(|key| merkle.insert(key, vec![b'v'], sentinel_addr).unwrap())
-                },
-                BatchSize::SmallInput,
-            );
-        });
+    //                 let keys: Vec<Vec<u8>> = repeat_with(|| {
+    //                     (&mut rng)
+    //                         .sample_iter(&Alphanumeric)
+    //                         .take(KEY_LEN)
+    //                         .collect()
+    //                 })
+    //                 .take(N)
+    //                 .collect();
+
+    //                 (merkle, sentinel_addr, keys)
+    //             },
+    //             #[allow(clippy::unwrap_used)]
+    //             |(mut merkle, sentinel_addr, keys)| {
+    //                 keys.into_iter()
+    //                     .for_each(|key| merkle.insert(key, vec![b'v'], sentinel_addr).unwrap())
+    //             },
+    //             BatchSize::SmallInput,
+    //         );
+    //     });
 }
 
 fn bench_db<const N: usize>(criterion: &mut Criterion) {
@@ -167,8 +162,7 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
                     |batch_ops| async {
                         let db_path = std::env::temp_dir();
                         let db_path = db_path.join("benchmark_db");
-                        let cfg =
-                            DbConfig::builder().wal(WalConfig::builder().max_revisions(10).build());
+                        let cfg = DbConfig::builder();
 
                         #[allow(clippy::unwrap_used)]
                         let db =
@@ -177,10 +171,7 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
                                 .unwrap();
 
                         #[allow(clippy::unwrap_used)]
-                        Arc::new(db.propose(batch_ops).await.unwrap())
-                            .commit()
-                            .await
-                            .unwrap()
+                        db.propose(batch_ops).await.unwrap().commit().await.unwrap()
                     },
                     BatchSize::SmallInput,
                 );
@@ -190,7 +181,7 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = Criterion::default().with_profiler(FlamegraphProfiler::Init(100));
-    targets = bench_trie_hash, bench_merkle::<3>, bench_db::<100>
+    targets = /*bench_trie_hash, TODO danlaine use or remove*/ bench_merkle::<3>, bench_db::<100>
 }
 
 criterion_main!(benches);

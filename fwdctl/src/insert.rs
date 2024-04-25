@@ -1,11 +1,9 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::sync::Arc;
-
 use clap::Args;
 use firewood::{
-    db::{BatchOp, Db, DbConfig, WalConfig},
+    db::{BatchOp, Db, DbConfig},
     v2::api::{self, Db as _, Proposal},
 };
 
@@ -32,9 +30,7 @@ pub struct Options {
 
 pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     log::debug!("inserting key value pair {:?}", opts);
-    let cfg = DbConfig::builder()
-        .truncate(false)
-        .wal(WalConfig::builder().max_revisions(10).build());
+    let cfg = DbConfig::builder().truncate(false);
 
     let db = Db::new(opts.db.clone(), &cfg.build()).await?;
 
@@ -42,7 +38,7 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
         key: opts.key.clone().into(),
         value: opts.value.bytes().collect(),
     }];
-    let proposal = Arc::new(db.propose(batch).await?);
+    let proposal = db.propose(batch).await?;
     proposal.commit().await?;
 
     println!("{}", opts.key);

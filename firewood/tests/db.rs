@@ -2,12 +2,12 @@
 // See the file LICENSE.md for licensing terms.
 
 use firewood::{
-    db::{DbConfig, WalConfig},
+    db::DbConfig,
     v2::api::{self, BatchOp, Db as _, DbView, Proposal},
 };
 use tokio::task::block_in_place;
 
-use std::{collections::VecDeque, env::temp_dir, path::PathBuf, sync::Arc};
+use std::{collections::VecDeque, env::temp_dir, path::PathBuf};
 
 mod common;
 use common::TestDbCreator;
@@ -16,7 +16,7 @@ use common::TestDbCreator;
 macro_rules! kv_dump {
     ($e: ident) => {{
         let mut s = Vec::new();
-        $e.kv_dump(&mut s).unwrap();
+        $e.dump(&mut s).unwrap();
         String::from_utf8(s).unwrap()
     }};
 }
@@ -24,20 +24,7 @@ macro_rules! kv_dump {
 #[tokio::test(flavor = "multi_thread")]
 #[allow(clippy::unwrap_used)]
 async fn test_basic_metrics() {
-    let cfg = DbConfig::builder()
-        .meta_ncached_pages(1024)
-        .meta_ncached_files(128)
-        .payload_ncached_pages(1024)
-        .payload_ncached_files(128)
-        .payload_file_nbit(16)
-        .payload_regn_nbit(16)
-        .wal(
-            WalConfig::builder()
-                .file_nbit(15)
-                .block_nbit(8)
-                .max_revisions(10)
-                .build(),
-        );
+    let cfg = DbConfig::builder();
 
     let db = TestDbCreator::builder()
         .cfg(cfg.build())
@@ -51,14 +38,13 @@ async fn test_basic_metrics() {
     //assert_eq!(metrics.kv_get.hit_count.get(), 0);
 
     // TODO: we can't fetch the revision for the empty tree, so insert a single value
-    Arc::new(
-        db.propose(vec![BatchOp::Put {
-            key: b"a",
-            value: b"b",
-        }])
-        .await
-        .unwrap(),
-    )
+
+    db.propose(vec![BatchOp::Put {
+        key: b"a",
+        value: b"b",
+    }])
+    .await
+    .unwrap()
     .commit()
     .await
     .unwrap();
@@ -73,21 +59,7 @@ async fn test_basic_metrics() {
 #[allow(clippy::unwrap_used)]
 async fn test_revisions() {
     use rand::{rngs::StdRng, Rng, SeedableRng};
-    let cfg = DbConfig::builder()
-        .meta_ncached_pages(1024)
-        .meta_ncached_files(128)
-        .payload_ncached_pages(1024)
-        .payload_ncached_files(128)
-        .payload_file_nbit(16)
-        .payload_regn_nbit(16)
-        .wal(
-            WalConfig::builder()
-                .file_nbit(15)
-                .block_nbit(8)
-                .max_revisions(10)
-                .build(),
-        )
-        .build();
+    let cfg = DbConfig::builder().build();
 
     let rng = std::cell::RefCell::new(StdRng::seed_from_u64(42));
     let max_len0 = 8;
@@ -129,7 +101,7 @@ async fn test_revisions() {
                     };
                     batch.push(write);
                 }
-                let proposal = Arc::new(db.propose(batch).await.unwrap());
+                let proposal = db.propose(batch).await.unwrap();
                 proposal.commit().await.unwrap();
             }
             while dumped.len() > 10 {
@@ -162,20 +134,7 @@ async fn test_revisions() {
 #[tokio::test(flavor = "multi_thread")]
 #[allow(clippy::unwrap_used)]
 async fn create_db_issue_proof() {
-    let cfg = DbConfig::builder()
-        .meta_ncached_pages(1024)
-        .meta_ncached_files(128)
-        .payload_ncached_pages(1024)
-        .payload_ncached_files(128)
-        .payload_file_nbit(16)
-        .payload_regn_nbit(16)
-        .wal(
-            WalConfig::builder()
-                .file_nbit(15)
-                .block_nbit(8)
-                .max_revisions(10)
-                .build(),
-        );
+    let cfg = DbConfig::builder();
 
     let mut tmpdir: PathBuf = std::env::var_os("CARGO_TARGET_DIR")
         .unwrap_or(temp_dir().into())
@@ -201,7 +160,7 @@ async fn create_db_issue_proof() {
         };
         batch.push(write);
     }
-    let proposal = Arc::new(db.propose(batch).await.unwrap());
+    let proposal = db.propose(batch).await.unwrap();
     proposal.commit().await.unwrap();
 
     let root_hash = db.root_hash().await.unwrap();
@@ -215,7 +174,7 @@ async fn create_db_issue_proof() {
         };
         batch.push(write);
     }
-    let proposal = Arc::new(db.propose(batch).await.unwrap());
+    let proposal = db.propose(batch).await.unwrap();
     proposal.commit().await.unwrap();
 
     let rev = db.revision(root_hash).await.unwrap();
@@ -251,9 +210,7 @@ macro_rules! assert_val {
 #[tokio::test(flavor = "multi_thread")]
 #[allow(clippy::unwrap_used)]
 async fn db_proposal() -> Result<(), api::Error> {
-    let cfg = DbConfig::builder()
-        .wal(WalConfig::builder().max_revisions(10).build())
-        .build();
+    let cfg = DbConfig::builder().build();
 
     let db = TestDbCreator::builder()
         .cfg(cfg)
@@ -270,14 +227,14 @@ async fn db_proposal() -> Result<(), api::Error> {
         BatchOp::Delete { key: b"z" },
     ];
 
-    let proposal = Arc::new(db.propose(batch).await?);
+    let proposal = db.propose(batch).await?;
     assert_val!(proposal, "k", "v");
 
     let batch_2 = vec![BatchOp::Put {
         key: b"k2",
         value: "v2".as_bytes().to_vec(),
     }];
-    let proposal_2 = Arc::new(proposal.clone().propose(batch_2).await?);
+    let proposal_2 = proposal.clone().propose(batch_2).await?;
     assert_val!(proposal_2, "k", "v");
     assert_val!(proposal_2, "k2", "v2");
 
@@ -291,12 +248,13 @@ async fn db_proposal() -> Result<(), api::Error> {
                 key: b"another_k_t1",
                 value: "another_v_t1".as_bytes().to_vec(),
             }];
-            let another_proposal = proposal.clone().propose(another_batch).await.unwrap();
-            let rev = another_proposal.get_revision();
-            assert_val!(rev, "k", "v");
-            assert_val!(rev, "another_k_t1", "another_v_t1");
-            // The proposal is invalid and cannot be committed
-            assert!(Arc::new(another_proposal).commit().await.is_err());
+            let _another_proposal = proposal.clone().propose(another_batch).await.unwrap();
+            // TODO: re-enable this once proposals can fetch their view
+            // let rev = another_proposal.get_revision();
+            // assert_val!(rev, "k", "v");
+            // assert_val!(rev, "another_k_t1", "another_v_t1");
+            // // The proposal is invalid and cannot be committed
+            // assert!(Arc::new(another_proposal).commit().await.is_err());
         }
     });
     let t2 = tokio::spawn({
@@ -306,11 +264,12 @@ async fn db_proposal() -> Result<(), api::Error> {
                 key: b"another_k_t2",
                 value: "another_v_t2".as_bytes().to_vec(),
             }];
-            let another_proposal = proposal.clone().propose(another_batch).await.unwrap();
-            let rev = another_proposal.get_revision();
-            assert_val!(rev, "k", "v");
-            assert_val!(rev, "another_k_t2", "another_v_t2");
-            assert!(Arc::new(another_proposal).commit().await.is_err());
+            let _another_proposal = proposal.clone().propose(another_batch).await.unwrap();
+            // TODO: re-enable this once proposals can fetch their view
+            // let rev = another_proposal.get_revision();
+            // assert_val!(rev, "k", "v");
+            // assert_val!(rev, "another_k_t2", "another_v_t2");
+            // assert!(Arc::new(another_proposal).commit().await.is_err());
         }
     });
     let (first, second) = tokio::join!(t1, t2);
@@ -323,7 +282,7 @@ async fn db_proposal() -> Result<(), api::Error> {
         key: b"k3",
         value: "v3".as_bytes().to_vec(),
     }];
-    let proposal = Arc::new(db.propose(batch).await?);
+    let proposal = db.propose(batch).await?;
     assert_val!(proposal, "k", "v");
     assert_val!(proposal, "k2", "v2");
     assert_val!(proposal, "k3", "v3");
@@ -332,7 +291,7 @@ async fn db_proposal() -> Result<(), api::Error> {
         key: b"k4",
         value: "v4".as_bytes().to_vec(),
     }];
-    let proposal_2 = Arc::new(proposal.clone().propose(batch_2).await?);
+    let proposal_2 = proposal.clone().propose(batch_2).await?;
     assert_val!(proposal_2, "k", "v");
     assert_val!(proposal_2, "k2", "v2");
     assert_val!(proposal_2, "k3", "v3");

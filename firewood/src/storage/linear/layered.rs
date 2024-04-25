@@ -1,34 +1,22 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::{collections::BTreeMap, io::Cursor, sync::Arc};
+use std::{collections::BTreeMap, io::Cursor};
 
-use super::{historical::Historical, proposed::Proposed, LinearStore, ReadLinearStore};
+use super::{LinearStoreParent, ReadLinearStore};
 
 #[derive(Debug)]
-pub(crate) struct Layer<'a, P: ReadLinearStore> {
-    parent: Arc<LinearStore<P>>,
+pub(super) struct Layer<'a> {
+    parent: LinearStoreParent,
     diffs: &'a BTreeMap<u64, Box<[u8]>>,
 }
 
-// TODO danlaine: These From methods require us to pub(crate) fields of Proposed
-// and Historical. Should we instead make Layer.parent and Layer.diffs public
-// and remove these From methods? i.e. layer creation logic moves out of here.
-impl<'a, P: ReadLinearStore, M> From<&'a Proposed<P, M>> for Layer<'a, P> {
-    fn from(state: &'a Proposed<P, M>) -> Self {
-        Self {
-            parent: state.parent.clone(),
-            diffs: &state.new,
-        }
-    }
-}
-
-impl<'a, P: ReadLinearStore> From<&'a Historical<P>> for Layer<'a, P> {
-    fn from(state: &'a Historical<P>) -> Self {
-        Self {
-            parent: state.parent.clone(),
-            diffs: &state.was,
-        }
+impl<'a> Layer<'a> {
+    pub(super) const fn new(
+        parent: LinearStoreParent,
+        diffs: &'a BTreeMap<u64, Box<[u8]>>,
+    ) -> Self {
+        Self { parent, diffs }
     }
 }
 
@@ -38,14 +26,14 @@ impl<'a, P: ReadLinearStore> From<&'a Historical<P>> for Layer<'a, P> {
 /// read-only, since we do not support mutating parents of another
 /// proposal
 #[derive(Debug)]
-pub(crate) struct LayeredReader<'a, P: ReadLinearStore> {
+pub(super) struct LayeredReader<'a> {
     offset: u64,
     state: LayeredReaderState<'a>,
-    layer: Layer<'a, P>,
+    layer: Layer<'a>,
 }
 
-impl<'a, P: ReadLinearStore> LayeredReader<'a, P> {
-    pub(crate) const fn new(offset: u64, layer: Layer<'a, P>) -> Self {
+impl<'a> LayeredReader<'a> {
+    pub(super) const fn new(offset: u64, layer: Layer<'a>) -> Self {
         Self {
             offset,
             state: LayeredReaderState::Initial,
@@ -75,7 +63,7 @@ enum LayeredReaderState<'a> {
     },
 }
 
-impl<'a, P: ReadLinearStore> std::io::Read for LayeredReader<'a, P> {
+impl<'a> std::io::Read for LayeredReader<'a> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self.state {
             LayeredReaderState::Initial => {

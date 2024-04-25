@@ -2,40 +2,41 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
-use super::{layered::LayeredReader, LinearStore, ReadLinearStore};
+use super::{
+    layered::{Layer, LayeredReader},
+    LinearStoreParent, ReadLinearStore,
+};
 
 /// A linear store used for historical revisions
 ///
 /// A [Historical] [LinearStore] supports read operations only
 #[derive(Debug)]
-pub(crate) struct Historical<P: ReadLinearStore> {
+pub(crate) struct Historical {
     /// (offset, value) for every area of this LinearStore modified in
     /// the revision after this one (i.e. `parent`).
     /// That is, what each area `was` in this revision.
     /// For example, if the first 3 bytes of this revision are `[0,1,2]` and the
     /// first 3 bytes of the next revision are `[4,5,6]` then this map contains
     /// `[(0, [0,1,2])]`.
-    pub(crate) was: BTreeMap<u64, Box<[u8]>>,
+    was: BTreeMap<u64, Box<[u8]>>,
     /// The state of the revision after this one.
-    pub(crate) parent: Arc<LinearStore<P>>,
+    parent: LinearStoreParent,
     size: u64,
 }
 
-impl<P: ReadLinearStore> Historical<P> {
-    pub(crate) fn new(
-        was: BTreeMap<u64, Box<[u8]>>,
-        parent: Arc<LinearStore<P>>,
-        size: u64,
-    ) -> Self {
+impl Historical {
+    pub(crate) fn new(was: BTreeMap<u64, Box<[u8]>>, parent: LinearStoreParent, size: u64) -> Self {
         Self { was, parent, size }
     }
 }
 
-impl<P: ReadLinearStore> ReadLinearStore for Historical<P> {
+impl ReadLinearStore for Historical {
     fn stream_from(&self, addr: u64) -> Result<Box<dyn std::io::Read + '_>, std::io::Error> {
-        Ok(Box::new(LayeredReader::new(addr, self.into())))
+        Ok(Box::new(LayeredReader::new(
+            addr,
+            Layer::new(self.parent.clone(), &self.was),
+        )))
     }
 
     fn size(&self) -> Result<u64, std::io::Error> {
@@ -60,16 +61,14 @@ mod tests {
         diffs: &[(u64, &[u8])],
         expected: &'static [u8],
     ) {
-        let parent = LinearStore {
-            state: ConstBacked::new(parent_state),
-        };
+        let parent = ConstBacked::new(parent_state);
 
         let mut was = BTreeMap::<u64, Box<[u8]>>::new();
         for (addr, data) in diffs {
             was.insert(*addr, data.to_vec().into_boxed_slice());
         }
 
-        let historical = Historical::new(was, Arc::new(parent), expected.len() as u64);
+        let historical = Historical::new(was, parent.into(), expected.len() as u64);
 
         for i in 0..expected.len() {
             let mut stream = historical.stream_from(i as u64).unwrap();

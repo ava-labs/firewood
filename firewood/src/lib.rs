@@ -182,15 +182,12 @@
 //! some very old ghost store to keep the size of the rolling window invariant.
 //!
 pub mod db;
-pub(crate) mod file;
 pub mod merkle;
-pub mod merkle_util;
+pub(crate) mod node;
 pub mod storage;
 
 pub mod config;
 pub mod nibbles;
-// TODO: shale should not be pub, but there are integration test dependencies :(
-pub mod shale;
 
 pub mod logger;
 pub mod v2;

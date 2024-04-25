@@ -11,7 +11,7 @@ use crate::rpcdb::{
     PutResponse, WriteBatchRequest, WriteBatchResponse,
 };
 use firewood::v2::api::{BatchOp, Db, DbView, Proposal};
-use std::sync::Arc;
+
 use tonic::{async_trait, Request, Response, Status};
 
 #[async_trait]
@@ -55,7 +55,7 @@ impl Database for DatabaseService {
     async fn put(&self, request: Request<PutRequest>) -> Result<Response<PutResponse>, Status> {
         let PutRequest { key, value } = request.into_inner();
         let batch = BatchOp::Put { key, value };
-        let proposal = Arc::new(self.db.propose(vec![batch]).await.into_status_result()?);
+        let proposal = self.db.propose(vec![batch]).await.into_status_result()?;
         let _ = proposal.commit().await.into_status_result()?;
 
         Ok(Response::new(PutResponse::default()))
@@ -67,8 +67,8 @@ impl Database for DatabaseService {
     ) -> Result<Response<DeleteResponse>, Status> {
         let DeleteRequest { key } = request.into_inner();
         let batch = BatchOp::<_, Vec<u8>>::Delete { key };
-        let propoal = Arc::new(self.db.propose(vec![batch]).await.into_status_result()?);
-        let _ = propoal.commit().await.into_status_result()?;
+        let proposal = self.db.propose(vec![batch]).await.into_status_result()?;
+        let _ = proposal.commit().await.into_status_result()?;
 
         Ok(Response::new(DeleteResponse::default()))
     }
@@ -105,7 +105,7 @@ impl Database for DatabaseService {
             .map(from_put_request)
             .chain(deletes.into_iter().map(from_delete_request))
             .collect();
-        let proposal = Arc::new(self.db.propose(batch).await.into_status_result()?);
+        let proposal = self.db.propose(batch).await.into_status_result()?;
         let _ = proposal.commit().await.into_status_result()?;
 
         Ok(Response::new(WriteBatchResponse::default()))
