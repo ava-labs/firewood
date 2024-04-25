@@ -96,6 +96,8 @@ pub(super) enum LinearStoreParent {
     ConstBacked(Arc<ConstBacked>),
 }
 
+struct LinearStoreParent2 {}
+
 impl PartialEq for LinearStoreParent {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -126,10 +128,16 @@ impl From<Historical> for LinearStoreParent {
     }
 }
 
+impl From<Arc<Historical>> for LinearStoreParent {
+    fn from(value: Arc<Historical>) -> Self {
+        LinearStoreParent::Historical(value)
+    }
+}
+
 #[cfg(test)]
-impl Into<LinearStoreParent> for ConstBacked {
-    fn into(self) -> LinearStoreParent {
-        LinearStoreParent::ConstBacked(self.into())
+impl From<ConstBacked> for LinearStoreParent {
+    fn from(value: ConstBacked) -> Self {
+        LinearStoreParent::ConstBacked(value.into())
     }
 }
 

@@ -2,11 +2,10 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::collections::BTreeMap;
+use std::sync::{Arc, RwLock};
 
-use super::{
-    layered::{Layer, LayeredReader},
-    LinearStoreParent, ReadLinearStore,
-};
+use super::layered::{Layer, LayeredReader};
+use super::{LinearStoreParent, ReadLinearStore};
 
 /// A linear store used for historical revisions
 ///
@@ -21,13 +20,21 @@ pub(crate) struct Historical {
     /// `[(0, [0,1,2])]`.
     was: BTreeMap<u64, Box<[u8]>>,
     /// The state of the revision after this one.
-    parent: LinearStoreParent,
+    parent: RwLock<LinearStoreParent>,
     size: u64,
 }
 
 impl Historical {
     pub(crate) fn new(was: BTreeMap<u64, Box<[u8]>>, parent: LinearStoreParent, size: u64) -> Self {
-        Self { was, parent, size }
+        Self {
+            was,
+            parent: parent.into(),
+            size,
+        }
+    }
+
+    pub(crate) fn reparent(self: &Arc<Self>, parent: LinearStoreParent) {
+        *self.parent.write().expect("poisoned lock") = parent;
     }
 }
 
@@ -35,7 +42,10 @@ impl ReadLinearStore for Historical {
     fn stream_from(&self, addr: u64) -> Result<Box<dyn std::io::Read + '_>, std::io::Error> {
         Ok(Box::new(LayeredReader::new(
             addr,
-            Layer::new(self.parent.clone(), &self.was),
+            Layer::new(
+                self.parent.read().expect("poisoned lock").clone(),
+                &self.was,
+            ),
         )))
     }
 

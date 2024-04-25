@@ -101,7 +101,6 @@ struct StoredArea<T> {
 /// The size of each allocation [NodeStore] makes from [LinearStore] is one of [AREA_SIZES].
 #[derive(Debug)]
 struct NodeStore<T: ReadLinearStore> {
-    size: u64,
     header: NodeStoreHeader,
     linear_store: T,
 }
@@ -148,6 +147,20 @@ impl<T: ReadLinearStore> NodeStore<T> {
     const fn sentinel_address(&self) -> Option<LinearAddress> {
         self.header.sentinel_address
     }
+
+    pub(crate) fn open(linear_store: T) -> Result<Self, Error> {
+        let mut stream = linear_store.stream_from(0)?;
+
+        let header: NodeStoreHeader = bincode::deserialize_from(&mut stream)
+            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+
+        std::mem::drop(stream);
+
+        Ok(Self {
+            header,
+            linear_store,
+        })
+    }
 }
 
 impl<T: WriteLinearStore> NodeStore<T> {
@@ -168,7 +181,6 @@ impl<T: WriteLinearStore> NodeStore<T> {
         linear_store.write(0, header_bytes.as_slice())?;
 
         Ok(Self {
-            size: NodeStoreHeader::SIZE,
             header,
             linear_store,
         })
@@ -223,8 +235,8 @@ impl<T: WriteLinearStore> NodeStore<T> {
     fn allocate_from_end(&mut self, n: u64) -> Result<(LinearAddress, u8), Error> {
         let index = area_size_to_index(n)?;
         let area_size = AREA_SIZES[index as usize];
-        let addr = LinearAddress::new(self.size).expect("node store size can't be 0");
-        self.size += area_size;
+        let addr =
+            LinearAddress::new(self.linear_store.size()?).expect("node store size can't be 0");
         debug_assert!(addr.get() % 8 == 0);
         Ok((addr, index))
     }
@@ -490,9 +502,6 @@ mod tests {
             // Leaf should go right after the header
             assert_eq!(leaf_addr.get(), NodeStoreHeader::SIZE);
 
-            // Size should be updated
-            assert_eq!(node_store.size, NodeStoreHeader::SIZE + leaf_area_size);
-
             // Should be able to read the leaf back
             let read_leaf = node_store.read_node(leaf_addr).unwrap();
             assert_eq!(*read_leaf, leaf);
@@ -515,13 +524,6 @@ mod tests {
 
             // branch should go right after leaf
             assert_eq!(branch_addr.get(), NodeStoreHeader::SIZE + leaf_area_size);
-
-            // Size should be updated
-            let (_, branch_area_size) = node_store.area_index_and_size(branch_addr).unwrap();
-            assert_eq!(
-                node_store.size,
-                NodeStoreHeader::SIZE + leaf_area_size + branch_area_size
-            );
 
             // Should be able to read the branch back
             let read_leaf2 = node_store.read_node(branch_addr).unwrap();
