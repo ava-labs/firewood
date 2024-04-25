@@ -436,7 +436,7 @@ struct FreeArea {
 mod tests {
     use crate::{
         node::{path::Path, BranchNode, LeafNode},
-        storage::linear::tests::InMemReadWriteLinearStore,
+        storage::linear::tests::MemStore,
     };
 
     use super::*;
@@ -470,7 +470,7 @@ mod tests {
 
     #[test]
     fn test_create() {
-        let linear_store = InMemReadWriteLinearStore::new();
+        let linear_store = MemStore::new(vec![]);
         let mut node_store = NodeStore::new(linear_store).unwrap();
 
         let leaf = Node::Leaf(LeafNode {
@@ -542,7 +542,7 @@ mod tests {
 
     #[test]
     fn test_update_resize() {
-        let linear_store = InMemReadWriteLinearStore::new();
+        let linear_store = MemStore::new(vec![]);
         let mut node_store = NodeStore::new(linear_store).unwrap();
 
         // Create a leaf
@@ -588,7 +588,7 @@ mod tests {
 
     #[test]
     fn test_update_dont_resize() {
-        let linear_store = InMemReadWriteLinearStore::new();
+        let linear_store = MemStore::new(vec![]);
         let mut node_store = NodeStore::new(linear_store).unwrap();
 
         // Create a leaf
@@ -624,7 +624,7 @@ mod tests {
 
     #[test]
     fn test_delete() {
-        let linear_store = InMemReadWriteLinearStore::new();
+        let linear_store = MemStore::new(vec![]);
         let mut node_store = NodeStore::new(linear_store).unwrap();
 
         // Create a leaf
@@ -662,7 +662,7 @@ mod tests {
 
     #[test]
     fn test_node_store_new() {
-        let linear_store = InMemReadWriteLinearStore::new();
+        let linear_store = MemStore::new(vec![]);
         let node_store = NodeStore::new(linear_store).unwrap();
 
         // Check the empty header is written at the start of the LinearStore.

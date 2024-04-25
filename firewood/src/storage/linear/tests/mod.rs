@@ -2,46 +2,21 @@
 // See the file LICENSE.md for licensing terms.
 
 use super::{ReadLinearStore, WriteLinearStore};
-use std::io::{Cursor, Error, Read};
+use std::io::{Cursor, Read};
 use test_case::test_case;
 
 #[derive(Debug, Clone)]
-pub(crate) struct ConstBacked {
-    data: &'static [u8],
-}
-
-impl ConstBacked {
-    pub(crate) const DATA: &'static [u8] = b"random data";
-
-    pub(crate) const fn new(data: &'static [u8]) -> Self {
-        Self { data }
-    }
-}
-
-impl ReadLinearStore for ConstBacked {
-    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, std::io::Error> {
-        Ok(Box::new(Cursor::new(
-            self.data.get(addr as usize..).unwrap_or(&[]),
-        )))
-    }
-
-    fn size(&self) -> Result<u64, Error> {
-        Ok(self.data.len() as u64)
-    }
-}
-
-#[derive(Debug)]
-pub struct InMemReadWriteLinearStore {
+pub struct MemStore {
     bytes: Vec<u8>,
 }
 
-impl InMemReadWriteLinearStore {
-    pub const fn new() -> Self {
-        Self { bytes: vec![] }
+impl MemStore {
+    pub const fn new(bytes: Vec<u8>) -> Self {
+        Self { bytes }
     }
 }
 
-impl WriteLinearStore for InMemReadWriteLinearStore {
+impl WriteLinearStore for MemStore {
     fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, std::io::Error> {
         let offset = offset as usize;
         if offset + object.len() > self.bytes.len() {
@@ -52,7 +27,7 @@ impl WriteLinearStore for InMemReadWriteLinearStore {
     }
 }
 
-impl ReadLinearStore for InMemReadWriteLinearStore {
+impl ReadLinearStore for MemStore {
     fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, std::io::Error> {
         let bytes = self
             .bytes
@@ -78,7 +53,7 @@ impl ReadLinearStore for InMemReadWriteLinearStore {
 #[test_case(&[(0,&[1, 2, 3]),(2,&[4])],(0,&[1,2,4]); "overwrite end of store")]
 #[test_case(&[(0,&[1, 2, 3]),(2,&[4,5])],(0,&[1,2,4,5]); "overwrite/extend end of store")]
 fn test_in_mem_write_linear_store(writes: &[(u64, &[u8])], expected: (u64, &[u8])) {
-    let mut store = InMemReadWriteLinearStore { bytes: vec![] };
+    let mut store = MemStore { bytes: vec![] };
     assert_eq!(store.size().unwrap(), 0);
 
     for write in writes {
