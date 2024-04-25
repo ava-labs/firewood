@@ -12,7 +12,10 @@ pub(super) struct Layer<'a> {
 }
 
 impl<'a> Layer<'a> {
-    pub(super) fn new(parent: LinearStoreParent, diffs: &'a BTreeMap<u64, Box<[u8]>>) -> Self {
+    pub(super) const fn new(
+        parent: LinearStoreParent,
+        diffs: &'a BTreeMap<u64, Box<[u8]>>,
+    ) -> Self {
         Self { parent, diffs }
     }
 }

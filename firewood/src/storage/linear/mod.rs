@@ -66,8 +66,6 @@ pub(super) mod filebacked;
 pub(super) mod historical;
 pub(super) mod proposed;
 
-pub(super) use proposed::{Immutable, Mutable};
-
 use self::filebacked::FileBacked;
 use self::historical::Historical;
 use self::proposed::ProposedImmutable;
@@ -96,6 +94,19 @@ pub(super) enum LinearStoreParent {
     Historical(Arc<historical::Historical>),
     #[cfg(test)]
     ConstBacked(Arc<ConstBacked>),
+}
+
+impl PartialEq for LinearStoreParent {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::FileBacked(l0), Self::FileBacked(r0)) => Arc::ptr_eq(l0, r0),
+            (Self::Proposed(l0), Self::Proposed(r0)) => Arc::ptr_eq(l0, r0),
+            (Self::Historical(l0), Self::Historical(r0)) => Arc::ptr_eq(l0, r0),
+            #[cfg(test)]
+            (Self::ConstBacked(l0), Self::ConstBacked(r0)) => Arc::ptr_eq(l0, r0),
+            _ => false,
+        }
+    }
 }
 
 impl From<FileBacked> for LinearStoreParent {

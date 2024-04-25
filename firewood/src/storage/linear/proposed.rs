@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::io::{Error, Read};
 use std::marker::PhantomData;
+use std::sync::RwLock;
 
 use super::layered::{Layer, LayeredReader};
 use super::{LinearStoreParent, ReadLinearStore, WriteLinearStore};
@@ -18,22 +19,16 @@ pub(crate) type ProposedImmutable = Proposed<Immutable>;
 
 #[derive(Debug)]
 pub(crate) struct Proposed<M: Send + Sync + Debug> {
-    new: BTreeMap<u64, Box<[u8]>>,
+    pub(crate) new: BTreeMap<u64, Box<[u8]>>,
     pub(crate) old: BTreeMap<u64, Box<[u8]>>,
-    pub(crate) parent: LinearStoreParent,
+    pub(crate) parent: RwLock<LinearStoreParent>,
     phantom_data: PhantomData<M>,
-}
-
-impl ProposedImmutable {
-    pub(crate) fn parent(&self) -> &LinearStoreParent {
-        &self.parent
-    }
 }
 
 impl ProposedMutable {
     pub(super) fn new(parent: LinearStoreParent) -> Self {
         Self {
-            parent,
+            parent: RwLock::new(parent),
             new: Default::default(),
             old: Default::default(),
             phantom_data: PhantomData,
@@ -53,13 +48,16 @@ impl<M: Debug + Send + Sync> ReadLinearStore for Proposed<M> {
     fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
         Ok(Box::new(LayeredReader::new(
             addr,
-            Layer::new(self.parent.clone(), &self.new),
+            Layer::new(
+                self.parent.read().expect("poisoned lock").clone(),
+                &self.new,
+            ),
         )))
     }
 
     fn size(&self) -> Result<u64, Error> {
         // start with the parent size
-        let parent_size = self.parent.size()?;
+        let parent_size = self.parent.read().expect("poisoned lock").size()?;
         // look at the last delta, if any, and see if it will extend the file
         Ok(self
             .new
