@@ -184,7 +184,7 @@
 pub mod db;
 pub mod merkle;
 pub(crate) mod node;
-pub mod storage;
+pub(crate) mod storage;
 
 pub mod config;
 pub mod nibbles;

@@ -2,5 +2,5 @@
 // See the file LICENSE.md for licensing terms.
 
 pub mod linear;
-pub(crate) mod manager;
+pub mod manager;
 pub mod node;

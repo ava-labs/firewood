@@ -16,10 +16,10 @@ use std::sync::Arc;
 
 use super::linear::{ReadLinearStore, WriteLinearStore};
 
-pub(crate) type LinearAddress = NonZeroU64;
+pub type LinearAddress = NonZeroU64;
 
 #[derive(Debug)]
-pub(crate) struct NodeStore<T: ReadLinearStore> {
+pub struct NodeStore<T: ReadLinearStore> {
     header: FreeSpaceManagementHeader,
     linear_store: T,
 }
@@ -29,7 +29,7 @@ impl<T: ReadLinearStore> NodeStore<T> {
     ///
     /// A node on disk will consist of a header which both identifies the
     /// node type ([Branch] or [Leaf]) followed by the serialized data
-    pub(crate) fn read(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
+    pub fn read(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
         let node_stream = self.linear_store.stream_from(addr.get())?;
         let node: Node = bincode::deserialize_from(node_stream)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
@@ -52,10 +52,11 @@ impl<T: ReadLinearStore> NodeStore<T> {
         self.header.sentinel_address
     }
 
-    pub(crate) fn open(linear_store: T) -> Result<Self, Error> {
+    pub fn open(linear_store: T) -> Result<Self, Error> {
         let mut stream = linear_store.stream_from(FileIdentifingMagic::SIZE)?;
         let mut header_bytes = [0u8; std::mem::size_of::<FreeSpaceManagementHeader>()];
         stream.read_exact(&mut header_bytes[..])?;
+        drop(stream);
         let header = bytemuck::cast(header_bytes);
         Ok(Self {
             header,
@@ -120,7 +121,7 @@ impl<T: WriteLinearStore> NodeStore<T> {
     }
 
     /// Create a new [NodeStore] by writing out the [FileIdentifingMagic] and [FreeSpaceManagementHeader]
-    pub(crate) fn initialize(mut linear_store: T) -> Result<Self, Error> {
+    pub fn initialize(mut linear_store: T) -> Result<Self, Error> {
         // Write the first 16 bytes of each [PageStore]
         linear_store.write(0, bytemuck::bytes_of(&FileIdentifingMagic::new()))?;
 

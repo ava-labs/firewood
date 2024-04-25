@@ -11,7 +11,7 @@ use super::{LinearStoreParent, ReadLinearStore};
 ///
 /// A [Historical] [LinearStore] supports read operations only
 #[derive(Debug)]
-pub(crate) struct Historical {
+pub struct Historical {
     /// (offset, value) for every area of this LinearStore modified in
     /// the revision after this one (i.e. `parent`).
     /// That is, what each area `was` in this revision.
@@ -25,7 +25,7 @@ pub(crate) struct Historical {
 }
 
 impl Historical {
-    pub(crate) fn new(was: BTreeMap<u64, Box<[u8]>>, parent: LinearStoreParent, size: u64) -> Self {
+    pub fn new(was: BTreeMap<u64, Box<[u8]>>, parent: LinearStoreParent, size: u64) -> Self {
         Self {
             was,
             parent: parent.into(),
@@ -33,7 +33,7 @@ impl Historical {
         }
     }
 
-    pub(crate) fn reparent(self: &Arc<Self>, parent: LinearStoreParent) {
+    pub fn reparent(self: &Arc<Self>, parent: LinearStoreParent) {
         *self.parent.write().expect("poisoned lock") = parent;
     }
 }

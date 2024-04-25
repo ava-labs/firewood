@@ -18,12 +18,12 @@ use std::sync::Mutex;
 use super::ReadLinearStore;
 
 #[derive(Debug)]
-pub(crate) struct FileBacked {
+pub struct FileBacked {
     fd: Mutex<File>,
 }
 
 impl FileBacked {
-    pub(crate) fn new(path: PathBuf) -> Result<Self, Error> {
+    pub fn new(path: PathBuf) -> Result<Self, Error> {
         let fd = OpenOptions::new()
             .read(true)
             .write(true)
@@ -51,7 +51,7 @@ impl ReadLinearStore for FileBacked {
 }
 
 impl FileBacked {
-    pub(crate) fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
+    pub fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
         self.fd
             .lock()
             .expect("poisoned lock")

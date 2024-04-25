@@ -77,13 +77,13 @@ mod layered;
 mod tests;
 
 /// All linear stores support reads
-pub(super) trait ReadLinearStore: Send + Sync + Debug {
+pub trait ReadLinearStore: Send + Sync + Debug {
     fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error>;
     fn size(&self) -> Result<u64, Error>;
 }
 
 /// Some linear stores support writes
-pub(super) trait WriteLinearStore: ReadLinearStore {
+pub trait WriteLinearStore: ReadLinearStore {
     fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error>;
 }
 
@@ -95,8 +95,6 @@ pub(super) enum LinearStoreParent {
     #[cfg(test)]
     ConstBacked(Arc<ConstBacked>),
 }
-
-struct LinearStoreParent2 {}
 
 impl PartialEq for LinearStoreParent {
     fn eq(&self, other: &Self) -> bool {

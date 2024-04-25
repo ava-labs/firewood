@@ -11,16 +11,16 @@ use super::layered::{Layer, LayeredReader};
 use super::{LinearStoreParent, ReadLinearStore, WriteLinearStore};
 
 #[derive(Debug)]
-pub(crate) struct Immutable;
+pub struct Immutable;
 #[derive(Debug)]
-pub(crate) struct Mutable;
-pub(crate) type ProposedMutable = Proposed<Mutable>;
-pub(crate) type ProposedImmutable = Proposed<Immutable>;
+pub struct Mutable;
+pub type ProposedMutable = Proposed<Mutable>;
+pub type ProposedImmutable = Proposed<Immutable>;
 
 #[derive(Debug)]
-pub(crate) struct Proposed<M: Send + Sync + Debug> {
-    pub(crate) new: BTreeMap<u64, Box<[u8]>>,
-    pub(crate) old: BTreeMap<u64, Box<[u8]>>,
+pub struct Proposed<M: Send + Sync + Debug> {
+    pub new: BTreeMap<u64, Box<[u8]>>,
+    pub old: BTreeMap<u64, Box<[u8]>>,
     parent: RwLock<LinearStoreParent>,
     phantom_data: PhantomData<M>,
 }
@@ -45,15 +45,15 @@ impl ProposedMutable {
 }
 
 impl ProposedImmutable {
-    pub(crate) fn reparent(self: &Arc<Self>, parent: LinearStoreParent) {
+    pub fn reparent(self: &Arc<Self>, parent: LinearStoreParent) {
         *self.parent.write().expect("poisoned lock") = parent;
     }
 
-    pub(crate) fn parent(&self) -> LinearStoreParent {
+    pub fn parent(&self) -> LinearStoreParent {
         self.parent.read().expect("poisoned lock").clone()
     }
 
-    pub(crate) fn has_parent(&self, candidate: &LinearStoreParent) -> bool {
+    pub fn has_parent(&self, candidate: &LinearStoreParent) -> bool {
         *self.parent.read().expect("poisoned lock") == *candidate
     }
 }
