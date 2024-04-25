@@ -173,13 +173,10 @@ impl<'a> std::io::Read for LayeredReader<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, io::Read};
-
-    use test_case::test_case;
-
-    use crate::storage::linear::tests::MemStore;
-
     use super::Layer;
+    use crate::storage::linear::tests::MemStore;
+    use std::{collections::BTreeMap, io::Read};
+    use test_case::test_case;
 
     #[test_case(vec![], &[],vec![];"empty")]
     #[test_case(vec![], &[(0,vec![0,1])],vec![];"1 diff; no parent")]
