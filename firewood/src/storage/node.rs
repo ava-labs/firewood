@@ -162,6 +162,10 @@ impl<T: ReadLinearStore> NodeStore<T> {
             linear_store,
         })
     }
+
+    pub const fn linear_store(&self) -> &T {
+        &self.linear_store
+    }
 }
 
 impl<T: WriteLinearStore> NodeStore<T> {
