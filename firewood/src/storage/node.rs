@@ -11,6 +11,7 @@ use std::io::{Error, ErrorKind, Write};
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
+use serde::ser::SerializeTuple;
 use serde::{Deserialize, Serialize};
 
 use crate::node::Node;
@@ -190,16 +191,16 @@ impl<T: WriteLinearStore> NodeStore<T> {
         })
     }
 
-    fn write_free_lists_header(&mut self) -> Result<(), Error> {
-        let header_bytes = bincode::serialize(&self.header.free_lists).map_err(|e| {
+    // TODO danlaine: Write only the parts of the header that have changed instead of the whole thing
+    fn write_header(&mut self) -> Result<(), Error> {
+        let header_bytes = bincode::serialize(&self.header).map_err(|e| {
             Error::new(
                 ErrorKind::InvalidData,
                 format!("Failed to serialize free lists: {}", e),
             )
         })?;
 
-        self.linear_store
-            .write(Version::SIZE, header_bytes.as_slice())?;
+        self.linear_store.write(0, header_bytes.as_slice())?;
 
         Ok(())
     }
@@ -249,7 +250,7 @@ impl<T: WriteLinearStore> NodeStore<T> {
     /// Returns the address of the allocated area.
     pub fn create_node(&mut self, node: &Node) -> Result<LinearAddress, Error> {
         let addr = self.create_node_inner(node)?;
-        self.write_free_lists_header()?;
+        self.write_header()?;
         Ok(addr)
     }
 
@@ -339,18 +340,14 @@ impl<T: WriteLinearStore> NodeStore<T> {
         // The newly freed block is now the head of the free list.
         self.header.free_lists[area_size_index as usize] = Some(addr);
 
-        self.write_free_lists_header()?;
+        self.write_header()?;
 
         Ok(())
     }
 
-    fn set_sentinel(&mut self, mut linear_store: T) -> Result<(), Error> {
-        if self.header.sentinel_address.is_some() {
-            unimplemented!("cannot move sentinel address")
-        }
-        // TODO danlaine: fix/uncomment below
-        // linear_store.write(FileIdentifingMagic::SIZE, bytemuck::bytes_of(&self.header))?;
-        Ok(())
+    fn set_sentinel(&mut self, addr: LinearAddress) -> Result<(), Error> {
+        self.header.sentinel_address = Some(addr);
+        self.write_header() // TODO make this update sentinel address
     }
 }
 
@@ -393,13 +390,13 @@ type FreeLists = [Option<LinearAddress>; NUM_AREA_SIZES];
 
 /// Persisted metadata for a [NodeStore].
 /// The [NodeStoreHeader] is at the start of the [LinearStore].
-#[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct NodeStoreHeader {
     /// Identifies the version of firewood used to create this [NodeStore].
     version: Version,
+    size: u64,
     /// Element i is the pointer to the first free block of size BLOCK_SIZES[i].
     free_lists: FreeLists,
-    size: u64,
     sentinel_address: Option<LinearAddress>,
 }
 
@@ -489,7 +486,10 @@ mod tests {
             // The header should be unchanged
             let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
             let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
-            assert_eq!(header, NodeStoreHeader::new());
+            assert_eq!(header.version, Version::new());
+            let empty_free_lists: FreeLists = Default::default();
+            assert_eq!(header.free_lists, empty_free_lists);
+            assert_eq!(header.sentinel_address, None);
 
             // Leaf should go right after the header
             assert_eq!(leaf_addr.get(), NodeStoreHeader::SIZE);
@@ -512,13 +512,18 @@ mod tests {
             children: [None; BRANCH_CHILDREN],
         }));
 
+        let old_size = node_store.header.size;
         let branch_addr = node_store.create_node(&branch).unwrap();
 
         {
-            // The header should be unchanged
+            // The header  should be unchanged
             let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
             let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
-            assert_eq!(header, NodeStoreHeader::new());
+            assert_eq!(header.version, Version::new());
+            let empty_free_lists: FreeLists = Default::default();
+            assert_eq!(header.free_lists, empty_free_lists);
+            assert_eq!(header.sentinel_address, None);
+            assert!(header.size > old_size);
 
             // branch should go right after leaf
             assert_eq!(branch_addr.get(), NodeStoreHeader::SIZE + leaf_area_size);
@@ -601,12 +606,17 @@ mod tests {
         });
 
         // The new node should fit in the old area
+        let old_size = node_store.header.size;
         node_store.update_node(leaf1_addr, &leaf2).unwrap();
 
         // The header should be unchanged
         let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
         let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
-        assert_eq!(header, NodeStoreHeader::new());
+        assert_eq!(header.version, Version::new());
+        let empty_free_lists: FreeLists = Default::default();
+        assert_eq!(header.free_lists, empty_free_lists);
+        assert_eq!(header.sentinel_address, None);
+        assert_eq!(header.size, old_size);
 
         // The new node should be readable
         let read_leaf2 = node_store.read_node(leaf1_addr).unwrap();
