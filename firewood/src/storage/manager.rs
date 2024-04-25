@@ -11,7 +11,7 @@ use std::sync::Arc;
 use super::linear::filebacked::FileBacked;
 use super::linear::historical::Historical;
 use super::linear::proposed::ProposedImmutable;
-use super::linear::{LinearStoreParent, ReadLinearStore, WriteLinearStore};
+use super::linear::{LinearStoreParent, ReadLinearStore};
 
 #[derive(Debug)]
 pub(super) struct RevisionManager {

@@ -15,7 +15,7 @@ use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use super::{ReadLinearStore, WriteLinearStore};
+use super::ReadLinearStore;
 
 #[derive(Debug)]
 pub(crate) struct FileBacked {
