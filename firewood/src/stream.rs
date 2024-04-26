@@ -16,13 +16,8 @@ use std::fmt::Debug;
 use std::{cmp::Ordering, iter::once};
 use std::{sync::Arc, task::Poll};
 
-trait RootAndNodeSource: RootSource + NodeSource {}
-
-pub trait RootSource {
-    fn root_address(&self) -> Option<LinearAddress>;
-}
-
 pub trait NodeSource: Debug {
+    fn root_address(&self) -> Option<LinearAddress>;
     fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, std::io::Error>;
 }
 
@@ -190,7 +185,7 @@ fn get_iterator_intial_state<'a, T: linear::ReadLinearStore>(
     node_source: Box<dyn NodeSource>,
     key: &[u8],
 ) -> Result<NodeStreamState, std::io::Error> {
-    let Some(root_addr) = merkle.root_address() else {
+    let Some(root_addr) = node_source.root_address() else {
         // This merkle is empty.
         return Ok(NodeStreamState::Iterating { iter_stack: vec![] });
     };
@@ -361,14 +356,11 @@ impl Stream for MerkleKeyValueStream {
     ) -> Poll<Option<Self::Item>> {
         // destructuring is necessary here because we need mutable access to `key_state`
         // at the same time as immutable access to `merkle`
-        let Self {
-            state,
-            node_source: merkle,
-        } = &mut *self;
+        let Self { state, node_source } = &mut *self;
 
         match state {
             MerkleKeyValueStreamState::_Uninitialized(key) => {
-                let iter = MerkleNodeStream::new(merkle, key.clone());
+                let iter = MerkleNodeStream::new(node_source, key.clone());
                 self.state = MerkleKeyValueStreamState::Initialized { node_iter: iter };
                 self.poll_next(_cx)
             }
@@ -391,7 +383,7 @@ impl Stream for MerkleKeyValueStream {
                                 Poll::Ready(Some(Ok((key, value))))
                             }
                         },
-                        Some(Err(e)) => Poll::Ready(Some(Err(e))),
+                        Some(Err(e)) => Poll::Ready(Some(Err(api::Error::IO(e)))),
                         None => Poll::Ready(None),
                     },
                     Poll::Pending => Poll::Pending,
@@ -453,7 +445,7 @@ impl<'a> PathIterator<'a> {
 }
 
 impl<'a> Iterator for PathIterator<'a> {
-    type Item = Result<(Key, &'a Node), MerkleError>;
+    type Item = Result<(Key, &'a Node), std::io::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // destructuring is necessary here because we need mutable access to `state`

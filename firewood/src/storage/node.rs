@@ -14,7 +14,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::node::Node;
-use crate::stream::{NodeSource, RootSource};
+use crate::stream::NodeSource;
 
 use super::linear::{ReadLinearStore, WriteLinearStore};
 
@@ -109,13 +109,13 @@ pub struct NodeStore<T> {
     linear_store: T,
 }
 
-impl<T: ReadLinearStore> RootSource for NodeStore<T> {
+impl<T: ReadLinearStore> NodeSource for NodeStore<T> {
+    // TODO danlaine: Is this the right way to impl this trait?
+    // Or should the method bodies be implemented in here?
     fn root_address(&self) -> Option<LinearAddress> {
         self.root_address()
     }
-}
 
-impl<T: ReadLinearStore> NodeSource for NodeStore<T> {
     fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
         self.read_node(addr)
     }
