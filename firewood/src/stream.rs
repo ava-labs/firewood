@@ -329,18 +329,18 @@ impl<'a, T: linear::ReadLinearStore> FusedStream for MerkleKeyValueStream<'a, T>
 }
 
 impl<'a, T: linear::ReadLinearStore> MerkleKeyValueStream<'a, T> {
-    pub(super) fn _new(merkle: &'a Merkle<T>, root_addr: LinearAddress) -> Self {
+    pub(super) fn _new(merkle: &'a Merkle<T>) -> Self {
         Self {
             state: MerkleKeyValueStreamState::_new(),
-            root_addr,
+            root_addr: merkle.root_address().unwrap(),
             merkle,
         }
     }
 
-    pub(super) fn _from_key(merkle: &'a Merkle<T>, root_addr: LinearAddress, key: Key) -> Self {
+    pub(super) fn _from_key(merkle: &'a Merkle<T>, key: Key) -> Self {
         Self {
             state: MerkleKeyValueStreamState::_with_key(key),
-            root_addr,
+            root_addr: merkle.root_address().unwrap(),
             merkle,
         }
     }
@@ -570,9 +570,10 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
+    use crate::storage::linear::{tests::MemStore, WriteLinearStore};
+
     use super::*;
     use test_case::test_case;
-    use tests::linear::tests::MemStore;
 
     impl<T: ReadLinearStore> Merkle<T> {
         pub(crate) fn node_iter(&self, root_addr: LinearAddress) -> MerkleNodeStream<'_, T> {
