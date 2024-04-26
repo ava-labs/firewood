@@ -5,10 +5,7 @@ use crate::{
     merkle::{Key, MerkleError, Value},
     nibbles::{Nibbles, NibblesIterator},
     node::{BranchNode, Node},
-    storage::{
-        linear::{self},
-        node::LinearAddress,
-    },
+    storage::node::LinearAddress,
     v2::api,
 };
 use futures::{stream::FusedStream, Stream, StreamExt};
@@ -181,7 +178,7 @@ impl Stream for MerkleNodeStream {
 }
 
 /// Returns the initial state for an iterator over the given `merkle` which starts at `key`.
-fn get_iterator_intial_state<'a, T: linear::ReadLinearStore>(
+fn get_iterator_intial_state<'a>(
     node_source: Box<dyn NodeSource>,
     key: &[u8],
 ) -> Result<NodeStreamState, std::io::Error> {
