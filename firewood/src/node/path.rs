@@ -5,7 +5,6 @@ use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::{self, Debug},
-    io::{Cursor, Read},
     iter::once,
 };
 

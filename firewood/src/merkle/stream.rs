@@ -731,7 +731,7 @@ mod tests {
 
     #[tokio::test]
     async fn node_iterate_empty() {
-        let mut merkle = _create_test_merkle();
+        let merkle = _create_test_merkle();
         let root_addr = merkle.get_root_address();
         let stream = merkle.node_iter(root_addr);
         check_stream_is_done(stream).await;
