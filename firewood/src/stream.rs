@@ -202,9 +202,8 @@ fn get_iterator_intial_state<'a, T: linear::ReadLinearStore + linear::WriteLinea
         // `next_unmatched_key_nibble` is the first nibble after `matched_key_nibbles`.
         let Some(next_unmatched_key_nibble) = unmatched_key_nibbles.next() else {
             // The invariant tells us `node` is a prefix of `matched_key_nibbles`.
-            // There is no more `matched_key_nibbles` left so `node` must be at `matched_key_nibbles`.
+            // There is no more `unmatched_key_nibbles` left so `node` must be at `matched_key_nibbles`.
             // Visit and return `node` first.
-
             iter_stack.push(IterationNode::Unvisited {
                 key: Box::from(matched_key_nibbles),
                 node,
