@@ -73,7 +73,6 @@ impl NodeStreamState<'_> {
 #[derive(Debug)]
 pub struct MerkleNodeStream<'a, T> {
     state: NodeStreamState<'a>,
-    root_addr: LinearAddress,
     merkle: &'a Merkle<T>,
 }
 
@@ -88,10 +87,9 @@ impl<'a, T: linear::ReadLinearStore> FusedStream for MerkleNodeStream<'a, T> {
 impl<'a, T: linear::ReadLinearStore> MerkleNodeStream<'a, T> {
     /// Returns a new iterator that will iterate over all the nodes in `merkle`
     /// with keys greater than or equal to `key`.
-    pub(super) fn new(merkle: &'a Merkle<T>, root_addr: LinearAddress, key: Key) -> Self {
+    pub(super) fn new(merkle: &'a Merkle<T>, key: Key) -> Self {
         Self {
             state: NodeStreamState::new(key),
-            root_addr,
             merkle,
         }
     }
@@ -106,15 +104,11 @@ impl<'a, T: linear::ReadLinearStore> Stream for MerkleNodeStream<'a, T> {
     ) -> Poll<Option<Self::Item>> {
         // destructuring is necessary here because we need mutable access to `state`
         // at the same time as immutable access to `merkle`.
-        let Self {
-            state,
-            root_addr,
-            merkle,
-        } = &mut *self;
+        let Self { state, merkle } = &mut *self;
 
         match state {
             NodeStreamState::StartFromKey(key) => {
-                self.state = get_iterator_intial_state(merkle, *root_addr, key)?;
+                self.state = get_iterator_intial_state(merkle, key)?;
                 self.poll_next(_cx)
             }
             NodeStreamState::Iterating { iter_stack } => {
@@ -183,9 +177,13 @@ impl<'a, T: linear::ReadLinearStore> Stream for MerkleNodeStream<'a, T> {
 /// Returns the initial state for an iterator over the given `merkle` which starts at `key`.
 fn get_iterator_intial_state<'a, T: linear::ReadLinearStore>(
     merkle: &'a Merkle<T>,
-    root_addr: LinearAddress,
     key: &[u8],
 ) -> Result<NodeStreamState<'a>, api::Error> {
+    let Some(root_addr) = merkle.root_address() else {
+        // This merkle is empty.
+        return Ok(NodeStreamState::Iterating { iter_stack: vec![] });
+    };
+
     // Invariant: `node`'s key is a prefix of `key`.
     let mut node = merkle.get_node(root_addr)?;
 
@@ -318,7 +316,6 @@ impl<'a, T> MerkleKeyValueStreamState<'a, T> {
 #[derive(Debug)]
 pub struct MerkleKeyValueStream<'a, T> {
     state: MerkleKeyValueStreamState<'a, T>,
-    root_addr: LinearAddress,
     merkle: &'a Merkle<T>,
 }
 
@@ -329,18 +326,16 @@ impl<'a, T: linear::ReadLinearStore> FusedStream for MerkleKeyValueStream<'a, T>
 }
 
 impl<'a, T: linear::ReadLinearStore> MerkleKeyValueStream<'a, T> {
-    pub(super) fn _new(merkle: &'a Merkle<T>, root_addr: LinearAddress) -> Self {
+    pub(super) fn _new(merkle: &'a Merkle<T>) -> Self {
         Self {
             state: MerkleKeyValueStreamState::_new(),
-            root_addr,
             merkle,
         }
     }
 
-    pub(super) fn _from_key(merkle: &'a Merkle<T>, root_addr: LinearAddress, key: Key) -> Self {
+    pub(super) fn _from_key(merkle: &'a Merkle<T>, key: Key) -> Self {
         Self {
             state: MerkleKeyValueStreamState::_with_key(key),
-            root_addr,
             merkle,
         }
     }
@@ -355,15 +350,11 @@ impl<'a, T: linear::ReadLinearStore> Stream for MerkleKeyValueStream<'a, T> {
     ) -> Poll<Option<Self::Item>> {
         // destructuring is necessary here because we need mutable access to `key_state`
         // at the same time as immutable access to `merkle`
-        let Self {
-            state,
-            root_addr,
-            merkle,
-        } = &mut *self;
+        let Self { state, merkle } = &mut *self;
 
         match state {
             MerkleKeyValueStreamState::_Uninitialized(key) => {
-                let iter = MerkleNodeStream::new(merkle, *root_addr, key.clone());
+                let iter = MerkleNodeStream::new(merkle, key.clone());
                 self.state = MerkleKeyValueStreamState::Initialized { node_iter: iter };
                 self.poll_next(_cx)
             }
@@ -575,16 +566,12 @@ mod tests {
     use tests::linear::tests::MemStore;
 
     impl<T: linear::ReadLinearStore + linear::WriteLinearStore> Merkle<T> {
-        pub(crate) fn node_iter(&self, root_addr: LinearAddress) -> MerkleNodeStream<'_, T> {
-            MerkleNodeStream::new(self, root_addr, Box::new([]))
+        pub(crate) fn node_iter(&self) -> MerkleNodeStream<'_, T> {
+            MerkleNodeStream::new(self, Box::new([]))
         }
 
-        pub(crate) fn node_iter_from(
-            &self,
-            root_addr: LinearAddress,
-            key: Key,
-        ) -> MerkleNodeStream<'_, T> {
-            MerkleNodeStream::new(self, root_addr, key)
+        pub(crate) fn node_iter_from(&self, key: Key) -> MerkleNodeStream<'_, T> {
+            MerkleNodeStream::new(self, key)
         }
     }
 
@@ -630,7 +617,7 @@ mod tests {
     #[test_case(&[0x00, 0x00, 0x00, 0xFF, 0x01]; "past leaf key")]
     #[tokio::test]
     async fn path_iterate_non_singleton_merkle_seek_leaf(key: &[u8]) {
-        let (merkle, _) = created_populated_merkle();
+        let merkle = created_populated_merkle();
 
         let mut stream = merkle.path_iter(key).unwrap();
 
@@ -672,7 +659,7 @@ mod tests {
 
     #[tokio::test]
     async fn path_iterate_non_singleton_merkle_seek_branch() {
-        let (merkle, _) = created_populated_merkle();
+        let merkle = created_populated_merkle();
 
         let key = &[0x00, 0x00, 0x00];
 
@@ -713,8 +700,7 @@ mod tests {
     #[tokio::test]
     async fn node_iterate_empty() {
         let merkle = _create_test_merkle();
-        let root_addr = merkle.root_address().unwrap();
-        let stream = merkle.node_iter(root_addr);
+        let stream = merkle.node_iter();
         check_stream_is_done(stream).await;
     }
 
@@ -722,11 +708,9 @@ mod tests {
     async fn node_iterate_root_only() {
         let mut merkle = _create_test_merkle();
 
-        let root_addr = merkle.root_address().unwrap();
-
         merkle.insert(vec![0x00], vec![0x00]).unwrap();
 
-        let mut stream = merkle.node_iter(root_addr);
+        let mut stream = merkle.node_iter();
 
         let (key, node) = stream.next().await.unwrap().unwrap();
 
@@ -747,9 +731,8 @@ mod tests {
     ///
     /// Note the 0000 branch has no value and the F0F0
     /// The number next to each branch is the position of the child in the branch's children array.
-    fn created_populated_merkle() -> (Merkle<MemStore>, LinearAddress) {
+    fn created_populated_merkle() -> Merkle<MemStore> {
         let mut merkle = _create_test_merkle();
-        let root_addr = merkle.root_address().unwrap();
 
         merkle
             .insert(vec![0x00, 0x00, 0x00], vec![0x00, 0x00, 0x00])
@@ -764,14 +747,14 @@ mod tests {
             .insert(vec![0x00, 0xD0, 0xD0], vec![0x00, 0xD0, 0xD0])
             .unwrap();
         merkle.insert(vec![0x00, 0xFF], vec![0x00, 0xFF]).unwrap();
-        (merkle, root_addr)
+        merkle
     }
 
     #[tokio::test]
     async fn node_iterator_no_start_key() {
-        let (merkle, root_addr) = created_populated_merkle();
+        let merkle = created_populated_merkle();
 
-        let mut stream = merkle.node_iter(root_addr);
+        let mut stream = merkle.node_iter();
 
         // Covers case of branch with no value
         let (key, node) = stream.next().await.unwrap().unwrap();
@@ -818,10 +801,9 @@ mod tests {
 
     #[tokio::test]
     async fn node_iterator_start_key_between_nodes() {
-        let (merkle, root_addr) = created_populated_merkle();
+        let merkle = created_populated_merkle();
 
-        let mut stream =
-            merkle.node_iter_from(root_addr, vec![0x00, 0x00, 0x01].into_boxed_slice());
+        let mut stream = merkle.node_iter_from(vec![0x00, 0x00, 0x01].into_boxed_slice());
 
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
@@ -843,10 +825,9 @@ mod tests {
 
     #[tokio::test]
     async fn node_iterator_start_key_on_node() {
-        let (merkle, root_addr) = created_populated_merkle();
+        let merkle = created_populated_merkle();
 
-        let mut stream =
-            merkle.node_iter_from(root_addr, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
+        let mut stream = merkle.node_iter_from(vec![0x00, 0xD0, 0xD0].into_boxed_slice());
 
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
@@ -868,9 +849,9 @@ mod tests {
 
     #[tokio::test]
     async fn node_iterator_start_key_after_last_key() {
-        let (merkle, root_addr) = created_populated_merkle();
+        let merkle = created_populated_merkle();
 
-        let stream = merkle.node_iter_from(root_addr, vec![0xFF].into_boxed_slice());
+        let stream = merkle.node_iter_from(vec![0xFF].into_boxed_slice());
 
         check_stream_is_done(stream).await;
     }

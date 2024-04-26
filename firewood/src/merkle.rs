@@ -139,11 +139,11 @@ impl<T: WriteLinearStore> Merkle<T> {
     }
 
     pub(crate) fn _key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
-        MerkleKeyValueStream::_new(self, self.root_addr)
+        MerkleKeyValueStream::_new(self)
     }
 
     pub(crate) fn _key_value_iter_from_key(&self, key: Key) -> MerkleKeyValueStream<'_, T> {
-        MerkleKeyValueStream::_from_key(self, self.root_addr, key)
+        MerkleKeyValueStream::_from_key(self, key)
     }
 
     pub(super) async fn _range_proof<K: api::KeyType + Send + Sync>(
