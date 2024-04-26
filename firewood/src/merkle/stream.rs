@@ -191,7 +191,9 @@ fn get_iterator_intial_state<'a, T: linear::ReadLinearStore + linear::WriteLinea
     // of each loop iteration.
     let mut matched_key_nibbles = vec![];
 
-    let mut unmatched_key_nibbles = Nibbles::<1>::new(key).into_iter();
+    // TODO danlaine: update the code below to reflect the fact that Nibbles no longer
+    // has a leading zero.
+    let mut unmatched_key_nibbles = Nibbles::new(key).into_iter();
 
     let mut iter_stack: Vec<IterationNode> = vec![];
 
@@ -407,7 +409,7 @@ enum PathIteratorState<'a> {
         /// Note the node at `address` may not have a key which is a
         /// prefix of the key we're traversing to.
         matched_key: Vec<u8>,
-        unmatched_key: NibblesIterator<'a, 0>,
+        unmatched_key: NibblesIterator<'a>,
         address: LinearAddress,
     },
     Exhausted,
@@ -583,8 +585,6 @@ use super::tests::_create_test_merkle;
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
-    use crate::storage::node::NodeStore;
-
     use super::*;
     use test_case::test_case;
     use tests::linear::tests::MemStore;
@@ -607,7 +607,7 @@ mod tests {
     #[test_case(&[1]; "non-empty key")]
     #[tokio::test]
     async fn path_iterate_empty_merkle_empty_key(key: &[u8]) {
-        let mut merkle = _create_test_merkle();
+        let merkle = _create_test_merkle();
         let root_addr = merkle.get_root_address();
         let root = merkle.get_node(root_addr).unwrap();
         let mut stream = merkle.path_iter(root, key);

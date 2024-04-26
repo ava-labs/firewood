@@ -4,7 +4,9 @@
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 use std::{
-    fmt::{self, Debug}, io::{Cursor, Read}, iter::once
+    fmt::{self, Debug},
+    io::{Cursor, Read},
+    iter::once,
 };
 
 use crate::nibbles::NibblesIterator;
@@ -63,12 +65,11 @@ impl Path {
             .chain(self.0.iter().copied())
     }
     pub(crate) fn encode(&self) -> Vec<u8> {
-            self.iter_encoded()
-            .collect()
+        self.iter_encoded().collect()
     }
 
     /// Returns the decoded path.
-    pub fn from_nibbles<const N: usize>(nibbles: NibblesIterator<'_, N>) -> Self {
+    pub fn from_nibbles(nibbles: NibblesIterator<'_>) -> Self {
         Self::from_iter(nibbles)
     }
 

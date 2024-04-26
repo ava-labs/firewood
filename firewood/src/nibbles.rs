@@ -9,20 +9,12 @@ static NIBBLES: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
 /// nibbles. Nibbles can be indexed using nib\[x\] or you can get an iterator
 /// with `into_iter()`
 ///
-/// Nibbles can be constructed with a number of leading zeroes. This is used
-/// in firewood because there is a root node, so we always want the first
-/// byte to be 0
-///
-/// When creating a Nibbles object, use the syntax `Nibbles::<N>(r)` where
-/// `N` is the number of leading zero bytes you need and `r` is a reference to
-/// a [u8]
-///
 /// # Examples
 ///
 /// ```
 /// # use firewood::nibbles;
 /// # fn main() {
-/// let nib = nibbles::Nibbles::<0>::new(&[0x56, 0x78]);
+/// let nib = nibbles::Nibbles::new(&[0x56, 0x78]);
 /// assert_eq!(nib.into_iter().collect::<Vec<_>>(), [0x5, 0x6, 0x7, 0x8]);
 ///
 /// // nibbles can be efficiently advanced without rendering the
@@ -38,28 +30,25 @@ static NIBBLES: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
 /// # }
 /// ```
 #[derive(Debug, Copy, Clone)]
-pub struct Nibbles<'a, const LEADING_ZEROES: usize>(&'a [u8]); // TODO danlaine: Remove LEADING_ZEROES
+pub struct Nibbles<'a>(&'a [u8]);
 
-impl<'a, const LEADING_ZEROES: usize> Index<usize> for Nibbles<'a, LEADING_ZEROES> {
+impl<'a> Index<usize> for Nibbles<'a> {
     type Output = u8;
 
     fn index(&self, index: usize) -> &Self::Output {
-        match index {
-            _ if index < LEADING_ZEROES => &NIBBLES[0],
-            _ if (index - LEADING_ZEROES) % 2 == 0 =>
-            {
-                #[allow(clippy::indexing_slicing)]
-                &NIBBLES[(self.0[(index - LEADING_ZEROES) / 2] >> 4) as usize]
-            }
+        if index % 2 == 0 {
             #[allow(clippy::indexing_slicing)]
-            _ => &NIBBLES[(self.0[(index - LEADING_ZEROES) / 2] & 0xf) as usize],
+            &NIBBLES[(self.0[(index) / 2] >> 4) as usize]
+        } else {
+            #[allow(clippy::indexing_slicing)]
+            &NIBBLES[(self.0[(index) / 2] & 0xf) as usize]
         }
     }
 }
 
-impl<'a, const LEADING_ZEROES: usize> IntoIterator for Nibbles<'a, LEADING_ZEROES> {
+impl<'a> IntoIterator for Nibbles<'a> {
     type Item = u8;
-    type IntoIter = NibblesIterator<'a, LEADING_ZEROES>;
+    type IntoIter = NibblesIterator<'a>;
 
     #[must_use]
     fn into_iter(self) -> Self::IntoIter {
@@ -71,15 +60,15 @@ impl<'a, const LEADING_ZEROES: usize> IntoIterator for Nibbles<'a, LEADING_ZEROE
     }
 }
 
-impl<'a, const LEADING_ZEROES: usize> Nibbles<'a, LEADING_ZEROES> {
+impl<'a> Nibbles<'a> {
     #[must_use]
     pub const fn len(&self) -> usize {
-        LEADING_ZEROES + 2 * self.0.len()
+        2 * self.0.len()
     }
 
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        LEADING_ZEROES == 0 && self.0.is_empty()
+        self.0.is_empty()
     }
 
     pub const fn new(inner: &'a [u8]) -> Self {
@@ -90,15 +79,15 @@ impl<'a, const LEADING_ZEROES: usize> Nibbles<'a, LEADING_ZEROES> {
 /// An iterator returned by [Nibbles::into_iter]
 /// See their documentation for details.
 #[derive(Clone, Debug)]
-pub struct NibblesIterator<'a, const LEADING_ZEROES: usize> {
-    data: Nibbles<'a, LEADING_ZEROES>,
+pub struct NibblesIterator<'a> {
+    data: Nibbles<'a>,
     head: usize,
     tail: usize,
 }
 
-impl<'a, const LEADING_ZEROES: usize> FusedIterator for NibblesIterator<'a, LEADING_ZEROES> {}
+impl<'a> FusedIterator for NibblesIterator<'a> {}
 
-impl<'a, const LEADING_ZEROES: usize> Iterator for NibblesIterator<'a, LEADING_ZEROES> {
+impl<'a> Iterator for NibblesIterator<'a> {
     type Item = u8;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -122,14 +111,14 @@ impl<'a, const LEADING_ZEROES: usize> Iterator for NibblesIterator<'a, LEADING_Z
     }
 }
 
-impl<'a, const LEADING_ZEROES: usize> NibblesIterator<'a, LEADING_ZEROES> {
+impl<'a> NibblesIterator<'a> {
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
         self.head == self.tail
     }
 }
 
-impl<'a, const LEADING_ZEROES: usize> DoubleEndedIterator for NibblesIterator<'a, LEADING_ZEROES> {
+impl<'a> DoubleEndedIterator for NibblesIterator<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.is_empty() {
             return None;
@@ -153,7 +142,7 @@ mod test {
 
     #[test]
     fn happy_regular_nibbles() {
-        let nib = Nibbles::<0>(&TEST_BYTES);
+        let nib = Nibbles(&TEST_BYTES);
         let expected = [0xdu8, 0xe, 0xa, 0xd, 0xb, 0xe, 0xe, 0xf];
         for v in expected.into_iter().enumerate() {
             assert_eq!(nib[v.0], v.1, "{v:?}");
@@ -161,43 +150,21 @@ mod test {
     }
 
     #[test]
-    fn leading_zero_nibbles_index() {
-        let nib = Nibbles::<1>(&TEST_BYTES);
-        let expected = [0u8, 0xd, 0xe, 0xa, 0xd, 0xb, 0xe, 0xe, 0xf];
-        for v in expected.into_iter().enumerate() {
-            assert_eq!(nib[v.0], v.1, "{v:?}");
-        }
-    }
-    #[test]
-    fn leading_zero_nibbles_iter() {
-        let nib = Nibbles::<1>(&TEST_BYTES);
-        let expected: [u8; 9] = [0u8, 0xd, 0xe, 0xa, 0xd, 0xb, 0xe, 0xe, 0xf];
-        expected.into_iter().eq(nib);
-    }
-
-    #[test]
-    fn skip_skips_zeroes() {
-        let nib1 = Nibbles::<1>(&TEST_BYTES);
-        let nib0 = Nibbles::<0>(&TEST_BYTES);
-        assert!(nib1.into_iter().skip(1).eq(nib0.into_iter()));
-    }
-
-    #[test]
     #[should_panic]
     fn out_of_bounds_panics() {
-        let nib = Nibbles::<0>(&TEST_BYTES);
+        let nib = Nibbles(&TEST_BYTES);
         let _ = nib[8];
     }
 
     #[test]
     fn last_nibble() {
-        let nib = Nibbles::<0>(&TEST_BYTES);
+        let nib = Nibbles(&TEST_BYTES);
         assert_eq!(nib[7], 0xf);
     }
 
     #[test]
-    fn size_hint_0() {
-        let nib = Nibbles::<0>(&TEST_BYTES);
+    fn size_hint() {
+        let nib = Nibbles(&TEST_BYTES);
         let mut nib_iter = nib.into_iter();
         assert_eq!((8, Some(8)), nib_iter.size_hint());
         let _ = nib_iter.next();
@@ -205,17 +172,8 @@ mod test {
     }
 
     #[test]
-    fn size_hint_1() {
-        let nib = Nibbles::<1>(&TEST_BYTES);
-        let mut nib_iter = nib.into_iter();
-        assert_eq!((9, Some(9)), nib_iter.size_hint());
-        let _ = nib_iter.next();
-        assert_eq!((8, Some(8)), nib_iter.size_hint());
-    }
-
-    #[test]
     fn backwards() {
-        let nib = Nibbles::<1>(&TEST_BYTES);
+        let nib = Nibbles(&TEST_BYTES);
         let nib_iter = nib.into_iter().rev();
         let expected = [0xf, 0xe, 0xe, 0xb, 0xd, 0xa, 0xe, 0xd, 0x0];
 
@@ -224,7 +182,7 @@ mod test {
 
     #[test]
     fn empty() {
-        let nib = Nibbles::<0>(&[]);
+        let nib = Nibbles(&[]);
         assert!(nib.is_empty());
         let it = nib.into_iter();
         assert!(it.is_empty());
@@ -232,19 +190,8 @@ mod test {
     }
 
     #[test]
-    fn not_empty_because_of_leading_nibble() {
-        let nib = Nibbles::<1>(&[]);
-        assert!(!nib.is_empty());
-        let mut it = nib.into_iter();
-        assert!(!it.is_empty());
-        assert_eq!(it.size_hint(), (1, Some(1)));
-        assert_eq!(it.next(), Some(0));
-        assert!(it.is_empty());
-        assert_eq!(it.size_hint(), (0, Some(0)));
-    }
-    #[test]
     fn not_empty_because_of_data() {
-        let nib = Nibbles::<0>(&[1]);
+        let nib = Nibbles(&[1]);
         assert!(!nib.is_empty());
         let mut it = nib.into_iter();
         assert!(!it.is_empty());
