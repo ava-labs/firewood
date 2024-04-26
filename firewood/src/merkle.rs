@@ -2,7 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 use crate::node::Node;
 use crate::proof::{Proof, ProofError};
-use crate::storage::linear::WriteLinearStore;
+use crate::storage::linear::{ReadLinearStore, WriteLinearStore};
 use crate::storage::node::{self, LinearAddress};
 use crate::stream::{MerkleKeyValueStream, PathIterator};
 use crate::trie_hash::TrieHash;
@@ -40,17 +40,13 @@ pub struct Merkle<T> {
     store: node::NodeStore<T>,
 }
 
-impl<T: WriteLinearStore> Merkle<T> {
+impl<T: ReadLinearStore> Merkle<T> {
     pub fn get_node(&self, _addr: LinearAddress) -> Result<&Node, MerkleError> {
         todo!()
     }
 
-    pub fn root_address(&self) -> Option<LinearAddress> {
+    pub const fn root_address(&self) -> Option<LinearAddress> {
         self.store.root_address()
-    }
-
-    pub const fn new() -> Self {
-        todo!()
     }
 
     pub fn root_hash(&self) -> Result<TrieHash, MerkleError> {
@@ -58,14 +54,6 @@ impl<T: WriteLinearStore> Merkle<T> {
     }
 
     pub fn dump(&self) -> Result<(), MerkleError> {
-        todo!()
-    }
-
-    pub fn insert<K: AsRef<[u8]>>(&mut self, _key: K, _val: Vec<u8>) -> Result<(), MerkleError> {
-        todo!()
-    }
-
-    pub fn remove<K: AsRef<[u8]>>(&mut self, _key: K) -> Result<Option<Vec<u8>>, MerkleError> {
         todo!()
     }
 
@@ -240,6 +228,20 @@ impl<T: WriteLinearStore> Merkle<T> {
             middle,
             last_key_proof,
         }))
+    }
+}
+
+impl<T: WriteLinearStore> Merkle<T> {
+    pub const fn new() -> Self {
+        todo!()
+    }
+
+    pub fn insert<K: AsRef<[u8]>>(&mut self, _key: K, _val: Vec<u8>) -> Result<(), MerkleError> {
+        todo!()
+    }
+
+    pub fn remove<K: AsRef<[u8]>>(&mut self, _key: K) -> Result<Option<Vec<u8>>, MerkleError> {
+        todo!()
     }
 }
 
