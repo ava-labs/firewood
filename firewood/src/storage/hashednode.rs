@@ -55,8 +55,10 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                 todo!()
             }
             Node::Leaf(ref leaf) => {
-                // TODO: refactor Path to not allocate here
-                hasher.update(leaf.partial_path.encode());
+                // TODO: can we use the stack here and call update less?
+                for byte in leaf.partial_path.iter_encoded() {
+                    hasher.update([byte]);
+                }
                 hasher.update(&leaf.value);
             }
         }
