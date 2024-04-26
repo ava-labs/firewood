@@ -133,7 +133,7 @@ impl<'a, T: linear::ReadLinearStore + linear::WriteLinearStore> Stream for Merkl
                                 Node::Leaf(_) => {}
                             }
 
-                            let key = key_from_nibble_iter(key.iter().copied().skip(1));
+                            let key = key_from_nibble_iter(key.iter().copied());
                             return Poll::Ready(Some(Ok((key, node))));
                         }
                         IterationNode::Visited {
@@ -201,17 +201,14 @@ fn get_iterator_intial_state<'a, T: linear::ReadLinearStore + linear::WriteLinea
     loop {
         // `next_unmatched_key_nibble` is the first nibble after `matched_key_nibbles`.
         let Some(next_unmatched_key_nibble) = unmatched_key_nibbles.next() else {
-            // The invariant tells us `node` is a prefix of `key`.
-            // There is no more `key` left so `node` must be at `key`.
+            // The invariant tells us `node` is a prefix of `matched_key_nibbles`.
+            // There is no more `matched_key_nibbles` left so `node` must be at `matched_key_nibbles`.
             // Visit and return `node` first.
-            match &node {
-                Node::Branch(_) | Node::Leaf(_) => {
-                    iter_stack.push(IterationNode::Unvisited {
-                        key: Box::from(matched_key_nibbles),
-                        node,
-                    });
-                }
-            }
+
+            iter_stack.push(IterationNode::Unvisited {
+                key: Box::from(matched_key_nibbles),
+                node,
+            });
 
             return Ok(NodeStreamState::Iterating { iter_stack });
         };
