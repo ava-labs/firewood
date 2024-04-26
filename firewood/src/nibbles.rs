@@ -10,7 +10,7 @@ static NIBBLES: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
 /// with `into_iter()`
 ///
 /// Nibbles can be constructed with a number of leading zeroes. This is used
-/// in firewood because there is a sentinel node, so we always want the first
+/// in firewood because there is a root node, so we always want the first
 /// byte to be 0
 ///
 /// When creating a Nibbles object, use the syntax `Nibbles::<N>(r)` where
@@ -38,7 +38,7 @@ static NIBBLES: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
 /// # }
 /// ```
 #[derive(Debug, Copy, Clone)]
-pub struct Nibbles<'a, const LEADING_ZEROES: usize>(&'a [u8]);
+pub struct Nibbles<'a, const LEADING_ZEROES: usize>(&'a [u8]); // TODO danlaine: Remove LEADING_ZEROES
 
 impl<'a, const LEADING_ZEROES: usize> Index<usize> for Nibbles<'a, LEADING_ZEROES> {
     type Output = u8;

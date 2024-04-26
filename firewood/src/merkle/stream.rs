@@ -69,7 +69,7 @@ impl NodeStreamState<'_> {
 #[derive(Debug)]
 pub struct MerkleNodeStream<'a, T> {
     state: NodeStreamState<'a>,
-    sentinel_addr: LinearAddress,
+    root_addr: LinearAddress,
     merkle: &'a Merkle<T>,
 }
 
@@ -86,10 +86,10 @@ impl<'a, T: linear::ReadLinearStore + linear::WriteLinearStore> FusedStream
 impl<'a, T: linear::ReadLinearStore + linear::WriteLinearStore> MerkleNodeStream<'a, T> {
     /// Returns a new iterator that will iterate over all the nodes in `merkle`
     /// with keys greater than or equal to `key`.
-    pub(super) fn new(merkle: &'a Merkle<T>, sentinel_addr: LinearAddress, key: Key) -> Self {
+    pub(super) fn new(merkle: &'a Merkle<T>, root_addr: LinearAddress, key: Key) -> Self {
         Self {
             state: NodeStreamState::new(key),
-            sentinel_addr,
+            root_addr,
             merkle,
         }
     }
@@ -106,13 +106,13 @@ impl<'a, T: linear::ReadLinearStore + linear::WriteLinearStore> Stream for Merkl
         // at the same time as immutable access to `merkle`.
         let Self {
             state,
-            sentinel_addr,
+            root_addr,
             merkle,
         } = &mut *self;
 
         match state {
             NodeStreamState::StartFromKey(key) => {
-                self.state = get_iterator_intial_state(merkle, *sentinel_addr, key)?;
+                self.state = get_iterator_intial_state(merkle, *root_addr, key)?;
                 self.poll_next(_cx)
             }
             NodeStreamState::Iterating { iter_stack } => {
@@ -181,11 +181,11 @@ impl<'a, T: linear::ReadLinearStore + linear::WriteLinearStore> Stream for Merkl
 /// Returns the initial state for an iterator over the given `merkle` which starts at `key`.
 fn get_iterator_intial_state<'a, T: linear::ReadLinearStore + linear::WriteLinearStore>(
     merkle: &'a Merkle<T>,
-    sentinel_addr: LinearAddress,
+    root_addr: LinearAddress,
     key: &[u8],
 ) -> Result<NodeStreamState<'a>, api::Error> {
     // Invariant: `node`'s key is a prefix of `key`.
-    let mut node = merkle.get_node(sentinel_addr)?;
+    let mut node = merkle.get_node(root_addr)?;
 
     // Invariant: `matched_key_nibbles` is the key of `node` at the start
     // of each loop iteration.
@@ -316,7 +316,7 @@ impl<'a, T> MerkleKeyValueStreamState<'a, T> {
 #[derive(Debug)]
 pub struct MerkleKeyValueStream<'a, T> {
     state: MerkleKeyValueStreamState<'a, T>,
-    sentinel_addr: LinearAddress,
+    root_addr: LinearAddress,
     merkle: &'a Merkle<T>,
 }
 
@@ -329,18 +329,18 @@ impl<'a, T: linear::ReadLinearStore + linear::WriteLinearStore> FusedStream
 }
 
 impl<'a, T: linear::ReadLinearStore + linear::WriteLinearStore> MerkleKeyValueStream<'a, T> {
-    pub(super) fn _new(merkle: &'a Merkle<T>, sentinel_addr: LinearAddress) -> Self {
+    pub(super) fn _new(merkle: &'a Merkle<T>, root_addr: LinearAddress) -> Self {
         Self {
             state: MerkleKeyValueStreamState::_new(),
-            sentinel_addr,
+            root_addr,
             merkle,
         }
     }
 
-    pub(super) fn _from_key(merkle: &'a Merkle<T>, sentinel_addr: LinearAddress, key: Key) -> Self {
+    pub(super) fn _from_key(merkle: &'a Merkle<T>, root_addr: LinearAddress, key: Key) -> Self {
         Self {
             state: MerkleKeyValueStreamState::_with_key(key),
-            sentinel_addr,
+            root_addr,
             merkle,
         }
     }
@@ -359,13 +359,13 @@ impl<'a, T: linear::ReadLinearStore + linear::WriteLinearStore> Stream
         // at the same time as immutable access to `merkle`
         let Self {
             state,
-            sentinel_addr,
+            root_addr,
             merkle,
         } = &mut *self;
 
         match state {
             MerkleKeyValueStreamState::_Uninitialized(key) => {
-                let iter = MerkleNodeStream::new(merkle, *sentinel_addr, key.clone());
+                let iter = MerkleNodeStream::new(merkle, *root_addr, key.clone());
                 self.state = MerkleKeyValueStreamState::Initialized { node_iter: iter };
                 self.poll_next(_cx)
             }
@@ -430,10 +430,10 @@ pub struct PathIterator<'a, 'b, T> {
 }
 
 impl<'a, 'b, T> PathIterator<'a, 'b, T> {
-    pub(super) fn new(merkle: &'a Merkle<T>, sentinel_node: &'a Node, key: &'b [u8]) -> Self {
-        let sentinel_addr = match sentinel_node {
+    pub(super) fn new(merkle: &'a Merkle<T>, root: &'a Node, key: &'b [u8]) -> Self {
+        let root_addr = match root {
             Node::Branch(branch) => match branch.children[0] {
-                Some(sentinel_addr) => sentinel_addr,
+                Some(root_addr) => root_addr,
                 None => {
                     return Self {
                         state: PathIteratorState::Exhausted,
@@ -441,7 +441,7 @@ impl<'a, 'b, T> PathIterator<'a, 'b, T> {
                     }
                 }
             },
-            _ => unreachable!("sentinel node is not a branch"),
+            _ => unreachable!("root node is not a branch"),
         };
 
         Self {
@@ -449,7 +449,7 @@ impl<'a, 'b, T> PathIterator<'a, 'b, T> {
             state: PathIteratorState::Iterating {
                 matched_key: vec![],
                 unmatched_key: Nibbles::new(key).into_iter(),
-                address: sentinel_addr,
+                address: root_addr,
             },
         }
     }
@@ -590,16 +590,16 @@ mod tests {
     use tests::linear::tests::MemStore;
 
     impl<T: linear::ReadLinearStore + linear::WriteLinearStore> Merkle<T> {
-        pub(crate) fn node_iter(&self, sentinel_addr: LinearAddress) -> MerkleNodeStream<'_, T> {
-            MerkleNodeStream::new(self, sentinel_addr, Box::new([]))
+        pub(crate) fn node_iter(&self, root_addr: LinearAddress) -> MerkleNodeStream<'_, T> {
+            MerkleNodeStream::new(self, root_addr, Box::new([]))
         }
 
         pub(crate) fn node_iter_from(
             &self,
-            sentinel_addr: LinearAddress,
+            root_addr: LinearAddress,
             key: Key,
         ) -> MerkleNodeStream<'_, T> {
-            MerkleNodeStream::new(self, sentinel_addr, key)
+            MerkleNodeStream::new(self, root_addr, key)
         }
     }
 
@@ -608,9 +608,9 @@ mod tests {
     #[tokio::test]
     async fn path_iterate_empty_merkle_empty_key(key: &[u8]) {
         let mut merkle = _create_test_merkle();
-        let sentinel_addr = merkle.get_sentinel();
-        let sentinel_node = merkle.get_node(sentinel_addr).unwrap();
-        let mut stream = merkle.path_iter(sentinel_node, key);
+        let root_addr = merkle.get_root_address();
+        let root = merkle.get_node(root_addr).unwrap();
+        let mut stream = merkle.path_iter(root, key);
         assert!(stream.next().is_none());
     }
 
@@ -622,13 +622,13 @@ mod tests {
     #[tokio::test]
     async fn path_iterate_singleton_merkle(key: &[u8]) {
         let mut merkle = _create_test_merkle();
-        let sentinel_addr = merkle.get_sentinel();
+        let root_addr = merkle.get_root_address();
 
         merkle.insert(vec![0x13, 0x37], vec![0x42]).unwrap();
 
-        let sentinel_node = merkle.get_node(sentinel_addr).unwrap();
+        let root = merkle.get_node(root_addr).unwrap();
 
-        let mut stream = merkle.path_iter(sentinel_node, key);
+        let mut stream = merkle.path_iter(root, key);
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
             Some(Err(e)) => panic!("{:?}", e),
@@ -646,11 +646,11 @@ mod tests {
     #[test_case(&[0x00, 0x00, 0x00, 0xFF, 0x01]; "past leaf key")]
     #[tokio::test]
     async fn path_iterate_non_singleton_merkle_seek_leaf(key: &[u8]) {
-        let (merkle, sentinel_addr) = created_populated_merkle();
+        let (merkle, root_addr) = created_populated_merkle();
 
-        let sentinel_node = merkle.get_node(sentinel_addr).unwrap();
+        let root = merkle.get_node(root_addr).unwrap();
 
-        let mut stream = merkle.path_iter(sentinel_node, key);
+        let mut stream = merkle.path_iter(root, key);
 
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
@@ -690,12 +690,12 @@ mod tests {
 
     #[tokio::test]
     async fn path_iterate_non_singleton_merkle_seek_branch() {
-        let (merkle, sentinel_addr) = created_populated_merkle();
+        let (merkle, root_addr) = created_populated_merkle();
 
         let key = &[0x00, 0x00, 0x00];
 
-        let sentinel_node = merkle.get_node(sentinel_addr).unwrap();
-        let mut stream = merkle.path_iter(sentinel_node, key);
+        let root = merkle.get_node(root_addr).unwrap();
+        let mut stream = merkle.path_iter(root, key);
 
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
@@ -732,8 +732,8 @@ mod tests {
     #[tokio::test]
     async fn node_iterate_empty() {
         let mut merkle = _create_test_merkle();
-        let sentinel_addr = merkle.get_sentinel();
-        let stream = merkle.node_iter(sentinel_addr);
+        let root_addr = merkle.get_root_address();
+        let stream = merkle.node_iter(root_addr);
         check_stream_is_done(stream).await;
     }
 
@@ -741,11 +741,11 @@ mod tests {
     async fn node_iterate_root_only() {
         let mut merkle = _create_test_merkle();
 
-        let sentinel_addr = merkle.get_sentinel();
+        let root_addr = merkle.get_root_address();
 
         merkle.insert(vec![0x00], vec![0x00]).unwrap();
 
-        let mut stream = merkle.node_iter(sentinel_addr);
+        let mut stream = merkle.node_iter(root_addr);
 
         let (key, node) = stream.next().await.unwrap().unwrap();
 
@@ -756,7 +756,7 @@ mod tests {
     }
 
     /// Returns a new [Merkle] with the following structure:
-    ///     sentinel
+    ///       sentinel  // TODO danlaine: Remove sentinel and update this diagram
     ///        | 0
     ///        00 <-- branch with no value
     ///     0/  D|   \F
@@ -768,7 +768,7 @@ mod tests {
     /// The number next to each branch is the position of the child in the branch's children array.
     fn created_populated_merkle() -> (Merkle<MemStore>, LinearAddress) {
         let mut merkle = _create_test_merkle();
-        let sentinel_addr = merkle.get_sentinel();
+        let root_addr = merkle.get_root_address();
 
         merkle
             .insert(vec![0x00, 0x00, 0x00], vec![0x00, 0x00, 0x00])
@@ -783,14 +783,14 @@ mod tests {
             .insert(vec![0x00, 0xD0, 0xD0], vec![0x00, 0xD0, 0xD0])
             .unwrap();
         merkle.insert(vec![0x00, 0xFF], vec![0x00, 0xFF]).unwrap();
-        (merkle, sentinel_addr)
+        (merkle, root_addr)
     }
 
     #[tokio::test]
     async fn node_iterator_no_start_key() {
-        let (merkle, sentinel_addr) = created_populated_merkle();
+        let (merkle, root_addr) = created_populated_merkle();
 
-        let mut stream = merkle.node_iter(sentinel_addr);
+        let mut stream = merkle.node_iter(root_addr);
 
         // Covers case of branch with no value
         let (key, node) = stream.next().await.unwrap().unwrap();
@@ -837,10 +837,10 @@ mod tests {
 
     #[tokio::test]
     async fn node_iterator_start_key_between_nodes() {
-        let (merkle, sentinel_addr) = created_populated_merkle();
+        let (merkle, root_addr) = created_populated_merkle();
 
         let mut stream =
-            merkle.node_iter_from(sentinel_addr, vec![0x00, 0x00, 0x01].into_boxed_slice());
+            merkle.node_iter_from(root_addr, vec![0x00, 0x00, 0x01].into_boxed_slice());
 
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
@@ -862,10 +862,10 @@ mod tests {
 
     #[tokio::test]
     async fn node_iterator_start_key_on_node() {
-        let (merkle, sentinel_addr) = created_populated_merkle();
+        let (merkle, root_addr) = created_populated_merkle();
 
         let mut stream =
-            merkle.node_iter_from(sentinel_addr, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
+            merkle.node_iter_from(root_addr, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
 
         let (key, node) = stream.next().await.unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
@@ -887,9 +887,9 @@ mod tests {
 
     #[tokio::test]
     async fn node_iterator_start_key_after_last_key() {
-        let (merkle, sentinel_addr) = created_populated_merkle();
+        let (merkle, root_addr) = created_populated_merkle();
 
-        let stream = merkle.node_iter_from(sentinel_addr, vec![0xFF].into_boxed_slice());
+        let stream = merkle.node_iter_from(root_addr, vec![0xFF].into_boxed_slice());
 
         check_stream_is_done(stream).await;
     }

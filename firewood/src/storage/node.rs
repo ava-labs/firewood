@@ -145,8 +145,8 @@ impl<T: ReadLinearStore> NodeStore<T> {
         }
     }
 
-    pub const fn sentinel_address(&self) -> Option<LinearAddress> {
-        self.header.sentinel_address
+    pub const fn root_address(&self) -> Option<LinearAddress> {
+        self.header.root_address
     }
 
     pub fn open(linear_store: T) -> Result<Self, Error> {
@@ -173,7 +173,7 @@ impl<T: WriteLinearStore> NodeStore<T> {
         let header = NodeStoreHeader {
             version: Version::new(),
             free_lists: Default::default(),
-            sentinel_address: None,
+            root_address: None,
             size: NodeStoreHeader::SIZE,
         };
 
@@ -346,9 +346,9 @@ impl<T: WriteLinearStore> NodeStore<T> {
         Ok(())
     }
 
-    fn set_sentinel(&mut self, addr: LinearAddress) -> Result<(), Error> {
-        self.header.sentinel_address = Some(addr);
-        self.write_header() // TODO make this update sentinel address
+    fn set_root(&mut self, addr: LinearAddress) -> Result<(), Error> {
+        self.header.root_address = Some(addr);
+        self.write_header()
     }
 }
 
@@ -398,7 +398,7 @@ struct NodeStoreHeader {
     size: u64,
     /// Element i is the pointer to the first free block of size BLOCK_SIZES[i].
     free_lists: FreeLists,
-    sentinel_address: Option<LinearAddress>,
+    root_address: Option<LinearAddress>,
 }
 
 impl NodeStoreHeader {
@@ -420,7 +420,7 @@ impl NodeStoreHeader {
     fn new() -> Self {
         Self {
             size: 0,
-            sentinel_address: None,
+            root_address: None,
             version: Version::new(),
             free_lists: Default::default(),
         }
@@ -488,7 +488,7 @@ mod tests {
             assert_eq!(header.version, Version::new());
             let empty_free_lists: FreeLists = Default::default();
             assert_eq!(header.free_lists, empty_free_lists);
-            assert_eq!(header.sentinel_address, None);
+            assert_eq!(header.root_address, None);
 
             // Leaf should go right after the header
             assert_eq!(leaf_addr.get(), NodeStoreHeader::SIZE);
@@ -521,7 +521,7 @@ mod tests {
             assert_eq!(header.version, Version::new());
             let empty_free_lists: FreeLists = Default::default();
             assert_eq!(header.free_lists, empty_free_lists);
-            assert_eq!(header.sentinel_address, None);
+            assert_eq!(header.root_address, None);
             assert!(header.size > old_size);
 
             // branch should go right after leaf
@@ -614,7 +614,7 @@ mod tests {
         assert_eq!(header.version, Version::new());
         let empty_free_lists: FreeLists = Default::default();
         assert_eq!(header.free_lists, empty_free_lists);
-        assert_eq!(header.sentinel_address, None);
+        assert_eq!(header.root_address, None);
         assert_eq!(header.size, old_size);
 
         // The new node should be readable

@@ -47,8 +47,7 @@ pub enum MerkleError {
 
 #[derive(Debug)]
 pub struct Merkle<T> {
-    // Get the sentinel addr from the NodeStore
-    sentinel_addr: LinearAddress,
+    root_addr: LinearAddress,
     store: node::NodeStore<T>,
 }
 
@@ -57,15 +56,10 @@ impl<T: linear::ReadLinearStore + linear::WriteLinearStore> Merkle<T> {
         todo!()
     }
 
-    pub fn get_sentinel(&mut self) -> LinearAddress {
-        self.sentinel_addr
+    pub fn get_root_address(&self) -> LinearAddress {
+        self.root_addr
     }
 
-    // fn _init_sentinel(&mut self) -> Result<LinearAddress, MerkleError> {
-    //     todo!()
-    // }
-
-    /// TODO danlaine: implement
     pub const fn new() -> Self {
         todo!()
     }
@@ -103,11 +97,11 @@ impl<T: linear::ReadLinearStore + linear::WriteLinearStore> Merkle<T> {
     {
         todo!()
         // let mut proofs = HashMap::new();
-        // if sentinel_addr.is_null() {
+        // if root_addr.is_null() {
         //     return Ok(Proof(proofs));
         // }
 
-        // let sentinel_node = self.get_node(sentinel_addr)?;
+        // let sentinel_node = self.get_node(root_addr)?;
 
         // let path_iter = self.path_iter(sentinel_node, key.as_ref());
 
@@ -127,12 +121,12 @@ impl<T: linear::ReadLinearStore + linear::WriteLinearStore> Merkle<T> {
     pub fn get<K: AsRef<[u8]>>(&self, _key: K) -> Result<Option<Box<[u8]>>, MerkleError> {
         todo!()
         // TODO danlaine use or remove the code below
-        // if sentinel_addr.is_null() {
+        // if root_addr.is_null() {
         //     todo!()
         //         return Ok(None);
         //     }
 
-        //     let root_node = self.get_node(sentinel_addr)?;
+        //     let root_node = self.get_node(root_addr)?;
         //     let node_ref = self.get_node_by_key(root_node, key)?;
 
         //     Ok(node_ref.map(Ref))
@@ -157,21 +151,17 @@ impl<T: linear::ReadLinearStore + linear::WriteLinearStore> Merkle<T> {
         todo!()
     }
 
-    // TODO danlaine: can we use the LinearAddress of the sentinel_node instead?
-    pub fn path_iter<'a, 'b>(
-        &'a self,
-        sentinel_node: &'a Node,
-        key: &'b [u8],
-    ) -> PathIterator<'_, 'b, T> {
-        PathIterator::new(self, sentinel_node, key)
+    // TODO danlaine: can we use the LinearAddress of the `root` instead?
+    pub fn path_iter<'a, 'b>(&'a self, root: &'a Node, key: &'b [u8]) -> PathIterator<'_, 'b, T> {
+        PathIterator::new(self, root, key)
     }
 
     pub(crate) fn _key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
-        MerkleKeyValueStream::_new(self, self.sentinel_addr)
+        MerkleKeyValueStream::_new(self, self.root_addr)
     }
 
     pub(crate) fn _key_value_iter_from_key(&self, key: Key) -> MerkleKeyValueStream<'_, T> {
-        MerkleKeyValueStream::_from_key(self, self.sentinel_addr, key)
+        MerkleKeyValueStream::_from_key(self, self.root_addr, key)
     }
 
     pub(super) async fn _range_proof<K: api::KeyType + Send + Sync>(
@@ -440,11 +430,11 @@ mod tests {
     //         let val = b"world";
 
     //         let mut merkle = create_test_merkle();
-    //         let sentinel_addr = merkle.init_sentinel().unwrap();
+    //         let root_addr = merkle.init_sentinel().unwrap();
 
-    //         merkle.insert(key, val.to_vec(), sentinel_addr).unwrap();
+    //         merkle.insert(key, val.to_vec(), root_addr).unwrap();
 
-    //         let fetched_val = merkle.get(key, sentinel_addr).unwrap();
+    //         let fetched_val = merkle.get(key, root_addr).unwrap();
 
     //         assert_eq!(fetched_val.as_deref(), val.as_slice().into());
     //     }
@@ -452,16 +442,16 @@ mod tests {
     //     #[test]
     //     fn insert_and_retrieve_multiple() {
     //         let mut merkle = create_test_merkle();
-    //         let sentinel_addr = merkle.init_sentinel().unwrap();
+    //         let root_addr = merkle.init_sentinel().unwrap();
 
     //         // insert values
     //         for key_val in u8::MIN..=u8::MAX {
     //             let key = vec![key_val];
     //             let val = vec![key_val];
 
-    //             merkle.insert(&key, val.clone(), sentinel_addr).unwrap();
+    //             merkle.insert(&key, val.clone(), root_addr).unwrap();
 
-    //             let fetched_val = merkle.get(&key, sentinel_addr).unwrap();
+    //             let fetched_val = merkle.get(&key, root_addr).unwrap();
 
     //             // make sure the value was inserted
     //             assert_eq!(fetched_val.as_deref(), val.as_slice().into());
@@ -472,7 +462,7 @@ mod tests {
     //             let key = vec![key_val];
     //             let val = vec![key_val];
 
-    //             let fetched_val = merkle.get(&key, sentinel_addr).unwrap();
+    //             let fetched_val = merkle.get(&key, root_addr).unwrap();
 
     //             assert_eq!(fetched_val.as_deref(), val.as_slice().into());
     //         }
@@ -515,18 +505,18 @@ mod tests {
     //         ];
 
     //         let mut merkle = create_test_merkle();
-    //         let sentinel_addr = merkle.init_sentinel().unwrap();
+    //         let root_addr = merkle.init_sentinel().unwrap();
 
     //         for (key, val) in &key_val {
-    //             merkle.insert(key, val.to_vec(), sentinel_addr).unwrap();
+    //             merkle.insert(key, val.to_vec(), root_addr).unwrap();
 
-    //             let fetched_val = merkle.get(key, sentinel_addr).unwrap();
+    //             let fetched_val = merkle.get(key, root_addr).unwrap();
 
     //             assert_eq!(fetched_val.as_deref(), val.as_slice().into());
     //         }
 
     //         for (key, val) in key_val {
-    //             let fetched_val = merkle.get(key, sentinel_addr).unwrap();
+    //             let fetched_val = merkle.get(key, root_addr).unwrap();
 
     //             assert_eq!(fetched_val.as_deref(), val.as_slice().into());
     //         }
@@ -538,35 +528,35 @@ mod tests {
     //         let val = b"world";
 
     //         let mut merkle = create_test_merkle();
-    //         let sentinel_addr = merkle.init_sentinel().unwrap();
+    //         let root_addr = merkle.init_sentinel().unwrap();
 
-    //         merkle.insert(key, val.to_vec(), sentinel_addr).unwrap();
+    //         merkle.insert(key, val.to_vec(), root_addr).unwrap();
 
     //         assert_eq!(
-    //             merkle.get(key, sentinel_addr).unwrap().as_deref(),
+    //             merkle.get(key, root_addr).unwrap().as_deref(),
     //             val.as_slice().into()
     //         );
 
-    //         let removed_val = merkle.remove(key, sentinel_addr).unwrap();
+    //         let removed_val = merkle.remove(key, root_addr).unwrap();
     //         assert_eq!(removed_val.as_deref(), val.as_slice().into());
 
-    //         let fetched_val = merkle.get(key, sentinel_addr).unwrap();
+    //         let fetched_val = merkle.get(key, root_addr).unwrap();
     //         assert!(fetched_val.is_none());
     //     }
 
     //     #[test]
     //     fn remove_many() {
     //         let mut merkle = create_test_merkle();
-    //         let sentinel_addr = merkle.init_sentinel().unwrap();
+    //         let root_addr = merkle.init_sentinel().unwrap();
 
     //         // insert values
     //         for key_val in u8::MIN..=u8::MAX {
     //             let key = &[key_val];
     //             let val = &[key_val];
 
-    //             merkle.insert(key, val.to_vec(), sentinel_addr).unwrap();
+    //             merkle.insert(key, val.to_vec(), root_addr).unwrap();
 
-    //             let fetched_val = merkle.get(key, sentinel_addr).unwrap();
+    //             let fetched_val = merkle.get(key, root_addr).unwrap();
 
     //             // make sure the value was inserted
     //             assert_eq!(fetched_val.as_deref(), val.as_slice().into());
@@ -577,13 +567,13 @@ mod tests {
     //             let key = &[key_val];
     //             let val = &[key_val];
 
-    //             let Ok(removed_val) = merkle.remove(key, sentinel_addr) else {
+    //             let Ok(removed_val) = merkle.remove(key, root_addr) else {
     //                 panic!("({key_val}, {key_val}) missing");
     //             };
 
     //             assert_eq!(removed_val.as_deref(), val.as_slice().into());
 
-    //             let fetched_val = merkle.get(key, sentinel_addr).unwrap();
+    //             let fetched_val = merkle.get(key, root_addr).unwrap();
     //             assert!(fetched_val.is_none());
     //         }
     //     }
@@ -591,9 +581,9 @@ mod tests {
     //     #[test]
     //     fn get_empty_proof() {
     //         let merkle = create_test_merkle();
-    //         let sentinel_addr = merkle.init_sentinel().unwrap();
+    //         let root_addr = merkle.init_sentinel().unwrap();
 
-    //         let proof = merkle.prove(b"any-key", sentinel_addr).unwrap();
+    //         let proof = merkle.prove(b"any-key", root_addr).unwrap();
 
     //         assert!(proof.0.is_empty());
     //     }
@@ -601,10 +591,10 @@ mod tests {
     //     #[tokio::test]
     //     async fn empty_range_proof() {
     //         let merkle = create_test_merkle();
-    //         let sentinel_addr = merkle.init_sentinel().unwrap();
+    //         let root_addr = merkle.init_sentinel().unwrap();
 
     //         assert!(merkle
-    //             .range_proof::<&[u8]>(sentinel_addr, None, None, None)
+    //             .range_proof::<&[u8]>(root_addr, None, None, None)
     //             .await
     //             .unwrap()
     //             .is_none());
@@ -613,12 +603,12 @@ mod tests {
     //     #[tokio::test]
     //     async fn range_proof_invalid_bounds() {
     //         let merkle = create_test_merkle();
-    //         let sentinel_addr = merkle.init_sentinel().unwrap();
+    //         let root_addr = merkle.init_sentinel().unwrap();
     //         let start_key = &[0x01];
     //         let end_key = &[0x00];
 
     //         match merkle
-    //             .range_proof::<&[u8]>(sentinel_addr, Some(start_key), Some(end_key), Some(1))
+    //             .range_proof::<&[u8]>(root_addr, Some(start_key), Some(end_key), Some(1))
     //             .await
     //         {
     //             Err(api::Error::InvalidRange {
@@ -633,25 +623,25 @@ mod tests {
     //     #[tokio::test]
     //     async fn full_range_proof() {
     //         let mut merkle = create_test_merkle();
-    //         let sentinel_addr = merkle.init_sentinel().unwrap();
+    //         let root_addr = merkle.init_sentinel().unwrap();
     //         // insert values
     //         for key_val in u8::MIN..=u8::MAX {
     //             let key = &[key_val];
     //             let val = &[key_val];
 
-    //             merkle.insert(key, val.to_vec(), sentinel_addr).unwrap();
+    //             merkle.insert(key, val.to_vec(), root_addr).unwrap();
     //         }
     //         merkle.flush_dirty();
 
     //         let rangeproof = merkle
-    //             .range_proof::<&[u8]>(sentinel_addr, None, None, None)
+    //             .range_proof::<&[u8]>(root_addr, None, None, None)
     //             .await
     //             .unwrap()
     //             .unwrap();
     //         assert_eq!(rangeproof.middle.len(), u8::MAX as usize + 1);
     //         assert_ne!(rangeproof.first_key_proof.0, rangeproof.last_key_proof.0);
-    //         let left_proof = merkle.prove([u8::MIN], sentinel_addr).unwrap();
-    //         let right_proof = merkle.prove([u8::MAX], sentinel_addr).unwrap();
+    //         let left_proof = merkle.prove([u8::MIN], root_addr).unwrap();
+    //         let right_proof = merkle.prove([u8::MAX], root_addr).unwrap();
     //         assert_eq!(rangeproof.first_key_proof.0, left_proof.0);
     //         assert_eq!(rangeproof.last_key_proof.0, right_proof.0);
     //     }
@@ -661,18 +651,18 @@ mod tests {
     //         const RANDOM_KEY: u8 = 42;
 
     //         let mut merkle = create_test_merkle();
-    //         let sentinel_addr = merkle.init_sentinel().unwrap();
+    //         let root_addr = merkle.init_sentinel().unwrap();
     //         // insert values
     //         for key_val in u8::MIN..=u8::MAX {
     //             let key = &[key_val];
     //             let val = &[key_val];
 
-    //             merkle.insert(key, val.to_vec(), sentinel_addr).unwrap();
+    //             merkle.insert(key, val.to_vec(), root_addr).unwrap();
     //         }
     //         merkle.flush_dirty();
 
     //         let rangeproof = merkle
-    //             .range_proof(sentinel_addr, Some([RANDOM_KEY]), None, Some(1))
+    //             .range_proof(root_addr, Some([RANDOM_KEY]), None, Some(1))
     //             .await
     //             .unwrap()
     //             .unwrap();
@@ -683,21 +673,21 @@ mod tests {
     //     #[test]
     //     fn shared_path_proof() {
     //         let mut merkle = create_test_merkle();
-    //         let sentinel_addr = merkle.init_sentinel().unwrap();
+    //         let root_addr = merkle.init_sentinel().unwrap();
 
     //         let key1 = b"key1";
     //         let value1 = b"1";
-    //         merkle.insert(key1, value1.to_vec(), sentinel_addr).unwrap();
+    //         merkle.insert(key1, value1.to_vec(), root_addr).unwrap();
 
     //         let key2 = b"key2";
     //         let value2 = b"2";
-    //         merkle.insert(key2, value2.to_vec(), sentinel_addr).unwrap();
+    //         merkle.insert(key2, value2.to_vec(), root_addr).unwrap();
 
-    //         let root_hash = merkle.root_hash(sentinel_addr).unwrap();
+    //         let root_hash = merkle.root_hash(root_addr).unwrap();
 
     //         let verified = {
     //             let key = key1;
-    //             let proof = merkle.prove(key, sentinel_addr).unwrap();
+    //             let proof = merkle.prove(key, root_addr).unwrap();
     //             proof.verify(key, root_hash.0).unwrap()
     //         };
 
@@ -705,7 +695,7 @@ mod tests {
 
     //         let verified = {
     //             let key = key2;
-    //             let proof = merkle.prove(key, sentinel_addr).unwrap();
+    //             let proof = merkle.prove(key, root_addr).unwrap();
     //             proof.verify(key, root_hash.0).unwrap()
     //         };
 
@@ -736,20 +726,20 @@ mod tests {
     //         ];
 
     //         let mut merkle = create_test_merkle();
-    //         let sentinel_addr = merkle.init_sentinel().unwrap();
+    //         let root_addr = merkle.init_sentinel().unwrap();
 
     //         for (key, val) in &pairs {
     //             let val = val.to_vec();
-    //             merkle.insert(key, val.clone(), sentinel_addr).unwrap();
+    //             merkle.insert(key, val.clone(), root_addr).unwrap();
 
-    //             let fetched_val = merkle.get(key, sentinel_addr).unwrap();
+    //             let fetched_val = merkle.get(key, root_addr).unwrap();
 
     //             // make sure the value was inserted
     //             assert_eq!(fetched_val.as_deref(), val.as_slice().into());
     //         }
 
     //         for (key, val) in pairs {
-    //             let fetched_val = merkle.get(key, sentinel_addr).unwrap();
+    //             let fetched_val = merkle.get(key, root_addr).unwrap();
 
     //             // make sure the value was inserted
     //             assert_eq!(fetched_val.as_deref(), val.into());
@@ -763,21 +753,21 @@ mod tests {
     //         let overwrite = vec![2];
 
     //         let mut merkle = create_test_merkle();
-    //         let sentinel_addr = merkle.init_sentinel().unwrap();
+    //         let root_addr = merkle.init_sentinel().unwrap();
 
-    //         merkle.insert(&key, val.clone(), sentinel_addr).unwrap();
+    //         merkle.insert(&key, val.clone(), root_addr).unwrap();
 
     //         assert_eq!(
-    //             merkle.get(&key, sentinel_addr).unwrap().as_deref(),
+    //             merkle.get(&key, root_addr).unwrap().as_deref(),
     //             Some(val.as_slice())
     //         );
 
     //         merkle
-    //             .insert(&key, overwrite.clone(), sentinel_addr)
+    //             .insert(&key, overwrite.clone(), root_addr)
     //             .unwrap();
 
     //         assert_eq!(
-    //             merkle.get(&key, sentinel_addr).unwrap().as_deref(),
+    //             merkle.get(&key, root_addr).unwrap().as_deref(),
     //             Some(overwrite.as_slice())
     //         );
     //     }
@@ -790,18 +780,18 @@ mod tests {
     //         let val_2 = vec![2];
 
     //         let mut merkle = create_test_merkle();
-    //         let sentinel_addr = merkle.init_sentinel().unwrap();
+    //         let root_addr = merkle.init_sentinel().unwrap();
 
-    //         merkle.insert(&key, val.clone(), sentinel_addr).unwrap();
-    //         merkle.insert(&key_2, val_2.clone(), sentinel_addr).unwrap();
+    //         merkle.insert(&key, val.clone(), root_addr).unwrap();
+    //         merkle.insert(&key_2, val_2.clone(), root_addr).unwrap();
 
     //         assert_eq!(
-    //             merkle.get(&key, sentinel_addr).unwrap().as_deref(),
+    //             merkle.get(&key, root_addr).unwrap().as_deref(),
     //             Some(val.as_slice())
     //         );
 
     //         assert_eq!(
-    //             merkle.get(&key_2, sentinel_addr).unwrap().as_deref(),
+    //             merkle.get(&key_2, root_addr).unwrap().as_deref(),
     //             Some(val_2.as_slice())
     //         );
     //     }
@@ -814,18 +804,18 @@ mod tests {
     //         let val_2 = vec![2];
 
     //         let mut merkle = create_test_merkle();
-    //         let sentinel_addr = merkle.init_sentinel().unwrap();
+    //         let root_addr = merkle.init_sentinel().unwrap();
 
-    //         merkle.insert(&key, val.clone(), sentinel_addr).unwrap();
-    //         merkle.insert(&key_2, val_2.clone(), sentinel_addr).unwrap();
+    //         merkle.insert(&key, val.clone(), root_addr).unwrap();
+    //         merkle.insert(&key_2, val_2.clone(), root_addr).unwrap();
 
     //         assert_eq!(
-    //             merkle.get(&key, sentinel_addr).unwrap().as_deref(),
+    //             merkle.get(&key, root_addr).unwrap().as_deref(),
     //             Some(val.as_slice())
     //         );
 
     //         assert_eq!(
-    //             merkle.get(&key_2, sentinel_addr).unwrap().as_deref(),
+    //             merkle.get(&key_2, root_addr).unwrap().as_deref(),
     //             Some(val_2.as_slice())
     //         );
     //     }
@@ -840,24 +830,24 @@ mod tests {
     //         let val_3 = vec![3];
 
     //         let mut merkle = create_test_merkle();
-    //         let sentinel_addr = merkle.init_sentinel().unwrap();
+    //         let root_addr = merkle.init_sentinel().unwrap();
 
-    //         merkle.insert(&key, val.clone(), sentinel_addr).unwrap();
-    //         merkle.insert(&key_2, val_2.clone(), sentinel_addr).unwrap();
-    //         merkle.insert(&key_3, val_3.clone(), sentinel_addr).unwrap();
+    //         merkle.insert(&key, val.clone(), root_addr).unwrap();
+    //         merkle.insert(&key_2, val_2.clone(), root_addr).unwrap();
+    //         merkle.insert(&key_3, val_3.clone(), root_addr).unwrap();
 
     //         assert_eq!(
-    //             merkle.get(&key, sentinel_addr).unwrap().as_deref(),
+    //             merkle.get(&key, root_addr).unwrap().as_deref(),
     //             Some(val.as_slice())
     //         );
 
     //         assert_eq!(
-    //             merkle.get(&key_2, sentinel_addr).unwrap().as_deref(),
+    //             merkle.get(&key_2, root_addr).unwrap().as_deref(),
     //             Some(val_2.as_slice())
     //         );
 
     //         assert_eq!(
-    //             merkle.get(&key_3, sentinel_addr).unwrap().as_deref(),
+    //             merkle.get(&key_3, root_addr).unwrap().as_deref(),
     //             Some(val_3.as_slice())
     //         );
     //     }
@@ -872,24 +862,24 @@ mod tests {
     //         let val_3 = vec![3];
 
     //         let mut merkle = create_test_merkle();
-    //         let sentinel_addr = merkle.init_sentinel().unwrap();
+    //         let root_addr = merkle.init_sentinel().unwrap();
 
-    //         merkle.insert(&key, val.clone(), sentinel_addr).unwrap();
-    //         merkle.insert(&key_2, val_2.clone(), sentinel_addr).unwrap();
-    //         merkle.insert(&key_3, val_3.clone(), sentinel_addr).unwrap();
+    //         merkle.insert(&key, val.clone(), root_addr).unwrap();
+    //         merkle.insert(&key_2, val_2.clone(), root_addr).unwrap();
+    //         merkle.insert(&key_3, val_3.clone(), root_addr).unwrap();
 
     //         assert_eq!(
-    //             merkle.get(&key, sentinel_addr).unwrap().as_deref(),
+    //             merkle.get(&key, root_addr).unwrap().as_deref(),
     //             Some(val.as_slice())
     //         );
 
     //         assert_eq!(
-    //             merkle.get(&key_2, sentinel_addr).unwrap().as_deref(),
+    //             merkle.get(&key_2, root_addr).unwrap().as_deref(),
     //             Some(val_2.as_slice())
     //         );
 
     //         assert_eq!(
-    //             merkle.get(&key_3, sentinel_addr).unwrap().as_deref(),
+    //             merkle.get(&key_3, root_addr).unwrap().as_deref(),
     //             Some(val_3.as_slice())
     //         );
     //     }
@@ -904,32 +894,32 @@ mod tests {
     //         let overwrite = vec![3];
 
     //         let mut merkle = create_test_merkle();
-    //         let sentinel_addr = merkle.init_sentinel().unwrap();
+    //         let root_addr = merkle.init_sentinel().unwrap();
 
-    //         merkle.insert(&key, val.clone(), sentinel_addr).unwrap();
-    //         merkle.insert(&key_2, val_2.clone(), sentinel_addr).unwrap();
+    //         merkle.insert(&key, val.clone(), root_addr).unwrap();
+    //         merkle.insert(&key_2, val_2.clone(), root_addr).unwrap();
 
     //         assert_eq!(
-    //             merkle.get(&key, sentinel_addr).unwrap().as_deref(),
+    //             merkle.get(&key, root_addr).unwrap().as_deref(),
     //             Some(val.as_slice())
     //         );
 
     //         assert_eq!(
-    //             merkle.get(&key_2, sentinel_addr).unwrap().as_deref(),
+    //             merkle.get(&key_2, root_addr).unwrap().as_deref(),
     //             Some(val_2.as_slice())
     //         );
 
     //         merkle
-    //             .insert(&key, overwrite.clone(), sentinel_addr)
+    //             .insert(&key, overwrite.clone(), root_addr)
     //             .unwrap();
 
     //         assert_eq!(
-    //             merkle.get(&key, sentinel_addr).unwrap().as_deref(),
+    //             merkle.get(&key, root_addr).unwrap().as_deref(),
     //             Some(overwrite.as_slice())
     //         );
 
     //         assert_eq!(
-    //             merkle.get(&key_2, sentinel_addr).unwrap().as_deref(),
+    //             merkle.get(&key_2, root_addr).unwrap().as_deref(),
     //             Some(val_2.as_slice())
     //         );
     //     }
@@ -937,14 +927,14 @@ mod tests {
     //     #[test]
     //     fn single_key_proof_with_one_node() {
     //         let mut merkle = create_test_merkle();
-    //         let sentinel_addr = merkle.init_sentinel().unwrap();
+    //         let root_addr = merkle.init_sentinel().unwrap();
     //         let key = b"key";
     //         let value = b"value";
 
-    //         merkle.insert(key, value.to_vec(), sentinel_addr).unwrap();
-    //         let root_hash = merkle.root_hash(sentinel_addr).unwrap();
+    //         merkle.insert(key, value.to_vec(), root_addr).unwrap();
+    //         let root_hash = merkle.root_hash(root_addr).unwrap();
 
-    //         let proof = merkle.prove(key, sentinel_addr).unwrap();
+    //         let proof = merkle.prove(key, root_addr).unwrap();
 
     //         let verified = proof.verify(key, root_hash.0).unwrap();
 
@@ -954,18 +944,18 @@ mod tests {
     //     #[test]
     //     fn two_key_proof_without_shared_path() {
     //         let mut merkle = create_test_merkle();
-    //         let sentinel_addr = merkle.init_sentinel().unwrap();
+    //         let root_addr = merkle.init_sentinel().unwrap();
 
     //         let key1 = &[0x00];
     //         let key2 = &[0xff];
 
-    //         merkle.insert(key1, key1.to_vec(), sentinel_addr).unwrap();
-    //         merkle.insert(key2, key2.to_vec(), sentinel_addr).unwrap();
+    //         merkle.insert(key1, key1.to_vec(), root_addr).unwrap();
+    //         merkle.insert(key2, key2.to_vec(), root_addr).unwrap();
 
-    //         let root_hash = merkle.root_hash(sentinel_addr).unwrap();
+    //         let root_hash = merkle.root_hash(root_addr).unwrap();
 
     //         let verified = {
-    //             let proof = merkle.prove(key1, sentinel_addr).unwrap();
+    //             let proof = merkle.prove(key1, root_addr).unwrap();
     //             proof.verify(key1, root_hash.0).unwrap()
     //         };
 
@@ -1058,8 +1048,8 @@ mod tests {
     //         new_value: Vec<u8>,
     //     ) -> Result<(), MerkleError> {
     //         let merkle = create_test_merkle();
-    //         let sentinel_addr = merkle.init_sentinel()?;
-    //         let sentinel = merkle.get_node(sentinel_addr)?;
+    //         let root_addr = merkle.init_sentinel()?;
+    //         let sentinel = merkle.get_node(root_addr)?;
 
     //         let mut node_ref = merkle.put_node(node)?;
     //         let addr = node_ref.as_addr();
