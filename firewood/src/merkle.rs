@@ -9,6 +9,8 @@ use crate::trie_hash::TrieHash;
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
 use std::future::ready;
+use std::io::Write;
+use std::ops::{Deref, DerefMut};
 use thiserror::Error;
 
 pub type Key = Box<[u8]>;
@@ -35,15 +37,28 @@ pub enum MerkleError {
 }
 
 #[derive(Debug)]
-pub struct Merkle<T> {
-    store: node::NodeStore<T>,
+pub struct Merkle<T>(node::NodeStore<T>);
+
+impl<T: ReadLinearStore> Deref for Merkle<T> {
+    type Target = node::NodeStore<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T: WriteLinearStore> DerefMut for Merkle<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 impl<T: ReadLinearStore> Merkle<T> {
-    pub const fn root_address(&self) -> Option<LinearAddress> {
-        self.store.root_address()
+    pub const fn new(store: node::NodeStore<T>) -> Merkle<T> {
+        Merkle(store)
     }
 
+    // TODO: remove me
     pub fn get_node(&self, _addr: LinearAddress) -> Result<&Node, MerkleError> {
         todo!()
     }
@@ -51,10 +66,6 @@ impl<T: ReadLinearStore> Merkle<T> {
 
 impl<T: WriteLinearStore> Merkle<T> {
     pub fn root_hash(&self) -> Result<TrieHash, MerkleError> {
-        todo!()
-    }
-
-    pub fn dump(&self) -> Result<(), MerkleError> {
         todo!()
     }
 
@@ -130,10 +141,7 @@ impl<T: WriteLinearStore> Merkle<T> {
     }
 
     // TODO danlaine: can we use the LinearAddress of the `root` instead?
-    pub fn path_iter<'a, 'b>(
-        &'a self,
-        key: &'b [u8],
-    ) -> Result<PathIterator<'_, 'b, T>, MerkleError> {
+    pub fn path_iter<'a>(&self, key: &'a [u8]) -> Result<PathIterator<'_, 'a, T>, MerkleError> {
         PathIterator::new(self, key)
     }
 
@@ -233,13 +241,28 @@ impl<T: WriteLinearStore> Merkle<T> {
             last_key_proof,
         }))
     }
+
+    pub fn dump_node(
+        &self,
+        addr: LinearAddress,
+        writer: &mut dyn Write,
+    ) -> Result<(), std::io::Error> {
+        write!(writer, "{addr} ")?;
+        let _node = self.read_node(addr)?;
+        todo!()
+    }
+    pub fn dump(&self) -> Result<String, std::io::Error> {
+        let mut result = vec![];
+        match self.root_address() {
+            Some(addr) => self.dump_node(addr, &mut result)?,
+            None => write!(&mut result, "[empty merkle]")?,
+        }
+
+        Ok(String::from_utf8_lossy(&result).to_string())
+    }
 }
 
 impl<T: WriteLinearStore> Merkle<T> {
-    pub const fn new() -> Self {
-        todo!()
-    }
-
     pub fn insert<K: AsRef<[u8]>>(&mut self, _key: K, _val: Vec<u8>) -> Result<(), MerkleError> {
         todo!()
     }
@@ -251,7 +274,7 @@ impl<T: WriteLinearStore> Merkle<T> {
 
 impl<T: WriteLinearStore> Merkle<T> {
     pub fn put_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError> {
-        self.store.create_node(&node).map_err(MerkleError::Format)
+        self.create_node(&node).map_err(MerkleError::Format)
     }
 
     fn _delete_node(&mut self, _addr: LinearAddress) -> Result<(), MerkleError> {

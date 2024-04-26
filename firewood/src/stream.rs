@@ -561,7 +561,7 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
-    use crate::storage::linear::{tests::MemStore, WriteLinearStore};
+    use crate::storage::{linear::tests::MemStore, node::NodeStore};
 
     use super::*;
     use test_case::test_case;
@@ -577,7 +577,7 @@ mod tests {
     }
 
     pub(super) fn _create_test_merkle() -> Merkle<MemStore> {
-        todo!()
+        Merkle::new(NodeStore::initialize(MemStore::new(vec![])).unwrap())
     }
 
     #[test_case(&[]; "empty key")]
