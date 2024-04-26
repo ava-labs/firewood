@@ -3,15 +3,13 @@
 
 use std::collections::HashMap;
 
-use crate::v2::api::HashKey;
+use crate::{merkle::Merkle, v2::api::HashKey};
 use aiofut::AioError;
 use nix::errno::Errno;
 use sha3::Digest;
 use thiserror::Error;
 
 use crate::{db::DbError, merkle::MerkleError};
-
-use super::Merkle;
 
 #[derive(Debug, Error)]
 pub enum ProofError {

@@ -1,8 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::merkle::nibbles_to_bytes_iter;
-use crate::merkle::TRIE_HASH_LEN;
+use crate::{merkle::nibbles_to_bytes_iter, trie_hash::TRIE_HASH_LEN};
 use enum_as_inner::EnumAsInner;
 use serde::{ser::SerializeTuple, Deserialize, Serialize};
 use sha3::{Digest, Keccak256};

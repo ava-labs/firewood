@@ -1,25 +1,18 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
-use crate::node::{BranchNode, Node};
+use crate::node::Node;
+use crate::proof::{Proof, ProofError};
 use crate::storage::linear::WriteLinearStore;
 use crate::storage::node::{self, LinearAddress};
+use crate::stream::{MerkleKeyValueStream, PathIterator};
+use crate::trie_hash::TrieHash;
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
 use std::future::ready;
 use thiserror::Error;
 
-pub mod proof;
-mod stream;
-mod trie_hash;
-
-pub use proof::{Proof, ProofError};
-pub use stream::MerkleKeyValueStream;
-pub use trie_hash::{TrieHash, TRIE_HASH_LEN};
-
-use self::stream::PathIterator;
-
 pub type Key = Box<[u8]>;
-type Value = Vec<u8>;
+pub type Value = Vec<u8>;
 
 #[derive(Debug, Error)]
 pub enum MerkleError {
@@ -312,9 +305,7 @@ pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
 
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
-mod tests {
-    use crate::storage::linear::tests::MemStore;
-
+pub(super) mod tests {
     use super::*;
     use test_case::test_case;
 
@@ -323,10 +314,6 @@ mod tests {
     fn to_nibbles(bytes: Vec<u8>, nibbles: &[u8]) {
         let n: Vec<_> = bytes.into_iter().flat_map(to_nibble_array).collect();
         assert_eq!(n, nibbles);
-    }
-
-    pub(super) fn _create_test_merkle() -> Merkle<MemStore> {
-        todo!()
     }
 
     //     fn branch(path: &[u8], value: &[u8], encoded_child: Option<Vec<u8>>) -> Node {

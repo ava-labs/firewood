@@ -8,8 +8,8 @@ use std::io::Error;
 use std::ops::Deref;
 use std::sync::{Arc, OnceLock};
 
-use crate::merkle::TrieHash;
 use crate::node::Node;
+use crate::trie_hash::TrieHash;
 
 use super::linear::{ReadLinearStore, WriteLinearStore};
 use super::node::{LinearAddress, NodeStore};

@@ -6,9 +6,9 @@ use std::{collections::BTreeMap, fmt::Debug, sync::Arc};
 use async_trait::async_trait;
 use futures::stream::Empty;
 
-use crate::{merkle::Proof, v2::api};
-
 use super::api::{KeyType, ValueType};
+use crate::proof::Proof;
+use crate::v2::api;
 
 #[derive(Clone, Debug)]
 pub(crate) enum KeyOp<V: ValueType> {

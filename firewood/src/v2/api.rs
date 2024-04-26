@@ -1,8 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::merkle::MerkleError;
-pub use crate::merkle::Proof;
+use crate::{merkle::MerkleError, proof::Proof};
 use async_trait::async_trait;
 use futures::Stream;
 use std::{fmt::Debug, sync::Arc};

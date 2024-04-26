@@ -1,11 +1,14 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use crate::proof::{Proof, ProofError};
+use crate::storage::linear;
 use crate::storage::linear::proposed::ProposedMutable;
+use crate::stream::MerkleKeyValueStream;
+use crate::trie_hash::TrieHash;
 pub use crate::v2::api::{Batch, BatchOp};
-use crate::{merkle, storage::linear};
 use crate::{
-    merkle::{MerkleError, MerkleKeyValueStream, Proof, ProofError, TrieHash},
+    merkle::MerkleError,
     v2::api::{self, HashKey, KeyType, ValueType},
 };
 use aiofut::AioError;
@@ -96,11 +99,11 @@ impl<T: linear::ReadLinearStore + linear::WriteLinearStore> api::DbView for Hist
 }
 
 impl<T> Historical<T> {
-    pub fn stream(&self) -> merkle::MerkleKeyValueStream<'_, T> {
+    pub fn stream(&self) -> MerkleKeyValueStream<'_, T> {
         todo!()
     }
 
-    pub fn stream_from(&self, _start_key: &[u8]) -> merkle::MerkleKeyValueStream<'_, T> {
+    pub fn stream_from(&self, _start_key: &[u8]) -> MerkleKeyValueStream<'_, T> {
         todo!()
     }
 

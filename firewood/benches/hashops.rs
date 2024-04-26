@@ -6,7 +6,7 @@
 use criterion::{criterion_group, criterion_main, profiler::Profiler, BatchSize, Criterion};
 use firewood::{
     db::{BatchOp, DbConfig},
-    merkle::{TrieHash, TRIE_HASH_LEN},
+    trie_hash::{TrieHash, TRIE_HASH_LEN},
     v2::api::{Db, Proposal},
 };
 use pprof::ProfilerGuard;

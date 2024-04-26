@@ -2,7 +2,8 @@
 // See the file LICENSE.md for licensing terms.
 
 use firewood::{
-    merkle::{Merkle, MerkleError, Proof, ProofError},
+    merkle::{Merkle, MerkleError},
+    proof::{Proof, ProofError},
     storage::linear::proposed::ProposedMutable,
 };
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng as _};

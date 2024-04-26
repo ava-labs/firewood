@@ -184,7 +184,10 @@
 pub mod db;
 pub mod merkle;
 pub(crate) mod node;
+pub mod proof;
 pub mod storage;
+pub mod stream;
+pub mod trie_hash;
 
 pub mod nibbles;
 

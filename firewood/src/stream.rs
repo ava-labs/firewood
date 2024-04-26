@@ -1,9 +1,10 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::{BranchNode, Key, Merkle, MerkleError, Node, Value};
 use crate::{
+    merkle::{Key, Merkle, MerkleError, Value},
     nibbles::{Nibbles, NibblesIterator},
+    node::{BranchNode, Node},
     storage::{linear, node::LinearAddress},
     v2::api,
 };
@@ -580,9 +581,6 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
 }
 
 #[cfg(test)]
-use super::tests::_create_test_merkle;
-
-#[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
     use super::*;
@@ -601,6 +599,10 @@ mod tests {
         ) -> MerkleNodeStream<'_, T> {
             MerkleNodeStream::new(self, root_addr, key)
         }
+    }
+
+    pub(super) fn _create_test_merkle() -> Merkle<MemStore> {
+        todo!()
     }
 
     #[test_case(&[]; "empty key")]
