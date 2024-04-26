@@ -565,7 +565,7 @@ mod tests {
     use test_case::test_case;
     use tests::linear::tests::MemStore;
 
-    impl<T: linear::ReadLinearStore + linear::WriteLinearStore> Merkle<T> {
+    impl<T: ReadLinearStore> Merkle<T> {
         pub(crate) fn node_iter(&self) -> MerkleNodeStream<'_, T> {
             MerkleNodeStream::new(self, Box::new([]))
         }
