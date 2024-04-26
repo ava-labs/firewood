@@ -610,7 +610,7 @@ mod tests {
     #[tokio::test]
     async fn path_iterate_empty_merkle_empty_key(key: &[u8]) {
         let merkle = _create_test_merkle();
-        let root_addr = merkle.get_root_address();
+        let root_addr = merkle.root_address().unwrap();
         let root = merkle.get_node(root_addr).unwrap();
         let mut stream = merkle.path_iter(root, key);
         assert!(stream.next().is_none());
@@ -624,11 +624,11 @@ mod tests {
     #[tokio::test]
     async fn path_iterate_singleton_merkle(key: &[u8]) {
         let mut merkle = _create_test_merkle();
-        let root_addr = merkle.get_root_address();
+        let root_addr = merkle.root_address();
 
         merkle.insert(vec![0x13, 0x37], vec![0x42]).unwrap();
 
-        let root = merkle.get_node(root_addr).unwrap();
+        let root = merkle.get_node(root_addr.unwrap()).unwrap();
 
         let mut stream = merkle.path_iter(root, key);
         let (key, node) = match stream.next() {
@@ -734,7 +734,7 @@ mod tests {
     #[tokio::test]
     async fn node_iterate_empty() {
         let merkle = _create_test_merkle();
-        let root_addr = merkle.get_root_address();
+        let root_addr = merkle.root_address().unwrap();
         let stream = merkle.node_iter(root_addr);
         check_stream_is_done(stream).await;
     }
@@ -743,7 +743,7 @@ mod tests {
     async fn node_iterate_root_only() {
         let mut merkle = _create_test_merkle();
 
-        let root_addr = merkle.get_root_address();
+        let root_addr = merkle.root_address().unwrap();
 
         merkle.insert(vec![0x00], vec![0x00]).unwrap();
 
@@ -770,7 +770,7 @@ mod tests {
     /// The number next to each branch is the position of the child in the branch's children array.
     fn created_populated_merkle() -> (Merkle<MemStore>, LinearAddress) {
         let mut merkle = _create_test_merkle();
-        let root_addr = merkle.get_root_address();
+        let root_addr = merkle.root_address().unwrap();
 
         merkle
             .insert(vec![0x00, 0x00, 0x00], vec![0x00, 0x00, 0x00])

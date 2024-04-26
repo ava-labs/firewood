@@ -45,8 +45,8 @@ impl<T: WriteLinearStore> Merkle<T> {
         todo!()
     }
 
-    pub fn get_root_address(&self) -> LinearAddress {
-        self.root_addr
+    pub fn root_address(&self) -> Option<LinearAddress> {
+        self.store.root_address()
     }
 
     pub const fn new() -> Self {
