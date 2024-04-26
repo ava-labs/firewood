@@ -41,14 +41,16 @@ pub struct Merkle<T> {
 }
 
 impl<T: ReadLinearStore> Merkle<T> {
-    pub fn get_node(&self, _addr: LinearAddress) -> Result<&Node, MerkleError> {
-        todo!()
-    }
-
-    pub const fn root_address(&self) -> Option<LinearAddress> {
+    pub fn root_address(&self) -> Option<LinearAddress> {
         self.store.root_address()
     }
 
+    pub fn get_node(&self, _addr: LinearAddress) -> Result<&Node, MerkleError> {
+        todo!()
+    }
+}
+
+impl<T: WriteLinearStore> Merkle<T> {
     pub fn root_hash(&self) -> Result<TrieHash, MerkleError> {
         todo!()
     }
@@ -129,8 +131,11 @@ impl<T: ReadLinearStore> Merkle<T> {
     }
 
     // TODO danlaine: can we use the LinearAddress of the `root` instead?
-    pub fn path_iter<'a, 'b>(&'a self, root: &'a Node, key: &'b [u8]) -> PathIterator<'_, 'b, T> {
-        PathIterator::new(self, root, key)
+    pub fn path_iter<'a, 'b>(
+        &'a self,
+        key: &'b [u8],
+    ) -> Result<PathIterator<'_, 'b, T>, MerkleError> {
+        PathIterator::new(self, key)
     }
 
     pub(crate) fn _key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {

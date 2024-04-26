@@ -5,7 +5,10 @@ use crate::{
     merkle::{Key, Merkle, MerkleError, Value},
     nibbles::{Nibbles, NibblesIterator},
     node::{BranchNode, Node},
-    storage::{linear, node::LinearAddress},
+    storage::{
+        linear::{self, ReadLinearStore},
+        node::LinearAddress,
+    },
     v2::api,
 };
 use futures::{stream::FusedStream, Stream, StreamExt};
@@ -188,6 +191,8 @@ fn get_iterator_intial_state<'a, T: linear::ReadLinearStore>(
 
     // Invariant: `matched_key_nibbles` is the key of `node` at the start
     // of each loop iteration.
+    // TODO populate `matched_key_nibbles` to make this invariant true
+    // before the first loop
     let mut matched_key_nibbles = vec![];
 
     // TODO danlaine: update the code below to reflect the fact that Nibbles no longer
@@ -422,29 +427,23 @@ pub struct PathIterator<'a, 'b, T> {
     merkle: &'a Merkle<T>,
 }
 
-impl<'a, 'b, T> PathIterator<'a, 'b, T> {
-    pub(super) fn new(merkle: &'a Merkle<T>, root: &'a Node, key: &'b [u8]) -> Self {
-        let root_addr = match root {
-            Node::Branch(branch) => match branch.children[0] {
-                Some(root_addr) => root_addr,
-                None => {
-                    return Self {
-                        state: PathIteratorState::Exhausted,
-                        merkle,
-                    }
-                }
-            },
-            _ => unreachable!("root node is not a branch"),
+impl<'a, 'b, T: ReadLinearStore> PathIterator<'a, 'b, T> {
+    pub(super) fn new(merkle: &'a Merkle<T>, key: &'b [u8]) -> Result<Self, MerkleError> {
+        let Some(root_addr) = merkle.root_address() else {
+            return Ok(Self {
+                state: PathIteratorState::Exhausted,
+                merkle,
+            });
         };
 
-        Self {
+        Ok(Self {
             merkle,
             state: PathIteratorState::Iterating {
                 matched_key: vec![],
                 unmatched_key: Nibbles::new(key).into_iter(),
                 address: root_addr,
             },
-        }
+        })
     }
 }
 
@@ -598,9 +597,7 @@ mod tests {
     #[tokio::test]
     async fn path_iterate_empty_merkle_empty_key(key: &[u8]) {
         let merkle = _create_test_merkle();
-        let root_addr = merkle.root_address().unwrap();
-        let root = merkle.get_node(root_addr).unwrap();
-        let mut stream = merkle.path_iter(root, key);
+        let mut stream = merkle.path_iter(key).unwrap();
         assert!(stream.next().is_none());
     }
 
@@ -612,13 +609,10 @@ mod tests {
     #[tokio::test]
     async fn path_iterate_singleton_merkle(key: &[u8]) {
         let mut merkle = _create_test_merkle();
-        let root_addr = merkle.root_address();
 
         merkle.insert(vec![0x13, 0x37], vec![0x42]).unwrap();
 
-        let root = merkle.get_node(root_addr.unwrap()).unwrap();
-
-        let mut stream = merkle.path_iter(root, key);
+        let mut stream = merkle.path_iter(key).unwrap();
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
             Some(Err(e)) => panic!("{:?}", e),
@@ -636,11 +630,9 @@ mod tests {
     #[test_case(&[0x00, 0x00, 0x00, 0xFF, 0x01]; "past leaf key")]
     #[tokio::test]
     async fn path_iterate_non_singleton_merkle_seek_leaf(key: &[u8]) {
-        let (merkle, root_addr) = created_populated_merkle();
+        let (merkle, _) = created_populated_merkle();
 
-        let root = merkle.get_node(root_addr).unwrap();
-
-        let mut stream = merkle.path_iter(root, key);
+        let mut stream = merkle.path_iter(key).unwrap();
 
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
@@ -680,12 +672,11 @@ mod tests {
 
     #[tokio::test]
     async fn path_iterate_non_singleton_merkle_seek_branch() {
-        let (merkle, root_addr) = created_populated_merkle();
+        let (merkle, _) = created_populated_merkle();
 
         let key = &[0x00, 0x00, 0x00];
 
-        let root = merkle.get_node(root_addr).unwrap();
-        let mut stream = merkle.path_iter(root, key);
+        let mut stream = merkle.path_iter(key).unwrap();
 
         let (key, node) = match stream.next() {
             Some(Ok((key, node))) => (key, node),
