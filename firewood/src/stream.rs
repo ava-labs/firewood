@@ -12,8 +12,16 @@ use crate::{
     v2::api,
 };
 use futures::{stream::FusedStream, Stream, StreamExt};
-use std::task::Poll;
 use std::{cmp::Ordering, iter::once};
+use std::{sync::Arc, task::Poll};
+
+pub trait RootSource {
+    fn root_address(&self) -> Option<LinearAddress>;
+}
+
+pub trait NodeSource {
+    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, std::io::Error>;
+}
 
 /// Represents an ongoing iteration over a node and its children.
 enum IterationNode<'a> {
@@ -561,7 +569,7 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
-    use crate::storage::linear::{tests::MemStore, WriteLinearStore};
+    use crate::storage::linear::tests::MemStore;
 
     use super::*;
     use test_case::test_case;

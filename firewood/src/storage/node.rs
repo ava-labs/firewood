@@ -14,6 +14,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::node::Node;
+use crate::stream::{NodeSource, RootSource};
 
 use super::linear::{ReadLinearStore, WriteLinearStore};
 
@@ -106,6 +107,18 @@ struct StoredArea<T> {
 pub struct NodeStore<T> {
     header: NodeStoreHeader,
     linear_store: T,
+}
+
+impl<T: ReadLinearStore> RootSource for NodeStore<T> {
+    fn root_address(&self) -> Option<LinearAddress> {
+        self.root_address()
+    }
+}
+
+impl<T: ReadLinearStore> NodeSource for NodeStore<T> {
+    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
+        self.read_node(addr)
+    }
 }
 
 impl<T: ReadLinearStore> NodeStore<T> {
