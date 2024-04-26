@@ -130,19 +130,17 @@ impl<T: WriteLinearStore> Merkle<T> {
     }
 
     // TODO danlaine: can we use the LinearAddress of the `root` instead?
-    pub fn path_iter<'a, 'b>(
-        &'a self,
-        key: &'b [u8],
-    ) -> Result<PathIterator<'_, 'b, T>, MerkleError> {
-        PathIterator::new(self, key)
+    pub fn path_iter<'a, 'b>(&'a self, key: &'b [u8]) -> Result<PathIterator<'b>, MerkleError> {
+        todo!()
+        // PathIterator::new(self, key)
     }
 
-    pub(crate) fn _key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
-        MerkleKeyValueStream::_new(self)
+    pub(crate) fn _key_value_iter(&self) -> MerkleKeyValueStream {
+        MerkleKeyValueStream::_new(Box::new(self.store))
     }
 
-    pub(crate) fn _key_value_iter_from_key(&self, key: Key) -> MerkleKeyValueStream<'_, T> {
-        MerkleKeyValueStream::_from_key(self, key)
+    pub(crate) fn _key_value_iter_from_key(&self, key: Key) -> MerkleKeyValueStream {
+        MerkleKeyValueStream::_from_key(Box::new(self.store), key)
     }
 
     pub(super) async fn _range_proof<K: api::KeyType + Send + Sync>(

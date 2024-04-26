@@ -64,7 +64,7 @@ pub struct Historical<T> {
 
 #[async_trait]
 impl<T: linear::ReadLinearStore + linear::WriteLinearStore> api::DbView for Historical<T> {
-    type Stream<'a> = MerkleKeyValueStream<'a, T> where Self: 'a;
+    type Stream = MerkleKeyValueStream;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         todo!()
@@ -90,20 +90,17 @@ impl<T: linear::ReadLinearStore + linear::WriteLinearStore> api::DbView for Hist
         todo!()
     }
 
-    fn iter_option<K: KeyType>(
-        &self,
-        _first_key: Option<K>,
-    ) -> Result<Self::Stream<'_>, api::Error> {
+    fn iter_option<K: KeyType>(&self, _first_key: Option<K>) -> Result<Self::Stream, api::Error> {
         todo!()
     }
 }
 
 impl<T> Historical<T> {
-    pub fn stream(&self) -> MerkleKeyValueStream<'_, T> {
+    pub fn stream(&self) -> MerkleKeyValueStream {
         todo!()
     }
 
-    pub fn stream_from(&self, _start_key: &[u8]) -> MerkleKeyValueStream<'_, T> {
+    pub fn stream_from(&self, _start_key: &[u8]) -> MerkleKeyValueStream {
         todo!()
     }
 
@@ -162,7 +159,7 @@ impl<T: linear::ReadLinearStore + linear::WriteLinearStore> api::Proposal for Pr
 
 #[async_trait]
 impl<T: linear::ReadLinearStore + linear::WriteLinearStore> api::DbView for Proposal<T> {
-    type Stream<'a> = MerkleKeyValueStream<'a, T> where T: 'a;
+    type Stream = MerkleKeyValueStream;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         todo!()
@@ -194,10 +191,7 @@ impl<T: linear::ReadLinearStore + linear::WriteLinearStore> api::DbView for Prop
         todo!();
     }
 
-    fn iter_option<K: KeyType>(
-        &self,
-        _first_key: Option<K>,
-    ) -> Result<Self::Stream<'_>, api::Error> {
+    fn iter_option<K: KeyType>(&self, _first_key: Option<K>) -> Result<Self::Stream, api::Error> {
         todo!()
     }
 }

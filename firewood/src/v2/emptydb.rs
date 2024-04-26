@@ -57,7 +57,7 @@ impl Db for EmptyDb {
 
 #[async_trait]
 impl DbView for HistoricalImpl {
-    type Stream<'a> = EmptyStreamer;
+    type Stream = EmptyStreamer;
 
     async fn root_hash(&self) -> Result<HashKey, Error> {
         Ok(ROOT_HASH)
