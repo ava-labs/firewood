@@ -1,7 +1,10 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood::merkle::{Merkle, MerkleError, Proof, ProofError};
+use firewood::{
+    merkle::{Merkle, MerkleError, Proof, ProofError},
+    storage::linear::proposed::ProposedMutable,
+};
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng as _};
 use std::collections::HashMap;
 
@@ -10,8 +13,8 @@ fn merkle_build_test<
     V: AsRef<[u8]> + Clone,
 >(
     items: Vec<(K, V)>,
-) -> Result<Merkle, MerkleError> {
-    let mut merkle = Merkle::new();
+) -> Result<Merkle<ProposedMutable>, MerkleError> {
+    let mut merkle: Merkle<ProposedMutable> = Merkle::new();
     for (k, v) in items.iter() {
         merkle.insert(k, v.as_ref().to_vec())?;
     }
@@ -104,12 +107,12 @@ fn test_root_hash_reversed_deletions() -> Result<(), MerkleError> {
 
         items.sort();
 
-        let mut merkle = Merkle::new();
+        let mut merkle: Merkle<ProposedMutable> = Merkle::new();
 
         let mut hashes = Vec::new();
 
         for (k, v) in items.iter() {
-            hashes.push((merkle.root_hash())?);
+            hashes.push((merkle.root_hash()?, merkle.dump()?));
             merkle.insert(k, v.to_vec())?;
         }
 
@@ -173,7 +176,7 @@ fn test_root_hash_random_deletions() -> Result<(), MerkleError> {
         let mut items_ordered: Vec<_> = items.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         items_ordered.sort();
         items_ordered.shuffle(&mut *rng.borrow_mut());
-        let mut merkle = Merkle::new();
+        let mut merkle: Merkle<ProposedMutable> = Merkle::new();
 
         for (k, v) in items.iter() {
             merkle.insert(k, v.to_vec())?;

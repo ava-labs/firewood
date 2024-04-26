@@ -103,7 +103,7 @@ struct StoredArea<T> {
 /// Every subsequent write is a [StoredArea] containing a [Node] or a [FreedArea].
 /// The size of each allocation [NodeStore] makes from [LinearStore] is one of [AREA_SIZES].
 #[derive(Debug)]
-pub struct NodeStore<T: ReadLinearStore> {
+pub struct NodeStore<T> {
     header: NodeStoreHeader,
     linear_store: T,
 }
@@ -145,7 +145,7 @@ impl<T: ReadLinearStore> NodeStore<T> {
         }
     }
 
-    const fn sentinel_address(&self) -> Option<LinearAddress> {
+    pub const fn sentinel_address(&self) -> Option<LinearAddress> {
         self.header.sentinel_address
     }
 

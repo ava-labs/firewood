@@ -45,15 +45,15 @@ impl ProposedMutable {
 }
 
 impl ProposedImmutable {
-    pub fn reparent(self: &Arc<Self>, parent: LinearStoreParent) {
+    pub(crate) fn reparent(self: &Arc<Self>, parent: LinearStoreParent) {
         *self.parent.write().expect("poisoned lock") = parent;
     }
 
-    pub fn parent(&self) -> LinearStoreParent {
+    pub(crate) fn parent(&self) -> LinearStoreParent {
         self.parent.read().expect("poisoned lock").clone()
     }
 
-    pub fn has_parent(&self, candidate: &LinearStoreParent) -> bool {
+    pub(crate) fn has_parent(&self, candidate: &LinearStoreParent) -> bool {
         *self.parent.read().expect("poisoned lock") == *candidate
     }
 }

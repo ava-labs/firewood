@@ -1,8 +1,9 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::merkle::{self};
+use crate::storage::linear::proposed::ProposedMutable;
 pub use crate::v2::api::{Batch, BatchOp};
+use crate::{merkle, storage::linear};
 use crate::{
     merkle::{MerkleError, MerkleKeyValueStream, Proof, ProofError, TrieHash},
     v2::api::{self, HashKey, KeyType, ValueType},
@@ -54,11 +55,13 @@ impl From<std::io::Error> for DbError {
 impl Error for DbError {}
 
 #[derive(Debug)]
-pub struct Historical {}
+pub struct Historical<T> {
+    _historical: T,
+}
 
 #[async_trait]
-impl api::DbView for Historical {
-    type Stream<'a> = MerkleKeyValueStream<'a> where Self: 'a;
+impl<T: linear::ReadLinearStore + linear::WriteLinearStore> api::DbView for Historical<T> {
+    type Stream<'a> = MerkleKeyValueStream<'a, T> where Self: 'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         todo!()
@@ -92,12 +95,12 @@ impl api::DbView for Historical {
     }
 }
 
-impl Historical {
-    pub fn stream(&self) -> merkle::MerkleKeyValueStream<'_> {
+impl<T> Historical<T> {
+    pub fn stream(&self) -> merkle::MerkleKeyValueStream<'_, T> {
         todo!()
     }
 
-    pub fn stream_from(&self, _start_key: &[u8]) -> merkle::MerkleKeyValueStream<'_> {
+    pub fn stream_from(&self, _start_key: &[u8]) -> merkle::MerkleKeyValueStream<'_, T> {
         todo!()
     }
 
@@ -134,11 +137,13 @@ impl Historical {
 }
 
 /// TODO danlaine: implement
-pub struct Proposal {}
+pub struct Proposal<T> {
+    _proposal: T,
+}
 
 #[async_trait]
-impl api::Proposal for Proposal {
-    type Proposal = Proposal;
+impl<T: linear::ReadLinearStore + linear::WriteLinearStore> api::Proposal for Proposal<T> {
+    type Proposal = Proposal<T>;
 
     async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
         todo!()
@@ -153,8 +158,8 @@ impl api::Proposal for Proposal {
 }
 
 #[async_trait]
-impl api::DbView for Proposal {
-    type Stream<'a> = MerkleKeyValueStream<'a>;
+impl<T: linear::ReadLinearStore + linear::WriteLinearStore> api::DbView for Proposal<T> {
+    type Stream<'a> = MerkleKeyValueStream<'a, T> where T: 'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         todo!()
@@ -212,9 +217,9 @@ pub struct Db {
 
 #[async_trait]
 impl api::Db for Db {
-    type Historical = Historical;
+    type Historical = Historical<ProposedMutable>;
 
-    type Proposal = Proposal;
+    type Proposal = Proposal<ProposedMutable>;
 
     async fn revision(&self, _root_hash: HashKey) -> Result<Arc<Self::Historical>, api::Error> {
         todo!()
@@ -243,7 +248,7 @@ impl Db {
     pub fn new_proposal<K: KeyType, V: ValueType>(
         &self,
         _data: Batch<K, V>,
-    ) -> Result<Proposal, DbError> {
+    ) -> Result<Proposal<ProposedMutable>, DbError> {
         todo!()
     }
 

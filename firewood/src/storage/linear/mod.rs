@@ -64,7 +64,7 @@ use std::sync::Arc;
 ///  - Convert the `LinearStore<Proposed<FileBacked, Readonly>>` to `LinearStore<FileBacked>`
 pub(super) mod filebacked;
 pub(super) mod historical;
-pub(super) mod proposed;
+pub mod proposed;
 
 use self::filebacked::FileBacked;
 use self::historical::Historical;

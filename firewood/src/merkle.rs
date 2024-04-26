@@ -2,7 +2,10 @@
 // See the file LICENSE.md for licensing terms.
 use crate::{
     node::{BranchNode, Node},
-    storage::node::LinearAddress,
+    storage::{
+        linear,
+        node::{self, LinearAddress},
+    },
     v2::api,
 };
 use futures::{StreamExt, TryStreamExt};
@@ -24,6 +27,8 @@ type Value = Vec<u8>;
 
 #[derive(Debug, Error)]
 pub enum MerkleError {
+    #[error("uninitialized")]
+    Uninitialized,
     #[error("read only")]
     ReadOnly,
     #[error("node not a branch node")]
@@ -36,30 +41,29 @@ pub enum MerkleError {
     UnsetInternal,
     #[error("merkle serde error: {0}")]
     BinarySerdeError(String),
+    #[error("invalid utf8")]
+    UTF8Error,
 }
 
 #[derive(Debug)]
-pub struct Merkle {
+pub struct Merkle<T> {
     // Get the sentinel addr from the NodeStore
-    _sentinel_addr: LinearAddress,
+    sentinel_addr: LinearAddress,
+    store: node::NodeStore<T>,
 }
 
-impl Merkle {
+impl<T: linear::ReadLinearStore + linear::WriteLinearStore> Merkle<T> {
     pub fn get_node(&self, _addr: LinearAddress) -> Result<&Node, MerkleError> {
         todo!()
     }
 
-    pub fn put_node(&self, _node: Node) -> Result<(), MerkleError> {
-        todo!()
+    pub fn get_sentinel(&mut self) -> LinearAddress {
+        self.sentinel_addr
     }
 
-    fn _delete_node(&mut self, _addr: LinearAddress) -> Result<(), MerkleError> {
-        todo!()
-    }
-
-    fn _init_sentinel(&mut self) -> Result<LinearAddress, MerkleError> {
-        todo!()
-    }
+    // fn _init_sentinel(&mut self) -> Result<LinearAddress, MerkleError> {
+    //     todo!()
+    // }
 
     /// TODO danlaine: implement
     pub const fn new() -> Self {
@@ -158,16 +162,16 @@ impl Merkle {
         &'a self,
         sentinel_node: &'a Node,
         key: &'b [u8],
-    ) -> PathIterator<'_, 'b> {
+    ) -> PathIterator<'_, 'b, T> {
         PathIterator::new(self, sentinel_node, key)
     }
 
-    pub(crate) fn _key_value_iter(&self) -> MerkleKeyValueStream<'_> {
-        MerkleKeyValueStream::_new(self, self._sentinel_addr)
+    pub(crate) fn _key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
+        MerkleKeyValueStream::_new(self, self.sentinel_addr)
     }
 
-    pub(crate) fn _key_value_iter_from_key(&self, key: Key) -> MerkleKeyValueStream<'_> {
-        MerkleKeyValueStream::_from_key(self, self._sentinel_addr, key)
+    pub(crate) fn _key_value_iter_from_key(&self, key: Key) -> MerkleKeyValueStream<'_, T> {
+        MerkleKeyValueStream::_from_key(self, self.sentinel_addr, key)
     }
 
     pub(super) async fn _range_proof<K: api::KeyType + Send + Sync>(
@@ -260,6 +264,16 @@ impl Merkle {
     }
 }
 
+impl<T: linear::WriteLinearStore> Merkle<T> {
+    pub fn put_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError> {
+        self.store.create_node(&node).map_err(MerkleError::Format)
+    }
+
+    fn _delete_node(&mut self, _addr: LinearAddress) -> Result<(), MerkleError> {
+        todo!()
+    }
+}
+
 // nibbles, high bits first, then low bits
 pub const fn to_nibble_array(x: u8) -> [u8; 2] {
     [x >> 4, x & 0b_0000_1111]
@@ -313,6 +327,8 @@ pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
+    use self::{linear::tests::MemStore, node::NodeStore};
+
     use super::*;
     use test_case::test_case;
 
@@ -323,7 +339,7 @@ mod tests {
         assert_eq!(n, nibbles);
     }
 
-    pub(super) fn _create_test_merkle<'de>() -> Merkle {
+    pub(super) fn _create_test_merkle<'de>() -> Merkle<MemStore> {
         todo!()
     }
 
