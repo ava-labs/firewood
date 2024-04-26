@@ -1,13 +1,9 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
-use crate::{
-    node::{BranchNode, Node},
-    storage::{
-        linear,
-        node::{self, LinearAddress},
-    },
-    v2::api,
-};
+use crate::node::{BranchNode, Node};
+use crate::storage::linear::WriteLinearStore;
+use crate::storage::node::{self, LinearAddress};
+use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
 use std::future::ready;
 use thiserror::Error;
@@ -51,7 +47,7 @@ pub struct Merkle<T> {
     store: node::NodeStore<T>,
 }
 
-impl<T: linear::ReadLinearStore + linear::WriteLinearStore> Merkle<T> {
+impl<T: WriteLinearStore> Merkle<T> {
     pub fn get_node(&self, _addr: LinearAddress) -> Result<&Node, MerkleError> {
         todo!()
     }
@@ -254,7 +250,7 @@ impl<T: linear::ReadLinearStore + linear::WriteLinearStore> Merkle<T> {
     }
 }
 
-impl<T: linear::WriteLinearStore> Merkle<T> {
+impl<T: WriteLinearStore> Merkle<T> {
     pub fn put_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError> {
         self.store.create_node(&node).map_err(MerkleError::Format)
     }
@@ -317,7 +313,7 @@ pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
-    use self::{linear::tests::MemStore, node::NodeStore};
+    use crate::storage::linear::tests::MemStore;
 
     use super::*;
     use test_case::test_case;
@@ -329,7 +325,7 @@ mod tests {
         assert_eq!(n, nibbles);
     }
 
-    pub(super) fn _create_test_merkle<'de>() -> Merkle<MemStore> {
+    pub(super) fn _create_test_merkle() -> Merkle<MemStore> {
         todo!()
     }
 
