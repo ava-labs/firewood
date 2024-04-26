@@ -73,8 +73,6 @@ use self::proposed::ProposedImmutable;
 use self::tests::MemStore;
 
 mod layered;
-#[cfg(test)]
-pub mod tests;
 
 /// All linear stores support reads
 pub trait ReadLinearStore: Send + Sync + Debug {
@@ -160,3 +158,5 @@ impl ReadLinearStore for LinearStoreParent {
         }
     }
 }
+
+pub mod tests;
