@@ -4,8 +4,7 @@
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 use std::{
-    fmt::{self, Debug},
-    iter::once,
+    fmt::{self, Debug}, io::{Cursor, Read}, iter::once
 };
 
 use crate::nibbles::NibblesIterator;
@@ -46,7 +45,7 @@ bitflags! {
 }
 
 impl Path {
-    pub(crate) fn encode(&self) -> Vec<u8> {
+    pub fn iter_encoded(&self) -> impl Iterator<Item = u8> + '_ {
         let mut flags = Flags::empty();
 
         let has_odd_len = self.0.len() & 1 == 1;
@@ -62,6 +61,9 @@ impl Path {
         once(flags.bits())
             .chain(extra_byte)
             .chain(self.0.iter().copied())
+    }
+    pub(crate) fn encode(&self) -> Vec<u8> {
+            self.iter_encoded()
             .collect()
     }
 
