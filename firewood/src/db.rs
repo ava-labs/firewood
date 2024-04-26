@@ -3,6 +3,7 @@
 
 use crate::proof::{Proof, ProofError};
 use crate::storage::linear;
+use crate::storage::linear::historical::Historical as HistoricalStore;
 use crate::storage::linear::proposed::ProposedMutable;
 use crate::stream::MerkleKeyValueStream;
 use crate::trie_hash::TrieHash;
@@ -14,6 +15,7 @@ use crate::{
 use aiofut::AioError;
 use async_trait::async_trait;
 
+use crate::storage::manager::RevisionManager;
 use metered::metered;
 use std::{error::Error, fmt, io::Write, path::Path, sync::Arc};
 use typed_builder::TypedBuilder;
@@ -58,12 +60,12 @@ impl From<std::io::Error> for DbError {
 impl Error for DbError {}
 
 #[derive(Debug)]
-pub struct Historical<T> {
-    _historical: T,
+pub struct HistoricalRev<T> {
+    _historical: Arc<T>,
 }
 
 #[async_trait]
-impl<T: linear::ReadLinearStore + linear::WriteLinearStore> api::DbView for Historical<T> {
+impl<T: linear::ReadLinearStore> api::DbView for HistoricalRev<T> {
     type Stream<'a> = MerkleKeyValueStream<'a, T> where Self: 'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
@@ -98,7 +100,7 @@ impl<T: linear::ReadLinearStore + linear::WriteLinearStore> api::DbView for Hist
     }
 }
 
-impl<T> Historical<T> {
+impl<T> HistoricalRev<T> {
     pub fn stream(&self) -> MerkleKeyValueStream<'_, T> {
         todo!()
     }
@@ -216,16 +218,23 @@ pub struct DbConfig {
 pub struct Db {
     metrics: Arc<DbMetrics>,
     _cfg: DbConfig,
+    manager: RevisionManager,
 }
 
 #[async_trait]
 impl api::Db for Db {
-    type Historical = Historical<ProposedMutable>;
+    type Historical = HistoricalRev<HistoricalStore>;
 
     type Proposal = Proposal<ProposedMutable>;
 
-    async fn revision(&self, _root_hash: HashKey) -> Result<Arc<Self::Historical>, api::Error> {
-        todo!()
+    async fn revision(
+        &self,
+        _root_hash: HashKey,
+    ) -> Result<Arc<HistoricalRev<HistoricalStore>>, api::Error> {
+        let store = self.manager.revision(_root_hash)?;
+        Ok(Arc::new(HistoricalRev::<HistoricalStore> {
+            _historical: store,
+        }))
     }
 
     async fn root_hash(&self) -> Result<HashKey, api::Error> {

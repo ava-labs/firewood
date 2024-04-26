@@ -63,7 +63,7 @@ use std::sync::Arc;
 ///  - Flush all the `Proposed<FileBacked, ReadOnly>::new` bytes to disk
 ///  - Convert the `LinearStore<Proposed<FileBacked, Readonly>>` to `LinearStore<FileBacked>`
 pub(super) mod filebacked;
-pub(super) mod historical;
+pub mod historical;
 pub mod proposed;
 
 use self::filebacked::FileBacked;

@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{merkle::MerkleError, proof::Proof};
+use crate::{merkle::MerkleError, proof::Proof, storage::manager::RevisionManagerError};
 use async_trait::async_trait;
 use futures::Stream;
 use std::{fmt::Debug, sync::Arc};
@@ -87,6 +87,13 @@ pub enum Error {
 
 impl From<MerkleError> for Error {
     fn from(err: MerkleError) -> Self {
+        // TODO: do a better job
+        Error::InternalError(Box::new(err))
+    }
+}
+
+impl From<RevisionManagerError> for Error {
+    fn from(err: RevisionManagerError) -> Self {
         // TODO: do a better job
         Error::InternalError(Box::new(err))
     }

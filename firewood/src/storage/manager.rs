@@ -10,6 +10,8 @@ use std::sync::Arc;
 
 use typed_builder::TypedBuilder;
 
+use crate::v2::api::HashKey;
+
 use super::linear::filebacked::FileBacked;
 use super::linear::historical::Historical;
 use super::linear::proposed::ProposedImmutable;
@@ -23,7 +25,7 @@ pub(super) struct RevisionManagerConfig {
 }
 
 #[derive(Debug)]
-pub(super) struct RevisionManager {
+pub(crate) struct RevisionManager {
     max_revisions: usize,
     filebacked: FileBacked,
     historical: VecDeque<Arc<Historical>>,
@@ -163,6 +165,10 @@ pub type NewProposalError = (); // TODO implement
 impl RevisionManager {
     pub fn add_proposal(&mut self, proposal: Arc<ProposedImmutable>) {
         self.proposals.push(proposal);
+    }
+
+    pub fn revision(&self, _root_hash: HashKey) -> Result<Arc<Historical>, RevisionManagerError> {
+        todo!()
     }
 }
 
