@@ -7,7 +7,7 @@ mod test {
         merkle::{Merkle, MerkleError},
         proof::{Proof, ProofError},
         storage::{
-            linear::{proposed::ProposedMutable, tests::MemStore},
+            linear::tests::MemStore,
             node::NodeStore,
         },
     };
