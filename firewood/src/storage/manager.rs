@@ -72,8 +72,11 @@ impl RevisionManager {
             self.historical.pop_front();
         }
 
+        // If we do copy on writes for underneath files, since we keep all changes
+        // after bootstrapping, we should be able to read from the changes and the 
+        // read only file map to the state at bootstrapping.
         // We actually doesn't care whether the writes are successful or not
-        // if crash recovery is handled above
+        // (crash recovery may need to be handled above)
         for write in proposal.new.iter() {
             self.filebacked.write(*write.0, write.1)?;
         }
