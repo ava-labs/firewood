@@ -73,7 +73,7 @@ impl<T: linear::ReadLinearStore> api::DbView for HistoricalRev<T> {
         todo!()
     }
 
-    async fn val<K: api::KeyType>(&self, _key: K) -> Result<Option<Vec<u8>>, api::Error> {
+    async fn val<K: KeyType>(&self, _key: K) -> Result<Option<Vec<u8>>, api::Error> {
         todo!()
     }
 
