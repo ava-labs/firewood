@@ -67,7 +67,7 @@ pub struct HistoricalRev<T> {
 
 #[async_trait]
 impl<T: linear::ReadLinearStore> api::DbView for HistoricalRev<T> {
-    type Stream<'a> = MerkleKeyValueStream<'a, T> where Self: 'a;
+    type Stream<'a,K> = MerkleKeyValueStream<'a,K, T> where Self: 'a,K:'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         todo!()
@@ -77,14 +77,14 @@ impl<T: linear::ReadLinearStore> api::DbView for HistoricalRev<T> {
         todo!()
     }
 
-    async fn single_key_proof<K: api::KeyType>(
+    async fn single_key_proof<K: KeyType>(
         &self,
         _key: K,
     ) -> Result<Option<Proof<Vec<u8>>>, api::Error> {
         todo!()
     }
 
-    async fn range_proof<K: api::KeyType, V>(
+    async fn range_proof<K: KeyType, V>(
         &self,
         _first_key: Option<K>,
         _last_key: Option<K>,
@@ -96,17 +96,17 @@ impl<T: linear::ReadLinearStore> api::DbView for HistoricalRev<T> {
     fn iter_option<K: KeyType>(
         &self,
         _first_key: Option<K>,
-    ) -> Result<Self::Stream<'_>, api::Error> {
+    ) -> Result<Self::Stream<'_, K>, api::Error> {
         todo!()
     }
 }
 
 impl<T> HistoricalRev<T> {
-    pub fn stream(&self) -> MerkleKeyValueStream<'_, T> {
+    pub fn stream<K: KeyType>(&self) -> MerkleKeyValueStream<'_, K, T> {
         todo!()
     }
 
-    pub fn stream_from(&self, _start_key: &[u8]) -> MerkleKeyValueStream<'_, T> {
+    pub fn stream_from<K: KeyType>(&self, _start_key: &[u8]) -> MerkleKeyValueStream<'_, K, T> {
         todo!()
     }
 
@@ -116,7 +116,7 @@ impl<T> HistoricalRev<T> {
     }
 
     /// Get a value associated with a key.
-    pub fn get<K: AsRef<[u8]>>(&self, _key: K) -> Option<Vec<u8>> {
+    pub fn get<K: KeyType>(&self, _key: K) -> Option<Vec<u8>> {
         todo!()
     }
 
@@ -125,12 +125,12 @@ impl<T> HistoricalRev<T> {
         todo!()
     }
 
-    pub fn prove<K: AsRef<[u8]>>(&self, _key: K) -> Result<Proof<Vec<u8>>, MerkleError> {
+    pub fn prove<K: KeyType>(&self, _key: K) -> Result<Proof<Vec<u8>>, MerkleError> {
         todo!()
     }
 
     /// Verifies a range proof is valid for a set of keys.
-    pub fn verify_range_proof<N: AsRef<[u8]> + Send, K: AsRef<[u8]>, V: AsRef<[u8]>>(
+    pub fn verify_range_proof<K: KeyType, N: AsRef<[u8]> + Send, V: AsRef<[u8]>>(
         &self,
         _proof: Proof<N>,
         _first_key: K,
@@ -155,7 +155,7 @@ impl<T: linear::ReadLinearStore + linear::WriteLinearStore> api::Proposal for Pr
         todo!()
     }
 
-    async fn propose<K: api::KeyType, V: api::ValueType>(
+    async fn propose<K: KeyType, V: api::ValueType>(
         self: Arc<Self>,
         _data: api::Batch<K, V>,
     ) -> Result<Arc<Self::Proposal>, api::Error> {
@@ -165,42 +165,36 @@ impl<T: linear::ReadLinearStore + linear::WriteLinearStore> api::Proposal for Pr
 
 #[async_trait]
 impl<T: linear::ReadLinearStore + linear::WriteLinearStore> api::DbView for Proposal<T> {
-    type Stream<'a> = MerkleKeyValueStream<'a, T> where T: 'a;
+    type Stream<'a,K> = MerkleKeyValueStream<'a, K,T> where T: 'a,K: 'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         todo!()
     }
 
-    async fn val<K>(&self, _key: K) -> Result<Option<Vec<u8>>, api::Error>
-    where
-        K: api::KeyType,
-    {
+    async fn val<K: KeyType>(&self, _key: K) -> Result<Option<Vec<u8>>, api::Error> {
         todo!()
     }
 
-    async fn single_key_proof<K>(&self, _key: K) -> Result<Option<Proof<Vec<u8>>>, api::Error>
-    where
-        K: api::KeyType,
-    {
+    async fn single_key_proof<K: KeyType>(
+        &self,
+        _key: K,
+    ) -> Result<Option<Proof<Vec<u8>>>, api::Error> {
         todo!()
     }
 
-    async fn range_proof<K, V>(
+    async fn range_proof<K: KeyType, V>(
         &self,
         _first_key: Option<K>,
         _last_key: Option<K>,
         _limit: Option<usize>,
-    ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>>>, api::Error>
-    where
-        K: api::KeyType,
-    {
+    ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>>>, api::Error> {
         todo!();
     }
 
     fn iter_option<K: KeyType>(
         &self,
         _first_key: Option<K>,
-    ) -> Result<Self::Stream<'_>, api::Error> {
+    ) -> Result<Self::Stream<'_, K>, api::Error> {
         todo!()
     }
 }

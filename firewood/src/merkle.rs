@@ -15,7 +15,7 @@ use thiserror::Error;
 
 // TODO danlaine do we need these?
 // Can we use KeyType and ValueType instead?
-pub type Key = Box<[u8]>;
+// pub type Key = Box<[u8]>;
 pub type Value = Vec<u8>;
 
 #[derive(Debug, Error)]
@@ -145,14 +145,14 @@ impl<T: ReadLinearStore> Merkle<T> {
         TraversalIterator::new(self, key)
     }
 
-    pub(crate) fn _key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
+    pub(crate) fn _key_value_iter<K: KeyType>(&self) -> MerkleKeyValueStream<'_, K, T> {
         MerkleKeyValueStream::_new(self)
     }
 
     pub(crate) fn _key_value_iter_from_key<K: KeyType>(
         &self,
         key: K,
-    ) -> MerkleKeyValueStream<'_, T> {
+    ) -> MerkleKeyValueStream<'_, K, T> {
         MerkleKeyValueStream::_from_key(self, key)
     }
 

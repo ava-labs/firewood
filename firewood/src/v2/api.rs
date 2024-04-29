@@ -154,9 +154,10 @@ pub trait Db {
 /// A [Proposal] requires implementing DbView
 #[async_trait]
 pub trait DbView {
-    type Stream<'a>: Stream<Item = Result<(Box<[u8]>, Vec<u8>), Error>>
+    type Stream<'a, K>: Stream<Item = Result<(K, Vec<u8>), Error>>
     where
-        Self: 'a;
+        Self: 'a,
+        K: 'a;
 
     /// Get the root hash for the current DbView
     async fn root_hash(&self) -> Result<HashKey, Error>;
@@ -193,15 +194,15 @@ pub trait DbView {
     /// If you always want to start at the beginning, [DbView::iter] is easier to use
     /// If you always provide a key, [DbView::iter_from] is easier to use
     ///
-    fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Stream<'_>, Error>;
+    fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Stream<'_, K>, Error>;
 
     /// Obtain a stream over the keys/values of this view, starting from the beginning
-    fn iter(&self) -> Result<Self::Stream<'_>, Error> {
+    fn iter<K: KeyType>(&self) -> Result<Self::Stream<'_, K>, Error> {
         self.iter_option(Option::<Box<[u8]>>::None)
     }
 
     /// Obtain a stream over the key/values, starting at a specific key
-    fn iter_from<K: KeyType + 'static>(&self, first_key: K) -> Result<Self::Stream<'_>, Error> {
+    fn iter_from<K: KeyType>(&self, first_key: K) -> Result<Self::Stream<'_, K>, Error> {
         self.iter_option(Some(first_key))
     }
 }
