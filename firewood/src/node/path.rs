@@ -44,6 +44,20 @@ impl Index<usize> for Path {
     }
 }
 
+impl<'a> IntoIterator for &'a Path {
+    type Item = u8;
+
+    type IntoIter = PathIterator<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        PathIterator {
+            data: self,
+            head: 0,
+            tail: self.bytes.len(),
+        }
+    }
+}
+
 impl IntoIterator for Path {
     type Item = u8;
     type IntoIter = PathIterator<'static>;
@@ -57,7 +71,7 @@ impl IntoIterator for Path {
     }
 }
 
-struct PathIterator<'a> {
+pub(crate) struct PathIterator<'a> {
     data: &'a Path,
     head: usize,
     tail: usize,

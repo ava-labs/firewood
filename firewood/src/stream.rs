@@ -3,7 +3,10 @@
 
 use crate::{
     merkle::{Key, Merkle, MerkleError, Value},
-    node::{path::Path, BranchNode, Node},
+    node::{
+        path::{Path, PathIterator},
+        BranchNode, Node,
+    },
     storage::{
         linear::{self, ReadLinearStore},
         node::LinearAddress,
@@ -245,7 +248,7 @@ fn get_iterator_intial_state<'a, T: linear::ReadLinearStore>(
                 };
 
                 let (comparison, new_unmatched_key_nibbles) =
-                    compare_partial_path(partial_key.iter(), unmatched_key_nibbles);
+                    compare_partial_path(partial_key.into_iter(), unmatched_key_nibbles);
                 unmatched_key_nibbles = new_unmatched_key_nibbles;
 
                 match comparison {
@@ -255,15 +258,15 @@ fn get_iterator_intial_state<'a, T: linear::ReadLinearStore>(
                     }
                     Ordering::Equal => {
                         // `child` is a prefix of `key`.
-                        matched_key_nibbles.extend(partial_key.iter().copied());
+                        matched_key_nibbles.extend(partial_key);
                         node = child;
                     }
                     Ordering::Greater => {
                         // `child` is after `key`.
                         let key = matched_key_nibbles
-                            .iter()
-                            .chain(partial_key.iter())
-                            .copied()
+                            .into_iter()
+                            .chain(partial_key)
+                            //.copied() TODO danlaine: remove
                             .collect();
                         iter_stack.push(IterationNode::Unvisited { key, node: child });
 
@@ -272,14 +275,14 @@ fn get_iterator_intial_state<'a, T: linear::ReadLinearStore>(
                 }
             }
             Node::Leaf(leaf) => {
-                if compare_partial_path(leaf.partial_path.iter(), unmatched_key_nibbles).0
+                if compare_partial_path(leaf.partial_path.into_iter(), unmatched_key_nibbles).0
                     == Ordering::Greater
                 {
                     // `child` is after `key`.
                     let key = matched_key_nibbles
                         .iter()
-                        .chain(leaf.partial_path.iter())
-                        .copied()
+                        .chain(leaf.partial_path.into_iter())
+                        // .copied()  TODO danlaine: remove
                         .collect();
                     iter_stack.push(IterationNode::Unvisited { key, node });
                 }
@@ -386,7 +389,7 @@ impl<'a, T: linear::ReadLinearStore> Stream for MerkleKeyValueStream<'a, T> {
     }
 }
 
-enum PathIteratorState<'a> {
+enum TraversalIteratorState<'a> {
     Iterating {
         /// The key, as nibbles, of the node at `address`, without the
         /// node's partial path (if any) at the end.
@@ -395,7 +398,7 @@ enum PathIteratorState<'a> {
         /// Note the node at `address` may not have a key which is a
         /// prefix of the key we're traversing to.
         matched_key: Vec<u8>,
-        unmatched_key: Iter<'a, u8>,
+        unmatched_key: PathIterator<'a>,
         address: LinearAddress,
     },
     Exhausted,
@@ -412,23 +415,23 @@ enum PathIteratorState<'a> {
 ///   remaining unmatched key, the node proves the non-existence of the key.
 /// Note that thi means that the last node's key isn't necessarily a prefix of
 /// the key we're traversing to.
-pub struct PathIterator<'a, 'b, T> {
-    state: PathIteratorState<'b>,
+pub struct TraversalIterator<'a, 'b, T> {
+    state: TraversalIteratorState<'b>,
     merkle: &'a Merkle<T>,
 }
 
-impl<'a, 'b, T: ReadLinearStore> PathIterator<'a, 'b, T> {
+impl<'a, 'b, T: ReadLinearStore> TraversalIterator<'a, 'b, T> {
     pub(super) fn new(merkle: &'a Merkle<T>, key: &'b [u8]) -> Result<Self, MerkleError> {
         let Some(root_addr) = merkle.root_address() else {
             return Ok(Self {
-                state: PathIteratorState::Exhausted,
+                state: TraversalIteratorState::Exhausted,
                 merkle,
             });
         };
 
         Ok(Self {
             merkle,
-            state: PathIteratorState::Iterating {
+            state: TraversalIteratorState::Iterating {
                 matched_key: vec![],
                 unmatched_key: Path::from_encoded(key).into_iter(),
                 address: root_addr,
@@ -437,7 +440,7 @@ impl<'a, 'b, T: ReadLinearStore> PathIterator<'a, 'b, T> {
     }
 }
 
-impl<'a, 'b, T: linear::ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
+impl<'a, 'b, T: linear::ReadLinearStore> Iterator for TraversalIterator<'a, 'b, T> {
     type Item = Result<(Key, &'a Node), MerkleError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -446,8 +449,8 @@ impl<'a, 'b, T: linear::ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
         let Self { state, merkle } = &mut *self;
 
         match state {
-            PathIteratorState::Exhausted => None,
-            PathIteratorState::Iterating {
+            TraversalIteratorState::Exhausted => None,
+            TraversalIteratorState::Iterating {
                 matched_key,
                 unmatched_key,
                 address,
@@ -463,25 +466,25 @@ impl<'a, 'b, T: linear::ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                 };
 
                 let (comparison, unmatched_key) =
-                    compare_partial_path(partial_path.iter(), unmatched_key);
+                    compare_partial_path(partial_path.into_iter(), unmatched_key);
 
-                matched_key.extend(partial_path.iter());
+                matched_key.extend(partial_path.into_iter());
                 let node_key = matched_key.clone().into_boxed_slice();
 
                 match comparison {
                     Ordering::Less | Ordering::Greater => {
-                        self.state = PathIteratorState::Exhausted;
+                        self.state = TraversalIteratorState::Exhausted;
                         Some(Ok((node_key.clone(), &node)))
                     }
                     Ordering::Equal => match node {
                         Node::Leaf(_) => {
-                            self.state = PathIteratorState::Exhausted;
+                            self.state = TraversalIteratorState::Exhausted;
                             Some(Ok((node_key, node)))
                         }
                         Node::Branch(branch) => {
                             let Some(next_unmatched_key_nibble) = unmatched_key.next() else {
                                 // There's no more key to match. We're done.
-                                self.state = PathIteratorState::Exhausted;
+                                self.state = TraversalIteratorState::Exhausted;
                                 return Some(Ok((node_key, &node)));
                             };
 
@@ -489,7 +492,7 @@ impl<'a, 'b, T: linear::ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                             let Some(child) = branch.children[next_unmatched_key_nibble as usize] else {
                                 // There's no child at the index of the next nibble in the key.
                                 // The node we're traversing to isn't in the trie.
-                                self.state = PathIteratorState::Exhausted;
+                                self.state = TraversalIteratorState::Exhausted;
                                 return Some(Ok((node_key, &node)));
                             };
 
@@ -519,7 +522,7 @@ fn compare_partial_path<'a, I1, I2>(
     mut unmatched_key_nibbles_iter: I2,
 ) -> (Ordering, I2)
 where
-    I1: Iterator<Item = &'a u8>,
+    I1: Iterator<Item = u8>, // TODO can we consolidate I1, I2?
     I2: Iterator<Item = u8>,
 {
     for next_partial_path_nibble in partial_path_iter {

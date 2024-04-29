@@ -4,7 +4,7 @@ use crate::node::Node;
 use crate::proof::{Proof, ProofError};
 use crate::storage::linear::{ReadLinearStore, WriteLinearStore};
 use crate::storage::node::{self, LinearAddress};
-use crate::stream::{MerkleKeyValueStream, PathIterator};
+use crate::stream::{MerkleKeyValueStream, TraversalIterator};
 use crate::trie_hash::TrieHash;
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
@@ -139,8 +139,11 @@ impl<T: ReadLinearStore> Merkle<T> {
     }
 
     // TODO danlaine: can we use the LinearAddress of the `root` instead?
-    pub fn path_iter<'a>(&self, key: &'a [u8]) -> Result<PathIterator<'_, 'a, T>, MerkleError> {
-        PathIterator::new(self, key)
+    pub fn path_iter<'a>(
+        &self,
+        key: &'a [u8],
+    ) -> Result<TraversalIterator<'_, 'a, T>, MerkleError> {
+        TraversalIterator::new(self, key)
     }
 
     pub(crate) fn _key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
