@@ -3,7 +3,6 @@
 
 use crate::{
     merkle::{Key, Merkle, MerkleError, Value},
-    nibbles::{Nibbles, NibblesIterator},
     node::{BranchNode, Node},
     storage::{
         linear::{self, ReadLinearStore},

@@ -189,7 +189,5 @@ pub mod storage;
 pub mod stream;
 pub mod trie_hash;
 
-pub mod nibbles;
-
 pub mod logger;
 pub mod v2;
