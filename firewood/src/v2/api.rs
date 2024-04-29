@@ -198,7 +198,7 @@ pub trait DbView {
 
     /// Obtain a stream over the keys/values of this view, starting from the beginning
     fn iter<K: KeyType>(&self) -> Result<Self::Stream<'_, K>, Error> {
-        self.iter_option(Option::<Box<[u8]>>::None)
+        self.iter_option(Option::<K>::None)
     }
 
     /// Obtain a stream over the key/values, starting at a specific key

@@ -156,7 +156,7 @@ impl<T: ReadLinearStore> Merkle<T> {
         MerkleKeyValueStream::_from_key(self, key)
     }
 
-    pub(super) async fn _range_proof<K: KeyType + Send + Sync>(
+    pub(super) async fn _range_proof<K: KeyType + Unpin>(
         &self,
         first_key: Option<K>,
         last_key: Option<K>,
@@ -178,7 +178,7 @@ impl<T: ReadLinearStore> Merkle<T> {
 
         let mut stream = match first_key {
             // TODO: fix the call-site to force the caller to do the allocation
-            Some(key) => self._key_value_iter_from_key(key.as_ref().to_vec().into_boxed_slice()),
+            Some(key) => self._key_value_iter_from_key(key),
             None => self._key_value_iter(),
         };
 
@@ -197,7 +197,7 @@ impl<T: ReadLinearStore> Merkle<T> {
             .map_err(|e| api::Error::InternalError(Box::new(e)))?;
         let limit = limit.map(|old_limit| old_limit - 1);
 
-        let mut middle = vec![(first_key.into_vec(), first_value)];
+        let mut middle = vec![(first_key, first_value)];
 
         // we stop streaming if either we hit the limit or the key returned was larger
         // than the largest key requested
@@ -217,9 +217,9 @@ impl<T: ReadLinearStore> Merkle<T> {
                     };
 
                     // keep going if the key returned is less than the last key requested
-                    ready(&*kv.0 <= last_key.as_ref())
+                    ready(kv.0.as_ref() <= last_key.as_ref())
                 })
-                .map(|kv_result| kv_result.map(|(k, v)| (k.into_vec(), v)))
+                .map(|kv_result| kv_result.map(|(k, v)| (k, v)))
                 .try_collect::<Vec<(Vec<u8>, Vec<u8>)>>()
                 .await?,
         );
