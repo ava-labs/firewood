@@ -8,7 +8,8 @@ use std::fmt::{Debug, Error as FmtError, Formatter};
 
 #[derive(PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct LeafNode {
-    pub(crate) partial_path: Path,
+    // TODO danlaine: should we hardcode generic param of Path to Box<[u8]>?
+    pub(crate) partial_path: Path<Box<[u8]>>,
     pub(crate) value: Vec<u8>,
 }
 

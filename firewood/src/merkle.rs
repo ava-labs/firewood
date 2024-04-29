@@ -139,10 +139,10 @@ impl<T: ReadLinearStore> Merkle<T> {
     }
 
     // TODO danlaine: can we use the LinearAddress of the `root` instead?
-    pub fn path_iter<'a>(
+    pub fn path_iter(
         &self,
-        key: &'a [u8],
-    ) -> Result<TraversalIterator<'_, 'a, T>, MerkleError> {
+        key: Box<[u8]>,
+    ) -> Result<TraversalIterator<'_, '_, T, Box<[u8]>>, MerkleError> {
         TraversalIterator::new(self, key)
     }
 

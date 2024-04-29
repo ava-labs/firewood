@@ -7,32 +7,39 @@ use std::{
     ops::Index,
 };
 
+use crate::v2::api::KeyType;
+
 static NIBBLES: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
 // TODO: use smallvec
 /// Path is part or all of a node's path in the trie.
 #[derive(PartialEq, Eq, Clone, Serialize, Deserialize)]
-pub struct Path {
+pub struct Path<T> {
     odd_nibble_length: bool,
     /// Each element is 2 nibbles (or 1 in the case of the final byte
     /// when `odd_nibble_length` is true).
-    bytes: Vec<u8>,
+    bytes: T,
 }
 
-impl Debug for Path {
+impl<T: KeyType> Debug for Path<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        for nib in self.bytes.iter() {
+        for nib in self.bytes.as_ref().iter() {
             write!(f, "{:x}", *nib & 0xf)?;
         }
         Ok(())
     }
 }
 
-impl Index<usize> for Path {
+impl<T: KeyType> Index<usize> for Path<T> {
     type Output = u8;
 
     fn index(&self, index: usize) -> &Self::Output {
-        let containing_byte = self.bytes.get(index / 2).copied().expect("index OOB");
+        let containing_byte = self
+            .bytes
+            .as_ref()
+            .get(index / 2)
+            .copied()
+            .expect("index OOB");
 
         let as_nibble = if index % 2 == 0 {
             containing_byte >> 4
@@ -44,16 +51,16 @@ impl Index<usize> for Path {
     }
 }
 
-impl<'a> IntoIterator for &'a Path {
+impl<'a, T: KeyType> IntoIterator for &'a Path<T> {
     type Item = u8;
 
-    type IntoIter = PathIterator<'a>;
+    type IntoIter = PathIterator<'a, T>;
 
     fn into_iter(self) -> Self::IntoIter {
         PathIterator {
             data: self,
             head: 0,
-            tail: self.bytes.len(),
+            tail: self.bytes.as_ref().len(),
         }
     }
 }
@@ -95,13 +102,13 @@ impl<'a> IntoIterator for &'a Path {
 //     }
 // }
 
-pub(crate) struct PathIterator<'a> {
-    data: &'a Path,
+pub(crate) struct PathIterator<'a, T> {
+    data: &'a Path<T>,
     head: usize,
     tail: usize,
 }
 
-impl<'a> Iterator for PathIterator<'a> {
+impl<'a, T: KeyType> Iterator for PathIterator<'a, T> {
     type Item = u8;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -125,14 +132,14 @@ impl<'a> Iterator for PathIterator<'a> {
     }
 }
 
-impl<'a> PathIterator<'a> {
+impl<'a, T> PathIterator<'a, T> {
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
         self.head == self.tail
     }
 }
 
-impl<'a> DoubleEndedIterator for PathIterator<'a> {
+impl<'a, T: KeyType> DoubleEndedIterator for PathIterator<'a, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.is_empty() {
             return None;
@@ -156,8 +163,8 @@ impl<'a> DoubleEndedIterator for PathIterator<'a> {
 //     }
 // }
 
-impl Path {
-    pub fn _new(bytes: Vec<u8>, odd_nibble_length: bool) -> Self {
+impl<T: KeyType> Path<T> {
+    pub fn _new(bytes: T, odd_nibble_length: bool) -> Self {
         Self {
             bytes,
             odd_nibble_length,
@@ -168,25 +175,27 @@ impl Path {
         unimplemented!()
     }
 
-    pub fn from_encoded(encoded: &[u8]) -> Self {
+    pub fn from_encoded(encoded: T) -> Self {
         unimplemented!()
     }
 
     /// Creates a new Path from a slice of nibbles.
-    pub fn from_nibbles(nibbles: &[u8]) -> Self {
-        // TODO danlaine: this can probably be made more "rusty" with iterators
-        let num_bytes = nibbles.len() / 2 + 1;
-        let mut bytes = Vec::with_capacity(num_bytes);
-        for i in 0..num_bytes {
-            #[allow(clippy::indexing_slicing)]
-            let high = nibbles[2 * i + 2];
-            let low = nibbles.get(2 * i + 1).copied().unwrap_or(0);
-            bytes.push(high << 4 | low);
-        }
+    pub fn from_nibbles(nibbles: T) -> Self {
+        todo!()
 
-        Self {
-            bytes,
-            odd_nibble_length: nibbles.len() % 2 == 1,
-        }
+        // // TODO danlaine: this can probably be made more "rusty" with iterators
+        // let num_bytes = nibbles.len() / 2 + 1;
+        // let mut bytes = Vec::with_capacity(num_bytes);
+        // for i in 0..num_bytes {
+        //     #[allow(clippy::indexing_slicing)]
+        //     let high = nibbles[2 * i + 2];
+        //     let low = nibbles.get(2 * i + 1).copied().unwrap_or(0);
+        //     bytes.push(high << 4 | low);
+        // }
+
+        // Self {
+        //     bytes,
+        //     odd_nibble_length: nibbles.len() % 2 == 1,
+        // }
     }
 }

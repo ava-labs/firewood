@@ -28,7 +28,8 @@ pub enum Node {
 /// If this is a branch node, `children` is non-empty.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct EncodedNode {
-    pub(crate) partial_path: Path,
+    // TODO danlaine: Should we hardcode generic param of Path to Box<[u8]>?
+    pub(crate) partial_path: Path<Box<[u8]>>,
     /// If a child is None, it doesn't exist.
     /// If it's Some, it's the value or value hash of the child.
     pub(crate) children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN],
@@ -77,11 +78,11 @@ impl<'de> Deserialize<'de> for EncodedNode {
     {
         let chd: Vec<(u64, Vec<u8>)>;
         let value: Option<Vec<u8>>;
-        let path: Vec<u8>;
+        let path: Box<[u8]>;
 
         (chd, value, path) = Deserialize::deserialize(deserializer)?;
 
-        let path = Path::from_nibbles(&path);
+        let path = Path::from_nibbles(path);
 
         let mut children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
         #[allow(clippy::indexing_slicing)]

@@ -8,7 +8,8 @@ use std::fmt::{Debug, Error as FmtError, Formatter};
 
 #[derive(PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct BranchNode {
-    pub(crate) partial_path: Path,
+    // TODO danlaine: Should we hardcode generic param of Path to Box<[u8]>?
+    pub(crate) partial_path: Path<Box<[u8]>>,
     pub(crate) value: Option<Box<[u8]>>,
     pub(crate) children: [Option<LinearAddress>; Self::MAX_CHILDREN],
 }
