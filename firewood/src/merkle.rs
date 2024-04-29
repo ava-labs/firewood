@@ -6,7 +6,7 @@ use crate::storage::linear::{ReadLinearStore, WriteLinearStore};
 use crate::storage::node::{self, LinearAddress};
 use crate::stream::{MerkleKeyValueStream, TraversalIterator};
 use crate::trie_hash::TrieHash;
-use crate::v2::api::{self, KeyType};
+use crate::v2::api::{self, KeyType, ValueType};
 use futures::{StreamExt, TryStreamExt};
 use std::future::ready;
 use std::io::Write;
@@ -69,7 +69,7 @@ impl<T: ReadLinearStore> Merkle<T> {
         todo!()
     }
 
-    fn _get_node_by_key<K: AsRef<[u8]>>(&self, _key: K) -> Result<Option<&Node>, MerkleError> {
+    fn _get_node_by_key<K: KeyType>(&self, _key: K) -> Result<Option<&Node>, MerkleError> {
         todo!()
     }
 
@@ -104,7 +104,7 @@ impl<T: ReadLinearStore> Merkle<T> {
         // Ok(Proof(proofs))
     }
 
-    pub fn get<K: AsRef<[u8]>>(&self, _key: K) -> Result<Option<Box<[u8]>>, MerkleError> {
+    pub fn get<K: KeyType>(&self, _key: K) -> Result<Option<Box<[u8]>>, MerkleError> {
         todo!()
         // TODO danlaine use or remove the code below
         // if root_addr.is_null() {
@@ -118,7 +118,7 @@ impl<T: ReadLinearStore> Merkle<T> {
         //     Ok(node_ref.map(Ref))
     }
 
-    pub fn verify_proof<N: AsRef<[u8]> + Send, K: AsRef<[u8]>>(
+    pub fn verify_proof<N: AsRef<[u8]> + Send, K: KeyType>(
         &self,
         _key: K,
         _proof: &Proof<N>,
@@ -126,7 +126,7 @@ impl<T: ReadLinearStore> Merkle<T> {
         todo!()
     }
 
-    pub fn verify_range_proof<N: AsRef<[u8]> + Send, K: AsRef<[u8]>, V: AsRef<[u8]>>(
+    pub fn verify_range_proof<N: AsRef<[u8]> + Send, K: KeyType, V: ValueType>(
         &self,
         _proof: &Proof<N>,
         _first_key: K,
@@ -138,10 +138,10 @@ impl<T: ReadLinearStore> Merkle<T> {
     }
 
     // TODO danlaine: can we use the LinearAddress of the `root` instead?
-    pub fn path_iter(
+    pub fn path_iter<K: KeyType>(
         &self,
-        key: Box<[u8]>,
-    ) -> Result<TraversalIterator<'_, '_, T, Box<[u8]>>, MerkleError> {
+        key: K,
+    ) -> Result<TraversalIterator<'_, '_, T, K>, MerkleError> {
         TraversalIterator::new(self, key)
     }
 
@@ -156,7 +156,7 @@ impl<T: ReadLinearStore> Merkle<T> {
         MerkleKeyValueStream::_from_key(self, key)
     }
 
-    pub(super) async fn _range_proof<K: api::KeyType + Send + Sync>(
+    pub(super) async fn _range_proof<K: KeyType + Send + Sync>(
         &self,
         first_key: Option<K>,
         last_key: Option<K>,
@@ -266,11 +266,11 @@ impl<T: ReadLinearStore> Merkle<T> {
 }
 
 impl<T: WriteLinearStore> Merkle<T> {
-    pub fn insert<K: AsRef<[u8]>>(&mut self, _key: K, _val: Vec<u8>) -> Result<(), MerkleError> {
+    pub fn insert<K: KeyType>(&mut self, _key: K, _val: Vec<u8>) -> Result<(), MerkleError> {
         todo!()
     }
 
-    pub fn remove<K: AsRef<[u8]>>(&mut self, _key: K) -> Result<Option<Vec<u8>>, MerkleError> {
+    pub fn remove<K: KeyType>(&mut self, _key: K) -> Result<Option<Vec<u8>>, MerkleError> {
         todo!()
     }
 
