@@ -9,9 +9,9 @@ use std::{fmt::Debug, sync::Arc};
 /// A `KeyType` is something that can be xcast to a u8 reference,
 /// and can be sent and shared across threads. References with
 /// lifetimes are not allowed (hence 'static)
-pub trait KeyType: AsRef<[u8]> + Send + Sync + Debug {}
+pub trait KeyType: AsRef<[u8]> + Send + Sync + Debug + 'static {}
 
-impl<T> KeyType for T where T: AsRef<[u8]> + Send + Sync + Debug {}
+impl<T> KeyType for T where T: AsRef<[u8]> + Send + Sync + Debug + 'static {}
 
 /// A `ValueType` is the same as a `KeyType`. However, these could
 /// be a different type from the `KeyType` on a given API call.

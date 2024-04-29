@@ -179,7 +179,7 @@ impl<'a, T: linear::ReadLinearStore> Stream for MerkleNodeStream<'a, T> {
 /// Returns the initial state for an iterator over the given `merkle` which starts at `key`.
 fn get_iterator_intial_state<'a, T: linear::ReadLinearStore>(
     merkle: &'a Merkle<T>,
-    key: &[u8],
+    key: Box<[u8]>, // TODO danlaine: don't hardcode this type?
 ) -> Result<NodeStreamState<'a>, api::Error> {
     let Some(root_addr) = merkle.root_address() else {
         // This merkle is empty.
@@ -312,7 +312,7 @@ impl<'a, T> MerkleKeyValueStreamState<'a, T> {
 
     /// Returns a new iterator that will iterate over all the key-value pairs in `merkle`
     /// with keys greater than or equal to `key`.
-    fn _with_key(key: Key) -> Self {
+    fn _with_key<K: KeyType>(key: K) -> Self {
         Self::_Uninitialized(key)
     }
 }
@@ -337,7 +337,7 @@ impl<'a, T: linear::ReadLinearStore> MerkleKeyValueStream<'a, T> {
         }
     }
 
-    pub(super) fn _from_key(merkle: &'a Merkle<T>, key: Key) -> Self {
+    pub(super) fn _from_key<K: KeyType>(merkle: &'a Merkle<T>, key: K) -> Self {
         Self {
             state: MerkleKeyValueStreamState::_with_key(key),
             merkle,
@@ -431,11 +431,14 @@ impl<'a, 'b, T: ReadLinearStore, K: KeyType> TraversalIterator<'a, 'b, T, K> {
             });
         };
 
+        let path = Path::from_encoded(key);
+        let iter = path.into_iter();
+
         Ok(Self {
             merkle,
             state: TraversalIteratorState::Iterating {
                 matched_key: vec![],
-                unmatched_key: Path::from_encoded(key),
+                unmatched_key: iter,
                 address: root_addr,
             },
         })

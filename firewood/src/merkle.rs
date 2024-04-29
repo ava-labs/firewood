@@ -6,13 +6,15 @@ use crate::storage::linear::{ReadLinearStore, WriteLinearStore};
 use crate::storage::node::{self, LinearAddress};
 use crate::stream::{MerkleKeyValueStream, TraversalIterator};
 use crate::trie_hash::TrieHash;
-use crate::v2::api;
+use crate::v2::api::{self, KeyType};
 use futures::{StreamExt, TryStreamExt};
 use std::future::ready;
 use std::io::Write;
 use std::ops::{Deref, DerefMut};
 use thiserror::Error;
 
+// TODO danlaine do we need these?
+// Can we use KeyType and ValueType instead?
 pub type Key = Box<[u8]>;
 pub type Value = Vec<u8>;
 
@@ -78,10 +80,7 @@ impl<T: ReadLinearStore> Merkle<T> {
     /// If the trie does not contain a value for key, the returned proof contains
     /// all nodes of the longest existing prefix of the key, ending with the node
     /// that proves the absence of the key (at least the root node).
-    pub fn prove<K>(&self, _key: K) -> Result<Proof<Vec<u8>>, MerkleError>
-    where
-        K: AsRef<[u8]>,
-    {
+    pub fn prove<K: KeyType>(&self, _key: K) -> Result<Proof<Vec<u8>>, MerkleError> {
         todo!()
         // let mut proofs = HashMap::new();
         // if root_addr.is_null() {
@@ -150,7 +149,10 @@ impl<T: ReadLinearStore> Merkle<T> {
         MerkleKeyValueStream::_new(self)
     }
 
-    pub(crate) fn _key_value_iter_from_key(&self, key: Key) -> MerkleKeyValueStream<'_, T> {
+    pub(crate) fn _key_value_iter_from_key<K: KeyType>(
+        &self,
+        key: K,
+    ) -> MerkleKeyValueStream<'_, T> {
         MerkleKeyValueStream::_from_key(self, key)
     }
 

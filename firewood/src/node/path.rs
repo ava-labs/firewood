@@ -65,28 +65,12 @@ impl<'a, T: KeyType> IntoIterator for &'a Path<T> {
     }
 }
 
-// impl IntoIterator for Path {
-//     type Item = u8;
-//     type IntoIter = OwnedPathIterator;
-
-//     fn into_iter(self) -> Self::IntoIter {
-//         OwnedPathIterator {
-//             data: self,
-//             inner: PathIterator {
-//                 data: &self,
-//                 head: 0,
-//                 tail: self.bytes.len(),
-//             },
-//         }
-//     }
+// pub(crate) struct OwnedPathIterator<'a, K: KeyType> {
+//     data: Path<K>,
+//     inner: PathIterator<'a, K>,
 // }
 
-// pub(crate) struct OwnedPathIterator {
-//     data: Path,
-//     inner: PathIterator<'static>,
-// }
-
-// impl Iterator for OwnedPathIterator {
+// impl<'a, K: KeyType> Iterator for OwnedPathIterator<'a, K> {
 //     type Item = u8;
 
 //     fn next(&mut self) -> Option<Self::Item> {
@@ -154,14 +138,6 @@ impl<'a, T: KeyType> DoubleEndedIterator for PathIterator<'a, T> {
         self.next_back()
     }
 }
-
-// TODO danlaine: do we need this?
-// impl std::ops::Deref for Path {
-//     type Target = [u8]; // TODO danlaine: what type should this be?
-//     fn deref(&self) -> &[u8] {
-//         &self.bytes
-//     }
-// }
 
 impl<T: KeyType> Path<T> {
     pub fn _new(bytes: T, odd_nibble_length: bool) -> Self {
