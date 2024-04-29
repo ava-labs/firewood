@@ -3,7 +3,7 @@
 
 use crate::{
     merkle::{Key, Merkle, MerkleError, Value},
-    node::{BranchNode, Node},
+    node::{path::Path, BranchNode, Node},
     storage::{
         linear::{self, ReadLinearStore},
         node::LinearAddress,
@@ -11,8 +11,8 @@ use crate::{
     v2::api,
 };
 use futures::{stream::FusedStream, Stream, StreamExt};
-use std::task::Poll;
 use std::{cmp::Ordering, iter::once};
+use std::{slice::Iter, task::Poll};
 
 /// Represents an ongoing iteration over a node and its children.
 enum IterationNode<'a> {
@@ -143,8 +143,8 @@ impl<'a, T: linear::ReadLinearStore> Stream for MerkleNodeStream<'a, T> {
                             let child = merkle.get_node(child_addr)?;
 
                             let partial_path = match child {
-                                Node::Branch(branch) => branch.partial_path.iter().copied(),
-                                Node::Leaf(leaf) => leaf.partial_path.iter().copied(),
+                                Node::Branch(branch) => branch.partial_path,
+                                Node::Leaf(leaf) => leaf.partial_path,
                             };
 
                             // The child's key is its parent's key, followed by the child's index,
@@ -194,7 +194,7 @@ fn get_iterator_intial_state<'a, T: linear::ReadLinearStore>(
 
     // TODO danlaine: update the code below to reflect the fact that Nibbles no longer
     // has a leading zero.
-    let mut unmatched_key_nibbles = Nibbles::new(key).into_iter();
+    let mut unmatched_key_nibbles = Path::from_encoded(key).into_iter();
 
     let mut iter_stack: Vec<IterationNode> = vec![];
 
@@ -395,7 +395,7 @@ enum PathIteratorState<'a> {
         /// Note the node at `address` may not have a key which is a
         /// prefix of the key we're traversing to.
         matched_key: Vec<u8>,
-        unmatched_key: NibblesIterator<'a>,
+        unmatched_key: Iter<'a, u8>,
         address: LinearAddress,
     },
     Exhausted,
@@ -430,7 +430,7 @@ impl<'a, 'b, T: ReadLinearStore> PathIterator<'a, 'b, T> {
             merkle,
             state: PathIteratorState::Iterating {
                 matched_key: vec![],
-                unmatched_key: Nibbles::new(key).into_iter(),
+                unmatched_key: Path::from_encoded(key).into_iter(),
                 address: root_addr,
             },
         })

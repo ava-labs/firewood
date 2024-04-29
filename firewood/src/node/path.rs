@@ -44,6 +44,19 @@ impl Index<usize> for Path {
     }
 }
 
+impl IntoIterator for Path {
+    type Item = u8;
+    type IntoIter = PathIterator<'static>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        PathIterator {
+            data: &self,
+            head: 0,
+            tail: self.bytes.len(),
+        }
+    }
+}
+
 struct PathIterator<'a> {
     data: &'a Path,
     head: usize,
@@ -97,12 +110,13 @@ impl<'a> DoubleEndedIterator for PathIterator<'a> {
     }
 }
 
-impl std::ops::Deref for Path {
-    type Target = [u8]; // TODO danlaine: what type should this be?
-    fn deref(&self) -> &[u8] {
-        &self.bytes
-    }
-}
+// TODO danlaine: do we need this?
+// impl std::ops::Deref for Path {
+//     type Target = [u8]; // TODO danlaine: what type should this be?
+//     fn deref(&self) -> &[u8] {
+//         &self.bytes
+//     }
+// }
 
 impl Path {
     pub fn _new(bytes: Vec<u8>, odd_nibble_length: bool) -> Self {
@@ -113,6 +127,10 @@ impl Path {
     }
 
     pub fn encode(&self) -> Vec<u8> {
+        unimplemented!()
+    }
+
+    pub fn from_encoded(encoded: &[u8]) -> Self {
         unimplemented!()
     }
 

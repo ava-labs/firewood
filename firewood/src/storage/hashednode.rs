@@ -56,8 +56,8 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
             }
             Node::Leaf(ref leaf) => {
                 // TODO: can we use the stack here and call update less?
-                for byte in leaf.partial_path.iter() {
-                    hasher.update([*byte]);
+                for byte in leaf.partial_path.clone().into_iter() {
+                    hasher.update([byte]);
                 }
                 hasher.update(&leaf.value);
             }
