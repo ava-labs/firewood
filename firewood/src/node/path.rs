@@ -58,18 +58,42 @@ impl<'a> IntoIterator for &'a Path {
     }
 }
 
-impl IntoIterator for Path {
-    type Item = u8;
-    type IntoIter = PathIterator<'static>;
+// impl IntoIterator for Path {
+//     type Item = u8;
+//     type IntoIter = OwnedPathIterator;
 
-    fn into_iter(self) -> Self::IntoIter {
-        PathIterator {
-            data: &self,
-            head: 0,
-            tail: self.bytes.len(),
-        }
-    }
-}
+//     fn into_iter(self) -> Self::IntoIter {
+//         OwnedPathIterator {
+//             data: self,
+//             inner: PathIterator {
+//                 data: &self,
+//                 head: 0,
+//                 tail: self.bytes.len(),
+//             },
+//         }
+//     }
+// }
+
+// pub(crate) struct OwnedPathIterator {
+//     data: Path,
+//     inner: PathIterator<'static>,
+// }
+
+// impl Iterator for OwnedPathIterator {
+//     type Item = u8;
+
+//     fn next(&mut self) -> Option<Self::Item> {
+//         self.inner.next()
+//     }
+
+//     fn size_hint(&self) -> (usize, Option<usize>) {
+//         self.inner.size_hint()
+//     }
+
+//     fn nth(&mut self, n: usize) -> Option<Self::Item> {
+//         self.inner.nth(n)
+//     }
+// }
 
 pub(crate) struct PathIterator<'a> {
     data: &'a Path,

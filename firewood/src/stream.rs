@@ -146,8 +146,8 @@ impl<'a, T: linear::ReadLinearStore> Stream for MerkleNodeStream<'a, T> {
                             let child = merkle.get_node(child_addr)?;
 
                             let partial_path = match child {
-                                Node::Branch(branch) => branch.partial_path,
-                                Node::Leaf(leaf) => leaf.partial_path,
+                                Node::Branch(branch) => &branch.partial_path,
+                                Node::Leaf(leaf) => &leaf.partial_path,
                             };
 
                             // The child's key is its parent's key, followed by the child's index,
@@ -197,7 +197,9 @@ fn get_iterator_intial_state<'a, T: linear::ReadLinearStore>(
 
     // TODO danlaine: update the code below to reflect the fact that Nibbles no longer
     // has a leading zero.
-    let mut unmatched_key_nibbles = Path::from_encoded(key).into_iter();
+    let path = Path::from_encoded(key);
+
+    let mut unmatched_key_nibbles = path.into_iter();
 
     let mut iter_stack: Vec<IterationNode> = vec![];
 
@@ -280,7 +282,7 @@ fn get_iterator_intial_state<'a, T: linear::ReadLinearStore>(
                 {
                     // `child` is after `key`.
                     let key = matched_key_nibbles
-                        .iter()
+                        .into_iter()
                         .chain(leaf.partial_path.into_iter())
                         // .copied()  TODO danlaine: remove
                         .collect();
