@@ -3,22 +3,21 @@
 
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
-use std::{
-    fmt::{self, Debug},
-    iter::once,
-};
-
-use crate::nibbles::NibblesIterator;
+use std::fmt::{self, Debug};
 
 // TODO: use smallvec
 /// Path is part or all of a node's path in the trie.
-/// Each element is a nibble.
 #[derive(PartialEq, Eq, Clone, Serialize, Deserialize)]
-pub struct Path(Vec<u8>);
+pub struct Path {
+    odd_nibble_length: bool,
+    /// Each element is 2 nibbles (or 1 in the case of the final byte
+    /// when `odd_nibble_length` is true).
+    bytes: Vec<u8>,
+}
 
 impl Debug for Path {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        for nib in self.0.iter() {
+        for nib in self.bytes.iter() {
             write!(f, "{:x}", *nib & 0xf)?;
         }
         Ok(())
@@ -26,15 +25,9 @@ impl Debug for Path {
 }
 
 impl std::ops::Deref for Path {
-    type Target = [u8];
+    type Target = [u8]; // TODO danlaine: what type should this be?
     fn deref(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-impl From<Vec<u8>> for Path {
-    fn from(value: Vec<u8>) -> Self {
-        Self(value)
+        &self.bytes
     }
 }
 
@@ -46,44 +39,26 @@ bitflags! {
 }
 
 impl Path {
-    pub fn _new(bytes: Vec<u8>) -> Self {
-        Self(bytes)
+    pub fn _new(bytes: Vec<u8>, odd_nibble_length: bool) -> Self {
+        Self {
+            bytes,
+            odd_nibble_length,
+        }
     }
 
-    pub fn iter_encoded(&self) -> impl Iterator<Item = u8> + '_ {
-        let mut flags = Flags::empty();
-
-        let has_odd_len = self.0.len() & 1 == 1;
-
-        let extra_byte = if has_odd_len {
-            flags.insert(Flags::ODD_LEN);
-
-            None
-        } else {
-            Some(0)
-        };
-
-        once(flags.bits())
-            .chain(extra_byte)
-            .chain(self.0.iter().copied())
-    }
-    pub(crate) fn encode(&self) -> Vec<u8> {
-        self.iter_encoded().collect()
-    }
-
-    /// Returns the decoded path.
-    pub fn from_nibbles(nibbles: NibblesIterator<'_>) -> Self {
-        Self::from_iter(nibbles)
-    }
-
-    /// Assumes all bytes are nibbles, prefer to use `from_nibbles` instead.
-    fn from_iter<Iter: Iterator<Item = u8>>(mut iter: Iter) -> Self {
-        let flags = Flags::from_bits_retain(iter.next().unwrap_or_default());
-
-        if !flags.contains(Flags::ODD_LEN) {
-            let _ = iter.next();
+    /// Creates a new Path from a slice of nibbles.
+    pub fn from_nibbles(nibbles: &[u8]) -> Self {
+        let num_bytes = nibbles.len() / 2 + 1;
+        let mut bytes = Vec::with_capacity(num_bytes);
+        for i in 0..num_bytes {
+            let high = nibbles.get(i * 2).copied().unwrap_or(0);
+            let low = nibbles.get(i * 2 + 1).copied().unwrap_or(0);
+            bytes.push(high << 4 | low);
         }
 
-        Self(iter.collect())
+        Self {
+            bytes,
+            odd_nibble_length: nibbles.len() % 2 == 1,
+        }
     }
 }
