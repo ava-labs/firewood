@@ -353,7 +353,7 @@ impl<T: WriteLinearStore> NodeStore<T> {
 }
 
 #[derive(Debug)]
-enum UpdateError {
+pub enum UpdateError {
     Io(Error),
     NodeMoved(LinearAddress),
 }

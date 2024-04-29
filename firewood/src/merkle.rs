@@ -40,6 +40,10 @@ pub enum MerkleError {
 #[derive(Debug)]
 pub struct Merkle<T: ReadLinearStore>(HashedNodeStore<T>);
 
+impl<T: ReadLinearStore> Merkle<T> {
+    const EMPTY_HASH: TrieHash = TrieHash([0; 32]);
+}
+
 impl<T: ReadLinearStore> Deref for Merkle<T> {
     type Target = HashedNodeStore<T>;
 
@@ -68,8 +72,17 @@ impl<T: ReadLinearStore> Merkle<T> {
         self.0.root_address()
     }
 
-    pub fn root_hash(&self) -> Result<TrieHash, MerkleError> {
-        todo!()
+    // TODO: can we make this &self instead of &mut self?
+    pub fn root_hash(&mut self) -> Result<TrieHash, std::io::Error> {
+        let root = self.root_address();
+        match root {
+            None => Ok(Self::EMPTY_HASH),
+            Some(root) => {
+                // TODO: We might be able to get the hash without reading the node...
+                let root_node = self.read_node(root)?;
+                root_node.hash(root, &mut self.0)
+            }
+        }
     }
 
     fn _get_node_by_key<K: AsRef<[u8]>>(&self, _key: K) -> Result<Option<&Node>, MerkleError> {
@@ -278,6 +291,14 @@ impl<T: WriteLinearStore> Merkle<T> {
         }
 
         Ok(())
+    }
+
+    pub fn insert_and_return_updates<K: AsRef<[u8]>>(
+        &self,
+        _key: K,
+        _val: Vec<u8>,
+    ) -> Result<(Vec<LinearAddress>, Vec<LinearAddress>), MerkleError> {
+        todo!()
     }
 
     pub fn remove<K: AsRef<[u8]>>(&mut self, _key: K) -> Result<Option<Vec<u8>>, MerkleError> {
