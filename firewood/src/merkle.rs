@@ -220,7 +220,7 @@ impl<T: ReadLinearStore> Merkle<T> {
                     ready(kv.0.as_ref() <= last_key.as_ref())
                 })
                 .map(|kv_result| kv_result.map(|(k, v)| (k, v)))
-                .try_collect::<Vec<(Vec<u8>, Vec<u8>)>>()
+                .try_collect::<Vec<(K, Vec<u8>)>>()
                 .await?,
         );
 
