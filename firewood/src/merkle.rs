@@ -62,9 +62,7 @@ impl<T: ReadLinearStore> Merkle<T> {
     pub fn get_node(&self, _addr: LinearAddress) -> Result<&Node, MerkleError> {
         todo!()
     }
-}
 
-impl<T: WriteLinearStore> Merkle<T> {
     pub fn root_hash(&self) -> Result<TrieHash, MerkleError> {
         todo!()
     }
