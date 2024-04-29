@@ -278,11 +278,6 @@ impl<T: WriteLinearStore> Merkle<T> {
     }
 }
 
-// nibbles, high bits first, then low bits
-pub const fn to_nibble_array(x: u8) -> [u8; 2] {
-    [x >> 4, x & 0b_0000_1111]
-}
-
 /// Returns an iterator where each element is the result of combining
 /// 2 nibbles of `nibbles`. If `nibbles` is odd length, panics in
 /// debug mode and drops the final nibble in release mode.
@@ -331,15 +326,8 @@ pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 pub(super) mod tests {
-    use super::*;
-    use test_case::test_case;
-
-    #[test_case(vec![0x12, 0x34, 0x56], &[0x1, 0x2, 0x3, 0x4, 0x5, 0x6])]
-    #[test_case(vec![0xc0, 0xff], &[0xc, 0x0, 0xf, 0xf])]
-    fn to_nibbles(bytes: Vec<u8>, nibbles: &[u8]) {
-        let n: Vec<_> = bytes.into_iter().flat_map(to_nibble_array).collect();
-        assert_eq!(n, nibbles);
-    }
+    // use super::*;
+    // use test_case::test_case;
 
     //     fn branch(path: &[u8], value: &[u8], encoded_child: Option<Vec<u8>>) -> Node {
     //         let (path, value) = (path.to_vec(), value.to_vec());
