@@ -63,6 +63,7 @@ impl Error for DbError {}
 
 #[derive(Debug)]
 pub struct HistoricalRev<T> {
+    // TODO: add Merkle wrapping here
     _historical: Arc<T>,
 }
 
@@ -240,7 +241,7 @@ impl api::Db for Db {
     }
 
     async fn root_hash(&self) -> Result<HashKey, api::Error> {
-        todo!()
+        Ok(self.manager.root_hash()?)
     }
 
     async fn propose<K: KeyType, V: ValueType>(

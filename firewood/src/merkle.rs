@@ -67,9 +67,7 @@ impl<T: ReadLinearStore> Merkle<T> {
     pub fn root_address(&self) -> Option<LinearAddress> {
         self.0.root_address()
     }
-}
 
-impl<T: WriteLinearStore> Merkle<T> {
     pub fn root_hash(&self) -> Result<TrieHash, MerkleError> {
         todo!()
     }
@@ -282,15 +280,6 @@ impl<T: WriteLinearStore> Merkle<T> {
         Ok(())
     }
 
-    fn insert_and_return_updates<K: AsRef<[u8]>>(
-        &self,
-        _key: K,
-        _val: Vec<u8>,
-    ) -> Result<(Vec<LinearAddress>, Vec<LinearAddress>), MerkleError> {
-        // TODO: copy from original
-        Ok((vec![], vec![]))
-    }
-
     pub fn remove<K: AsRef<[u8]>>(&mut self, _key: K) -> Result<Option<Vec<u8>>, MerkleError> {
         // let Some(root_address) = self.root_address() else {
         //     return Ok(None);
@@ -303,11 +292,10 @@ impl<T: WriteLinearStore> Merkle<T> {
     pub fn put_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError> {
         self.create_node(&node).map_err(MerkleError::Format)
     }
-}
 
-// nibbles, high bits first, then low bits
-pub const fn to_nibble_array(x: u8) -> [u8; 2] {
-    [x >> 4, x & 0b_0000_1111]
+    fn _delete_node(&mut self, _addr: LinearAddress) -> Result<(), MerkleError> {
+        todo!()
+    }
 }
 
 /// Returns an iterator where each element is the result of combining
@@ -358,15 +346,8 @@ pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 pub(super) mod tests {
-    use super::*;
-    use test_case::test_case;
-
-    #[test_case(vec![0x12, 0x34, 0x56], &[0x1, 0x2, 0x3, 0x4, 0x5, 0x6])]
-    #[test_case(vec![0xc0, 0xff], &[0xc, 0x0, 0xf, 0xf])]
-    fn to_nibbles(bytes: Vec<u8>, nibbles: &[u8]) {
-        let n: Vec<_> = bytes.into_iter().flat_map(to_nibble_array).collect();
-        assert_eq!(n, nibbles);
-    }
+    // use super::*;
+    // use test_case::test_case;
 
     //     fn branch(path: &[u8], value: &[u8], encoded_child: Option<Vec<u8>>) -> Node {
     //         let (path, value) = (path.to_vec(), value.to_vec());

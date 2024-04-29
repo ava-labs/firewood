@@ -31,7 +31,8 @@ pub(crate) struct RevisionManager {
     historical: VecDeque<Arc<Historical>>,
     proposals: Vec<Arc<ProposedImmutable>>, // TODO: Should be Vec<Weak<ProposedImmutable>>
     committing_proposals: VecDeque<Arc<ProposedImmutable>>,
-    // TODO: by_hash: HashMap<TrieHash, LinearStoreParent>
+    // TODO: by_hash: HashMap<TrieHash, LinearStore>
+    // TODO: maintain root hash of the most recent commit
 }
 
 impl RevisionManager {
@@ -71,6 +72,11 @@ impl RevisionManager {
             self.historical.pop_front();
         }
 
+        // If we do copy on writes for underneath files, since we keep all changes
+        // after bootstrapping, we should be able to read from the changes and the 
+        // read only file map to the state at bootstrapping.
+        // We actually doesn't care whether the writes are successful or not
+        // (crash recovery may need to be handled above)
         for write in proposal.new.iter() {
             self.filebacked.write(*write.0, write.1)?;
         }
@@ -156,6 +162,8 @@ impl RevisionManager {
             matches!(proposal, LinearStoreParent::Proposed(us) if Arc::ptr_eq(&us, &should_be_us))
         );
 
+        // TODO: we should reparent fileback as the parent of this committed proposal??
+
         Ok(())
     }
 }
@@ -167,7 +175,12 @@ impl RevisionManager {
         self.proposals.push(proposal);
     }
 
+
     pub fn revision(&self, _root_hash: HashKey) -> Result<Arc<Historical>, RevisionManagerError> {
+        todo!()
+    }
+
+    pub fn root_hash(&self) -> Result<HashKey, RevisionManagerError> {
         todo!()
     }
 }
