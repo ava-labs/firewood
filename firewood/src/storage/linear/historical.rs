@@ -57,8 +57,9 @@ impl ReadLinearStore for Historical {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
+    use crate::storage::linear::memory::MemStore;
+
     use super::*;
-    use crate::storage::linear::tests::MemStore;
     use test_case::test_case;
 
     #[test_case(&[0,1,2,3],&[(0,&[4,5,6])],&[4,5,6,3];"read diff, parent")]
