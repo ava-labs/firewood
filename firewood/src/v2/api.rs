@@ -154,7 +154,7 @@ pub trait Db {
 /// A [Proposal] requires implementing DbView
 #[async_trait]
 pub trait DbView {
-    type Stream<'a, K>: Stream<Item = Result<(K, Vec<u8>), Error>>
+    type Stream<'a, K: KeyType>: Stream<Item = Result<(K, Vec<u8>), Error>>
     where
         Self: 'a,
         K: 'a;

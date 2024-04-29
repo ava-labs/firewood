@@ -557,7 +557,9 @@ fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (u8,
         .filter_map(|(pos, child_addr)| child_addr.map(|child_addr| (pos as u8, child_addr)))
 }
 
-fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
+fn key_from_nibble_iter<K: KeyType, Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> K {
+    todo!();
+
     let mut data = Vec::with_capacity(nibbles.size_hint().0 / 2);
 
     while let (Some(hi), Some(lo)) = (nibbles.next(), nibbles.next()) {
@@ -580,7 +582,7 @@ mod tests {
             MerkleNodeStream::new(self, Box::new([]))
         }
 
-        pub(crate) fn node_iter_from(&self, key: Key) -> MerkleNodeStream<'_, Box<[u8]>, T> {
+        pub(crate) fn node_iter_from<K: KeyType>(&self, key: K) -> MerkleNodeStream<'_, K, T> {
             MerkleNodeStream::new(self, key)
         }
     }

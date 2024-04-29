@@ -67,7 +67,7 @@ pub struct HistoricalRev<T> {
 
 #[async_trait]
 impl<T: linear::ReadLinearStore> api::DbView for HistoricalRev<T> {
-    type Stream<'a,K> = MerkleKeyValueStream<'a,K, T> where Self: 'a,K:'a;
+    type Stream<'a,K:KeyType> = MerkleKeyValueStream<'a,K, T> where Self: 'a,K:'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         todo!()
@@ -165,7 +165,7 @@ impl<T: linear::ReadLinearStore + linear::WriteLinearStore> api::Proposal for Pr
 
 #[async_trait]
 impl<T: linear::ReadLinearStore + linear::WriteLinearStore> api::DbView for Proposal<T> {
-    type Stream<'a,K> = MerkleKeyValueStream<'a, K,T> where T: 'a,K: 'a;
+    type Stream<'a,K:KeyType> = MerkleKeyValueStream<'a, K,T> where T: 'a, K:'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         todo!()
