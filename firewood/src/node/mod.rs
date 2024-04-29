@@ -14,8 +14,6 @@ pub(crate) mod path;
 pub use branch::BranchNode;
 pub use leaf::LeafNode;
 
-use crate::nibbles::Nibbles;
-
 use self::path::Path;
 
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner, Serialize, Deserialize)]
@@ -83,7 +81,7 @@ impl<'de> Deserialize<'de> for EncodedNode {
 
         (chd, value, path) = Deserialize::deserialize(deserializer)?;
 
-        let path = Path::from_nibbles(Nibbles::new(&path).into_iter());
+        let path = Path::from_nibbles(&path);
 
         let mut children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
         #[allow(clippy::indexing_slicing)]
