@@ -474,7 +474,7 @@ mod tests {
         let mut node_store = NodeStore::initialize(linear_store).unwrap();
 
         let leaf = Node::Leaf(LeafNode {
-            partial_path: Path(vec![0, 1, 2]),
+            partial_path: Path::_new(vec![0, 1, 2]),
             value: vec![3, 4, 5],
         });
 
@@ -506,7 +506,7 @@ mod tests {
 
         // Create another node
         let branch = Node::Branch(Box::new(BranchNode {
-            partial_path: Path(vec![6, 7, 8]),
+            partial_path: Path::_new(vec![6, 7, 8]),
             value: Some(vec![9, 10, 11].into_boxed_slice()),
             children: [None; BRANCH_CHILDREN],
         }));
@@ -547,7 +547,7 @@ mod tests {
 
         // Create a leaf
         let leaf = Node::Leaf(LeafNode {
-            partial_path: Path(vec![]),
+            partial_path: Path::_new(vec![]),
             value: vec![1],
         });
         let leaf_addr = node_store.create_node(&leaf).unwrap();
@@ -555,7 +555,7 @@ mod tests {
 
         // Update the node
         let branch = Node::Branch(Box::new(BranchNode {
-            partial_path: Path(vec![6, 7, 8]),
+            partial_path: Path::_new(vec![6, 7, 8]),
             value: Some(vec![9, 10, 11].into_boxed_slice()),
             children: [None; BRANCH_CHILDREN],
         }));
@@ -593,14 +593,14 @@ mod tests {
 
         // Create a leaf
         let leaf1 = Node::Leaf(LeafNode {
-            partial_path: Path(vec![]),
+            partial_path: Path::_new(vec![]),
             value: vec![1],
         });
         let leaf1_addr = node_store.create_node(&leaf1).unwrap();
 
         // Update the node
         let leaf2 = Node::Leaf(LeafNode {
-            partial_path: Path(vec![]),
+            partial_path: Path::_new(vec![]),
             value: vec![2],
         });
 
@@ -629,7 +629,7 @@ mod tests {
 
         // Create a leaf
         let leaf = Node::Leaf(LeafNode {
-            partial_path: Path(vec![]),
+            partial_path: Path::_new(vec![]),
             value: vec![1],
         });
         let leaf_addr = node_store.create_node(&leaf).unwrap();
