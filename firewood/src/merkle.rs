@@ -268,9 +268,7 @@ impl<T: WriteLinearStore> Merkle<T> {
     pub fn remove<K: AsRef<[u8]>>(&mut self, _key: K) -> Result<Option<Vec<u8>>, MerkleError> {
         todo!()
     }
-}
 
-impl<T: WriteLinearStore> Merkle<T> {
     pub fn put_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError> {
         self.create_node(&node).map_err(MerkleError::Format)
     }
