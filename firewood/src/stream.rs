@@ -409,7 +409,7 @@ enum PathIteratorState<'a> {
 }
 
 pub struct NodeWithKey {
-    pub key: Box<[u8]>,
+    pub key_nibbles: Box<[u8]>,
     pub node: Arc<Node>,
     pub addr: LinearAddress,
 }
@@ -486,7 +486,7 @@ impl<'a, 'b, T: linear::ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                         let addr = *address;
                         self.state = PathIteratorState::Exhausted;
                         Some(Ok(NodeWithKey {
-                            key: node_key.clone(),
+                            key_nibbles: node_key.clone(),
                             node: node.clone(),
                             addr,
                         }))
@@ -496,7 +496,7 @@ impl<'a, 'b, T: linear::ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                             let addr = *address;
                             self.state = PathIteratorState::Exhausted;
                             Some(Ok(NodeWithKey {
-                                key: node_key.clone(),
+                                key_nibbles: node_key.clone(),
                                 node: node.clone(),
                                 addr,
                             }))
@@ -507,7 +507,7 @@ impl<'a, 'b, T: linear::ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                                 let addr = *address;
                                 self.state = PathIteratorState::Exhausted;
                                 return Some(Ok(NodeWithKey {
-                                    key: node_key.clone(),
+                                    key_nibbles: node_key.clone(),
                                     node: node.clone(),
                                     addr,
                                 }));
@@ -520,7 +520,7 @@ impl<'a, 'b, T: linear::ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                                 let addr = *address;
                                 self.state = PathIteratorState::Exhausted;
                                 return Some(Ok(NodeWithKey {
-                                    key: node_key.clone(),
+                                    key_nibbles: node_key.clone(),
                                     node: node.clone(),
                                     addr,
                                 }));
@@ -531,7 +531,7 @@ impl<'a, 'b, T: linear::ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                             *address = child;
 
                             Some(Ok(NodeWithKey {
-                                key: node_key,
+                                key_nibbles: node_key,
                                 node: node.clone(),
                                 addr: *address,
                             }))

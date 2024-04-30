@@ -308,7 +308,12 @@ impl<T: WriteLinearStore> Merkle<T> {
             return Ok(Default::default());
         };
 
-        if last_node.key.as_ref() == key.as_ref() {
+        if last_node
+            .key_nibbles
+            .iter()
+            .cloned()
+            .eq(Nibbles::new(key.as_ref()).into_iter())
+        {
             match &*last_node.node {
                 Node::Branch(_) => todo!(),
                 Node::Leaf(leaf) => {
