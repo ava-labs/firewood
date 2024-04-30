@@ -68,10 +68,9 @@ pub mod proposed;
 
 use self::filebacked::FileBacked;
 use self::historical::Historical;
-use self::proposed::ProposedImmutable;
 #[cfg(test)]
-use self::tests::MemStore;
-
+use self::memory::MemStore;
+use self::proposed::ProposedImmutable;
 mod layered;
 
 /// All linear stores support reads
@@ -86,7 +85,7 @@ pub trait WriteLinearStore: ReadLinearStore {
 }
 
 #[derive(Debug, Clone)]
-pub(super) enum LinearStoreParent {
+pub enum LinearStoreParent {
     FileBacked(Arc<FileBacked>),
     Proposed(Arc<ProposedImmutable>),
     Historical(Arc<historical::Historical>),
@@ -159,4 +158,4 @@ impl ReadLinearStore for LinearStoreParent {
     }
 }
 
-pub mod tests;
+pub mod memory;

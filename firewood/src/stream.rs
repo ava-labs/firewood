@@ -71,7 +71,7 @@ impl NodeStreamState<'_> {
 }
 
 #[derive(Debug)]
-pub struct MerkleNodeStream<'a, T> {
+pub struct MerkleNodeStream<'a, T: ReadLinearStore> {
     state: NodeStreamState<'a>,
     merkle: &'a Merkle<T>,
 }
@@ -291,7 +291,7 @@ fn get_iterator_intial_state<'a, T: linear::ReadLinearStore>(
 }
 
 #[derive(Debug)]
-enum MerkleKeyValueStreamState<'a, T> {
+enum MerkleKeyValueStreamState<'a, T: ReadLinearStore> {
     /// The iterator state is lazily initialized when poll_next is called
     /// for the first time. The iteration start key is stored here.
     _Uninitialized(Key),
@@ -300,7 +300,7 @@ enum MerkleKeyValueStreamState<'a, T> {
     Initialized { node_iter: MerkleNodeStream<'a, T> },
 }
 
-impl<'a, T> MerkleKeyValueStreamState<'a, T> {
+impl<'a, T: ReadLinearStore> MerkleKeyValueStreamState<'a, T> {
     /// Returns a new iterator that will iterate over all the key-value pairs in `merkle`.
     fn _new() -> Self {
         Self::_Uninitialized(Box::new([]))
@@ -314,7 +314,7 @@ impl<'a, T> MerkleKeyValueStreamState<'a, T> {
 }
 
 #[derive(Debug)]
-pub struct MerkleKeyValueStream<'a, T> {
+pub struct MerkleKeyValueStream<'a, T: ReadLinearStore> {
     state: MerkleKeyValueStreamState<'a, T>,
     merkle: &'a Merkle<T>,
 }
@@ -413,7 +413,7 @@ enum PathIteratorState<'a> {
 ///   remaining unmatched key, the node proves the non-existence of the key.
 /// Note that thi means that the last node's key isn't necessarily a prefix of
 /// the key we're traversing to.
-pub struct PathIterator<'a, 'b, T> {
+pub struct PathIterator<'a, 'b, T: ReadLinearStore> {
     state: PathIteratorState<'b>,
     merkle: &'a Merkle<T>,
 }
@@ -561,7 +561,9 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
-    use crate::storage::{linear::tests::MemStore, node::NodeStore};
+    use crate::storage::hashednode::HashedNodeStore;
+
+    use self::linear::memory::MemStore;
 
     use super::*;
     use test_case::test_case;
@@ -577,7 +579,7 @@ mod tests {
     }
 
     pub(super) fn _create_test_merkle() -> Merkle<MemStore> {
-        Merkle::new(NodeStore::initialize(MemStore::new(vec![])).unwrap())
+        Merkle::new(HashedNodeStore::initialize(MemStore::new(vec![])).unwrap())
     }
 
     #[test_case(&[]; "empty key")]
