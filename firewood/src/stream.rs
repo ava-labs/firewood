@@ -402,6 +402,12 @@ enum PathIteratorState<'a> {
     Exhausted,
 }
 
+pub struct NodeWithKey<'a> {
+    pub key: Box<[u8]>,
+    pub node: &'a Node,
+    pub addr: LinearAddress,
+}
+
 /// Iterates over all nodes on the path to a given key starting from the root.
 /// All nodes are branch nodes except possibly the last, which may be a leaf.
 /// If the key is in the trie, the last node is the one at the given key.
@@ -411,7 +417,7 @@ enum PathIteratorState<'a> {
 ///   then the branch node proves the non-existence of the key.
 /// * A node (either branch or leaf) whose partial path doesn't match the
 ///   remaining unmatched key, the node proves the non-existence of the key.
-/// Note that thi means that the last node's key isn't necessarily a prefix of
+/// Note that this means that the last node's key isn't necessarily a prefix of
 /// the key we're traversing to.
 pub struct PathIterator<'a, 'b, T: ReadLinearStore> {
     state: PathIteratorState<'b>,
@@ -439,7 +445,7 @@ impl<'a, 'b, T: ReadLinearStore> PathIterator<'a, 'b, T> {
 }
 
 impl<'a, 'b, T: linear::ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
-    type Item = Result<(Key, &'a Node), MerkleError>;
+    type Item = Result<NodeWithKey<'a>, MerkleError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // destructuring is necessary here because we need mutable access to `state`
@@ -471,34 +477,58 @@ impl<'a, 'b, T: linear::ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
 
                 match comparison {
                     Ordering::Less | Ordering::Greater => {
+                        let addr = *address;
                         self.state = PathIteratorState::Exhausted;
-                        Some(Ok((node_key.clone(), &node)))
+                        Some(Ok(NodeWithKey {
+                            key: node_key.clone(),
+                            node,
+                            addr,
+                        }))
                     }
                     Ordering::Equal => match node {
                         Node::Leaf(_) => {
+                            let addr = *address;
                             self.state = PathIteratorState::Exhausted;
-                            Some(Ok((node_key, node)))
+                            Some(Ok(NodeWithKey {
+                                key: node_key.clone(),
+                                node,
+                                addr,
+                            }))
                         }
                         Node::Branch(branch) => {
                             let Some(next_unmatched_key_nibble) = unmatched_key.next() else {
                                 // There's no more key to match. We're done.
+                                let addr = *address;
                                 self.state = PathIteratorState::Exhausted;
-                                return Some(Ok((node_key, &node)));
+                                return Some(Ok(NodeWithKey {
+                                    key: node_key.clone(),
+                                    node,
+                                    addr,
+                                }));
                             };
 
                             #[allow(clippy::indexing_slicing)]
                             let Some(child) = branch.children[next_unmatched_key_nibble as usize] else {
                                 // There's no child at the index of the next nibble in the key.
                                 // The node we're traversing to isn't in the trie.
+                                let addr = *address;
                                 self.state = PathIteratorState::Exhausted;
-                                return Some(Ok((node_key, &node)));
+                                return Some(Ok(NodeWithKey {
+                                    key: node_key.clone(),
+                                    node,
+                                    addr,
+                                }));
                             };
 
                             matched_key.push(next_unmatched_key_nibble);
 
                             *address = child;
 
-                            Some(Ok((node_key, &node)))
+                            Some(Ok(NodeWithKey {
+                                key: node_key,
+                                node,
+                                addr: *address,
+                            }))
                         }
                     },
                 }
@@ -604,7 +634,7 @@ mod tests {
 
         let mut stream = merkle.path_iter(key).unwrap();
         let (key, node) = match stream.next() {
-            Some(Ok((key, node))) => (key, node),
+            Some(Ok(node_with_key)) => (node_with_key.key, node_with_key.node),
             Some(Err(e)) => panic!("{:?}", e),
             None => panic!("unexpected end of iterator"),
         };
@@ -625,7 +655,7 @@ mod tests {
         let mut stream = merkle.path_iter(key).unwrap();
 
         let (key, node) = match stream.next() {
-            Some(Ok((key, node))) => (key, node),
+            Some(Ok(node_with_key)) => (node_with_key.key, node_with_key.node),
             Some(Err(e)) => panic!("{:?}", e),
             None => panic!("unexpected end of iterator"),
         };
@@ -633,7 +663,7 @@ mod tests {
         assert!(node.as_branch().unwrap().value.is_none());
 
         let (key, node) = match stream.next() {
-            Some(Ok((key, node))) => (key, node),
+            Some(Ok(node_with_key)) => (node_with_key.key, node_with_key.node),
             Some(Err(e)) => panic!("{:?}", e),
             None => panic!("unexpected end of iterator"),
         };
@@ -647,7 +677,7 @@ mod tests {
         );
 
         let (key, node) = match stream.next() {
-            Some(Ok((key, node))) => (key, node),
+            Some(Ok(node_with_key)) => (node_with_key.key, node_with_key.node),
             Some(Err(e)) => panic!("{:?}", e),
             None => panic!("unexpected end of iterator"),
         };
@@ -669,7 +699,7 @@ mod tests {
         let mut stream = merkle.path_iter(key).unwrap();
 
         let (key, node) = match stream.next() {
-            Some(Ok((key, node))) => (key, node),
+            Some(Ok(node_with_key)) => (node_with_key.key, node_with_key.node),
             Some(Err(e)) => panic!("{:?}", e),
             None => panic!("unexpected end of iterator"),
         };
@@ -677,7 +707,7 @@ mod tests {
         assert!(node.as_branch().unwrap().value.is_none());
 
         let (key, node) = match stream.next() {
-            Some(Ok((key, node))) => (key, node),
+            Some(Ok(node_with_key)) => (node_with_key.key, node_with_key.node),
             Some(Err(e)) => panic!("{:?}", e),
             None => panic!("unexpected end of iterator"),
         };

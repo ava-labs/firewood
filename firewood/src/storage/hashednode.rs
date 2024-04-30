@@ -96,3 +96,11 @@ impl HashedNode {
         }
     }
 }
+
+impl Deref for HashedNode {
+    type Target = Arc<Node>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
