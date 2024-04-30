@@ -640,7 +640,7 @@ mod tests {
 
         let mut stream = merkle.path_iter(key).unwrap();
         let (key, node) = match stream.next() {
-            Some(Ok(node_with_key)) => (node_with_key.key, node_with_key.node),
+            Some(Ok(node_with_key)) => (node_with_key.key_nibbles, node_with_key.node),
             Some(Err(e)) => panic!("{:?}", e),
             None => panic!("unexpected end of iterator"),
         };
@@ -661,7 +661,7 @@ mod tests {
         let mut stream = merkle.path_iter(key).unwrap();
 
         let (key, node) = match stream.next() {
-            Some(Ok(node_with_key)) => (node_with_key.key, node_with_key.node),
+            Some(Ok(node_with_key)) => (node_with_key.key_nibbles, node_with_key.node),
             Some(Err(e)) => panic!("{:?}", e),
             None => panic!("unexpected end of iterator"),
         };
@@ -669,7 +669,7 @@ mod tests {
         assert!(node.as_branch().unwrap().value.is_none());
 
         let (key, node) = match stream.next() {
-            Some(Ok(node_with_key)) => (node_with_key.key, node_with_key.node),
+            Some(Ok(node_with_key)) => (node_with_key.key_nibbles, node_with_key.node),
             Some(Err(e)) => panic!("{:?}", e),
             None => panic!("unexpected end of iterator"),
         };
@@ -683,7 +683,7 @@ mod tests {
         );
 
         let (key, node) = match stream.next() {
-            Some(Ok(node_with_key)) => (node_with_key.key, node_with_key.node),
+            Some(Ok(node_with_key)) => (node_with_key.key_nibbles, node_with_key.node),
             Some(Err(e)) => panic!("{:?}", e),
             None => panic!("unexpected end of iterator"),
         };
@@ -705,7 +705,7 @@ mod tests {
         let mut stream = merkle.path_iter(key).unwrap();
 
         let (key, node) = match stream.next() {
-            Some(Ok(node_with_key)) => (node_with_key.key, node_with_key.node),
+            Some(Ok(node_with_key)) => (node_with_key.key_nibbles, node_with_key.node),
             Some(Err(e)) => panic!("{:?}", e),
             None => panic!("unexpected end of iterator"),
         };
@@ -713,7 +713,7 @@ mod tests {
         assert!(node.as_branch().unwrap().value.is_none());
 
         let (key, node) = match stream.next() {
-            Some(Ok(node_with_key)) => (node_with_key.key, node_with_key.node),
+            Some(Ok(node_with_key)) => (node_with_key.key_nibbles, node_with_key.node),
             Some(Err(e)) => panic!("{:?}", e),
             None => panic!("unexpected end of iterator"),
         };
