@@ -318,7 +318,7 @@ impl<T: WriteLinearStore> NodeStore<T> {
     }
 
     /// Deletes the [Node] at the given address.
-    fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error> {
+    pub fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error> {
         debug_assert!(addr.get() % 8 == 0);
 
         let (area_size_index, _) = self.area_index_and_size(addr)?;
@@ -439,7 +439,7 @@ struct FreeArea {
 mod tests {
     use crate::node::path::Path;
     use crate::node::{BranchNode, LeafNode};
-    use crate::storage::linear::tests::MemStore;
+    use crate::storage::linear::memory::MemStore;
 
     use super::*;
 

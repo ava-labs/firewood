@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use crate::{merkle::Merkle, v2::api::HashKey};
+use crate::{merkle::Merkle, storage::linear::ReadLinearStore, v2::api::HashKey};
 use aiofut::AioError;
 use nix::errno::Errno;
 use sha3::Digest;
@@ -134,7 +134,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     /// necessary nodes will be resolved and leave the remaining as hashnode.
     ///
     /// The given edge proof is allowed to be an existent or non-existent proof.
-    fn _proof_to_path<K, T>(
+    fn _proof_to_path<K, T: ReadLinearStore>(
         &self,
         _key: K,
         _root_hash: HashKey,

@@ -173,8 +173,9 @@ impl<'a> std::io::Read for LayeredReader<'a> {
 
 #[cfg(test)]
 mod tests {
+    use crate::storage::linear::memory::MemStore;
+
     use super::Layer;
-    use crate::storage::linear::tests::MemStore;
     use std::{collections::BTreeMap, io::Read};
     use test_case::test_case;
 

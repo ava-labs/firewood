@@ -190,7 +190,7 @@ impl WriteLinearStore for ProposedMutable {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod test {
-    use crate::storage::linear::tests::MemStore;
+    use crate::storage::linear::memory::MemStore;
 
     use super::*;
     use rand::Rng;

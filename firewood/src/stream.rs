@@ -18,24 +18,24 @@ use std::task::Poll;
 use std::{cmp::Ordering, iter::once};
 
 /// Represents an ongoing iteration over a node and its children.
-enum IterationNode<'a, K: KeyType> {
+enum IterationNode<'a> {
     /// This node has not been returned yet.
     Unvisited {
         /// The key (as nibbles) of this node.
-        key: K,
+        key: Box<[u8]>,
         node: &'a Node,
     },
     /// This node has been returned. Track which child to visit next.
     Visited {
         /// The key (as nibbles) of this node.
-        key: K,
+        key: Box<[u8]>,
         /// Returns the non-empty children of this node and their positions
         /// in the node's children array.
         children_iter: Box<dyn Iterator<Item = (u8, LinearAddress)> + Send>,
     },
 }
 
-impl<'a, K: KeyType> std::fmt::Debug for IterationNode<'a, K> {
+impl<'a> std::fmt::Debug for IterationNode<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unvisited { key, node } => f
@@ -52,33 +52,34 @@ impl<'a, K: KeyType> std::fmt::Debug for IterationNode<'a, K> {
 }
 
 #[derive(Debug)]
-enum NodeStreamState<'a, K: KeyType> {
+enum NodeStreamState<'a> {
     /// The iterator state is lazily initialized when poll_next is called
     /// for the first time. The iteration start key is stored here.
-    StartFromKey(K),
+    StartFromKey(Box<[u8]>),
     Iterating {
         /// Each element is a node that will be visited (i.e. returned)
         /// or has been visited but has unvisited children.
         /// On each call to poll_next we pop the next element.
         /// If it's unvisited, we visit it.
         /// If it's visited, we push its next child onto this stack.
-        iter_stack: Vec<IterationNode<'a, K>>,
+        iter_stack: Vec<IterationNode<'a>>,
     },
 }
 
-impl<K: KeyType> NodeStreamState<'_, K> {
-    fn new(key: K) -> Self {
-        Self::StartFromKey(key)
+impl NodeStreamState<'_> {
+    fn new<K: KeyType>(key: K) -> Self {
+        let key = key.as_ref();
+        Self::StartFromKey(Box::new(*key))
     }
 }
 
 #[derive(Debug)]
-pub struct MerkleNodeStream<'a, K: KeyType, T> {
-    state: NodeStreamState<'a, K>,
+pub struct MerkleNodeStream<'a, T: ReadLinearStore> {
+    state: NodeStreamState<'a>,
     merkle: &'a Merkle<T>,
 }
 
-impl<'a, K: KeyType, T: linear::ReadLinearStore> FusedStream for MerkleNodeStream<'a, K, T> {
+impl<'a, T: linear::ReadLinearStore> FusedStream for MerkleNodeStream<'a, T> {
     fn is_terminated(&self) -> bool {
         // The top of `iter_stack` is the next node to return.
         // If `iter_stack` is empty, there are no more nodes to visit.
@@ -86,10 +87,10 @@ impl<'a, K: KeyType, T: linear::ReadLinearStore> FusedStream for MerkleNodeStrea
     }
 }
 
-impl<'a, K: KeyType, T: linear::ReadLinearStore> MerkleNodeStream<'a, K, T> {
+impl<'a, T: linear::ReadLinearStore> MerkleNodeStream<'a, T> {
     /// Returns a new iterator that will iterate over all the nodes in `merkle`
     /// with keys greater than or equal to `key`.
-    pub(super) fn new(merkle: &'a Merkle<T>, key: K) -> Self {
+    pub(super) fn new<K: KeyType>(merkle: &'a Merkle<T>, key: K) -> Self {
         Self {
             state: NodeStreamState::new(key),
             merkle,
@@ -97,8 +98,8 @@ impl<'a, K: KeyType, T: linear::ReadLinearStore> MerkleNodeStream<'a, K, T> {
     }
 }
 
-impl<'a, K: KeyType, T: linear::ReadLinearStore> Stream for MerkleNodeStream<'a, K, T> {
-    type Item = Result<(K, &'a Node), api::Error>;
+impl<'a, T: linear::ReadLinearStore> Stream for MerkleNodeStream<'a, T> {
+    type Item = Result<(Box<[u8]>, &'a Node), api::Error>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
@@ -180,7 +181,7 @@ impl<'a, K: KeyType, T: linear::ReadLinearStore> Stream for MerkleNodeStream<'a,
 fn get_iterator_intial_state<'a, K: KeyType, T: linear::ReadLinearStore>(
     merkle: &'a Merkle<T>,
     key: K,
-) -> Result<NodeStreamState<'a, K>, api::Error> {
+) -> Result<NodeStreamState<'a>, api::Error> {
     let Some(root_addr) = merkle.root_address() else {
         // This merkle is empty.
         return Ok(NodeStreamState::Iterating { iter_stack: vec![] });
@@ -295,18 +296,16 @@ fn get_iterator_intial_state<'a, K: KeyType, T: linear::ReadLinearStore>(
 }
 
 #[derive(Debug)]
-enum MerkleKeyValueStreamState<'a, K: KeyType, T> {
+enum MerkleKeyValueStreamState<'a, T: ReadLinearStore> {
     /// The iterator state is lazily initialized when poll_next is called
     /// for the first time. The iteration start key is stored here.
-    _Uninitialized(K),
+    _Uninitialized(Box<[u8]>),
     /// The iterator works by iterating over the nodes in the merkle trie
     /// and returning the key-value pairs for nodes that have values.
-    Initialized {
-        node_iter: MerkleNodeStream<'a, K, T>,
-    },
+    Initialized { node_iter: MerkleNodeStream<'a, T> },
 }
 
-impl<'a, K: KeyType, T> MerkleKeyValueStreamState<'a, K, T> {
+impl<'a, T: ReadLinearStore> MerkleKeyValueStreamState<'a, T> {
     /// Returns a new iterator that will iterate over all the key-value pairs in `merkle`.
     fn _new() -> Self {
         Self::_Uninitialized(Box::new([]))
@@ -314,24 +313,24 @@ impl<'a, K: KeyType, T> MerkleKeyValueStreamState<'a, K, T> {
 
     /// Returns a new iterator that will iterate over all the key-value pairs in `merkle`
     /// with keys greater than or equal to `key`.
-    fn _with_key(key: K) -> Self {
+    fn _with_key<K: KeyType>(key: K) -> Self {
         Self::_Uninitialized(key)
     }
 }
 
 #[derive(Debug)]
-pub struct MerkleKeyValueStream<'a, K: KeyType, T> {
-    state: MerkleKeyValueStreamState<'a, K, T>,
+pub struct MerkleKeyValueStream<'a, T: ReadLinearStore> {
+    state: MerkleKeyValueStreamState<'a, T>,
     merkle: &'a Merkle<T>,
 }
 
-impl<'a, K: KeyType, T: linear::ReadLinearStore> FusedStream for MerkleKeyValueStream<'a, K, T> {
+impl<'a, T: linear::ReadLinearStore> FusedStream for MerkleKeyValueStream<'a, T> {
     fn is_terminated(&self) -> bool {
         matches!(&self.state, MerkleKeyValueStreamState::Initialized { node_iter } if node_iter.is_terminated())
     }
 }
 
-impl<'a, K: KeyType, T: linear::ReadLinearStore> MerkleKeyValueStream<'a, K, T> {
+impl<'a, T: linear::ReadLinearStore> MerkleKeyValueStream<'a, T> {
     pub(super) fn _new(merkle: &'a Merkle<T>) -> Self {
         Self {
             state: MerkleKeyValueStreamState::_new(),
@@ -339,7 +338,7 @@ impl<'a, K: KeyType, T: linear::ReadLinearStore> MerkleKeyValueStream<'a, K, T> 
         }
     }
 
-    pub(super) fn _from_key(merkle: &'a Merkle<T>, key: K) -> Self {
+    pub(super) fn _from_key<K: KeyType>(merkle: &'a Merkle<T>, key: K) -> Self {
         Self {
             state: MerkleKeyValueStreamState::_with_key(key),
             merkle,
@@ -347,8 +346,8 @@ impl<'a, K: KeyType, T: linear::ReadLinearStore> MerkleKeyValueStream<'a, K, T> 
     }
 }
 
-impl<'a, K: KeyType, T: linear::ReadLinearStore> Stream for MerkleKeyValueStream<'a, K, T> {
-    type Item = Result<(K, Value), api::Error>;
+impl<'a, T: linear::ReadLinearStore> Stream for MerkleKeyValueStream<'a, T> {
+    type Item = Result<(Box<[u8]>, Value), api::Error>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
@@ -419,13 +418,13 @@ enum TraversalIteratorState<'a, T> {
 ///   remaining unmatched key, the node proves the non-existence of the key.
 /// Note that thi means that the last node's key isn't necessarily a prefix of
 /// the key we're traversing to.
-pub struct TraversalIterator<'a, 'b, T, K> {
-    state: TraversalIteratorState<'b, K>,
+pub struct TraversalIterator<'a, 'b, T: ReadLinearStore> {
+    state: TraversalIteratorState<'b, Box<[u8]>>,
     merkle: &'a Merkle<T>,
 }
 
-impl<'a, 'b, T: ReadLinearStore, K: KeyType> TraversalIterator<'a, 'b, T, K> {
-    pub(super) fn new(merkle: &'a Merkle<T>, key: K) -> Result<Self, MerkleError> {
+impl<'a, 'b, T: ReadLinearStore> TraversalIterator<'a, 'b, T> {
+    pub(super) fn new<K: KeyType>(merkle: &'a Merkle<T>, key: K) -> Result<Self, MerkleError> {
         let Some(root_addr) = merkle.root_address() else {
             return Ok(Self {
                 state: TraversalIteratorState::Exhausted,
@@ -447,8 +446,8 @@ impl<'a, 'b, T: ReadLinearStore, K: KeyType> TraversalIterator<'a, 'b, T, K> {
     }
 }
 
-impl<'a, 'b, K: KeyType, T: linear::ReadLinearStore> Iterator for TraversalIterator<'a, 'b, K, T> {
-    type Item = Result<(K, &'a Node), MerkleError>;
+impl<'a, 'b, T: linear::ReadLinearStore> Iterator for TraversalIterator<'a, 'b, T> {
+    type Item = Result<(Box<[u8]>, &'a Node), MerkleError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // destructuring is necessary here because we need mutable access to `state`
@@ -557,9 +556,7 @@ fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (u8,
         .filter_map(|(pos, child_addr)| child_addr.map(|child_addr| (pos as u8, child_addr)))
 }
 
-fn key_from_nibble_iter<K: KeyType, Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> K {
-    todo!();
-
+fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Box<[u8]> {
     let mut data = Vec::with_capacity(nibbles.size_hint().0 / 2);
 
     while let (Some(hi), Some(lo)) = (nibbles.next(), nibbles.next()) {
@@ -572,7 +569,9 @@ fn key_from_nibble_iter<K: KeyType, Iter: Iterator<Item = u8>>(mut nibbles: Iter
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
-    use crate::storage::{linear::tests::MemStore, node::NodeStore};
+    use crate::storage::hashednode::HashedNodeStore;
+
+    use self::linear::memory::MemStore;
 
     use super::*;
     use test_case::test_case;
@@ -588,7 +587,7 @@ mod tests {
     }
 
     pub(super) fn _create_test_merkle() -> Merkle<MemStore> {
-        Merkle::new(NodeStore::initialize(MemStore::new(vec![])).unwrap())
+        Merkle::new(HashedNodeStore::initialize(MemStore::new(vec![])).unwrap())
     }
 
     #[test_case(Box::new([]); "empty key")]

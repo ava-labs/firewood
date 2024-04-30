@@ -1,23 +1,25 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use crate::merkle::MerkleError;
 use crate::proof::{Proof, ProofError};
-use crate::storage::linear;
 use crate::storage::linear::historical::Historical as HistoricalStore;
 use crate::storage::linear::proposed::ProposedMutable;
+use crate::storage::linear::{self, ReadLinearStore};
 use crate::stream::MerkleKeyValueStream;
 use crate::trie_hash::TrieHash;
+use crate::v2::api::{self, HashKey, KeyType, ValueType};
 pub use crate::v2::api::{Batch, BatchOp};
-use crate::{
-    merkle::MerkleError,
-    v2::api::{self, HashKey, KeyType, ValueType},
-};
 use aiofut::AioError;
 use async_trait::async_trait;
 
 use crate::storage::manager::RevisionManager;
 use metered::metered;
-use std::{error::Error, fmt, io::Write, path::Path, sync::Arc};
+use std::error::Error;
+use std::fmt;
+use std::io::Write;
+use std::path::Path;
+use std::sync::Arc;
 use typed_builder::TypedBuilder;
 
 // TODO use or remove
@@ -67,7 +69,7 @@ pub struct HistoricalRev<T> {
 
 #[async_trait]
 impl<T: linear::ReadLinearStore> api::DbView for HistoricalRev<T> {
-    type Stream<'a,K:KeyType> = MerkleKeyValueStream<'a,K, T> where Self: 'a,K:'a;
+    type Stream<'a> = MerkleKeyValueStream<'a, T> where Self: 'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         todo!()
@@ -96,17 +98,17 @@ impl<T: linear::ReadLinearStore> api::DbView for HistoricalRev<T> {
     fn iter_option<K: KeyType>(
         &self,
         _first_key: Option<K>,
-    ) -> Result<Self::Stream<'_, K>, api::Error> {
+    ) -> Result<Self::Stream<'_>, api::Error> {
         todo!()
     }
 }
 
-impl<T> HistoricalRev<T> {
-    pub fn stream<K: KeyType>(&self) -> MerkleKeyValueStream<'_, K, T> {
+impl<T: ReadLinearStore> HistoricalRev<T> {
+    pub fn stream(&self) -> MerkleKeyValueStream<'_, T> {
         todo!()
     }
 
-    pub fn stream_from<K: KeyType>(&self, _start_key: &[u8]) -> MerkleKeyValueStream<'_, K, T> {
+    pub fn stream_from<K: KeyType>(&self, _start_key: K) -> MerkleKeyValueStream<'_, T> {
         todo!()
     }
 
@@ -165,7 +167,7 @@ impl<T: linear::ReadLinearStore + linear::WriteLinearStore> api::Proposal for Pr
 
 #[async_trait]
 impl<T: linear::ReadLinearStore + linear::WriteLinearStore> api::DbView for Proposal<T> {
-    type Stream<'a,K:KeyType> = MerkleKeyValueStream<'a, K,T> where T: 'a, K:'a;
+    type Stream<'a> = MerkleKeyValueStream<'a, T> where T: 'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         todo!()
@@ -194,7 +196,7 @@ impl<T: linear::ReadLinearStore + linear::WriteLinearStore> api::DbView for Prop
     fn iter_option<K: KeyType>(
         &self,
         _first_key: Option<K>,
-    ) -> Result<Self::Stream<'_, K>, api::Error> {
+    ) -> Result<Self::Stream<'_>, api::Error> {
         todo!()
     }
 }
