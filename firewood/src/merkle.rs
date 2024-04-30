@@ -66,11 +66,6 @@ impl<T: ReadLinearStore> Merkle<T> {
         Merkle(store)
     }
 
-    // TODO: remove me; callers should use [Merkle::read_node]
-    pub fn get_node(&self, _addr: LinearAddress) -> Result<&Node, MerkleError> {
-        todo!()
-    }
-
     pub fn root_address(&self) -> Option<LinearAddress> {
         self.0.root_address()
     }
@@ -314,7 +309,7 @@ impl<T: WriteLinearStore> Merkle<T> {
         };
 
         if last_node.key.as_ref() == key.as_ref() {
-            match last_node.node {
+            match &*last_node.node {
                 Node::Branch(_) => todo!(),
                 Node::Leaf(leaf) => {
                     let new_leaf = Node::Leaf(LeafNode {
