@@ -44,7 +44,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
         self.hashes.insert(addr, None);
     }
 
-    fn hash_internal(&self, node: &Arc<Node>) -> TrieHash {
+    fn hash_internal(&self, node: &Arc<Node>) -> Result<TrieHash, Error> {
         let mut hasher = Keccak256::new();
         match **node {
             Node::Branch(ref _branch) => {
@@ -58,7 +58,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                 hasher.update(&leaf.value);
             }
         }
-        TrieHash(hasher.finalize().into())
+        Ok(TrieHash(hasher.finalize().into()))
     }
 }
 
@@ -82,17 +82,25 @@ impl HashedNode {
     pub fn hash<T: ReadLinearStore>(
         &self,
         addr: LinearAddress,
-        mut store: HashedNodeStore<T>,
-    ) -> TrieHash {
+        store: &mut HashedNodeStore<T>,
+    ) -> Result<TrieHash, Error> {
         // see if we already have the hashed value for this node
         let value = store.hashes.get_mut(&addr);
         match value {
             None | Some(None) => {
-                let hash = store.hash_internal(&self.0);
+                let hash = store.hash_internal(&self.0)?;
                 store.hashes.insert(addr, Some(hash));
-                hash
+                Ok(hash)
             }
-            Some(Some(hash)) => *hash,
+            Some(Some(hash)) => Ok(*hash),
         }
+    }
+}
+
+impl Deref for HashedNode {
+    type Target = Arc<Node>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }

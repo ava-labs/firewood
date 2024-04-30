@@ -12,16 +12,16 @@ use crate::{
     v2::api,
 };
 use futures::{stream::FusedStream, Stream, StreamExt};
-use std::task::Poll;
 use std::{cmp::Ordering, iter::once};
+use std::{sync::Arc, task::Poll};
 
 /// Represents an ongoing iteration over a node and its children.
-enum IterationNode<'a> {
+enum IterationNode {
     /// This node has not been returned yet.
     Unvisited {
         /// The key (as nibbles) of this node.
         key: Key,
-        node: &'a Node,
+        node: Arc<Node>,
     },
     /// This node has been returned. Track which child to visit next.
     Visited {
@@ -33,7 +33,7 @@ enum IterationNode<'a> {
     },
 }
 
-impl<'a> std::fmt::Debug for IterationNode<'a> {
+impl std::fmt::Debug for IterationNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unvisited { key, node } => f
@@ -50,7 +50,7 @@ impl<'a> std::fmt::Debug for IterationNode<'a> {
 }
 
 #[derive(Debug)]
-enum NodeStreamState<'a> {
+enum NodeStreamState {
     /// The iterator state is lazily initialized when poll_next is called
     /// for the first time. The iteration start key is stored here.
     StartFromKey(Key),
@@ -60,11 +60,11 @@ enum NodeStreamState<'a> {
         /// On each call to poll_next we pop the next element.
         /// If it's unvisited, we visit it.
         /// If it's visited, we push its next child onto this stack.
-        iter_stack: Vec<IterationNode<'a>>,
+        iter_stack: Vec<IterationNode>,
     },
 }
 
-impl NodeStreamState<'_> {
+impl NodeStreamState {
     fn new(key: Key) -> Self {
         Self::StartFromKey(key)
     }
@@ -72,7 +72,7 @@ impl NodeStreamState<'_> {
 
 #[derive(Debug)]
 pub struct MerkleNodeStream<'a, T: ReadLinearStore> {
-    state: NodeStreamState<'a>,
+    state: NodeStreamState,
     merkle: &'a Merkle<T>,
 }
 
@@ -96,7 +96,7 @@ impl<'a, T: linear::ReadLinearStore> MerkleNodeStream<'a, T> {
 }
 
 impl<'a, T: linear::ReadLinearStore> Stream for MerkleNodeStream<'a, T> {
-    type Item = Result<(Key, &'a Node), api::Error>;
+    type Item = Result<(Key, Arc<Node>), api::Error>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
@@ -115,13 +115,13 @@ impl<'a, T: linear::ReadLinearStore> Stream for MerkleNodeStream<'a, T> {
                 while let Some(mut iter_node) = iter_stack.pop() {
                     match iter_node {
                         IterationNode::Unvisited { key, node } => {
-                            match node {
+                            match &*node {
                                 Node::Branch(branch) => {
                                     // `node` is a branch node. Visit its children next.
                                     iter_stack.push(IterationNode::Visited {
                                         key: key.clone(),
                                         children_iter: Box::new(as_enumerated_children_iter(
-                                            branch,
+                                            &*branch,
                                         )),
                                     });
                                 }
@@ -141,9 +141,9 @@ impl<'a, T: linear::ReadLinearStore> Stream for MerkleNodeStream<'a, T> {
                                 continue;
                             };
 
-                            let child = merkle.get_node(child_addr)?;
+                            let child = merkle.read_node(child_addr)?;
 
-                            let partial_path = match child {
+                            let partial_path = match &**child {
                                 Node::Branch(branch) => branch.partial_path.iter().copied(),
                                 Node::Leaf(leaf) => leaf.partial_path.iter().copied(),
                             };
@@ -162,7 +162,7 @@ impl<'a, T: linear::ReadLinearStore> Stream for MerkleNodeStream<'a, T> {
 
                             iter_stack.push(IterationNode::Unvisited {
                                 key: child_key,
-                                node: child,
+                                node: child.clone(),
                             });
                             return self.poll_next(_cx);
                         }
@@ -178,14 +178,14 @@ impl<'a, T: linear::ReadLinearStore> Stream for MerkleNodeStream<'a, T> {
 fn get_iterator_intial_state<'a, T: linear::ReadLinearStore>(
     merkle: &'a Merkle<T>,
     key: &[u8],
-) -> Result<NodeStreamState<'a>, api::Error> {
+) -> Result<NodeStreamState, api::Error> {
     let Some(root_addr) = merkle.root_address() else {
         // This merkle is empty.
         return Ok(NodeStreamState::Iterating { iter_stack: vec![] });
     };
 
     // Invariant: `node`'s key is a prefix of `key`.
-    let mut node = merkle.get_node(root_addr)?;
+    let mut node = merkle.read_node(root_addr)?;
 
     // Invariant: `matched_key_nibbles` is the key of `node` at the start
     // of each loop iteration.
@@ -207,13 +207,13 @@ fn get_iterator_intial_state<'a, T: linear::ReadLinearStore>(
             // Visit and return `node` first.
             iter_stack.push(IterationNode::Unvisited {
                 key: Box::from(matched_key_nibbles),
-                node,
+                node: node.clone(),
             });
 
             return Ok(NodeStreamState::Iterating { iter_stack });
         };
 
-        match &node {
+        match &**node {
             Node::Branch(branch) => {
                 // The next nibble in `key` is `next_unmatched_key_nibble`,
                 // so all children of `node` with a position > `next_unmatched_key_nibble`
@@ -221,7 +221,7 @@ fn get_iterator_intial_state<'a, T: linear::ReadLinearStore>(
                 iter_stack.push(IterationNode::Visited {
                     key: matched_key_nibbles.iter().copied().collect(),
                     children_iter: Box::new(
-                        as_enumerated_children_iter(branch)
+                        as_enumerated_children_iter(&*branch)
                             .filter(move |(pos, _)| *pos > next_unmatched_key_nibble),
                     ),
                 });
@@ -238,9 +238,9 @@ fn get_iterator_intial_state<'a, T: linear::ReadLinearStore>(
 
                 matched_key_nibbles.push(next_unmatched_key_nibble);
 
-                let child = merkle.get_node(child_addr)?;
+                let child = merkle.read_node(child_addr)?;
 
-                let partial_key = match child {
+                let partial_key = match &**child {
                     Node::Branch(branch) => &branch.partial_path,
                     Node::Leaf(leaf) => &leaf.partial_path,
                 };
@@ -266,7 +266,10 @@ fn get_iterator_intial_state<'a, T: linear::ReadLinearStore>(
                             .chain(partial_key.iter())
                             .copied()
                             .collect();
-                        iter_stack.push(IterationNode::Unvisited { key, node: child });
+                        iter_stack.push(IterationNode::Unvisited {
+                            key,
+                            node: child.clone(),
+                        });
 
                         return Ok(NodeStreamState::Iterating { iter_stack });
                     }
@@ -282,7 +285,10 @@ fn get_iterator_intial_state<'a, T: linear::ReadLinearStore>(
                         .chain(leaf.partial_path.iter())
                         .copied()
                         .collect();
-                    iter_stack.push(IterationNode::Unvisited { key, node });
+                    iter_stack.push(IterationNode::Unvisited {
+                        key,
+                        node: node.clone(),
+                    });
                 }
                 return Ok(NodeStreamState::Iterating { iter_stack });
             }
@@ -361,7 +367,7 @@ impl<'a, T: linear::ReadLinearStore> Stream for MerkleKeyValueStream<'a, T> {
             MerkleKeyValueStreamState::Initialized { node_iter: iter } => {
                 match iter.poll_next_unpin(_cx) {
                     Poll::Ready(node) => match node {
-                        Some(Ok((key, node))) => match node {
+                        Some(Ok((key, node))) => match &*node {
                             Node::Branch(branch) => {
                                 let Some(value) = branch.value.as_ref() else {
                                     // This node doesn't have a value to return.
@@ -402,6 +408,12 @@ enum PathIteratorState<'a> {
     Exhausted,
 }
 
+pub struct NodeWithKey {
+    pub key: Box<[u8]>,
+    pub node: Arc<Node>,
+    pub addr: LinearAddress,
+}
+
 /// Iterates over all nodes on the path to a given key starting from the root.
 /// All nodes are branch nodes except possibly the last, which may be a leaf.
 /// If the key is in the trie, the last node is the one at the given key.
@@ -411,7 +423,7 @@ enum PathIteratorState<'a> {
 ///   then the branch node proves the non-existence of the key.
 /// * A node (either branch or leaf) whose partial path doesn't match the
 ///   remaining unmatched key, the node proves the non-existence of the key.
-/// Note that thi means that the last node's key isn't necessarily a prefix of
+/// Note that this means that the last node's key isn't necessarily a prefix of
 /// the key we're traversing to.
 pub struct PathIterator<'a, 'b, T: ReadLinearStore> {
     state: PathIteratorState<'b>,
@@ -439,7 +451,7 @@ impl<'a, 'b, T: ReadLinearStore> PathIterator<'a, 'b, T> {
 }
 
 impl<'a, 'b, T: linear::ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
-    type Item = Result<(Key, &'a Node), MerkleError>;
+    type Item = Result<NodeWithKey, MerkleError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // destructuring is necessary here because we need mutable access to `state`
@@ -453,12 +465,12 @@ impl<'a, 'b, T: linear::ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                 unmatched_key,
                 address,
             } => {
-                let node = match merkle.get_node(*address) {
+                let node = match merkle.read_node(*address) {
                     Ok(node) => node,
-                    Err(e) => return Some(Err(e)),
+                    Err(e) => return Some(Err(e.into())),
                 };
 
-                let partial_path = match node {
+                let partial_path = match &**node {
                     Node::Branch(branch) => &branch.partial_path,
                     Node::Leaf(leaf) => &leaf.partial_path,
                 };
@@ -471,34 +483,58 @@ impl<'a, 'b, T: linear::ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
 
                 match comparison {
                     Ordering::Less | Ordering::Greater => {
+                        let addr = *address;
                         self.state = PathIteratorState::Exhausted;
-                        Some(Ok((node_key.clone(), &node)))
+                        Some(Ok(NodeWithKey {
+                            key: node_key.clone(),
+                            node: node.clone(),
+                            addr,
+                        }))
                     }
-                    Ordering::Equal => match node {
+                    Ordering::Equal => match &**node {
                         Node::Leaf(_) => {
+                            let addr = *address;
                             self.state = PathIteratorState::Exhausted;
-                            Some(Ok((node_key, node)))
+                            Some(Ok(NodeWithKey {
+                                key: node_key.clone(),
+                                node: node.clone(),
+                                addr,
+                            }))
                         }
                         Node::Branch(branch) => {
                             let Some(next_unmatched_key_nibble) = unmatched_key.next() else {
                                 // There's no more key to match. We're done.
+                                let addr = *address;
                                 self.state = PathIteratorState::Exhausted;
-                                return Some(Ok((node_key, &node)));
+                                return Some(Ok(NodeWithKey {
+                                    key: node_key.clone(),
+                                    node: node.clone(),
+                                    addr,
+                                }));
                             };
 
                             #[allow(clippy::indexing_slicing)]
                             let Some(child) = branch.children[next_unmatched_key_nibble as usize] else {
                                 // There's no child at the index of the next nibble in the key.
                                 // The node we're traversing to isn't in the trie.
+                                let addr = *address;
                                 self.state = PathIteratorState::Exhausted;
-                                return Some(Ok((node_key, &node)));
+                                return Some(Ok(NodeWithKey {
+                                    key: node_key.clone(),
+                                    node: node.clone(),
+                                    addr,
+                                }));
                             };
 
                             matched_key.push(next_unmatched_key_nibble);
 
                             *address = child;
 
-                            Some(Ok((node_key, &node)))
+                            Some(Ok(NodeWithKey {
+                                key: node_key,
+                                node: node.clone(),
+                                addr: *address,
+                            }))
                         }
                     },
                 }
@@ -569,11 +605,11 @@ mod tests {
     use test_case::test_case;
 
     impl<T: ReadLinearStore> Merkle<T> {
-        pub(crate) fn node_iter(&self) -> MerkleNodeStream<'_, T> {
+        pub(crate) fn node_iter(&self) -> MerkleNodeStream<T> {
             MerkleNodeStream::new(self, Box::new([]))
         }
 
-        pub(crate) fn node_iter_from(&self, key: Key) -> MerkleNodeStream<'_, T> {
+        pub(crate) fn node_iter_from(&self, key: Key) -> MerkleNodeStream<T> {
             MerkleNodeStream::new(self, key)
         }
     }
@@ -604,7 +640,7 @@ mod tests {
 
         let mut stream = merkle.path_iter(key).unwrap();
         let (key, node) = match stream.next() {
-            Some(Ok((key, node))) => (key, node),
+            Some(Ok(node_with_key)) => (node_with_key.key, node_with_key.node),
             Some(Err(e)) => panic!("{:?}", e),
             None => panic!("unexpected end of iterator"),
         };
@@ -625,7 +661,7 @@ mod tests {
         let mut stream = merkle.path_iter(key).unwrap();
 
         let (key, node) = match stream.next() {
-            Some(Ok((key, node))) => (key, node),
+            Some(Ok(node_with_key)) => (node_with_key.key, node_with_key.node),
             Some(Err(e)) => panic!("{:?}", e),
             None => panic!("unexpected end of iterator"),
         };
@@ -633,7 +669,7 @@ mod tests {
         assert!(node.as_branch().unwrap().value.is_none());
 
         let (key, node) = match stream.next() {
-            Some(Ok((key, node))) => (key, node),
+            Some(Ok(node_with_key)) => (node_with_key.key, node_with_key.node),
             Some(Err(e)) => panic!("{:?}", e),
             None => panic!("unexpected end of iterator"),
         };
@@ -647,7 +683,7 @@ mod tests {
         );
 
         let (key, node) = match stream.next() {
-            Some(Ok((key, node))) => (key, node),
+            Some(Ok(node_with_key)) => (node_with_key.key, node_with_key.node),
             Some(Err(e)) => panic!("{:?}", e),
             None => panic!("unexpected end of iterator"),
         };
@@ -669,7 +705,7 @@ mod tests {
         let mut stream = merkle.path_iter(key).unwrap();
 
         let (key, node) = match stream.next() {
-            Some(Ok((key, node))) => (key, node),
+            Some(Ok(node_with_key)) => (node_with_key.key, node_with_key.node),
             Some(Err(e)) => panic!("{:?}", e),
             None => panic!("unexpected end of iterator"),
         };
@@ -677,7 +713,7 @@ mod tests {
         assert!(node.as_branch().unwrap().value.is_none());
 
         let (key, node) = match stream.next() {
-            Some(Ok((key, node))) => (key, node),
+            Some(Ok(node_with_key)) => (node_with_key.key, node_with_key.node),
             Some(Err(e)) => panic!("{:?}", e),
             None => panic!("unexpected end of iterator"),
         };

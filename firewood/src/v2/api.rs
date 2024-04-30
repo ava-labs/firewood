@@ -73,7 +73,7 @@ pub enum Error {
     },
 
     #[error("IO error: {0}")]
-    IO(std::io::Error),
+    IO(#[from] std::io::Error),
 
     #[error("Invalid proposal")]
     InvalidProposal,

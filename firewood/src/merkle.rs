@@ -1,16 +1,19 @@
+use crate::nibbles::Nibbles;
+use crate::node::path::Path;
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
-use crate::node::Node;
+use crate::node::{BranchNode, LeafNode, Node};
 use crate::proof::{Proof, ProofError};
 use crate::storage::hashednode::HashedNodeStore;
 use crate::storage::linear::{ReadLinearStore, WriteLinearStore};
-use crate::storage::node::LinearAddress;
-use crate::stream::{MerkleKeyValueStream, PathIterator};
+use crate::storage::node::{LinearAddress, UpdateError};
+use crate::stream::{MerkleKeyValueStream, NodeWithKey, PathIterator};
 use crate::trie_hash::TrieHash;
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
 use std::future::ready;
 use std::io::Write;
+
 use std::ops::{Deref, DerefMut};
 use thiserror::Error;
 
@@ -40,6 +43,10 @@ pub enum MerkleError {
 #[derive(Debug)]
 pub struct Merkle<T: ReadLinearStore>(HashedNodeStore<T>);
 
+impl<T: ReadLinearStore> Merkle<T> {
+    const EMPTY_HASH: TrieHash = TrieHash([0; 32]);
+}
+
 impl<T: ReadLinearStore> Deref for Merkle<T> {
     type Target = HashedNodeStore<T>;
 
@@ -59,17 +66,21 @@ impl<T: ReadLinearStore> Merkle<T> {
         Merkle(store)
     }
 
-    // TODO: remove me; callers should use [Merkle::read_node]
-    pub fn get_node(&self, _addr: LinearAddress) -> Result<&Node, MerkleError> {
-        todo!()
-    }
-
     pub fn root_address(&self) -> Option<LinearAddress> {
         self.0.root_address()
     }
 
-    pub fn root_hash(&self) -> Result<TrieHash, MerkleError> {
-        todo!()
+    // TODO: can we make this &self instead of &mut self?
+    pub fn root_hash(&mut self) -> Result<TrieHash, std::io::Error> {
+        let root = self.root_address();
+        match root {
+            None => Ok(Self::EMPTY_HASH),
+            Some(root) => {
+                // TODO: We might be able to get the hash without reading the node...
+                let root_node = self.read_node(root)?;
+                root_node.hash(root, &mut self.0)
+            }
+        }
     }
 
     fn _get_node_by_key<K: AsRef<[u8]>>(&self, _key: K) -> Result<Option<&Node>, MerkleError> {
@@ -267,17 +278,87 @@ impl<T: ReadLinearStore> Merkle<T> {
 
 impl<T: WriteLinearStore> Merkle<T> {
     pub fn insert<K: AsRef<[u8]>>(&mut self, key: K, val: Vec<u8>) -> Result<(), MerkleError> {
-        let (parents, deleted) = self.insert_and_return_updates(key, val)?;
-
-        for addr in parents {
-            self.0.invalidate_hash(addr)
+        for addr in self.insert_and_return_ancestors(key, val)? {
+            self.0.invalidate_hash(addr);
         }
-
-        for ptr in deleted {
-            self.delete_node(ptr)?
-        }
-
         Ok(())
+    }
+
+    pub fn insert_and_return_ancestors<K: AsRef<[u8]>>(
+        &mut self,
+        key: K,
+        val: Vec<u8>,
+    ) -> Result<Vec<LinearAddress>, MerkleError> {
+        let mut traversal_path = PathIterator::new(self, key.as_ref())?
+            .collect::<Result<Vec<NodeWithKey>, MerkleError>>()?;
+
+        let hash_invalidation_addresses: Vec<_> =
+            traversal_path.iter().map(|item| item.addr).collect();
+
+        let Some(last_node) = traversal_path.pop() else {
+            let key_nibbles = Nibbles::new(key.as_ref()).into_iter();
+
+            // no root, so create a leaf with this value
+            let leaf = Node::Leaf(crate::node::LeafNode {
+                partial_path: Path::from_nibbles(key_nibbles),
+                value: val,
+            });
+            let new_root = self.create_node(&leaf)?;
+            self.set_root(new_root)?;
+            return Ok(Default::default());
+        };
+
+        if last_node.key.as_ref() == key.as_ref() {
+            match &*last_node.node {
+                Node::Branch(_) => todo!(),
+                Node::Leaf(leaf) => {
+                    let new_leaf = Node::Leaf(LeafNode {
+                        value: val,
+                        partial_path: leaf.partial_path.clone(),
+                    });
+                    let addr = last_node.addr;
+                    // TODO: can we remove this clone?
+                    let parent = traversal_path.pop().map(|parent_node| {
+                        (
+                            parent_node.addr,
+                            parent_node.node.as_branch().unwrap().clone(),
+                        )
+                    });
+                    match self.update_node(addr, &new_leaf) {
+                        Err(crate::storage::node::UpdateError::NodeMoved(new_addr)) => {
+                            // update the parent to point to the new node address
+                            let Some(branch) = parent else {
+                                self.set_root(new_addr)?;
+                                return Ok(Default::default());
+                            };
+                            let mut new_children = branch.1.children;
+                            *new_children
+                                .iter_mut()
+                                .find(|child_addr| **child_addr == Some(addr))
+                                .unwrap() = Some(new_addr);
+                            let new_branch = Node::Branch(Box::new(BranchNode {
+                                children: new_children,
+                                partial_path: branch.1.partial_path,
+                                value: branch.1.value,
+                            }));
+                            self.update_node(branch.0, &new_branch)
+                                .map_err(|ue| match ue {
+                                    UpdateError::Io(e) => MerkleError::Format(e),
+                                    UpdateError::NodeMoved(_) => unreachable!(
+                                        "only changed the child address, node can't grow"
+                                    ),
+                                })?;
+                        }
+                        Err(UpdateError::Io(e)) => return Err(e.into()),
+                        _ => {}
+                    }
+                }
+            }
+        } else {
+            todo!()
+        }
+
+        Ok(hash_invalidation_addresses)
     }
 
     pub fn remove<K: AsRef<[u8]>>(&mut self, _key: K) -> Result<Option<Vec<u8>>, MerkleError> {
@@ -345,7 +426,29 @@ pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
 
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
-pub(super) mod tests {
+mod tests {
+
+    use crate::storage::linear::memory::MemStore;
+
+    use super::*;
+
+    #[test]
+    fn insert_empty() {
+        let mut merkle = create_in_memory_merkle();
+        merkle.insert(b"abc", vec![]).unwrap()
+    }
+
+    #[test]
+    fn insert_two() {
+        let mut merkle = create_in_memory_merkle();
+        merkle.insert(b"abc", vec![]).unwrap();
+        merkle.insert(b"abc", vec![b'a']).unwrap()
+    }
+
+    fn create_in_memory_merkle() -> Merkle<MemStore> {
+        Merkle::new(HashedNodeStore::initialize(MemStore::new(vec![])).unwrap())
+    }
+
     // use super::*;
     // use test_case::test_case;
 
