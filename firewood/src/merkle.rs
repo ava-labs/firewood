@@ -275,16 +275,16 @@ impl<T: ReadLinearStore> Merkle<T> {
 }
 
 impl<T: WriteLinearStore> Merkle<T> {
-    pub fn insert<K: AsRef<[u8]>>(&mut self, key: K, val: Vec<u8>) -> Result<(), MerkleError> {
+    pub fn insert(&mut self, key: &[u8], val: Vec<u8>) -> Result<(), MerkleError> {
         for addr in self.insert_and_return_ancestors(key, val)? {
             self.0.invalidate_hash(addr);
         }
         Ok(())
     }
 
-    pub fn insert_and_return_ancestors<K: AsRef<[u8]>>(
+    pub fn insert_and_return_ancestors(
         &mut self,
-        key: K,
+        key: &[u8],
         val: Vec<u8>,
     ) -> Result<Vec<LinearAddress>, MerkleError> {
         let mut traversal_path = PathIterator::new(self, key.as_ref())?
@@ -1228,7 +1228,7 @@ mod test {
     ) -> Result<Merkle<MemStore>, MerkleError> {
         let mut merkle = Merkle::new(HashedNodeStore::initialize(MemStore::new(vec![])).unwrap());
         for (k, v) in items.iter() {
-            merkle.insert(k, v.as_ref().to_vec())?;
+            merkle.insert(k.as_ref(), v.as_ref().to_vec())?;
         }
 
         Ok(merkle)
