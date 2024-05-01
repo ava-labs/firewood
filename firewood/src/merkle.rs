@@ -10,15 +10,25 @@ use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
 use std::future::ready;
 use std::io::Write;
+use storage::ReadLinearStore;
 use storage::{BranchNode, LeafNode, Node};
-use storage::{LinearAddress, UpdateError};
-use storage::{ReadLinearStore, WriteLinearStore};
+use storage::{LinearAddress, UpdateError, WriteLinearStore};
 
 use std::ops::{Deref, DerefMut};
 use thiserror::Error;
 
 pub type Key = Box<[u8]>;
 pub type Value = Vec<u8>;
+
+macro_rules! update_always_shrinks {
+    ($expression:expr) => {
+        match $expression {
+            Err(UpdateError::NodeMoved(_)) => unreachable!("this can't shrink"),
+            Err(UpdateError::Io(e)) => Err(e),
+            Ok(v) => Ok(v),
+        }
+    };
+}
 
 #[derive(Debug, Error)]
 pub enum MerkleError {
@@ -306,6 +316,14 @@ impl<T: WriteLinearStore> Merkle<T> {
             return Ok(Default::default());
         };
 
+        // `last_node` may be the node with the greatest prefix of `key`
+        // or it proves the non-existence of `key` in the trie
+
+        // Cases are:
+        // 1. `last_node.key` == `key` (handled)
+        // 2. `last_node.key` is a prefix of `key`
+        // 3. `last_node.key` is not a prefix of `key`
+
         if last_node
             .key_nibbles
             .iter()
@@ -364,17 +382,201 @@ impl<T: WriteLinearStore> Merkle<T> {
                 }
             }
         } else {
+            // 2. `last_node.key` is a prefix of `key`
+            // 3. `last_node.key` is not a prefix of `key`
+
+            // Check for case (2)
+            let prefix_overlap = PrefixOverlap::from(&*last_node.key_nibbles, key);
+            let closest_node = if !prefix_overlap.unique_a.is_empty() {
+                // `last_node.key` is not a prefix of `key`
+
+                // If unique_b is empty then the branch node will not have `val`
+
+                let Some(parent) = traversal_path.pop() else {
+                    let mut new_root_branch = BranchNode {
+                        children: Default::default(),
+                        partial_path: Path::from_nibbles_iterator(
+                            prefix_overlap.shared.into_iter().copied(),
+                        ),
+                        value: Some(val.into_boxed_slice()),
+                    };
+
+                    if prefix_overlap.unique_b.is_empty() {
+                        new_root_branch
+                            .children
+                            .get_mut(prefix_overlap.unique_a[0] as usize)
+                            .unwrap()
+                            .replace(last_node.addr);
+
+                        let new_root = Node::Branch(Box::new(new_root_branch));
+                        let new_root_addr = self.create_node(&new_root)?;
+                        self.set_root(new_root_addr)?;
+
+                        let child =
+                            last_node
+                                .node
+                                .new_with_partial_path(Path::from_nibbles_iterator(
+                                    // skip the shared prefix and the branch nibble
+                                    prefix_overlap.unique_a.into_iter().skip(1).copied(),
+                                ));
+
+                        update_always_shrinks!(self.update_node(last_node.addr, &child))?;
+
+                        return Ok(Default::default());
+                    } else {
+                        /*TODO use
+                        (*last_node.node)
+                                .as_branch()
+                                .expect("parent must be a branch")
+                                .value
+                                .clone(),
+                             */
+                        todo!()
+                    }
+
+                    // `new_root` has the common prefix of `key` and `last_node.key`
+
+                    todo!()
+                };
+                parent
+            } else {
+                // `last_node.key` is a prefix of `key`
+                last_node
+            };
+
+            // `closest_node` is the node with the greatest prefix of `key`
+
+            /*
+                    if v.root.IsNothing() {
+                // the trie is empty, so create a new root node.
+                root := newNode(key)
+                root.setValue(v.db.hasher, value)
+                v.root = maybe.Some(root)
+                return root, v.recordNewNode(root)
+            }
+
+            // Find the node that most closely matches [key].
+            var closestNode *node
+            if err := visitPathToKey(v, key, func(n *node) error {
+                closestNode = n
+                // Need to recalculate ID for all nodes on path to [key].
+                return v.recordNodeChange(n)
+            }); err != nil {
+                return nil, err
+            }
+
+            if closestNode == nil {
+                // [v.root.key] isn't a prefix of [key].
+                var (
+                    oldRoot            = v.root.Value()
+                    commonPrefixLength = getLengthOfCommonPrefix(oldRoot.key, key, 0 /*offset*/, v.tokenSize)
+                    commonPrefix       = oldRoot.key.Take(commonPrefixLength)
+                    newRoot            = newNode(commonPrefix)
+                    oldRootID          = v.db.hasher.HashNode(oldRoot)
+                )
+                v.db.metrics.HashCalculated()
+
+                // Call addChildWithID instead of addChild so the old root is added
+                // to the new root with the correct ID.
+                // TODO:
+                // [oldRootID] shouldn't need to be calculated here.
+                // Either oldRootID should already be calculated or will be calculated at the end with the other nodes
+                // Initialize the v.changes.rootID during newView and then use that here instead of oldRootID
+                newRoot.addChildWithID(oldRoot, v.tokenSize, oldRootID)
+                if err := v.recordNewNode(newRoot); err != nil {
+                    return nil, err
+                }
+                v.root = maybe.Some(newRoot)
+
+                closestNode = newRoot
+            }
+
+            // a node with that exact key already exists so update its value
+            if closestNode.key == key {
+                closestNode.setValue(v.db.hasher, value)
+                // closestNode was already marked as changed in the ancestry loop above
+                return closestNode, nil
+            }
+
+            // A node with the exact key doesn't exist so determine the portion of the
+            // key that hasn't been matched yet
+            // Note that [key] has prefix [closestNode.key], so [key] must be longer
+            // and the following index won't OOB.
+            existingChildEntry, hasChild := closestNode.children[key.Token(closestNode.key.length, v.tokenSize)]
+            if !hasChild {
+                // there are no existing nodes along the key [key], so create a new node to insert [value]
+                newNode := newNode(key)
+                newNode.setValue(v.db.hasher, value)
+                closestNode.addChild(newNode, v.tokenSize)
+                return newNode, v.recordNewNode(newNode)
+            }
+
+            // if we have reached this point, then the [key] we are trying to insert and
+            // the existing path node have some common prefix.
+            // a new branching node will be created that will represent this common prefix and
+            // have the existing path node and the value being inserted as children.
+
+            // generate the new branch node
+            // find how many tokens are common between the existing child's compressed key and
+            // the current key(offset by the closest node's key),
+            // then move all the common tokens into the branch node
+            commonPrefixLength := getLengthOfCommonPrefix(
+                existingChildEntry.compressedKey,
+                key,
+                closestNode.key.length+v.tokenSize,
+                v.tokenSize,
+            )
+
+            if existingChildEntry.compressedKey.length <= commonPrefixLength {
+                // Since the compressed key is shorter than the common prefix,
+                // we should have visited [existingChildEntry] in [visitPathToKey].
+                return nil, ErrVisitPathToKey
+            }
+
+            branchNode := newNode(key.Take(closestNode.key.length + v.tokenSize + commonPrefixLength))
+            closestNode.addChild(branchNode, v.tokenSize)
+            nodeWithValue := branchNode
+
+            if key.length == branchNode.key.length {
+                // the branch node has exactly the key to be inserted as its key, so set the value on the branch node
+                branchNode.setValue(v.db.hasher, value)
+            } else {
+                // the key to be inserted is a child of the branch node
+                // create a new node and add the value to it
+                newNode := newNode(key)
+                newNode.setValue(v.db.hasher, value)
+                branchNode.addChild(newNode, v.tokenSize)
+                if err := v.recordNewNode(newNode); err != nil {
+                    return nil, err
+                }
+                nodeWithValue = newNode
+            }
+
+            // add the existing child onto the branch node
+            branchNode.setChildEntry(
+                existingChildEntry.compressedKey.Token(commonPrefixLength, v.tokenSize),
+                &child{
+                    compressedKey: existingChildEntry.compressedKey.Skip(commonPrefixLength + v.tokenSize),
+                    id:            existingChildEntry.id,
+                    hasValue:      existingChildEntry.hasValue,
+                })
+
+            return nodeWithValue, v.recordNewNode(branchNode)
+                     */
+
             // If last node isn't prefix of key:
             //    Go to the parent of the last node
             //    If parent doesn't exist:
-            //        Last node is the only node in the trie.
-            //        Create a branch node with the common prefix
-            //        Create a leaf node with the remaining nibbles (exclude the branch nibble)
+            //        Create a branch node B with the common prefix of `key` and `last_node.key`
+            //        If the common prefix is `key`:
+            //             Set B's value to `val`
+            //        Set the root to B
+            //        Create a leaf node with the remaining nibbles of (exclude the branch nibble)
             //        Set the branch node's child to the leaf node
             //        Return
             //    Else:
             //        Note that parent's key is prefix of `key`
-            //        Create a branch node with the common prefix of the new key and last node
+            //        Create a branch node with the common prefix of the `key` and `last_node.key`
             //        Create a leaf node with the remaining nibbles (exclude the branch nibble)
             //        Set the branch node's child to the leaf node
             //        Set the parent's child to the branch node
@@ -422,41 +624,40 @@ pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
     nibbles.chunks_exact(2).map(|p| (p[0] << 4) | p[1])
 }
 
-/// TODO danlaine: use or remove PrefixOverlap
 /// The [`PrefixOverlap`] type represents the _shared_ and _unique_ parts of two potentially overlapping slices.
 /// As the type-name implies, the `shared` property only constitues a shared *prefix*.
 /// The `unique_*` properties, [`unique_a`][`PrefixOverlap::unique_a`] and [`unique_b`][`PrefixOverlap::unique_b`]
 /// are set based on the argument order passed into the [`from`][`PrefixOverlap::from`] constructor.
-// #[derive(Debug)]
-// struct PrefixOverlap<'a, T> {
-//     shared: &'a [T],
-//     unique_a: &'a [T],
-//     unique_b: &'a [T],
-// }
+#[derive(Debug)]
+struct PrefixOverlap<'a, T> {
+    shared: &'a [T],
+    unique_a: &'a [T],
+    unique_b: &'a [T],
+}
 
-// impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
-//     fn from(a: &'a [T], b: &'a [T]) -> Self {
-//         let mut split_index = 0;
+impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
+    fn from(a: &'a [T], b: &'a [T]) -> Self {
+        let mut split_index = 0;
 
-//         #[allow(clippy::indexing_slicing)]
-//         for i in 0..std::cmp::min(a.len(), b.len()) {
-//             if a[i] != b[i] {
-//                 break;
-//             }
+        #[allow(clippy::indexing_slicing)]
+        for i in 0..std::cmp::min(a.len(), b.len()) {
+            if a[i] != b[i] {
+                break;
+            }
 
-//             split_index += 1;
-//         }
+            split_index += 1;
+        }
 
-//         let (shared, unique_a) = a.split_at(split_index);
-//         let (_, unique_b) = b.split_at(split_index);
+        let (shared, unique_a) = a.split_at(split_index);
+        let (_, unique_b) = b.split_at(split_index);
 
-//         Self {
-//             shared,
-//             unique_a,
-//             unique_b,
-//         }
-//     }
-// }
+        Self {
+            shared,
+            unique_a,
+            unique_b,
+        }
+    }
+}
 
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]

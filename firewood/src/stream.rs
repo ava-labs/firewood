@@ -7,10 +7,10 @@ use crate::{
     v2::api,
 };
 
-use storage::{BranchNode, Node, ReadLinearStore, LinearAddress};
 use futures::{stream::FusedStream, Stream, StreamExt};
 use std::{cmp::Ordering, iter::once};
 use std::{sync::Arc, task::Poll};
+use storage::{BranchNode, LinearAddress, Node, ReadLinearStore};
 
 /// Represents an ongoing iteration over a node and its children.
 enum IterationNode {
@@ -422,6 +422,8 @@ pub struct NodeWithKey {
 ///   remaining unmatched key, the node proves the non-existence of the key.
 /// Note that this means that the last node's key isn't necessarily a prefix of
 /// the key we're traversing to.
+/// TODO danlaine: Change this to only return nodes that are prefixes of the key
+/// or equal to the key
 pub struct PathIterator<'a, 'b, T: ReadLinearStore> {
     state: PathIteratorState<'b>,
     merkle: &'a Merkle<T>,
