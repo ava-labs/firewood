@@ -1220,10 +1220,7 @@ mod test {
     use rand::{thread_rng, Rng, SeedableRng as _};
     use std::collections::HashMap;
 
-    fn merkle_build_test<
-        K: AsRef<[u8]> + std::cmp::Ord + Clone + std::fmt::Debug,
-        V: AsRef<[u8]> + Clone,
-    >(
+    fn merkle_build_test<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         items: Vec<(K, V)>,
     ) -> Result<Merkle<MemStore>, MerkleError> {
         let mut merkle = Merkle::new(HashedNodeStore::initialize(MemStore::new(vec![])).unwrap());
