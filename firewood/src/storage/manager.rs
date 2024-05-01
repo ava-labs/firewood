@@ -73,7 +73,7 @@ impl RevisionManager {
         }
 
         // If we do copy on writes for underneath files, since we keep all changes
-        // after bootstrapping, we should be able to read from the changes and the 
+        // after bootstrapping, we should be able to read from the changes and the
         // read only file map to the state at bootstrapping.
         // We actually doesn't care whether the writes are successful or not
         // (crash recovery may need to be handled above)
@@ -174,7 +174,6 @@ impl RevisionManager {
     pub fn add_proposal(&mut self, proposal: Arc<ProposedImmutable>) {
         self.proposals.push(proposal);
     }
-
 
     pub fn revision(&self, _root_hash: HashKey) -> Result<Arc<Historical>, RevisionManagerError> {
         todo!()

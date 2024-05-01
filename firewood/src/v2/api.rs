@@ -73,7 +73,7 @@ pub enum Error {
     },
 
     #[error("IO error: {0}")]
-    IO(std::io::Error),
+    IO(#[from] std::io::Error),
 
     #[error("Invalid proposal")]
     InvalidProposal,
@@ -196,8 +196,8 @@ pub trait DbView {
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Stream<'_>, Error>;
 
     /// Obtain a stream over the keys/values of this view, starting from the beginning
-    fn iter<K: KeyType>(&self) -> Result<Self::Stream<'_>, Error> {
-        self.iter_option(Option::<K>::None)
+    fn iter(&self) -> Result<Self::Stream<'_>, Error> {
+        self.iter_option(Option::<Box<[u8]>>::None)
     }
 
     /// Obtain a stream over the key/values, starting at a specific key

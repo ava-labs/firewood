@@ -2,6 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use std::{
     fmt::{self, Debug},
     ops::Index,
@@ -24,7 +25,7 @@ pub struct Path<T> {
 impl<T: KeyType> Debug for Path<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         for nib in self.bytes.as_ref().iter() {
-            write!(f, "{:x}", *nib & 0xf)?;
+            write!(f, "{:x}", *nib & 0xf)?; // TODO danlaine: is this right?
         }
         Ok(())
     }
@@ -174,4 +175,23 @@ impl<T: KeyType> Path<T> {
         //     odd_nibble_length: nibbles.len() % 2 == 1,
         // }
     }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use test_case::test_case;
+
+    // TODO danlaine: uncomment/fix this test
+    // #[test_case([0, 0, 2, 3], [2, 3])]
+    // #[test_case([1, 2, 3, 4], [2, 3, 4])]
+    // fn encode_decode<T: AsRef<[u8]> + PartialEq + Debug, U: AsRef<[u8]>>(encode: T, expected: U) {
+    //     let from_encoded = Path::from_encoded_iter(encode.as_ref().iter().copied());
+    //     assert_eq!(
+    //         from_encoded.0,
+    //         SmallVec::<[u8; 32]>::from_slice(expected.as_ref())
+    //     );
+    //     let to_encoded = from_encoded.iter_encoded().collect::<SmallVec<[u8; 32]>>();
+    //     assert_eq!(encode.as_ref(), to_encoded.as_ref());
+    // }
 }
