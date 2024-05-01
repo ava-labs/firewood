@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::merkle::MerkleError;
+use crate::merkle::{Merkle, MerkleError};
 use crate::proof::{Proof, ProofError};
 use crate::stream::MerkleKeyValueStream;
 use crate::v2::api::{self, HashKey, KeyType, ValueType};
@@ -12,7 +12,7 @@ use storage::ReadLinearStore;
 use storage::TrieHash;
 use storage::{Historical as HistoricalStore, WriteLinearStore};
 
-use crate::manager::{RevisionManager, RevisionManagerConfig};
+use crate::manager::{RevisionManager, RevisionManagerConfig, RevisionManagerError};
 use metered::metered;
 use std::error::Error;
 use std::fmt;
@@ -34,6 +34,7 @@ pub enum DbError {
     CreateError,
     IO(std::io::Error),
     InvalidProposal,
+    RevisionManager(RevisionManagerError),
 }
 
 impl fmt::Display for DbError {
@@ -46,6 +47,7 @@ impl fmt::Display for DbError {
             DbError::CreateError => write!(f, "database create error"),
             DbError::IO(e) => write!(f, "I/O error: {e:?}"),
             DbError::InvalidProposal => write!(f, "invalid proposal"),
+            DbError::RevisionManager(e) => write!(f, "revision manager error: {e:?}"),
         }
     }
 }
@@ -266,9 +268,13 @@ impl Db {
     /// Create a proposal.
     pub fn new_proposal<K: KeyType, V: ValueType>(
         &self,
-        _data: Batch<K, V>,
-    ) -> Result<Proposal<ProposedMutable>, DbError> {
-        todo!()
+        data: Batch<K, V>,
+    ) -> Result<Proposal<Merkle<ProposedMutable>>, DbError> {
+        let p = self
+            .manager
+            .propose(data)
+            .map_err(DbError::RevisionManager)?;
+        Ok(Proposal { _proposal: p })
     }
 
     /// Dump the Trie of the latest revision.

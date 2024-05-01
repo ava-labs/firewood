@@ -25,6 +25,7 @@ impl From<DbError> for api::Error {
             }
             DbError::IO(e) => api::Error::IO(e),
             DbError::InvalidProposal => api::Error::InvalidProposal,
+            DbError::RevisionManager(e) => api::Error::InternalError(Box::new(e)),
         }
     }
 }

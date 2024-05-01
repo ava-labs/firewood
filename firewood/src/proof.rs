@@ -61,6 +61,7 @@ impl From<DbError> for ProofError {
                 ProofError::SystemError(nix::errno::Errno::from_raw(e.raw_os_error().unwrap()))
             }
             DbError::InvalidProposal => ProofError::InvalidProof,
+            DbError::RevisionManager(_) => ProofError::InvalidProof,
         }
     }
 }

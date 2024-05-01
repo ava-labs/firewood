@@ -10,12 +10,14 @@ use std::sync::Arc;
 
 use typed_builder::TypedBuilder;
 
-use crate::v2::api::HashKey;
+use crate::merkle::{Merkle, MerkleError};
+use crate::v2::api::{Batch, BatchOp, HashKey, KeyType, ValueType};
 
+use super::hashednode::HashedNodeStore;
 use storage::FileBacked;
 use storage::Historical;
-use storage::ProposedImmutable;
 use storage::{LinearStoreParent, ReadLinearStore};
+use storage::{ProposedImmutable, ProposedMutable};
 
 #[derive(Clone, Debug, TypedBuilder)]
 pub struct RevisionManagerConfig {
@@ -27,7 +29,8 @@ pub struct RevisionManagerConfig {
 #[derive(Debug)]
 pub(crate) struct RevisionManager {
     max_revisions: usize,
-    filebacked: FileBacked,
+    filebacked: Arc<FileBacked>,
+    filewrite: FileBacked,
     historical: VecDeque<Arc<Historical>>,
     proposals: Vec<Arc<ProposedImmutable>>, // TODO: Should be Vec<Weak<ProposedImmutable>>
     committing_proposals: VecDeque<Arc<ProposedImmutable>>,
@@ -43,7 +46,8 @@ impl RevisionManager {
     ) -> Result<Self, Error> {
         Ok(Self {
             max_revisions: config.max_revisions,
-            filebacked: FileBacked::new(filename, truncate)?,
+            filebacked: Arc::new(FileBacked::new(filename.clone(), false)?),
+            filewrite: FileBacked::new(filename, truncate)?,
             historical: Default::default(),
             proposals: Default::default(),
             committing_proposals: Default::default(),
@@ -52,7 +56,7 @@ impl RevisionManager {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum RevisionManagerError {
+pub enum RevisionManagerError {
     #[error("The proposal cannot be committed since a sibling was committed")]
     SiblingCommitted,
     #[error(
@@ -61,6 +65,8 @@ pub(crate) enum RevisionManagerError {
     NotLatest,
     #[error("An IO error occurred during the commit")]
     IO(#[from] std::io::Error),
+    #[error("merkle error: {0}")]
+    MerkleError(#[from] MerkleError),
 }
 
 impl RevisionManager {
@@ -82,7 +88,7 @@ impl RevisionManager {
         // We actually doesn't care whether the writes are successful or not
         // (crash recovery may need to be handled above)
         for write in proposal.new.iter() {
-            self.filebacked.write(*write.0, write.1)?;
+            self.filewrite.write(*write.0, write.1)?;
         }
 
         self.writes_completed(proposal)
@@ -185,6 +191,29 @@ impl RevisionManager {
 
     pub fn root_hash(&self) -> Result<HashKey, RevisionManagerError> {
         todo!()
+    }
+
+    pub fn propose<K: KeyType, V: ValueType>(
+        &self,
+        batch: Batch<K, V>,
+    ) -> Result<Merkle<ProposedMutable>, RevisionManagerError> {
+        let linear = ProposedMutable::new(LinearStoreParent::FileBacked(self.filebacked.clone()));
+        let merkle = Merkle::new(HashedNodeStore::initialize(linear).unwrap());
+        batch
+            .into_iter()
+            .try_for_each(|op| -> Result<(), RevisionManagerError> {
+                match op {
+                    BatchOp::Put { key: _, value: _ } => {
+                        // merkle.insert(key, &value)?;
+                        Ok(())
+                    }
+                    BatchOp::Delete { key: _ } => {
+                        // merkle.remove(&key)?;
+                        Ok(())
+                    }
+                }
+            })?;
+        Ok(merkle)
     }
 }
 
