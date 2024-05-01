@@ -364,6 +364,31 @@ impl<T: WriteLinearStore> Merkle<T> {
                 }
             }
         } else {
+            // If last node isn't prefix of key:
+            //    Go to the parent of the last node
+            //    If parent doesn't exist:
+            //        Last node is the only node in the trie.
+            //        Create a branch node with the common prefix
+            //        Create a leaf node with the remaining nibbles (exclude the branch nibble)
+            //        Set the branch node's child to the leaf node
+            //        Return
+            //    Else:
+            //        Note that parent's key is prefix of `key`
+            //        Create a branch node with the common prefix of the new key and last node
+            //        Create a leaf node with the remaining nibbles (exclude the branch nibble)
+            //        Set the branch node's child to the leaf node
+            //        Set the parent's child to the branch node
+            //        Return
+            // Else:
+            //     If last node is a branch:
+            //         Create a leaf node with the remaining nibbles
+            //         Return
+            //     Else:
+            //         Create a branch node with the common prefix of the new key and last node
+            //         Create a leaf node with the remaining nibbles
+            //         Set the branch node's child to the leaf node
+            //         Set the parent's child to the branch node
+            //         Return
             todo!()
         }
 
