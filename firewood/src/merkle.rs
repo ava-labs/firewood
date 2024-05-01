@@ -172,10 +172,10 @@ impl<T: ReadLinearStore> Merkle<T> {
         limit: Option<usize>,
     ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>>>, api::Error> {
         if let (Some(k1), Some(k2)) = (&first_key, &last_key) {
-            if k1.as_ref() > k2.as_ref() {
+            if k1 > k2 {
                 return Err(api::Error::InvalidRange {
-                    first_key: k1.as_ref().to_vec(),
-                    last_key: k2.as_ref().to_vec(),
+                    first_key: k1.to_vec(),
+                    last_key: k2.to_vec(),
                 });
             }
         }
@@ -187,7 +187,7 @@ impl<T: ReadLinearStore> Merkle<T> {
 
         let mut stream = match first_key {
             // TODO: fix the call-site to force the caller to do the allocation
-            Some(key) => self._key_value_iter_from_key(key.as_ref().to_vec().into_boxed_slice()),
+            Some(key) => self._key_value_iter_from_key(key.to_vec().into_boxed_slice()),
             None => self._key_value_iter(),
         };
 
@@ -202,7 +202,7 @@ impl<T: ReadLinearStore> Merkle<T> {
         };
 
         let first_key_proof = self
-            .prove(first_key.as_ref())
+            .prove(&first_key)
             .map_err(|e| api::Error::InternalError(Box::new(e)))?;
         let limit = limit.map(|old_limit| old_limit - 1);
 
@@ -216,7 +216,7 @@ impl<T: ReadLinearStore> Merkle<T> {
                 .take(limit.unwrap_or(usize::MAX))
                 .take_while(|kv_result| {
                     // no last key asked for, so keep going
-                    let Some(last_key) = last_key.as_ref() else {
+                    let Some(last_key) = last_key else {
                         return ready(true);
                     };
 
@@ -226,7 +226,7 @@ impl<T: ReadLinearStore> Merkle<T> {
                     };
 
                     // keep going if the key returned is less than the last key requested
-                    ready(&*kv.0 <= last_key.as_ref())
+                    ready(&*kv.0 <= last_key)
                 })
                 .map(|kv_result| kv_result.map(|(k, v)| (k.into_vec(), v)))
                 .try_collect::<Vec<(Vec<u8>, Vec<u8>)>>()
@@ -287,14 +287,14 @@ impl<T: WriteLinearStore> Merkle<T> {
         key: &[u8],
         val: Vec<u8>,
     ) -> Result<Vec<LinearAddress>, MerkleError> {
-        let mut traversal_path = PathIterator::new(self, key.as_ref())?
-            .collect::<Result<Vec<NodeWithKey>, MerkleError>>()?;
+        let mut traversal_path =
+            PathIterator::new(self, key)?.collect::<Result<Vec<NodeWithKey>, MerkleError>>()?;
 
         let hash_invalidation_addresses: Vec<_> =
             traversal_path.iter().map(|item| item.addr).collect();
 
         let Some(last_node) = traversal_path.pop() else {
-            let key_nibbles = Nibbles::new(key.as_ref());
+            let key_nibbles = Nibbles::new(key);
 
             // no root, so create a leaf with this value
             let leaf = Node::Leaf(crate::node::LeafNode {
@@ -310,7 +310,7 @@ impl<T: WriteLinearStore> Merkle<T> {
             .key_nibbles
             .iter()
             .cloned()
-            .eq(Nibbles::new(key.as_ref()).into_iter())
+            .eq(Nibbles::new(key).into_iter())
         {
             match &*last_node.node {
                 Node::Branch(_) => todo!(),
@@ -1687,7 +1687,7 @@ mod test {
                 continue;
             }
             // Short circuit if the decreased key is underflow
-            if first.as_ref() > items[start].0.as_ref() {
+            if &first > items[start].0 {
                 continue;
             }
             // Short circuit if the increased key is same with the next key
@@ -1696,13 +1696,13 @@ mod test {
                 continue;
             }
             // Short circuit if the increased key is overflow
-            if last.as_ref() < items[end - 1].0.as_ref() {
+            if &last < items[end - 1].0 {
                 continue;
             }
 
-            let mut proof = merkle.prove(first.as_ref())?;
+            let mut proof = merkle.prove(&first)?;
             assert!(!proof.0.is_empty());
-            let end_proof = merkle.prove(last.as_ref())?;
+            let end_proof = merkle.prove(&last)?;
             assert!(!end_proof.0.is_empty());
             proof.extend(end_proof);
 
@@ -1713,7 +1713,7 @@ mod test {
                 vals.push(*item.1);
             }
 
-            merkle.verify_range_proof(&proof, first.as_ref(), last.as_ref(), keys, vals)?;
+            merkle.verify_range_proof(&proof, &first, &last, keys, vals)?;
         }
 
         // Special case, two edge proofs for two edge key.
@@ -2021,9 +2021,9 @@ mod test {
         let mut first = last;
         first = decrease_key(&first);
 
-        let mut proof = merkle.prove(first.as_ref())?;
+        let mut proof = merkle.prove(&first)?;
         assert!(!proof.0.is_empty());
-        let end_proof = merkle.prove(last.as_ref())?;
+        let end_proof = merkle.prove(&last)?;
         assert!(!end_proof.0.is_empty());
         proof.extend(end_proof);
 
@@ -2260,7 +2260,7 @@ mod test {
         let keys = item_iter.clone().map(|item| item.0).collect();
         let vals = item_iter.map(|item| item.1).collect();
 
-        merkle.verify_range_proof(&proof, start.as_ref(), end.as_ref(), keys, vals)?;
+        merkle.verify_range_proof(&proof, &start, &end, keys, vals)?;
 
         Ok(())
     }
@@ -2289,7 +2289,7 @@ mod test {
         let mut keys = Vec::new();
         let mut vals = Vec::new();
         for (i, item) in items.iter().enumerate() {
-            let cur_proof = merkle.prove(item.0.as_ref())?;
+            let cur_proof = merkle.prove(&item.0)?;
             assert!(!cur_proof.0.is_empty());
             proof.extend(cur_proof);
             if i == 50 {
