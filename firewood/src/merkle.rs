@@ -2298,7 +2298,7 @@ mod test {
             }
         }
 
-        merkle.verify_range_proof(&proof, &keys[0], &keys[keys.len() - 1], keys.clone(), vals)?;
+        merkle.verify_range_proof(&proof, keys[0], keys[keys.len() - 1], keys.clone(), vals)?;
 
         Ok(())
     }

@@ -118,7 +118,7 @@ impl<T: ReadLinearStore> HistoricalRev<T> {
     }
 
     /// Get a value associated with a key.
-    pub fn get<K: AsRef<[u8]>>(&self, _key: K) -> Option<Vec<u8>> {
+    pub fn get(&self, _key: &[u8]) -> Option<Vec<u8>> {
         todo!()
     }
 
@@ -127,17 +127,17 @@ impl<T: ReadLinearStore> HistoricalRev<T> {
         todo!()
     }
 
-    pub fn prove<K: AsRef<[u8]>>(&self, _key: K) -> Result<Proof<Vec<u8>>, MerkleError> {
+    pub fn prove(&self, _key: &[u8]) -> Result<Proof<Vec<u8>>, MerkleError> {
         todo!()
     }
 
     /// Verifies a range proof is valid for a set of keys.
-    pub fn verify_range_proof<N: AsRef<[u8]> + Send, K: AsRef<[u8]>, V: AsRef<[u8]>>(
+    pub fn verify_range_proof<N: AsRef<[u8]> + Send, V: AsRef<[u8]>>(
         &self,
         _proof: Proof<N>,
-        _first_key: K,
-        _last_key: K,
-        _keys: Vec<K>,
+        _first_key: &[u8],
+        _last_key: &[u8],
+        _keys: Vec<&[u8]>,
         _values: Vec<V>,
     ) -> Result<bool, ProofError> {
         todo!()
