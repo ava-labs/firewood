@@ -138,12 +138,12 @@ impl<'a> DoubleEndedIterator for NibblesIterator<'a> {
 #[allow(clippy::indexing_slicing)]
 mod test {
     use super::Nibbles;
-    static TEST_BYTES: [u8; 4] = [0xdeu8, 0xad, 0xbe, 0xef];
+    static TEST_BYTES: [u8; 4] = [0xde, 0xad, 0xbe, 0xef];
 
     #[test]
     fn happy_regular_nibbles() {
         let nib = Nibbles(&TEST_BYTES);
-        let expected = [0xdu8, 0xe, 0xa, 0xd, 0xb, 0xe, 0xe, 0xf];
+        let expected = [0xd, 0xe, 0xa, 0xd, 0xb, 0xe, 0xe, 0xf];
         for v in expected.into_iter().enumerate() {
             assert_eq!(nib[v.0], v.1, "{v:?}");
         }

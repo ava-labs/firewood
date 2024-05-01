@@ -83,7 +83,7 @@ impl<T: ReadLinearStore> Merkle<T> {
         }
     }
 
-    fn _get_node_by_key<K: AsRef<[u8]>>(&self, _key: K) -> Result<Option<&Node>, MerkleError> {
+    fn _get_node_by_key(&self, _key: &[u8]) -> Result<Option<&Node>, MerkleError> {
         todo!()
     }
 
@@ -94,10 +94,7 @@ impl<T: ReadLinearStore> Merkle<T> {
     /// If the trie does not contain a value for key, the returned proof contains
     /// all nodes of the longest existing prefix of the key, ending with the node
     /// that proves the absence of the key (at least the root node).
-    pub fn prove<K>(&self, _key: K) -> Result<Proof<Vec<u8>>, MerkleError>
-    where
-        K: AsRef<[u8]>,
-    {
+    pub fn prove(&self, _key: &[u8]) -> Result<Proof<Vec<u8>>, MerkleError> {
         todo!()
         // let mut proofs = HashMap::new();
         // if root_addr.is_null() {
@@ -121,7 +118,7 @@ impl<T: ReadLinearStore> Merkle<T> {
         // Ok(Proof(proofs))
     }
 
-    pub fn get<K: AsRef<[u8]>>(&self, _key: K) -> Result<Option<Box<[u8]>>, MerkleError> {
+    pub fn get(&self, _key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
         todo!()
         // TODO danlaine use or remove the code below
         // if root_addr.is_null() {
@@ -135,20 +132,20 @@ impl<T: ReadLinearStore> Merkle<T> {
         //     Ok(node_ref.map(Ref))
     }
 
-    pub fn verify_proof<N: AsRef<[u8]> + Send, K: AsRef<[u8]>>(
+    pub fn verify_proof<N: AsRef<[u8]> + Send>(
         &self,
-        _key: K,
+        _key: &[u8],
         _proof: &Proof<N>,
     ) -> Result<Option<Vec<u8>>, MerkleError> {
         todo!()
     }
 
-    pub fn verify_range_proof<N: AsRef<[u8]> + Send, K: AsRef<[u8]>, V: AsRef<[u8]>>(
+    pub fn verify_range_proof<N: AsRef<[u8]> + Send, V: AsRef<[u8]>>(
         &self,
         _proof: &Proof<N>,
-        _first_key: K,
-        _last_key: K,
-        _keys: Vec<K>,
+        _first_key: &[u8],
+        _last_key: &[u8],
+        _keys: Vec<&[u8]>,
         _vals: Vec<V>,
     ) -> Result<bool, ProofError> {
         todo!()
@@ -164,20 +161,21 @@ impl<T: ReadLinearStore> Merkle<T> {
     }
 
     pub(crate) fn _key_value_iter_from_key(&self, key: Key) -> MerkleKeyValueStream<'_, T> {
+        // TODO danlaine: change key to &[u8]
         MerkleKeyValueStream::_from_key(self, key)
     }
 
-    pub(super) async fn _range_proof<K: api::KeyType + Send + Sync>(
+    pub(super) async fn _range_proof(
         &self,
-        first_key: Option<K>,
-        last_key: Option<K>,
+        first_key: Option<&[u8]>,
+        last_key: Option<&[u8]>,
         limit: Option<usize>,
     ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>>>, api::Error> {
         if let (Some(k1), Some(k2)) = (&first_key, &last_key) {
-            if k1.as_ref() > k2.as_ref() {
+            if k1 > k2 {
                 return Err(api::Error::InvalidRange {
-                    first_key: k1.as_ref().to_vec(),
-                    last_key: k2.as_ref().to_vec(),
+                    first_key: k1.to_vec(),
+                    last_key: k2.to_vec(),
                 });
             }
         }
@@ -189,7 +187,7 @@ impl<T: ReadLinearStore> Merkle<T> {
 
         let mut stream = match first_key {
             // TODO: fix the call-site to force the caller to do the allocation
-            Some(key) => self._key_value_iter_from_key(key.as_ref().to_vec().into_boxed_slice()),
+            Some(key) => self._key_value_iter_from_key(key.to_vec().into_boxed_slice()),
             None => self._key_value_iter(),
         };
 
@@ -218,7 +216,7 @@ impl<T: ReadLinearStore> Merkle<T> {
                 .take(limit.unwrap_or(usize::MAX))
                 .take_while(|kv_result| {
                     // no last key asked for, so keep going
-                    let Some(last_key) = last_key.as_ref() else {
+                    let Some(last_key) = last_key else {
                         return ready(true);
                     };
 
@@ -228,7 +226,7 @@ impl<T: ReadLinearStore> Merkle<T> {
                     };
 
                     // keep going if the key returned is less than the last key requested
-                    ready(&*kv.0 <= last_key.as_ref())
+                    ready(&*kv.0 <= last_key)
                 })
                 .map(|kv_result| kv_result.map(|(k, v)| (k.into_vec(), v)))
                 .try_collect::<Vec<(Vec<u8>, Vec<u8>)>>()
@@ -277,26 +275,26 @@ impl<T: ReadLinearStore> Merkle<T> {
 }
 
 impl<T: WriteLinearStore> Merkle<T> {
-    pub fn insert<K: AsRef<[u8]>>(&mut self, key: K, val: Vec<u8>) -> Result<(), MerkleError> {
+    pub fn insert(&mut self, key: &[u8], val: Vec<u8>) -> Result<(), MerkleError> {
         for addr in self.insert_and_return_ancestors(key, val)? {
             self.0.invalidate_hash(addr);
         }
         Ok(())
     }
 
-    pub fn insert_and_return_ancestors<K: AsRef<[u8]>>(
+    pub fn insert_and_return_ancestors(
         &mut self,
-        key: K,
+        key: &[u8],
         val: Vec<u8>,
     ) -> Result<Vec<LinearAddress>, MerkleError> {
-        let mut traversal_path = PathIterator::new(self, key.as_ref())?
-            .collect::<Result<Vec<NodeWithKey>, MerkleError>>()?;
+        let mut traversal_path =
+            PathIterator::new(self, key)?.collect::<Result<Vec<NodeWithKey>, MerkleError>>()?;
 
         let hash_invalidation_addresses: Vec<_> =
             traversal_path.iter().map(|item| item.addr).collect();
 
         let Some(last_node) = traversal_path.pop() else {
-            let key_nibbles = Nibbles::new(key.as_ref());
+            let key_nibbles = Nibbles::new(key);
 
             // no root, so create a leaf with this value
             let leaf = Node::Leaf(LeafNode {
@@ -312,7 +310,7 @@ impl<T: WriteLinearStore> Merkle<T> {
             .key_nibbles
             .iter()
             .cloned()
-            .eq(Nibbles::new(key.as_ref()).into_iter())
+            .eq(Nibbles::new(key).into_iter())
         {
             match &*last_node.node {
                 Node::Branch(_) => todo!(),
@@ -366,7 +364,7 @@ impl<T: WriteLinearStore> Merkle<T> {
         Ok(hash_invalidation_addresses)
     }
 
-    pub fn remove<K: AsRef<[u8]>>(&mut self, _key: K) -> Result<Option<Vec<u8>>, MerkleError> {
+    pub fn remove(&mut self, _key: &[u8]) -> Result<Option<Vec<u8>>, MerkleError> {
         // let Some(root_address) = self.root_address() else {
         //     return Ok(None);
         // };
@@ -1222,15 +1220,12 @@ mod test {
     use rand::{thread_rng, Rng, SeedableRng as _};
     use std::collections::HashMap;
 
-    fn merkle_build_test<
-        K: AsRef<[u8]> + std::cmp::Ord + Clone + std::fmt::Debug,
-        V: AsRef<[u8]> + Clone,
-    >(
+    fn merkle_build_test<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         items: Vec<(K, V)>,
     ) -> Result<Merkle<MemStore>, MerkleError> {
         let mut merkle = Merkle::new(HashedNodeStore::initialize(MemStore::new(vec![])).unwrap());
         for (k, v) in items.iter() {
-            merkle.insert(k, v.as_ref().to_vec())?;
+            merkle.insert(k.as_ref(), v.as_ref().to_vec())?;
         }
 
         Ok(merkle)
@@ -1443,7 +1438,7 @@ mod test {
         let mut items = Vec::from_iter(set.iter());
         items.sort();
         let merkle = merkle_build_test(items.clone())?;
-        let (keys, vals): (Vec<&[u8; 32]>, Vec<&[u8; 20]>) = items.into_iter().unzip();
+        let (keys, vals): (Vec<[u8; 32]>, Vec<[u8; 20]>) = items.into_iter().unzip();
 
         for (i, key) in keys.iter().enumerate() {
             let proof = merkle.prove(key)?;
@@ -1468,7 +1463,7 @@ mod test {
             ("ddd", "ok"),
         ];
         let merkle = merkle_build_test(items)?;
-        let key = "doe";
+        let key = "doe".as_ref();
 
         let proof = merkle.prove(key)?;
         assert!(!proof.0.is_empty());
@@ -1489,7 +1484,7 @@ mod test {
             ("e", "coin"),
         ];
         let merkle = merkle_build_test(items)?;
-        let key = "d";
+        let key = "d".as_ref();
 
         let proof = merkle.prove(key)?;
         assert!(!proof.0.is_empty());
@@ -1506,7 +1501,7 @@ mod test {
         let mut items = Vec::from_iter(set.iter());
         items.sort();
         let merkle = merkle_build_test(items.clone())?;
-        let (keys, _): (Vec<&[u8; 32]>, Vec<&[u8; 20]>) = items.into_iter().unzip();
+        let (keys, _): (Vec<[u8; 32]>, Vec<[u8; 20]>) = items.into_iter().unzip();
 
         for key in keys.iter() {
             let mut proof = merkle.prove(key)?;
@@ -1527,12 +1522,12 @@ mod test {
     fn test_missing_key_proof() -> Result<(), MerkleError> {
         let items = vec![("k", "v")];
         let merkle = merkle_build_test(items)?;
-        for key in &["a", "j", "l", "z"] {
-            let proof = merkle.prove(key)?;
+        for key in ["a", "j", "l", "z"] {
+            let proof = merkle.prove(key.as_ref())?;
             assert!(!proof.0.is_empty());
             assert!(proof.0.len() == 1);
 
-            let val = merkle.verify_proof(key, &proof)?;
+            let val = merkle.verify_proof(key.as_ref(), &proof)?;
             assert!(val.is_none());
         }
 
@@ -1543,7 +1538,7 @@ mod test {
     fn test_empty_tree_proof() -> Result<(), MerkleError> {
         let items: Vec<(&str, &str)> = Vec::new();
         let merkle = merkle_build_test(items)?;
-        let key = "x";
+        let key = "x".as_ref();
 
         let proof = merkle.prove(key)?;
         assert!(proof.0.is_empty());
@@ -1578,11 +1573,11 @@ mod test {
             let mut keys = Vec::new();
             let mut vals = Vec::new();
             for item in items[start..end].iter() {
-                keys.push(&item.0);
+                keys.push(item.0.as_ref());
                 vals.push(&item.1);
             }
 
-            merkle.verify_range_proof(&proof, &items[start].0, &items[end - 1].0, keys, vals)?;
+            merkle.verify_range_proof(&proof, items[start].0, items[end - 1].0, keys, vals)?;
         }
         Ok(())
     }
@@ -1657,8 +1652,10 @@ mod test {
                 }
                 _ => unreachable!(),
             }
+
+            let keys_slice = keys.iter().map(|k| k.as_ref()).collect::<Vec<&[u8]>>();
             assert!(merkle
-                .verify_range_proof(&proof, *items[start].0, *items[end - 1].0, keys, vals)
+                .verify_range_proof(&proof, items[start].0, items[end - 1].0, keys_slice, vals)
                 .is_err());
         }
 
@@ -1689,7 +1686,7 @@ mod test {
                 continue;
             }
             // Short circuit if the decreased key is underflow
-            if first.as_ref() > items[start].0.as_ref() {
+            if &first > items[start].0 {
                 continue;
             }
             // Short circuit if the increased key is same with the next key
@@ -1698,29 +1695,29 @@ mod test {
                 continue;
             }
             // Short circuit if the increased key is overflow
-            if last.as_ref() < items[end - 1].0.as_ref() {
+            if &last < items[end - 1].0 {
                 continue;
             }
 
-            let mut proof = merkle.prove(first)?;
+            let mut proof = merkle.prove(&first)?;
             assert!(!proof.0.is_empty());
-            let end_proof = merkle.prove(last)?;
+            let end_proof = merkle.prove(&last)?;
             assert!(!end_proof.0.is_empty());
             proof.extend(end_proof);
 
-            let mut keys: Vec<[u8; 32]> = Vec::new();
+            let mut keys: Vec<&[u8]> = Vec::new();
             let mut vals: Vec<[u8; 20]> = Vec::new();
             for item in items[start..end].iter() {
-                keys.push(*item.0);
+                keys.push(item.0);
                 vals.push(*item.1);
             }
 
-            merkle.verify_range_proof(&proof, first, last, keys, vals)?;
+            merkle.verify_range_proof(&proof, &first, &last, keys, vals)?;
         }
 
         // Special case, two edge proofs for two edge key.
-        let first: [u8; 32] = [0; 32];
-        let last: [u8; 32] = [255; 32];
+        let first = &[0; 32];
+        let last = &[255; 32];
         let mut proof = merkle.prove(first)?;
         assert!(!proof.0.is_empty());
         let end_proof = merkle.prove(last)?;
@@ -1728,7 +1725,8 @@ mod test {
         proof.extend(end_proof);
 
         let (keys, vals): (Vec<&[u8; 32]>, Vec<&[u8; 20]>) = items.into_iter().unzip();
-        merkle.verify_range_proof(&proof, &first, &last, keys, vals)?;
+        let keys = keys.iter().map(|k| k.as_ref()).collect::<Vec<&[u8]>>();
+        merkle.verify_range_proof(&proof, first, last, keys, vals)?;
 
         Ok(())
     }
@@ -1749,22 +1747,22 @@ mod test {
         let mut end = 200;
         let first = decrease_key(items[start].0);
 
-        let mut proof = merkle.prove(first)?;
+        let mut proof = merkle.prove(&first)?;
         assert!(!proof.0.is_empty());
         let end_proof = merkle.prove(items[end - 1].0)?;
         assert!(!end_proof.0.is_empty());
         proof.extend(end_proof);
 
         start = 105; // Gap created
-        let mut keys: Vec<[u8; 32]> = Vec::new();
+        let mut keys: Vec<&[u8]> = Vec::new();
         let mut vals: Vec<[u8; 20]> = Vec::new();
         // Create gap
         for item in items[start..end].iter() {
-            keys.push(*item.0);
+            keys.push(item.0);
             vals.push(*item.1);
         }
         assert!(merkle
-            .verify_range_proof(&proof, first, *items[end - 1].0, keys, vals)
+            .verify_range_proof(&proof, &first, items[end - 1].0, keys, vals)
             .is_err());
 
         // Case 2
@@ -1774,20 +1772,20 @@ mod test {
 
         let mut proof = merkle.prove(items[start].0)?;
         assert!(!proof.0.is_empty());
-        let end_proof = merkle.prove(last)?;
+        let end_proof = merkle.prove(&last)?;
         assert!(!end_proof.0.is_empty());
         proof.extend(end_proof);
 
         end = 195; // Capped slice
-        let mut keys: Vec<[u8; 32]> = Vec::new();
+        let mut keys: Vec<&[u8]> = Vec::new();
         let mut vals: Vec<[u8; 20]> = Vec::new();
         // Create gap
         for item in items[start..end].iter() {
-            keys.push(*item.0);
+            keys.push(item.0);
             vals.push(*item.1);
         }
         assert!(merkle
-            .verify_range_proof(&proof, *items[start].0, last, keys, vals)
+            .verify_range_proof(&proof, items[start].0, &last, keys, vals)
             .is_err());
 
         Ok(())
@@ -1811,15 +1809,15 @@ mod test {
 
         merkle.verify_range_proof(
             &start_proof,
-            &items[start].0,
-            &items[start].0,
-            vec![&items[start].0],
+            items[start].0,
+            items[start].0,
+            vec![items[start].0],
             vec![&items[start].1],
         )?;
 
         // One element with left non-existent edge proof
         let first = decrease_key(items[start].0);
-        let mut proof = merkle.prove(first)?;
+        let mut proof = merkle.prove(&first)?;
         assert!(!proof.0.is_empty());
         let end_proof = merkle.prove(items[start].0)?;
         assert!(!end_proof.0.is_empty());
@@ -1827,9 +1825,9 @@ mod test {
 
         merkle.verify_range_proof(
             &proof,
-            first,
-            *items[start].0,
-            vec![*items[start].0],
+            &first,
+            items[start].0,
+            vec![items[start].0],
             vec![*items[start].1],
         )?;
 
@@ -1837,30 +1835,30 @@ mod test {
         let last = increase_key(items[start].0);
         let mut proof = merkle.prove(items[start].0)?;
         assert!(!proof.0.is_empty());
-        let end_proof = merkle.prove(last)?;
+        let end_proof = merkle.prove(&last)?;
         assert!(!end_proof.0.is_empty());
         proof.extend(end_proof);
 
         merkle.verify_range_proof(
             &proof,
-            *items[start].0,
-            last,
-            vec![*items[start].0],
+            items[start].0,
+            &last,
+            vec![items[start].0],
             vec![*items[start].1],
         )?;
 
         // One element with two non-existent edge proofs
-        let mut proof = merkle.prove(first)?;
+        let mut proof = merkle.prove(&first)?;
         assert!(!proof.0.is_empty());
-        let end_proof = merkle.prove(last)?;
+        let end_proof = merkle.prove(&last)?;
         assert!(!end_proof.0.is_empty());
         proof.extend(end_proof);
 
         merkle.verify_range_proof(
             &proof,
-            first,
-            last,
-            vec![*items[start].0],
+            &first,
+            &last,
+            vec![items[start].0],
             vec![*items[start].1],
         )?;
 
@@ -1869,14 +1867,14 @@ mod test {
         let val = rand::thread_rng().gen::<[u8; 20]>();
         let merkle = merkle_build_test(vec![(key, val)])?;
 
-        let first: [u8; 32] = [0; 32];
+        let first = &[0; 32];
         let mut proof = merkle.prove(first)?;
         assert!(!proof.0.is_empty());
-        let end_proof = merkle.prove(key)?;
+        let end_proof = merkle.prove(&key)?;
         assert!(!end_proof.0.is_empty());
         proof.extend(end_proof);
 
-        merkle.verify_range_proof(&proof, first, key, vec![key], vec![val])?;
+        merkle.verify_range_proof(&proof, first, &key, vec![&key], vec![val])?;
 
         Ok(())
     }
@@ -1892,7 +1890,7 @@ mod test {
         let merkle = merkle_build_test(items.clone())?;
 
         let item_iter = items.clone().into_iter();
-        let keys: Vec<&[u8; 32]> = item_iter.clone().map(|item| item.0).collect();
+        let keys: Vec<&[u8]> = item_iter.clone().map(|item| item.0.as_ref()).collect();
         let vals: Vec<&[u8; 20]> = item_iter.map(|item| item.1).collect();
 
         let empty_proof = Proof(HashMap::<[u8; 32], Vec<u8>>::new());
@@ -1924,15 +1922,15 @@ mod test {
         )?;
 
         // Even with non-existent edge proofs, it should still work.
-        let first: [u8; 32] = [0; 32];
-        let last: [u8; 32] = [255; 32];
+        let first = &[0; 32];
+        let last = &[255; 32];
         let mut proof = merkle.prove(first)?;
         assert!(!proof.0.is_empty());
         let end_proof = merkle.prove(last)?;
         assert!(!end_proof.0.is_empty());
         proof.extend(end_proof);
 
-        merkle.verify_range_proof(&proof, &first, &last, keys, vals)?;
+        merkle.verify_range_proof(&proof, first, last, keys, vals)?;
 
         Ok(())
     }
@@ -1950,19 +1948,19 @@ mod test {
         let cases = [(items.len() - 1, false)];
         for c in cases.iter() {
             let first = increase_key(items[c.0].0);
-            let proof = merkle.prove(first)?;
+            let proof = merkle.prove(&first)?;
             assert!(!proof.0.is_empty());
 
             // key and value vectors are intentionally empty.
-            let keys: Vec<[u8; 32]> = Vec::new();
+            let keys: Vec<&[u8]> = Vec::new();
             let vals: Vec<[u8; 20]> = Vec::new();
 
             if c.1 {
                 assert!(merkle
-                    .verify_range_proof(&proof, first, first, keys, vals)
+                    .verify_range_proof(&proof, &first, &first, keys, vals)
                     .is_err());
             } else {
-                merkle.verify_range_proof(&proof, first, first, keys, vals)?;
+                merkle.verify_range_proof(&proof, &first, &first, keys, vals)?;
             }
         }
 
@@ -1977,7 +1975,7 @@ mod test {
         let mut items = Vec::new();
         // Sorted entries
         for i in 0..10_u32 {
-            let mut key: [u8; 32] = [0; 32];
+            let mut key = [0; 32];
             for (index, d) in i.to_be_bytes().iter().enumerate() {
                 key[index] = *d;
             }
@@ -1988,18 +1986,18 @@ mod test {
         let first = 2;
         let last = 8;
 
-        let mut proof = merkle.prove(items[first].0)?;
+        let mut proof = merkle.prove(&items[first].0)?;
         assert!(!proof.0.is_empty());
-        let end_proof = merkle.prove(items[last - 1].0)?;
+        let end_proof = merkle.prove(&items[last - 1].0)?;
         assert!(!end_proof.0.is_empty());
         proof.extend(end_proof);
 
         let middle = (first + last) / 2 - first;
-        let (keys, vals): (Vec<&[u8; 32]>, Vec<&[u8; 4]>) = items[first..last]
+        let (keys, vals): (Vec<&[u8]>, Vec<&[u8; 4]>) = items[first..last]
             .iter()
             .enumerate()
             .filter(|(pos, _)| *pos != middle)
-            .map(|(_, item)| (&item.0, &item.1))
+            .map(|(_, item)| (item.0.as_ref(), &item.1))
             .unzip();
 
         assert!(merkle
@@ -2023,28 +2021,40 @@ mod test {
         let mut first = last;
         first = decrease_key(&first);
 
-        let mut proof = merkle.prove(first)?;
+        let mut proof = merkle.prove(&first)?;
         assert!(!proof.0.is_empty());
-        let end_proof = merkle.prove(last)?;
+        let end_proof = merkle.prove(&last)?;
         assert!(!end_proof.0.is_empty());
         proof.extend(end_proof);
 
         assert!(merkle
-            .verify_range_proof(&proof, first, last, vec![*items[pos].0], vec![items[pos].1])
+            .verify_range_proof(
+                &proof,
+                &first,
+                &last,
+                vec![items[pos].0],
+                vec![items[pos].1]
+            )
             .is_err());
 
         first = increase_key(items[pos].0);
         last = first;
         last = increase_key(&last);
 
-        let mut proof = merkle.prove(first)?;
+        let mut proof = merkle.prove(&first)?;
         assert!(!proof.0.is_empty());
-        let end_proof = merkle.prove(last)?;
+        let end_proof = merkle.prove(&last)?;
         assert!(!end_proof.0.is_empty());
         proof.extend(end_proof);
 
         assert!(merkle
-            .verify_range_proof(&proof, first, last, vec![*items[pos].0], vec![items[pos].1])
+            .verify_range_proof(
+                &proof,
+                &first,
+                &last,
+                vec![items[pos].0],
+                vec![items[pos].1]
+            )
             .is_err());
 
         Ok(())
@@ -2067,7 +2077,7 @@ mod test {
 
             let cases = vec![0, 1, 100, 1000, items.len() - 1];
             for case in cases {
-                let start: [u8; 32] = [0; 32];
+                let start = &[0; 32];
                 let mut proof = merkle.prove(start)?;
                 assert!(!proof.0.is_empty());
                 let end_proof = merkle.prove(items[case].0)?;
@@ -2075,10 +2085,10 @@ mod test {
                 proof.extend(end_proof);
 
                 let item_iter = items.clone().into_iter().take(case + 1);
-                let keys = item_iter.clone().map(|item| *item.0).collect();
+                let keys = item_iter.clone().map(|item| item.0.as_ref()).collect();
                 let vals = item_iter.map(|item| item.1).collect();
 
-                merkle.verify_range_proof(&proof, start, *items[case].0, keys, vals)?;
+                merkle.verify_range_proof(&proof, start, items[case].0, keys, vals)?;
             }
         }
         Ok(())
@@ -2101,7 +2111,7 @@ mod test {
 
             let cases = vec![0, 1, 100, 1000, items.len() - 1];
             for case in cases {
-                let end: [u8; 32] = [255; 32];
+                let end = &[255; 32];
                 let mut proof = merkle.prove(items[case].0)?;
                 assert!(!proof.0.is_empty());
                 let end_proof = merkle.prove(end)?;
@@ -2109,10 +2119,10 @@ mod test {
                 proof.extend(end_proof);
 
                 let item_iter = items.clone().into_iter().skip(case);
-                let keys = item_iter.clone().map(|item| item.0).collect();
+                let keys = item_iter.clone().map(|item| item.0.as_ref()).collect();
                 let vals = item_iter.map(|item| item.1).collect();
 
-                merkle.verify_range_proof(&proof, items[case].0, &end, keys, vals)?;
+                merkle.verify_range_proof(&proof, items[case].0, end, keys, vals)?;
             }
         }
         Ok(())
@@ -2132,8 +2142,8 @@ mod test {
             items.sort();
             let merkle = merkle_build_test(items.clone())?;
 
-            let start: [u8; 32] = [0; 32];
-            let end: [u8; 32] = [255; 32];
+            let start = &[0; 32];
+            let end = &[255; 32];
 
             let mut proof = merkle.prove(start)?;
             assert!(!proof.0.is_empty());
@@ -2142,7 +2152,8 @@ mod test {
             proof.extend(end_proof);
 
             let (keys, vals): (Vec<&[u8; 32]>, Vec<&[u8; 20]>) = items.into_iter().unzip();
-            merkle.verify_range_proof(&proof, &start, &end, keys, vals)?;
+            let keys = keys.iter().map(|k| k.as_ref()).collect::<Vec<&[u8]>>();
+            merkle.verify_range_proof(&proof, start, end, keys, vals)?;
         }
         Ok(())
     }
@@ -2174,7 +2185,7 @@ mod test {
         proof.extend(end_proof);
 
         let item_iter = items.clone().into_iter().skip(start).take(end - start);
-        let keys = item_iter.clone().map(|item| item.0).collect();
+        let keys = item_iter.clone().map(|item| item.0.as_ref()).collect();
         let vals = item_iter.map(|item| item.1).collect();
         assert!(merkle
             .verify_range_proof(&proof, items[start].0, items[end - 1].0, keys, vals)
@@ -2210,7 +2221,7 @@ mod test {
         proof.extend(end_proof);
 
         let item_iter = items.clone().into_iter();
-        let keys = item_iter.clone().map(|item| item.0).collect();
+        let keys = item_iter.clone().map(|item| item.0.as_ref()).collect();
         let vals = item_iter.map(|item| item.1).collect();
         assert!(merkle
             .verify_range_proof(&proof, items[start].0, items[end].0, keys, vals)
@@ -2246,11 +2257,10 @@ mod test {
         assert!(!end_proof.0.is_empty());
         proof.extend(end_proof);
 
-        let item_iter = items.into_iter();
-        let keys = item_iter.clone().map(|item| item.0).collect();
-        let vals = item_iter.map(|item| item.1).collect();
+        let keys = items.iter().map(|item| item.0.as_ref()).collect();
+        let vals = items.iter().map(|item| item.1.clone()).collect();
 
-        merkle.verify_range_proof(&proof, start, end, keys, vals)?;
+        merkle.verify_range_proof(&proof, &start, &end, keys, vals)?;
 
         Ok(())
     }
@@ -2279,16 +2289,16 @@ mod test {
         let mut keys = Vec::new();
         let mut vals = Vec::new();
         for (i, item) in items.iter().enumerate() {
-            let cur_proof = merkle.prove(item.0)?;
+            let cur_proof = merkle.prove(&item.0)?;
             assert!(!cur_proof.0.is_empty());
             proof.extend(cur_proof);
             if i == 50 {
-                keys.push(item.0);
+                keys.push(item.0.as_ref());
                 vals.push(item.1);
             }
         }
 
-        merkle.verify_range_proof(&proof, keys[0], keys[keys.len() - 1], keys, vals)?;
+        merkle.verify_range_proof(&proof, keys[0], keys[keys.len() - 1], keys.clone(), vals)?;
 
         Ok(())
     }

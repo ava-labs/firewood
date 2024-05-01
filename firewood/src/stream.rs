@@ -633,7 +633,7 @@ mod tests {
     async fn path_iterate_singleton_merkle(key: &[u8]) {
         let mut merkle = _create_test_merkle();
 
-        merkle.insert(vec![0x13, 0x37], vec![0x42]).unwrap();
+        merkle.insert(&[0x13, 0x37], vec![0x42]).unwrap();
 
         let mut stream = merkle.path_iter(key).unwrap();
         let (key, node) = match stream.next() {
@@ -744,7 +744,7 @@ mod tests {
     async fn node_iterate_root_only() {
         let mut merkle = _create_test_merkle();
 
-        merkle.insert(vec![0x00], vec![0x00]).unwrap();
+        merkle.insert(&[0x00], vec![0x00]).unwrap();
 
         let mut stream = merkle.node_iter();
 
@@ -771,18 +771,18 @@ mod tests {
         let mut merkle = _create_test_merkle();
 
         merkle
-            .insert(vec![0x00, 0x00, 0x00], vec![0x00, 0x00, 0x00])
+            .insert(&[0x00, 0x00, 0x00], vec![0x00, 0x00, 0x00])
             .unwrap();
         merkle
-            .insert(vec![0x00, 0x00, 0x00, 0x01], vec![0x00, 0x00, 0x00, 0x01])
+            .insert(&[0x00, 0x00, 0x00, 0x01], vec![0x00, 0x00, 0x00, 0x01])
             .unwrap();
         merkle
-            .insert(vec![0x00, 0x00, 0x00, 0xFF], vec![0x00, 0x00, 0x00, 0xFF])
+            .insert(&[0x00, 0x00, 0x00, 0xFF], vec![0x00, 0x00, 0x00, 0xFF])
             .unwrap();
         merkle
-            .insert(vec![0x00, 0xD0, 0xD0], vec![0x00, 0xD0, 0xD0])
+            .insert(&[0x00, 0xD0, 0xD0], vec![0x00, 0xD0, 0xD0])
             .unwrap();
-        merkle.insert(vec![0x00, 0xFF], vec![0x00, 0xFF]).unwrap();
+        merkle.insert(&[0x00, 0xFF], vec![0x00, 0xFF]).unwrap();
         merkle
     }
 
@@ -902,7 +902,7 @@ mod tests {
 
         // insert all values from u8::MIN to u8::MAX, with the key and value the same
         for k in u8::MIN..=u8::MAX {
-            merkle.insert([k], vec![k]).unwrap();
+            merkle.insert(&[k], vec![k]).unwrap();
         }
 
         let mut stream = match start {
@@ -939,7 +939,7 @@ mod tests {
         // doesn't just return the keys in insertion order.
         for i in (0..=u8::MAX).rev() {
             for j in (0..=u8::MAX).rev() {
-                let key = vec![i, j];
+                let key = &[i, j];
                 let value = vec![i, j];
 
                 merkle.insert(key, value).unwrap();
@@ -1309,7 +1309,7 @@ mod tests {
         let key = vec![0x00];
         let greater_key = vec![0xff];
         let mut merkle = _create_test_merkle();
-        merkle.insert(key.clone(), key).unwrap();
+        merkle.insert(&key, key.clone()).unwrap();
         let stream = merkle._key_value_iter_from_key(greater_key.into_boxed_slice());
 
         check_stream_is_done(stream).await;
