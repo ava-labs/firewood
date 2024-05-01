@@ -20,8 +20,7 @@ aquamarine = "0.5.0"
 async-trait = "0.1.77"
 bytemuck = { version = "1.14.3", features = ["derive"] }
 enum-as-inner = "0.6.0"
-growth-ring = { version = "0.0.4", path = "../growth-ring" }
-libaio = {version = "0.0.4", path = "../libaio" }
+storage = { version = "0.0.4", path = "../storage" }
 futures = "0.3.30"
 hex = "0.4.3"
 lru = "0.12.2"

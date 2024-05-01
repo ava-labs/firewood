@@ -1,12 +1,12 @@
 use crate::nibbles::Nibbles;
-use crate::node::path::Path;
+use storage::Path;
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
-use crate::node::{BranchNode, LeafNode, Node};
+use storage::{BranchNode, LeafNode, Node};
 use crate::proof::{Proof, ProofError};
-use crate::storage::hashednode::HashedNodeStore;
-use crate::storage::linear::{ReadLinearStore, WriteLinearStore};
-use crate::storage::node::{LinearAddress, UpdateError};
+use crate::hashednode::HashedNodeStore;
+use storage::{ReadLinearStore, WriteLinearStore};
+use storage::{LinearAddress, UpdateError};
 use crate::stream::{MerkleKeyValueStream, NodeWithKey, PathIterator};
 use crate::trie_hash::TrieHash;
 use crate::v2::api;
@@ -299,7 +299,7 @@ impl<T: WriteLinearStore> Merkle<T> {
             let key_nibbles = Nibbles::new(key.as_ref());
 
             // no root, so create a leaf with this value
-            let leaf = Node::Leaf(crate::node::LeafNode {
+            let leaf = Node::Leaf(LeafNode {
                 partial_path: Path::from_nibbles_iterator(key_nibbles.into_iter()),
                 value: val,
             });
@@ -330,7 +330,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                         )
                     });
                     match self.update_node(addr, &new_leaf) {
-                        Err(crate::storage::node::UpdateError::NodeMoved(new_addr)) => {
+                        Err(storage::UpdateError::NodeMoved(new_addr)) => {
                             // update the parent to point to the new node address
                             let Some(branch) = parent else {
                                 self.set_root(new_addr)?;
@@ -432,7 +432,7 @@ pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
-    use crate::storage::linear::memory::MemStore;
+    use storage::MemStore;
 
     use super::*;
 
@@ -1217,7 +1217,7 @@ mod tests {
 #[allow(clippy::unwrap_used)]
 mod test {
     use super::*;
-    use crate::storage::linear::memory::MemStore;
+    use storage::MemStore;
     use rand::rngs::StdRng;
     use rand::{thread_rng, Rng, SeedableRng as _};
     use std::collections::HashMap;

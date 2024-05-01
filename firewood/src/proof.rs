@@ -3,8 +3,8 @@
 
 use std::collections::HashMap;
 
-use crate::{merkle::Merkle, storage::linear::ReadLinearStore, v2::api::HashKey};
-use aiofut::AioError;
+use crate::{merkle::Merkle, v2::api::HashKey};
+use storage::ReadLinearStore;
 use nix::errno::Errno;
 use sha3::Digest;
 use thiserror::Error;
@@ -13,8 +13,6 @@ use crate::{db::DbError, merkle::MerkleError};
 
 #[derive(Debug, Error)]
 pub enum ProofError {
-    #[error("aio error: {0:?}")]
-    AioError(AioError),
     #[error("decoding error")]
     DecodeError(#[from] bincode::Error),
     #[error("no such node")]
@@ -52,7 +50,6 @@ pub enum ProofError {
 impl From<DbError> for ProofError {
     fn from(d: DbError) -> ProofError {
         match d {
-            DbError::Aio(e) => ProofError::AioError(e),
             DbError::InvalidParams => ProofError::InvalidProof,
             DbError::Merkle(e) => ProofError::InvalidNode(e),
             DbError::System(e) => ProofError::SystemError(e),

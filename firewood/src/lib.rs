@@ -183,13 +183,14 @@
 //!
 pub mod db;
 pub mod merkle;
-pub(crate) mod node;
 pub mod proof;
-pub mod storage;
 pub mod stream;
 pub mod trie_hash;
+pub mod manager;
 
 pub mod nibbles;
 
 pub mod logger;
 pub mod v2;
+
+mod hashednode;

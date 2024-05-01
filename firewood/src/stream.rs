@@ -4,13 +4,10 @@
 use crate::{
     merkle::{Key, Merkle, MerkleError, Value},
     nibbles::{Nibbles, NibblesIterator},
-    node::{BranchNode, Node},
-    storage::{
-        linear::{self, ReadLinearStore},
-        node::LinearAddress,
-    },
     v2::api,
 };
+
+use storage::{BranchNode, Node, ReadLinearStore, LinearAddress};
 use futures::{stream::FusedStream, Stream, StreamExt};
 use std::{cmp::Ordering, iter::once};
 use std::{sync::Arc, task::Poll};
@@ -76,7 +73,7 @@ pub struct MerkleNodeStream<'a, T: ReadLinearStore> {
     merkle: &'a Merkle<T>,
 }
 
-impl<'a, T: linear::ReadLinearStore> FusedStream for MerkleNodeStream<'a, T> {
+impl<'a, T: ReadLinearStore> FusedStream for MerkleNodeStream<'a, T> {
     fn is_terminated(&self) -> bool {
         // The top of `iter_stack` is the next node to return.
         // If `iter_stack` is empty, there are no more nodes to visit.
@@ -84,7 +81,7 @@ impl<'a, T: linear::ReadLinearStore> FusedStream for MerkleNodeStream<'a, T> {
     }
 }
 
-impl<'a, T: linear::ReadLinearStore> MerkleNodeStream<'a, T> {
+impl<'a, T: ReadLinearStore> MerkleNodeStream<'a, T> {
     /// Returns a new iterator that will iterate over all the nodes in `merkle`
     /// with keys greater than or equal to `key`.
     pub(super) fn new(merkle: &'a Merkle<T>, key: Key) -> Self {
@@ -95,7 +92,7 @@ impl<'a, T: linear::ReadLinearStore> MerkleNodeStream<'a, T> {
     }
 }
 
-impl<'a, T: linear::ReadLinearStore> Stream for MerkleNodeStream<'a, T> {
+impl<'a, T: ReadLinearStore> Stream for MerkleNodeStream<'a, T> {
     type Item = Result<(Key, Arc<Node>), api::Error>;
 
     fn poll_next(
@@ -175,7 +172,7 @@ impl<'a, T: linear::ReadLinearStore> Stream for MerkleNodeStream<'a, T> {
 }
 
 /// Returns the initial state for an iterator over the given `merkle` which starts at `key`.
-fn get_iterator_intial_state<'a, T: linear::ReadLinearStore>(
+fn get_iterator_intial_state<'a, T: ReadLinearStore>(
     merkle: &'a Merkle<T>,
     key: &[u8],
 ) -> Result<NodeStreamState, api::Error> {
@@ -325,13 +322,13 @@ pub struct MerkleKeyValueStream<'a, T: ReadLinearStore> {
     merkle: &'a Merkle<T>,
 }
 
-impl<'a, T: linear::ReadLinearStore> FusedStream for MerkleKeyValueStream<'a, T> {
+impl<'a, T: ReadLinearStore> FusedStream for MerkleKeyValueStream<'a, T> {
     fn is_terminated(&self) -> bool {
         matches!(&self.state, MerkleKeyValueStreamState::Initialized { node_iter } if node_iter.is_terminated())
     }
 }
 
-impl<'a, T: linear::ReadLinearStore> MerkleKeyValueStream<'a, T> {
+impl<'a, T: ReadLinearStore> MerkleKeyValueStream<'a, T> {
     pub(super) fn _new(merkle: &'a Merkle<T>) -> Self {
         Self {
             state: MerkleKeyValueStreamState::_new(),
@@ -347,7 +344,7 @@ impl<'a, T: linear::ReadLinearStore> MerkleKeyValueStream<'a, T> {
     }
 }
 
-impl<'a, T: linear::ReadLinearStore> Stream for MerkleKeyValueStream<'a, T> {
+impl<'a, T: ReadLinearStore> Stream for MerkleKeyValueStream<'a, T> {
     type Item = Result<(Key, Value), api::Error>;
 
     fn poll_next(
@@ -450,7 +447,7 @@ impl<'a, 'b, T: ReadLinearStore> PathIterator<'a, 'b, T> {
     }
 }
 
-impl<'a, 'b, T: linear::ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
+impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
     type Item = Result<NodeWithKey, MerkleError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -597,9 +594,9 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
-    use crate::storage::hashednode::HashedNodeStore;
+    use crate::hashednode::HashedNodeStore;
 
-    use self::linear::memory::MemStore;
+    use storage::MemStore;
 
     use super::*;
     use test_case::test_case;

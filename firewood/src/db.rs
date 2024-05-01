@@ -3,17 +3,16 @@
 
 use crate::merkle::MerkleError;
 use crate::proof::{Proof, ProofError};
-use crate::storage::linear::historical::Historical as HistoricalStore;
-use crate::storage::linear::proposed::ProposedMutable;
-use crate::storage::linear::{self, ReadLinearStore};
+use storage::{Historical as HistoricalStore, WriteLinearStore};
+use storage::ProposedMutable;
+use storage::ReadLinearStore;
 use crate::stream::MerkleKeyValueStream;
 use crate::trie_hash::TrieHash;
 use crate::v2::api::{self, HashKey, KeyType, ValueType};
 pub use crate::v2::api::{Batch, BatchOp};
-use aiofut::AioError;
 use async_trait::async_trait;
 
-use crate::storage::manager::RevisionManager;
+use crate::manager::RevisionManager;
 use metered::metered;
 use std::error::Error;
 use std::fmt;
@@ -28,7 +27,6 @@ const _VERSION_STR: &[u8; 16] = b"firewood v0.1\0\0\0";
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum DbError {
-    Aio(AioError),
     InvalidParams,
     Merkle(MerkleError),
     System(nix::Error),
@@ -41,7 +39,6 @@ pub enum DbError {
 impl fmt::Display for DbError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            DbError::Aio(e) => write!(f, "aio error: {e:?}"),
             DbError::InvalidParams => write!(f, "invalid parameters provided"),
             DbError::Merkle(e) => write!(f, "merkle error: {e:?}"),
             DbError::System(e) => write!(f, "system error: {e:?}"),
@@ -68,7 +65,7 @@ pub struct HistoricalRev<T> {
 }
 
 #[async_trait]
-impl<T: linear::ReadLinearStore> api::DbView for HistoricalRev<T> {
+impl<T: ReadLinearStore> api::DbView for HistoricalRev<T> {
     type Stream<'a> = MerkleKeyValueStream<'a, T> where Self: 'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
@@ -150,7 +147,7 @@ pub struct Proposal<T> {
 }
 
 #[async_trait]
-impl<T: linear::ReadLinearStore + linear::WriteLinearStore> api::Proposal for Proposal<T> {
+impl<T: WriteLinearStore> api::Proposal for Proposal<T> {
     type Proposal = Proposal<T>;
 
     async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
@@ -166,7 +163,7 @@ impl<T: linear::ReadLinearStore + linear::WriteLinearStore> api::Proposal for Pr
 }
 
 #[async_trait]
-impl<T: linear::ReadLinearStore + linear::WriteLinearStore> api::DbView for Proposal<T> {
+impl<T: WriteLinearStore> api::DbView for Proposal<T> {
     type Stream<'a> = MerkleKeyValueStream<'a, T> where T: 'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
