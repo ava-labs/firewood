@@ -2,17 +2,17 @@ use crate::nibbles::Nibbles;
 use storage::Path;
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
-use storage::{BranchNode, LeafNode, Node};
-use crate::proof::{Proof, ProofError};
 use crate::hashednode::HashedNodeStore;
-use storage::{ReadLinearStore, WriteLinearStore};
-use storage::{LinearAddress, UpdateError};
+use crate::proof::{Proof, ProofError};
 use crate::stream::{MerkleKeyValueStream, NodeWithKey, PathIterator};
 use crate::trie_hash::TrieHash;
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
 use std::future::ready;
 use std::io::Write;
+use storage::{BranchNode, LeafNode, Node};
+use storage::{LinearAddress, UpdateError};
+use storage::{ReadLinearStore, WriteLinearStore};
 
 use std::ops::{Deref, DerefMut};
 use thiserror::Error;
@@ -319,38 +319,44 @@ impl<T: WriteLinearStore> Merkle<T> {
                         value: val,
                         partial_path: leaf.partial_path.clone(),
                     });
-                    let addr = last_node.addr;
-                    // TODO: can we remove this clone?
-                    let parent = traversal_path.pop().map(|parent_node| {
-                        (
-                            parent_node.addr,
-                            parent_node.node.as_branch().unwrap().clone(),
-                        )
-                    });
-                    match self.update_node(addr, &new_leaf) {
+
+                    let leaf_addr = last_node.addr;
+
+                    let leaf_parent = traversal_path.pop();
+
+                    match self.update_node(leaf_addr, &new_leaf) {
                         Err(storage::UpdateError::NodeMoved(new_addr)) => {
                             // update the parent to point to the new node address
-                            let Some(branch) = parent else {
+                            let Some(leaf_parent) = leaf_parent else {
                                 self.set_root(new_addr)?;
                                 return Ok(Default::default());
                             };
-                            let mut new_children = branch.1.children;
-                            *new_children
+
+                            let leaf_parent_branch = leaf_parent
+                                .node
+                                .as_branch()
+                                .expect("leaf parent should be a branch");
+
+                            let mut new_leaf_parent_children = leaf_parent_branch.children;
+                            *new_leaf_parent_children
                                 .iter_mut()
-                                .find(|child_addr| **child_addr == Some(addr))
+                                .find(|child_addr| **child_addr == Some(leaf_addr))
                                 .unwrap() = Some(new_addr);
+
                             let new_branch = Node::Branch(Box::new(BranchNode {
-                                children: new_children,
-                                partial_path: branch.1.partial_path,
-                                value: branch.1.value,
+                                children: new_leaf_parent_children,
+                                partial_path: leaf_parent_branch.partial_path.clone(),
+                                value: leaf_parent_branch.value.clone(),
                             }));
-                            self.update_node(branch.0, &new_branch)
-                                .map_err(|ue| match ue {
+
+                            self.update_node(leaf_parent.addr, &new_branch).map_err(
+                                |ue| match ue {
                                     UpdateError::Io(e) => MerkleError::Format(e),
                                     UpdateError::NodeMoved(_) => unreachable!(
                                         "only changed the child address, node can't grow"
                                     ),
-                                })?;
+                                },
+                            )?;
                         }
                         Err(UpdateError::Io(e)) => return Err(e.into()),
                         _ => {}
@@ -1215,10 +1221,10 @@ mod tests {
 #[allow(clippy::unwrap_used)]
 mod test {
     use super::*;
-    use storage::MemStore;
     use rand::rngs::StdRng;
     use rand::{thread_rng, Rng, SeedableRng as _};
     use std::collections::HashMap;
+    use storage::MemStore;
 
     fn merkle_build_test<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         items: Vec<(K, V)>,
