@@ -413,17 +413,8 @@ pub struct NodeWithKey {
 
 /// Iterates over all nodes on the path to a given key starting from the root.
 /// All nodes are branch nodes except possibly the last, which may be a leaf.
-/// If the key is in the trie, the last node is the one at the given key.
-/// Otherwise, the last node proves the non-existence of the key.
-/// Specifically, if during the traversal, we encounter:
-/// * A branch node with no child at the index of the next nibble in the key,
-///   then the branch node proves the non-existence of the key.
-/// * A node (either branch or leaf) whose partial path doesn't match the
-///   remaining unmatched key, the node proves the non-existence of the key.
-/// Note that this means that the last node's key isn't necessarily a prefix of
-/// the key we're traversing to.
-/// TODO danlaine: Change this to only return nodes that are prefixes of the key
-/// or equal to the key
+/// All returned nodes have keys which are a prefix of the given key.
+/// If the given key is in the trie, the last node is at that key.
 pub struct PathIterator<'a, 'b, T: ReadLinearStore> {
     state: PathIteratorState<'b>,
     merkle: &'a Merkle<T>,
@@ -481,7 +472,11 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                 let node_key = matched_key.clone().into_boxed_slice();
 
                 match comparison {
-                    Ordering::Less | Ordering::Greater => {
+                    Ordering::Less => {
+                        self.state = PathIteratorState::Exhausted;
+                        None
+                    }
+                    Ordering::Greater => {
                         let addr = *address;
                         self.state = PathIteratorState::Exhausted;
                         Some(Ok(NodeWithKey {
@@ -598,6 +593,7 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
 mod tests {
     use crate::hashednode::HashedNodeStore;
 
+    use assert_cmd::assert;
     use storage::MemStore;
 
     use super::*;
@@ -613,6 +609,17 @@ mod tests {
         }
     }
 
+    /// Returns a new [Merkle] with the following structure:
+    ///     sentinel
+    ///        | 0
+    ///        00 <-- branch with no value
+    ///     0/  D|   \F
+    ///    00   0D0   F <-- leaf with no partial path
+    ///  0/ \F
+    ///  1   F
+    ///
+    /// Note the 0000 branch has no value and the F0F0
+    /// The number next to each branch is the position of the child in the branch's children array.
     pub(super) fn _create_test_merkle() -> Merkle<MemStore> {
         Merkle::new(HashedNodeStore::initialize(MemStore::new(vec![])).unwrap())
     }
@@ -626,14 +633,14 @@ mod tests {
         assert!(stream.next().is_none());
     }
 
-    #[test_case(&[]; "empty key")]
-    #[test_case(&[13]; "prefix of singleton key")]
-    #[test_case(&[13, 37]; "match singleton key")]
-    #[test_case(&[13, 37,1]; "suffix of singleton key")]
-    #[test_case(&[255]; "no key nibbles match singleton key")]
+    #[test_case(&[],true; "empty key")]
+    #[test_case(&[13],true; "prefix of singleton key")]
+    #[test_case(&[13, 37],true; "match singleton key")]
+    #[test_case(&[13, 37,1],false; "suffix of singleton key")]
+    #[test_case(&[255],false; "no key nibbles match singleton key")]
     #[tokio::test]
-    async fn path_iterate_singleton_merkle(key: &[u8]) {
-        let mut merkle = _create_test_merkle();
+    async fn path_iterate_singleton_merkle(key: &[u8], should_yield_elt: bool) {
+        let mut merkle = created_populated_merkle();
 
         merkle.insert(&[0x13, 0x37], vec![0x42]).unwrap();
 
@@ -641,9 +648,13 @@ mod tests {
         let (key, node) = match stream.next() {
             Some(Ok(node_with_key)) => (node_with_key.key_nibbles, node_with_key.node),
             Some(Err(e)) => panic!("{:?}", e),
-            None => panic!("unexpected end of iterator"),
+            None => {
+                assert!(!should_yield_elt);
+                return;
+            }
         };
 
+        assert!(should_yield_elt);
         assert_eq!(key, vec![0x01, 0x03, 0x03, 0x07].into_boxed_slice());
         assert_eq!(node.as_leaf().unwrap().value, vec![0x42]);
 
