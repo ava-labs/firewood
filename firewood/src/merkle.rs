@@ -296,11 +296,11 @@ impl<T: WriteLinearStore> Merkle<T> {
             traversal_path.iter().map(|item| item.addr).collect();
 
         let Some(last_node) = traversal_path.pop() else {
-            let key_nibbles = Nibbles::new(key.as_ref()).into_iter();
+            let key_nibbles = Nibbles::new(key.as_ref());
 
             // no root, so create a leaf with this value
             let leaf = Node::Leaf(crate::node::LeafNode {
-                partial_path: Path::from_nibbles(key_nibbles),
+                partial_path: Path::from_nibbles_iterator(key_nibbles.into_iter()),
                 value: val,
             });
             let new_root = self.create_node(&leaf)?;
@@ -432,22 +432,24 @@ pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
-
     use crate::storage::linear::memory::MemStore;
 
     use super::*;
 
     #[test]
-    fn insert_empty() {
+    fn insert_one() {
         let mut merkle = create_in_memory_merkle();
         merkle.insert(b"abc", vec![]).unwrap()
     }
 
     #[test]
-    fn insert_two() {
+    fn insert_two() -> Result<(), MerkleError> {
         let mut merkle = create_in_memory_merkle();
-        merkle.insert(b"abc", vec![]).unwrap();
-        merkle.insert(b"abc", vec![b'a']).unwrap()
+        merkle.insert(b"abc", vec![])?;
+        let root_addr = merkle.root_address();
+        merkle.insert(b"abc", b"abcdefghijklmnopqrstuvwxyz".to_vec())?;
+        assert_ne!(root_addr, merkle.root_address());
+        Ok(())
     }
 
     fn create_in_memory_merkle() -> Merkle<MemStore> {

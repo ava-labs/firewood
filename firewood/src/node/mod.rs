@@ -9,7 +9,7 @@ use std::fmt::Debug;
 
 mod branch;
 mod leaf;
-pub(crate) mod path;
+pub mod path;
 
 pub use branch::BranchNode;
 pub use leaf::LeafNode;
@@ -83,7 +83,7 @@ impl<'de> Deserialize<'de> for EncodedNode {
 
         (chd, value, path) = Deserialize::deserialize(deserializer)?;
 
-        let path = Path::from_nibbles(Nibbles::new(&path).into_iter());
+        let path = Path::from_nibbles_iterator(Nibbles::new(&path).into_iter());
 
         let mut children: [Option<Vec<u8>>; BranchNode::MAX_CHILDREN] = Default::default();
         #[allow(clippy::indexing_slicing)]
