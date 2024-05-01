@@ -165,10 +165,10 @@ impl<T: ReadLinearStore> Merkle<T> {
         MerkleKeyValueStream::_from_key(self, key)
     }
 
-    pub(super) async fn _range_proof<K: api::KeyType + Send + Sync>(
+    pub(super) async fn _range_proof(
         &self,
-        first_key: Option<K>,
-        last_key: Option<K>,
+        first_key: Option<&[u8]>,
+        last_key: Option<&[u8]>,
         limit: Option<usize>,
     ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>>>, api::Error> {
         if let (Some(k1), Some(k2)) = (&first_key, &last_key) {
@@ -364,7 +364,7 @@ impl<T: WriteLinearStore> Merkle<T> {
         Ok(hash_invalidation_addresses)
     }
 
-    pub fn remove<K: AsRef<[u8]>>(&mut self, _key: K) -> Result<Option<Vec<u8>>, MerkleError> {
+    pub fn remove(&mut self, _key: &[u8]) -> Result<Option<Vec<u8>>, MerkleError> {
         // let Some(root_address) = self.root_address() else {
         //     return Ok(None);
         // };
