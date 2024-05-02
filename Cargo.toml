@@ -1,7 +1,6 @@
 [workspace]
 members = [
-  "firewood",
-  "fwdctl",
+  "placeholder",
   "growth-ring",
   "libaio",
   "grpc-testtool",

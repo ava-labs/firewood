@@ -4,7 +4,7 @@
 use criterion::{
     black_box, criterion_group, criterion_main, profiler::Profiler, Bencher, Criterion,
 };
-use firewood::shale::{
+use placeholder::shale::{
     compact::{ChunkHeader, StoreHeader},
     disk_address::DiskAddress,
     in_mem::InMemLinearStore,

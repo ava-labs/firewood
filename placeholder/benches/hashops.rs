@@ -4,7 +4,7 @@
 // hash benchmarks; run with 'cargo bench'
 
 use criterion::{criterion_group, criterion_main, profiler::Profiler, BatchSize, Criterion};
-use firewood::{
+use placeholder::{
     db::{BatchOp, DbConfig},
     merkle::{Bincode, Merkle, TrieHash, TRIE_HASH_LEN},
     shale::{
@@ -172,7 +172,7 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
 
                         #[allow(clippy::unwrap_used)]
                         let db =
-                            firewood::db::Db::new(db_path, &cfg.clone().truncate(true).build())
+                            placeholder::db::Db::new(db_path, &cfg.clone().truncate(true).build())
                                 .await
                                 .unwrap();
 

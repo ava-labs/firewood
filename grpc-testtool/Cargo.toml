@@ -16,7 +16,7 @@ test = false
 bench = false
 
 [dependencies]
-firewood = { version = "0.0.4", path = "../firewood" }
+placeholder = { version = "0.0.4", path = "../placeholder" }
 prost = "0.12.3"
 thiserror = "1.0.57"
 tokio = { version = "1.36.0", features = ["sync", "rt-multi-thread"] }

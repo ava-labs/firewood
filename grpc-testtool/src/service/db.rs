@@ -8,7 +8,7 @@ use crate::sync::{
     GetProofResponse, GetRangeProofRequest, GetRangeProofResponse, VerifyChangeProofRequest,
     VerifyChangeProofResponse,
 };
-use firewood::v2::api::Db;
+use placeholder::v2::api::Db;
 use tonic::{async_trait, Request, Response, Status};
 
 #[async_trait]

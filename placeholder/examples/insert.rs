@@ -10,7 +10,7 @@ use std::{
     time::Instant,
 };
 
-use firewood::{
+use placeholder::{
     db::{Batch, BatchOp, Db, DbConfig},
     v2::api::{Db as _, DbView, Proposal},
 };
@@ -118,9 +118,9 @@ fn get_keys_to_verify(batch: &Batch<Vec<u8>, Vec<u8>>, pct: u16) -> HashMap<Vec<
 }
 
 async fn verify_keys(
-    db: &impl firewood::v2::api::Db,
+    db: &impl placeholder::v2::api::Db,
     verify: HashMap<Vec<u8>, Vec<u8>>,
-) -> Result<(), firewood::v2::api::Error> {
+) -> Result<(), placeholder::v2::api::Error> {
     if !verify.is_empty() {
         let hash = db.root_hash().await?;
         let revision = db.revision(hash).await?;
