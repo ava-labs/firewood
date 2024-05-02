@@ -295,27 +295,187 @@ impl<T: WriteLinearStore> Merkle<T> {
     pub fn insert_and_return_ancestors(
         &mut self,
         key: &[u8],
-        val: Vec<u8>,
+        value: Vec<u8>,
     ) -> Result<Vec<LinearAddress>, MerkleError> {
         let mut traversal_path =
             PathIterator::new(self, key)?.collect::<Result<Vec<NodeWithKey>, MerkleError>>()?;
 
+        let Some(last_node) = traversal_path.pop() else {
+            // There is no node which is a prefix of `key`.
+            // Either the trie is empty or the root isn't a prefix of `key`.
+
+            let Some(root_addr) = self.root_address() else {
+                // The trie is empty.
+                // Create a new leaf node with this value and set it as the root.
+                let key_nibbles = Nibbles::new(key);
+
+                // no root, so create a leaf with this value
+                let leaf = Node::Leaf(LeafNode {
+                    partial_path: Path::from_nibbles_iterator(key_nibbles.into_iter()),
+                    value,
+                });
+
+                let new_root = self.create_node(&leaf)?;
+                self.set_root(new_root)?;
+                return Ok(Default::default());
+            };
+
+            // There is a root node, but it's not at a prefix of `key`.
+            // Create a new node with the common prefix of the root's key and `key`.
+            let old_root_addr = root_addr;
+            let old_root = self.read_node(old_root_addr)?;
+
+            let old_root_key = match &**old_root {
+                Node::Branch(branch) => &branch.partial_path,
+                Node::Leaf(leaf) => &leaf.partial_path,
+            };
+
+            let overlap = PrefixOverlap::from(old_root_key.as_ref(), key);
+
+            let mut new_root = BranchNode {
+                children: Default::default(),
+                partial_path: Path::from_nibbles_iterator(overlap.shared.iter().copied()),
+                value: None,
+            };
+
+            if overlap.unique_b.is_empty() {
+                // `key` is a prefix of the existing root's key.
+                // The new root is at `key` and has the `value`.
+                new_root.value = Some(value.into_boxed_slice());
+
+                // This assertion must hold because if it didn't, that would imply that
+                // the root's key is a prefix of `key` which can't be true because otherwise
+                // `traversal_path` would have contained the root.
+                assert!(overlap.unique_a.len() > 0);
+
+                // The old root becomes a child of the new root.
+                new_root.children[overlap.unique_a[0] as usize] = Some(root_addr);
+
+                let new_root = Node::Branch(Box::new(new_root));
+                let new_root_addr = self.create_node(&new_root)?;
+                self.set_root(new_root_addr)?;
+
+                // Update the old root's partial path to be shorter since now it has a parent.
+                let old_root = old_root
+                    .clone()
+                    .new_with_partial_path(Path::from_nibbles_iterator(
+                        overlap.unique_a.iter().skip(1).copied(),
+                    ));
+                // Shortening the partial path should never cause the node to grow.
+                // TODO danlaine: Should we make this assumption?
+                update_always_shrinks!(self.update_node(root_addr, &old_root))?;
+                return Ok(vec![old_root_addr]);
+            } else {
+                // `key` is not a prefix of the existing root's key.
+                // Create a branch node that has as children the existing root
+                // and a new leaf node with `value`.
+
+                // Update the old root's partial path to be shorter since now it has a parent.
+                let old_root = old_root
+                    .clone()
+                    .new_with_partial_path(Path::from_nibbles_iterator(
+                        overlap.unique_a.iter().skip(1).copied(),
+                    ));
+
+                // Shortening the partial path should never cause the node to grow.
+                // TODO danlaine: Should we make this assumption?
+                update_always_shrinks!(self.update_node(root_addr, &old_root))?;
+
+                // Create a new leaf node with the remaining nibbles of `key`
+                // (less the branch nibble).
+                let new_leaf = Node::Leaf(LeafNode {
+                    value,
+                    partial_path: Path::from_nibbles_iterator(
+                        overlap.unique_b.iter().skip(1).copied(),
+                    ),
+                });
+                let new_leaf_addr = self.create_node(&new_leaf)?;
+
+                new_root.children[overlap.unique_a[0] as usize] = Some(root_addr);
+                new_root.children[overlap.unique_b[0] as usize] = Some(new_leaf_addr);
+
+                let new_root = Node::Branch(Box::new(new_root));
+                let new_root_addr = self.create_node(&new_root)?;
+                self.set_root(new_root_addr)?;
+
+                return Ok(vec![old_root_addr]);
+            }
+        };
+        // `key` is at/after the root's key.
+
+        // All nodes in `traversal_path` are prefixes of `key`.
+        // All of their hashes must be invalidated because we're
+        // adding a descendant.
         let hash_invalidation_addresses: Vec<_> =
             traversal_path.iter().map(|item| item.addr).collect();
 
-        let Some(last_node) = traversal_path.pop() else {
-            let key_nibbles = Nibbles::new(key);
+        if last_node.key_nibbles.iter().eq(key.iter()) {
+            // The last node in the traversal path is at `key`.
+            // We're replacing the value in an existing key-value pair.
+            match &*last_node.node {
+                Node::Branch(last_node_branch) => {
+                    // Replace the value in the branch node.
+                    let new_branch = Node::Branch(Box::new(BranchNode {
+                        children: last_node_branch.children.clone(),
+                        partial_path: last_node_branch.partial_path.clone(),
+                        value: Some(value.into_boxed_slice()),
+                    }));
 
-            // no root, so create a leaf with this value
-            let leaf = Node::Leaf(LeafNode {
-                partial_path: Path::from_nibbles_iterator(key_nibbles.into_iter()),
-                value: val,
-            });
-            let new_root = self.create_node(&leaf)?;
-            self.set_root(new_root)?;
-            return Ok(Default::default());
-        };
+                    update_always_shrinks!(self.update_node(last_node.addr, &new_branch))?;
+                }
+                Node::Leaf(last_node_leaf) => {
+                    // Replace the value in the leaf node.
+                    let new_leaf = Node::Leaf(LeafNode {
+                        value,
+                        partial_path: last_node_leaf.partial_path.clone(),
+                    });
 
+                    let last_node_addr = last_node.addr;
+                    let last_node_parent = traversal_path.pop();
+
+                    match self.update_node(last_node_addr, &new_leaf) {
+                        Err(storage::UpdateError::NodeMoved(new_addr)) => {
+                            // The leaf we're updating moved to a new address.
+                            // Update the leaf's parent to point to the new address.
+                            let Some(leaf_parent) = last_node_parent else {
+                                // There is no parent of this leaf. It must be the root.
+                                self.set_root(new_addr)?;
+                                return Ok(Default::default());
+                            };
+
+                            let leaf_parent_branch = leaf_parent
+                                .node
+                                .as_branch()
+                                .expect("leaf parent should be a branch");
+
+                            let mut new_leaf_parent_children = leaf_parent_branch.children;
+                            *new_leaf_parent_children
+                                .iter_mut()
+                                .find(|child_addr| **child_addr == Some(last_node_addr))
+                                .expect("parent has its child's address") = Some(new_addr);
+
+                            let new_last_node_parent = Node::Branch(Box::new(BranchNode {
+                                children: new_leaf_parent_children,
+                                partial_path: leaf_parent_branch.partial_path.clone(),
+                                value: leaf_parent_branch.value.clone(),
+                            }));
+
+                            update_always_shrinks!(
+                                self.update_node(leaf_parent.addr, &new_last_node_parent)
+                            )?;
+                        }
+                        Err(UpdateError::Io(e)) => return Err(e.into()),
+                        _ => {}
+                    }
+                }
+            }
+        } else {
+            // The last node in the traversal path is not at `key`.
+            // TODO implement
+        }
+
+        Ok(hash_invalidation_addresses)
+        /*
         // `last_node` may be the node with the greatest prefix of `key`
         // or it proves the non-existence of `key` in the trie
 
@@ -334,7 +494,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 Node::Branch(_) => todo!(),
                 Node::Leaf(leaf) => {
                     let new_leaf = Node::Leaf(LeafNode {
-                        value: val,
+                        value,
                         partial_path: leaf.partial_path.clone(),
                     });
 
@@ -398,7 +558,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                         partial_path: Path::from_nibbles_iterator(
                             prefix_overlap.shared.into_iter().copied(),
                         ),
-                        value: Some(val.into_boxed_slice()),
+                        value: Some(value.into_boxed_slice()),
                     };
 
                     if prefix_overlap.unique_b.is_empty() {
@@ -443,158 +603,155 @@ impl<T: WriteLinearStore> Merkle<T> {
                 // `last_node.key` is a prefix of `key`
                 last_node
             };
+            */
 
-            // `closest_node` is the node with the greatest prefix of `key`
+        // `closest_node` is the node with the greatest prefix of `key`
 
-            /*
-                    if v.root.IsNothing() {
-                // the trie is empty, so create a new root node.
-                root := newNode(key)
-                root.setValue(v.db.hasher, value)
-                v.root = maybe.Some(root)
-                return root, v.recordNewNode(root)
-            }
-
-            // Find the node that most closely matches [key].
-            var closestNode *node
-            if err := visitPathToKey(v, key, func(n *node) error {
-                closestNode = n
-                // Need to recalculate ID for all nodes on path to [key].
-                return v.recordNodeChange(n)
-            }); err != nil {
-                return nil, err
-            }
-
-            if closestNode == nil {
-                // [v.root.key] isn't a prefix of [key].
-                var (
-                    oldRoot            = v.root.Value()
-                    commonPrefixLength = getLengthOfCommonPrefix(oldRoot.key, key, 0 /*offset*/, v.tokenSize)
-                    commonPrefix       = oldRoot.key.Take(commonPrefixLength)
-                    newRoot            = newNode(commonPrefix)
-                    oldRootID          = v.db.hasher.HashNode(oldRoot)
-                )
-                v.db.metrics.HashCalculated()
-
-                // Call addChildWithID instead of addChild so the old root is added
-                // to the new root with the correct ID.
-                // TODO:
-                // [oldRootID] shouldn't need to be calculated here.
-                // Either oldRootID should already be calculated or will be calculated at the end with the other nodes
-                // Initialize the v.changes.rootID during newView and then use that here instead of oldRootID
-                newRoot.addChildWithID(oldRoot, v.tokenSize, oldRootID)
-                if err := v.recordNewNode(newRoot); err != nil {
-                    return nil, err
-                }
-                v.root = maybe.Some(newRoot)
-
-                closestNode = newRoot
-            }
-
-            // a node with that exact key already exists so update its value
-            if closestNode.key == key {
-                closestNode.setValue(v.db.hasher, value)
-                // closestNode was already marked as changed in the ancestry loop above
-                return closestNode, nil
-            }
-
-            // A node with the exact key doesn't exist so determine the portion of the
-            // key that hasn't been matched yet
-            // Note that [key] has prefix [closestNode.key], so [key] must be longer
-            // and the following index won't OOB.
-            existingChildEntry, hasChild := closestNode.children[key.Token(closestNode.key.length, v.tokenSize)]
-            if !hasChild {
-                // there are no existing nodes along the key [key], so create a new node to insert [value]
-                newNode := newNode(key)
-                newNode.setValue(v.db.hasher, value)
-                closestNode.addChild(newNode, v.tokenSize)
-                return newNode, v.recordNewNode(newNode)
-            }
-
-            // if we have reached this point, then the [key] we are trying to insert and
-            // the existing path node have some common prefix.
-            // a new branching node will be created that will represent this common prefix and
-            // have the existing path node and the value being inserted as children.
-
-            // generate the new branch node
-            // find how many tokens are common between the existing child's compressed key and
-            // the current key(offset by the closest node's key),
-            // then move all the common tokens into the branch node
-            commonPrefixLength := getLengthOfCommonPrefix(
-                existingChildEntry.compressedKey,
-                key,
-                closestNode.key.length+v.tokenSize,
-                v.tokenSize,
-            )
-
-            if existingChildEntry.compressedKey.length <= commonPrefixLength {
-                // Since the compressed key is shorter than the common prefix,
-                // we should have visited [existingChildEntry] in [visitPathToKey].
-                return nil, ErrVisitPathToKey
-            }
-
-            branchNode := newNode(key.Take(closestNode.key.length + v.tokenSize + commonPrefixLength))
-            closestNode.addChild(branchNode, v.tokenSize)
-            nodeWithValue := branchNode
-
-            if key.length == branchNode.key.length {
-                // the branch node has exactly the key to be inserted as its key, so set the value on the branch node
-                branchNode.setValue(v.db.hasher, value)
-            } else {
-                // the key to be inserted is a child of the branch node
-                // create a new node and add the value to it
-                newNode := newNode(key)
-                newNode.setValue(v.db.hasher, value)
-                branchNode.addChild(newNode, v.tokenSize)
-                if err := v.recordNewNode(newNode); err != nil {
-                    return nil, err
-                }
-                nodeWithValue = newNode
-            }
-
-            // add the existing child onto the branch node
-            branchNode.setChildEntry(
-                existingChildEntry.compressedKey.Token(commonPrefixLength, v.tokenSize),
-                &child{
-                    compressedKey: existingChildEntry.compressedKey.Skip(commonPrefixLength + v.tokenSize),
-                    id:            existingChildEntry.id,
-                    hasValue:      existingChildEntry.hasValue,
-                })
-
-            return nodeWithValue, v.recordNewNode(branchNode)
-                     */
-
-            // If last node isn't prefix of key:
-            //    Go to the parent of the last node
-            //    If parent doesn't exist:
-            //        Create a branch node B with the common prefix of `key` and `last_node.key`
-            //        If the common prefix is `key`:
-            //             Set B's value to `val`
-            //        Set the root to B
-            //        Create a leaf node with the remaining nibbles of (exclude the branch nibble)
-            //        Set the branch node's child to the leaf node
-            //        Return
-            //    Else:
-            //        Note that parent's key is prefix of `key`
-            //        Create a branch node with the common prefix of the `key` and `last_node.key`
-            //        Create a leaf node with the remaining nibbles (exclude the branch nibble)
-            //        Set the branch node's child to the leaf node
-            //        Set the parent's child to the branch node
-            //        Return
-            // Else:
-            //     If last node is a branch:
-            //         Create a leaf node with the remaining nibbles
-            //         Return
-            //     Else:
-            //         Create a branch node with the common prefix of the new key and last node
-            //         Create a leaf node with the remaining nibbles
-            //         Set the branch node's child to the leaf node
-            //         Set the parent's child to the branch node
-            //         Return
-            todo!()
+        /*
+                if v.root.IsNothing() {
+            // the trie is empty, so create a new root node.
+            root := newNode(key)
+            root.setValue(v.db.hasher, value)
+            v.root = maybe.Some(root)
+            return root, v.recordNewNode(root)
         }
 
-        Ok(hash_invalidation_addresses)
+        // Find the node that most closely matches [key].
+        var closestNode *node
+        if err := visitPathToKey(v, key, func(n *node) error {
+            closestNode = n
+            // Need to recalculate ID for all nodes on path to [key].
+            return v.recordNodeChange(n)
+        }); err != nil {
+            return nil, err
+        }
+
+        if closestNode == nil {
+            // [v.root.key] isn't a prefix of [key].
+            var (
+                oldRoot            = v.root.Value()
+                commonPrefixLength = getLengthOfCommonPrefix(oldRoot.key, key, 0 /*offset*/, v.tokenSize)
+                commonPrefix       = oldRoot.key.Take(commonPrefixLength)
+                newRoot            = newNode(commonPrefix)
+                oldRootID          = v.db.hasher.HashNode(oldRoot)
+            )
+            v.db.metrics.HashCalculated()
+
+            // Call addChildWithID instead of addChild so the old root is added
+            // to the new root with the correct ID.
+            // TODO:
+            // [oldRootID] shouldn't need to be calculated here.
+            // Either oldRootID should already be calculated or will be calculated at the end with the other nodes
+            // Initialize the v.changes.rootID during newView and then use that here instead of oldRootID
+            newRoot.addChildWithID(oldRoot, v.tokenSize, oldRootID)
+            if err := v.recordNewNode(newRoot); err != nil {
+                return nil, err
+            }
+            v.root = maybe.Some(newRoot)
+
+            closestNode = newRoot
+        }
+
+        // a node with that exact key already exists so update its value
+        if closestNode.key == key {
+            closestNode.setValue(v.db.hasher, value)
+            // closestNode was already marked as changed in the ancestry loop above
+            return closestNode, nil
+        }
+
+        // A node with the exact key doesn't exist so determine the portion of the
+        // key that hasn't been matched yet
+        // Note that [key] has prefix [closestNode.key], so [key] must be longer
+        // and the following index won't OOB.
+        existingChildEntry, hasChild := closestNode.children[key.Token(closestNode.key.length, v.tokenSize)]
+        if !hasChild {
+            // there are no existing nodes along the key [key], so create a new node to insert [value]
+            newNode := newNode(key)
+            newNode.setValue(v.db.hasher, value)
+            closestNode.addChild(newNode, v.tokenSize)
+            return newNode, v.recordNewNode(newNode)
+        }
+
+        // if we have reached this point, then the [key] we are trying to insert and
+        // the existing path node have some common prefix.
+        // a new branching node will be created that will represent this common prefix and
+        // have the existing path node and the value being inserted as children.
+
+        // generate the new branch node
+        // find how many tokens are common between the existing child's compressed key and
+        // the current key(offset by the closest node's key),
+        // then move all the common tokens into the branch node
+        commonPrefixLength := getLengthOfCommonPrefix(
+            existingChildEntry.compressedKey,
+            key,
+            closestNode.key.length+v.tokenSize,
+            v.tokenSize,
+        )
+
+        if existingChildEntry.compressedKey.length <= commonPrefixLength {
+            // Since the compressed key is shorter than the common prefix,
+            // we should have visited [existingChildEntry] in [visitPathToKey].
+            return nil, ErrVisitPathToKey
+        }
+
+        branchNode := newNode(key.Take(closestNode.key.length + v.tokenSize + commonPrefixLength))
+        closestNode.addChild(branchNode, v.tokenSize)
+        nodeWithValue := branchNode
+
+        if key.length == branchNode.key.length {
+            // the branch node has exactly the key to be inserted as its key, so set the value on the branch node
+            branchNode.setValue(v.db.hasher, value)
+        } else {
+            // the key to be inserted is a child of the branch node
+            // create a new node and add the value to it
+            newNode := newNode(key)
+            newNode.setValue(v.db.hasher, value)
+            branchNode.addChild(newNode, v.tokenSize)
+            if err := v.recordNewNode(newNode); err != nil {
+                return nil, err
+            }
+            nodeWithValue = newNode
+        }
+
+        // add the existing child onto the branch node
+        branchNode.setChildEntry(
+            existingChildEntry.compressedKey.Token(commonPrefixLength, v.tokenSize),
+            &child{
+                compressedKey: existingChildEntry.compressedKey.Skip(commonPrefixLength + v.tokenSize),
+                id:            existingChildEntry.id,
+                hasValue:      existingChildEntry.hasValue,
+            })
+
+        return nodeWithValue, v.recordNewNode(branchNode)
+                 */
+
+        // If last node isn't prefix of key:
+        //    Go to the parent of the last node
+        //    If parent doesn't exist:
+        //        Create a branch node B with the common prefix of `key` and `last_node.key`
+        //        If the common prefix is `key`:
+        //             Set B's value to `val`
+        //        Set the root to B
+        //        Create a leaf node with the remaining nibbles of (exclude the branch nibble)
+        //        Set the branch node's child to the leaf node
+        //        Return
+        //    Else:
+        //        Note that parent's key is prefix of `key`
+        //        Create a branch node with the common prefix of the `key` and `last_node.key`
+        //        Create a leaf node with the remaining nibbles (exclude the branch nibble)
+        //        Set the branch node's child to the leaf node
+        //        Set the parent's child to the branch node
+        //        Return
+        // Else:
+        //     If last node is a branch:
+        //         Create a leaf node with the remaining nibbles
+        //         Return
+        //     Else:
+        //         Create a branch node with the common prefix of the new key and last node
+        //         Create a leaf node with the remaining nibbles
+        //         Set the branch node's child to the leaf node
+        //         Set the parent's child to the branch node
+        //         Return
     }
 
     pub fn remove(&mut self, _key: &[u8]) -> Result<Option<Vec<u8>>, MerkleError> {
