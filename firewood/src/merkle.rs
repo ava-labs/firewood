@@ -297,6 +297,9 @@ impl<T: WriteLinearStore> Merkle<T> {
         key: &[u8],
         value: Vec<u8>,
     ) -> Result<Vec<LinearAddress>, MerkleError> {
+        let key_nibbles = Nibbles::new(key);
+        let key_as_path = Path::from_nibbles_iterator(key_nibbles.into_iter());
+
         let mut traversal_path =
             PathIterator::new(self, key)?.collect::<Result<Vec<NodeWithKey>, MerkleError>>()?;
 
@@ -307,11 +310,10 @@ impl<T: WriteLinearStore> Merkle<T> {
             let Some(root_addr) = self.root_address() else {
                 // The trie is empty.
                 // Create a new leaf node with this value and set it as the root.
-                let key_nibbles = Nibbles::new(key);
 
                 // no root, so create a leaf with this value
                 let leaf = Node::Leaf(LeafNode {
-                    partial_path: Path::from_nibbles_iterator(key_nibbles.into_iter()),
+                    partial_path: key_as_path,
                     value,
                 });
 
@@ -330,7 +332,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 Node::Leaf(leaf) => &leaf.partial_path,
             };
 
-            let overlap = PrefixOverlap::from(old_root_key.as_ref(), key);
+            let overlap = PrefixOverlap::from(old_root_key.as_ref(), key_as_path.as_ref());
 
             let mut new_root = BranchNode {
                 children: Default::default(),
@@ -409,7 +411,7 @@ impl<T: WriteLinearStore> Merkle<T> {
         let hash_invalidation_addresses: Vec<_> =
             traversal_path.iter().map(|item| item.addr).collect();
 
-        if last_node.key_nibbles.iter().eq(key.iter()) {
+        if last_node.key_nibbles.iter().eq(key_as_path.as_ref()) {
             // The last node in the traversal path is at `key`.
             // We're replacing the value in an existing key-value pair.
             match &*last_node.node {
@@ -471,7 +473,66 @@ impl<T: WriteLinearStore> Merkle<T> {
             }
         } else {
             // The last node in the traversal path is not at `key`.
-            // TODO implement
+            match &*last_node.node {
+                Node::Branch(_) => todo!(),
+                Node::Leaf(last_node_leaf) => {
+                    // The last node is a leaf node. Replace it with a branch
+                    // that has the new key-value pair leaf as a child.
+                    let new_leaf = Node::Leaf(LeafNode {
+                        value,
+                        partial_path: Path::from_nibbles_iterator(
+                            key_as_path
+                                .iter()
+                                .skip(last_node.key_nibbles.len() + 1)
+                                .copied(),
+                        ),
+                    });
+                    let new_leaf_addr = self.create_node(&new_leaf)?;
+
+                    // Turn the leaf into a branch node.
+                    let mut new_branch = BranchNode {
+                        children: Default::default(),
+                        partial_path: last_node_leaf.partial_path.clone(),
+                        value: Some(last_node_leaf.value.clone().into_boxed_slice()),
+                    };
+                    new_branch.children[key_as_path[last_node.key_nibbles.len()] as usize] =
+                        Some(new_leaf_addr);
+                    let new_branch = Node::Branch(Box::new(new_branch));
+
+                    match self.update_node(last_node.addr, &new_branch) {
+                        Err(UpdateError::NodeMoved(new_addr)) => {
+                            // The leaf we're updating to a branch is now at a new address.
+                            // Update its parent to point to the new address.
+                            let last_node_parent =
+                                traversal_path.pop().expect("leaf must have a parent");
+
+                            let last_node_parent_branch = last_node_parent
+                                .node
+                                .as_branch()
+                                .expect("leaf parent must be a branch");
+
+                            let mut new_last_node_parent_children =
+                                last_node_parent_branch.children;
+                            *new_last_node_parent_children
+                                .iter_mut()
+                                .find(|child_addr| **child_addr == Some(last_node.addr))
+                                .expect("parent has its child's address") = Some(new_addr);
+
+                            let new_last_node_parent = Node::Branch(Box::new(BranchNode {
+                                children: new_last_node_parent_children,
+                                partial_path: last_node_parent_branch.partial_path.clone(),
+                                value: last_node_parent_branch.value.clone(),
+                            }));
+
+                            update_always_shrinks!(
+                                self.update_node(last_node_parent.addr, &new_last_node_parent)
+                            )?;
+                        }
+                        Err(UpdateError::Io(e)) => return Err(e.into()),
+                        _ => {}
+                    }
+                }
+            }
         }
 
         Ok(hash_invalidation_addresses)
