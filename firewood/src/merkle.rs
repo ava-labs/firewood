@@ -303,28 +303,22 @@ impl<T: WriteLinearStore> Merkle<T> {
         let mut traversal_path =
             PathIterator::new(self, key)?.collect::<Result<Vec<NodeWithKey>, MerkleError>>()?;
 
+        let Some(old_root_addr) = self.root_address() else {
+            // The trie is empty. Create a new leaf node with `value` and set
+            // it as the root.
+            let leaf = Node::Leaf(LeafNode {
+                partial_path: key_as_path,
+                value,
+            });
+
+            let new_root = self.create_node(&leaf)?;
+            self.set_root(new_root)?;
+            return Ok(Default::default());
+        };
+
         let Some(last_node) = traversal_path.pop() else {
-            // There is no node which is a prefix of `key`.
-            // Either the trie is empty or the root isn't a prefix of `key`.
-
-            let Some(root_addr) = self.root_address() else {
-                // The trie is empty.
-                // Create a new leaf node with this value and set it as the root.
-
-                // no root, so create a leaf with this value
-                let leaf = Node::Leaf(LeafNode {
-                    partial_path: key_as_path,
-                    value,
-                });
-
-                let new_root = self.create_node(&leaf)?;
-                self.set_root(new_root)?;
-                return Ok(Default::default());
-            };
-
-            // There is a root node, but it's not at a prefix of `key`.
+            // There is no node (including the root) which is a prefix of `key`.
             // Create a new node with the common prefix of the root's key and `key`.
-            let old_root_addr = root_addr;
             let old_root = self.read_node(old_root_addr)?;
 
             let old_root_key = match &**old_root {
@@ -351,7 +345,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 assert!(overlap.unique_a.len() > 0);
 
                 // The old root becomes a child of the new root.
-                new_root.children[overlap.unique_a[0] as usize] = Some(root_addr);
+                new_root.children[overlap.unique_a[0] as usize] = Some(old_root_addr);
 
                 let new_root = Node::Branch(Box::new(new_root));
                 let new_root_addr = self.create_node(&new_root)?;
@@ -365,7 +359,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     ));
                 // Shortening the partial path should never cause the node to grow.
                 // TODO danlaine: Should we make this assumption?
-                update_always_shrinks!(self.update_node(root_addr, &old_root))?;
+                update_always_shrinks!(self.update_node(old_root_addr, &old_root))?;
                 return Ok(vec![old_root_addr]);
             } else {
                 // `key` is not a prefix of the existing root's key.
@@ -381,7 +375,7 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                 // Shortening the partial path should never cause the node to grow.
                 // TODO danlaine: Should we make this assumption?
-                update_always_shrinks!(self.update_node(root_addr, &old_root))?;
+                update_always_shrinks!(self.update_node(old_root_addr, &old_root))?;
 
                 // Create a new leaf node with the remaining nibbles of `key`
                 // (less the branch nibble).
@@ -393,7 +387,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 });
                 let new_leaf_addr = self.create_node(&new_leaf)?;
 
-                new_root.children[overlap.unique_a[0] as usize] = Some(root_addr);
+                new_root.children[overlap.unique_a[0] as usize] = Some(old_root_addr);
                 new_root.children[overlap.unique_b[0] as usize] = Some(new_leaf_addr);
 
                 let new_root = Node::Branch(Box::new(new_root));
@@ -504,6 +498,83 @@ impl<T: WriteLinearStore> Merkle<T> {
                         update_always_shrinks!(self.update_node(last_node.addr, &updated_branch))?;
                         return Ok(hash_invalidation_addresses);
                     };
+
+                    // There is a child at the index that the `key` would be at. Get it.
+                    let child_node = self.read_node(child_addr)?;
+
+                    match &**child_node {
+                        Node::Branch(_) => todo!(),
+                        Node::Leaf(child_leaf) => {
+                            let prefix_overlap = PrefixOverlap::from(
+                                &*child_leaf.partial_path,
+                                &key_as_path[last_node.key_nibbles.len() + 1..],
+                            );
+
+                            let mut new_branch = BranchNode {
+                                children: Default::default(),
+                                partial_path: Path::from_nibbles_iterator(
+                                    prefix_overlap.shared.iter().copied(),
+                                ),
+                                value: None,
+                            };
+
+                            if prefix_overlap.unique_b.is_empty() {
+                                // The new branch is at `key`.
+                                new_branch.value = Some(value.into_boxed_slice());
+
+                                // The old leaf becomes a child of the new branch.
+                                new_branch.children[prefix_overlap.unique_a[0] as usize] =
+                                    Some(child_addr);
+
+                                // Update `last_node` to point to the new branch.
+                                let new_branch = Node::Branch(Box::new(new_branch));
+                                let new_branch_addr = self.create_node(&new_branch)?;
+
+                                let mut new_last_node = BranchNode {
+                                    children: last_node_branch.children.clone(),
+                                    partial_path: last_node_branch.partial_path.clone(),
+                                    value: last_node_branch.value.clone(),
+                                };
+                                new_last_node.children[child_index] = Some(new_branch_addr);
+                                let new_last_node = Node::Branch(Box::new(new_last_node));
+
+                                update_always_shrinks!(
+                                    self.update_node(last_node.addr, &new_last_node)
+                                )?;
+                                return Ok(hash_invalidation_addresses);
+                            }
+
+                            // The new branch has both the new value and the old leaf as children.
+                            let new_leaf = Node::Leaf(LeafNode {
+                                value: value.clone(),
+                                partial_path: Path::from_nibbles_iterator(
+                                    prefix_overlap.unique_b.iter().copied(),
+                                ),
+                            });
+                            let new_leaf_addr = self.create_node(&new_leaf)?;
+
+                            new_branch.children[prefix_overlap.unique_b[0] as usize] =
+                                Some(new_leaf_addr);
+
+                            new_branch.children[prefix_overlap.unique_a[0] as usize] =
+                                Some(child_addr);
+
+                            let new_branch = Node::Branch(Box::new(new_branch));
+                            let new_branch_addr = self.create_node(&new_branch)?;
+
+                            let mut new_last_node = BranchNode {
+                                children: last_node_branch.children.clone(),
+                                partial_path: last_node_branch.partial_path.clone(),
+                                value: last_node_branch.value.clone(),
+                            };
+                            new_last_node.children[child_index] = Some(new_branch_addr);
+                            let new_last_node = Node::Branch(Box::new(new_last_node));
+                            update_always_shrinks!(
+                                self.update_node(last_node.addr, &new_last_node)
+                            )?;
+                            return Ok(hash_invalidation_addresses);
+                        }
+                    }
                 }
                 Node::Leaf(last_node_leaf) => {
                     // The last node is a leaf node. Replace it with a branch
