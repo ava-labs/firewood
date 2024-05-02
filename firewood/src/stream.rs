@@ -468,69 +468,63 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                 let (comparison, unmatched_key) =
                     compare_partial_path(partial_path.iter(), unmatched_key);
 
-                matched_key.extend(partial_path.iter());
-                let node_key = matched_key.clone().into_boxed_slice();
-
                 match comparison {
-                    Ordering::Less => {
+                    Ordering::Less | Ordering::Greater => {
                         self.state = PathIteratorState::Exhausted;
                         None
                     }
-                    Ordering::Greater => {
+                    Ordering::Equal => {
+                        matched_key.extend(partial_path.iter());
+                        let node_key = matched_key.clone().into_boxed_slice();
                         let addr = *address;
-                        self.state = PathIteratorState::Exhausted;
-                        Some(Ok(NodeWithKey {
-                            key_nibbles: node_key.clone(),
-                            node: node.clone(),
-                            addr,
-                        }))
+
+                        match &**node {
+                            Node::Leaf(_) => {
+                                // We're at a leaf so we're done.
+                                self.state = PathIteratorState::Exhausted;
+                                Some(Ok(NodeWithKey {
+                                    key_nibbles: node_key.clone(),
+                                    node: node.clone(),
+                                    addr,
+                                }))
+                            }
+                            Node::Branch(branch) => {
+                                // We're at a branch whose key is a prefix of `key`.
+                                // Find its child (if any) that matches the next nibble in the key.
+                                let Some(next_unmatched_key_nibble) = unmatched_key.next() else {
+                                    // We're at the node at `key` so we're done.
+                                    self.state = PathIteratorState::Exhausted;
+                                    return Some(Ok(NodeWithKey {
+                                        key_nibbles: node_key.clone(),
+                                        node: node.clone(),
+                                        addr,
+                                    }));
+                                };
+
+                                #[allow(clippy::indexing_slicing)]
+                                let Some(child_addr) =
+                                    branch.children[next_unmatched_key_nibble as usize]
+                                else {
+                                    // There's no child at the index of the next nibble in the key.
+                                    // There's no node at `key` in this trie so we're done.
+                                    self.state = PathIteratorState::Exhausted;
+                                    return Some(Ok(NodeWithKey {
+                                        key_nibbles: node_key.clone(),
+                                        node: node.clone(),
+                                        addr,
+                                    }));
+                                };
+
+                                matched_key.push(next_unmatched_key_nibble);
+
+                                Some(Ok(NodeWithKey {
+                                    key_nibbles: node_key,
+                                    node: node.clone(),
+                                    addr: child_addr,
+                                }))
+                            }
+                        }
                     }
-                    Ordering::Equal => match &**node {
-                        Node::Leaf(_) => {
-                            let addr = *address;
-                            self.state = PathIteratorState::Exhausted;
-                            Some(Ok(NodeWithKey {
-                                key_nibbles: node_key.clone(),
-                                node: node.clone(),
-                                addr,
-                            }))
-                        }
-                        Node::Branch(branch) => {
-                            let Some(next_unmatched_key_nibble) = unmatched_key.next() else {
-                                // There's no more key to match. We're done.
-                                let addr = *address;
-                                self.state = PathIteratorState::Exhausted;
-                                return Some(Ok(NodeWithKey {
-                                    key_nibbles: node_key.clone(),
-                                    node: node.clone(),
-                                    addr,
-                                }));
-                            };
-
-                            #[allow(clippy::indexing_slicing)]
-                            let Some(child) = branch.children[next_unmatched_key_nibble as usize] else {
-                                // There's no child at the index of the next nibble in the key.
-                                // The node we're traversing to isn't in the trie.
-                                let addr = *address;
-                                self.state = PathIteratorState::Exhausted;
-                                return Some(Ok(NodeWithKey {
-                                    key_nibbles: node_key.clone(),
-                                    node: node.clone(),
-                                    addr,
-                                }));
-                            };
-
-                            matched_key.push(next_unmatched_key_nibble);
-
-                            *address = child;
-
-                            Some(Ok(NodeWithKey {
-                                key_nibbles: node_key,
-                                node: node.clone(),
-                                addr: *address,
-                            }))
-                        }
-                    },
                 }
             }
         }
@@ -593,7 +587,6 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
 mod tests {
     use crate::hashednode::HashedNodeStore;
 
-    use assert_cmd::assert;
     use storage::MemStore;
 
     use super::*;
