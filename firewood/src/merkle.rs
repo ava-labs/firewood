@@ -474,7 +474,37 @@ impl<T: WriteLinearStore> Merkle<T> {
         } else {
             // The last node in the traversal path is not at `key`.
             match &*last_node.node {
-                Node::Branch(_) => todo!(),
+                Node::Branch(last_node_branch) => {
+                    // The last node is a branch node.
+                    // See if there's a node at the child index that the `key` would be at.
+                    let child_index = key_as_path[last_node.key_nibbles.len()] as usize;
+                    let Some(child_addr) = last_node_branch.children[child_index] else {
+                        // There is no child at the index that the `key` would be at.
+                        // Create a new leaf at that index.
+                        let new_leaf = Node::Leaf(LeafNode {
+                            value,
+                            partial_path: Path::from_nibbles_iterator(
+                                key_as_path
+                                    .iter()
+                                    .skip(last_node.key_nibbles.len() + 1)
+                                    .copied(),
+                            ),
+                        });
+                        let new_leaf_addr = self.create_node(&new_leaf)?;
+
+                        let mut updated_branch_children = last_node_branch.children.clone();
+                        updated_branch_children[child_index] = Some(new_leaf_addr);
+
+                        let updated_branch = Node::Branch(Box::new(BranchNode {
+                            children: updated_branch_children,
+                            partial_path: last_node_branch.partial_path.clone(),
+                            value: last_node_branch.value.clone(),
+                        }));
+
+                        update_always_shrinks!(self.update_node(last_node.addr, &updated_branch))?;
+                        return Ok(hash_invalidation_addresses);
+                    };
+                }
                 Node::Leaf(last_node_leaf) => {
                     // The last node is a leaf node. Replace it with a branch
                     // that has the new key-value pair leaf as a child.
