@@ -740,9 +740,14 @@ impl<T: WriteLinearStore> Merkle<T> {
                             let new_branch = Node::Branch(Box::new(new_branch));
                             let new_branch_addr = self.create_node(&new_branch)?;
 
-                            // TODO we need to shorten the partial path of the leaf containing
-                            // the old value because we're traversing an additional nibble due
-                            // to the additional ancestor.
+                            let updated_leaf = LeafNode {
+                                value: child_leaf.value.clone(),
+                                partial_path: Path::from_nibbles_iterator(
+                                    prefix_overlap.unique_a.iter().skip(1).copied(),
+                                ),
+                            };
+                            let updated_leaf = Node::Leaf(updated_leaf);
+                            update_always_shrinks!(self.update_node(child_addr, &updated_leaf))?;
 
                             let mut new_last_node = BranchNode {
                                 children: last_node_branch.children,
@@ -788,8 +793,11 @@ impl<T: WriteLinearStore> Merkle<T> {
                         Err(UpdateError::NodeMoved(new_addr)) => {
                             // The leaf we're updating to a branch is now at a new address.
                             // Update its parent to point to the new address.
-                            let last_node_parent =
-                                traversal_path.pop().expect("leaf must have a parent");
+                            let Some(last_node_parent) = traversal_path.pop() else {
+                                // There is no parent of this leaf. The new branch is the root.
+                                self.set_root(new_addr)?;
+                                return Ok(hash_invalidation_addresses);
+                            };
 
                             let last_node_parent_branch = last_node_parent
                                 .node
