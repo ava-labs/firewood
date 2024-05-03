@@ -549,7 +549,41 @@ impl<T: WriteLinearStore> Merkle<T> {
                             value: last_node_branch.value.clone(),
                         }));
 
-                        update_always_shrinks!(self.update_node(last_node.addr, &updated_branch))?;
+                        match self.update_node(last_node.addr, &updated_branch) {
+                            Ok(()) => {}
+                            Err(UpdateError::Io(e)) => return Err(e.into()),
+                            Err(UpdateError::NodeMoved(new_addr)) => {
+                                // The branch we're updating moved to a new address.
+                                // Update its parent to point to the new address.
+                                let Some(last_node_parent) = traversal_path.pop() else {
+                                    // There is no parent of this branch. It must be the root.
+                                    self.set_root(new_addr)?;
+                                    return Ok(hash_invalidation_addresses);
+                                };
+
+                                let last_node_parent_branch = last_node_parent
+                                    .node
+                                    .as_branch()
+                                    .expect("branch parent must be a branch");
+
+                                let mut new_last_node_parent_children =
+                                    last_node_parent_branch.children;
+                                *new_last_node_parent_children
+                                    .iter_mut()
+                                    .find(|child_addr| **child_addr == Some(last_node.addr))
+                                    .expect("parent has its child's address") = Some(new_addr);
+
+                                let new_last_node_parent = Node::Branch(Box::new(BranchNode {
+                                    children: new_last_node_parent_children,
+                                    partial_path: last_node_parent_branch.partial_path.clone(),
+                                    value: last_node_parent_branch.value.clone(),
+                                }));
+
+                                update_always_shrinks!(
+                                    self.update_node(last_node_parent.addr, &new_last_node_parent)
+                                )?;
+                            }
+                        };
                         return Ok(hash_invalidation_addresses);
                     };
 

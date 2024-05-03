@@ -605,17 +605,6 @@ mod tests {
         }
     }
 
-    /// Returns a new [Merkle] with the following structure:
-    ///     sentinel
-    ///        | 0
-    ///        00 <-- branch with no value
-    ///     0/  D|   \F
-    ///    00   0D0   F <-- leaf with no partial path
-    ///  0/ \F
-    ///  1   F
-    ///
-    /// Note the 0000 branch has no value and the F0F0
-    /// The number next to each branch is the position of the child in the branch's children array.
     pub(super) fn _create_test_merkle() -> Merkle<MemStore> {
         Merkle::new(HashedNodeStore::initialize(MemStore::new(vec![])).unwrap())
     }
@@ -765,9 +754,14 @@ mod tests {
         check_stream_is_done(stream).await;
     }
 
-    /// Returns a new [Merkle] with the following structure:
-    ///       sentinel  // TODO danlaine: Remove sentinel and update this diagram
-    ///        | 0
+    /// Returns a new [Merkle] with the following key-value pairs:
+    /// Note each hex symbol in the keys below is a nibble (not two nibbles).
+    /// 000000 --> 000000
+    /// 00000001 -->00000001
+    /// 000000FF --> 000000FF
+    /// 00D0D0 --> 00D0D0
+    /// 00FF --> 00FF
+    /// structure:
     ///        00 <-- branch with no value
     ///     0/  D|   \F
     ///    00   0D0   F <-- leaf with no partial path
