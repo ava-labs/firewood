@@ -516,11 +516,14 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                                 };
 
                                 matched_key.push(next_unmatched_key_nibble);
+                                let node_address = *address;
+
+                                *address = child_addr;
 
                                 Some(Ok(NodeWithKey {
                                     key_nibbles: node_key,
                                     node: node.clone(),
-                                    addr: child_addr,
+                                    addr: node_address,
                                 }))
                             }
                         }
