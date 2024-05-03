@@ -182,11 +182,11 @@
 //! some very old ghost store to keep the size of the rolling window invariant.
 //!
 pub mod db;
+pub mod manager;
 pub mod merkle;
 pub mod proof;
 pub mod stream;
 pub mod trie_hash;
-pub mod manager;
 
 pub mod nibbles;
 

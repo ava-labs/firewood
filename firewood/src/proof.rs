@@ -4,9 +4,9 @@
 use std::collections::HashMap;
 
 use crate::{merkle::Merkle, v2::api::HashKey};
-use storage::ReadLinearStore;
 use nix::errno::Errno;
 use sha3::Digest;
+use storage::ReadLinearStore;
 use thiserror::Error;
 
 use crate::{db::DbError, merkle::MerkleError};

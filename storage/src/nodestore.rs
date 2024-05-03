@@ -154,7 +154,7 @@ impl<T: ReadLinearStore> NodeStore<T> {
     }
 
     /// Open an existing [NodeStore] from a [ReadLinearStore]
-    /// 
+    ///
     /// This method reads the header previously created from a call to
     /// [NodeStore::initialize]
     pub fn open(linear_store: T) -> Result<Self, Error> {
@@ -368,7 +368,7 @@ impl<T: WriteLinearStore> NodeStore<T> {
 /// There are no implementations of [Into::into] here because we want to be sure
 /// the caller thinks about how to handle the node moving to a new address when
 /// it changes size.
-/// 
+///
 /// TODO: Callers shouldn't care whether or not the node changed size and should
 /// handle the moving of a node in all cases. This may allow the storage layer to
 /// be smarter about moving related nodes closer together on disk (i.e., dynamic
@@ -461,9 +461,9 @@ struct FreeArea {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use crate::linear::memory::MemStore;
     use crate::Path;
     use crate::{BranchNode, LeafNode};
-    use crate::linear::memory::MemStore;
 
     use super::*;
 

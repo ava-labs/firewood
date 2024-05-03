@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Path, LinearAddress};
+use crate::{LinearAddress, Path};
 use std::fmt::{Debug, Error as FmtError, Formatter};
 
 #[derive(PartialEq, Eq, Clone, Serialize, Deserialize)]

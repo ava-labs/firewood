@@ -86,7 +86,6 @@ pub trait ReadLinearStore: Send + Sync + Debug {
 
 /// Some linear stores support writes
 pub trait WriteLinearStore: ReadLinearStore {
-
     /// Write a new object at a given offset
     fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error>;
 }

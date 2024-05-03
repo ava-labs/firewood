@@ -12,7 +12,7 @@ use crate::Path;
 pub struct LeafNode {
     /// The path of this leaf, but only the remaining nibbles
     pub partial_path: Path,
-    
+
     /// The value associated with this leaf
     pub value: Vec<u8>,
 }

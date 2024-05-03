@@ -9,11 +9,11 @@ use std::io::Error;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-use storage::Node;
 use crate::trie_hash::TrieHash;
+use storage::Node;
 
-use storage::{ReadLinearStore, WriteLinearStore};
 use storage::{LinearAddress, NodeStore};
+use storage::{ReadLinearStore, WriteLinearStore};
 
 #[derive(Debug)]
 pub struct HashedNode(Arc<Node>);

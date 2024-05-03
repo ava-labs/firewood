@@ -3,14 +3,14 @@
 
 use crate::merkle::MerkleError;
 use crate::proof::{Proof, ProofError};
-use storage::{Historical as HistoricalStore, WriteLinearStore};
-use storage::ProposedMutable;
-use storage::ReadLinearStore;
 use crate::stream::MerkleKeyValueStream;
 use crate::trie_hash::TrieHash;
 use crate::v2::api::{self, HashKey, KeyType, ValueType};
 pub use crate::v2::api::{Batch, BatchOp};
 use async_trait::async_trait;
+use storage::ProposedMutable;
+use storage::ReadLinearStore;
+use storage::{Historical as HistoricalStore, WriteLinearStore};
 
 use crate::manager::RevisionManager;
 use metered::metered;
