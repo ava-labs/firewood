@@ -617,7 +617,48 @@ impl<T: WriteLinearStore> Merkle<T> {
                                 value: None,
                             };
 
-                            if prefix_overlap.unique_b.is_empty() {
+                            if let Some(&first_b) = prefix_overlap.unique_b.first() {
+                                // The new branch has both the new value and the old branch as children.
+                                let new_leaf = Node::Leaf(LeafNode {
+                                    value,
+                                    partial_path: Path::from_nibbles_iterator(
+                                        prefix_overlap.unique_b.iter().skip(1).copied(),
+                                    ),
+                                });
+                                let new_leaf_addr = self.create_node(&new_leaf)?;
+                                *new_branch.mut_child(first_b) = Some(new_leaf_addr);
+                                *new_branch.mut_child(prefix_overlap.unique_a[0]) =
+                                    Some(child_addr);
+
+                                // Update `child_branch` to shorten its partial path.
+                                let updated_child_branch = BranchNode {
+                                    children: child_branch.children,
+                                    partial_path: Path::from_nibbles_iterator(
+                                        prefix_overlap.unique_a.iter().skip(1).copied(),
+                                    ),
+                                    value: child_branch.value.clone(),
+                                };
+                                let updated_child_branch =
+                                    Node::Branch(Box::new(updated_child_branch));
+                                update_always_shrinks!(
+                                    self.update_node(child_addr, &updated_child_branch)
+                                )?;
+
+                                let new_branch = Node::Branch(Box::new(new_branch));
+                                let new_branch_addr = self.create_node(&new_branch)?;
+
+                                // Update `last_node` to point to the new branch.
+                                let mut new_last_node = BranchNode {
+                                    children: last_node_branch.children,
+                                    partial_path: last_node_branch.partial_path.clone(),
+                                    value: last_node_branch.value.clone(),
+                                };
+                                *new_last_node.mut_child(child_index as u8) = Some(new_branch_addr);
+                                let new_last_node = Node::Branch(Box::new(new_last_node));
+                                update_always_shrinks!(
+                                    self.update_node(last_node.addr, &new_last_node)
+                                )?;
+                            } else {
                                 // The new branch is at `key`.
                                 new_branch.value = Some(value.into_boxed_slice());
 
@@ -641,47 +682,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                                 update_always_shrinks!(
                                     self.update_node(last_node.addr, &new_last_node)
                                 )?;
-                                return Ok(hash_invalidation_addresses);
                             }
-
-                            // The new branch has both the new value and the old branch as children.
-                            let new_leaf = Node::Leaf(LeafNode {
-                                value,
-                                partial_path: Path::from_nibbles_iterator(
-                                    prefix_overlap.unique_b.iter().skip(1).copied(),
-                                ),
-                            });
-                            let new_leaf_addr = self.create_node(&new_leaf)?;
-                            *new_branch.mut_child(prefix_overlap.unique_b[0]) = Some(new_leaf_addr);
-                            *new_branch.mut_child(prefix_overlap.unique_a[0]) = Some(child_addr);
-
-                            // Update `child_branch` to shorten its partial path.
-                            let updated_child_branch = BranchNode {
-                                children: child_branch.children,
-                                partial_path: Path::from_nibbles_iterator(
-                                    prefix_overlap.unique_a.iter().skip(1).copied(),
-                                ),
-                                value: child_branch.value.clone(),
-                            };
-                            let updated_child_branch = Node::Branch(Box::new(updated_child_branch));
-                            update_always_shrinks!(
-                                self.update_node(child_addr, &updated_child_branch)
-                            )?;
-
-                            let new_branch = Node::Branch(Box::new(new_branch));
-                            let new_branch_addr = self.create_node(&new_branch)?;
-
-                            // Update `last_node` to point to the new branch.
-                            let mut new_last_node = BranchNode {
-                                children: last_node_branch.children,
-                                partial_path: last_node_branch.partial_path.clone(),
-                                value: last_node_branch.value.clone(),
-                            };
-                            *new_last_node.mut_child(child_index as u8) = Some(new_branch_addr);
-                            let new_last_node = Node::Branch(Box::new(new_last_node));
-                            update_always_shrinks!(
-                                self.update_node(last_node.addr, &new_last_node)
-                            )?;
                             return Ok(hash_invalidation_addresses);
                         }
                         Node::Leaf(child_leaf) => {
@@ -871,19 +872,14 @@ struct PrefixOverlap<'a, T> {
 
 impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
     fn from(a: &'a [T], b: &'a [T]) -> Self {
-        let mut split_index = 0;
-
-        #[allow(clippy::indexing_slicing)]
-        for i in 0..std::cmp::min(a.len(), b.len()) {
-            if a[i] != b[i] {
-                break;
-            }
-
-            split_index += 1;
-        }
+        let split_index = a
+            .iter()
+            .zip(b)
+            .position(|(a, b)| *a != *b)
+            .unwrap_or_else(|| std::cmp::min(a.len(), b.len()));
 
         let (shared, unique_a) = a.split_at(split_index);
-        let (_, unique_b) = b.split_at(split_index);
+        let unique_b = b.get(split_index..).expect("");
 
         Self {
             shared,
