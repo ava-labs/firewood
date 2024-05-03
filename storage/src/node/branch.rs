@@ -44,4 +44,11 @@ impl Debug for BranchNode {
 impl BranchNode {
     /// The maximum number of children in a [BranchNode]
     pub const MAX_CHILDREN: usize = 16;
+
+    /// Obtain a mutable reference to a child address within a branch
+    /// This convenience method takes a u8 as the nibble offset
+    /// It panics if passed a value more than 0xf
+    pub fn mut_child(&mut self, child_index: u8) -> &mut Option<LinearAddress> {
+        self.children.get_mut(child_index as usize).expect("nibble")
+    }
 }
