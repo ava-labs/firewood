@@ -647,8 +647,7 @@ mod tests {
     }
 
     #[test_case(&[0x00, 0x00, 0x00, 0xFF]; "leaf key")]
-    #[test_case(&[0x00, 0x00, 0x00, 0xF3]; "leaf sibling key")]
-    #[test_case(&[0x00, 0x00, 0x00, 0xFF, 0x01]; "past leaf key")]
+    #[test_case(&[0x00, 0x00, 0x00, 0xFF, 0x01]; "leaf key suffix")]
     #[tokio::test]
     async fn path_iterate_non_singleton_merkle_seek_leaf(key: &[u8]) {
         let merkle = created_populated_merkle();
@@ -691,11 +690,11 @@ mod tests {
         assert!(stream.next().is_none());
     }
 
+    #[test_case(&[0x00, 0x00, 0x00]; "branch key")]
+    #[test_case(&[0x00, 0x00, 0x00, 0x10]; "branch key suffix (but not a leaf key)")]
     #[tokio::test]
-    async fn path_iterate_non_singleton_merkle_seek_branch() {
+    async fn path_iterate_non_singleton_merkle_seek_branch(key: &[u8]) {
         let merkle = created_populated_merkle();
-
-        let key = &[0x00, 0x00, 0x00];
 
         let mut stream = merkle.path_iter(key).unwrap();
 
