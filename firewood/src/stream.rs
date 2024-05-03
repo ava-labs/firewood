@@ -230,7 +230,7 @@ fn get_iterator_intial_state<T: ReadLinearStore>(
                     iter_stack.push(IterationNode::Visited {
                         key: matched_key_nibbles.clone().into_boxed_slice(),
                         children_iter: Box::new(
-                            as_enumerated_children_iter(&*branch)
+                            as_enumerated_children_iter(branch)
                                 .filter(move |(pos, _)| *pos > next_unmatched_key_nibble),
                         ),
                     });

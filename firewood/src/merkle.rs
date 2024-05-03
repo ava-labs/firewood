@@ -93,8 +93,16 @@ macro_rules! write_attributes {
                 nibbles_formatter($node.partial_path.0.clone())
             )?;
         }
+        #[allow(clippy::unnecessary_to_owned)]
         if !$value.is_empty() {
-            write!($writer, " val={}", String::from_utf8_lossy($value))?;
+            match String::from_utf8($value) {
+                Ok(string) if string.chars().all(char::is_alphanumeric) =>{
+                    write!($writer, " val={}", string)?
+                }
+                _ => {
+                    write!($writer, " val={}", hex::encode($value))?;
+                }
+            }
         }
     };
 }
@@ -299,11 +307,11 @@ impl<T: ReadLinearStore> Merkle<T> {
         writer: &mut dyn Write,
     ) -> Result<(), std::io::Error> {
         let node = self.read_node(addr)?;
-        let empty_box = Box::from([]);
         match &**node {
             Node::Branch(b) => {
                 write!(writer, "  {addr}[label=\"@{addr}")?;
-                write_attributes!(writer, b, &b.value.as_ref().unwrap_or(&empty_box));
+
+                write_attributes!(writer, b, b.value.clone().unwrap_or(Box::from([])).to_vec());
                 writeln!(writer, "\"]")?;
                 for (childidx, child) in b.children.iter().enumerate() {
                     match child {
@@ -325,7 +333,7 @@ impl<T: ReadLinearStore> Merkle<T> {
             }
             Node::Leaf(l) => {
                 write!(writer, "  {addr}[label=\"@{addr}")?;
-                write_attributes!(writer, l, &l.value);
+                write_attributes!(writer, l, l.value.clone());
                 writeln!(writer, "\" shape=rect]")?;
             }
         };
