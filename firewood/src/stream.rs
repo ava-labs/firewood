@@ -605,7 +605,7 @@ mod tests {
         }
     }
 
-    pub(super) fn _create_test_merkle() -> Merkle<MemStore> {
+    pub(super) fn create_test_merkle() -> Merkle<MemStore> {
         Merkle::new(HashedNodeStore::initialize(MemStore::new(vec![])).unwrap())
     }
 
@@ -613,21 +613,21 @@ mod tests {
     #[test_case(&[1]; "non-empty key")]
     #[tokio::test]
     async fn path_iterate_empty_merkle_empty_key(key: &[u8]) {
-        let merkle = _create_test_merkle();
+        let merkle = create_test_merkle();
         let mut stream = merkle.path_iter(key).unwrap();
         assert!(stream.next().is_none());
     }
 
-    #[test_case(&[],true; "empty key")]
-    #[test_case(&[13],true; "prefix of singleton key")]
-    #[test_case(&[13, 37],true; "match singleton key")]
-    #[test_case(&[13, 37,1],false; "suffix of singleton key")]
-    #[test_case(&[255],false; "no key nibbles match singleton key")]
+    #[test_case(&[],false; "empty key")]
+    #[test_case(&[0xBE,0xE0],false; "prefix of singleton key")]
+    #[test_case(&[0xBE, 0xEF],true; "match singleton key")]
+    #[test_case(&[0xBE, 0xEF,0x10],true; "suffix of singleton key")]
+    #[test_case(&[0xF0],false; "no key nibbles match singleton key")]
     #[tokio::test]
     async fn path_iterate_singleton_merkle(key: &[u8], should_yield_elt: bool) {
-        let mut merkle = created_populated_merkle();
+        let mut merkle = create_test_merkle();
 
-        merkle.insert(&[0x13, 0x37], vec![0x42]).unwrap();
+        merkle.insert(&[0xBE, 0xEF], vec![0x42]).unwrap();
 
         let mut stream = merkle.path_iter(key).unwrap();
         let (key, node) = match stream.next() {
@@ -640,7 +640,7 @@ mod tests {
         };
 
         assert!(should_yield_elt);
-        assert_eq!(key, vec![0x01, 0x03, 0x03, 0x07].into_boxed_slice());
+        assert_eq!(key, vec![0x0B, 0x0E, 0x0E, 0x0F].into_boxed_slice());
         assert_eq!(node.as_leaf().unwrap().value, vec![0x42]);
 
         assert!(stream.next().is_none());
@@ -726,21 +726,21 @@ mod tests {
 
     #[tokio::test]
     async fn key_value_iterate_empty() {
-        let merkle = _create_test_merkle();
+        let merkle = create_test_merkle();
         let stream = merkle._key_value_iter_from_key(b"x".to_vec().into_boxed_slice());
         check_stream_is_done(stream).await;
     }
 
     #[tokio::test]
     async fn node_iterate_empty() {
-        let merkle = _create_test_merkle();
+        let merkle = create_test_merkle();
         let stream = merkle.node_iter();
         check_stream_is_done(stream).await;
     }
 
     #[tokio::test]
     async fn node_iterate_root_only() {
-        let mut merkle = _create_test_merkle();
+        let mut merkle = create_test_merkle();
 
         merkle.insert(&[0x00], vec![0x00]).unwrap();
 
@@ -756,6 +756,7 @@ mod tests {
 
     /// Returns a new [Merkle] with the following key-value pairs:
     /// Note each hex symbol in the keys below is a nibble (not two nibbles).
+    /// Each hex symbol in the values below is a byte.
     /// 000000 --> 000000
     /// 00000001 -->00000001
     /// 000000FF --> 000000FF
@@ -764,14 +765,13 @@ mod tests {
     /// structure:
     ///        00 <-- branch with no value
     ///     0/  D|   \F
-    ///    00   0D0   F <-- leaf with no partial path
+    ///   000   0D0   F <-- leaf with no partial path
     ///  0/ \F
     ///  1   F
     ///
-    /// Note the 0000 branch has no value and the F0F0
     /// The number next to each branch is the position of the child in the branch's children array.
     fn created_populated_merkle() -> Merkle<MemStore> {
-        let mut merkle = _create_test_merkle();
+        let mut merkle = create_test_merkle();
 
         merkle
             .insert(&[0x00, 0x00, 0x00], vec![0x00, 0x00, 0x00])
@@ -901,7 +901,7 @@ mod tests {
     #[test_case(Some(&[u8::MAX]); "Starting at last key")]
     #[tokio::test]
     async fn key_value_iterate_many(start: Option<&[u8]>) {
-        let mut merkle = _create_test_merkle();
+        let mut merkle = create_test_merkle();
 
         // insert all values from u8::MIN to u8::MAX, with the key and value the same
         for k in u8::MIN..=u8::MAX {
@@ -930,13 +930,13 @@ mod tests {
 
     #[tokio::test]
     async fn key_value_fused_empty() {
-        let merkle = _create_test_merkle();
+        let merkle = create_test_merkle();
         check_stream_is_done(merkle._key_value_iter()).await;
     }
 
     #[tokio::test]
     async fn key_value_table_test() {
-        let mut merkle = _create_test_merkle();
+        let mut merkle = create_test_merkle();
 
         // Insert key-values in reverse order to ensure iterator
         // doesn't just return the keys in insertion order.
@@ -996,7 +996,7 @@ mod tests {
 
     #[tokio::test]
     async fn key_value_fused_full() {
-        let mut merkle = _create_test_merkle();
+        let mut merkle = create_test_merkle();
 
         let last = vec![0x00, 0x00, 0x00];
 
@@ -1026,7 +1026,7 @@ mod tests {
 
     #[tokio::test]
     async fn key_value_root_with_empty_value() {
-        let mut merkle = _create_test_merkle();
+        let mut merkle = create_test_merkle();
 
         let key = vec![].into_boxed_slice();
         let value = vec![0x00];
@@ -1040,7 +1040,7 @@ mod tests {
 
     #[tokio::test]
     async fn key_value_get_branch_and_leaf() {
-        let mut merkle = _create_test_merkle();
+        let mut merkle = create_test_merkle();
 
         let first_leaf = &[0x00, 0x00];
         let second_leaf = &[0x00, 0x0f];
@@ -1074,7 +1074,7 @@ mod tests {
 
     #[tokio::test]
     async fn key_value_start_at_key_not_in_trie() {
-        let mut merkle = _create_test_merkle();
+        let mut merkle = create_test_merkle();
 
         let first_key = 0x00;
         let intermediate = 0x80;
@@ -1116,7 +1116,7 @@ mod tests {
         let branch_path = 0x0f;
         let children = 0..=0x0f;
 
-        let mut merkle = _create_test_merkle();
+        let mut merkle = create_test_merkle();
 
         children.clone().for_each(|child_path| {
             let key = vec![sibling_path, child_path];
@@ -1159,7 +1159,7 @@ mod tests {
 
         let children = (0..=0xf).map(|val| (val << 4) + val); // 0x00, 0x11, ... 0xff
 
-        let mut merkle = _create_test_merkle();
+        let mut merkle = create_test_merkle();
 
         merkle.insert(&branch_key, branch_key.clone()).unwrap();
 
@@ -1201,7 +1201,7 @@ mod tests {
     async fn key_value_start_at_key_on_extension() {
         let missing = 0x0a;
         let children = (0..=0x0f).filter(|x| *x != missing);
-        let mut merkle = _create_test_merkle();
+        let mut merkle = create_test_merkle();
 
         let keys: Vec<_> = children
             .map(|child_path| {
@@ -1235,7 +1235,7 @@ mod tests {
         // path extension is 0x090
         let children = (0..=0x0f).map(|val| vec![shared_path, val]);
 
-        let mut merkle = _create_test_merkle();
+        let mut merkle = create_test_merkle();
 
         children.for_each(|key| {
             merkle.insert(&key, key.clone()).unwrap();
@@ -1254,7 +1254,7 @@ mod tests {
         // path extension is 0x090
         let children = (0..=0x0f).map(|val| vec![shared_path, val]);
 
-        let mut merkle = _create_test_merkle();
+        let mut merkle = create_test_merkle();
 
         let keys: Vec<_> = children
             .map(|key| {
@@ -1281,7 +1281,7 @@ mod tests {
         let children = (0..=0xf)
             .map(|val| (val << 4) + val) // 0x00, 0x11, ... 0xff
             .filter(|x| *x != missing);
-        let mut merkle = _create_test_merkle();
+        let mut merkle = create_test_merkle();
 
         let keys: Vec<_> = children
             .map(|child_path| {
@@ -1311,7 +1311,7 @@ mod tests {
     async fn key_value_start_at_key_greater_than_all_others_leaf() {
         let key = vec![0x00];
         let greater_key = vec![0xff];
-        let mut merkle = _create_test_merkle();
+        let mut merkle = create_test_merkle();
         merkle.insert(&key, key.clone()).unwrap();
         let stream = merkle._key_value_iter_from_key(greater_key.into_boxed_slice());
 
@@ -1324,7 +1324,7 @@ mod tests {
         let children = (0..=0xf)
             .map(|val| (val << 4) + val) // 0x00, 0x11, ... 0xff
             .filter(|x| *x != greatest);
-        let mut merkle = _create_test_merkle();
+        let mut merkle = create_test_merkle();
 
         let keys: Vec<_> = children
             .map(|child_path| {
