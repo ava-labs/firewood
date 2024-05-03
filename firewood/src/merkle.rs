@@ -72,22 +72,31 @@ impl<T: ReadLinearStore> DerefMut for Merkle<T> {
     }
 }
 
+// convert a set of nibbles into a printable string
+// panics if there is a non-nibble byte in the set
 fn nibbles_formatter<X: IntoIterator<Item = u8>>(nib: X) -> String {
     nib.into_iter()
-        .map(|c| *b"0123456789abcdef".get(c as usize).unwrap() as char)
+        .map(|c| {
+            *b"0123456789abcdef"
+                .get(c as usize)
+                .expect("requires nibbles") as char
+        })
         .collect::<String>()
 }
-
 
 macro_rules! write_attributes {
     ($writer:ident, $node:expr, $value:expr) => {
         if !$node.partial_path.0.is_empty() {
-            write!($writer, " pp={}", nibbles_formatter($node.partial_path.0.clone()))?;
+            write!(
+                $writer,
+                " pp={}",
+                nibbles_formatter($node.partial_path.0.clone())
+            )?;
         }
         if !$value.is_empty() {
             write!($writer, " val={}", String::from_utf8_lossy($value))?;
         }
-    }
+    };
 }
 
 impl<T: ReadLinearStore> Merkle<T> {
@@ -293,9 +302,7 @@ impl<T: ReadLinearStore> Merkle<T> {
         let empty_box = Box::from([]);
         match &**node {
             Node::Branch(b) => {
-                write!(
-                    writer,
-                    "  {addr}[label=\"@{addr}")?;
+                write!(writer, "  {addr}[label=\"@{addr}")?;
                 write_attributes!(writer, b, &b.value.as_ref().unwrap_or(&empty_box));
                 writeln!(writer, "\"]")?;
                 for (childidx, child) in b.children.iter().enumerate() {
@@ -303,8 +310,11 @@ impl<T: ReadLinearStore> Merkle<T> {
                         None => {}
                         Some(childaddr) => {
                             if !seen.insert(*childaddr) {
-                                // we have already seen this child, so 
-                                writeln!(writer, "  {addr} -> {childaddr}[label=\"{childidx} (dup)\" color=red]")?;
+                                // we have already seen this child, so
+                                writeln!(
+                                    writer,
+                                    "  {addr} -> {childaddr}[label=\"{childidx} (dup)\" color=red]"
+                                )?;
                             } else {
                                 writeln!(writer, "  {addr} -> {childaddr}[label=\"{childidx}\"]")?;
                                 self.dump_node(*childaddr, seen, writer)?;
@@ -314,9 +324,7 @@ impl<T: ReadLinearStore> Merkle<T> {
                 }
             }
             Node::Leaf(l) => {
-                write!(
-                    writer,
-                    "  {addr}[label=\"@{addr}")?;
+                write!(writer, "  {addr}[label=\"@{addr}")?;
                 write_attributes!(writer, l, &l.value);
                 writeln!(writer, "\" shape=rect]")?;
             }
@@ -392,13 +400,13 @@ impl<T: WriteLinearStore> Merkle<T> {
                 // The new root is at `key` and has the `value`.
                 new_root.value = Some(value.into_boxed_slice());
 
-                // This assertion must hold because if it didn't, that would imply that
+                // There must be something in unique_a because if it didn't, that would imply that
                 // the root's key is a prefix of `key` which can't be true because otherwise
                 // `traversal_path` would have contained the root.
-                assert!(overlap.unique_a.len() > 0);
+                let index = *overlap.unique_a.first().expect("must exist; see comments") as usize;
 
                 // The old root becomes a child of the new root.
-                new_root.children[overlap.unique_a[0] as usize] = Some(old_root_addr);
+                *new_root.children.get_mut(index).expect("nibble") = Some(old_root_addr);
 
                 let new_root = Node::Branch(Box::new(new_root));
                 let new_root_addr = self.create_node(&new_root)?;

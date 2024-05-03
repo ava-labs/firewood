@@ -118,7 +118,7 @@ impl<'a, T: ReadLinearStore> Stream for MerkleNodeStream<'a, T> {
                                     iter_stack.push(IterationNode::Visited {
                                         key: key.clone(),
                                         children_iter: Box::new(as_enumerated_children_iter(
-                                            &*branch,
+                                            branch,
                                         )),
                                     });
                                 }
@@ -218,7 +218,7 @@ fn get_iterator_intial_state<T: ReadLinearStore>(
                 iter_stack.push(IterationNode::Visited {
                     key: matched_key_nibbles.iter().copied().collect(),
                     children_iter: Box::new(
-                        as_enumerated_children_iter(&*branch)
+                        as_enumerated_children_iter(branch)
                             .filter(move |(pos, _)| *pos > next_unmatched_key_nibble),
                     ),
                 });
