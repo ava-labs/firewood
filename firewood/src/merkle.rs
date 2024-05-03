@@ -296,17 +296,17 @@ impl<T: ReadLinearStore> Merkle<T> {
                 write!(
                     writer,
                     "  {addr}[label=\"@{addr}")?;
-                write_attributes!(writer, b, &b.value.as_ref().clone().unwrap_or_else(|| &empty_box));
-                write!(writer, "\"]\n")?;
+                write_attributes!(writer, b, &b.value.as_ref().unwrap_or(&empty_box));
+                writeln!(writer, "\"]")?;
                 for (childidx, child) in b.children.iter().enumerate() {
                     match child {
                         None => {}
                         Some(childaddr) => {
                             if !seen.insert(*childaddr) {
                                 // we have already seen this child, so 
-                                write!(writer, "  {addr} -> {childaddr}[label=\"{childidx} (dup)\" color=red]\n")?;
+                                writeln!(writer, "  {addr} -> {childaddr}[label=\"{childidx} (dup)\" color=red]")?;
                             } else {
-                                write!(writer, "  {addr} -> {childaddr}[label=\"{childidx}\"]\n")?;
+                                writeln!(writer, "  {addr} -> {childaddr}[label=\"{childidx}\"]")?;
                                 self.dump_node(*childaddr, seen, writer)?;
                             }
                         }
@@ -318,16 +318,16 @@ impl<T: ReadLinearStore> Merkle<T> {
                     writer,
                     "  {addr}[label=\"@{addr}")?;
                 write_attributes!(writer, l, &l.value);
-                write!(writer, "\" shape=rect]\n")?;
+                writeln!(writer, "\" shape=rect]")?;
             }
         };
         Ok(())
     }
     pub fn dump(&self) -> Result<String, std::io::Error> {
         let mut result = vec![];
-        write!(result, "digraph Merkle {{\n")?;
+        writeln!(result, "digraph Merkle {{")?;
         if let Some(addr) = self.root_address() {
-            write!(result, " root -> {addr}\n")?;
+            writeln!(result, " root -> {addr}")?;
             let mut seen = HashSet::new();
             self.dump_node(addr, &mut seen, &mut result)?;
         }

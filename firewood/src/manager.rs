@@ -17,8 +17,8 @@ use storage::Historical;
 use storage::ProposedImmutable;
 use storage::{LinearStoreParent, ReadLinearStore};
 
-#[derive(Debug, TypedBuilder)]
-pub(super) struct RevisionManagerConfig {
+#[derive(Clone, Debug, TypedBuilder)]
+pub struct RevisionManagerConfig {
     /// The number of historical revisions to keep in memory.
     #[builder(default = 64)]
     max_revisions: usize,
@@ -36,10 +36,14 @@ pub(crate) struct RevisionManager {
 }
 
 impl RevisionManager {
-    fn new(filename: PathBuf, config: RevisionManagerConfig) -> Result<Self, Error> {
+    pub fn new(
+        filename: PathBuf,
+        truncate: bool,
+        config: RevisionManagerConfig,
+    ) -> Result<Self, Error> {
         Ok(Self {
             max_revisions: config.max_revisions,
-            filebacked: FileBacked::new(filename)?,
+            filebacked: FileBacked::new(filename, truncate)?,
             historical: Default::default(),
             proposals: Default::default(),
             committing_proposals: Default::default(),

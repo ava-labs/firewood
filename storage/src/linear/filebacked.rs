@@ -25,12 +25,12 @@ pub struct FileBacked {
 
 impl FileBacked {
     /// Create or open a file at a given path
-    pub fn new(path: PathBuf) -> Result<Self, Error> {
+    pub fn new(path: PathBuf, truncate: bool) -> Result<Self, Error> {
         let fd = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
-            .truncate(false)
+            .truncate(truncate)
             .open(path)?;
 
         Ok(Self { fd: Mutex::new(fd) })

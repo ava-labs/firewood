@@ -93,13 +93,13 @@ pub trait WriteLinearStore: ReadLinearStore {
 /// The parent of a [ReadLinearStore]
 #[derive(Debug, Clone)]
 pub enum LinearStoreParent {
-    ///
+    /// The parent is on disk
     FileBacked(Arc<FileBacked>),
 
-    ///
+    /// The parent is a proposal
     Proposed(Arc<ProposedImmutable>),
 
-    ///
+    /// The parent is a historical revision
     Historical(Arc<historical::Historical>),
 
     #[cfg(test)]
