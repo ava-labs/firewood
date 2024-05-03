@@ -259,10 +259,7 @@ impl Db {
             cfg.truncate,
             cfg.manager.clone(),
         )?;
-        let db = Self {
-            metrics,
-            manager,
-        };
+        let db = Self { metrics, manager };
         Ok(db)
     }
 
