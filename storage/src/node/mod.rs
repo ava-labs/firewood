@@ -26,6 +26,14 @@ pub enum Node {
 }
 
 impl Node {
+    /// Returns the partial path of the node.
+    pub fn partial_path(&self) -> &Path {
+        match self {
+            Node::Branch(b) => &b.partial_path,
+            Node::Leaf(l) => &l.partial_path,
+        }
+    }
+
     /// Returns a new Arc<Node> which is the same as `self` but with the given `partial_path`.
     pub fn new_with_partial_path(self: Arc<Node>, partial_path: Path) -> Arc<Node> {
         match self.as_ref() {
