@@ -8,6 +8,7 @@ use crate::stream::{MerkleKeyValueStream, NodeWithKey, PathIterator};
 use crate::trie_hash::TrieHash;
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
+use std::collections::HashSet;
 use std::future::ready;
 use std::io::Write;
 use storage::ReadLinearStore;
@@ -68,6 +69,24 @@ impl<T: ReadLinearStore> Deref for Merkle<T> {
 impl<T: ReadLinearStore> DerefMut for Merkle<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
+    }
+}
+
+fn nibbles_formatter<X: IntoIterator<Item = u8>>(nib: X) -> String {
+    nib.into_iter()
+        .map(|c| *b"0123456789abcdef".get(c as usize).unwrap() as char)
+        .collect::<String>()
+}
+
+
+macro_rules! write_attributes {
+    ($writer:ident, $node:expr, $value:expr) => {
+        if !$node.partial_path.0.is_empty() {
+            write!($writer, " pp={}", nibbles_formatter($node.partial_path.0.clone()))?;
+        }
+        if !$value.is_empty() {
+            write!($writer, " val={}", String::from_utf8_lossy($value))?;
+        }
     }
 }
 
@@ -264,40 +283,32 @@ impl<T: ReadLinearStore> Merkle<T> {
         }))
     }
 
-    fn nibbles_formatter<X: IntoIterator<Item = u8>>(nib: X) -> String {
-        nib.into_iter()
-            .map(|c| *b"0123456789abcdef".get(c as usize).unwrap() as char)
-            .collect::<String>()
-    }
-
     pub fn dump_node(
         &self,
         addr: LinearAddress,
-        indent: usize,
+        seen: &mut HashSet<LinearAddress>,
         writer: &mut dyn Write,
     ) -> Result<(), std::io::Error> {
         let node = self.read_node(addr)?;
-        if indent > 4 {
-            // FIXME: specify a maximum depth
-            return Ok(());
-        }
+        let empty_box = Box::from([]);
         match &**node {
             Node::Branch(b) => {
                 write!(
                     writer,
-                    "  {addr}[label=\"branch@{addr} pp={}",
-                    Self::nibbles_formatter(b.partial_path.0.clone())
-                )?;
-                if let Some(val) = &b.value {
-                    write!(writer, " val={}", String::from_utf8_lossy(val))?;
-                }
-                write!(writer, "\"]\n")?;
+                    "  {addr}[label=\"@{addr}")?;
+                write_attributes!(writer, b, &b.value.as_ref().unwrap_or(&empty_box));
+                writeln!(writer, "\"]")?;
                 for (childidx, child) in b.children.iter().enumerate() {
                     match child {
                         None => {}
                         Some(childaddr) => {
-                            write!(writer, "  {addr} -> {childaddr}[label=\"{childidx}\"]\n")?;
-                            self.dump_node(*childaddr, indent + 1, writer)?;
+                            if !seen.insert(*childaddr) {
+                                // we have already seen this child, so 
+                                writeln!(writer, "  {addr} -> {childaddr}[label=\"{childidx} (dup)\" color=red]")?;
+                            } else {
+                                writeln!(writer, "  {addr} -> {childaddr}[label=\"{childidx}\"]")?;
+                                self.dump_node(*childaddr, seen, writer)?;
+                            }
                         }
                     }
                 }
@@ -305,27 +316,20 @@ impl<T: ReadLinearStore> Merkle<T> {
             Node::Leaf(l) => {
                 write!(
                     writer,
-                    "  {addr}[label=\"leaf@{addr} pp={}",
-                    Self::nibbles_formatter(l.partial_path.0.clone().into_iter())
-                )?;
-                if !l.value.is_empty() {
-                    write!(
-                        writer,
-                        " val={}",
-                        String::from_utf8_lossy(l.value.as_slice())
-                    )?;
-                }
-                write!(writer, "\"]\n")?;
+                    "  {addr}[label=\"@{addr}")?;
+                write_attributes!(writer, l, &l.value);
+                writeln!(writer, "\" shape=rect]")?;
             }
         };
         Ok(())
     }
     pub fn dump(&self) -> Result<String, std::io::Error> {
         let mut result = vec![];
-        write!(result, "digraph Merkle {{\n")?;
+        writeln!(result, "digraph Merkle {{")?;
         if let Some(addr) = self.root_address() {
-            write!(result, " root -> {addr}\n")?;
-            self.dump_node(addr, 0, &mut result)?;
+            writeln!(result, " root -> {addr}")?;
+            let mut seen = HashSet::new();
+            self.dump_node(addr, &mut seen, &mut result)?;
         }
         write!(result, "}}")?;
 

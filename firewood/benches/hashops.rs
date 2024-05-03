@@ -166,7 +166,7 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
 
                         #[allow(clippy::unwrap_used)]
                         let db =
-                            firewood::db::Db::new(db_path, &cfg.clone().truncate(true).build())
+                            firewood::db::Db::new(db_path, cfg.clone().truncate(true).build())
                                 .await
                                 .unwrap();
 

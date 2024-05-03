@@ -36,7 +36,7 @@ impl TestDbCreator {
         });
         let mut creator = self.clone();
         creator.path = path.clone().into();
-        let db = Db::new(&path, &self.cfg).await.unwrap();
+        let db = Db::new(&path, self.cfg).await.unwrap();
         TestDb {
             creator,
             db,

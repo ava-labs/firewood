@@ -12,7 +12,7 @@ use storage::ProposedMutable;
 use storage::ReadLinearStore;
 use storage::{Historical as HistoricalStore, WriteLinearStore};
 
-use crate::manager::RevisionManager;
+use crate::manager::{RevisionManager, RevisionManagerConfig};
 use metered::metered;
 use std::error::Error;
 use std::fmt;
@@ -211,13 +211,14 @@ pub struct DbConfig {
     /// existing contents will be lost.
     #[builder(default = false)]
     pub truncate: bool,
+    #[builder(default = RevisionManagerConfig::builder().build())]
+    pub manager: RevisionManagerConfig,
 }
 
 /// TODO danlaine: implement
 #[derive(Debug)]
 pub struct Db {
     metrics: Arc<DbMetrics>,
-    _cfg: DbConfig,
     manager: RevisionManager,
 }
 
@@ -251,9 +252,18 @@ impl api::Db for Db {
 
 #[metered(registry = DbMetrics, visibility = pub)]
 impl Db {
-    pub async fn new<P: AsRef<Path>>(_db_path: P, _cfg: &DbConfig) -> Result<Self, api::Error> {
-        // TODO danlaine: Do intialization here and return Ok(Self { ... })
-        todo!()
+    pub async fn new<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> Result<Self, api::Error> {
+        let metrics = DbMetrics::default().into();
+        let manager = RevisionManager::new(
+            db_path.as_ref().to_path_buf(),
+            cfg.truncate,
+            cfg.manager.clone(),
+        )?;
+        let db = Self {
+            metrics,
+            manager,
+        };
+        Ok(db)
     }
 
     /// Create a proposal.

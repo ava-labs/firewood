@@ -32,7 +32,7 @@ impl Node {
             Node::Branch(b) => Arc::new(Node::Branch(Box::new(BranchNode {
                 partial_path,
                 value: b.value.clone(),
-                children: b.children.clone(),
+                children: b.children,
             }))),
             Node::Leaf(l) => Arc::new(Node::Leaf(LeafNode {
                 partial_path,

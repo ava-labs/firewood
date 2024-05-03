@@ -36,7 +36,7 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     log::debug!("dump database {:?}", opts);
     let cfg = DbConfig::builder().truncate(false);
 
-    let db = Db::new(opts.db.clone(), &cfg.build()).await?;
+    let db = Db::new(opts.db.clone(), cfg.build()).await?;
     let latest_hash = db.root_hash().await?;
     let latest_rev = db.revision(latest_hash).await?;
     let start_key = opts.start_key.clone().unwrap_or(Box::new([]));

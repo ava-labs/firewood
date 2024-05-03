@@ -53,7 +53,7 @@ impl Database {
         // see https://github.com/ava-labs/firewood/issues/418
         let cfg = DbConfig::builder().truncate(true).build();
 
-        let db = Db::new(path, &cfg).await?;
+        let db = Db::new(path, cfg).await?;
 
         Ok(Self {
             db,
