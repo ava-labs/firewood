@@ -181,7 +181,8 @@ fn get_iterator_intial_state<T: ReadLinearStore>(
         return Ok(NodeStreamState::Iterating { iter_stack: vec![] });
     };
 
-    // Invariant: `matched_key_nibbles` is the key before the node at `addr`.
+    // Invariant: `matched_key_nibbles` is the path before `node`'s
+    // partial path at the start of each loop iteration.
     let mut matched_key_nibbles = vec![];
 
     let mut unmatched_key_nibbles = Nibbles::new(key).into_iter();
@@ -202,6 +203,16 @@ fn get_iterator_intial_state<T: ReadLinearStore>(
 
         match comparison {
             Ordering::Less => {
+                // `node` is before `key`. It shouldn't be visited
+                // and neither should its descendants.
+                return Ok(NodeStreamState::Iterating { iter_stack });
+            }
+            Ordering::Greater => {
+                // `node` is after `key`. Visit it first.
+                iter_stack.push(IterationNode::Unvisited {
+                    key: Box::from(matched_key_nibbles),
+                    node: node.clone(),
+                });
                 return Ok(NodeStreamState::Iterating { iter_stack });
             }
             Ordering::Equal => match &**node {
@@ -210,7 +221,6 @@ fn get_iterator_intial_state<T: ReadLinearStore>(
                         key: matched_key_nibbles.clone().into_boxed_slice(),
                         node: node.clone(),
                     });
-
                     return Ok(NodeStreamState::Iterating { iter_stack });
                 }
                 Node::Branch(branch) => {
@@ -245,15 +255,6 @@ fn get_iterator_intial_state<T: ReadLinearStore>(
                     matched_key_nibbles.push(next_unmatched_key_nibble);
                 }
             },
-            Ordering::Greater => {
-                // `node` is after `key`.
-                // Start iterating from here.
-                iter_stack.push(IterationNode::Unvisited {
-                    key: Box::from(matched_key_nibbles),
-                    node: node.clone(),
-                });
-                return Ok(NodeStreamState::Iterating { iter_stack });
-            }
         }
     }
 }
