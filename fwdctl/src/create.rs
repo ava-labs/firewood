@@ -50,17 +50,15 @@ pub struct Options {
     max_revisions: u32,
 }
 
-pub(super) const fn new(opts: &Options) -> DbConfig {
-    DbConfig {
-        truncate: opts.truncate,
-    }
+pub(super) fn new(opts: &Options) -> DbConfig {
+    DbConfig::builder().truncate(opts.truncate).build()
 }
 
 pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     let db_config = new(opts);
     log::debug!("database configuration parameters: \n{:?}\n", db_config);
 
-    Db::new(opts.name.clone(), &db_config).await?;
+    Db::new(opts.name.clone(), db_config).await?;
     println!("created firewood database in {:?}", opts.name);
     Ok(())
 }

@@ -118,7 +118,7 @@ impl<'a, T: ReadLinearStore> Stream for MerkleNodeStream<'a, T> {
                                     iter_stack.push(IterationNode::Visited {
                                         key: key.clone(),
                                         children_iter: Box::new(as_enumerated_children_iter(
-                                            &*branch,
+                                            branch,
                                         )),
                                     });
                                 }
@@ -172,8 +172,8 @@ impl<'a, T: ReadLinearStore> Stream for MerkleNodeStream<'a, T> {
 }
 
 /// Returns the initial state for an iterator over the given `merkle` which starts at `key`.
-fn get_iterator_intial_state<'a, T: ReadLinearStore>(
-    merkle: &'a Merkle<T>,
+fn get_iterator_intial_state<T: ReadLinearStore>(
+    merkle: &Merkle<T>,
     key: &[u8],
 ) -> Result<NodeStreamState, api::Error> {
     let Some(mut addr) = merkle.root_address() else {

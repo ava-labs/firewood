@@ -141,7 +141,7 @@ async fn create_db_issue_proof() {
         .into();
     tmpdir.push("/tmp/test_db_proof");
 
-    let db = firewood::db::Db::new(tmpdir, &cfg.truncate(true).build())
+    let db = firewood::db::Db::new(tmpdir, cfg.truncate(true).build())
         .await
         .unwrap();
 

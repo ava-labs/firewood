@@ -165,10 +165,9 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
                         let cfg = DbConfig::builder();
 
                         #[allow(clippy::unwrap_used)]
-                        let db =
-                            firewood::db::Db::new(db_path, &cfg.clone().truncate(true).build())
-                                .await
-                                .unwrap();
+                        let db = firewood::db::Db::new(db_path, cfg.clone().truncate(true).build())
+                            .await
+                            .unwrap();
 
                         #[allow(clippy::unwrap_used)]
                         db.propose(batch_ops).await.unwrap().commit().await.unwrap()

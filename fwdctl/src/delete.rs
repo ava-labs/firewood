@@ -28,7 +28,7 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     log::debug!("deleting key {:?}", opts);
     let cfg = DbConfig::builder().truncate(false);
 
-    let db = Db::new(opts.db.clone(), &cfg.build()).await?;
+    let db = Db::new(opts.db.clone(), cfg.build()).await?;
 
     let batch: Vec<BatchOp<String, String>> = vec![BatchOp::Delete {
         key: opts.key.clone(),
