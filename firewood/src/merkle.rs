@@ -156,18 +156,28 @@ impl<T: ReadLinearStore> Merkle<T> {
         // Ok(Proof(proofs))
     }
 
-    pub fn get(&self, _key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
-        todo!()
-        // TODO danlaine use or remove the code below
-        // if root_addr.is_null() {
-        //     todo!()
-        //         return Ok(None);
-        //     }
+    pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
+        let path_iter = self.path_iter(key)?;
 
-        //     let root_node = self.get_node(root_addr)?;
-        //     let node_ref = self.get_node_by_key(root_node, key)?;
+        let Some(last_node) = path_iter.last() else {
+            return Ok(None);
+        };
 
-        //     Ok(node_ref.map(Ref))
+        let last_node = last_node?;
+
+        if last_node
+            .key_nibbles
+            .iter()
+            .copied()
+            .eq(Nibbles::new(key).into_iter())
+        {
+            match &*last_node.node {
+                Node::Branch(branch) => Ok(branch.value.clone()),
+                Node::Leaf(leaf) => Ok(Some(leaf.value.clone().into_boxed_slice())),
+            }
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn verify_proof<N: AsRef<[u8]> + Send>(
