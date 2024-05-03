@@ -176,120 +176,85 @@ fn get_iterator_intial_state<'a, T: ReadLinearStore>(
     merkle: &'a Merkle<T>,
     key: &[u8],
 ) -> Result<NodeStreamState, api::Error> {
-    let Some(root_addr) = merkle.root_address() else {
+    let Some(mut addr) = merkle.root_address() else {
         // This merkle is empty.
         return Ok(NodeStreamState::Iterating { iter_stack: vec![] });
     };
 
-    // Invariant: `node`'s key is a prefix of `key`.
-    let mut node = merkle.read_node(root_addr)?;
-
-    // Invariant: `matched_key_nibbles` is the key of `node` at the start
-    // of each loop iteration.
-    // TODO populate `matched_key_nibbles` to make this invariant true
-    // before the first loop
+    // Invariant: `matched_key_nibbles` is the key before the node at `addr`.
     let mut matched_key_nibbles = vec![];
 
-    // TODO danlaine: update the code below to reflect the fact that Nibbles no longer
-    // has a leading zero.
     let mut unmatched_key_nibbles = Nibbles::new(key).into_iter();
 
     let mut iter_stack: Vec<IterationNode> = vec![];
 
     loop {
-        // `next_unmatched_key_nibble` is the first nibble after `matched_key_nibbles`.
-        let Some(next_unmatched_key_nibble) = unmatched_key_nibbles.next() else {
-            // The invariant tells us `node` is a prefix of `matched_key_nibbles`.
-            // There is no more `unmatched_key_nibbles` left so `node` must be at `matched_key_nibbles`.
-            // Visit and return `node` first.
-            iter_stack.push(IterationNode::Unvisited {
-                key: Box::from(matched_key_nibbles),
-                node: node.clone(),
-            });
+        let node = merkle.read_node(addr)?;
 
-            return Ok(NodeStreamState::Iterating { iter_stack });
-        };
+        // See if `node`'s key is a prefix of `key`.
+        let partial_path = node.partial_path();
 
-        match &**node {
-            Node::Branch(branch) => {
-                // The next nibble in `key` is `next_unmatched_key_nibble`,
-                // so all children of `node` with a position > `next_unmatched_key_nibble`
-                // should be visited since they are after `key`.
-                iter_stack.push(IterationNode::Visited {
-                    key: matched_key_nibbles.iter().copied().collect(),
-                    children_iter: Box::new(
-                        as_enumerated_children_iter(&*branch)
-                            .filter(move |(pos, _)| *pos > next_unmatched_key_nibble),
-                    ),
-                });
+        let (comparison, new_unmatched_key_nibbles) =
+            compare_partial_path(partial_path.iter(), unmatched_key_nibbles);
+        unmatched_key_nibbles = new_unmatched_key_nibbles;
 
-                // Figure out if the child at `next_unmatched_key_nibble` is a prefix of `key`.
-                // (i.e. if we should run this loop body again)
-                #[allow(clippy::indexing_slicing)]
-                let Some(child_addr) = branch.children[next_unmatched_key_nibble as usize] else {
-                    // There is no child at `next_unmatched_key_nibble`.
-                    // We'll visit `node`'s first child at index > `next_unmatched_key_nibble`
-                    // first (if it exists).
+        matched_key_nibbles.extend(partial_path.iter());
+
+        match comparison {
+            Ordering::Less => {
+                return Ok(NodeStreamState::Iterating { iter_stack });
+            }
+            Ordering::Equal => match &**node {
+                Node::Leaf(_) => {
+                    iter_stack.push(IterationNode::Unvisited {
+                        key: matched_key_nibbles.clone().into_boxed_slice(),
+                        node: node.clone(),
+                    });
+
                     return Ok(NodeStreamState::Iterating { iter_stack });
-                };
-
-                matched_key_nibbles.push(next_unmatched_key_nibble);
-
-                let child = merkle.read_node(child_addr)?;
-
-                let partial_key = match &**child {
-                    Node::Branch(branch) => &branch.partial_path,
-                    Node::Leaf(leaf) => &leaf.partial_path,
-                };
-
-                let (comparison, new_unmatched_key_nibbles) =
-                    compare_partial_path(partial_key.iter(), unmatched_key_nibbles);
-                unmatched_key_nibbles = new_unmatched_key_nibbles;
-
-                match comparison {
-                    Ordering::Less => {
-                        // `child` is before `key`.
-                        return Ok(NodeStreamState::Iterating { iter_stack });
-                    }
-                    Ordering::Equal => {
-                        // `child` is a prefix of `key`.
-                        matched_key_nibbles.extend(partial_key.iter().copied());
-                        node = child;
-                    }
-                    Ordering::Greater => {
-                        // `child` is after `key`.
-                        let key = matched_key_nibbles
-                            .iter()
-                            .chain(partial_key.iter())
-                            .copied()
-                            .collect();
+                }
+                Node::Branch(branch) => {
+                    let Some(next_unmatched_key_nibble) = unmatched_key_nibbles.next() else {
+                        // There is no more key to traverse.
                         iter_stack.push(IterationNode::Unvisited {
-                            key,
-                            node: child.clone(),
+                            key: matched_key_nibbles.clone().into_boxed_slice(),
+                            node: node.clone(),
                         });
 
                         return Ok(NodeStreamState::Iterating { iter_stack });
-                    }
-                }
-            }
-            Node::Leaf(leaf) => {
-                if compare_partial_path(leaf.partial_path.iter(), unmatched_key_nibbles).0
-                    == Ordering::Greater
-                {
-                    // `child` is after `key`.
-                    let key = matched_key_nibbles
-                        .iter()
-                        .chain(leaf.partial_path.iter())
-                        .copied()
-                        .collect();
-                    iter_stack.push(IterationNode::Unvisited {
-                        key,
-                        node: node.clone(),
+                    };
+
+                    // There is no child at `next_unmatched_key_nibble`.
+                    // We'll visit `node`'s first child at index > `next_unmatched_key_nibble`
+                    // first (if it exists).
+                    iter_stack.push(IterationNode::Visited {
+                        key: matched_key_nibbles.clone().into_boxed_slice(),
+                        children_iter: Box::new(
+                            as_enumerated_children_iter(&*branch)
+                                .filter(move |(pos, _)| *pos > next_unmatched_key_nibble),
+                        ),
                     });
+
+                    let Some(child_addr) = branch.children[next_unmatched_key_nibble as usize]
+                    else {
+                        return Ok(NodeStreamState::Iterating { iter_stack });
+                    };
+
+                    addr = child_addr;
+
+                    matched_key_nibbles.push(next_unmatched_key_nibble);
                 }
+            },
+            Ordering::Greater => {
+                // `node` is after `key`.
+                // Start iterating from here.
+                iter_stack.push(IterationNode::Unvisited {
+                    key: Box::from(matched_key_nibbles),
+                    node: node.clone(),
+                });
                 return Ok(NodeStreamState::Iterating { iter_stack });
             }
-        };
+        }
     }
 }
 
