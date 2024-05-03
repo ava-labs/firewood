@@ -264,21 +264,70 @@ impl<T: ReadLinearStore> Merkle<T> {
         }))
     }
 
+    fn nibbles_formatter<X: IntoIterator<Item = u8>>(nib: X) -> String {
+        nib.into_iter()
+            .map(|c| *b"0123456789abcdef".get(c as usize).unwrap() as char)
+            .collect::<String>()
+    }
+
     pub fn dump_node(
         &self,
         addr: LinearAddress,
+        indent: usize,
         writer: &mut dyn Write,
     ) -> Result<(), std::io::Error> {
-        write!(writer, "{addr} ")?;
-        let _node = self.read_node(addr)?;
-        todo!()
+        let node = self.read_node(addr)?;
+        if indent > 4 {
+            // FIXME: specify a maximum depth
+            return Ok(());
+        }
+        match &**node {
+            Node::Branch(b) => {
+                write!(
+                    writer,
+                    "  {addr}[label=\"branch@{addr} pp={}",
+                    Self::nibbles_formatter(b.partial_path.0.clone())
+                )?;
+                if let Some(val) = &b.value {
+                    write!(writer, " val={}", String::from_utf8_lossy(val))?;
+                }
+                write!(writer, "\"]\n")?;
+                for (childidx, child) in b.children.iter().enumerate() {
+                    match child {
+                        None => {}
+                        Some(childaddr) => {
+                            write!(writer, "  {addr} -> {childaddr}[label=\"{childidx}\"]\n")?;
+                            self.dump_node(*childaddr, indent + 1, writer)?;
+                        }
+                    }
+                }
+            }
+            Node::Leaf(l) => {
+                write!(
+                    writer,
+                    "  {addr}[label=\"leaf@{addr} pp={}",
+                    Self::nibbles_formatter(l.partial_path.0.clone().into_iter())
+                )?;
+                if !l.value.is_empty() {
+                    write!(
+                        writer,
+                        " val={}",
+                        String::from_utf8_lossy(l.value.as_slice())
+                    )?;
+                }
+                write!(writer, "\"]\n")?;
+            }
+        };
+        Ok(())
     }
     pub fn dump(&self) -> Result<String, std::io::Error> {
         let mut result = vec![];
-        match self.root_address() {
-            Some(addr) => self.dump_node(addr, &mut result)?,
-            None => write!(&mut result, "[empty merkle]")?,
+        write!(result, "digraph Merkle {{\n")?;
+        if let Some(addr) = self.root_address() {
+            write!(result, " root -> {addr}\n")?;
+            self.dump_node(addr, 0, &mut result)?;
         }
+        write!(result, "}}")?;
 
         Ok(String::from_utf8_lossy(&result).to_string())
     }
@@ -1504,6 +1553,7 @@ mod test {
     use rand::rngs::StdRng;
     use rand::{thread_rng, Rng, SeedableRng as _};
     use std::collections::HashMap;
+
     use storage::MemStore;
 
     fn merkle_build_test<K: AsRef<[u8]>, V: AsRef<[u8]>>(
@@ -1512,6 +1562,7 @@ mod test {
         let mut merkle = Merkle::new(HashedNodeStore::initialize(MemStore::new(vec![])).unwrap());
         for (k, v) in items.iter() {
             merkle.insert(k.as_ref(), v.as_ref().to_vec())?;
+            println!("{}", merkle.dump()?);
         }
 
         Ok(merkle)
@@ -1529,8 +1580,7 @@ mod test {
         ];
         let merkle = merkle_build_test(items)?;
 
-        merkle.dump()?;
-
+        merkle.dump().unwrap();
         Ok(())
     }
 
