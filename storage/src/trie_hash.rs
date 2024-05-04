@@ -5,8 +5,8 @@ use std::fmt::{self, Debug};
 
 use sha3::digest::{generic_array::GenericArray, typenum};
 
-pub const TRIE_HASH_LEN: usize = 32;
-
+/// A hash value inside a merkle trie
+/// We use the same type as returned by sha3 here to avoid copies
 #[derive(PartialEq, Eq, Clone)]
 pub struct TrieHash(GenericArray<u8, typenum::U32>);
 
@@ -24,7 +24,7 @@ impl Debug for TrieHash {
 }
 
 impl From<[u8; 32]> for TrieHash {
-    fn from(value: [u8; 32]) -> Self {
+    fn from(value: [u8; Self::len()]) -> Self {
         TrieHash(value.into())
     }
 }
@@ -32,5 +32,12 @@ impl From<[u8; 32]> for TrieHash {
 impl From<GenericArray<u8, typenum::U32>> for TrieHash {
     fn from(value: GenericArray<u8, typenum::U32>) -> Self {
         TrieHash(value)
+    }
+}
+
+impl TrieHash {
+    /// Return the length of a TrieHash
+    const fn len() -> usize {
+        std::mem::size_of::<TrieHash>()
     }
 }

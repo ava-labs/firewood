@@ -16,6 +16,7 @@
 mod linear;
 mod node;
 mod nodestore;
+mod trie_hash;
 
 // re-export these so callers don't need to know where they are
 pub use linear::{LinearStoreParent, ReadLinearStore, WriteLinearStore};
@@ -26,3 +27,5 @@ pub use linear::proposed::{ProposedImmutable, ProposedMutable};
 pub use linear::{
     filebacked::FileBacked, historical::Historical, memory::MemStore, proposed::Proposed,
 };
+
+pub use trie_hash::TrieHash;

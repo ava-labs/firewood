@@ -5,7 +5,6 @@ use storage::Path;
 use crate::hashednode::HashedNodeStore;
 use crate::proof::{Proof, ProofError};
 use crate::stream::{MerkleKeyValueStream, NodeWithKey, PathIterator};
-use crate::trie_hash::{TrieHash, TRIE_HASH_LEN};
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
 use std::collections::HashSet;
@@ -13,6 +12,7 @@ use std::future::ready;
 use std::io::Write;
 use std::sync::OnceLock;
 use storage::ReadLinearStore;
+use storage::TrieHash;
 use storage::{BranchNode, LeafNode, Node};
 use storage::{LinearAddress, UpdateError, WriteLinearStore};
 
@@ -120,7 +120,7 @@ impl<T: ReadLinearStore> Merkle<T> {
         let root = self.root_address();
         match root {
             None => Ok(EMPTY_HASH
-                .get_or_init(|| TrieHash::from([0u8; TRIE_HASH_LEN]))
+                .get_or_init(|| TrieHash::from([0u8; std::mem::size_of::<TrieHash>()]))
                 .clone()),
             Some(root) => {
                 // TODO: We might be able to get the hash without reading the node...

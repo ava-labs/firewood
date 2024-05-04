@@ -9,8 +9,8 @@ use std::io::Error;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-use crate::trie_hash::TrieHash;
 use storage::Node;
+use storage::TrieHash;
 
 use storage::{LinearAddress, NodeStore};
 use storage::{ReadLinearStore, WriteLinearStore};

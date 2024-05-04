@@ -186,7 +186,6 @@ pub mod manager;
 pub mod merkle;
 pub mod proof;
 pub mod stream;
-pub mod trie_hash;
 
 pub mod nibbles;
 
