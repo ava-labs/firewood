@@ -3,14 +3,16 @@
 
 use std::fmt::{self, Debug};
 
+use sha3::digest::{generic_array::GenericArray, typenum};
+
 pub const TRIE_HASH_LEN: usize = 32;
 
-#[derive(PartialEq, Eq, Clone, Copy)]
-pub struct TrieHash(pub [u8; TRIE_HASH_LEN]);
+#[derive(PartialEq, Eq, Clone)]
+pub struct TrieHash(GenericArray<u8, typenum::U32>);
 
 impl std::ops::Deref for TrieHash {
-    type Target = [u8; TRIE_HASH_LEN];
-    fn deref(&self) -> &[u8; TRIE_HASH_LEN] {
+    type Target = GenericArray<u8, typenum::U32>;
+    fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
@@ -18,5 +20,17 @@ impl std::ops::Deref for TrieHash {
 impl Debug for TrieHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         write!(f, "{}", hex::encode(self.0))
+    }
+}
+
+impl From<[u8; 32]> for TrieHash {
+    fn from(value: [u8; 32]) -> Self {
+        TrieHash(value.into())
+    }
+}
+
+impl From<GenericArray<u8, typenum::U32>> for TrieHash {
+    fn from(value: GenericArray<u8, typenum::U32>) -> Self {
+        TrieHash(value)
     }
 }

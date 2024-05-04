@@ -5,12 +5,13 @@ use storage::Path;
 use crate::hashednode::HashedNodeStore;
 use crate::proof::{Proof, ProofError};
 use crate::stream::{MerkleKeyValueStream, NodeWithKey, PathIterator};
-use crate::trie_hash::TrieHash;
+use crate::trie_hash::{TrieHash, TRIE_HASH_LEN};
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
 use std::collections::HashSet;
 use std::future::ready;
 use std::io::Write;
+use std::sync::OnceLock;
 use storage::ReadLinearStore;
 use storage::{BranchNode, LeafNode, Node};
 use storage::{LinearAddress, UpdateError, WriteLinearStore};
@@ -54,9 +55,7 @@ pub enum MerkleError {
 #[derive(Debug)]
 pub struct Merkle<T: ReadLinearStore>(HashedNodeStore<T>);
 
-impl<T: ReadLinearStore> Merkle<T> {
-    const EMPTY_HASH: TrieHash = TrieHash([0; 32]);
-}
+static EMPTY_HASH: OnceLock<TrieHash> = OnceLock::new();
 
 impl<T: ReadLinearStore> Deref for Merkle<T> {
     type Target = HashedNodeStore<T>;
@@ -96,7 +95,7 @@ macro_rules! write_attributes {
         #[allow(clippy::unnecessary_to_owned)]
         if !$value.is_empty() {
             match String::from_utf8($value) {
-                Ok(string) if string.chars().all(char::is_alphanumeric) =>{
+                Ok(string) if string.chars().all(char::is_alphanumeric) => {
                     write!($writer, " val={}", string)?
                 }
                 _ => {
@@ -120,7 +119,9 @@ impl<T: ReadLinearStore> Merkle<T> {
     pub fn root_hash(&mut self) -> Result<TrieHash, std::io::Error> {
         let root = self.root_address();
         match root {
-            None => Ok(Self::EMPTY_HASH),
+            None => Ok(EMPTY_HASH
+                .get_or_init(|| TrieHash::from([0u8; TRIE_HASH_LEN]))
+                .clone()),
             Some(root) => {
                 // TODO: We might be able to get the hash without reading the node...
                 let root_node = self.read_node(root)?;
@@ -1902,7 +1903,7 @@ mod test {
 
                 let h0 = merkle.root_hash()?;
 
-                if h[..] != *h0 {
+                if TrieHash::from(h) != h0 {
                     println!("{} != {}", hex::encode(h), hex::encode(*h0));
                 }
             }

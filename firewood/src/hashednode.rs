@@ -58,7 +58,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                 hasher.update(&leaf.value);
             }
         }
-        Ok(TrieHash(hasher.finalize().into()))
+        Ok(hasher.finalize().into())
     }
 }
 
@@ -89,10 +89,10 @@ impl HashedNode {
         match value {
             None | Some(None) => {
                 let hash = store.hash_internal(&self.0)?;
-                store.hashes.insert(addr, Some(hash));
+                store.hashes.insert(addr, Some(hash.clone()));
                 Ok(hash)
             }
-            Some(Some(hash)) => Ok(*hash),
+            Some(Some(hash)) => Ok(hash.clone()),
         }
     }
 }
