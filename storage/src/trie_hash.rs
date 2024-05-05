@@ -3,7 +3,10 @@
 
 use std::fmt::{self, Debug};
 
-use serde::{de::{SeqAccess, Visitor}, Deserialize, Serialize};
+use serde::{
+    de::{SeqAccess, Visitor},
+    Deserialize, Serialize,
+};
 use sha3::digest::{generic_array::GenericArray, typenum};
 
 /// A hash value inside a merkle trie
@@ -52,7 +55,8 @@ impl TrieHash {
 impl Serialize for TrieHash {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer {
+        S: serde::Serializer,
+    {
         serializer.serialize_bytes(&self.0)
     }
 }
@@ -60,7 +64,8 @@ impl Serialize for TrieHash {
 impl<'de> Deserialize<'de> for TrieHash {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
-        D: serde::Deserializer<'de> {
+        D: serde::Deserializer<'de>,
+    {
         deserializer.deserialize_bytes(TrieVisitor)
     }
 }
@@ -84,10 +89,9 @@ impl<'de> Visitor<'de> for TrieVisitor {
             if let Some(byte) = seq.next_element()? {
                 *dest = byte;
             } else {
-                return Err(serde::de::Error::invalid_length(idx, &self))
+                return Err(serde::de::Error::invalid_length(idx, &self));
             }
         }
         Ok(hash)
     }
-
 }

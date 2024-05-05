@@ -120,19 +120,13 @@ impl<T: ReadLinearStore> Merkle<T> {
     pub fn root_hash(&mut self) -> Result<TrieHash, std::io::Error> {
         let root = self.root_address();
         match root {
-            None => Ok(EMPTY_HASH
-                .get_or_init(|| TrieHash::from([0u8; std::mem::size_of::<TrieHash>()]))
-                .clone()),
+            None => Ok(EMPTY_HASH.get_or_init(TrieHash::default).clone()),
             Some(root) => {
                 // TODO: We might be able to get the hash without reading the node...
                 let root_node = self.read_node(root)?;
                 root_node.hash(root, &mut self.0)
             }
         }
-    }
-
-    fn _get_node_by_key(&self, _key: &[u8]) -> Result<Option<&Node>, MerkleError> {
-        todo!()
     }
 
     /// Constructs a merkle proof for key. The result contains all encoded nodes
@@ -575,7 +569,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                         });
                         let new_leaf_addr = self.create_node(&new_leaf)?;
 
-                        let mut updated_branch_children = last_node_branch.children.clone();
+                        let mut updated_branch_children = last_node_branch.children;
                         updated_branch_children[child_index] = Some(new_leaf_addr);
 
                         let mut updated_child_hashes = last_node_branch.child_hashes.clone();
@@ -687,7 +681,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                                 *new_last_node.mut_child(child_index as u8) = Some(new_branch_addr);
                                 *new_last_node
                                     .child_hashes
-                                    .get_mut(child_index as usize)
+                                    .get_mut(child_index)
                                     .expect("nibble") = None;
                                 let new_last_node = Node::Branch(Box::new(new_last_node));
                                 update_always_shrinks!(
@@ -715,7 +709,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                                 *new_last_node.mut_child(child_index as u8) = Some(new_branch_addr);
                                 *new_last_node
                                     .child_hashes
-                                    .get_mut(child_index as usize)
+                                    .get_mut(child_index)
                                     .expect("nibble") = None;
                                 let new_last_node = Node::Branch(Box::new(new_last_node));
 
@@ -762,7 +756,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                                 *new_last_node.mut_child(child_index as u8) = Some(new_branch_addr);
                                 *new_last_node
                                     .child_hashes
-                                    .get_mut(child_index as usize)
+                                    .get_mut(child_index)
                                     .expect("nibble") = None;
 
                                 let new_last_node = Node::Branch(Box::new(new_last_node));

@@ -40,25 +40,9 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
         Ok(HashedNode(node))
     }
 
-    pub fn invalidate_hash(&mut self, addr: LinearAddress) {
-        self.hashes.insert(addr, None);
-    }
-
-    fn hash_internal(&self, node: &Arc<Node>) -> Result<TrieHash, Error> {
-        let mut hasher = Keccak256::new();
-        match **node {
-            Node::Branch(ref _branch) => {
-                todo!()
-            }
-            Node::Leaf(ref leaf) => {
-                // TODO: can we use the stack here and call update less?
-                for byte in leaf.partial_path.iter_encoded() {
-                    hasher.update([byte]);
-                }
-                hasher.update(&leaf.value);
-            }
-        }
-        Ok(hasher.finalize().into())
+    pub fn root_hash(&self, addr: LinearAddress) -> Result<TrieHash, Error> {
+        let node = self.read_node(addr)?;
+        Ok(self.hash_internal(&node))
     }
 }
 
@@ -78,6 +62,40 @@ impl<T: ReadLinearStore> DerefMut for HashedNodeStore<T> {
     }
 }
 
+impl<T: WriteLinearStore> HashedNodeStore<T> {
+    pub fn invalidate_hash(&mut self, addr: LinearAddress) {
+        self.hashes.insert(addr, None);
+    }
+}
+
+impl<T: ReadLinearStore> HashedNodeStore<T> {
+    // hash a node
+    // assumes all the children of a branch have their hashes filled in
+    // TODO: We should include the full partial path up to this node in the hash
+    // this is because the hash will not change for leaves when they move
+
+    fn hash_internal(&self, node: &Arc<Node>) -> TrieHash {
+        let mut hasher = Keccak256::new();
+        match **node {
+            Node::Branch(ref branch) => {
+                hasher.update(&branch.partial_path.0);
+                if let Some(value) = &branch.value {
+                    hasher.update(value);
+                }
+                hasher.update(
+                    bincode::serialize(&branch.child_hashes).expect("serialization of constant"),
+                );
+            }
+            Node::Leaf(ref leaf) => {
+                // TODO: This should be the full path to this node, not the partial path
+                hasher.update(&leaf.partial_path.0);
+                hasher.update(&leaf.value);
+            }
+        }
+        hasher.finalize().into()
+    }
+}
+
 impl HashedNode {
     pub fn hash<T: ReadLinearStore>(
         &self,
@@ -88,7 +106,7 @@ impl HashedNode {
         let value = store.hashes.get_mut(&addr);
         match value {
             None | Some(None) => {
-                let hash = store.hash_internal(&self.0)?;
+                let hash = store.hash_internal(&self.0);
                 store.hashes.insert(addr, Some(hash.clone()));
                 Ok(hash)
             }
