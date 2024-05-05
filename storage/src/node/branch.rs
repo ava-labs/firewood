@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{LinearAddress, Path};
+use crate::{LeafNode, LinearAddress, Path, TrieHash};
 use std::fmt::{Debug, Error as FmtError, Formatter};
 
 #[derive(PartialEq, Eq, Clone, Serialize, Deserialize)]
@@ -17,6 +17,11 @@ pub struct BranchNode {
 
     /// The children of this branch
     pub children: [Option<LinearAddress>; Self::MAX_CHILDREN],
+
+    /// The hashes for each child
+    /// TODO: Serialize only non-zero ones. We know how many from the 'children' array
+    /// and can reconstruct it without storing blanks for each non-existent child
+    pub child_hashes: [Option<TrieHash>; Self::MAX_CHILDREN],
 }
 
 impl Debug for BranchNode {
@@ -50,5 +55,56 @@ impl BranchNode {
     /// It panics if passed a value more than 0xf
     pub fn mut_child(&mut self, child_index: u8) -> &mut Option<LinearAddress> {
         self.children.get_mut(child_index as usize).expect("nibble")
+    }
+
+    /// consume a branch node, finding the old child address and setting it
+    /// to a new one. Also invalidates the hash for it.
+    pub fn update_child_address(
+        &self,
+        old_child_addr: LinearAddress,
+        new_child_addr: Option<LinearAddress>,
+    ) -> BranchNode {
+        let mut new_children = self.children;
+        let (index, child_ref) = new_children
+            .iter_mut()
+            .enumerate()
+            .find(|(_, &mut child_addr)| child_addr == Some(old_child_addr))
+            .expect("child was not in the parent");
+        *child_ref = new_child_addr;
+
+        let mut new_child_hashes = self.child_hashes.clone();
+        *new_child_hashes
+            .get_mut(index)
+            .expect("arrays are same size, so offset into one must match the other") = None;
+        BranchNode {
+            partial_path: self.partial_path.clone(),
+            value: self.value.clone(),
+            children: new_children,
+            child_hashes: new_child_hashes,
+        }
+    }
+
+    /// Update the child address of a branch node and invalidate the hash
+    pub fn update_child(&mut self, child_index: u8, new_child_addr: Option<LinearAddress>) {
+        *self.mut_child(child_index) = new_child_addr;
+        self.invalidate_child_hash(child_index);
+    }
+
+    pub(crate) fn invalidate_child_hash(&mut self, child_index: u8) {
+        *self
+            .child_hashes
+            .get_mut(child_index as usize)
+            .expect("nibble") = None;
+    }
+}
+
+impl From<&LeafNode> for BranchNode {
+    fn from(leaf: &LeafNode) -> Self {
+        BranchNode {
+            partial_path: leaf.partial_path.clone(),
+            value: Some(leaf.value.clone().into_boxed_slice()),
+            children: Default::default(),
+            child_hashes: Default::default(),
+        }
     }
 }

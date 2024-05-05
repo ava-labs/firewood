@@ -41,6 +41,7 @@ impl Node {
                 partial_path,
                 value: b.value.clone(),
                 children: b.children,
+                child_hashes: b.child_hashes.clone(),
             }))),
             Node::Leaf(l) => Arc::new(Node::Leaf(LeafNode {
                 partial_path,
