@@ -925,9 +925,11 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
-    use storage::MemStore;
-
     use super::*;
+    use rand::rngs::StdRng;
+    use rand::{thread_rng, Rng, SeedableRng as _};
+    use std::collections::HashMap;
+    use storage::MemStore;
 
     #[test]
     fn insert_one() {
@@ -1009,7 +1011,7 @@ mod tests {
     //     #[test_case(branch(&[2], b"", vec![1, 2, 3].into()); "branch with path and children")]
     //     #[test_case(branch(&[2], b"value", vec![1, 2, 3].into()); "branch with path value and children")]
     //     fn encode(node: Node) {
-    //         let merkle = create_test_merkle();
+    //         let merkle = create_in_memory_merkle();
 
     //         let node_ref = merkle.put_node(node).unwrap();
     //         let encoded = node_ref.get_encoded(&merkle.store);
@@ -1043,110 +1045,40 @@ mod tests {
     //         assert_eq!(node, new_node);
     //     }
 
-    //     #[test]
-    //     fn insert_and_retrieve_one() {
-    //         let key = b"hello";
-    //         let val = b"world";
+    #[test]
+    fn test_insert_and_get() {
+        let mut merkle = create_in_memory_merkle();
 
-    //         let mut merkle = create_test_merkle();
-    //         let root_addr = merkle.init_sentinel().unwrap();
+        // insert values
+        for key_val in u8::MIN..=u8::MAX {
+            let key = vec![key_val];
+            let val = vec![key_val];
 
-    //         merkle.insert(key, val.to_vec(), root_addr).unwrap();
+            merkle.insert(&key, val.clone()).unwrap();
 
-    //         let fetched_val = merkle.get(key, root_addr).unwrap();
+            let fetched_val = merkle.get(&key).unwrap();
 
-    //         assert_eq!(fetched_val.as_deref(), val.as_slice().into());
-    //     }
+            // make sure the value was inserted
+            assert_eq!(fetched_val.as_deref(), val.as_slice().into());
+        }
 
-    //     #[test]
-    //     fn insert_and_retrieve_multiple() {
-    //         let mut merkle = create_test_merkle();
-    //         let root_addr = merkle.init_sentinel().unwrap();
+        // make sure none of the previous values were forgotten after initial insert
+        for key_val in u8::MIN..=u8::MAX {
+            let key = vec![key_val];
+            let val = vec![key_val];
 
-    //         // insert values
-    //         for key_val in u8::MIN..=u8::MAX {
-    //             let key = vec![key_val];
-    //             let val = vec![key_val];
+            let fetched_val = merkle.get(&key).unwrap();
 
-    //             merkle.insert(&key, val.clone(), root_addr).unwrap();
-
-    //             let fetched_val = merkle.get(&key, root_addr).unwrap();
-
-    //             // make sure the value was inserted
-    //             assert_eq!(fetched_val.as_deref(), val.as_slice().into());
-    //         }
-
-    //         // make sure none of the previous values were forgotten after initial insert
-    //         for key_val in u8::MIN..=u8::MAX {
-    //             let key = vec![key_val];
-    //             let val = vec![key_val];
-
-    //             let fetched_val = merkle.get(&key, root_addr).unwrap();
-
-    //             assert_eq!(fetched_val.as_deref(), val.as_slice().into());
-    //         }
-    //     }
-
-    //     #[test]
-    //     fn long_insert_and_retrieve_multiple() {
-    //         let key_val: Vec<(&'static [u8], _)> = vec![
-    //             (
-    //                 &[0, 0, 0, 1, 0, 101, 151, 236],
-    //                 [16, 15, 159, 195, 34, 101, 227, 73],
-    //             ),
-    //             (
-    //                 &[0, 0, 1, 107, 198, 92, 205],
-    //                 [26, 147, 21, 200, 138, 106, 137, 218],
-    //             ),
-    //             (&[0, 1, 0, 1, 0, 56], [194, 147, 168, 193, 19, 226, 51, 204]),
-    //             (&[1, 90], [101, 38, 25, 65, 181, 79, 88, 223]),
-    //             (
-    //                 &[1, 1, 1, 0, 0, 0, 1, 59],
-    //                 [105, 173, 182, 126, 67, 166, 166, 196],
-    //             ),
-    //             (
-    //                 &[0, 1, 0, 0, 1, 1, 55, 33, 38, 194],
-    //                 [90, 140, 160, 53, 230, 100, 237, 236],
-    //             ),
-    //             (
-    //                 &[1, 1, 0, 1, 249, 46, 69],
-    //                 [16, 104, 134, 6, 57, 46, 200, 35],
-    //             ),
-    //             (
-    //                 &[1, 1, 0, 1, 0, 0, 1, 33, 163],
-    //                 [95, 97, 187, 124, 198, 28, 75, 226],
-    //             ),
-    //             (
-    //                 &[1, 1, 0, 1, 0, 57, 156],
-    //                 [184, 18, 69, 29, 96, 252, 188, 58],
-    //             ),
-    //             (&[1, 0, 1, 1, 0, 218], [155, 38, 43, 54, 93, 134, 73, 209]),
-    //         ];
-
-    //         let mut merkle = create_test_merkle();
-    //         let root_addr = merkle.init_sentinel().unwrap();
-
-    //         for (key, val) in &key_val {
-    //             merkle.insert(key, val.to_vec(), root_addr).unwrap();
-
-    //             let fetched_val = merkle.get(key, root_addr).unwrap();
-
-    //             assert_eq!(fetched_val.as_deref(), val.as_slice().into());
-    //         }
-
-    //         for (key, val) in key_val {
-    //             let fetched_val = merkle.get(key, root_addr).unwrap();
-
-    //             assert_eq!(fetched_val.as_deref(), val.as_slice().into());
-    //         }
-    //     }
+            assert_eq!(fetched_val.as_deref(), val.as_slice().into());
+        }
+    }
 
     //     #[test]
     //     fn remove_one() {
     //         let key = b"hello";
     //         let val = b"world";
 
-    //         let mut merkle = create_test_merkle();
+    //         let mut merkle = create_in_memory_merkle();
     //         let root_addr = merkle.init_sentinel().unwrap();
 
     //         merkle.insert(key, val.to_vec(), root_addr).unwrap();
@@ -1165,7 +1097,7 @@ mod tests {
 
     //     #[test]
     //     fn remove_many() {
-    //         let mut merkle = create_test_merkle();
+    //         let mut merkle = create_in_memory_merkle();
     //         let root_addr = merkle.init_sentinel().unwrap();
 
     //         // insert values
@@ -1199,7 +1131,7 @@ mod tests {
 
     //     #[test]
     //     fn get_empty_proof() {
-    //         let merkle = create_test_merkle();
+    //         let merkle = create_in_memory_merkle();
     //         let root_addr = merkle.init_sentinel().unwrap();
 
     //         let proof = merkle.prove(b"any-key", root_addr).unwrap();
@@ -1209,7 +1141,7 @@ mod tests {
 
     //     #[tokio::test]
     //     async fn empty_range_proof() {
-    //         let merkle = create_test_merkle();
+    //         let merkle = create_in_memory_merkle();
     //         let root_addr = merkle.init_sentinel().unwrap();
 
     //         assert!(merkle
@@ -1221,7 +1153,7 @@ mod tests {
 
     //     #[tokio::test]
     //     async fn range_proof_invalid_bounds() {
-    //         let merkle = create_test_merkle();
+    //         let merkle = create_in_memory_merkle();
     //         let root_addr = merkle.init_sentinel().unwrap();
     //         let start_key = &[0x01];
     //         let end_key = &[0x00];
@@ -1241,7 +1173,7 @@ mod tests {
 
     //     #[tokio::test]
     //     async fn full_range_proof() {
-    //         let mut merkle = create_test_merkle();
+    //         let mut merkle = create_in_memory_merkle();
     //         let root_addr = merkle.init_sentinel().unwrap();
     //         // insert values
     //         for key_val in u8::MIN..=u8::MAX {
@@ -1269,7 +1201,7 @@ mod tests {
     //     async fn single_value_range_proof() {
     //         const RANDOM_KEY: u8 = 42;
 
-    //         let mut merkle = create_test_merkle();
+    //         let mut merkle = create_in_memory_merkle();
     //         let root_addr = merkle.init_sentinel().unwrap();
     //         // insert values
     //         for key_val in u8::MIN..=u8::MAX {
@@ -1291,7 +1223,7 @@ mod tests {
 
     //     #[test]
     //     fn shared_path_proof() {
-    //         let mut merkle = create_test_merkle();
+    //         let mut merkle = create_in_memory_merkle();
     //         let root_addr = merkle.init_sentinel().unwrap();
 
     //         let key1 = b"key1";
@@ -1344,7 +1276,7 @@ mod tests {
     //             ),
     //         ];
 
-    //         let mut merkle = create_test_merkle();
+    //         let mut merkle = create_in_memory_merkle();
     //         let root_addr = merkle.init_sentinel().unwrap();
 
     //         for (key, val) in &pairs {
@@ -1371,7 +1303,7 @@ mod tests {
     //         let val = vec![1];
     //         let overwrite = vec![2];
 
-    //         let mut merkle = create_test_merkle();
+    //         let mut merkle = create_in_memory_merkle();
     //         let root_addr = merkle.init_sentinel().unwrap();
 
     //         merkle.insert(&key, val.clone(), root_addr).unwrap();
@@ -1391,161 +1323,137 @@ mod tests {
     //         );
     //     }
 
-    //     #[test]
-    //     fn new_leaf_is_a_child_of_the_old_leaf() {
-    //         let key = vec![0xff];
-    //         let val = vec![1];
-    //         let key_2 = vec![0xff, 0x00];
-    //         let val_2 = vec![2];
+    #[test]
+    fn test_insert_leaf_suffix() {
+        // key_2 is a suffix of key, which is a leaf
+        let key = vec![0xff];
+        let val = vec![1];
+        let key_2 = vec![0xff, 0x00];
+        let val_2 = vec![2];
 
-    //         let mut merkle = create_test_merkle();
-    //         let root_addr = merkle.init_sentinel().unwrap();
+        let mut merkle = create_in_memory_merkle();
 
-    //         merkle.insert(&key, val.clone(), root_addr).unwrap();
-    //         merkle.insert(&key_2, val_2.clone(), root_addr).unwrap();
+        merkle.insert(&key, val.clone()).unwrap();
+        merkle.insert(&key_2, val_2.clone()).unwrap();
 
-    //         assert_eq!(
-    //             merkle.get(&key, root_addr).unwrap().as_deref(),
-    //             Some(val.as_slice())
-    //         );
+        let got = merkle.get(&key).unwrap().unwrap();
 
-    //         assert_eq!(
-    //             merkle.get(&key_2, root_addr).unwrap().as_deref(),
-    //             Some(val_2.as_slice())
-    //         );
-    //     }
+        assert_eq!(&*got, val);
 
-    //     #[test]
-    //     fn old_leaf_is_a_child_of_the_new_leaf() {
-    //         let key = vec![0xff, 0x00];
-    //         let val = vec![1];
-    //         let key_2 = vec![0xff];
-    //         let val_2 = vec![2];
+        let got = merkle.get(&key_2).unwrap().unwrap();
+        assert_eq!(&*got, val_2);
+    }
 
-    //         let mut merkle = create_test_merkle();
-    //         let root_addr = merkle.init_sentinel().unwrap();
+    #[test]
+    fn test_insert_leaf_prefix() {
+        // key_2 is a prefix of key, which is a leaf
+        let key = vec![0xff, 0x00];
+        let val = vec![1];
+        let key_2 = vec![0xff];
+        let val_2 = vec![2];
 
-    //         merkle.insert(&key, val.clone(), root_addr).unwrap();
-    //         merkle.insert(&key_2, val_2.clone(), root_addr).unwrap();
+        let mut merkle = create_in_memory_merkle();
 
-    //         assert_eq!(
-    //             merkle.get(&key, root_addr).unwrap().as_deref(),
-    //             Some(val.as_slice())
-    //         );
+        merkle.insert(&key, val.clone()).unwrap();
+        merkle.insert(&key_2, val_2.clone()).unwrap();
 
-    //         assert_eq!(
-    //             merkle.get(&key_2, root_addr).unwrap().as_deref(),
-    //             Some(val_2.as_slice())
-    //         );
-    //     }
+        let got = merkle.get(&key).unwrap().unwrap();
+        assert_eq!(&*got, val);
 
-    //     #[test]
-    //     fn new_leaf_is_sibling_of_old_leaf() {
-    //         let key = vec![0xff];
-    //         let val = vec![1];
-    //         let key_2 = vec![0xff, 0x00];
-    //         let val_2 = vec![2];
-    //         let key_3 = vec![0xff, 0x0f];
-    //         let val_3 = vec![3];
+        let got = merkle.get(&key_2).unwrap().unwrap();
+        assert_eq!(&*got, val_2);
+    }
 
-    //         let mut merkle = create_test_merkle();
-    //         let root_addr = merkle.init_sentinel().unwrap();
+    #[test]
+    fn test_insert_sibling_leaf() {
+        // The node at key is a branch node with children key_2 and key_3.
+        // TODO assert in this test that key is the parent of key_2 and key_3.
+        // i.e. the node types are branch, leaf, leaf respectively.
+        let key = vec![0xff];
+        let val = vec![1];
+        let key_2 = vec![0xff, 0x00];
+        let val_2 = vec![2];
+        let key_3 = vec![0xff, 0x0f];
+        let val_3 = vec![3];
 
-    //         merkle.insert(&key, val.clone(), root_addr).unwrap();
-    //         merkle.insert(&key_2, val_2.clone(), root_addr).unwrap();
-    //         merkle.insert(&key_3, val_3.clone(), root_addr).unwrap();
+        let mut merkle = create_in_memory_merkle();
 
-    //         assert_eq!(
-    //             merkle.get(&key, root_addr).unwrap().as_deref(),
-    //             Some(val.as_slice())
-    //         );
+        merkle.insert(&key, val.clone()).unwrap();
+        merkle.insert(&key_2, val_2.clone()).unwrap();
+        merkle.insert(&key_3, val_3.clone()).unwrap();
 
-    //         assert_eq!(
-    //             merkle.get(&key_2, root_addr).unwrap().as_deref(),
-    //             Some(val_2.as_slice())
-    //         );
+        let got = merkle.get(&key).unwrap().unwrap();
+        assert_eq!(&*got, val);
 
-    //         assert_eq!(
-    //             merkle.get(&key_3, root_addr).unwrap().as_deref(),
-    //             Some(val_3.as_slice())
-    //         );
-    //     }
+        let got = merkle.get(&key_2).unwrap().unwrap();
+        assert_eq!(&*got, val_2);
 
-    //     #[test]
-    //     fn old_branch_is_a_child_of_new_branch() {
-    //         let key = vec![0xff, 0xf0];
-    //         let val = vec![1];
-    //         let key_2 = vec![0xff, 0xf0, 0x00];
-    //         let val_2 = vec![2];
-    //         let key_3 = vec![0xff];
-    //         let val_3 = vec![3];
+        let got = merkle.get(&key_3).unwrap().unwrap();
+        assert_eq!(&*got, val_3);
+    }
 
-    //         let mut merkle = create_test_merkle();
-    //         let root_addr = merkle.init_sentinel().unwrap();
+    #[test]
+    fn test_insert_branch_as_branch_parent() {
+        let key = vec![0xff, 0xf0];
+        let val = vec![1];
+        let key_2 = vec![0xff, 0xf0, 0x00];
+        let val_2 = vec![2];
+        let key_3 = vec![0xff];
+        let val_3 = vec![3];
 
-    //         merkle.insert(&key, val.clone(), root_addr).unwrap();
-    //         merkle.insert(&key_2, val_2.clone(), root_addr).unwrap();
-    //         merkle.insert(&key_3, val_3.clone(), root_addr).unwrap();
+        let mut merkle = create_in_memory_merkle();
 
-    //         assert_eq!(
-    //             merkle.get(&key, root_addr).unwrap().as_deref(),
-    //             Some(val.as_slice())
-    //         );
+        merkle.insert(&key, val.clone()).unwrap();
+        // key is a leaf
 
-    //         assert_eq!(
-    //             merkle.get(&key_2, root_addr).unwrap().as_deref(),
-    //             Some(val_2.as_slice())
-    //         );
+        merkle.insert(&key_2, val_2.clone()).unwrap();
+        // key is branch with child key_2
 
-    //         assert_eq!(
-    //             merkle.get(&key_3, root_addr).unwrap().as_deref(),
-    //             Some(val_3.as_slice())
-    //         );
-    //     }
+        merkle.insert(&key_3, val_3.clone()).unwrap();
+        // key_3 is a branch with child key
+        // key is a branch with child key_3
 
-    //     #[test]
-    //     fn overlapping_branch_insert() {
-    //         let key = vec![0xff];
-    //         let val = vec![1];
-    //         let key_2 = vec![0xff, 0x00];
-    //         let val_2 = vec![2];
+        let got = merkle.get(&key).unwrap().unwrap();
+        assert_eq!(&*got, val);
 
-    //         let overwrite = vec![3];
+        let got = merkle.get(&key_2).unwrap().unwrap();
+        assert_eq!(&*got, val_2);
 
-    //         let mut merkle = create_test_merkle();
-    //         let root_addr = merkle.init_sentinel().unwrap();
+        let got = merkle.get(&key_3).unwrap().unwrap();
+        assert_eq!(&*got, val_3);
+    }
 
-    //         merkle.insert(&key, val.clone(), root_addr).unwrap();
-    //         merkle.insert(&key_2, val_2.clone(), root_addr).unwrap();
+    #[test]
+    fn test_insert_overwrite_branch_value() {
+        let key = vec![0xff];
+        let val = vec![1];
+        let key_2 = vec![0xff, 0x00];
+        let val_2 = vec![2];
+        let overwrite = vec![3];
 
-    //         assert_eq!(
-    //             merkle.get(&key, root_addr).unwrap().as_deref(),
-    //             Some(val.as_slice())
-    //         );
+        let mut merkle = create_in_memory_merkle();
 
-    //         assert_eq!(
-    //             merkle.get(&key_2, root_addr).unwrap().as_deref(),
-    //             Some(val_2.as_slice())
-    //         );
+        merkle.insert(&key, val.clone()).unwrap();
+        merkle.insert(&key_2, val_2.clone()).unwrap();
 
-    //         merkle
-    //             .insert(&key, overwrite.clone(), root_addr)
-    //             .unwrap();
+        let got = merkle.get(&key).unwrap().unwrap();
+        assert_eq!(&*got, val);
 
-    //         assert_eq!(
-    //             merkle.get(&key, root_addr).unwrap().as_deref(),
-    //             Some(overwrite.as_slice())
-    //         );
+        let got = merkle.get(&key_2).unwrap().unwrap();
+        assert_eq!(&*got, val_2);
 
-    //         assert_eq!(
-    //             merkle.get(&key_2, root_addr).unwrap().as_deref(),
-    //             Some(val_2.as_slice())
-    //         );
-    //     }
+        merkle.insert(&key, overwrite.clone()).unwrap();
+
+        let got = merkle.get(&key).unwrap().unwrap();
+        assert_eq!(&*got, overwrite);
+
+        let got = merkle.get(&key_2).unwrap().unwrap();
+        assert_eq!(&*got, val_2);
+    }
 
     //     #[test]
     //     fn single_key_proof_with_one_node() {
-    //         let mut merkle = create_test_merkle();
+    //         let mut merkle = create_in_memory_merkle();
     //         let root_addr = merkle.init_sentinel().unwrap();
     //         let key = b"key";
     //         let value = b"value";
@@ -1562,7 +1470,7 @@ mod tests {
 
     //     #[test]
     //     fn two_key_proof_without_shared_path() {
-    //         let mut merkle = create_test_merkle();
+    //         let mut merkle = create_in_memory_merkle();
     //         let root_addr = merkle.init_sentinel().unwrap();
 
     //         let key1 = &[0x00];
@@ -1580,141 +1488,6 @@ mod tests {
 
     //         assert_eq!(verified.as_deref(), Some(key1.as_slice()));
     //     }
-
-    //     #[test]
-    //     fn update_leaf_with_larger_path() -> Result<(), MerkleError> {
-    //         let path = vec![0x00];
-    //         let value = vec![0x00];
-
-    //         let double_path = path
-    //             .clone()
-    //             .into_iter()
-    //             .chain(path.clone())
-    //             .collect::<Vec<_>>();
-
-    //         let node = Node::from_leaf(LeafNode {
-    //             partial_path: Path::from(path),
-    //             value: value.clone(),
-    //         });
-
-    //         check_node_update(node, double_path, value)
-    //     }
-
-    //     #[test]
-    //     fn update_leaf_with_larger_value() -> Result<(), MerkleError> {
-    //         let path = vec![0x00];
-    //         let value = vec![0x00];
-
-    //         let double_value = value
-    //             .clone()
-    //             .into_iter()
-    //             .chain(value.clone())
-    //             .collect::<Vec<_>>();
-
-    //         let node = Node::from_leaf(LeafNode {
-    //             partial_path: Path::from(path.clone()),
-    //             value,
-    //         });
-
-    //         check_node_update(node, path, double_value)
-    //     }
-
-    //     #[test]
-    //     fn update_branch_with_larger_path() -> Result<(), MerkleError> {
-    //         let path = vec![0x00];
-    //         let value = vec![0x00];
-
-    //         let double_path = path
-    //             .clone()
-    //             .into_iter()
-    //             .chain(path.clone())
-    //             .collect::<Vec<_>>();
-
-    //         let node = Node::from_branch(BranchNode {
-    //             partial_path: Path::from(path.clone()),
-    //             children: Default::default(),
-    //             value: Some(value.clone()),
-    //             children_encoded: Default::default(),
-    //         });
-
-    //         check_node_update(node, double_path, value)
-    //     }
-
-    //     #[test]
-    //     fn update_branch_with_larger_value() -> Result<(), MerkleError> {
-    //         let path = vec![0x00];
-    //         let value = vec![0x00];
-
-    //         let double_value = value
-    //             .clone()
-    //             .into_iter()
-    //             .chain(value.clone())
-    //             .collect::<Vec<_>>();
-
-    //         let node = Node::from_branch(BranchNode {
-    //             partial_path: Path::from(path.clone()),
-    //             children: Default::default(),
-    //             value: Some(value),
-    //             children_encoded: Default::default(),
-    //         });
-
-    //         check_node_update(node, path, double_value)
-    //     }
-
-    //     fn check_node_update(
-    //         node: Node,
-    //         new_path: Vec<u8>,
-    //         new_value: Vec<u8>,
-    //     ) -> Result<(), MerkleError> {
-    //         let merkle = create_test_merkle();
-    //         let root_addr = merkle.init_sentinel()?;
-    //         let sentinel = merkle.get_node(root_addr)?;
-
-    //         let mut node_ref = merkle.put_node(node)?;
-    //         let addr = node_ref.as_addr();
-
-    //         // make sure that doubling the path length will fail on a normal write
-    //         let write_result = node_ref.write(|node| {
-    //             node.inner_mut().set_path(Path(new_path.clone()));
-    //             node.inner_mut().set_value(new_value.clone());
-    //             node.rehash();
-    //         });
-
-    //         assert!(matches!(write_result, Err(ObjWriteSizeError)));
-
-    //         let mut to_delete = vec![];
-    //         // could be any branch node, convenient to use the root.
-    //         let mut parents = vec![(sentinel, 0)];
-
-    //         let node = merkle.update_path_and_move_node_if_larger(
-    //             (&mut parents, &mut to_delete),
-    //             node_ref,
-    //             Path(new_path.clone()),
-    //         )?;
-
-    //         assert_ne!(node.as_addr(), addr);
-    //         assert_eq!(&to_delete[0], &addr);
-
-    //         let (path, value) = match node.inner() {
-    //             NodeType::Leaf(leaf) => (&leaf.partial_path, Some(&leaf.value)),
-    //             NodeType::Branch(branch) => (&branch.partial_path, branch.value.as_ref()),
-    //         };
-
-    //         assert_eq!(path, &Path(new_path));
-    //         assert_eq!(value, Some(&new_value));
-
-    //         Ok(())
-    //     }
-}
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod test {
-    use super::*;
-    use rand::rngs::StdRng;
-    use rand::{thread_rng, Rng, SeedableRng as _};
-    use std::collections::HashMap;
-
-    use storage::MemStore;
 
     fn merkle_build_test<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         items: Vec<(K, V)>,
