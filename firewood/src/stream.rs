@@ -593,7 +593,7 @@ mod tests {
     async fn path_iterate_singleton_merkle(key: &[u8], should_yield_elt: bool) {
         let mut merkle = create_test_merkle();
 
-        merkle.insert(&[0xBE, 0xEF], vec![0x42]).unwrap();
+        merkle.insert(&[0xBE, 0xEF], Box::new([0x42])).unwrap();
 
         let mut stream = merkle.path_iter(key).unwrap();
         let (key, node) = match stream.next() {
@@ -607,7 +607,7 @@ mod tests {
 
         assert!(should_yield_elt);
         assert_eq!(key, vec![0x0B, 0x0E, 0x0E, 0x0F].into_boxed_slice());
-        assert_eq!(node.as_leaf().unwrap().value, vec![0x42]);
+        assert_eq!(node.as_leaf().unwrap().value, Box::from([0x42]));
 
         assert!(stream.next().is_none());
     }
@@ -651,7 +651,10 @@ mod tests {
             key,
             vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x0F].into_boxed_slice()
         );
-        assert_eq!(node.as_leaf().unwrap().value, vec![0x00, 0x00, 0x00, 0x0FF],);
+        assert_eq!(
+            node.as_leaf().unwrap().value,
+            Box::from([0x00, 0x00, 0x00, 0x0FF])
+        );
 
         assert!(stream.next().is_none());
     }
@@ -707,7 +710,7 @@ mod tests {
     async fn node_iterate_root_only() {
         let mut merkle = create_test_merkle();
 
-        merkle.insert(&[0x00], vec![0x00]).unwrap();
+        merkle.insert(&[0x00], Box::new([0x00])).unwrap();
 
         let mut stream = merkle.node_iter();
 
@@ -739,18 +742,26 @@ mod tests {
         let mut merkle = create_test_merkle();
 
         merkle
-            .insert(&[0x00, 0x00, 0x00], vec![0x00, 0x00, 0x00])
+            .insert(&[0x00, 0x00, 0x00], Box::new([0x00, 0x00, 0x00]))
             .unwrap();
         merkle
-            .insert(&[0x00, 0x00, 0x00, 0x01], vec![0x00, 0x00, 0x00, 0x01])
+            .insert(
+                &[0x00, 0x00, 0x00, 0x01],
+                Box::new([0x00, 0x00, 0x00, 0x01]),
+            )
             .unwrap();
         merkle
-            .insert(&[0x00, 0x00, 0x00, 0xFF], vec![0x00, 0x00, 0x00, 0xFF])
+            .insert(
+                &[0x00, 0x00, 0x00, 0xFF],
+                Box::new([0x00, 0x00, 0x00, 0xFF]),
+            )
             .unwrap();
         merkle
-            .insert(&[0x00, 0xD0, 0xD0], vec![0x00, 0xD0, 0xD0])
+            .insert(&[0x00, 0xD0, 0xD0], Box::new([0x00, 0xD0, 0xD0]))
             .unwrap();
-        merkle.insert(&[0x00, 0xFF], vec![0x00, 0xFF]).unwrap();
+        merkle
+            .insert(&[0x00, 0xFF], Box::new([0x00, 0xFF]))
+            .unwrap();
         merkle
     }
 
@@ -870,7 +881,7 @@ mod tests {
 
         // insert all values from u8::MIN to u8::MAX, with the key and value the same
         for k in u8::MIN..=u8::MAX {
-            merkle.insert(&[k], vec![k]).unwrap();
+            merkle.insert(&[k], Box::new([k])).unwrap();
         }
 
         let mut stream = match start {
@@ -908,7 +919,7 @@ mod tests {
         for i in (0..=u8::MAX).rev() {
             for j in (0..=u8::MAX).rev() {
                 let key = &[i, j];
-                let value = vec![i, j];
+                let value = Box::new([i, j]);
 
                 merkle.insert(key, value).unwrap();
             }
@@ -975,7 +986,7 @@ mod tests {
         }
 
         for kv in key_values.iter() {
-            merkle.insert(kv, kv.clone()).unwrap();
+            merkle.insert(kv, kv.into_boxed_slice()).unwrap();
         }
 
         let mut stream = merkle._key_value_iter();
@@ -994,27 +1005,27 @@ mod tests {
         let mut merkle = create_test_merkle();
 
         let key = vec![].into_boxed_slice();
-        let value = vec![0x00];
+        let value = [0x00];
 
-        merkle.insert(&key, value.clone()).unwrap();
+        merkle.insert(&key, value.into()).unwrap();
 
         let mut stream = merkle._key_value_iter();
 
-        assert_eq!(stream.next().await.unwrap().unwrap(), (key, value));
+        assert_eq!(stream.next().await.unwrap().unwrap(), (key, value.into()));
     }
 
     #[tokio::test]
     async fn key_value_get_branch_and_leaf() {
         let mut merkle = create_test_merkle();
 
-        let first_leaf = &[0x00, 0x00];
-        let second_leaf = &[0x00, 0x0f];
-        let branch = &[0x00];
+        let first_leaf = [0x00, 0x00];
+        let second_leaf = [0x00, 0x0f];
+        let branch = [0x00];
 
-        merkle.insert(first_leaf, first_leaf.to_vec()).unwrap();
-        merkle.insert(second_leaf, second_leaf.to_vec()).unwrap();
+        merkle.insert(&first_leaf, first_leaf.into()).unwrap();
+        merkle.insert(&second_leaf, second_leaf.into()).unwrap();
 
-        merkle.insert(branch, branch.to_vec()).unwrap();
+        merkle.insert(&branch, branch.into()).unwrap();
 
         let mut stream = merkle._key_value_iter();
 
@@ -1055,7 +1066,7 @@ mod tests {
         assert!(key_values[1] < key_values[2]);
 
         for key in key_values.iter() {
-            merkle.insert(key, key.to_vec()).unwrap();
+            merkle.insert(key, key.into_boxed_slice()).unwrap();
         }
 
         let mut stream = merkle._key_value_iter_from_key(vec![intermediate].into_boxed_slice());
@@ -1086,14 +1097,14 @@ mod tests {
         children.clone().for_each(|child_path| {
             let key = vec![sibling_path, child_path];
 
-            merkle.insert(&key, key.clone()).unwrap();
+            merkle.insert(&key, key.into()).unwrap();
         });
 
         let mut keys: Vec<_> = children
             .map(|child_path| {
                 let key = vec![branch_path, child_path];
 
-                merkle.insert(&key, key.clone()).unwrap();
+                merkle.insert(&key, key.into()).unwrap();
 
                 key
             })
@@ -1126,19 +1137,19 @@ mod tests {
 
         let mut merkle = create_test_merkle();
 
-        merkle.insert(&branch_key, branch_key.clone()).unwrap();
+        merkle.insert(&branch_key, branch_key.into()).unwrap();
 
         children.clone().for_each(|child_path| {
             let key = vec![sibling_path, child_path];
 
-            merkle.insert(&key, key.clone()).unwrap();
+            merkle.insert(&key, key.into()).unwrap();
         });
 
         let mut keys: Vec<_> = children
             .map(|child_path| {
                 let key = vec![branch_path, child_path];
 
-                merkle.insert(&key, key.clone()).unwrap();
+                merkle.insert(&key, key.into()).unwrap();
 
                 key
             })
@@ -1172,7 +1183,7 @@ mod tests {
             .map(|child_path| {
                 let key = vec![child_path];
 
-                merkle.insert(&key, key.clone()).unwrap();
+                merkle.insert(&key, key.into()).unwrap();
 
                 key
             })
@@ -1203,7 +1214,7 @@ mod tests {
         let mut merkle = create_test_merkle();
 
         children.for_each(|key| {
-            merkle.insert(&key, key.clone()).unwrap();
+            merkle.insert(&key, key.into()).unwrap();
         });
 
         let stream = merkle._key_value_iter_from_key(vec![start_key].into_boxed_slice());
@@ -1223,7 +1234,7 @@ mod tests {
 
         let keys: Vec<_> = children
             .map(|key| {
-                merkle.insert(&key, key.clone()).unwrap();
+                merkle.insert(&key, key.into()).unwrap();
                 key
             })
             .collect();
@@ -1252,7 +1263,7 @@ mod tests {
             .map(|child_path| {
                 let key = vec![child_path];
 
-                merkle.insert(&key, key.clone()).unwrap();
+                merkle.insert(&key, key.into()).unwrap();
 
                 key
             })
@@ -1274,11 +1285,11 @@ mod tests {
 
     #[tokio::test]
     async fn key_value_start_at_key_greater_than_all_others_leaf() {
-        let key = vec![0x00];
-        let greater_key = vec![0xff];
+        let key = [0x00];
+        let greater_key = [0xff];
         let mut merkle = create_test_merkle();
-        merkle.insert(&key, key.clone()).unwrap();
-        let stream = merkle._key_value_iter_from_key(greater_key.into_boxed_slice());
+        merkle.insert(&key, key.into()).unwrap();
+        let stream = merkle._key_value_iter_from_key(greater_key.into());
 
         check_stream_is_done(stream).await;
     }
@@ -1295,7 +1306,7 @@ mod tests {
             .map(|child_path| {
                 let key = vec![child_path];
 
-                merkle.insert(&key, key.clone()).unwrap();
+                merkle.insert(&key, key.into()).unwrap();
 
                 key
             })

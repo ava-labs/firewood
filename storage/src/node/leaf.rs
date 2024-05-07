@@ -14,7 +14,7 @@ pub struct LeafNode {
     pub partial_path: Path,
 
     /// The value associated with this leaf
-    pub value: Vec<u8>,
+    pub value: Box<[u8]>,
 }
 
 impl Debug for LeafNode {

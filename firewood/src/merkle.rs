@@ -95,7 +95,7 @@ macro_rules! write_attributes {
         }
         #[allow(clippy::unnecessary_to_owned)]
         if !$value.is_empty() {
-            match String::from_utf8($value) {
+            match std::str::from_utf8($value) {
                 Ok(string) if string.chars().all(char::is_alphanumeric) => {
                     write!($writer, " val={}", string)?
                 }
@@ -177,7 +177,7 @@ impl<T: ReadLinearStore> Merkle<T> {
         {
             match &*last_node.node {
                 Node::Branch(branch) => Ok(branch.value.clone()),
-                Node::Leaf(leaf) => Ok(Some(leaf.value.clone().into_boxed_slice())),
+                Node::Leaf(leaf) => Ok(Some(leaf.value.clone())),
             }
         } else {
             Ok(None)
@@ -317,7 +317,7 @@ impl<T: ReadLinearStore> Merkle<T> {
             Node::Branch(b) => {
                 write!(writer, "  {addr}[label=\"@{addr}")?;
 
-                write_attributes!(writer, b, b.value.clone().unwrap_or(Box::from([])).to_vec());
+                write_attributes!(writer, b, &b.value.clone().unwrap_or(Box::from([])));
                 writeln!(writer, "\"]")?;
                 for (childidx, child) in b.children.iter().enumerate() {
                     match child {
@@ -339,7 +339,7 @@ impl<T: ReadLinearStore> Merkle<T> {
             }
             Node::Leaf(l) => {
                 write!(writer, "  {addr}[label=\"@{addr}")?;
-                write_attributes!(writer, l, l.value.clone());
+                write_attributes!(writer, l, &l.value);
                 writeln!(writer, "\" shape=rect]")?;
             }
         };
@@ -360,7 +360,7 @@ impl<T: ReadLinearStore> Merkle<T> {
 }
 
 impl<T: WriteLinearStore> Merkle<T> {
-    pub fn insert(&mut self, key: &[u8], val: Vec<u8>) -> Result<(), MerkleError> {
+    pub fn insert(&mut self, key: &[u8], val: Box<[u8]>) -> Result<(), MerkleError> {
         for addr in self.insert_and_return_ancestors(key, val)? {
             self.0.invalidate_hash(addr);
         }
@@ -370,7 +370,7 @@ impl<T: WriteLinearStore> Merkle<T> {
     pub fn insert_and_return_ancestors(
         &mut self,
         key: &[u8],
-        value: Vec<u8>,
+        value: Box<[u8]>,
     ) -> Result<Vec<LinearAddress>, MerkleError> {
         let key_nibbles = Nibbles::new(key); // how to get a &[u8] from this where each byte is a nibble?
         let key_as_path = Path::from_nibbles_iterator(key_nibbles.into_iter()); // .as_ref() &[u8]
@@ -413,7 +413,7 @@ impl<T: WriteLinearStore> Merkle<T> {
             if overlap.unique_b.is_empty() {
                 // `key` is a prefix of the existing root's key.
                 // The new root is at `key` and has the `value`.
-                new_root.value = Some(value.into_boxed_slice());
+                new_root.value = Some(value);
 
                 // There must be something in unique_a because if it didn't, that would imply that
                 // the root's key is a prefix of `key` which can't be true because otherwise
@@ -492,7 +492,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     let new_branch = Node::Branch(Box::new(BranchNode {
                         children: last_node_branch.children,
                         partial_path: last_node_branch.partial_path.clone(),
-                        value: Some(value.into_boxed_slice()),
+                        value: Some(value),
                         child_hashes: last_node_branch.child_hashes.clone(),
                     }));
 
@@ -689,7 +689,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                                 )?;
                             } else {
                                 // The new branch is at `key`.
-                                new_branch.value = Some(value.into_boxed_slice());
+                                new_branch.value = Some(value);
 
                                 // The old branch becomes a child of the new branch.
                                 // TODO explain why this is safe
@@ -736,7 +736,7 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                             if prefix_overlap.unique_b.is_empty() {
                                 // The new branch is at `key`.
-                                new_branch.value = Some(value.into_boxed_slice());
+                                new_branch.value = Some(value);
 
                                 // The old leaf becomes a child of the new branch
                                 // both unique_a and unique_b can't both be empty
@@ -934,15 +934,15 @@ mod tests {
     #[test]
     fn insert_one() {
         let mut merkle = create_in_memory_merkle();
-        merkle.insert(b"abc", vec![]).unwrap()
+        merkle.insert(b"abc", Box::new([])).unwrap()
     }
 
     #[test]
     fn insert_two() -> Result<(), MerkleError> {
         let mut merkle = create_in_memory_merkle();
-        merkle.insert(b"abc", vec![])?;
+        merkle.insert(b"abc", Box::new([]))?;
         let root_addr = merkle.root_address();
-        merkle.insert(b"abc", b"abcdefghijklmnopqrstuvwxyz".to_vec())?;
+        merkle.insert(b"abc", Box::from(*b"abcdefghijklmnopqrstuvwxyz"))?;
         assert_ne!(root_addr, merkle.root_address());
         Ok(())
     }
@@ -1052,7 +1052,7 @@ mod tests {
         // insert values
         for key_val in u8::MIN..=u8::MAX {
             let key = vec![key_val];
-            let val = vec![key_val];
+            let val = Box::new([key_val]);
 
             merkle.insert(&key, val.clone()).unwrap();
 
@@ -1327,41 +1327,41 @@ mod tests {
     fn test_insert_leaf_suffix() {
         // key_2 is a suffix of key, which is a leaf
         let key = vec![0xff];
-        let val = vec![1];
+        let val = [1];
         let key_2 = vec![0xff, 0x00];
-        let val_2 = vec![2];
+        let val_2 = [2];
 
         let mut merkle = create_in_memory_merkle();
 
-        merkle.insert(&key, val.clone()).unwrap();
-        merkle.insert(&key_2, val_2.clone()).unwrap();
+        merkle.insert(&key, Box::new(val)).unwrap();
+        merkle.insert(&key_2, Box::new(val_2)).unwrap();
 
         let got = merkle.get(&key).unwrap().unwrap();
 
-        assert_eq!(&*got, val);
+        assert_eq!(*got, val);
 
         let got = merkle.get(&key_2).unwrap().unwrap();
-        assert_eq!(&*got, val_2);
+        assert_eq!(*got, val_2);
     }
 
     #[test]
     fn test_insert_leaf_prefix() {
         // key_2 is a prefix of key, which is a leaf
         let key = vec![0xff, 0x00];
-        let val = vec![1];
+        let val = [1];
         let key_2 = vec![0xff];
-        let val_2 = vec![2];
+        let val_2 = [2];
 
         let mut merkle = create_in_memory_merkle();
 
-        merkle.insert(&key, val.clone()).unwrap();
-        merkle.insert(&key_2, val_2.clone()).unwrap();
+        merkle.insert(&key, Box::new(val)).unwrap();
+        merkle.insert(&key_2, Box::new(val_2)).unwrap();
 
         let got = merkle.get(&key).unwrap().unwrap();
-        assert_eq!(&*got, val);
+        assert_eq!(*got, val);
 
         let got = merkle.get(&key_2).unwrap().unwrap();
-        assert_eq!(&*got, val_2);
+        assert_eq!(*got, val_2);
     }
 
     #[test]
@@ -1370,46 +1370,46 @@ mod tests {
         // TODO assert in this test that key is the parent of key_2 and key_3.
         // i.e. the node types are branch, leaf, leaf respectively.
         let key = vec![0xff];
-        let val = vec![1];
+        let val = [1];
         let key_2 = vec![0xff, 0x00];
-        let val_2 = vec![2];
+        let val_2 = [2];
         let key_3 = vec![0xff, 0x0f];
-        let val_3 = vec![3];
+        let val_3 = [3];
 
         let mut merkle = create_in_memory_merkle();
 
-        merkle.insert(&key, val.clone()).unwrap();
-        merkle.insert(&key_2, val_2.clone()).unwrap();
-        merkle.insert(&key_3, val_3.clone()).unwrap();
+        merkle.insert(&key, Box::new(val)).unwrap();
+        merkle.insert(&key_2, Box::new(val_2)).unwrap();
+        merkle.insert(&key_3, Box::new(val_3)).unwrap();
 
         let got = merkle.get(&key).unwrap().unwrap();
-        assert_eq!(&*got, val);
+        assert_eq!(*got, val);
 
         let got = merkle.get(&key_2).unwrap().unwrap();
-        assert_eq!(&*got, val_2);
+        assert_eq!(*got, val_2);
 
         let got = merkle.get(&key_3).unwrap().unwrap();
-        assert_eq!(&*got, val_3);
+        assert_eq!(*got, val_3);
     }
 
     #[test]
     fn test_insert_branch_as_branch_parent() {
         let key = vec![0xff, 0xf0];
-        let val = vec![1];
+        let val = [1];
         let key_2 = vec![0xff, 0xf0, 0x00];
-        let val_2 = vec![2];
+        let val_2 = [2];
         let key_3 = vec![0xff];
-        let val_3 = vec![3];
+        let val_3 = [3];
 
         let mut merkle = create_in_memory_merkle();
 
-        merkle.insert(&key, val.clone()).unwrap();
+        merkle.insert(&key, Box::new(val)).unwrap();
         // key is a leaf
 
-        merkle.insert(&key_2, val_2.clone()).unwrap();
+        merkle.insert(&key_2, Box::new(val_2)).unwrap();
         // key is branch with child key_2
 
-        merkle.insert(&key_3, val_3.clone()).unwrap();
+        merkle.insert(&key_3, Box::new(val_3)).unwrap();
         // key_3 is a branch with child key
         // key is a branch with child key_3
 
@@ -1426,29 +1426,29 @@ mod tests {
     #[test]
     fn test_insert_overwrite_branch_value() {
         let key = vec![0xff];
-        let val = vec![1];
+        let val = [1];
         let key_2 = vec![0xff, 0x00];
-        let val_2 = vec![2];
-        let overwrite = vec![3];
+        let val_2 = [2];
+        let overwrite = [3];
 
         let mut merkle = create_in_memory_merkle();
 
-        merkle.insert(&key, val.clone()).unwrap();
-        merkle.insert(&key_2, val_2.clone()).unwrap();
+        merkle.insert(&key, Box::new(val)).unwrap();
+        merkle.insert(&key_2, Box::new(val_2)).unwrap();
 
         let got = merkle.get(&key).unwrap().unwrap();
-        assert_eq!(&*got, val);
+        assert_eq!(*got, val);
 
         let got = merkle.get(&key_2).unwrap().unwrap();
-        assert_eq!(&*got, val_2);
+        assert_eq!(*got, val_2);
 
-        merkle.insert(&key, overwrite.clone()).unwrap();
+        merkle.insert(&key, Box::new(overwrite)).unwrap();
 
         let got = merkle.get(&key).unwrap().unwrap();
-        assert_eq!(&*got, overwrite);
+        assert_eq!(*got, overwrite);
 
         let got = merkle.get(&key_2).unwrap().unwrap();
-        assert_eq!(&*got, val_2);
+        assert_eq!(*got, val_2);
     }
 
     //     #[test]
@@ -1494,7 +1494,7 @@ mod tests {
     ) -> Result<Merkle<MemStore>, MerkleError> {
         let mut merkle = Merkle::new(HashedNodeStore::initialize(MemStore::new(vec![])).unwrap());
         for (k, v) in items.iter() {
-            merkle.insert(k.as_ref(), v.as_ref().to_vec())?;
+            merkle.insert(k.as_ref(), Box::from(v.as_ref()))?;
             println!("{}", merkle.dump()?);
         }
 
@@ -1580,7 +1580,7 @@ mod tests {
             let mut items: Vec<_> = (0..10)
                 .map(|_| keygen())
                 .map(|key| {
-                    let val: Vec<u8> = (0..8).map(|_| rng.borrow_mut().gen()).collect();
+                    let val: Box<[u8]> = (0..8).map(|_| rng.borrow_mut().gen()).collect();
                     (key, val)
                 })
                 .collect();
@@ -1594,7 +1594,7 @@ mod tests {
 
             for (k, v) in items.iter() {
                 hashes.push((merkle.root_hash()?, merkle.dump()?));
-                merkle.insert(k, v.to_vec())?;
+                merkle.insert(k, v.clone())?;
             }
 
             let mut new_hashes = Vec::new();
@@ -1652,7 +1652,7 @@ mod tests {
             let mut items = std::collections::HashMap::new();
 
             for _ in 0..10 {
-                let val: Vec<u8> = (0..8).map(|_| rng.borrow_mut().gen()).collect();
+                let val: Box<[u8]> = (0..8).map(|_| rng.borrow_mut().gen()).collect();
                 items.insert(keygen(), val);
             }
 
@@ -1664,7 +1664,7 @@ mod tests {
                 Merkle::new(HashedNodeStore::initialize(MemStore::new(vec![])).unwrap());
 
             for (k, v) in items.iter() {
-                merkle.insert(k, v.to_vec())?;
+                merkle.insert(k, v.clone())?;
             }
 
             for (k, v) in items.iter() {

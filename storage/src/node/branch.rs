@@ -102,7 +102,7 @@ impl From<&LeafNode> for BranchNode {
     fn from(leaf: &LeafNode) -> Self {
         BranchNode {
             partial_path: leaf.partial_path.clone(),
-            value: Some(leaf.value.clone().into_boxed_slice()),
+            value: Some(leaf.value.clone()),
             children: Default::default(),
             child_hashes: Default::default(),
         }
