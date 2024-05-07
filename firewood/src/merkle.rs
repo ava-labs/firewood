@@ -361,8 +361,9 @@ impl<T: ReadLinearStore> Merkle<T> {
 
 impl<T: WriteLinearStore> Merkle<T> {
     pub fn insert(&mut self, key: &[u8], val: Vec<u8>) -> Result<(), MerkleError> {
-        for addr in self.insert_and_return_ancestors(key, val)? {
-            self.0.invalidate_hash(addr);
+        for _addr in self.insert_and_return_ancestors(key, val)? {
+            // TODO: actually invalidate the hashes
+            // This means changing the iterator so that it returns which child we went down
         }
         Ok(())
     }

@@ -1,16 +1,14 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![allow(dead_code)]
-
 use sha3::{Digest, Keccak256};
 use std::collections::HashMap;
 use std::io::Error;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-use storage::Node;
 use storage::TrieHash;
+use storage::{Node, ProposedImmutable};
 
 use storage::{LinearAddress, NodeStore};
 use storage::{ReadLinearStore, WriteLinearStore};
@@ -21,7 +19,7 @@ pub struct HashedNode(Arc<Node>);
 #[derive(Debug)]
 pub struct HashedNodeStore<T: ReadLinearStore> {
     nodestore: NodeStore<T>,
-    hashes: HashMap<LinearAddress, Option<TrieHash>>,
+    modified: HashMap<LinearAddress, Node>,
 }
 
 impl<T: WriteLinearStore> HashedNodeStore<T> {
@@ -29,8 +27,17 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         let nodestore = NodeStore::initialize(linearstore)?;
         Ok(HashedNodeStore {
             nodestore,
-            hashes: Default::default(),
+            modified: Default::default(),
         })
+    }
+}
+
+impl<T: ReadLinearStore> From<NodeStore<T>> for HashedNodeStore<T> {
+    fn from(nodestore: NodeStore<T>) -> Self {
+        HashedNodeStore {
+            nodestore,
+            modified: Default::default(),
+        }
     }
 }
 
@@ -63,8 +70,15 @@ impl<T: ReadLinearStore> DerefMut for HashedNodeStore<T> {
 }
 
 impl<T: WriteLinearStore> HashedNodeStore<T> {
-    pub fn invalidate_hash(&mut self, addr: LinearAddress) {
-        self.hashes.insert(addr, None);
+    pub fn freeze(self) -> HashedNodeStore<ProposedImmutable> {
+        for _node in self.modified {
+            todo!("write the nodes to the reserved space");
+        }
+        let frozen_nodestore = self.nodestore.freeze();
+        HashedNodeStore {
+            nodestore: frozen_nodestore,
+            modified: Default::default(),
+        }
     }
 }
 
@@ -97,21 +111,13 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
 }
 
 impl HashedNode {
+    // TODO: This is broken
     pub fn hash<T: ReadLinearStore>(
         &self,
-        addr: LinearAddress,
+        _addr: LinearAddress,
         store: &mut HashedNodeStore<T>,
     ) -> Result<TrieHash, Error> {
-        // see if we already have the hashed value for this node
-        let value = store.hashes.get_mut(&addr);
-        match value {
-            None | Some(None) => {
-                let hash = store.hash_internal(&self.0);
-                store.hashes.insert(addr, Some(hash.clone()));
-                Ok(hash)
-            }
-            Some(Some(hash)) => Ok(hash.clone()),
-        }
+        Ok(store.hash_internal(&self.0))
     }
 }
 

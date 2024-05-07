@@ -14,6 +14,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::node::Node;
+use crate::ProposedImmutable;
 
 use super::linear::{ReadLinearStore, WriteLinearStore};
 
@@ -267,15 +268,28 @@ impl<T: WriteLinearStore> NodeStore<T> {
         Ok(addr)
     }
 
-    /// The inner implementation of [create_node] that doesn't update the free lists.
-    fn create_node_inner(&mut self, node: &Node) -> Result<LinearAddress, Error> {
+    fn stored_len(node: &Node) -> u64 {
+        // TODO: calculate length without serializing!
         let area: Area<&Node, FreeArea> = Area::Node(node);
-
-        let area_bytes =
-            bincode::serialize(&area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+        let area_bytes = bincode::serialize(&area)
+            .map_err(|e| Error::new(ErrorKind::InvalidData, e))
+            .expect("fixme");
 
         // +1 for the size index byte
-        let stored_area_size = area_bytes.len() as u64 + 1;
+        // TODO: do a better job packing the boolean (freed) with the possible node sizes
+        // A reasonable option is use a i8 and negative values indicate it's freed whereas positive values are non-free
+        // This would still allow for 127 different sizes
+        area_bytes.len() as u64 + 1
+    }
+
+    /// Allocates an area in the [LinearStore] but does not write it; returns
+    /// where the node will go and the freelist size of the node
+    ///
+    /// Note: The node is removed from the freelist but it still contains a freed status
+    /// in the linearstore. The caller must eventually call [NodeStore::update_node] or
+    /// [NodeStore::delete_node] on this node
+    pub fn allocate_node(&mut self, node: &Node) -> Result<(LinearAddress, u8), Error> {
+        let stored_area_size = Self::stored_len(node);
 
         // Attempt to allocate from a free list.
         // If we can't allocate from a free list, allocate past the existing
@@ -285,9 +299,16 @@ impl<T: WriteLinearStore> NodeStore<T> {
             None => self.allocate_from_end(stored_area_size)?,
         };
 
+        Ok((addr, index))
+    }
+
+    /// The inner implementation of [create_node] that doesn't update the free lists.
+    fn create_node_inner(&mut self, node: &Node) -> Result<LinearAddress, Error> {
+        let (addr, index) = self.allocate_node(node)?;
+
         let stored_area = StoredArea {
             area_size_index: index,
-            area,
+            area: Area::<_, FreeArea>::Node(node),
         };
 
         let stored_area_bytes =
@@ -361,6 +382,16 @@ impl<T: WriteLinearStore> NodeStore<T> {
     pub fn set_root(&mut self, addr: LinearAddress) -> Result<(), Error> {
         self.header.root_address = Some(addr);
         self.write_header()
+    }
+}
+
+impl<W: WriteLinearStore> NodeStore<W> {
+    /// Freeze a writable NodeStore into a ProposedImmutable
+    pub fn freeze(self) -> NodeStore<ProposedImmutable> {
+        NodeStore {
+            header: self.header,
+            linear_store: self.linear_store.freeze(),
+        }
     }
 }
 

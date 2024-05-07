@@ -1,8 +1,13 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::{ReadLinearStore, WriteLinearStore};
-use std::io::{Cursor, Read};
+use crate::{LinearStoreParent, Proposed};
+
+use super::{proposed::Immutable, ReadLinearStore, WriteLinearStore};
+use std::{
+    io::{Cursor, Read},
+    sync::Arc,
+};
 
 #[derive(Debug, Clone, Default)]
 /// An in-memory impelementation of [WriteLinearStore]
@@ -25,6 +30,11 @@ impl WriteLinearStore for MemStore {
         }
         self.bytes[offset..offset + object.len()].copy_from_slice(object);
         Ok(object.len())
+    }
+
+    fn freeze(self) -> Proposed<Immutable> {
+        let parent = LinearStoreParent::MemBacked(Arc::new(self));
+        Proposed::new(parent).freeze()
     }
 }
 

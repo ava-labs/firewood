@@ -66,10 +66,10 @@ pub(super) mod filebacked;
 pub mod historical;
 pub mod proposed;
 
+use crate::MemStore;
+
 use self::filebacked::FileBacked;
 use self::historical::Historical;
-#[cfg(test)]
-use self::memory::MemStore;
 use self::proposed::ProposedImmutable;
 mod layered;
 
@@ -88,6 +88,10 @@ pub trait ReadLinearStore: Send + Sync + Debug {
 pub trait WriteLinearStore: ReadLinearStore {
     /// Write a new object at a given offset
     fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error>;
+
+    /// Convert this [WriteLinearStore] into a [ProposedImmutable]
+    /// which only implements ReadLinearStore, not [WriteLinearStore]
+    fn freeze(self) -> crate::ProposedImmutable;
 }
 
 /// The parent of a [ReadLinearStore]
@@ -97,12 +101,12 @@ pub enum LinearStoreParent {
     FileBacked(Arc<FileBacked>),
 
     /// The parent is a proposal
-    Proposed(Arc<ProposedImmutable>),
+    Proposed(Arc<crate::ProposedImmutable>),
 
     /// The parent is a historical revision
     Historical(Arc<historical::Historical>),
 
-    #[cfg(test)]
+    /// The parent is in memory (primarily for testing)
     MemBacked(Arc<MemStore>),
 }
 
@@ -112,7 +116,6 @@ impl PartialEq for LinearStoreParent {
             (Self::FileBacked(l0), Self::FileBacked(r0)) => Arc::ptr_eq(l0, r0),
             (Self::Proposed(l0), Self::Proposed(r0)) => Arc::ptr_eq(l0, r0),
             (Self::Historical(l0), Self::Historical(r0)) => Arc::ptr_eq(l0, r0),
-            #[cfg(test)]
             (Self::MemBacked(l0), Self::MemBacked(r0)) => Arc::ptr_eq(l0, r0),
             _ => false,
         }
@@ -142,6 +145,12 @@ impl From<Arc<Historical>> for LinearStoreParent {
     }
 }
 
+impl From<Arc<MemStore>> for LinearStoreParent {
+    fn from(value: Arc<MemStore>) -> Self {
+        LinearStoreParent::MemBacked(value)
+    }
+}
+
 #[cfg(test)]
 impl From<MemStore> for LinearStoreParent {
     fn from(value: MemStore) -> Self {
@@ -155,7 +164,6 @@ impl ReadLinearStore for LinearStoreParent {
             LinearStoreParent::FileBacked(filebacked) => filebacked.stream_from(addr),
             LinearStoreParent::Proposed(proposed) => proposed.stream_from(addr),
             LinearStoreParent::Historical(historical) => historical.stream_from(addr),
-            #[cfg(test)]
             LinearStoreParent::MemBacked(memstore) => memstore.stream_from(addr),
         }
     }
@@ -165,7 +173,6 @@ impl ReadLinearStore for LinearStoreParent {
             LinearStoreParent::FileBacked(filebacked) => filebacked.size(),
             LinearStoreParent::Proposed(proposed) => proposed.size(),
             LinearStoreParent::Historical(historical) => historical.size(),
-            #[cfg(test)]
             LinearStoreParent::MemBacked(memstore) => memstore.size(),
         }
     }

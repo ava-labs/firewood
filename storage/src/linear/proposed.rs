@@ -194,6 +194,15 @@ impl WriteLinearStore for ProposedMutable {
         self.new.insert(insert.offset, insert.data);
         Ok(object.len())
     }
+
+    fn freeze(self) -> ProposedImmutable {
+        Proposed {
+            new: self.new,
+            old: self.old,
+            parent: self.parent,
+            phantom_data: Default::default(),
+        }
+    }
 }
 
 // this is actually a clippy bug, works on nightly; see
