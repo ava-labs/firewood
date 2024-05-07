@@ -530,7 +530,7 @@ mod tests {
 
         let leaf = Node::Leaf(LeafNode {
             partial_path: Path::from([0, 1, 2]),
-            value: vec![3, 4, 5],
+            value: Box::new([3, 4, 5]),
         });
 
         let leaf_addr = node_store.create_node(&leaf).unwrap();
@@ -604,7 +604,7 @@ mod tests {
         // Create a leaf
         let leaf = Node::Leaf(LeafNode {
             partial_path: Path::new(),
-            value: vec![1],
+            value: Box::new([1]),
         });
         let leaf_addr = node_store.create_node(&leaf).unwrap();
         let (leaf_index, leaf_area_size) = node_store.area_index_and_size(leaf_addr).unwrap();
@@ -651,14 +651,14 @@ mod tests {
         // Create a leaf
         let leaf1 = Node::Leaf(LeafNode {
             partial_path: Path::new(),
-            value: vec![1],
+            value: Box::new([1]),
         });
         let leaf1_addr = node_store.create_node(&leaf1).unwrap();
 
         // Update the node
         let leaf2 = Node::Leaf(LeafNode {
             partial_path: Path::new(),
-            value: vec![2],
+            value: Box::new([2]),
         });
 
         // The new node should fit in the old area
@@ -687,7 +687,7 @@ mod tests {
         // Create a leaf
         let leaf = Node::Leaf(LeafNode {
             partial_path: Path::new(),
-            value: vec![1],
+            value: Box::new([1]),
         });
         let leaf_addr = node_store.create_node(&leaf).unwrap();
         let (leaf_index, _) = node_store.area_index_and_size(leaf_addr).unwrap();
