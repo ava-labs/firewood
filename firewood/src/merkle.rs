@@ -10,7 +10,6 @@ use futures::{StreamExt, TryStreamExt};
 use std::collections::HashSet;
 use std::future::ready;
 use std::io::Write;
-use std::sync::OnceLock;
 use storage::Path;
 use storage::ReadLinearStore;
 use storage::TrieHash;
@@ -55,8 +54,6 @@ pub enum MerkleError {
 
 #[derive(Debug)]
 pub struct Merkle<T: ReadLinearStore>(HashedNodeStore<T>);
-
-static EMPTY_HASH: OnceLock<TrieHash> = OnceLock::new();
 
 impl<T: ReadLinearStore> Deref for Merkle<T> {
     type Target = HashedNodeStore<T>;
@@ -112,21 +109,13 @@ impl<T: ReadLinearStore> Merkle<T> {
         Merkle(store)
     }
 
-    pub fn root_address(&self) -> Option<LinearAddress> {
+    pub const fn root_address(&self) -> Option<LinearAddress> {
         self.0.root_address()
     }
 
     // TODO: can we make this &self instead of &mut self?
     pub fn root_hash(&mut self) -> Result<TrieHash, std::io::Error> {
-        let root = self.root_address();
-        match root {
-            None => Ok(EMPTY_HASH.get_or_init(TrieHash::default).clone()),
-            Some(root) => {
-                // TODO: We might be able to get the hash without reading the node...
-                let root_node = self.read_node(root)?;
-                root_node.hash(root, &mut self.0)
-            }
-        }
+        self.0.root_hash()
     }
 
     /// Constructs a merkle proof for key. The result contains all encoded nodes
@@ -313,7 +302,7 @@ impl<T: ReadLinearStore> Merkle<T> {
         writer: &mut dyn Write,
     ) -> Result<(), std::io::Error> {
         let node = self.read_node(addr)?;
-        match &**node {
+        match &*node {
             Node::Branch(b) => {
                 write!(writer, "  {addr}[label=\"@{addr}")?;
 
@@ -384,7 +373,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 value,
             });
 
-            let new_root = self.create_node(&leaf)?;
+            let new_root = self.create_node(leaf)?;
             self.set_root(new_root)?;
             return Ok(Default::default());
         };
@@ -397,7 +386,7 @@ impl<T: WriteLinearStore> Merkle<T> {
             // Create a new node with the common prefix of the root's key and `key`.
             let old_root = self.read_node(old_root_addr)?;
 
-            let old_root_key = match &**old_root {
+            let old_root_key = match &*old_root {
                 Node::Branch(branch) => &branch.partial_path,
                 Node::Leaf(leaf) => &leaf.partial_path,
             };
@@ -425,7 +414,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 *new_root.children.get_mut(index).expect("nibble") = Some(old_root_addr);
 
                 let new_root = Node::Branch(Box::new(new_root));
-                let new_root_addr = self.create_node(&new_root)?;
+                let new_root_addr = self.create_node(new_root)?;
                 self.set_root(new_root_addr)?;
 
                 // Update the old root's partial path to be shorter since now it has a parent.
@@ -437,7 +426,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                         ));
                 // Shortening the partial path should never cause the node to grow.
                 // TODO danlaine: Should we make this assumption?
-                update_always_shrinks!(self.update_node(old_root_addr, &new_child))?;
+                update_always_shrinks!(self.update_node(old_root_addr, new_child))?;
                 return Ok(vec![old_root_addr]);
             } else {
                 // `key` is not a prefix of the existing root's key.
@@ -454,7 +443,7 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                 // Shortening the partial path should never cause the node to grow.
                 // TODO danlaine: Should we make this assumption?
-                update_always_shrinks!(self.update_node(old_root_addr, &child_with_old_root_value))?;
+                update_always_shrinks!(self.update_node(old_root_addr, child_with_old_root_value))?;
 
                 // Create a new leaf node with the remaining nibbles of `key`
                 // (less the branch nibble).
@@ -464,13 +453,13 @@ impl<T: WriteLinearStore> Merkle<T> {
                         overlap.unique_b.iter().skip(1).copied(),
                     ),
                 });
-                let new_leaf_addr = self.create_node(&new_leaf)?;
+                let new_leaf_addr = self.create_node(new_leaf)?;
 
                 *new_root.mut_child(overlap.unique_a[0]) = Some(old_root_addr);
                 *new_root.mut_child(overlap.unique_b[0]) = Some(new_leaf_addr);
 
                 let new_root = Node::Branch(Box::new(new_root));
-                let new_root_addr = self.create_node(&new_root)?;
+                let new_root_addr = self.create_node(new_root)?;
                 self.set_root(new_root_addr)?;
 
                 return Ok(vec![old_root_addr]);
@@ -498,7 +487,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     }));
 
                     // TODO we can't use this macro because the node may move
-                    update_always_shrinks!(self.update_node(last_node.addr, &new_branch))?;
+                    update_always_shrinks!(self.update_node(last_node.addr, new_branch))?;
                 }
                 Node::Leaf(last_node_leaf) => {
                     // Replace the value in the leaf node.
@@ -509,7 +498,8 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                     let last_node_addr = last_node.addr;
 
-                    match self.update_node(last_node_addr, &new_leaf) {
+                    drop(last_node);
+                    match self.update_node(last_node_addr, new_leaf) {
                         Ok(_) => {}
                         Err(UpdateError::Io(e)) => return Err(e.into()),
                         Err(storage::UpdateError::NodeMoved(new_addr)) => {
@@ -542,7 +532,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                             }));
 
                             update_always_shrinks!(
-                                self.update_node(leaf_parent.addr, &new_last_node_parent)
+                                self.update_node(leaf_parent.addr, new_last_node_parent)
                             )?;
                         }
                     }
@@ -568,7 +558,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                                     .copied(),
                             ),
                         });
-                        let new_leaf_addr = self.create_node(&new_leaf)?;
+                        let new_leaf_addr = self.create_node(new_leaf)?;
 
                         let mut updated_branch_children = last_node_branch.children;
                         updated_branch_children[child_index] = Some(new_leaf_addr);
@@ -583,7 +573,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                             child_hashes: updated_child_hashes,
                         }));
 
-                        match self.update_node(last_node.addr, &updated_branch) {
+                        match self.update_node(last_node.addr, updated_branch) {
                             Ok(()) => {}
                             Err(UpdateError::Io(e)) => return Err(e.into()),
                             Err(UpdateError::NodeMoved(new_addr)) => {
@@ -615,7 +605,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                                 }));
 
                                 update_always_shrinks!(
-                                    self.update_node(last_node_parent.addr, &new_last_node_parent)
+                                    self.update_node(last_node_parent.addr, new_last_node_parent)
                                 )?;
                             }
                         };
@@ -625,7 +615,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     // There is a child at the index that the `key` would be at. Get it.
                     let child_node = self.read_node(child_addr)?;
 
-                    match &**child_node {
+                    match &*child_node {
                         Node::Branch(child_branch) => {
                             let prefix_overlap = PrefixOverlap::from(
                                 &child_branch.partial_path,
@@ -649,7 +639,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                                         prefix_overlap.unique_b.iter().skip(1).copied(),
                                     ),
                                 });
-                                let new_leaf_addr = self.create_node(&new_leaf)?;
+                                let new_leaf_addr = self.create_node(new_leaf)?;
                                 *new_branch.mut_child(first_b) = Some(new_leaf_addr);
                                 *new_branch.mut_child(prefix_overlap.unique_a[0]) =
                                     Some(child_addr);
@@ -666,11 +656,11 @@ impl<T: WriteLinearStore> Merkle<T> {
                                 let updated_child_branch =
                                     Node::Branch(Box::new(updated_child_branch));
                                 update_always_shrinks!(
-                                    self.update_node(child_addr, &updated_child_branch)
+                                    self.update_node(child_addr, updated_child_branch)
                                 )?;
 
                                 let new_branch = Node::Branch(Box::new(new_branch));
-                                let new_branch_addr = self.create_node(&new_branch)?;
+                                let new_branch_addr = self.create_node(new_branch)?;
 
                                 // Update `last_node` to point to the new branch.
                                 let mut new_last_node = BranchNode {
@@ -686,7 +676,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                                     .expect("nibble") = None;
                                 let new_last_node = Node::Branch(Box::new(new_last_node));
                                 update_always_shrinks!(
-                                    self.update_node(last_node.addr, &new_last_node)
+                                    self.update_node(last_node.addr, new_last_node)
                                 )?;
                             } else {
                                 // The new branch is at `key`.
@@ -699,7 +689,7 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                                 // Update `last_node` to point to the new branch.
                                 let new_branch = Node::Branch(Box::new(new_branch));
-                                let new_branch_addr = self.create_node(&new_branch)?;
+                                let new_branch_addr = self.create_node(new_branch)?;
 
                                 let mut new_last_node = BranchNode {
                                     children: last_node_branch.children,
@@ -715,7 +705,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                                 let new_last_node = Node::Branch(Box::new(new_last_node));
 
                                 update_always_shrinks!(
-                                    self.update_node(last_node.addr, &new_last_node)
+                                    self.update_node(last_node.addr, new_last_node)
                                 )?;
                             }
                             return Ok(hash_invalidation_addresses);
@@ -746,7 +736,7 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                                 // Update `last_node` to point to the new branch.
                                 let new_branch = Node::Branch(Box::new(new_branch));
-                                let new_branch_addr = self.create_node(&new_branch)?;
+                                let new_branch_addr = self.create_node(new_branch)?;
 
                                 let mut new_last_node = BranchNode {
                                     children: last_node_branch.children,
@@ -763,7 +753,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                                 let new_last_node = Node::Branch(Box::new(new_last_node));
 
                                 update_always_shrinks!(
-                                    self.update_node(last_node.addr, &new_last_node)
+                                    self.update_node(last_node.addr, new_last_node)
                                 )?;
                                 return Ok(hash_invalidation_addresses);
                             }
@@ -775,14 +765,14 @@ impl<T: WriteLinearStore> Merkle<T> {
                                     prefix_overlap.unique_b.iter().skip(1).copied(),
                                 ),
                             });
-                            let new_leaf_addr = self.create_node(&new_leaf)?;
+                            let new_leaf_addr = self.create_node(new_leaf)?;
 
                             new_branch
                                 .update_child(prefix_overlap.unique_b[0], Some(new_leaf_addr));
                             new_branch.update_child(prefix_overlap.unique_a[0], Some(child_addr));
 
                             let new_branch = Node::Branch(Box::new(new_branch));
-                            let new_branch_addr = self.create_node(&new_branch)?;
+                            let new_branch_addr = self.create_node(new_branch)?;
 
                             let updated_leaf = LeafNode {
                                 value: child_leaf.value.clone(),
@@ -791,7 +781,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                                 ),
                             };
                             let updated_leaf = Node::Leaf(updated_leaf);
-                            update_always_shrinks!(self.update_node(child_addr, &updated_leaf))?;
+                            update_always_shrinks!(self.update_node(child_addr, updated_leaf))?;
 
                             let mut new_last_node = BranchNode {
                                 children: last_node_branch.children,
@@ -802,9 +792,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                             new_last_node.update_child(child_index as u8, Some(new_branch_addr));
 
                             let new_last_node = Node::Branch(Box::new(new_last_node));
-                            update_always_shrinks!(
-                                self.update_node(last_node.addr, &new_last_node)
-                            )?;
+                            update_always_shrinks!(self.update_node(last_node.addr, new_last_node))?;
                             return Ok(hash_invalidation_addresses);
                         }
                     }
@@ -821,7 +809,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                                 .copied(),
                         ),
                     });
-                    let new_leaf_addr = self.create_node(&new_leaf)?;
+                    let new_leaf_addr = self.create_node(new_leaf)?;
 
                     // Turn the leaf into a branch node.
                     let mut new_branch: BranchNode = last_node_leaf.into();
@@ -833,7 +821,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     );
                     let new_branch = Node::Branch(Box::new(new_branch));
 
-                    match self.update_node(last_node.addr, &new_branch) {
+                    match self.update_node(last_node.addr, new_branch) {
                         Err(UpdateError::NodeMoved(new_addr)) => {
                             // The leaf we're updating to a branch is now at a new address.
                             // Update its parent to point to the new address.
@@ -853,7 +841,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                             let new_last_node_parent = Node::Branch(Box::new(branch));
 
                             update_always_shrinks!(
-                                self.update_node(last_node_parent.addr, &new_last_node_parent)
+                                self.update_node(last_node_parent.addr, new_last_node_parent)
                             )?;
                         }
                         Err(UpdateError::Io(e)) => return Err(e.into()),
@@ -876,7 +864,7 @@ impl<T: WriteLinearStore> Merkle<T> {
 
 impl<T: WriteLinearStore> Merkle<T> {
     pub fn put_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError> {
-        self.create_node(&node).map_err(MerkleError::Format)
+        self.create_node(node).map_err(MerkleError::Format)
     }
 
     fn _delete_node(&mut self, _addr: LinearAddress) -> Result<(), MerkleError> {
@@ -933,16 +921,6 @@ mod tests {
     fn insert_one() {
         let mut merkle = create_in_memory_merkle();
         merkle.insert(b"abc", Box::new([])).unwrap()
-    }
-
-    #[test]
-    fn insert_two() -> Result<(), MerkleError> {
-        let mut merkle = create_in_memory_merkle();
-        merkle.insert(b"abc", Box::new([]))?;
-        let root_addr = merkle.root_address();
-        merkle.insert(b"abc", Box::from(*b"abcdefghijklmnopqrstuvwxyz"))?;
-        assert_ne!(root_addr, merkle.root_address());
-        Ok(())
     }
 
     fn create_in_memory_merkle() -> Merkle<MemStore> {

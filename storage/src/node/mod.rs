@@ -35,18 +35,18 @@ impl Node {
     }
 
     /// Returns a new Arc<Node> which is the same as `self` but with the given `partial_path`.
-    pub fn new_with_partial_path(self: Arc<Node>, partial_path: Path) -> Arc<Node> {
+    pub fn new_with_partial_path(self: Arc<Node>, partial_path: Path) -> Node {
         match self.as_ref() {
-            Node::Branch(b) => Arc::new(Node::Branch(Box::new(BranchNode {
+            Node::Branch(b) => Node::Branch(Box::new(BranchNode {
                 partial_path,
                 value: b.value.clone(),
                 children: b.children,
                 child_hashes: b.child_hashes.clone(),
-            }))),
-            Node::Leaf(l) => Arc::new(Node::Leaf(LeafNode {
+            })),
+            Node::Leaf(l) => Node::Leaf(LeafNode {
                 partial_path,
                 value: l.value.clone(),
-            })),
+            }),
         }
     }
 }

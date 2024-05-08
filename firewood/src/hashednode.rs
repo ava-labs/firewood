@@ -4,22 +4,25 @@
 use sha3::{Digest, Keccak256};
 use std::collections::HashMap;
 use std::io::Error;
-use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
-use storage::TrieHash;
 use storage::{Node, ProposedImmutable};
+use storage::{TrieHash, UpdateError};
 
 use storage::{LinearAddress, NodeStore};
 use storage::{ReadLinearStore, WriteLinearStore};
 
-#[derive(Debug)]
-pub struct HashedNode(Arc<Node>);
-
+/// A [HashedNodeStore] keeps track of nodes as they change when they are backed by a LinearStore.
+/// This defers the writes of those nodes until all the changes are made to the trie as part of a
+/// batch. It also supports a `freeze` method which consumes a [WriteLinearStore] backed [HashedNodeStore],
+/// makes sure the hashes are filled in, and flushes the nodes out before returning a [ReadLinearStore]
+/// backed HashedNodeStore for future operations. `freeze` is called when the batch is completed and is
+/// used to obtain the merkle trie for the proposal.
 #[derive(Debug)]
 pub struct HashedNodeStore<T: ReadLinearStore> {
     nodestore: NodeStore<T>,
-    modified: HashMap<LinearAddress, Node>,
+    modified: HashMap<LinearAddress, (Arc<Node>, u8)>,
+    root_hash: OnceLock<TrieHash>,
 }
 
 impl<T: WriteLinearStore> HashedNodeStore<T> {
@@ -28,6 +31,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         Ok(HashedNodeStore {
             nodestore,
             modified: Default::default(),
+            root_hash: Default::default(),
         })
     }
 }
@@ -37,35 +41,48 @@ impl<T: ReadLinearStore> From<NodeStore<T>> for HashedNodeStore<T> {
         HashedNodeStore {
             nodestore,
             modified: Default::default(),
+            root_hash: Default::default(),
         }
     }
 }
 
 impl<T: ReadLinearStore> HashedNodeStore<T> {
-    pub fn read_node(&self, addr: LinearAddress) -> Result<HashedNode, Error> {
-        let node = self.nodestore.read_node(addr)?;
-        Ok(HashedNode(node))
+    pub fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
+        if let Some(modified_node) = self.modified.get(&addr) {
+            Ok(modified_node.0.clone())
+        } else {
+            Ok(self.nodestore.read_node(addr)?)
+        }
     }
 
-    pub fn root_hash(&self, addr: LinearAddress) -> Result<TrieHash, Error> {
-        let node = self.read_node(addr)?;
-        Ok(self.hash_internal(&node))
+    pub fn root_hash(&self) -> Result<TrieHash, Error> {
+        if let Some(addr) = self.nodestore.root_address() {
+            #[cfg(nightly)]
+            let result = self
+                .root_hash
+                .get_or_try_init(|| {
+                    let node = self.read_node(addr)?;
+                    Ok(self.hash_internal(&node))
+                })
+                .cloned();
+            #[cfg(not(nightly))]
+            let result = Ok(self
+                .root_hash
+                .get_or_init(|| {
+                    let node = self
+                        .read_node(addr)
+                        .expect("TODO: use get_or_try_init once it's available");
+                    self.hash_internal(&node)
+                })
+                .clone());
+            result
+        } else {
+            Ok(TrieHash::default())
+        }
     }
-}
 
-// TODO: This should be a concrete implementation that invalidates hashes for items
-// at the same address
-impl<T: ReadLinearStore> Deref for HashedNodeStore<T> {
-    type Target = NodeStore<T>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.nodestore
-    }
-}
-
-impl<T: ReadLinearStore> DerefMut for HashedNodeStore<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.nodestore
+    pub const fn root_address(&self) -> Option<LinearAddress> {
+        self.nodestore.root_address()
     }
 }
 
@@ -78,7 +95,39 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         HashedNodeStore {
             nodestore: frozen_nodestore,
             modified: Default::default(),
+            root_hash: Default::default(),
         }
+    }
+    pub fn create_node(&mut self, node: Node) -> Result<LinearAddress, Error> {
+        let (addr, size) = self.nodestore.allocate_node(&node)?;
+        self.modified.insert(addr, (Arc::new(node), size));
+        Ok(addr)
+    }
+
+    pub fn update_node(
+        &mut self,
+        old_address: LinearAddress,
+        node: Node,
+    ) -> Result<(), UpdateError> {
+        let old_size = if let Some((_, old_size)) = self.modified.get(&old_address) {
+            *old_size
+        } else {
+            self.nodestore.node_size(old_address)?
+        };
+        // the node was already modified, see if it still fits
+        if !self.nodestore.still_fits(old_size, &node)? {
+            self.modified.remove(&old_address);
+            self.nodestore.delete_node(old_address)?;
+            return Err(UpdateError::NodeMoved(self.create_node(node)?));
+        }
+        self.modified
+            .insert(old_address, (Arc::new(node), old_size));
+
+        Ok(())
+    }
+
+    pub fn set_root(&mut self, root_addr: LinearAddress) -> Result<(), Error> {
+        self.nodestore.set_root(root_addr)
     }
 }
 
@@ -107,24 +156,5 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
             }
         }
         hasher.finalize().into()
-    }
-}
-
-impl HashedNode {
-    // TODO: This is broken
-    pub fn hash<T: ReadLinearStore>(
-        &self,
-        _addr: LinearAddress,
-        store: &mut HashedNodeStore<T>,
-    ) -> Result<TrieHash, Error> {
-        Ok(store.hash_internal(&self.0))
-    }
-}
-
-impl Deref for HashedNode {
-    type Target = Arc<Node>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
