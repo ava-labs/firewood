@@ -10,9 +10,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::v2::api::HashKey;
-use storage::FileBacked;
 use storage::Historical;
 use storage::ProposedImmutable;
+use storage::{FileBacked, TrieHash};
 use storage::{LinearStoreParent, ReadLinearStore};
 use typed_builder::TypedBuilder;
 
@@ -27,11 +27,10 @@ pub struct RollingRevisionManagerConfig {
 pub(crate) struct RollingRevisionManager {
     max_revisions: usize,
     filebacked: Arc<FileBacked>,
-    historical: VecDeque<Arc<Historical>>,
+    historicals: VecDeque<(TrieHash, Arc<Historical>)>,
     proposals: Vec<Arc<ProposedImmutable>>,
     last_commit: Arc<Historical>,
     commit_in_progress: AtomicBool,
-    // TODO: by_hash: HashMap<TrieHash, LinearStore>
     // TODO: maintain root hash of the most recent commit
 }
 
@@ -50,7 +49,7 @@ impl RollingRevisionManager {
         Ok(Self {
             max_revisions: config.max_revisions,
             filebacked,
-            historical: Default::default(),
+            historicals: Default::default(),
             proposals: Default::default(),
             last_commit: base_historical,
             commit_in_progress: AtomicBool::new(false),
@@ -72,6 +71,8 @@ pub(crate) enum RollingRevisionManagerError {
     NotLatest,
     #[error("The proposal cannot be committed since a sibling was committed")]
     SiblingCommitted,
+    #[error("The revision does not exist")]
+    NoSuchRevision,
     #[error("An IO error occurred during the commit")]
     IO(#[from] std::io::Error),
 }
@@ -103,6 +104,10 @@ impl RollingRevisionManager {
             parent.clone(),
             proposal.size()?,
         ));
+
+        // TODO: get the hash of historical revision
+        let hash = TrieHash::default();
+        self.historicals.push_back((hash, self.last_commit.clone()));
         self.last_commit = historical;
 
         self.commit_in_progress
@@ -110,6 +115,53 @@ impl RollingRevisionManager {
             .map_err(|_| RollingRevisionManagerError::CommitAlreadyInProgress)?;
 
         // TODO: Async flush
+        Ok(())
+    }
+
+    fn expire_revisions(&mut self) -> Result<(), RollingRevisionManagerError> {
+        // Check if revision expioration is needed
+        if self.historicals.len() < self.max_revisions {
+            return Ok(());
+        }
+
+        // TODO: Signal the writer thread to stop writing and wait for it to finish and return
+        // the last written historical revision hash
+        let last_hash = TrieHash::default();
+
+        // Find the index of historical revision to expire based on the last written
+        // historical revision hash
+        let expiry_index = self
+            .historicals
+            .iter()
+            .position(|(hash, _)| *hash == last_hash)
+            .ok_or(RollingRevisionManagerError::NoSuchRevision)?;
+
+        if self.historicals.len() > expiry_index {
+            // create a new base revision, and then reparent the rest to be its child.
+            // TODO: use the updated filename, and mutex for updating historicals.
+            let filename = PathBuf::from("");
+            let filebacked = Arc::new(FileBacked::new(filename, false)?);
+            let base_historical = Arc::new(Historical::new(
+                Default::default(),
+                LinearStoreParent::FileBacked(filebacked.clone()),
+                0,
+            ));
+
+            let child = self
+                .historicals
+                .get(expiry_index)
+                .ok_or(RollingRevisionManagerError::NoSuchRevision)?
+                .1
+                .clone();
+            child.reparent(base_historical.clone().into());
+        }
+
+        // Drain the expired historical revisions to release the references
+        let _ = self
+            .historicals
+            .drain(0..expiry_index)
+            .collect::<VecDeque<_>>();
+
         Ok(())
     }
 }
