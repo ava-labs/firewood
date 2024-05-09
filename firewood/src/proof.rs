@@ -1,12 +1,9 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
-
-use std::collections::HashMap;
-
-use crate::{merkle::Merkle, v2::api::HashKey};
+use crate::v2::api::HashKey;
 use nix::errno::Errno;
-use sha3::Digest;
-use storage::ReadLinearStore;
+use sha3::{Digest, Sha3_256};
+use storage::{BranchNode, Node, Path, TrieHash};
 use thiserror::Error;
 
 use crate::{db::DbError, merkle::MerkleError};
@@ -65,38 +62,58 @@ impl From<DbError> for ProofError {
     }
 }
 
-/// A proof that a single key is present
-///
-/// The generic N represents the storage for the node
-#[derive(Clone, Debug)]
-pub struct Proof<N>(pub HashMap<HashKey, N>);
+/*
+type ProofNode struct {
+    Key Key
+    // Nothing if this is an intermediate node.
+    // The value in this node if its length < [HashLen].
+    // The hash of the value in this node otherwise.
+    ValueOrHash maybe.Maybe[[]byte]
+    Children    map[byte]ids.ID
+}
+*/
 
-/// `SubProof` contains the value or the hash of a node that maps
-/// to a single proof step. If reaches an end step during proof verification,
-/// the `SubProof` should be the `Value` variant.
+// TODO danlaine: This should proabbly go somewhere else.
+// We will want to make the hasher generic.
+/// Returns the value digest for of this node, or None if it has no value.
+pub fn _value_digest(node: &Node) -> Option<Box<[u8]>> {
+    let value = match node {
+        Node::Branch(branch) => match &branch.value {
+            Some(value) => value,
+            None => return None.into(),
+        },
+        Node::Leaf(leaf) => &leaf.value,
+    };
 
-#[derive(Debug)]
-#[allow(dead_code)] // TODO use or remove this type
-enum SubProof {
-    Value(Vec<u8>),
-    Hash(HashKey),
+    if value.len() < 32 {
+        Some(value.clone())
+    } else {
+        let hash = Sha3_256::digest(value)
+            .into_iter()
+            .collect::<Vec<u8>>()
+            .into_boxed_slice();
+        Some(hash)
+    }
 }
 
-impl<N: AsRef<[u8]> + Send> Proof<N> {
-    /// verify_proof checks merkle proofs. The given proof must contain the value for
-    /// key in a trie with the given root hash. VerifyProof returns an error if the
-    /// proof contains invalid trie nodes or the wrong value.
-    ///
-    /// The generic N represents the storage for the node
-    pub fn verify<K: AsRef<[u8]>>(
-        &self,
-        _key: K,
-        _root_hash: HashKey,
-    ) -> Result<Option<Vec<u8>>, ProofError> {
+#[derive(Clone, Debug)]
+pub struct ProofNode {
+    path: Path,
+    value_digest: Option<Box<[u8]>>,
+    children: [Option<TrieHash>; BranchNode::MAX_CHILDREN],
+}
+
+/// A proof that a key does/doesn't exist in a given trie.
+#[derive(Clone, Debug)]
+pub struct Proof(pub Vec<ProofNode>);
+
+impl Proof {
+    pub fn verify(&self, _path: Path, _root_hash: TrieHash) -> Result<bool, ProofError> {
+        // First check whether the proof is syntactically valid.
         todo!()
     }
 
-    pub fn extend(&mut self, other: Proof<N>) {
+    pub fn extend(&mut self, other: Proof) {
         self.0.extend(other.0)
     }
 
@@ -125,47 +142,4 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
         // create an empty merkle trie in memory
         todo!();
     }
-
-    /// proofToPath converts a merkle proof to trie node path. The main purpose of
-    /// this function is recovering a node path from the merkle proof stream. All
-    /// necessary nodes will be resolved and leave the remaining as hashnode.
-    ///
-    /// The given edge proof is allowed to be an existent or non-existent proof.
-    fn _proof_to_path<K, T: ReadLinearStore>(
-        &self,
-        _key: K,
-        _root_hash: HashKey,
-        _in_mem_merkle: &mut Merkle<T>,
-        _allow_non_existent_node: bool,
-    ) -> Result<Option<Vec<u8>>, ProofError>
-    where
-        K: AsRef<[u8]>,
-    {
-        todo!()
-    }
-}
-
-fn _generate_subproof_hash(encoded: &[u8]) -> Result<HashKey, ProofError> {
-    match encoded.len() {
-        0..=31 => {
-            let sub_hash = sha3::Keccak256::digest(encoded).into();
-            Ok(sub_hash)
-        }
-
-        32 => {
-            let sub_hash = encoded
-                .try_into()
-                .expect("slice length checked in match arm");
-
-            Ok(sub_hash)
-        }
-
-        len => Err(ProofError::DecodeError(Box::new(
-            bincode::ErrorKind::Custom(format!("invalid proof length: {len}")),
-        ))),
-    }
-}
-
-fn _generate_subproof(encoded: &[u8]) -> Result<SubProof, ProofError> {
-    Ok(SubProof::Hash(_generate_subproof_hash(encoded)?))
 }
