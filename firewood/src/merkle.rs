@@ -451,34 +451,34 @@ impl<T: WriteLinearStore> Merkle<T> {
 
         match &*last_node.node {
             Node::Branch(last_node_branch) => {
-                let prefix_overlap = PrefixOverlap::from(&last_node.key_nibbles, &key_as_path);
+                let remaining_key = {
+                    let overlap = PrefixOverlap::from(&last_node.key_nibbles, &key_as_path);
+                    assert!(overlap.unique_a.is_empty());
+                    overlap.unique_b
+                };
 
-                let Some(last_node_to_child_index) = prefix_overlap.unique_b.first() else {
+                let Some(&last_node_to_child_index) = remaining_key.first() else {
                     // `last_node_branch` is at `key`. Update its value.
-                    let updated_last_node = Node::Branch(Box::new(BranchNode {
+                    let last_node_addr = last_node.addr;
+
+                    let last_node = Node::Branch(Box::new(BranchNode {
                         children: last_node_branch.children,
                         partial_path: last_node_branch.partial_path.clone(),
                         value: Some(value),
                         child_hashes: last_node_branch.child_hashes.clone(),
                     }));
 
-                    self.update_node(
-                        traversal_path.iter().rev(),
-                        last_node.addr,
-                        updated_last_node,
-                    )?;
+                    self.update_node(traversal_path.iter().rev(), last_node_addr, last_node)?;
 
                     return Ok(hash_invalidation_addresses);
                 };
+                let remaining_key = &remaining_key[1..];
                 // `last_node` is at a strict prefix of `key`.
-                assert!(prefix_overlap.unique_a.is_empty());
 
-                // See if the last node has a child where `key` would go.
-                let last_node_to_child_index = *last_node_to_child_index as usize;
-
+                // See if the `last_node` has a child where `key` would go.
                 let child_option = *last_node_branch
                     .children
-                    .get(last_node_to_child_index)
+                    .get(last_node_to_child_index as usize)
                     .expect("index is a nibble");
 
                 let Some(child_addr) = child_option else {
@@ -491,33 +491,29 @@ impl<T: WriteLinearStore> Merkle<T> {
                     //                      new_leaf
                     let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
                         value,
-                        partial_path: Path::from_nibbles_iterator(
-                            prefix_overlap.unique_b.iter().skip(1).copied(),
-                        ),
+                        partial_path: Path::from_nibbles_iterator(remaining_key.iter().copied()),
                     }))?;
+
+                    let last_node_addr = last_node.addr;
 
                     let mut updated_last_node_children = last_node_branch.children;
                     *updated_last_node_children
-                        .get_mut(last_node_to_child_index)
+                        .get_mut(last_node_to_child_index as usize)
                         .expect("index is a nibble") = Some(new_leaf_addr);
 
                     let mut updated_last_node_child_hashes = last_node_branch.child_hashes.clone();
                     *updated_last_node_child_hashes
-                        .get_mut(last_node_to_child_index)
+                        .get_mut(last_node_to_child_index as usize)
                         .expect("index is a nibble") = Default::default();
 
-                    let updated_last_node = Node::Branch(Box::new(BranchNode {
+                    let last_node = Node::Branch(Box::new(BranchNode {
                         children: updated_last_node_children,
                         partial_path: last_node_branch.partial_path.clone(),
                         value: last_node_branch.value.clone(),
                         child_hashes: updated_last_node_child_hashes,
                     }));
 
-                    self.update_node(
-                        traversal_path.iter().rev(),
-                        last_node.addr,
-                        updated_last_node,
-                    )?;
+                    self.update_node(traversal_path.iter().rev(), last_node_addr, last_node)?;
                     return Ok(hash_invalidation_addresses);
                 };
 
@@ -527,11 +523,8 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                 match &*child_node {
                     Node::Branch(child_branch) => {
-                        let prefix_overlap = PrefixOverlap::from(
-                            &child_branch.partial_path,
-                            // Skip 1 for child index nibble from last_node to here
-                            &prefix_overlap.unique_b[1..],
-                        );
+                        let prefix_overlap =
+                            PrefixOverlap::from(&child_branch.partial_path, &remaining_key);
 
                         let mut remaining_key_iter = prefix_overlap.unique_b.iter().copied();
 
@@ -582,10 +575,10 @@ impl<T: WriteLinearStore> Merkle<T> {
                                 last_node_branch.child_hashes.clone();
 
                             *last_node_children
-                                .get_mut(last_node_to_child_index)
+                                .get_mut(last_node_to_child_index as usize)
                                 .expect("nibble") = Some(new_branch_addr);
                             *last_node_children_hashes
-                                .get_mut(last_node_to_child_index)
+                                .get_mut(last_node_to_child_index as usize)
                                 .expect("nibble") = Default::default();
 
                             let last_node_addr = last_node.addr;
@@ -651,11 +644,10 @@ impl<T: WriteLinearStore> Merkle<T> {
                             value: last_node_branch.value.clone(),
                             child_hashes: last_node_branch.child_hashes.clone(),
                         };
-                        *new_last_node.mut_child(last_node_to_child_index as u8) =
-                            Some(new_branch_addr);
+                        *new_last_node.mut_child(last_node_to_child_index) = Some(new_branch_addr);
                         *new_last_node
                             .child_hashes
-                            .get_mut(last_node_to_child_index)
+                            .get_mut(last_node_to_child_index as usize)
                             .expect("nibble") = Default::default();
                         let new_last_node = Node::Branch(Box::new(new_last_node));
                         self.update_node(
@@ -668,10 +660,8 @@ impl<T: WriteLinearStore> Merkle<T> {
                     }
                     Node::Leaf(child_leaf) => {
                         // `child_leaf` is not a prefix of `key`.
-                        let prefix_overlap = PrefixOverlap::from(
-                            &child_leaf.partial_path,
-                            &prefix_overlap.unique_b[1..],
-                        );
+                        let prefix_overlap =
+                            PrefixOverlap::from(&child_leaf.partial_path, &remaining_key);
 
                         let mut new_branch = BranchNode {
                             children: Default::default(),
@@ -700,11 +690,11 @@ impl<T: WriteLinearStore> Merkle<T> {
                                 value: last_node_branch.value.clone(),
                                 child_hashes: last_node_branch.child_hashes.clone(),
                             };
-                            *new_last_node.mut_child(last_node_to_child_index as u8) =
+                            *new_last_node.mut_child(last_node_to_child_index) =
                                 Some(new_branch_addr);
                             *new_last_node
                                 .child_hashes
-                                .get_mut(last_node_to_child_index)
+                                .get_mut(last_node_to_child_index as usize)
                                 .expect("nibble") = Default::default();
 
                             let new_last_node = Node::Branch(Box::new(new_last_node));
@@ -752,8 +742,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                             value: last_node_branch.value.clone(),
                             child_hashes: last_node_branch.child_hashes.clone(),
                         };
-                        new_last_node
-                            .update_child(last_node_to_child_index as u8, Some(new_branch_addr));
+                        new_last_node.update_child(last_node_to_child_index, Some(new_branch_addr));
 
                         let new_last_node = Node::Branch(Box::new(new_last_node));
                         self.update_node(
