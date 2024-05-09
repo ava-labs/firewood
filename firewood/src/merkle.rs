@@ -6,7 +6,6 @@ use crate::nibbles::Nibbles;
 use crate::proof::{Proof, ProofError};
 use crate::stream::{MerkleKeyValueStream, NodeWithKey, PathIterator};
 use crate::v2::api;
-use core::hash;
 use futures::{StreamExt, TryStreamExt};
 use std::collections::HashSet;
 use std::future::ready;
@@ -15,7 +14,7 @@ use storage::Path;
 use storage::ReadLinearStore;
 use storage::TrieHash;
 use storage::{BranchNode, LeafNode, Node};
-use storage::{LinearAddress, UpdateError, WriteLinearStore};
+use storage::{LinearAddress, WriteLinearStore};
 
 use std::ops::{Deref, DerefMut};
 use thiserror::Error;
@@ -485,8 +484,17 @@ impl<T: WriteLinearStore> Merkle<T> {
                 Node::Branch(last_node_branch) => {
                     // The last node is a branch node.
                     // See if there's a node at the child index that the `key` would be at.
-                    let child_index = key_as_path[last_node.key_nibbles.len()] as usize;
-                    let Some(child_addr) = last_node_branch.children[child_index] else {
+                    let child_index = *key_as_path
+                        .get(last_node.key_nibbles.len())
+                        .expect("last node key is prefix of key")
+                        as usize;
+
+                    let child_option = *last_node_branch
+                        .children
+                        .get(child_index)
+                        .expect("index is a nibble");
+
+                    let Some(child_addr) = child_option else {
                         // There is no child at the index that the `key` would be at.
                         // Create a new leaf at that index.
                         let new_leaf = Node::Leaf(LeafNode {
@@ -500,23 +508,28 @@ impl<T: WriteLinearStore> Merkle<T> {
                         });
                         let new_leaf_addr = self.create_node(new_leaf)?;
 
-                        let mut updated_branch_children = last_node_branch.children;
-                        updated_branch_children[child_index] = Some(new_leaf_addr);
+                        let mut updated_last_node_children = last_node_branch.children;
+                        *updated_last_node_children
+                            .get_mut(child_index)
+                            .expect("index is a nibble") = Some(new_leaf_addr);
 
-                        let mut updated_child_hashes = last_node_branch.child_hashes.clone();
-                        updated_child_hashes[child_index] = Default::default();
+                        let mut updated_last_node_child_hashes =
+                            last_node_branch.child_hashes.clone();
+                        *updated_last_node_child_hashes
+                            .get_mut(child_index)
+                            .expect("index is a nibble") = Default::default();
 
-                        let updated_branch = Node::Branch(Box::new(BranchNode {
-                            children: updated_branch_children,
+                        let updated_last_node = Node::Branch(Box::new(BranchNode {
+                            children: updated_last_node_children,
                             partial_path: last_node_branch.partial_path.clone(),
                             value: last_node_branch.value.clone(),
-                            child_hashes: updated_child_hashes,
+                            child_hashes: updated_last_node_child_hashes,
                         }));
 
                         self.update_node(
                             traversal_path.iter().rev(),
                             last_node.addr,
-                            updated_branch,
+                            updated_last_node,
                         )?;
                         return Ok(hash_invalidation_addresses);
                     };
@@ -725,7 +738,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 Node::Leaf(last_node_leaf) => {
                     // The last node is a leaf node. Replace it with a branch
                     // that has the new key-value pair leaf as a child.
-                    let new_leaf = Node::Leaf(LeafNode {
+                    let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
                         value,
                         partial_path: Path::from_nibbles_iterator(
                             key_as_path
@@ -733,32 +746,26 @@ impl<T: WriteLinearStore> Merkle<T> {
                                 .skip(last_node.key_nibbles.len() + 1)
                                 .copied(),
                         ),
-                    });
-                    let new_leaf_addr = self.create_node(new_leaf)?;
+                    }))?;
 
                     // Turn the leaf into a branch node.
-                    let mut new_branch: BranchNode = last_node_leaf.into();
+                    let mut updated_last_node: BranchNode = last_node_leaf.into();
+                    let child_index = *key_as_path
+                        .get(last_node.key_nibbles.len())
+                        .expect("last_node key is prefix of inserted key");
+                    updated_last_node.update_child(child_index, Some(new_leaf_addr));
+                    let updated_last_node = Node::Branch(Box::new(updated_last_node));
 
-                    // TODO explain why this is safe
-                    new_branch.update_child(
-                        key_as_path[last_node.key_nibbles.len()],
-                        Some(new_leaf_addr),
-                    );
-                    let new_branch = Node::Branch(Box::new(new_branch));
-
-                    self.update_node(traversal_path.iter().rev(), last_node.addr, new_branch)?;
+                    self.update_node(
+                        traversal_path.iter().rev(),
+                        last_node.addr,
+                        updated_last_node,
+                    )?;
                 }
             }
         }
 
         Ok(hash_invalidation_addresses)
-    }
-
-    fn update_child_pointers(
-        &mut self,
-        traversal_path: Vec<NodeWithKey>,
-    ) -> Result<(), MerkleError> {
-        todo!()
     }
 
     pub fn remove(&mut self, _key: &[u8]) -> Result<Option<Vec<u8>>, MerkleError> {

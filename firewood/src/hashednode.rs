@@ -7,8 +7,8 @@ use std::io::Error;
 use std::iter::once;
 use std::sync::{Arc, OnceLock};
 
+use storage::TrieHash;
 use storage::{Node, Path, ProposedImmutable};
-use storage::{TrieHash, UpdateError};
 
 use storage::{LinearAddress, NodeStore};
 use storage::{ReadLinearStore, WriteLinearStore};
