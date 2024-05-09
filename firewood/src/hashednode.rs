@@ -13,6 +13,9 @@ use storage::{TrieHash, UpdateError};
 use storage::{LinearAddress, NodeStore};
 use storage::{ReadLinearStore, WriteLinearStore};
 
+use crate::merkle::MerkleError;
+use crate::stream::NodeWithKey;
+
 /// A [HashedNodeStore] keeps track of nodes as they change when they are backed by a LinearStore.
 /// This defers the writes of those nodes until all the changes are made to the trie as part of a
 /// batch. It also supports a `freeze` method which consumes a [WriteLinearStore] backed [HashedNodeStore],
@@ -164,11 +167,50 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         Ok(addr)
     }
 
-    pub fn update_node(
+    /// Updates the parent of `old_addr` to point to `new_addr` instead.
+    /// `ancestors` contains the ancestors of the moved node, starting with the
+    /// parent of the moved node and ending with the root.
+    pub fn handle_move<'a, A: Iterator<Item = &'a NodeWithKey>>(
         &mut self,
+        mut ancestors: A,
+        old_addr: LinearAddress,
+        new_addr: LinearAddress,
+    ) -> Result<(), MerkleError> {
+        let Some(parent) = ancestors.next() else {
+            self.set_root(new_addr)?;
+            return Ok(());
+        };
+
+        let mut updated_parent = parent
+            .node
+            .as_branch()
+            .expect("parent must be a branch")
+            .clone();
+
+        let index = updated_parent
+            .children
+            .iter()
+            .position(|child| *child == Some(old_addr))
+            .expect("old_addr must be a child of parent");
+        updated_parent.children[index] = Some(new_addr);
+
+        let updated_parent = Node::Branch(updated_parent);
+
+        self.update_node(ancestors, parent.addr, updated_parent)?;
+
+        Ok(())
+    }
+
+    /// Updates the node at `old_address` to be `node`. The node will be moved if
+    /// it doesn't fit in its current location. `ancestors` contains the nodes
+    /// from `node`'s parent up to and including the root. Returns the new address
+    /// of `node`, which may be the same as `old_address`.
+    pub fn update_node<'a, A: Iterator<Item = &'a NodeWithKey>>(
+        &mut self,
+        ancestors: A,
         old_address: LinearAddress,
         node: Node,
-    ) -> Result<(), UpdateError> {
+    ) -> Result<LinearAddress, MerkleError> {
         let old_size = if let Some((_, old_size)) = self.modified.get(&old_address) {
             *old_size
         } else {
@@ -178,12 +220,14 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         if !self.nodestore.still_fits(old_size, &node)? {
             self.modified.remove(&old_address);
             self.nodestore.delete_node(old_address)?;
-            return Err(UpdateError::NodeMoved(self.create_node(node)?));
+            let new_address = self.create_node(node)?;
+            self.handle_move(ancestors, old_address, new_address)?;
+            return Ok(new_address);
         }
         self.modified
             .insert(old_address, (Arc::new(node), old_size));
 
-        Ok(())
+        Ok(old_address)
     }
 
     pub fn set_root(&mut self, root_addr: LinearAddress) -> Result<(), Error> {
