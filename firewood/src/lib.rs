@@ -193,3 +193,4 @@ pub mod logger;
 pub mod v2;
 
 mod hashednode;
+mod revision_manager;
