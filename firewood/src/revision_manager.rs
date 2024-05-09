@@ -60,21 +60,20 @@ impl RollingRevisionManager {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RollingRevisionManagerError {
-    #[error("The proposal cannot be committed since a sibling was committed")]
-    SiblingCommitted,
-    #[error(
-        "The proposal cannot be committed since it is not a direct child of the most recent commit"
-    )]
-    NotLatest,
+    #[error("A commit is already is progress, only one commit can be in progress at a time")]
+    CommitAlreadyInProgress,
     #[error(
         "The proposal cannot be committed with a parent of type {0:?}, only Historical are allowed"
     )]
     InvalidParentType(LinearStoreParent),
+    #[error(
+        "The proposal cannot be committed since it is not a direct child of the most recent commit"
+    )]
+    NotLatest,
+    #[error("The proposal cannot be committed since a sibling was committed")]
+    SiblingCommitted,
     #[error("An IO error occurred during the commit")]
     IO(#[from] std::io::Error),
-
-    #[error("A commit is already is progress, only one commit can be in progress at a time")]
-    CommitAlreadyInProgress,
 }
 
 impl RollingRevisionManager {
