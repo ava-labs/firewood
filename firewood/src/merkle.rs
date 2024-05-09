@@ -564,7 +564,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                         updated_branch_children[child_index] = Some(new_leaf_addr);
 
                         let mut updated_child_hashes = last_node_branch.child_hashes.clone();
-                        updated_child_hashes[child_index] = None;
+                        updated_child_hashes[child_index] = Default::default();
 
                         let updated_branch = Node::Branch(Box::new(BranchNode {
                             children: updated_branch_children,
@@ -673,7 +673,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                                 *new_last_node
                                     .child_hashes
                                     .get_mut(child_index)
-                                    .expect("nibble") = None;
+                                    .expect("nibble") = Default::default();
                                 let new_last_node = Node::Branch(Box::new(new_last_node));
                                 update_always_shrinks!(
                                     self.update_node(last_node.addr, new_last_node)
@@ -701,7 +701,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                                 *new_last_node
                                     .child_hashes
                                     .get_mut(child_index)
-                                    .expect("nibble") = None;
+                                    .expect("nibble") = Default::default();
                                 let new_last_node = Node::Branch(Box::new(new_last_node));
 
                                 update_always_shrinks!(
@@ -748,7 +748,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                                 *new_last_node
                                     .child_hashes
                                     .get_mut(child_index)
-                                    .expect("nibble") = None;
+                                    .expect("nibble") = Default::default();
 
                                 let new_last_node = Node::Branch(Box::new(new_last_node));
 

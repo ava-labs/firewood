@@ -94,6 +94,47 @@ impl Path {
 
         Self(iter.collect())
     }
+
+    /// Add nibbles to the end of a path
+    pub fn extend<T: IntoIterator<Item = u8>>(&mut self, iter: T) {
+        self.0.extend(iter)
+    }
+
+    /// Create an iterator that returns the bytes from the underlying nibbles
+    /// If there is an odd nibble at the end, it is dropped
+    pub fn bytes_iter(&self) -> BytesIterator<'_> {
+        BytesIterator { iter: self.iter() }
+    }
+
+    /// Create a boxed set of bytes from the Path
+    pub fn bytes(&self) -> Box<[u8]> {
+        self.bytes_iter().collect()
+    }
+}
+
+#[derive(Debug)]
+pub struct BytesIterator<'a> {
+    iter: std::slice::Iter<'a, u8>,
+}
+
+impl Iterator for BytesIterator<'_> {
+    type Item = u8;
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(&hi) = self.iter.next() {
+            if let Some(&lo) = self.iter.next() {
+                return Some(hi * 16 + lo);
+            }
+        }
+        None
+    }
+
+    // this helps make the collection into a box faster
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (
+            self.iter.size_hint().0 / 2,
+            self.iter.size_hint().1.map(|max| max / 2),
+        )
+    }
 }
 
 #[cfg(test)]

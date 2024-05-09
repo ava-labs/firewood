@@ -372,6 +372,20 @@ impl<T: WriteLinearStore> NodeStore<T> {
         Err(UpdateError::NodeMoved(new_node_addr))
     }
 
+    /// Update a node in-place. This should only be used when the node was allocated using
+    /// allocate_node.
+    /// TODO: We should enforce this by having a new type for allocated nodes, which could
+    /// carry the size information too
+    pub fn update_in_place(&mut self, addr: LinearAddress, node: &Node) -> Result<(), Error> {
+        let new_area: Area<&Node, FreeArea> = Area::Node(node);
+        let new_area_bytes =
+            bincode::serialize(&new_area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+
+        let addr = addr.get() + 1; // Skip the index byte
+        self.linear_store.write(addr, new_area_bytes.as_slice())?;
+        Ok(())
+    }
+
     /// Deletes the [Node] at the given address.
     pub fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error> {
         debug_assert!(addr.get() % 8 == 0);

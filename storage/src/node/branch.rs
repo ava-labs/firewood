@@ -21,7 +21,7 @@ pub struct BranchNode {
     /// The hashes for each child
     /// TODO: Serialize only non-zero ones. We know how many from the 'children' array
     /// and can reconstruct it without storing blanks for each non-existent child
-    pub child_hashes: [Option<TrieHash>; Self::MAX_CHILDREN],
+    pub child_hashes: [TrieHash; Self::MAX_CHILDREN],
 }
 
 impl Debug for BranchNode {
@@ -75,7 +75,8 @@ impl BranchNode {
         let mut new_child_hashes = self.child_hashes.clone();
         *new_child_hashes
             .get_mut(index)
-            .expect("arrays are same size, so offset into one must match the other") = None;
+            .expect("arrays are same size, so offset into one must match the other") =
+            Default::default();
         BranchNode {
             partial_path: self.partial_path.clone(),
             value: self.value.clone(),
@@ -94,7 +95,7 @@ impl BranchNode {
         *self
             .child_hashes
             .get_mut(child_index as usize)
-            .expect("nibble") = None;
+            .expect("nibble") = Default::default();
     }
 }
 
