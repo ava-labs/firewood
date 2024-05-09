@@ -537,8 +537,6 @@ impl<T: WriteLinearStore> Merkle<T> {
                         partial_path: Path::from_nibbles_iterator(remaining_key.iter().copied()),
                     }))?;
 
-                    let last_node_addr = last_node.addr;
-
                     let mut updated_last_node_children = last_node_branch.children;
                     *updated_last_node_children
                         .get_mut(last_node_to_child_index as usize)
@@ -549,14 +547,16 @@ impl<T: WriteLinearStore> Merkle<T> {
                         .get_mut(last_node_to_child_index as usize)
                         .expect("index is a nibble") = Default::default();
 
-                    let last_node = Node::Branch(Box::new(BranchNode {
-                        children: updated_last_node_children,
-                        partial_path: last_node_branch.partial_path.clone(),
-                        value: last_node_branch.value.clone(),
-                        child_hashes: updated_last_node_child_hashes,
-                    }));
-
-                    self.update_node(traversal_path.iter().rev(), last_node_addr, last_node)?;
+                    self.update_node(
+                        traversal_path.iter().rev(),
+                        last_node.addr,
+                        Node::Branch(Box::new(BranchNode {
+                            children: updated_last_node_children,
+                            partial_path: last_node_branch.partial_path.clone(),
+                            value: last_node_branch.value.clone(),
+                            child_hashes: updated_last_node_child_hashes,
+                        })),
+                    )?;
                     return Ok(hash_invalidation_addresses);
                 };
 
@@ -582,19 +582,17 @@ impl<T: WriteLinearStore> Merkle<T> {
                             //  child_branch       new_branch
                             //                         |
                             //                     child_branch
-                            let child_branch = BranchNode {
-                                children: child_branch.children,
-                                partial_path: Path::from_nibbles_iterator(
-                                    prefix_overlap.unique_a.iter().copied(),
-                                ),
-                                value: child_branch.value.clone(),
-                                child_hashes: child_branch.child_hashes.clone(),
-                            };
-
                             let child_branch_addr = self.update_node(
-                                traversal_path.iter().rev(),
+                                traversal_path.iter().rev(), // TODO danlaine: fix this arg? This is missing last_node.
                                 child_addr,
-                                Node::Branch(Box::new(child_branch)),
+                                Node::Branch(Box::new(BranchNode {
+                                    children: child_branch.children,
+                                    partial_path: Path::from_nibbles_iterator(
+                                        prefix_overlap.unique_a.iter().copied(),
+                                    ),
+                                    value: child_branch.value.clone(),
+                                    child_hashes: child_branch.child_hashes.clone(),
+                                })),
                             )?;
 
                             let mut new_branch_children: [Option<LinearAddress>;
@@ -670,7 +668,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                         };
                         let updated_child_branch = Node::Branch(Box::new(updated_child_branch));
                         let updated_child_branch_addr = self.update_node(
-                            traversal_path.iter().rev(),
+                            traversal_path.iter().rev(), // TODO danlaine: fix this arg? This is missing last_node.
                             child_addr,
                             updated_child_branch,
                         )?;
