@@ -450,6 +450,49 @@ impl<T: WriteLinearStore> Merkle<T> {
             traversal_path.iter().map(|item| item.addr).collect();
 
         match &*last_node.node {
+            Node::Leaf(last_node_leaf) => {
+                let mut remaining_key = {
+                    let overlap = PrefixOverlap::from(&last_node.key_nibbles, &key_as_path);
+                    assert!(overlap.unique_a.is_empty());
+                    overlap.unique_b.iter().copied()
+                };
+
+                let Some(child_index) = remaining_key.next() else {
+                    // `last_node_leaf` is at `key`. Update its value in place.
+                    self.update_node(
+                        traversal_path.iter().rev(),
+                        last_node.addr,
+                        Node::Leaf(LeafNode {
+                            value,
+                            partial_path: last_node_leaf.partial_path.clone(),
+                        }),
+                    )?;
+                    return Ok(hash_invalidation_addresses);
+                };
+
+                // `last_node_leaf` is at a strict prefix of `key`. Replace it with a branch.
+                //
+                //     ...                ...
+                //      |      -->         |
+                //  last_node       updated_last_node
+                //                         |
+                //                      new_leaf
+                let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
+                    value,
+                    partial_path: Path::from_nibbles_iterator(remaining_key),
+                }))?;
+
+                let mut updated_last_node: BranchNode = last_node_leaf.into();
+                updated_last_node.update_child(child_index, Some(new_leaf_addr));
+
+                self.update_node(
+                    traversal_path.iter().rev(),
+                    last_node.addr,
+                    Node::Branch(Box::new(updated_last_node)),
+                )?;
+
+                Ok(hash_invalidation_addresses)
+            }
             Node::Branch(last_node_branch) => {
                 let remaining_key = {
                     let overlap = PrefixOverlap::from(&last_node.key_nibbles, &key_as_path);
@@ -754,53 +797,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     }
                 }
             }
-            Node::Leaf(last_node_leaf) => {
-                // `last_node_leaf` is at a prefix of `key`.
-                let mut remaining_key = PrefixOverlap::from(&last_node.key_nibbles, &key_as_path)
-                    .unique_b
-                    .iter()
-                    .copied();
-
-                let Some(child_index) = remaining_key.next() else {
-                    // `last_node_leaf` is at `key`. Update its value in place.
-                    let updated_last_node = Node::Leaf(LeafNode {
-                        value,
-                        partial_path: last_node_leaf.partial_path.clone(),
-                    });
-
-                    self.update_node(
-                        traversal_path.iter().rev(),
-                        last_node.addr,
-                        updated_last_node,
-                    )?;
-                    return Ok(hash_invalidation_addresses);
-                };
-
-                // `last_node_leaf` is at a strict prefix of `key`. Replace it with a branch.
-                //
-                //     ...                ...
-                //      |      -->         |
-                //  last_node       updated_last_node
-                //                         |
-                //                      new_leaf
-                let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
-                    value,
-                    partial_path: Path::from_nibbles_iterator(remaining_key),
-                }))?;
-
-                let mut updated_last_node: BranchNode = last_node_leaf.into();
-                updated_last_node.update_child(child_index, Some(new_leaf_addr));
-                let updated_last_node = Node::Branch(Box::new(updated_last_node));
-
-                self.update_node(
-                    traversal_path.iter().rev(),
-                    last_node.addr,
-                    updated_last_node,
-                )?;
-            }
         }
-
-        Ok(hash_invalidation_addresses)
     }
 
     pub fn remove(&mut self, _key: &[u8]) -> Result<Option<Vec<u8>>, MerkleError> {
