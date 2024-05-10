@@ -512,12 +512,8 @@ impl<T: WriteLinearStore> Merkle<T> {
                 // `last_node` is at a strict prefix of `key`.
 
                 // See if the `last_node` has a child where `key` would go.
-                let child_option = *last_node_branch
-                    .children
-                    .get(last_node_to_child_index as usize)
-                    .expect("index is a nibble");
 
-                let Some(child_addr) = child_option else {
+                let Some(&child_addr) = last_node_branch.child(last_node_to_child_index) else {
                     // There is no child at the index that the `key` would be at.
                     // Create a new leaf at that index.
                     //     ...                ...

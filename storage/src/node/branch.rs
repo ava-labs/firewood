@@ -52,9 +52,21 @@ impl BranchNode {
 
     /// Obtain a mutable reference to a child address within a branch
     /// This convenience method takes a u8 as the nibble offset
-    /// It panics if passed a value more than 0xf
+    /// Panics if `child_index` >= [BranchNode::MAX_CHILDREN].
     pub fn mut_child(&mut self, child_index: u8) -> &mut Option<LinearAddress> {
-        self.children.get_mut(child_index as usize).expect("nibble")
+        self.children
+            .get_mut(child_index as usize)
+            .expect("child_index is in bounds")
+    }
+
+    /// Returns the address of the child at the given index.
+    /// None if there is no child at that index.
+    /// Panics if `child_index` >= [BranchNode::MAX_CHILDREN].
+    pub fn child(&self, child_index: u8) -> Option<&LinearAddress> {
+        self.children
+            .get(child_index as usize)
+            .expect("child_index is in bounds")
+            .as_ref()
     }
 
     /// consume a branch node, finding the old child address and setting it
