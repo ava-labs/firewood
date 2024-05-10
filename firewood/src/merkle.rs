@@ -708,7 +708,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                             child_hashes: Default::default(),
                         };
 
-                        let Some(child_index_2) = path_overlap.unique_b.first() else {
+                        let Some(key_child_index) = path_overlap.unique_b.first() else {
                             // The new branch is at `key`.
                             new_branch.value = Some(value);
 
@@ -765,7 +765,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                             updated_leaf,
                         )?;
 
-                        new_branch.update_child(*child_index_2, Some(new_leaf_addr));
+                        new_branch.update_child(*key_child_index, Some(new_leaf_addr));
                         new_branch.update_child(path_overlap.unique_a[0], Some(updated_leaf_addr));
 
                         let new_branch = Node::Branch(Box::new(new_branch));
