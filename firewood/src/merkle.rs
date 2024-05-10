@@ -569,7 +569,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                             //                         |
                             //                     child_branch
                             let child_branch_addr = self.update_node(
-                                std::iter::empty(), // Going to reparent so no need to update address in parent.
+                                std::iter::empty(), // TODO danlaine: fix this arg. This is missing last_node.
                                 child_addr,
                                 Node::Branch(Box::new(BranchNode {
                                     children: child_branch.children,
@@ -650,7 +650,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                         };
                         let updated_child_branch = Node::Branch(Box::new(updated_child_branch));
                         let updated_child_branch_addr = self.update_node(
-                            traversal_path.iter(), // TODO danlaine: fix this arg? This is missing last_node.
+                            traversal_path.iter(), // TODO danlaine: fix this arg. This is missing last_node.
                             child_addr,
                             updated_child_branch,
                         )?;
