@@ -14,7 +14,7 @@ use storage::{LinearAddress, NodeStore};
 use storage::{ReadLinearStore, WriteLinearStore};
 
 use crate::merkle::MerkleError;
-use crate::stream::NodeWithKey;
+use crate::stream::PathIterItem;
 
 /// A [HashedNodeStore] keeps track of nodes as they change when they are backed by a LinearStore.
 /// This defers the writes of those nodes until all the changes are made to the trie as part of a
@@ -177,7 +177,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     /// Updates the parent of `old_addr` to point to `new_addr` instead.
     /// `ancestors` contains the ancestors of the moved node, starting with the
     /// parent of the moved node and ending with the root.
-    pub fn handle_move<'a, A: Iterator<Item = &'a NodeWithKey>>(
+    pub fn handle_move<'a, A: Iterator<Item = &'a PathIterItem>>(
         &mut self,
         mut ancestors: A,
         old_addr: LinearAddress,
@@ -217,7 +217,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     /// it doesn't fit in its current location. `ancestors` contains the nodes
     /// from `node`'s parent up to and including the root. Returns the new address
     /// of `node`, which may be the same as `old_address`.
-    pub fn update_node<'a, A: Iterator<Item = &'a NodeWithKey>>(
+    pub fn update_node<'a, A: Iterator<Item = &'a PathIterItem>>(
         &mut self,
         ancestors: A,
         old_address: LinearAddress,
