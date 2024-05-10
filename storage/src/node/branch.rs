@@ -53,7 +53,7 @@ impl BranchNode {
     /// Obtain a mutable reference to a child address within a branch
     /// This convenience method takes a u8 as the nibble offset
     /// Panics if `child_index` >= [BranchNode::MAX_CHILDREN].
-    pub fn mut_child(&mut self, child_index: u8) -> &mut Option<LinearAddress> {
+    pub fn child_mut(&mut self, child_index: u8) -> &mut Option<LinearAddress> {
         self.children
             .get_mut(child_index as usize)
             .expect("child_index is in bounds")
@@ -99,7 +99,7 @@ impl BranchNode {
 
     /// Update the child address of a branch node and invalidate the hash
     pub fn update_child(&mut self, child_index: u8, new_child_addr: Option<LinearAddress>) {
-        *self.mut_child(child_index) = new_child_addr;
+        *self.child_mut(child_index) = new_child_addr;
         self.invalidate_child_hash(child_index);
     }
 
