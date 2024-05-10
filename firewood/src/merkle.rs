@@ -510,9 +510,6 @@ impl<T: WriteLinearStore> Merkle<T> {
                 };
 
                 // `last_node` is at a strict prefix of `key`.
-                // `remaining_key` is `key` after removing the prefix of `last_node` and 1 additional
-                // nibble for the child index that points to the node after `last_node`.
-                let remaining_key = &remaining_key[1..];
 
                 // See if the `last_node` has a child where `key` would go.
                 let child_option = *last_node_branch
