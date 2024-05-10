@@ -140,7 +140,7 @@ impl<'a, T: ReadLinearStore> Stream for MerkleNodeStream<'a, T> {
 
                             let child = merkle.read_node(child_addr)?;
 
-                            let partial_path = match &**child {
+                            let partial_path = match &*child {
                                 Node::Branch(branch) => branch.partial_path.iter().copied(),
                                 Node::Leaf(leaf) => leaf.partial_path.iter().copied(),
                             };
@@ -215,7 +215,7 @@ fn get_iterator_intial_state<T: ReadLinearStore>(
                 });
                 return Ok(NodeStreamState::Iterating { iter_stack });
             }
-            Ordering::Equal => match &**node {
+            Ordering::Equal => match &*node {
                 Node::Leaf(_) => {
                     iter_stack.push(IterationNode::Unvisited {
                         key: matched_key_nibbles.clone().into_boxed_slice(),
@@ -426,7 +426,7 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                     Err(e) => return Some(Err(e.into())),
                 };
 
-                let partial_path = match &**node {
+                let partial_path = match &*node {
                     Node::Branch(branch) => &branch.partial_path,
                     Node::Leaf(leaf) => &leaf.partial_path,
                 };
@@ -444,7 +444,7 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                         let node_key = matched_key.clone().into_boxed_slice();
                         let addr = *address;
 
-                        match &**node {
+                        match &*node {
                             Node::Leaf(_) => {
                                 // We're at a leaf so we're done.
                                 self.state = PathIteratorState::Exhausted;
