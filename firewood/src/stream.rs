@@ -371,10 +371,17 @@ enum PathIteratorState<'a> {
     Exhausted,
 }
 
-pub struct NodeWithKey {
+pub struct PathIterItem {
+    /// The key of the node at `address` as nibbles.
     pub key_nibbles: Box<[u8]>,
     pub node: Arc<Node>,
+    /// The address of `node` in the linear store.
     pub addr: LinearAddress,
+    /// The next item returned by the iterator is a child of `node`.
+    /// Specifically, it's the child at index `next_nibble` in `node`'s
+    /// children array.
+    /// None if `node` is the last node in the path.
+    pub next_nibble: Option<u8>,
 }
 
 /// Iterates over all nodes on the path to a given key starting from the root.
@@ -407,7 +414,7 @@ impl<'a, 'b, T: ReadLinearStore> PathIterator<'a, 'b, T> {
 }
 
 impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
-    type Item = Result<NodeWithKey, MerkleError>;
+    type Item = Result<PathIterItem, MerkleError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // destructuring is necessary here because we need mutable access to `state`
@@ -448,10 +455,11 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                             Node::Leaf(_) => {
                                 // We're at a leaf so we're done.
                                 self.state = PathIteratorState::Exhausted;
-                                Some(Ok(NodeWithKey {
+                                Some(Ok(PathIterItem {
                                     key_nibbles: node_key.clone(),
                                     node: node.clone(),
                                     addr,
+                                    next_nibble: None,
                                 }))
                             }
                             Node::Branch(branch) => {
@@ -460,10 +468,11 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                                 let Some(next_unmatched_key_nibble) = unmatched_key.next() else {
                                     // We're at the node at `key` so we're done.
                                     self.state = PathIteratorState::Exhausted;
-                                    return Some(Ok(NodeWithKey {
+                                    return Some(Ok(PathIterItem {
                                         key_nibbles: node_key.clone(),
                                         node: node.clone(),
                                         addr,
+                                        next_nibble: None,
                                     }));
                                 };
 
@@ -474,10 +483,11 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                                     // There's no child at the index of the next nibble in the key.
                                     // There's no node at `key` in this trie so we're done.
                                     self.state = PathIteratorState::Exhausted;
-                                    return Some(Ok(NodeWithKey {
+                                    return Some(Ok(PathIterItem {
                                         key_nibbles: node_key.clone(),
                                         node: node.clone(),
                                         addr,
+                                        next_nibble: None,
                                     }));
                                 };
 
@@ -486,10 +496,11 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
 
                                 *address = child_addr;
 
-                                Some(Ok(NodeWithKey {
+                                Some(Ok(PathIterItem {
                                     key_nibbles: node_key,
                                     node: node.clone(),
                                     addr: node_address,
+                                    next_nibble: Some(next_unmatched_key_nibble),
                                 }))
                             }
                         }
@@ -596,8 +607,8 @@ mod tests {
         merkle.insert(&[0xBE, 0xEF], Box::new([0x42])).unwrap();
 
         let mut stream = merkle.path_iter(key).unwrap();
-        let (key, node) = match stream.next() {
-            Some(Ok(node_with_key)) => (node_with_key.key_nibbles, node_with_key.node),
+        let node = match stream.next() {
+            Some(Ok(item)) => item,
             Some(Err(e)) => panic!("{:?}", e),
             None => {
                 assert!(!should_yield_elt);
@@ -606,8 +617,12 @@ mod tests {
         };
 
         assert!(should_yield_elt);
-        assert_eq!(key, vec![0x0B, 0x0E, 0x0E, 0x0F].into_boxed_slice());
-        assert_eq!(node.as_leaf().unwrap().value, Box::from([0x42]));
+        assert_eq!(
+            node.key_nibbles,
+            vec![0x0B, 0x0E, 0x0E, 0x0F].into_boxed_slice()
+        );
+        assert_eq!(node.node.as_leaf().unwrap().value, Box::from([0x42]));
+        assert_eq!(node.next_nibble, None);
 
         assert!(stream.next().is_none());
     }
@@ -620,39 +635,42 @@ mod tests {
 
         let mut stream = merkle.path_iter(key).unwrap();
 
-        let (key, node) = match stream.next() {
-            Some(Ok(node_with_key)) => (node_with_key.key_nibbles, node_with_key.node),
+        let node = match stream.next() {
+            Some(Ok(node)) => node,
             Some(Err(e)) => panic!("{:?}", e),
             None => panic!("unexpected end of iterator"),
         };
-        assert_eq!(key, vec![0x00, 0x00].into_boxed_slice());
-        assert!(node.as_branch().unwrap().value.is_none());
+        assert_eq!(node.key_nibbles, vec![0x00, 0x00].into_boxed_slice());
+        assert_eq!(node.next_nibble, Some(0));
+        assert!(node.node.as_branch().unwrap().value.is_none());
 
-        let (key, node) = match stream.next() {
-            Some(Ok(node_with_key)) => (node_with_key.key_nibbles, node_with_key.node),
+        let node = match stream.next() {
+            Some(Ok(node)) => node,
             Some(Err(e)) => panic!("{:?}", e),
             None => panic!("unexpected end of iterator"),
         };
         assert_eq!(
-            key,
+            node.key_nibbles,
             vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00].into_boxed_slice()
         );
+        assert_eq!(node.next_nibble, Some(0x0F));
         assert_eq!(
-            node.as_branch().unwrap().value,
+            node.node.as_branch().unwrap().value,
             Some(vec![0x00, 0x00, 0x00].into_boxed_slice()),
         );
 
-        let (key, node) = match stream.next() {
-            Some(Ok(node_with_key)) => (node_with_key.key_nibbles, node_with_key.node),
+        let node = match stream.next() {
+            Some(Ok(node)) => node,
             Some(Err(e)) => panic!("{:?}", e),
             None => panic!("unexpected end of iterator"),
         };
         assert_eq!(
-            key,
+            node.key_nibbles,
             vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x0F].into_boxed_slice()
         );
+        assert_eq!(node.next_nibble, None);
         assert_eq!(
-            node.as_leaf().unwrap().value,
+            node.node.as_leaf().unwrap().value,
             Box::from([0x00, 0x00, 0x00, 0x0FF])
         );
 
@@ -667,27 +685,29 @@ mod tests {
 
         let mut stream = merkle.path_iter(key).unwrap();
 
-        let (key, node) = match stream.next() {
-            Some(Ok(node_with_key)) => (node_with_key.key_nibbles, node_with_key.node),
+        let node = match stream.next() {
+            Some(Ok(node)) => node,
             Some(Err(e)) => panic!("{:?}", e),
             None => panic!("unexpected end of iterator"),
         };
-        assert_eq!(key, vec![0x00, 0x00].into_boxed_slice());
-        assert!(node.as_branch().unwrap().value.is_none());
+        assert_eq!(node.key_nibbles, vec![0x00, 0x00].into_boxed_slice());
+        assert!(node.node.as_branch().unwrap().value.is_none());
+        assert_eq!(node.next_nibble, Some(0));
 
-        let (key, node) = match stream.next() {
-            Some(Ok(node_with_key)) => (node_with_key.key_nibbles, node_with_key.node),
+        let node = match stream.next() {
+            Some(Ok(node)) => node,
             Some(Err(e)) => panic!("{:?}", e),
             None => panic!("unexpected end of iterator"),
         };
         assert_eq!(
-            key,
+            node.key_nibbles,
             vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00].into_boxed_slice()
         );
         assert_eq!(
-            node.as_branch().unwrap().value,
+            node.node.as_branch().unwrap().value,
             Some(vec![0x00, 0x00, 0x00].into_boxed_slice()),
         );
+        assert_eq!(node.next_nibble, None);
 
         assert!(stream.next().is_none());
     }
