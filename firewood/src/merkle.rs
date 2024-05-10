@@ -9,14 +9,14 @@ use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
 use std::collections::HashSet;
 use std::future::ready;
+use std::io::Error;
 use std::io::Write;
-use storage::Path;
+use std::ops::{Deref, DerefMut};
 use storage::ReadLinearStore;
 use storage::TrieHash;
 use storage::{BranchNode, LeafNode, Node};
 use storage::{LinearAddress, UpdateError, WriteLinearStore};
-
-use std::ops::{Deref, DerefMut};
+use storage::{Path, ProposedImmutable};
 use thiserror::Error;
 
 pub type Key = Box<[u8]>;
@@ -861,6 +861,9 @@ impl<T: WriteLinearStore> Merkle<T> {
         //     return Ok(None);
         // };
         todo!()
+    }
+    pub fn freeze(self) -> Result<HashedNodeStore<ProposedImmutable>, Error> {
+        self.0.freeze()
     }
 }
 

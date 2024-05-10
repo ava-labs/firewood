@@ -191,8 +191,8 @@ impl RollingRevisionManager {
     pub fn propose<K: KeyType, V: ValueType>(
         &self,
         batch: Batch<K, V>,
-    ) -> Result<Merkle<ProposedMutable>, RollingRevisionManagerError> {
-        let linear = ProposedMutable::new(LinearStoreParent::FileBacked(self.filebacked.clone()));
+    ) -> Result<Merkle<ProposedImmutable>, RollingRevisionManagerError> {
+        let linear = ProposedMutable::new(LinearStoreParent::Historical(self.last_commit.clone()));
         let mut merkle = Merkle::new(HashedNodeStore::initialize(linear).unwrap());
         batch
             .into_iter()
@@ -208,6 +208,8 @@ impl RollingRevisionManager {
                     }
                 }
             })?;
+        let node_store = merkle.freeze()?;
+        let merkle = Merkle::new(node_store);
         Ok(merkle)
     }
 }
