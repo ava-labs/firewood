@@ -235,7 +235,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
             self.nodestore.delete_node(old_address)?;
             let (new_address, new_node_size_index) = self.nodestore.allocate_node(&node)?;
             self.modified
-                .insert(new_address, (node.into(), new_node_size_index));
+                .insert(new_address, (Arc::new(node), new_node_size_index));
             self.handle_move(ancestors, old_address, new_address)?;
             return Ok(new_address);
         }

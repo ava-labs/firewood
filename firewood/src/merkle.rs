@@ -491,7 +491,8 @@ impl<T: WriteLinearStore> Merkle<T> {
                 Ok(hash_invalidation_addresses)
             }
             Node::Branch(last_node_branch) => {
-                let Some(&last_node_to_child_index) = remaining_key.first() else {
+                let Some((&last_node_to_child_index, remaining_key)) = remaining_key.split_first()
+                else {
                     // `last_node_branch` is at `key`. Update its value.
                     //     ...                ...
                     //      |      -->         |
@@ -507,6 +508,7 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                     return Ok(hash_invalidation_addresses);
                 };
+
                 // `last_node` is at a strict prefix of `key`.
                 // `remaining_key` is `key` after removing the prefix of `last_node` and 1 additional
                 // nibble for the child index that points to the node after `last_node`.
