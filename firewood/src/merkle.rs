@@ -1270,9 +1270,6 @@ mod tests {
 
         merkle.insert(&key, Box::new(val)).unwrap();
         merkle.insert(&key_2, Box::new(val_2)).unwrap();
-        let got = merkle.get(&key_2).unwrap().unwrap(); // todo remove
-        assert_eq!(*got, val_2); // todo remove
-
         merkle.insert(&key_3, Box::new(val_3)).unwrap();
 
         let got = merkle.get(&key).unwrap().unwrap();
@@ -1388,7 +1385,7 @@ mod tests {
         let mut merkle = Merkle::new(HashedNodeStore::initialize(MemStore::new(vec![])).unwrap());
         for (k, v) in items.iter() {
             merkle.insert(k.as_ref(), Box::from(v.as_ref()))?;
-            // println!("{}", merkle.dump()?);
+            println!("{}", merkle.dump()?);
         }
 
         Ok(merkle)
