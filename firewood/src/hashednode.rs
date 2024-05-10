@@ -177,13 +177,13 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     /// Updates the parent of `old_addr` to point to `new_addr` instead.
     /// `ancestors` contains the ancestors of the moved node, starting with the
     /// parent of the moved node and ending with the root.
-    pub fn handle_move<'a, A: Iterator<Item = &'a PathIterItem>>(
+    pub fn handle_move<'a, A: DoubleEndedIterator<Item = &'a PathIterItem>>(
         &mut self,
         mut ancestors: A,
         old_addr: LinearAddress,
         new_addr: LinearAddress,
     ) -> Result<(), MerkleError> {
-        let Some(parent) = ancestors.next() else {
+        let Some(parent) = ancestors.next_back() else {
             self.set_root(new_addr)?;
             return Ok(());
         };
@@ -217,7 +217,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     /// it doesn't fit in its current location. `ancestors` contains the nodes
     /// from `node`'s parent up to and including the root. Returns the new address
     /// of `node`, which may be the same as `old_address`.
-    pub fn update_node<'a, A: Iterator<Item = &'a PathIterItem>>(
+    pub fn update_node<'a, A: DoubleEndedIterator<Item = &'a PathIterItem>>(
         &mut self,
         ancestors: A,
         old_address: LinearAddress,
