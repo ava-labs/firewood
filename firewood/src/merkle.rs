@@ -440,6 +440,7 @@ impl<T: WriteLinearStore> Merkle<T> {
         let hash_invalidation_addresses: Vec<_> =
             traversal_path.iter().map(|item| item.addr).collect();
 
+        // `remaining_key` is `key` with the prefix of `last_node` removed.
         let remaining_key = {
             let overlap = PrefixOverlap::from(&last_node.key_nibbles, &key_as_path);
             assert!(overlap.unique_a.is_empty());
@@ -452,6 +453,9 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                 let Some(child_index) = remaining_key.next() else {
                     // `last_node_leaf` is at `key`. Update its value in place.
+                    //     ...                ...
+                    //      |      -->         |
+                    //  last_node       updated_last_node
                     self.update_node(
                         traversal_path.iter().rev(),
                         last_node.addr,
@@ -489,21 +493,28 @@ impl<T: WriteLinearStore> Merkle<T> {
             Node::Branch(last_node_branch) => {
                 let Some(&last_node_to_child_index) = remaining_key.first() else {
                     // `last_node_branch` is at `key`. Update its value.
-                    let last_node_addr = last_node.addr;
-
-                    let last_node = Node::Branch(Box::new(BranchNode {
+                    //     ...                ...
+                    //      |      -->         |
+                    //  last_node       updated_last_node
+                    let updated_last_node = Node::Branch(Box::new(BranchNode {
                         children: last_node_branch.children,
                         partial_path: last_node_branch.partial_path.clone(),
                         value: Some(value),
                         child_hashes: last_node_branch.child_hashes.clone(),
                     }));
 
-                    self.update_node(traversal_path.iter().rev(), last_node_addr, last_node)?;
+                    self.update_node(
+                        traversal_path.iter().rev(),
+                        last_node.addr,
+                        updated_last_node,
+                    )?;
 
                     return Ok(hash_invalidation_addresses);
                 };
-                let remaining_key = &remaining_key[1..];
                 // `last_node` is at a strict prefix of `key`.
+                // `remaining_key` is `key` after removing the prefix of `last_node` and 1 additional
+                // nibble for the child index that points to the node after `last_node`.
+                let remaining_key = &remaining_key[1..];
 
                 // See if the `last_node` has a child where `key` would go.
                 let child_option = *last_node_branch
@@ -524,15 +535,11 @@ impl<T: WriteLinearStore> Merkle<T> {
                         partial_path: Path::from_nibbles_iterator(remaining_key.iter().copied()),
                     }))?;
 
+                    // Add new leaf as child of `last_node`.
                     let mut updated_last_node_children = last_node_branch.children;
                     *updated_last_node_children
                         .get_mut(last_node_to_child_index as usize)
                         .expect("index is a nibble") = Some(new_leaf_addr);
-
-                    let mut updated_last_node_child_hashes = last_node_branch.child_hashes.clone();
-                    *updated_last_node_child_hashes
-                        .get_mut(last_node_to_child_index as usize)
-                        .expect("index is a nibble") = Default::default();
 
                     self.update_node(
                         traversal_path.iter().rev(),
@@ -541,7 +548,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                             children: updated_last_node_children,
                             partial_path: last_node_branch.partial_path.clone(),
                             value: last_node_branch.value.clone(),
-                            child_hashes: updated_last_node_child_hashes,
+                            child_hashes: last_node_branch.child_hashes.clone(),
                         })),
                     )?;
                     return Ok(hash_invalidation_addresses);
@@ -571,7 +578,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                             //                         |
                             //                     child_branch
                             let child_branch_addr = self.update_node(
-                                traversal_path.iter().rev(), // TODO danlaine: fix this arg? This is missing last_node.
+                                std::iter::empty(), // Going to reparent so no need to update address in parent.
                                 child_addr,
                                 Node::Branch(Box::new(BranchNode {
                                     children: child_branch.children,
@@ -612,10 +619,10 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                             let last_node_addr = last_node.addr;
                             let last_node = Node::Branch(Box::new(BranchNode {
-                                children: last_node_branch.children,
+                                children: last_node_children,
                                 partial_path: last_node_branch.partial_path.clone(),
                                 value: last_node_branch.value.clone(),
-                                child_hashes: last_node_branch.child_hashes.clone(),
+                                child_hashes: last_node_children_hashes,
                             }));
 
                             self.update_node(
