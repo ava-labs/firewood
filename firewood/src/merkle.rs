@@ -349,7 +349,7 @@ impl<T: ReadLinearStore> Merkle<T> {
 }
 
 impl<T: WriteLinearStore> Merkle<T> {
-    pub fn insert(&mut self, key: &[u8], val: Box<[u8]>) -> Result<(), MerkleError> {
+    pub fn insert<K: AsRef<[u8]>>(&mut self, key: K, val: Box<[u8]>) -> Result<(), MerkleError> {
         for _addr in self.insert_and_return_ancestors(key, val)? {
             // TODO: actually invalidate the hashes
             // This means changing the iterator so that it returns which child we went down
@@ -357,11 +357,12 @@ impl<T: WriteLinearStore> Merkle<T> {
         Ok(())
     }
 
-    pub fn insert_and_return_ancestors(
+    pub fn insert_and_return_ancestors<K: AsRef<[u8]>>(
         &mut self,
-        key: &[u8],
+        key: K,
         value: Box<[u8]>,
     ) -> Result<Vec<LinearAddress>, MerkleError> {
+        let key = key.as_ref();
         let key_nibbles = Nibbles::new(key); // how to get a &[u8] from this where each byte is a nibble?
         let key_as_path = Path::from_nibbles_iterator(key_nibbles.into_iter()); // .as_ref() &[u8]
 
@@ -473,7 +474,8 @@ impl<T: WriteLinearStore> Merkle<T> {
         let hash_invalidation_addresses: Vec<_> =
             traversal_path.iter().map(|item| item.addr).collect();
 
-        if last_node.key_nibbles.iter().eq(key_as_path.as_ref()) {
+        let key_as_path_ref: &[u8] = key_as_path.as_ref();
+        if last_node.key_nibbles.iter().eq(key_as_path_ref) {
             // The last node in the traversal path is at `key`.
             // We're replacing the value in an existing key-value pair.
             match &*last_node.node {
@@ -854,7 +856,7 @@ impl<T: WriteLinearStore> Merkle<T> {
         Ok(hash_invalidation_addresses)
     }
 
-    pub fn remove(&mut self, _key: &[u8]) -> Result<Option<Vec<u8>>, MerkleError> {
+    pub fn remove<K: AsRef<[u8]>>(&mut self, _key: K) -> Result<Option<Vec<u8>>, MerkleError> {
         // let Some(root_address) = self.root_address() else {
         //     return Ok(None);
         // };

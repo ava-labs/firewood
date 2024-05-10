@@ -9,10 +9,12 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crate::v2::api::HashKey;
-use storage::Historical;
+use crate::hashednode::HashedNodeStore;
+use crate::merkle::{Merkle, MerkleError};
+use crate::v2::api::{Batch, BatchOp, HashKey, KeyType, ValueType};
 use storage::ProposedImmutable;
 use storage::{FileBacked, TrieHash};
+use storage::{Historical, ProposedMutable};
 use storage::{LinearStoreParent, ReadLinearStore};
 use typed_builder::TypedBuilder;
 
@@ -75,6 +77,8 @@ pub(crate) enum RollingRevisionManagerError {
     NoSuchRevision,
     #[error("An IO error occurred during the commit")]
     IO(#[from] std::io::Error),
+    #[error("merkle error: {0}")]
+    MerkleError(#[from] MerkleError),
 }
 
 impl RollingRevisionManager {
@@ -182,6 +186,29 @@ impl RollingRevisionManager {
 
     pub fn root_hash(&self) -> Result<HashKey, RollingRevisionManagerError> {
         todo!()
+    }
+
+    pub fn propose<K: KeyType, V: ValueType>(
+        &self,
+        batch: Batch<K, V>,
+    ) -> Result<Merkle<ProposedMutable>, RollingRevisionManagerError> {
+        let linear = ProposedMutable::new(LinearStoreParent::FileBacked(self.filebacked.clone()));
+        let mut merkle = Merkle::new(HashedNodeStore::initialize(linear).unwrap());
+        batch
+            .into_iter()
+            .try_for_each(|op| -> Result<(), RollingRevisionManagerError> {
+                match op {
+                    BatchOp::Put { key, value } => {
+                        merkle.insert(key, value.as_ref().into())?;
+                        Ok(())
+                    }
+                    BatchOp::Delete { key } => {
+                        merkle.remove(key)?;
+                        Ok(())
+                    }
+                }
+            })?;
+        Ok(merkle)
     }
 }
 
