@@ -4,7 +4,7 @@
 use crate::hashednode::HashedNodeStore;
 use crate::nibbles::Nibbles;
 use crate::proof::{Proof, ProofError};
-use crate::stream::{MerkleKeyValueStream, NodeWithKey, PathIterator};
+use crate::stream::{MerkleKeyValueStream, PathIterItem, PathIterator};
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
 use std::collections::HashSet;
@@ -379,7 +379,7 @@ impl<T: WriteLinearStore> Merkle<T> {
         };
 
         let mut traversal_path =
-            PathIterator::new(self, key)?.collect::<Result<Vec<NodeWithKey>, MerkleError>>()?;
+            PathIterator::new(self, key)?.collect::<Result<Vec<PathIterItem>, MerkleError>>()?;
 
         let Some(last_node) = traversal_path.pop() else {
             // There is no node (including the root) which is a prefix of `key`.
