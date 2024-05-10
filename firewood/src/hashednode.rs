@@ -59,6 +59,12 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
         }
     }
 
+    // Returns a actual node instead of just an arc to it. This node is then
+    // owned by the caller.
+    // If the node was previously modified, then it will consume the modified Arc
+    // and return the inner value. This assumes no other references to that Arc
+    // exist at this time (that is, no iterators are active on the HashedNodeStore)
+    // If the node was not modified, a clone of the node is returned
     fn take_node(&mut self, addr: LinearAddress) -> Result<Node, Error> {
         if let Some((modified_node, _)) = self.modified.remove(&addr) {
             Ok(Arc::into_inner(modified_node).expect("no other references to this node can exist"))
@@ -69,6 +75,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
     }
 
     pub fn root_hash(&self) -> Result<TrieHash, Error> {
+        debug_assert!(self.modified.is_empty());
         if let Some(addr) = self.nodestore.root_address() {
             #[cfg(nightly)]
             let result = self
@@ -187,12 +194,17 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
             .expect("parent must be a branch")
             .clone();
 
-        let index = updated_parent
+        let (offset, child) = updated_parent
             .children
-            .iter()
-            .position(|child| *child == Some(old_addr))
-            .expect("old_addr must be a child of parent");
-        updated_parent.children[index] = Some(new_addr);
+            .iter_mut()
+            .enumerate()
+            .find(|(_, child)| **child == Some(old_addr))
+            .expect("old_addr must be a child");
+        *child = Some(new_addr);
+        *updated_parent
+            .child_hashes
+            .get_mut(offset)
+            .expect("old_addr must be a child") = Default::default();
 
         let updated_parent = Node::Branch(updated_parent);
 
@@ -211,21 +223,24 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         old_address: LinearAddress,
         node: Node,
     ) -> Result<LinearAddress, MerkleError> {
-        let old_size = if let Some((_, old_size)) = self.modified.get(&old_address) {
-            *old_size
-        } else {
-            self.nodestore.node_size(old_address)?
-        };
+        let old_node_size_index =
+            if let Some((_, old_node_size_index)) = self.modified.get(&old_address) {
+                *old_node_size_index
+            } else {
+                self.nodestore.node_size(old_address)?
+            };
         // the node was already modified, see if it still fits
-        if !self.nodestore.still_fits(old_size, &node)? {
+        if !self.nodestore.still_fits(old_node_size_index, &node)? {
             self.modified.remove(&old_address);
             self.nodestore.delete_node(old_address)?;
-            let new_address = self.create_node(node)?;
+            let (new_address, new_node_size_index) = self.nodestore.allocate_node(&node)?;
+            self.modified
+                .insert(new_address, (node.into(), new_node_size_index));
             self.handle_move(ancestors, old_address, new_address)?;
             return Ok(new_address);
         }
         self.modified
-            .insert(old_address, (Arc::new(node), old_size));
+            .insert(old_address, (Arc::new(node), old_node_size_index));
 
         Ok(old_address)
     }
