@@ -50,6 +50,11 @@ impl TrieHash {
     const fn len() -> usize {
         std::mem::size_of::<TrieHash>()
     }
+
+    /// Returns true iff each element in this hash is 0.
+    pub fn is_empty(&self) -> bool {
+        self.iter().all(|&elt| elt == 0)
+    }
 }
 
 impl Serialize for TrieHash {
