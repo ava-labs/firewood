@@ -198,7 +198,7 @@ impl RevisionManager {
         batch: Batch<K, V>,
     ) -> Result<Merkle<ProposedMutable>, RevisionManagerError> {
         let linear = ProposedMutable::new(LinearStoreParent::FileBacked(self.filebacked.clone()));
-        let mut merkle = Merkle::new(HashedNodeStore::initialize(linear).unwrap());
+        let mut merkle = Merkle::new(HashedNodeStore::initialize(linear)?);
         batch
             .into_iter()
             .try_for_each(|op| -> Result<(), RevisionManagerError> {

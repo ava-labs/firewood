@@ -158,6 +158,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
             root_hash: Default::default(),
         })
     }
+
     pub fn create_node(&mut self, node: Node) -> Result<LinearAddress, Error> {
         let (addr, size) = self.nodestore.allocate_node(&node)?;
         self.modified.insert(addr, (Arc::new(node), size));
@@ -192,6 +193,10 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
 }
 
 impl<T: ReadLinearStore> HashedNodeStore<T> {
+    pub fn consume_linear_store(self) -> T {
+        self.nodestore.consume_linear_store()
+    }
+
     // hash a node
     // assumes all the children of a branch have their hashes filled in
     fn hash_internal(&self, node: &Node, path_prefix: &Path) -> TrieHash {

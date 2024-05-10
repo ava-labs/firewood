@@ -176,6 +176,11 @@ impl<T: ReadLinearStore> NodeStore<T> {
     pub const fn linear_store(&self) -> &T {
         &self.linear_store
     }
+
+    /// Consume the underlying [ReadLinearStore] from this [NodeStore]
+    pub fn consume_linear_store(self) -> T {
+        self.linear_store
+    }
 }
 
 impl<T: WriteLinearStore> NodeStore<T> {
