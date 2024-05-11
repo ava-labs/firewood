@@ -114,8 +114,13 @@ impl<T: ReadLinearStore> Merkle<T> {
     }
 
     // TODO: can we make this &self instead of &mut self?
-    pub fn root_hash(&mut self) -> Result<TrieHash, std::io::Error> {
+    pub fn root_hash(&self) -> Result<TrieHash, std::io::Error> {
         self.0.root_hash()
+    }
+
+    /// Consume the underlying [ReadLinearStore] from this [NodeStore]
+    pub fn consume_linear_store(self) -> T {
+        self.0.consume_linear_store()
     }
 
     /// Constructs a merkle proof for key. The result contains all encoded nodes

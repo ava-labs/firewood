@@ -11,11 +11,11 @@ use std::sync::Arc;
 
 use crate::hashednode::HashedNodeStore;
 use crate::merkle::{Merkle, MerkleError};
-use crate::v2::api::{Batch, BatchOp, HashKey, KeyType, ValueType};
-use storage::ProposedImmutable;
+use crate::v2::api::{Batch, BatchOp, KeyType, ValueType};
 use storage::{FileBacked, TrieHash};
 use storage::{Historical, ProposedMutable};
 use storage::{LinearStoreParent, ReadLinearStore};
+use storage::{NodeStore, ProposedImmutable};
 use typed_builder::TypedBuilder;
 
 #[derive(Clone, Debug, TypedBuilder)]
@@ -30,10 +30,8 @@ pub(crate) struct RollingRevisionManager {
     max_revisions: usize,
     filebacked: Arc<FileBacked>,
     historicals: VecDeque<(TrieHash, Arc<Historical>)>,
-    proposals: Vec<(TrieHash, Arc<ProposedImmutable>)>,
-    last_commit: Arc<Historical>,
+    last_commit: (TrieHash, Arc<Historical>),
     commit_in_progress: AtomicBool,
-    // TODO: maintain root hash of the most recent commit
 }
 
 impl RollingRevisionManager {
@@ -43,17 +41,22 @@ impl RollingRevisionManager {
         config: RollingRevisionManagerConfig,
     ) -> Result<Self, Error> {
         let filebacked = Arc::new(FileBacked::new(filename, truncate)?);
-        let base_historical = Arc::new(Historical::new(
+        let base_historical = Historical::new(
             Default::default(),
             LinearStoreParent::FileBacked(filebacked.clone()),
             0,
-        ));
+        );
+        let nodestore = NodeStore::open(base_historical)?;
+        let merkle = Merkle::new(nodestore.into());
+        let root_hash = merkle.root_hash()?;
+
+        let base_historical = merkle.consume_linear_store();
+
         Ok(Self {
             max_revisions: config.max_revisions,
             filebacked,
             historicals: Default::default(),
-            proposals: Default::default(),
-            last_commit: base_historical,
+            last_commit: (root_hash, Arc::new(base_historical)),
             commit_in_progress: AtomicBool::new(false),
         })
     }
@@ -89,7 +92,7 @@ impl RollingRevisionManager {
         let parent = proposal.parent();
         match parent {
             LinearStoreParent::Historical(ref h) => {
-                if Arc::ptr_eq(h, &self.last_commit) {
+                if Arc::ptr_eq(h, &self.last_commit.1) {
                     return Err(RollingRevisionManagerError::NotLatest);
                 }
             }
@@ -103,16 +106,19 @@ impl RollingRevisionManager {
         // TODO: WAL
 
         // TODO: Historical do not need to old, but need new. Proposal need to only have new.
-        let historical = Arc::new(Historical::new(
+        let historical = Historical::new(
             std::mem::take(&mut proposal.new.clone()), // TODO: remove clone
             parent.clone(),
             proposal.size()?,
-        ));
+        );
 
-        // TODO: get the hash of historical revision
-        let hash = TrieHash::default();
-        self.historicals.push_back((hash, self.last_commit.clone()));
-        self.last_commit = historical;
+        self.historicals.push_back(self.last_commit.clone());
+
+        let nodestore = NodeStore::open(historical)?;
+        let merkle = Merkle::new(nodestore.into());
+        let root_hash = merkle.root_hash()?;
+        let historical = merkle.consume_linear_store();
+        self.last_commit = (root_hash, Arc::new(historical));
 
         self.commit_in_progress
             .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
@@ -175,20 +181,28 @@ pub type NewProposalError = (); // TODO implement
 impl RollingRevisionManager {
     pub fn revision(
         &self,
-        _root_hash: HashKey,
+        root_hash: TrieHash,
     ) -> Result<Arc<Historical>, RollingRevisionManagerError> {
-        todo!()
+        let historical = self
+            .historicals
+            .iter()
+            .find(|(hash, _)| *hash == root_hash)
+            .ok_or(RollingRevisionManagerError::NoSuchRevision)?
+            .1
+            .clone();
+        Ok(historical)
     }
 
-    pub fn root_hash(&self) -> Result<HashKey, RollingRevisionManagerError> {
-        todo!()
+    pub fn root_hash(&self) -> Result<TrieHash, RollingRevisionManagerError> {
+        Ok(self.last_commit.0.clone())
     }
 
     pub fn propose<K: KeyType, V: ValueType>(
         &mut self,
         batch: Batch<K, V>,
-    ) -> Result<Arc<ProposedImmutable>, RollingRevisionManagerError> {
-        let linear = ProposedMutable::new(LinearStoreParent::Historical(self.last_commit.clone()));
+    ) -> Result<ProposedImmutable, RollingRevisionManagerError> {
+        let linear =
+            ProposedMutable::new(LinearStoreParent::Historical(self.last_commit.1.clone()));
         let mut merkle = Merkle::new(HashedNodeStore::initialize(linear)?);
         batch
             .into_iter()
@@ -204,11 +218,8 @@ impl RollingRevisionManager {
                     }
                 }
             })?;
-        let root_hash = merkle.root_hash()?;
         let node_store = merkle.freeze()?;
-        let linear_store = Arc::new(node_store.consume_linear_store());
-        self.proposals.push((root_hash, linear_store.clone()));
-        Ok(linear_store)
+        Ok(node_store.consume_linear_store())
     }
 }
 

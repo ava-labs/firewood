@@ -95,6 +95,10 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
     pub const fn root_address(&self) -> Option<LinearAddress> {
         self.nodestore.root_address()
     }
+
+    pub fn consume_linear_store(self) -> T {
+        self.nodestore.consume_linear_store()
+    }
 }
 
 impl<T: WriteLinearStore> HashedNodeStore<T> {
@@ -193,10 +197,6 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
 }
 
 impl<T: ReadLinearStore> HashedNodeStore<T> {
-    pub fn consume_linear_store(self) -> T {
-        self.nodestore.consume_linear_store()
-    }
-
     // hash a node
     // assumes all the children of a branch have their hashes filled in
     fn hash_internal(&self, node: &Node, path_prefix: &Path) -> TrieHash {
