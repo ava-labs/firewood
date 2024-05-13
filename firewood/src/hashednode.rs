@@ -214,8 +214,9 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
             .map(|(child_index, _)| child_index)
             .expect("parent has node as child");
 
-        // True iff we've already marked the moved node's hash as invalid
-        // in its parent during a previous traversal.
+        // True iff the moved node's hash was already marked as invalid
+        // in `parent` because we never computed it or we invalidated it in
+        // a previous traversal
         let child_hash_already_invalidated = parent
             .child_hashes
             .get(child_index)
