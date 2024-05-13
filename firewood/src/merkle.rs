@@ -339,21 +339,9 @@ impl<T: ReadLinearStore> Merkle<T> {
 }
 
 impl<T: WriteLinearStore> Merkle<T> {
-    pub fn insert(&mut self, key: &[u8], val: Box<[u8]>) -> Result<(), MerkleError> {
-        for _addr in self.insert_and_return_ancestors(key, val)? {
-            // TODO: actually invalidate the hashes
-            // This means changing the iterator so that it returns which child we went down
-        }
-        Ok(())
-    }
-
-    pub fn insert_and_return_ancestors(
-        &mut self,
-        key: &[u8],
-        value: Box<[u8]>,
-    ) -> Result<Vec<LinearAddress>, MerkleError> {
-        let key_nibbles = Nibbles::new(key); // how to get a &[u8] from this where each byte is a nibble?
-        let key_as_path = Path::from_nibbles_iterator(key_nibbles.into_iter()); // .as_ref() &[u8]
+    pub fn insert(&mut self, key: &[u8], value: Box<[u8]>) -> Result<(), MerkleError> {
+        let key_as_nibbles = Nibbles::new(key); // how to get a &[u8] from this where each byte is a nibble?
+        let key_as_path = Path::from_nibbles_iterator(key_as_nibbles.into_iter()); // .as_ref() &[u8]
 
         let Some(old_root_addr) = self.root_address() else {
             // The trie is empty. Create a new leaf node with `value` and set
@@ -364,10 +352,11 @@ impl<T: WriteLinearStore> Merkle<T> {
             });
             let root_addr = self.create_node(root)?;
             self.set_root(root_addr)?;
-            return Ok(Default::default());
+            return Ok(());
         };
         // The trie is non-empty.
 
+        // The path from the root up to an including the node with the greatest prefix of `key`.
         let mut traversal_path =
             PathIterator::new(self, key)?.collect::<Result<Vec<PathIterItem>, MerkleError>>()?;
 
@@ -430,15 +419,9 @@ impl<T: WriteLinearStore> Merkle<T> {
             }));
             let new_root_addr = self.create_node(new_root)?;
             self.set_root(new_root_addr)?;
-            return Ok(vec![old_root_addr]);
+            return Ok(());
         };
         // `last_node`'s key is a prefix of `key`
-
-        // All nodes in `traversal_path` are prefixes of `key`.
-        // All of their hashes must be invalidated because we're
-        // adding a descendant.
-        let hash_invalidation_addresses: Vec<_> =
-            traversal_path.iter().map(|item| item.addr).collect();
 
         // `remaining_key` is `key` with the prefix of `last_node` removed.
         let remaining_key = {
@@ -464,7 +447,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                             partial_path: last_node_leaf.partial_path.clone(),
                         }),
                     )?;
-                    return Ok(hash_invalidation_addresses);
+                    return Ok(());
                 };
 
                 // `last_node_leaf` is at a strict prefix of `key`. Replace it with a branch.
@@ -488,7 +471,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     Node::Branch(Box::new(updated_last_node)),
                 )?;
 
-                Ok(hash_invalidation_addresses)
+                Ok(())
             }
             Node::Branch(last_node_branch) => {
                 let Some((&last_node_to_child_index, remaining_key)) = remaining_key.split_first()
@@ -506,7 +489,7 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                     self.update_node(traversal_path.iter(), last_node.addr, updated_last_node)?;
 
-                    return Ok(hash_invalidation_addresses);
+                    return Ok(());
                 };
 
                 // `last_node` is at a strict prefix of `key`.
@@ -542,7 +525,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                             child_hashes: last_node_branch.child_hashes.clone(),
                         })),
                     )?;
-                    return Ok(hash_invalidation_addresses);
+                    return Ok(());
                 };
 
                 // There is a child at the index that the `key` would be at. Get it.
@@ -618,7 +601,7 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                             self.update_node(traversal_path.iter(), last_node_addr, last_node)?;
 
-                            return Ok(hash_invalidation_addresses);
+                            return Ok(());
                         };
 
                         // The new branch has both the new value and the old branch as children.
@@ -675,7 +658,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                         let new_last_node = Node::Branch(Box::new(new_last_node));
                         self.update_node(traversal_path.iter(), last_node.addr, new_last_node)?;
 
-                        return Ok(hash_invalidation_addresses);
+                        return Ok(());
                     }
                     Node::Leaf(child_leaf) => {
                         // `child_leaf` is not a prefix of `key`.
@@ -719,7 +702,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                             let new_last_node = Node::Branch(Box::new(new_last_node));
 
                             self.update_node(traversal_path.iter(), last_node.addr, new_last_node)?;
-                            return Ok(hash_invalidation_addresses);
+                            return Ok(());
                         };
 
                         // The new branch has both the new value and the old leaf as children.
@@ -757,7 +740,7 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                         let new_last_node = Node::Branch(Box::new(new_last_node));
                         self.update_node(traversal_path.iter(), last_node.addr, new_last_node)?;
-                        return Ok(hash_invalidation_addresses);
+                        return Ok(());
                     }
                 }
             }
