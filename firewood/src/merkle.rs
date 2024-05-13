@@ -512,9 +512,10 @@ impl<T: WriteLinearStore> Merkle<T> {
         }
     }
 
-    // Insert a new key-value pair below `branch`.
+    // Insert a new key-value pair below `branch`, which is the node
+    // with the largest prefix of the key we're inserting into the trie.
     // `remaining_key` is the remaining nibbles of the key after
-    // matching `child_index`.
+    // matching up to `child_index`.
     fn insert_branch_child(
         &mut self,
         ancestors: &[PathIterItem],
@@ -556,15 +557,18 @@ impl<T: WriteLinearStore> Merkle<T> {
         };
 
         // There is a child at `child_index` already.
+        // Note that `child` can't be a prefix of the key we're inserting
+        // because it's deeper than `branch`, which is guaranteed to be the
+        // node with the largest prefix of the key we're inserting.
         let child = self.read_node(child_addr)?;
 
         match &*child {
             Node::Branch(child) => {
                 let path_overlap = PrefixOverlap::from(&child.partial_path, &remaining_key);
 
-                let mut remaining_key_iter = path_overlap.unique_b.iter().copied();
+                let mut remaining_key = path_overlap.unique_b.iter().copied();
 
-                let Some(new_leaf_index) = remaining_key_iter.next() else {
+                let Some(new_leaf_index) = remaining_key.next() else {
                     // `remaining_key` is before `child`.
                     // Make a new branch node between `branch` and `child`.
                     //
@@ -626,7 +630,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 //                    child    new_leaf
                 let new_leaf = Node::Leaf(LeafNode {
                     value,
-                    partial_path: Path::from_nibbles_iterator(remaining_key_iter),
+                    partial_path: Path::from_nibbles_iterator(remaining_key),
                 });
                 let new_leaf_addr = self.create_node(new_leaf)?;
 
