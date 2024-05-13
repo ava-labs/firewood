@@ -365,7 +365,10 @@ impl<T: WriteLinearStore> Merkle<T> {
             // There is no node (including the root) which is a prefix of `path`.
             // Insert a new branch node above the existing root and make the
             // old root a child of the new branch node.
-
+            //
+            //  old_root  -->  new_root
+            //                    |
+            //                 old_root
             let old_root = self.read_node(old_root_addr)?;
 
             let path_overlap = PrefixOverlap::from(old_root.partial_path().as_ref(), path.as_ref());
