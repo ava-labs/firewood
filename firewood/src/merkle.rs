@@ -532,6 +532,16 @@ impl<T: WriteLinearStore> Merkle<T> {
         // Note that `child` can't be a prefix of the key we're inserting
         // because it's deeper than `branch`, which is guaranteed to be the
         // node with the largest prefix of the key we're inserting.
+        //    ...                ...
+        //     |      -->         |
+        //  branch             branch
+        //  /    \            /      \
+        // ...  child       ...     new_branch
+        //                            |       \
+        //                         new_leaf*   child
+        //
+        // Note that new_leaf is only created if the remaining path is non-empty.
+        // Note that child may be a leaf or a branch node.
         let child = self.read_node(child_addr)?;
 
         let path_overlap = PrefixOverlap::from(&child.partial_path(), &remaining_path);
@@ -542,24 +552,19 @@ impl<T: WriteLinearStore> Merkle<T> {
             .expect("child can't be prefix of key");
 
         // Update `child` to shorten its partial path.
-        let child_addr = match &*child {
-            Node::Branch(child) => {
-                let child = BranchNode {
-                    children: child.children,
-                    partial_path: Path::from_nibbles_iterator(child_partial_path.iter().copied()),
-                    value: child.value.clone(),
-                    child_hashes: child.child_hashes.clone(),
-                };
-                self.update_node(empty(), child_addr, Node::Branch(Box::new(child)))?
-            }
-            Node::Leaf(child) => {
-                let child = LeafNode {
-                    value: child.value.clone(),
-                    partial_path: Path::from_nibbles_iterator(child_partial_path.iter().copied()),
-                };
-                self.update_node(empty(), child_addr, Node::Leaf(child))?
-            }
+        let child = match &*child {
+            Node::Branch(child) => Node::Branch(Box::new(BranchNode {
+                children: child.children,
+                partial_path: Path::from_nibbles_iterator(child_partial_path.iter().copied()),
+                value: child.value.clone(),
+                child_hashes: child.child_hashes.clone(),
+            })),
+            Node::Leaf(child) => Node::Leaf(LeafNode {
+                value: child.value.clone(),
+                partial_path: Path::from_nibbles_iterator(child_partial_path.iter().copied()),
+            }),
         };
+        let updated_child_addr = self.create_node(child)?;
 
         let mut new_branch = BranchNode {
             children: Default::default(),
@@ -567,28 +572,29 @@ impl<T: WriteLinearStore> Merkle<T> {
             value: None,
             child_hashes: Default::default(),
         };
-        *new_branch.child_mut(new_branch_to_child_index) = Some(child_addr);
+        *new_branch.child_mut(new_branch_to_child_index) = Some(updated_child_addr);
 
-        let mut remaining_path = path_overlap.unique_b.iter().copied();
-        if let Some(new_leaf_child_index) = remaining_path.next() {
+        if let Some((&new_leaf_child_index, remaining_path)) = path_overlap.unique_b.split_first() {
             let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
                 value,
-                partial_path: Path::from_nibbles_iterator(remaining_path),
+                partial_path: Path::from_nibbles_iterator(remaining_path.iter().copied()),
             }))?;
             *new_branch.child_mut(new_leaf_child_index) = Some(new_leaf_addr);
         } else {
+            new_branch.value = Some(value);
         }
-
         let new_branch_addr = self.create_node(Node::Branch(Box::new(new_branch)))?;
 
         let mut branch = BranchNode {
-            children: branch.children,
+            children: branch.children.clone(),
             partial_path: branch.partial_path.clone(),
             value: branch.value.clone(),
             child_hashes: branch.child_hashes.clone(),
         };
         branch.update_child(child_index, Some(new_branch_addr));
+
         self.update_node(ancestors, branch_addr, Node::Branch(Box::new(branch)))?;
+
         Ok(())
     }
 
