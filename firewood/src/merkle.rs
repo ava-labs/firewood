@@ -463,13 +463,13 @@ impl<T: WriteLinearStore> Merkle<T> {
                 //  last_node          new_branch
                 //                         |
                 //                      last_node
-                let last_node_addr = self.create_node(Node::Leaf(LeafNode {
+                let new_last_node_addr = self.create_node(Node::Leaf(LeafNode {
                     value,
                     partial_path: Path::from_nibbles_iterator(remaining_path.iter().copied()),
                 }))?;
 
                 let mut new_branch: BranchNode = last_node.into();
-                *new_branch.child_mut(child_index) = Some(last_node_addr);
+                *new_branch.child_mut(child_index) = Some(new_last_node_addr);
 
                 self.update_node(
                     ancestors,
