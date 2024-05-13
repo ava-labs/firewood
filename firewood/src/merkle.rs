@@ -628,14 +628,16 @@ impl<T: WriteLinearStore> Merkle<T> {
                     value: None,
                     child_hashes: Default::default(),
                 };
+                // Add new leaf as a child of the `new_branch`.
                 *new_branch.child_mut(new_leaf_index) = Some(new_leaf_addr);
+
+                let (&new_branch_to_child_index, child_partial_path) =
+                    path_overlap.unique_a.split_first().expect("TODO");
 
                 // Update `child` to shorten its partial path.
                 let child = BranchNode {
                     children: child.children,
-                    partial_path: Path::from_nibbles_iterator(
-                        path_overlap.unique_a.iter().skip(1).copied(),
-                    ),
+                    partial_path: Path::from_nibbles_iterator(child_partial_path.iter().copied()),
                     value: child.value.clone(),
                     child_hashes: child.child_hashes.clone(),
                 };
@@ -644,10 +646,12 @@ impl<T: WriteLinearStore> Merkle<T> {
                 let child_addr =
                     self.update_node(empty(), child_addr, Node::Branch(Box::new(child)))?;
 
-                *new_branch.child_mut(path_overlap.unique_a[0]) = Some(child_addr);
+                // Add `child` as a child of the `new_branch`.
+                *new_branch.child_mut(new_branch_to_child_index) = Some(child_addr);
                 let new_branch_addr = self.create_node(Node::Branch(Box::new(new_branch)))?;
 
-                // Update `branch` to point to the new branch.
+                // Update `branch` to point to `new_branch`
+                // instead of `child`.
                 let mut branch = BranchNode {
                     children: branch.children,
                     partial_path: branch.partial_path.clone(),
@@ -715,6 +719,12 @@ impl<T: WriteLinearStore> Merkle<T> {
                 });
                 let new_leaf_addr = self.create_node(new_leaf)?;
 
+                // Add `new_leaf` as a child of `new_branch`.
+                new_branch.update_child(*new_leaf_index, Some(new_leaf_addr));
+
+                let (&new_branch_to_child_index, child_partial_path) =
+                    path_overlap.unique_a.split_first().expect("TODO");
+
                 // Update `child` to shorten its partial path.
                 // We're going to update `branch` and its ancestors below so we
                 // don't need to pass in the ancestors to invalidate.
@@ -724,17 +734,17 @@ impl<T: WriteLinearStore> Merkle<T> {
                     Node::Leaf(LeafNode {
                         value: child.value.clone(),
                         partial_path: Path::from_nibbles_iterator(
-                            path_overlap.unique_a.iter().skip(1).copied(),
+                            child_partial_path.iter().copied(),
                         ),
                     }),
                 )?;
 
-                new_branch.update_child(*new_leaf_index, Some(new_leaf_addr));
-                new_branch.update_child(path_overlap.unique_a[0], Some(child_addr));
+                // Add `child` as a child of `new_branch`.
+                new_branch.update_child(new_branch_to_child_index, Some(child_addr));
 
-                let new_branch = Node::Branch(Box::new(new_branch));
-                let new_branch_addr = self.create_node(new_branch)?;
+                let new_branch_addr = self.create_node(Node::Branch(Box::new(new_branch)))?;
 
+                // Update `branch` to have `new_branch` as a child instead of `child`.
                 let mut branch = BranchNode {
                     children: branch.children,
                     partial_path: branch.partial_path.clone(),
