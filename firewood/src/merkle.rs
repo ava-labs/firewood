@@ -358,10 +358,11 @@ impl<T: WriteLinearStore> Merkle<T> {
         // The trie is non-empty.
 
         // The path from the root up to and including the node with the greatest prefix of `key`.
-        let mut traversal_path =
-            PathIterator::new(self, key)?.collect::<Result<Vec<PathIterItem>, MerkleError>>()?;
+        let mut traversal_path = PathIterator::new(self, key)?
+            .collect::<Result<Vec<PathIterItem>, MerkleError>>()?
+            .into_iter();
 
-        let Some(last_node) = traversal_path.pop() else {
+        let Some(last_node) = traversal_path.next_back() else {
             // There is no node (including the root) which is a prefix of `key`.
             // Insert a new branch node above the existing root and make the
             // old root a child of the new branch node.
@@ -446,7 +447,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     //      |      -->         |
                     //  last_node           last_node (updated)
                     self.update_node(
-                        traversal_path.iter(),
+                        traversal_path,
                         last_node_addr,
                         Node::Leaf(LeafNode {
                             value,
@@ -472,7 +473,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 *last_node.child_mut(*child_index) = Some(new_leaf_addr);
 
                 self.update_node(
-                    traversal_path.iter(),
+                    traversal_path,
                     last_node_addr,
                     Node::Branch(Box::new(last_node)),
                 )?;
@@ -487,7 +488,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     //      |      -->         |
                     //  last_node       updated_last_node
                     self.update_node(
-                        traversal_path.iter(),
+                        traversal_path,
                         last_node_addr,
                         Node::Branch(Box::new(BranchNode {
                             children: last_node.children,
@@ -501,7 +502,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 };
 
                 return self.insert_branch_child(
-                    &traversal_path,
+                    traversal_path,
                     last_node_addr,
                     last_node,
                     last_node_to_child_index,
@@ -516,9 +517,9 @@ impl<T: WriteLinearStore> Merkle<T> {
     // with the largest prefix of the key we're inserting into the trie.
     // `remaining_key` is the remaining nibbles of the key after
     // matching up to `child_index`.
-    fn insert_branch_child(
+    fn insert_branch_child<A: DoubleEndedIterator<Item = PathIterItem>>(
         &mut self,
-        ancestors: &[PathIterItem],
+        ancestors: A,
         branch_addr: LinearAddress,
         branch: &Box<BranchNode>,
         child_index: u8,
@@ -548,11 +549,7 @@ impl<T: WriteLinearStore> Merkle<T> {
             // child at `child_index` whose hash we need to invalidate.
             *branch.child_mut(child_index) = Some(new_leaf_addr);
 
-            self.update_node(
-                ancestors.iter(),
-                branch_addr,
-                Node::Branch(Box::new(branch)),
-            )?;
+            self.update_node(ancestors, branch_addr, Node::Branch(Box::new(branch)))?;
             return Ok(());
         };
 
@@ -611,11 +608,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                         child_hashes: branch.child_hashes.clone(),
                     };
                     branch.update_child(child_index, Some(new_branch_addr));
-                    self.update_node(
-                        ancestors.iter(),
-                        branch_addr,
-                        Node::Branch(Box::new(branch)),
-                    )?;
+                    self.update_node(ancestors, branch_addr, Node::Branch(Box::new(branch)))?;
 
                     return Ok(());
                 };
@@ -671,11 +664,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     child_hashes: branch.child_hashes.clone(),
                 };
                 branch.update_child(child_index, Some(new_branch_addr));
-                self.update_node(
-                    ancestors.iter(),
-                    branch_addr,
-                    Node::Branch(Box::new(branch)),
-                )?;
+                self.update_node(ancestors, branch_addr, Node::Branch(Box::new(branch)))?;
 
                 return Ok(());
             }
@@ -709,11 +698,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                         child_hashes: branch.child_hashes.clone(),
                     };
                     branch.update_child(child_index, Some(new_branch_addr));
-                    self.update_node(
-                        ancestors.iter(),
-                        branch_addr,
-                        Node::Branch(Box::new(branch)),
-                    )?;
+                    self.update_node(ancestors, branch_addr, Node::Branch(Box::new(branch)))?;
                     return Ok(());
                 };
 
@@ -764,11 +749,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     child_hashes: branch.child_hashes.clone(),
                 };
                 branch.update_child(child_index, Some(new_branch_addr));
-                self.update_node(
-                    ancestors.iter(),
-                    branch_addr,
-                    Node::Branch(Box::new(branch)),
-                )?;
+                self.update_node(ancestors, branch_addr, Node::Branch(Box::new(branch)))?;
                 return Ok(());
             }
         }
