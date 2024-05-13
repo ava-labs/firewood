@@ -460,18 +460,22 @@ impl<T: WriteLinearStore> Merkle<T> {
                 //
                 //     ...                ...
                 //      |      -->         |
-                //  last_node          last_node
+                //  last_node          new_branch
                 //                         |
-                //                      new_leaf
-                let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
+                //                      last_node
+                let last_node_addr = self.create_node(Node::Leaf(LeafNode {
                     value,
                     partial_path: Path::from_nibbles_iterator(remaining_path.iter().copied()),
                 }))?;
 
-                let mut last_node: BranchNode = last_node.into();
-                *last_node.child_mut(child_index) = Some(new_leaf_addr);
+                let mut new_branch: BranchNode = last_node.into();
+                *new_branch.child_mut(child_index) = Some(last_node_addr);
 
-                self.update_node(ancestors, last_node_addr, Node::Branch(Box::new(last_node)))?;
+                self.update_node(
+                    ancestors,
+                    last_node_addr,
+                    Node::Branch(Box::new(new_branch)),
+                )?;
 
                 Ok(())
             }
