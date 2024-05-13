@@ -440,24 +440,31 @@ impl<T: WriteLinearStore> Merkle<T> {
         };
 
         let last_node_addr = last_node.addr;
+        let Some((&child_index, remaining_path)) = remaining_path.split_first() else {
+            // `last_node_branch` is at `path`. Update its value.
+            //     ...                ...
+            //      |      -->         |
+            //  last_node       updated_last_node
+            let last_node = match &*last_node.node {
+                Node::Leaf(last_node) => Node::Leaf(LeafNode {
+                    value,
+                    partial_path: last_node.partial_path.clone(),
+                }),
+                Node::Branch(last_node) => Node::Branch(Box::new(BranchNode {
+                    children: last_node.children,
+                    partial_path: last_node.partial_path.clone(),
+                    value: Some(value),
+                    child_hashes: last_node.child_hashes.clone(),
+                })),
+            };
+
+            self.update_node(ancestors, last_node_addr, last_node)?;
+
+            return Ok(());
+        };
+
         match &*last_node.node {
             Node::Leaf(last_node) => {
-                let Some((child_index, remaining_path)) = remaining_path.split_first() else {
-                    // `last_node` is at `path`. Update its value in place.
-                    //     ...                ...
-                    //      |      -->         |
-                    //  last_node           last_node (updated)
-                    self.update_node(
-                        ancestors,
-                        last_node_addr,
-                        Node::Leaf(LeafNode {
-                            value,
-                            partial_path: last_node.partial_path.clone(),
-                        }),
-                    )?;
-                    return Ok(());
-                };
-
                 // `last_node` is at a strict prefix of `path`. Replace it with a branch.
                 //
                 //     ...                ...
@@ -471,39 +478,18 @@ impl<T: WriteLinearStore> Merkle<T> {
                 }))?;
 
                 let mut last_node: BranchNode = last_node.into();
-                *last_node.child_mut(*child_index) = Some(new_leaf_addr);
+                *last_node.child_mut(child_index) = Some(new_leaf_addr);
 
                 self.update_node(ancestors, last_node_addr, Node::Branch(Box::new(last_node)))?;
 
                 Ok(())
             }
             Node::Branch(last_node) => {
-                let Some((&last_node_to_child_index, remaining_path)) =
-                    remaining_path.split_first()
-                else {
-                    // `last_node_branch` is at `path`. Update its value.
-                    //     ...                ...
-                    //      |      -->         |
-                    //  last_node       updated_last_node
-                    self.update_node(
-                        ancestors,
-                        last_node_addr,
-                        Node::Branch(Box::new(BranchNode {
-                            children: last_node.children,
-                            partial_path: last_node.partial_path.clone(),
-                            value: Some(value),
-                            child_hashes: last_node.child_hashes.clone(),
-                        })),
-                    )?;
-
-                    return Ok(());
-                };
-
                 return self.insert_branch_child(
                     ancestors,
                     last_node_addr,
                     last_node,
-                    last_node_to_child_index,
+                    child_index,
                     remaining_path,
                     value,
                 );
