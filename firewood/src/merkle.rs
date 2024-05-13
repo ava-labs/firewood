@@ -357,11 +357,11 @@ impl<T: WriteLinearStore> Merkle<T> {
         // The trie is non-empty.
 
         // The path from the root down to and including the node with the greatest prefix of `path`.
-        let mut traversal = PathIterator::new(self, key)?
+        let mut ancestors = PathIterator::new(self, key)?
             .collect::<Result<Vec<PathIterItem>, MerkleError>>()?
             .into_iter();
 
-        let Some(last_node) = traversal.next_back() else {
+        let Some(last_node) = ancestors.next_back() else {
             // There is no node (including the root) which is a prefix of `path`.
             // Insert a new branch node above the existing root and make the
             // old root a child of the new branch node.
@@ -445,7 +445,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     //      |      -->         |
                     //  last_node           last_node (updated)
                     self.update_node(
-                        traversal,
+                        ancestors,
                         last_node_addr,
                         Node::Leaf(LeafNode {
                             value,
@@ -470,7 +470,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 let mut last_node: BranchNode = last_node.into();
                 *last_node.child_mut(*child_index) = Some(new_leaf_addr);
 
-                self.update_node(traversal, last_node_addr, Node::Branch(Box::new(last_node)))?;
+                self.update_node(ancestors, last_node_addr, Node::Branch(Box::new(last_node)))?;
 
                 Ok(())
             }
@@ -483,7 +483,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     //      |      -->         |
                     //  last_node       updated_last_node
                     self.update_node(
-                        traversal,
+                        ancestors,
                         last_node_addr,
                         Node::Branch(Box::new(BranchNode {
                             children: last_node.children,
@@ -497,7 +497,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 };
 
                 return self.insert_branch_child(
-                    traversal,
+                    ancestors,
                     last_node_addr,
                     last_node,
                     last_node_to_child_index,
