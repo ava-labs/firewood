@@ -577,11 +577,9 @@ impl<T: WriteLinearStore> Merkle<T> {
                         child_hashes: child.child_hashes.clone(),
                     }));
 
-                    let child_addr = self.update_node(
-                        empty(), // TODO is this ok?
-                        child_addr,
-                        child,
-                    )?;
+                    // We're going to update `branch` and its ancestors below so we
+                    // don't need to pass in the ancestors to invalidate.
+                    let child_addr = self.update_node(empty(), child_addr, child)?;
 
                     let mut new_branch = BranchNode {
                         partial_path: Path::from_nibbles_iterator(
@@ -641,11 +639,10 @@ impl<T: WriteLinearStore> Merkle<T> {
                     value: child.value.clone(),
                     child_hashes: child.child_hashes.clone(),
                 };
-                let child_addr = self.update_node(
-                    ancestors.iter(), // TODO danlaine: fix this arg. This is missing last_node.
-                    child_addr,
-                    Node::Branch(Box::new(child)),
-                )?;
+                // We're going to update `branch` and its ancestors below so we
+                // don't need to pass in the ancestors to invalidate.
+                let child_addr =
+                    self.update_node(empty(), child_addr, Node::Branch(Box::new(child)))?;
 
                 *new_branch.child_mut(path_overlap.unique_a[0]) = Some(child_addr);
                 let new_branch_addr = self.create_node(Node::Branch(Box::new(new_branch)))?;
@@ -719,8 +716,10 @@ impl<T: WriteLinearStore> Merkle<T> {
                 let new_leaf_addr = self.create_node(new_leaf)?;
 
                 // Update `child` to shorten its partial path.
+                // We're going to update `branch` and its ancestors below so we
+                // don't need to pass in the ancestors to invalidate.
                 let child_addr = self.update_node(
-                    empty(), // TODO is this ok?
+                    empty(),
                     child_addr,
                     Node::Leaf(LeafNode {
                         value: child.value.clone(),
