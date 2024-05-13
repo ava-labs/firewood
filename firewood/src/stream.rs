@@ -245,8 +245,8 @@ fn get_iterator_intial_state<T: ReadLinearStore>(
                         ),
                     });
 
-                    let Some(child_addr) = branch.children[next_unmatched_key_nibble as usize]
-                    else {
+                    #[allow(clippy::indexing_slicing)]
+                    let Some(child_addr) = branch.children[next_unmatched_key_nibble as usize] else {
                         return Ok(NodeStreamState::Iterating { iter_stack });
                     };
 

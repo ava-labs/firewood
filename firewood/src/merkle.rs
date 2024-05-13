@@ -455,8 +455,10 @@ impl<T: WriteLinearStore> Merkle<T> {
                 });
                 let new_leaf_addr = self.create_node(new_leaf)?;
 
-                *new_root.mut_child(overlap.unique_a[0]) = Some(old_root_addr);
-                *new_root.mut_child(overlap.unique_b[0]) = Some(new_leaf_addr);
+                *new_root.mut_child(*overlap.unique_a.first().expect("checked earlier (fixme)")) =
+                    Some(old_root_addr);
+                *new_root.mut_child(*overlap.unique_b.first().expect("checked earlier (fixme)")) =
+                    Some(new_leaf_addr);
 
                 let new_root = Node::Branch(Box::new(new_root));
                 let new_root_addr = self.create_node(new_root)?;
@@ -545,7 +547,9 @@ impl<T: WriteLinearStore> Merkle<T> {
                 Node::Branch(last_node_branch) => {
                     // The last node is a branch node.
                     // See if there's a node at the child index that the `key` would be at.
+                    #[allow(clippy::indexing_slicing)]
                     let child_index = key_as_path[last_node.key_nibbles.len()] as usize;
+                    #[allow(clippy::indexing_slicing)]
                     let Some(child_addr) = last_node_branch.children[child_index] else {
                         // There is no child at the index that the `key` would be at.
                         // Create a new leaf at that index.
@@ -617,6 +621,7 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                     match &*child_node {
                         Node::Branch(child_branch) => {
+                            #[allow(clippy::indexing_slicing)]
                             let prefix_overlap = PrefixOverlap::from(
                                 &child_branch.partial_path,
                                 &key_as_path[last_node.key_nibbles.len() + 1..],
@@ -641,8 +646,9 @@ impl<T: WriteLinearStore> Merkle<T> {
                                 });
                                 let new_leaf_addr = self.create_node(new_leaf)?;
                                 *new_branch.mut_child(first_b) = Some(new_leaf_addr);
-                                *new_branch.mut_child(prefix_overlap.unique_a[0]) =
-                                    Some(child_addr);
+                                *new_branch.mut_child(
+                                    *prefix_overlap.unique_a.first().expect("must be non-empty"),
+                                ) = Some(child_addr);
 
                                 // Update `child_branch` to shorten its partial path.
                                 let updated_child_branch = BranchNode {
@@ -684,8 +690,9 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                                 // The old branch becomes a child of the new branch.
                                 // TODO explain why this is safe
-                                *new_branch.mut_child(prefix_overlap.unique_a[0]) =
-                                    Some(child_addr);
+                                *new_branch.mut_child(
+                                    *prefix_overlap.unique_a.first().expect("must be non-empty"),
+                                ) = Some(child_addr);
 
                                 // Update `last_node` to point to the new branch.
                                 let new_branch = Node::Branch(Box::new(new_branch));
@@ -711,6 +718,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                             return Ok(hash_invalidation_addresses);
                         }
                         Node::Leaf(child_leaf) => {
+                            #[allow(clippy::indexing_slicing)]
                             let prefix_overlap = PrefixOverlap::from(
                                 &child_leaf.partial_path,
                                 &key_as_path[last_node.key_nibbles.len() + 1..],
@@ -731,8 +739,12 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                                 // The old leaf becomes a child of the new branch
                                 // both unique_a and unique_b can't both be empty
-                                *new_branch.mut_child(prefix_overlap.unique_a[0]) =
-                                    Some(child_addr);
+                                #[allow(clippy::indexing_slicing)]
+                                let child = *prefix_overlap
+                                    .unique_a
+                                    .first()
+                                    .expect("both can't be empty");
+                                *new_branch.mut_child(child) = Some(child_addr);
 
                                 // Update `last_node` to point to the new branch.
                                 let new_branch = Node::Branch(Box::new(new_branch));
@@ -767,8 +779,10 @@ impl<T: WriteLinearStore> Merkle<T> {
                             });
                             let new_leaf_addr = self.create_node(new_leaf)?;
 
+                            #[allow(clippy::indexing_slicing)]
                             new_branch
                                 .update_child(prefix_overlap.unique_b[0], Some(new_leaf_addr));
+                            #[allow(clippy::indexing_slicing)]
                             new_branch.update_child(prefix_overlap.unique_a[0], Some(child_addr));
 
                             let new_branch = Node::Branch(Box::new(new_branch));
@@ -815,6 +829,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     let mut new_branch: BranchNode = last_node_leaf.into();
 
                     // TODO explain why this is safe
+                    #[allow(clippy::indexing_slicing)]
                     new_branch.update_child(
                         key_as_path[last_node.key_nibbles.len()],
                         Some(new_leaf_addr),
