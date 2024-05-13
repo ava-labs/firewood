@@ -373,19 +373,29 @@ impl<T: WriteLinearStore> Merkle<T> {
 
             let path_overlap = PrefixOverlap::from(old_root.partial_path().as_ref(), path.as_ref());
 
-            // `new_root_child_index` is the child index of the old root in the new root.
-            let (&new_root_child_index, old_root_partial_path) = path_overlap
+            let (&old_root_child_index, old_root_partial_path) = path_overlap
                 .unique_a
                 .split_first()
-                .expect("old_root shouldn't be a prefix of path");
+                .expect("old_root shouldn't be prefix of path");
 
-            // Update the old root's partial path to be shorter since it has a parent now.
-            let old_root = old_root
-                .clone()
-                .new_with_partial_path(Path::from_nibbles_iterator(
-                    old_root_partial_path.iter().copied(),
-                ));
-            let old_root_new_addr = self.update_node(empty(), old_root_addr, old_root)?;
+            // Shorten the partial path of `old_root` since it has a parent now.
+            let old_root = match &*old_root {
+                Node::Leaf(old_root) => Node::Leaf(LeafNode {
+                    value: old_root.value.clone(),
+                    partial_path: Path::from_nibbles_iterator(
+                        old_root_partial_path.iter().copied(),
+                    ),
+                }),
+                Node::Branch(old_root) => Node::Branch(Box::new(BranchNode {
+                    children: old_root.children.clone(),
+                    partial_path: Path::from_nibbles_iterator(
+                        old_root_partial_path.iter().copied(),
+                    ),
+                    value: old_root.value.clone(),
+                    child_hashes: old_root.child_hashes.clone(),
+                })),
+            };
+            let old_root_addr = self.update_node(empty(), old_root_addr, old_root)?;
 
             let mut new_root = BranchNode {
                 partial_path: Path::from_nibbles_iterator(path_overlap.shared.iter().copied()),
@@ -393,38 +403,19 @@ impl<T: WriteLinearStore> Merkle<T> {
                 children: Default::default(),
                 child_hashes: Default::default(),
             };
+            *new_root.child_mut(old_root_child_index) = Some(old_root_addr);
 
-            // Make the old root a child of the new root.
-            *new_root.child_mut(new_root_child_index) = Some(old_root_new_addr);
-
-            if let Some((&new_leaf_child_index, new_leaf_partial_path)) =
+            if let Some((new_leaf_child_index, remaining_path)) =
                 path_overlap.unique_b.split_first()
             {
-                // `path` is not a prefix of the old root's path.
-                // Make a new leaf which is a sibling of the old root and child of the new root.
-                //    ...                 ...
-                //     |                   |
-                //   old_root           new_root
-                //     |         -->   /        \
-                //   new_leaf        old_root    new_leaf
                 let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
                     value,
-                    partial_path: Path::from_nibbles_iterator(
-                        new_leaf_partial_path.iter().copied(),
-                    ),
+                    partial_path: Path::from_nibbles_iterator(remaining_path.iter().copied()),
                 }))?;
-
-                *new_root.child_mut(new_leaf_child_index) = Some(new_leaf_addr);
+                *new_root.child_mut(*new_leaf_child_index) = Some(new_leaf_addr);
             } else {
-                // `path` is a prefix of the existing root's path.
-                // The new root branch node is at `path` and has `value`.
-                //   ...             ...
-                //    |               |
-                //  old_root  -->  new_root
-                //                    |
-                //                 old_root
                 new_root.value = Some(value);
-            };
+            }
 
             let new_root_addr = self.create_node(Node::Branch(Box::new(new_root)))?;
             self.set_root(new_root_addr)?;
