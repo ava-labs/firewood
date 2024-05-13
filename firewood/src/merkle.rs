@@ -475,127 +475,110 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                 Ok(())
             }
-            Node::Branch(last_node) => {
-                return self.insert_branch_child(
-                    ancestors,
-                    last_node_addr,
-                    last_node,
-                    child_index,
-                    remaining_path,
-                    value,
-                );
+            Node::Branch(branch) => {
+                // See if `branch` has a child at `child_index` already.
+                let Some(&child_addr) = branch.child(child_index) else {
+                    // Create a new leaf at empty `child_index`.
+                    //     ...                ...
+                    //      |      -->         |
+                    //    branch             branch
+                    //    /   \           /    |        \
+                    //  ...   ...       ...  new_leaf   ...
+                    let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
+                        value,
+                        partial_path: Path::from_nibbles_iterator(remaining_path.iter().copied()),
+                    }))?;
+
+                    let mut branch = BranchNode {
+                        children: branch.children,
+                        partial_path: branch.partial_path.clone(),
+                        value: branch.value.clone(),
+                        child_hashes: branch.child_hashes.clone(),
+                    };
+                    // We don't need to call update_child because we know there is no
+                    // child at `child_index` whose hash we need to invalidate.
+                    *branch.child_mut(child_index) = Some(new_leaf_addr);
+
+                    self.update_node(ancestors, last_node_addr, Node::Branch(Box::new(branch)))?;
+                    return Ok(());
+                };
+
+                // There is a child at `child_index` already.
+                // Note that `child` can't be a prefix of the key we're inserting
+                // because it's deeper than `branch`, which is guaranteed to be the
+                // node with the largest prefix of the key we're inserting.
+                //    ...                ...
+                //     |      -->         |
+                //  branch             branch
+                //  /    \            /      \
+                // ...  child       ...     new_branch
+                //                            |       \
+                //                         new_leaf*   child
+                //
+                // Note that new_leaf is only created if the remaining path is non-empty.
+                // Note that child may be a leaf or a branch node.
+                let child = self.read_node(child_addr)?;
+
+                let path_overlap = PrefixOverlap::from(&child.partial_path(), &remaining_path);
+
+                let (&new_branch_to_child_index, child_partial_path) = path_overlap
+                    .unique_a
+                    .split_first()
+                    .expect("child can't be prefix of key");
+
+                // Update `child` to shorten its partial path.
+                let child = match &*child {
+                    Node::Branch(child) => Node::Branch(Box::new(BranchNode {
+                        children: child.children,
+                        partial_path: Path::from_nibbles_iterator(
+                            child_partial_path.iter().copied(),
+                        ),
+                        value: child.value.clone(),
+                        child_hashes: child.child_hashes.clone(),
+                    })),
+                    Node::Leaf(child) => Node::Leaf(LeafNode {
+                        value: child.value.clone(),
+                        partial_path: Path::from_nibbles_iterator(
+                            child_partial_path.iter().copied(),
+                        ),
+                    }),
+                };
+                let updated_child_addr = self.create_node(child)?;
+
+                let mut new_branch = BranchNode {
+                    children: Default::default(),
+                    partial_path: Path::from_nibbles_iterator(path_overlap.shared.iter().copied()),
+                    value: None,
+                    child_hashes: Default::default(),
+                };
+                *new_branch.child_mut(new_branch_to_child_index) = Some(updated_child_addr);
+
+                if let Some((&new_leaf_child_index, remaining_path)) =
+                    path_overlap.unique_b.split_first()
+                {
+                    let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
+                        value,
+                        partial_path: Path::from_nibbles_iterator(remaining_path.iter().copied()),
+                    }))?;
+                    *new_branch.child_mut(new_leaf_child_index) = Some(new_leaf_addr);
+                } else {
+                    new_branch.value = Some(value);
+                }
+                let new_branch_addr = self.create_node(Node::Branch(Box::new(new_branch)))?;
+
+                let mut branch = BranchNode {
+                    children: branch.children.clone(),
+                    partial_path: branch.partial_path.clone(),
+                    value: branch.value.clone(),
+                    child_hashes: branch.child_hashes.clone(),
+                };
+                branch.update_child(child_index, Some(new_branch_addr));
+
+                self.update_node(ancestors, last_node_addr, Node::Branch(Box::new(branch)))?;
+
+                Ok(())
             }
         }
-    }
-
-    // Insert a new key-value pair below `branch`, which is the node
-    // with the largest prefix of the key we're inserting into the trie.
-    // `remaining_path` is the remaining nibbles of the key after
-    // matching up to `child_index`.
-    fn insert_branch_child<A: DoubleEndedIterator<Item = PathIterItem>>(
-        &mut self,
-        ancestors: A,
-        branch_addr: LinearAddress,
-        branch: &Box<BranchNode>,
-        child_index: u8,
-        remaining_path: &[u8],
-        value: Box<[u8]>,
-    ) -> Result<(), MerkleError> {
-        // See if `branch` has a child at `child_index` already.
-        let Some(&child_addr) = branch.child(child_index) else {
-            // Create a new leaf at empty `child_index`.
-            //     ...                ...
-            //      |      -->         |
-            //    branch             branch
-            //    /   \           /    |        \
-            //  ...   ...       ...  new_leaf   ...
-            let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
-                value,
-                partial_path: Path::from_nibbles_iterator(remaining_path.iter().copied()),
-            }))?;
-
-            let mut branch = BranchNode {
-                children: branch.children,
-                partial_path: branch.partial_path.clone(),
-                value: branch.value.clone(),
-                child_hashes: branch.child_hashes.clone(),
-            };
-            // We don't need to call update_child because we know there is no
-            // child at `child_index` whose hash we need to invalidate.
-            *branch.child_mut(child_index) = Some(new_leaf_addr);
-
-            self.update_node(ancestors, branch_addr, Node::Branch(Box::new(branch)))?;
-            return Ok(());
-        };
-
-        // There is a child at `child_index` already.
-        // Note that `child` can't be a prefix of the key we're inserting
-        // because it's deeper than `branch`, which is guaranteed to be the
-        // node with the largest prefix of the key we're inserting.
-        //    ...                ...
-        //     |      -->         |
-        //  branch             branch
-        //  /    \            /      \
-        // ...  child       ...     new_branch
-        //                            |       \
-        //                         new_leaf*   child
-        //
-        // Note that new_leaf is only created if the remaining path is non-empty.
-        // Note that child may be a leaf or a branch node.
-        let child = self.read_node(child_addr)?;
-
-        let path_overlap = PrefixOverlap::from(&child.partial_path(), &remaining_path);
-
-        let (&new_branch_to_child_index, child_partial_path) = path_overlap
-            .unique_a
-            .split_first()
-            .expect("child can't be prefix of key");
-
-        // Update `child` to shorten its partial path.
-        let child = match &*child {
-            Node::Branch(child) => Node::Branch(Box::new(BranchNode {
-                children: child.children,
-                partial_path: Path::from_nibbles_iterator(child_partial_path.iter().copied()),
-                value: child.value.clone(),
-                child_hashes: child.child_hashes.clone(),
-            })),
-            Node::Leaf(child) => Node::Leaf(LeafNode {
-                value: child.value.clone(),
-                partial_path: Path::from_nibbles_iterator(child_partial_path.iter().copied()),
-            }),
-        };
-        let updated_child_addr = self.create_node(child)?;
-
-        let mut new_branch = BranchNode {
-            children: Default::default(),
-            partial_path: Path::from_nibbles_iterator(path_overlap.shared.iter().copied()),
-            value: None,
-            child_hashes: Default::default(),
-        };
-        *new_branch.child_mut(new_branch_to_child_index) = Some(updated_child_addr);
-
-        if let Some((&new_leaf_child_index, remaining_path)) = path_overlap.unique_b.split_first() {
-            let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
-                value,
-                partial_path: Path::from_nibbles_iterator(remaining_path.iter().copied()),
-            }))?;
-            *new_branch.child_mut(new_leaf_child_index) = Some(new_leaf_addr);
-        } else {
-            new_branch.value = Some(value);
-        }
-        let new_branch_addr = self.create_node(Node::Branch(Box::new(new_branch)))?;
-
-        let mut branch = BranchNode {
-            children: branch.children.clone(),
-            partial_path: branch.partial_path.clone(),
-            value: branch.value.clone(),
-            child_hashes: branch.child_hashes.clone(),
-        };
-        branch.update_child(child_index, Some(new_branch_addr));
-
-        self.update_node(ancestors, branch_addr, Node::Branch(Box::new(branch)))?;
-
-        Ok(())
     }
 
     pub fn remove(&mut self, _key: &[u8]) -> Result<Option<Vec<u8>>, MerkleError> {
