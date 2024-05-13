@@ -357,7 +357,7 @@ impl<T: WriteLinearStore> Merkle<T> {
         };
         // The trie is non-empty.
 
-        // The path from the root up to an including the node with the greatest prefix of `key`.
+        // The path from the root up to and including the node with the greatest prefix of `key`.
         let mut traversal_path =
             PathIterator::new(self, key)?.collect::<Result<Vec<PathIterItem>, MerkleError>>()?;
 
@@ -366,15 +366,22 @@ impl<T: WriteLinearStore> Merkle<T> {
             // Insert a new branch node above the existing root and make the
             // old root a child of the new branch node.
 
-            // Update the old root's partial path to be shorter since it has a parent now.
             let old_root = self.read_node(old_root_addr)?;
+
             let path_overlap =
                 PrefixOverlap::from(old_root.partial_path().as_ref(), key_as_path.as_ref());
+
+            // `new_root_child_index` is the child index of the old root in the new root.
+            let (&new_root_child_index, old_root_partial_path) = path_overlap
+                .unique_a
+                .split_first()
+                .expect("old_root shouldn't be a prefix of key");
+
+            // Update the old root's partial path to be shorter since it has a parent now.
             let old_root = old_root
                 .clone()
                 .new_with_partial_path(Path::from_nibbles_iterator(
-                    // Skip 1 nibble for the child index in the new branch node.
-                    path_overlap.unique_a.iter().skip(1).copied(),
+                    old_root_partial_path.iter().copied(),
                 ));
             let old_root_new_addr = self.update_node(empty(), old_root_addr, old_root)?;
 
@@ -385,10 +392,11 @@ impl<T: WriteLinearStore> Merkle<T> {
             // the `old_root`'s key is a prefix of `key`, which can't be true because otherwise
             // `traversal_path` would have contained the root.
             *new_root_children
-                .get_mut(path_overlap.unique_a[0] as usize)
+                .get_mut(new_root_child_index as usize)
                 .expect("nibble") = Some(old_root_new_addr);
 
-            let new_root_value = if let Some(&new_leaf_child_index) = path_overlap.unique_b.first()
+            let new_root_value = if let Some((&new_leaf_child_index, new_leaf_partial_path)) =
+                path_overlap.unique_b.split_first()
             {
                 // `key` is not a prefix of the old root's key.
                 // Make a new leaf which is a sibling of the old root and child of the new root.
@@ -396,7 +404,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     value,
                     partial_path: Path::from_nibbles_iterator(
                         // Skip 1 nibble for the child index in the new root branch node.
-                        path_overlap.unique_b.iter().skip(1).copied(),
+                        new_leaf_partial_path.iter().copied(),
                     ),
                 }))?;
 
