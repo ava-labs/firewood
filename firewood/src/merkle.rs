@@ -7,14 +7,15 @@ use crate::proof::{Proof, ProofError};
 use crate::stream::{MerkleKeyValueStream, PathIterItem, PathIterator};
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
-use std::collections::HashSet;
+use sha3::{Digest, Keccak256};
+use std::collections::{HashMap, HashSet};
 use std::future::ready;
 use std::io::Write;
-use storage::Path;
 use storage::ReadLinearStore;
 use storage::TrieHash;
 use storage::{BranchNode, LeafNode, Node};
 use storage::{LinearAddress, UpdateError, WriteLinearStore};
+use storage::{Path, ProposedImmutable};
 
 use std::ops::{Deref, DerefMut};
 use thiserror::Error;
@@ -125,28 +126,21 @@ impl<T: ReadLinearStore> Merkle<T> {
     /// If the trie does not contain a value for key, the returned proof contains
     /// all nodes of the longest existing prefix of the key, ending with the node
     /// that proves the absence of the key (at least the root node).
-    pub fn prove(&self, _key: &[u8]) -> Result<Proof<Vec<u8>>, MerkleError> {
-        todo!()
-        // let mut proofs = HashMap::new();
-        // if root_addr.is_null() {
-        //     return Ok(Proof(proofs));
-        // }
-
-        // let sentinel_node = self.get_node(root_addr)?;
-
-        // let path_iter = self.path_iter(sentinel_node, key.as_ref());
-
-        // let nodes = path_iter
-        //     .map(|result| result.map(|(_, node)| node))
-        //     .collect::<Result<Vec<NodeObjRef>, MerkleError>>()?;
-
-        // // Get the hashes of the nodes.
-        // for node in nodes.into_iter() {
-        //     let encoded = node.get_encoded(&self.store);
-        //     let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(encoded).into();
-        //     proofs.insert(hash, encoded.to_vec());
-        // }
-        // Ok(Proof(proofs))
+    pub fn prove(&self, key: &[u8]) -> Result<Proof<Vec<u8>>, MerkleError> {
+        let mut proofs = HashMap::new();
+        let path_iter = PathIterator::new(self, key)?;
+        for path in path_iter {
+            let path = path?;
+            let hashable = self.0.hashable_contents(
+                &path.node,
+                &Path::from_nibbles_iterator(path.key_nibbles.iter().copied()),
+            );
+            let mut hasher = Keccak256::new();
+            hasher.update(&hashable);
+            let hash = hasher.finalize().into();
+            proofs.insert(hash, hashable);
+        }
+        Ok(Proof(proofs))
     }
 
     pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
@@ -875,6 +869,10 @@ impl<T: WriteLinearStore> Merkle<T> {
         // };
         todo!()
     }
+
+    pub fn freeze(self) -> Result<Merkle<ProposedImmutable>, MerkleError> {
+        Ok(Merkle(self.0.freeze()?))
+    }
 }
 
 impl<T: WriteLinearStore> Merkle<T> {
@@ -930,6 +928,7 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use rand::{rngs::StdRng, thread_rng, Rng as _, SeedableRng as _};
     use storage::MemStore;
 
     #[test]
@@ -1120,27 +1119,25 @@ mod tests {
     //         }
     //     }
 
-    //     #[test]
-    //     fn get_empty_proof() {
-    //         let merkle = create_in_memory_merkle();
-    //         let root_addr = merkle.init_sentinel().unwrap();
+    #[test]
+    fn get_empty_proof() {
+        let merkle = create_in_memory_merkle();
 
-    //         let proof = merkle.prove(b"any-key", root_addr).unwrap();
+        let proof = merkle.prove(b"any-key").unwrap();
 
-    //         assert!(proof.0.is_empty());
-    //     }
+        assert!(proof.0.is_empty());
+    }
 
-    //     #[tokio::test]
-    //     async fn empty_range_proof() {
-    //         let merkle = create_in_memory_merkle();
-    //         let root_addr = merkle.init_sentinel().unwrap();
+    // #[tokio::test]
+    // async fn empty_range_proof() {
+    //     let merkle = create_in_memory_merkle();
 
-    //         assert!(merkle
-    //             .range_proof::<&[u8]>(root_addr, None, None, None)
-    //             .await
-    //             .unwrap()
-    //             .is_none());
-    //     }
+    //     assert!(merkle
+    //         .range_proof::<&[u8]>(None, None, None)
+    //         .await
+    //         .unwrap()
+    //         .is_none());
+    // }
 
     //     #[tokio::test]
     //     async fn range_proof_invalid_bounds() {
@@ -1486,7 +1483,7 @@ mod tests {
         let mut merkle = Merkle::new(HashedNodeStore::initialize(MemStore::new(vec![])).unwrap());
         for (k, v) in items.iter() {
             merkle.insert(k.as_ref(), Box::from(v.as_ref()))?;
-            println!("{}", merkle.dump()?);
+            // println!("{}", merkle.dump()?);
         }
 
         Ok(merkle)
@@ -1690,25 +1687,26 @@ mod tests {
     //     Ok(())
     // }
 
-    // #[test]
-    // #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
-    // fn test_proof() -> Result<(), MerkleError> {
-    //     let set = fixed_and_pseudorandom_data(500);
-    //     let mut items = Vec::from_iter(set.iter());
-    //     items.sort();
-    //     let merkle = merkle_build_test(items.clone())?;
-    //     let (keys, vals): (Vec<[u8; 32]>, Vec<[u8; 20]>) = items.into_iter().unzip();
+    #[test]
+    #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+    fn test_proof() -> Result<(), MerkleError> {
+        let set = fixed_and_pseudorandom_data(500);
+        let mut items = Vec::from_iter(set.iter());
+        items.sort();
+        let merkle = merkle_build_test(items.clone())?.freeze()?;
+        let (keys, _vals): (Vec<[u8; 32]>, Vec<[u8; 20]>) = items.into_iter().unzip();
 
-    //     for (i, key) in keys.iter().enumerate() {
-    //         let proof = merkle.prove(key)?;
-    //         assert!(!proof.0.is_empty());
-    //         let val = merkle.verify_proof(key, &proof)?;
-    //         assert!(val.is_some());
-    //         assert_eq!(val.unwrap(), vals[i]);
-    //     }
+        for key in keys.iter() {
+            let proof = merkle.prove(key)?;
+            assert!(!proof.0.is_empty());
+            // TODO: verify_proof
+            // let val = merkle.verify_proof(key, &proof)?;
+            // assert!(val.is_some());
+            // assert_eq!(val.unwrap(), vals[i]);
+        }
 
-    //     Ok(())
-    // }
+        Ok(())
+    }
 
     // #[test]
     // /// Verify the proofs that end with leaf node with the given key.
@@ -2564,46 +2562,46 @@ mod tests {
 
     // generate pseudorandom data, but prefix it with some known data
     // The number of fixed data points is 100; you specify how much random data you want
-    // #[allow(clippy::indexing_slicing)]
-    // fn fixed_and_pseudorandom_data(random_count: u32) -> HashMap<[u8; 32], [u8; 20]> {
-    //     let mut items: HashMap<[u8; 32], [u8; 20]> = HashMap::new();
-    //     for i in 0..100_u32 {
-    //         let mut key: [u8; 32] = [0; 32];
-    //         let mut value: [u8; 20] = [0; 20];
-    //         for (index, d) in i.to_be_bytes().iter().enumerate() {
-    //             key[index] = *d;
-    //             value[index] = *d;
-    //         }
-    //         items.insert(key, value);
+    #[allow(clippy::indexing_slicing)]
+    fn fixed_and_pseudorandom_data(random_count: u32) -> HashMap<[u8; 32], [u8; 20]> {
+        let mut items: HashMap<[u8; 32], [u8; 20]> = HashMap::new();
+        for i in 0..100_u32 {
+            let mut key: [u8; 32] = [0; 32];
+            let mut value: [u8; 20] = [0; 20];
+            for (index, d) in i.to_be_bytes().iter().enumerate() {
+                key[index] = *d;
+                value[index] = *d;
+            }
+            items.insert(key, value);
 
-    //         let mut more_key: [u8; 32] = [0; 32];
-    //         for (index, d) in (i + 10).to_be_bytes().iter().enumerate() {
-    //             more_key[index] = *d;
-    //         }
-    //         items.insert(more_key, value);
-    //     }
+            let mut more_key: [u8; 32] = [0; 32];
+            for (index, d) in (i + 10).to_be_bytes().iter().enumerate() {
+                more_key[index] = *d;
+            }
+            items.insert(more_key, value);
+        }
 
-    //     // read FIREWOOD_TEST_SEED from the environment. If it's there, parse it into a u64.
-    //     let seed = std::env::var("FIREWOOD_TEST_SEED")
-    //         .ok()
-    //         .map_or_else(
-    //             || None,
-    //             |s| Some(str::parse(&s).expect("couldn't parse FIREWOOD_TEST_SEED; must be a u64")),
-    //         )
-    //         .unwrap_or_else(|| thread_rng().gen());
+        // read FIREWOOD_TEST_SEED from the environment. If it's there, parse it into a u64.
+        let seed = std::env::var("FIREWOOD_TEST_SEED")
+            .ok()
+            .map_or_else(
+                || None,
+                |s| Some(str::parse(&s).expect("couldn't parse FIREWOOD_TEST_SEED; must be a u64")),
+            )
+            .unwrap_or_else(|| thread_rng().gen());
 
-    //     // the test framework will only render this in verbose mode or if the test fails
-    //     // to re-run the test when it fails, just specify the seed instead of randomly
-    //     // selecting one
-    //     eprintln!("Seed {seed}: to rerun with this data, export FIREWOOD_TEST_SEED={seed}");
-    //     let mut r = StdRng::seed_from_u64(seed);
-    //     for _ in 0..random_count {
-    //         let key = r.gen::<[u8; 32]>();
-    //         let val = r.gen::<[u8; 20]>();
-    //         items.insert(key, val);
-    //     }
-    //     items
-    // }
+        // the test framework will only render this in verbose mode or if the test fails
+        // to re-run the test when it fails, just specify the seed instead of randomly
+        // selecting one
+        eprintln!("Seed {seed}: to rerun with this data, export FIREWOOD_TEST_SEED={seed}");
+        let mut r = StdRng::seed_from_u64(seed);
+        for _ in 0..random_count {
+            let key = r.gen::<[u8; 32]>();
+            let val = r.gen::<[u8; 20]>();
+            items.insert(key, val);
+        }
+        items
+    }
 
     // fn increase_key(key: &[u8; 32]) -> [u8; 32] {
     //     let mut new_key = *key;

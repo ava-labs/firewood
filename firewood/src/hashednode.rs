@@ -1,7 +1,8 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use sha3::{Digest, Keccak256};
+use sha3::digest::core_api::CoreWrapper;
+use sha3::{Digest, Keccak256, Keccak256Core};
 use std::collections::HashMap;
 use std::io::Error;
 use std::iter::once;
@@ -99,6 +100,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
 
 impl<T: WriteLinearStore> HashedNodeStore<T> {
     // recursively hash this node
+    // this should only be called when freezing the merkle
     fn hash(
         &mut self,
         node_addr: LinearAddress,
@@ -191,11 +193,38 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     }
 }
 
+trait HasUpdate {
+    fn update<T: AsRef<[u8]>>(&mut self, data: T);
+}
+
+impl HasUpdate for CoreWrapper<Keccak256Core> {
+    fn update<T: AsRef<[u8]>>(&mut self, data: T) {
+        sha3::Digest::update(self, data)
+    }
+}
+
+impl HasUpdate for Vec<u8> {
+    fn update<T: AsRef<[u8]>>(&mut self, data: T) {
+        self.extend(data.as_ref());
+    }
+}
+
 impl<T: ReadLinearStore> HashedNodeStore<T> {
-    // hash a node
-    // assumes all the children of a branch have their hashes filled in
     fn hash_internal(&self, node: &Node, path_prefix: &Path) -> TrieHash {
         let mut hasher = Keccak256::new();
+        self.hash_internal_with(node, path_prefix, &mut hasher);
+        hasher.finalize().into()
+    }
+
+    pub fn hashable_contents(&self, node: &Node, path_prefix: &Path) -> Vec<u8> {
+        let mut hasher = vec![];
+        self.hash_internal_with(node, path_prefix, &mut hasher);
+        hasher
+    }
+
+    // hash a node
+    // assumes all the children of a branch have their hashes filled in
+    fn hash_internal_with<H: HasUpdate>(&self, node: &Node, path_prefix: &Path, hasher: &mut H) {
         match *node {
             Node::Branch(ref branch) => {
                 // collect the full key
@@ -233,7 +262,6 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                 hasher.update(&leaf.value);
             }
         }
-        hasher.finalize().into()
     }
 }
 
