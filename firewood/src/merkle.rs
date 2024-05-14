@@ -10,7 +10,7 @@ use futures::{StreamExt, TryStreamExt};
 use std::collections::HashSet;
 use std::future::ready;
 use std::io::Write;
-use std::iter::empty;
+use std::iter::{empty, once};
 use storage::Path;
 use storage::ReadLinearStore;
 use storage::TrieHash;
@@ -614,24 +614,234 @@ impl<T: WriteLinearStore> Merkle<T> {
 
         let removed = greatest_prefix_node;
 
-        let Some(removed_parent) = ancestors.next_back() else {
-            // The removed node was the root.
-            match &*removed.node {
-                Node::Leaf(leaf) => {
-                    // The root was a leaf. The trie is empty now.
+        match &*removed.node {
+            Node::Branch(branch) => {
+                let Some(removed_value) = &branch.value else {
+                    // The node at `path` has no value so there's nothing to remove.
+                    return Ok(None);
+                };
+
+                // See if the branch has more than 1 child.
+                let num_children = branch.children.iter().filter(|c| c.is_some()).count();
+
+                if num_children > 1 {
+                    // The branch has more than 1 child. Remove the value but keep the branch.
+                    let branch = BranchNode {
+                        children: branch.children,
+                        partial_path: branch.partial_path.clone(),
+                        value: None,
+                        child_hashes: branch.child_hashes.clone(),
+                    };
+                    self.update_node(ancestors, removed.addr, Node::Branch(Box::new(branch)))?;
+                    return Ok(Some(removed_value.clone()));
+                }
+
+                // The branch has only 1 child.
+                // Extend the child's partial path to include the branch's partial path.
+                let (child_index, child_addr) = branch
+                    .children
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, addr)| addr.map(|addr| (index as u8, addr)))
+                    .expect("branch must have children");
+
+                let child = self.read_node(child_addr)?;
+
+                let child_new_partial_path = Path::from_nibbles_iterator(
+                    branch
+                        .partial_path
+                        .iter()
+                        .chain(once(&child_index))
+                        .chain(child.partial_path().iter())
+                        .copied(),
+                );
+
+                let child = match &*child {
+                    Node::Leaf(leaf) => Node::Leaf(LeafNode {
+                        value: leaf.value.clone(),
+                        partial_path: child_new_partial_path,
+                    }),
+                    Node::Branch(child) => Node::Branch(Box::new(BranchNode {
+                        children: child.children,
+                        partial_path: child_new_partial_path,
+                        value: child.value.clone(),
+                        child_hashes: child.child_hashes.clone(),
+                    })),
+                };
+
+                // Point the removed node's parent to the child, bypassing the removed node.
+                let Some(removed_parent) = ancestors.next_back() else {
+                    // The removed node was the root.
+                    self.delete_node(child_addr)?;
+                    let new_root_addr = self.update_node(ancestors, removed.addr, child)?;
+                    self.set_root(Some(new_root_addr))?;
+                    return Ok(Some(removed_value.clone()));
+                };
+
+                self.delete_node(child_addr)?;
+                let child_addr = self.create_node(child)?;
+
+                let removed_parent_addr = removed_parent.addr;
+                let mut removed_parent = removed_parent
+                    .node
+                    .as_branch()
+                    .expect("parent of a node must be a branch")
+                    .deref()
+                    .clone();
+                removed_parent.update_child(child_index, Some(child_addr));
+
+                self.delete_node(removed.addr)?;
+                self.update_node(
+                    ancestors,
+                    removed_parent_addr,
+                    Node::Branch(Box::new(removed_parent)),
+                )?;
+
+                return Ok(Some(removed_value.clone()));
+            }
+            Node::Leaf(leaf) => {
+                // Update the parent of the removed node.
+                let Some(removed_parent) = ancestors.next_back() else {
+                    // The removed node was the root.
                     self.delete_node(removed.addr)?;
                     self.set_root(None)?;
                     return Ok(Some(leaf.value.clone()));
+                };
+                let removed_parent_addr = removed_parent.addr;
+                let child_index = removed_parent
+                    .next_nibble
+                    .expect("parent of leaf must have next nibble");
+
+                let mut removed_parent = removed_parent
+                    .node
+                    .as_branch()
+                    .expect("parent of a node must be a branch")
+                    .clone();
+                removed_parent.update_child(child_index, None);
+
+                // See if the parent of the removed node has more than 1 child.
+                let num_children = removed_parent
+                    .children
+                    .iter()
+                    .filter(|c| c.is_some())
+                    .count();
+
+                if num_children > 1 || removed_parent.value.is_some() {
+                    // `removed_parent` can't be combined with its 1 child.
+                    self.delete_node(removed.addr)?;
+                    self.update_node(ancestors, removed_parent_addr, Node::Branch(removed_parent))?;
+                    return Ok(Some(leaf.value.clone()));
                 }
-                Node::Branch(branch) => {
-                    todo!()
-                }
+
+                // The parent of the removed node has no value and 1 child.
+                // It should be combined with its only child.
+
+                let (child_index, child_addr) = removed_parent
+                    .children
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, addr)| addr.map(|addr| (index as u8, addr)))
+                    .expect("branch must have children");
+
+                let child = self.read_node(child_addr)?;
+
+                let child_partial_path = Path::from_nibbles_iterator(
+                    removed_parent
+                        .partial_path
+                        .iter()
+                        .chain(once(&child_index))
+                        .chain(child.partial_path().iter())
+                        .copied(),
+                );
+
+                let child = match &*child {
+                    Node::Leaf(leaf) => Node::Leaf(LeafNode {
+                        value: leaf.value.clone(),
+                        partial_path: child_partial_path,
+                    }),
+                    Node::Branch(child) => Node::Branch(Box::new(BranchNode {
+                        children: child.children,
+                        partial_path: child_partial_path,
+                        value: child.value.clone(),
+                        child_hashes: child.child_hashes.clone(),
+                    })),
+                };
+
+                self.delete_node(removed.addr)?;
+                self.delete_node(child_addr)?;
+                self.update_node(ancestors, removed_parent_addr, child)?;
+                return Ok(Some(leaf.value.clone()));
             }
+        }
 
-            todo!()
-        };
+        // let Some(removed_parent) = ancestors.next_back() else {
+        //     // The removed node was the root.
+        //     match &*removed.node {
+        //         Node::Leaf(leaf) => {
+        //             // The root was a leaf. The trie is empty now.
+        //             self.delete_node(removed.addr)?;
+        //             self.set_root(None)?;
+        //             return Ok(Some(leaf.value.clone()));
+        //         }
+        //         Node::Branch(branch) => {
+        //             let num_children = branch.children.iter().filter(|c| c.is_some()).count();
 
-        todo!()
+        //             if num_children == 1 {
+        //                 // The root was a branch with only one child.
+        //                 // The child becomes the new root.
+        //                 let (child_index, child_addr) = branch
+        //                     .children
+        //                     .iter()
+        //                     .enumerate()
+        //                     .find_map(|(index, addr)| addr.map(|addr| (index as u8, addr)))
+        //                     .expect("branch must have children");
+
+        //                 let child = self.read_node(child_addr)?;
+
+        //                 let root_partial_path = Path::from_nibbles_iterator(
+        //                     branch
+        //                         .partial_path
+        //                         .iter()
+        //                         .chain(once(&child_index))
+        //                         .chain(child.partial_path().iter())
+        //                         .copied(),
+        //                 );
+
+        //                 let new_root = match &*child {
+        //                     Node::Leaf(leaf) => Node::Leaf(LeafNode {
+        //                         value: leaf.value.clone(),
+        //                         partial_path: root_partial_path,
+        //                     }),
+        //                     Node::Branch(child) => Node::Branch(Box::new(BranchNode {
+        //                         children: child.children,
+        //                         partial_path: root_partial_path,
+        //                         value: child.value.clone(),
+        //                         child_hashes: child.child_hashes.clone(),
+        //                     })),
+        //                 };
+        //                 self.delete_node(child_addr)?;
+        //                 let new_root_addr = self.update_node(empty(), removed.addr, new_root)?;
+        //                 self.set_root(Some(new_root_addr))?;
+        //             } else {
+        //                 // The root was a branch with multiple children.
+        //                 // The value is removed but the branch remains otherwise unchanged.
+        //                 let branch = BranchNode {
+        //                     children: branch.children,
+        //                     partial_path: branch.partial_path.clone(),
+        //                     value: None,
+        //                     child_hashes: branch.child_hashes.clone(),
+        //                 };
+        //                 self.update_node(ancestors, removed.addr, Node::Branch(Box::new(branch)))?;
+        //             }
+        //             return Ok(Some(removed_value.clone()));
+        //         }
+        //     }
+        // };
+
+        // let removed_parent = removed_parent
+        //     .node
+        //     .as_branch()
+        //     .expect("parent of a node must be a branch");
     }
 }
 
@@ -819,21 +1029,60 @@ mod tests {
     }
 
     #[test]
-    fn remove_one() {
-        let key = vec![0, 1, 2];
-        let val = [0, 1, 2];
+    fn remove_root() {
+        let key0 = vec![0];
+        let val0 = [0];
+        let key1 = vec![0, 1];
+        let val1 = [0, 1];
+        let key2 = vec![0, 1, 2];
+        let val2 = [0, 1, 2];
+        let key3 = vec![0, 1, 15];
+        let val3 = [0, 1, 15];
 
         let mut merkle = create_in_memory_merkle();
 
-        merkle.insert(&key, Box::from(val)).unwrap();
+        merkle.insert(&key0, Box::from(val0)).unwrap();
+        merkle.insert(&key1, Box::from(val1)).unwrap();
+        merkle.insert(&key2, Box::from(val2)).unwrap();
+        merkle.insert(&key3, Box::from(val3)).unwrap();
+        // Trie is:
+        //   key0
+        //    |
+        //   key1
+        //  /    \
+        // key2  key3
 
-        assert_eq!(merkle.get(&key).unwrap(), Some(Box::from(val)));
+        // Test removal of root when it's a branch with 1 branch child
+        let removed_val = merkle.remove(&key0).unwrap();
+        assert_eq!(removed_val, Some(Box::from(val0)));
+        assert!(merkle.get(&key0).unwrap().is_none());
+        // Removing an already removed key is a no-op
+        assert!(merkle.remove(&key0).unwrap().is_none());
 
-        let removed_val = merkle.remove(&key).unwrap();
-        assert_eq!(removed_val, Some(Box::from(val)));
+        // Trie is:
+        //   key1
+        //  /    \
+        // key2  key3
+        // Test removal of root when it's a branch with multiple children
+        assert_eq!(merkle.remove(&key1).unwrap(), Some(Box::from(val1)));
+        assert!(merkle.get(&key1).unwrap().is_none());
+        assert!(merkle.remove(&key1).unwrap().is_none());
 
-        let fetched_val = merkle.get(&key).unwrap();
-        assert!(fetched_val.is_none());
+        // Trie is:
+        //   key1 (now has no value)
+        //  /    \
+        // key2  key3
+        let removed_val = merkle.remove(&key2).unwrap();
+        assert_eq!(removed_val, Some(Box::from(val2)));
+        assert!(merkle.get(&key2).unwrap().is_none());
+        assert!(merkle.remove(&key2).unwrap().is_none());
+
+        // Trie is:
+        // key1 (now has no value)
+        //  |
+        // key3
+
+        // Removing an already removed key is a no-op
     }
 
     //     #[test]
