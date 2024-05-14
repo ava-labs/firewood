@@ -4,6 +4,7 @@
 use sha3::{Digest, Keccak256};
 use std::collections::HashMap;
 use std::io::Error;
+use std::io::ErrorKind::NotFound;
 use std::iter::once;
 use std::sync::{Arc, OnceLock};
 
@@ -25,7 +26,7 @@ use crate::stream::PathIterItem;
 #[derive(Debug)]
 pub struct HashedNodeStore<T: ReadLinearStore> {
     nodestore: NodeStore<T>,
-    modified: HashMap<LinearAddress, (Arc<Node>, u8)>,
+    modified: HashMap<LinearAddress, Option<(Arc<Node>, u8)>>,
     root_hash: OnceLock<TrieHash>,
 }
 
@@ -53,7 +54,11 @@ impl<T: ReadLinearStore> From<NodeStore<T>> for HashedNodeStore<T> {
 impl<T: ReadLinearStore> HashedNodeStore<T> {
     pub fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
         if let Some(modified_node) = self.modified.get(&addr) {
-            Ok(modified_node.0.clone())
+            if let Some((modified_node, _)) = modified_node {
+                return Ok(modified_node.clone());
+            } else {
+                return Err(Error::new(std::io::ErrorKind::Other, "Node not found"));
+            }
         } else {
             Ok(self.nodestore.read_node(addr)?)
         }
@@ -66,8 +71,13 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
     // exist at this time (that is, no iterators are active on the HashedNodeStore)
     // If the node was not modified, a clone of the node is returned
     fn take_node(&mut self, addr: LinearAddress) -> Result<Node, Error> {
-        if let Some((modified_node, _)) = self.modified.remove(&addr) {
-            Ok(Arc::into_inner(modified_node).expect("no other references to this node can exist"))
+        if let Some(modified_node) = self.modified.remove(&addr) {
+            if let Some((modified_node, _)) = modified_node {
+                return Ok(Arc::into_inner(modified_node)
+                    .expect("no other references to this node can exist"));
+            } else {
+                return Err(Error::new(NotFound, "Node not found"));
+            }
         } else {
             let node = self.nodestore.read_node(addr)?;
             Ok((*node).clone())
@@ -152,6 +162,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
             Node::Leaf(_) => Ok(self.hash_internal(node, path_prefix)),
         }
     }
+
     pub fn freeze(mut self) -> Result<HashedNodeStore<ProposedImmutable>, Error> {
         // fill in all remaining hashes, including the root hash
         if let Some(root_address) = self.root_address() {
@@ -168,10 +179,16 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
             root_hash: Default::default(),
         })
     }
+
     pub fn create_node(&mut self, node: Node) -> Result<LinearAddress, Error> {
         let (addr, size) = self.nodestore.allocate_node(&node)?;
-        self.modified.insert(addr, (Arc::new(node), size));
+        self.modified.insert(addr, Some((Arc::new(node), size)));
         Ok(addr)
+    }
+
+    pub fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error> {
+        self.modified.insert(addr, None);
+        Ok(())
     }
 
     /// Fixes the trie after a node is updated.
@@ -193,7 +210,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         new_addr: LinearAddress,
     ) -> Result<(), MerkleError> {
         let Some(parent) = ancestors.next_back() else {
-            self.set_root(new_addr)?;
+            self.set_root(Some(new_addr))?;
             return Ok(());
         };
 
@@ -257,12 +274,15 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         old_address: LinearAddress,
         node: Node,
     ) -> Result<LinearAddress, MerkleError> {
-        let old_node_size_index =
-            if let Some((_, old_node_size_index)) = self.modified.get(&old_address) {
+        let old_node_size_index = if let Some(modified_node) = self.modified.get(&old_address) {
+            if let Some((_, old_node_size_index)) = modified_node {
                 *old_node_size_index
             } else {
                 self.nodestore.node_size(old_address)?
-            };
+            }
+        } else {
+            self.nodestore.node_size(old_address)?
+        };
 
         // If the node was already modified, see if it still fits
         let new_address = if !self.nodestore.still_fits(old_node_size_index, &node)? {
@@ -270,11 +290,11 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
             self.nodestore.delete_node(old_address)?;
             let (new_address, new_node_size_index) = self.nodestore.allocate_node(&node)?;
             self.modified
-                .insert(new_address, (Arc::new(node), new_node_size_index));
+                .insert(new_address, Some((Arc::new(node), new_node_size_index)));
             new_address
         } else {
             self.modified
-                .insert(old_address, (Arc::new(node), old_node_size_index));
+                .insert(old_address, Some((Arc::new(node), old_node_size_index)));
             old_address
         };
 
@@ -283,7 +303,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         Ok(new_address)
     }
 
-    pub fn set_root(&mut self, root_addr: LinearAddress) -> Result<(), Error> {
+    pub fn set_root(&mut self, root_addr: Option<LinearAddress>) -> Result<(), Error> {
         self.nodestore.set_root(root_addr)
     }
 }
@@ -350,7 +370,7 @@ mod test {
             value: Box::new(*b"abc"),
         });
         let addr = hns.create_node(node).unwrap();
-        hns.set_root(addr).unwrap();
+        hns.set_root(Some(addr)).unwrap();
 
         let frozen = hns.freeze().unwrap();
         assert_ne!(frozen.root_hash().unwrap(), Default::default());

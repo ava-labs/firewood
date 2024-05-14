@@ -359,7 +359,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     value,
                 });
                 let root_addr = self.create_node(root)?;
-                self.set_root(root_addr)?;
+                self.set_root(Some(root_addr))?;
                 return Ok(());
             };
             // There is a root but it's not a prefix of `path`.
@@ -420,7 +420,7 @@ impl<T: WriteLinearStore> Merkle<T> {
             }
 
             let new_root_addr = self.create_node(Node::Branch(Box::new(new_root)))?;
-            self.set_root(new_root_addr)?;
+            self.set_root(Some(new_root_addr))?;
             return Ok(());
         };
         // `greatest_prefix_node` is a prefix of `path`
@@ -592,10 +592,45 @@ impl<T: WriteLinearStore> Merkle<T> {
         }
     }
 
-    pub fn remove(&mut self, _key: &[u8]) -> Result<Option<Vec<u8>>, MerkleError> {
-        // let Some(root_address) = self.root_address() else {
-        //     return Ok(None);
-        // };
+    pub fn remove(&mut self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
+        let path = Path::from_nibbles_iterator(Nibbles::new(key).into_iter());
+
+        // The path from the root down to and including the node with the greatest prefix of `path`.
+        let mut ancestors = PathIterator::new(self, key)?
+            .collect::<Result<Vec<PathIterItem>, MerkleError>>()?
+            .into_iter();
+
+        let Some(greatest_prefix_node) = ancestors.next_back() else {
+            // There is no node which is a prefix of `path`.
+            // Therefore `path` is not in the trie.
+            return Ok(None);
+        };
+
+        if &*greatest_prefix_node.key_nibbles != key {
+            // `greatest_prefix_node` is a prefix of `path` but not equal to `path`.
+            // Therefore `path` is not in the trie.
+            return Ok(None);
+        }
+
+        let removed = greatest_prefix_node;
+
+        let Some(removed_parent) = ancestors.next_back() else {
+            // The removed node was the root.
+            match &*removed.node {
+                Node::Leaf(leaf) => {
+                    // The root was a leaf. The trie is empty now.
+                    self.delete_node(removed.addr)?;
+                    self.set_root(None)?;
+                    return Ok(Some(leaf.value.clone()));
+                }
+                Node::Branch(branch) => {
+                    todo!()
+                }
+            }
+
+            todo!()
+        };
+
         todo!()
     }
 }
@@ -603,10 +638,6 @@ impl<T: WriteLinearStore> Merkle<T> {
 impl<T: WriteLinearStore> Merkle<T> {
     pub fn put_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError> {
         self.create_node(node).map_err(MerkleError::Format)
-    }
-
-    fn _delete_node(&mut self, _addr: LinearAddress) -> Result<(), MerkleError> {
-        todo!()
     }
 }
 

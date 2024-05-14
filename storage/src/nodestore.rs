@@ -416,8 +416,8 @@ impl<T: WriteLinearStore> NodeStore<T> {
     }
 
     /// Write the root [LinearAddress] of the [NodeStore]
-    pub fn set_root(&mut self, addr: LinearAddress) -> Result<(), Error> {
-        self.header.root_address = Some(addr);
+    pub fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), Error> {
+        self.header.root_address = addr;
         self.write_header()
     }
 }
