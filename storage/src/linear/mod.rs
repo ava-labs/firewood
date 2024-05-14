@@ -76,7 +76,7 @@ mod layered;
 /// All linear stores support reads
 pub trait ReadLinearStore: Send + Sync + Debug {
     /// Return a `Read` object for a stream of data from a [ReadLinearStore] at a
-    /// given address. Note this does not use [LinearAddress] to allow for reading
+    /// given address. Note this does not use LinearAddress to allow for reading
     /// at address 0
     fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error>;
 
