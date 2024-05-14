@@ -49,12 +49,4 @@ impl Node {
             }),
         }
     }
-
-    /// Returns Some(value) in the node, or None if the node has no value.
-    pub fn value(&self) -> Option<&Box<[u8]>> {
-        match self {
-            Node::Branch(branch) => branch.value.as_ref(),
-            Node::Leaf(l) => Some(&l.value),
-        }
-    }
 }
