@@ -5,9 +5,12 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 
 #[derive(Debug, Error)]
-pub enum StoreError<T> {
+pub enum StoreError {
     #[error("error sending data: `{0}`")]
-    Send(#[from] tokio::sync::mpsc::error::SendError<T>),
+    Send(#[from] tokio::sync::mpsc::error::SendError<(u64, Box<[u8]>)>),
+
+    #[error("An IO error occurred during the write")]
+    IO(#[from] std::io::Error),
 }
 
 #[derive(Debug)]
@@ -48,23 +51,19 @@ impl DiskScheduler {
 
     /// run starts the DiskScheduler and processes all the writes.
     /// The caller (e.g. Coordinator) should spawn the writer thread.
-    pub async fn run(self, filename: PathBuf) {
+    pub async fn run(self, filename: PathBuf) -> Result<(), StoreError>{
         let mut receiver = self.receiver;
-        let mut store = PersistedStore::new(filename).await.unwrap();
+        let mut store = PersistedStore::new(filename).await?;
         let local_pool = tokio::task::LocalSet::new();
         local_pool
             // everything needs to be moved into this future in order to be properly dropped
             .run_until(async move {
                 loop {
-                    while let Some(element) = receiver.recv().await {
+                    while let Some((offset, object)) = receiver.recv().await {
                         // Write to the store
-                        let writes = element;
-                        store
-                            .write(writes.0, &writes.1)
-                            .await
-                            .unwrap_or_else(|err| {
-                                eprintln!("Error writing to store: {:?}", err);
-                            });
+                         store
+                            .write(offset, &object)
+                            .await.unwrap(); 
                     }
                 }
             })
@@ -72,6 +71,7 @@ impl DiskScheduler {
 
         // when finished process all requests, wait for any pending-futures to complete
         local_pool.await;
+        Ok(())
     }
 }
 
