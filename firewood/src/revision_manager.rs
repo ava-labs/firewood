@@ -12,10 +12,12 @@ use std::sync::Arc;
 use crate::hashednode::HashedNodeStore;
 use crate::merkle::{Merkle, MerkleError};
 use crate::v2::api::{Batch, BatchOp, KeyType, ValueType};
+use storage::{DiskRequester, DiskScheduler};
 use storage::{FileBacked, TrieHash};
 use storage::{Historical, ProposedMutable};
 use storage::{LinearStoreParent, ReadLinearStore};
 use storage::{NodeStore, ProposedImmutable};
+use tokio::sync::mpsc;
 use typed_builder::TypedBuilder;
 
 #[derive(Clone, Debug, TypedBuilder)]
@@ -32,6 +34,7 @@ pub(crate) struct RollingRevisionManager {
     historicals: VecDeque<(TrieHash, Arc<Historical>)>,
     last_commit: (TrieHash, Arc<Historical>),
     commit_in_progress: AtomicBool,
+    requester: DiskRequester,
 }
 
 impl RollingRevisionManager {
@@ -40,7 +43,7 @@ impl RollingRevisionManager {
         truncate: bool,
         config: RollingRevisionManagerConfig,
     ) -> Result<Self, Error> {
-        let filebacked = Arc::new(FileBacked::new(filename, truncate)?);
+        let filebacked = Arc::new(FileBacked::new(filename.clone(), truncate)?);
         let base_historical = Historical::new(
             Default::default(),
             LinearStoreParent::FileBacked(filebacked.clone()),
@@ -51,6 +54,7 @@ impl RollingRevisionManager {
         let root_hash = merkle.root_hash()?;
 
         let base_historical = merkle.consume_linear_store();
+        let requester = Self::init_store(filename);
 
         Ok(Self {
             max_revisions: config.max_revisions,
@@ -58,7 +62,18 @@ impl RollingRevisionManager {
             historicals: Default::default(),
             last_commit: (root_hash, Arc::new(base_historical)),
             commit_in_progress: AtomicBool::new(false),
+            requester,
         })
+    }
+
+    fn init_store(filename: PathBuf) -> DiskRequester {
+        let (write_sender, write_receiver) = mpsc::unbounded_channel();
+        let requester = DiskRequester::new(write_sender);
+        let scheduler = DiskScheduler::new(write_receiver);
+        std::thread::spawn(move || {
+            scheduler.run(filename);
+        });
+        requester
     }
 }
 
@@ -125,6 +140,13 @@ impl RollingRevisionManager {
             .map_err(|_| RollingRevisionManagerError::CommitAlreadyInProgress)?;
 
         // TODO: Async flush
+        let changes = self.last_commit.1.changes();
+        for change in changes.iter() {
+            let offset = *change.0;
+            let object = change.1.clone();
+            self.requester.send_writes((offset, object));
+        }
+
         Ok(())
     }
 

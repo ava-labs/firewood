@@ -4,7 +4,7 @@
 // TODO: remove this once we have code that uses it
 #![allow(dead_code)]
 
-mod scheduler;
+pub(crate) mod scheduler;
 
 use bytes::Bytes;
 use std::io::{Error, SeekFrom};
@@ -19,12 +19,19 @@ pub struct StoreWrite {
     data: Bytes,
 }
 
+#[derive(Debug)]
+/// PersistedStore is a store that persists and retrieve data to/from disk
 pub struct PersistedStore {
     path: PathBuf,
     fd: Mutex<File>,
 }
 
 impl PersistedStore {
+    /// Creates a new instance of `PersistedStore` with the specified file path.
+    ///
+    /// * `path` - The path to the file.
+    ///
+    /// Returns a `Result` containing the new `PersistedStore` instance or an error.
     pub async fn new(path: PathBuf) -> Result<Self, Error> {
         let file = OpenOptions::new()
             .read(true)
@@ -41,6 +48,12 @@ impl PersistedStore {
     }
 
     // TODO: impl ReadLinearStore when it is async
+    /// Streams data from the specified address with the given length.
+    ///
+    /// * `addr` - The starting address to stream from.
+    /// * `length` - The length of the data to stream.
+    ///
+    /// Returns a `Result` containing the streamed data or an error.
     pub async fn stream_from(&self, addr: u64, length: usize) -> Result<Bytes, Error> {
         let mut file = self.fd.lock().await;
         file.seek(SeekFrom::Start(addr)).await?;
@@ -49,13 +62,17 @@ impl PersistedStore {
         Ok(Bytes::from(buffer))
     }
 
-    pub async fn write_all(&mut self, writes: &[StoreWrite]) -> Result<(), Error> {
+    /// Writes data to the file at the specified offset.
+    ///
+    /// * `offset` - The offset in the file to write the data.
+    /// * `object` - The data to write.
+    ///
+    /// Returns a `Result` indicating success or an error.
+    pub async fn write(&mut self, offset: u64, object: &[u8]) -> Result<(), Error> {
         let mut file = self.fd.lock().await;
 
-        for write in writes {
-            file.seek(SeekFrom::Start(write.offset)).await?; // Seek to the specified offset
-            file.write_all(&write.data).await?; // Write data to the file at the specified offset
-        }
+        file.seek(SeekFrom::Start(offset)).await?; // Seek to the specified offset
+        file.write_all(object).await?; // Write data to the file at the specified offset
 
         Ok(())
     }
@@ -76,18 +93,22 @@ mod tests {
         let first_data = "Hello, ";
         let second_data = "world";
 
-        let writes = vec![
-            StoreWrite {
-                offset: 0,
-                data: Bytes::from(first_data),
-            },
-            StoreWrite {
-                offset: first_data.len() as u64,
-                data: Bytes::from(second_data),
-            },
-        ];
+        // let first = vec![
+        //     StoreWrite {
+        //         offset: 0,
+        //         data: Bytes::from(first_data),
+        //     },
+        //     StoreWrite {
+        //         offset: first_data.len() as u64,
+        //         data: Bytes::from(second_data),
+        //     },
+        // ];
 
-        persisted_store.write_all(&writes).await.unwrap();
+        persisted_store.write(0, first_data.as_ref()).await.unwrap();
+        persisted_store
+            .write(first_data.len() as u64, second_data.as_ref())
+            .await
+            .unwrap();
 
         let read_data = persisted_store
             .stream_from(0, first_data.len() + second_data.len())

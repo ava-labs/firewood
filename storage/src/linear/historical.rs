@@ -39,6 +39,11 @@ impl Historical {
     pub fn reparent(self: &Arc<Self>, parent: LinearStoreParent) {
         *self.parent.write().expect("poisoned lock") = parent;
     }
+
+    /// Retrieve the old changes in the proposal
+    pub fn changes(&self) -> &BTreeMap<u64, Box<[u8]>> {
+        &self.was
+    }
 }
 
 impl ReadLinearStore for Historical {
