@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::{env::temp_dir, fs::remove_dir_all, ops::Deref, path::PathBuf};
+use std::{env::temp_dir, fs::remove_file, ops::Deref, path::PathBuf};
 
 use firewood::db::{Db, DbConfig};
 use typed_builder::TypedBuilder;
@@ -68,7 +68,7 @@ impl Drop for TestDb {
     fn drop(&mut self) {
         if !self.preserve_on_drop {
             #[allow(clippy::unwrap_used)]
-            remove_dir_all(self.creator.path.as_ref().unwrap()).unwrap();
+            remove_file(self.creator.path.as_ref().unwrap()).unwrap();
         }
     }
 }
