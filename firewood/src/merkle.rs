@@ -606,7 +606,7 @@ impl<T: WriteLinearStore> Merkle<T> {
             return Ok(None);
         };
 
-        if &*greatest_prefix_node.key_nibbles != key {
+        if &*greatest_prefix_node.key_nibbles != path.0.as_ref() {
             // `greatest_prefix_node` is a prefix of `path` but not equal to `path`.
             // Therefore `path` is not in the trie.
             return Ok(None);
@@ -818,27 +818,23 @@ mod tests {
         }
     }
 
-    //     #[test]
-    //     fn remove_one() {
-    //         let key = b"hello";
-    //         let val = b"world";
+    #[test]
+    fn remove_one() {
+        let key = vec![0, 1, 2];
+        let val = [0, 1, 2];
 
-    //         let mut merkle = create_in_memory_merkle();
-    //         let root_addr = merkle.init_sentinel().unwrap();
+        let mut merkle = create_in_memory_merkle();
 
-    //         merkle.insert(key, val.to_vec(), root_addr).unwrap();
+        merkle.insert(&key, Box::from(val)).unwrap();
 
-    //         assert_eq!(
-    //             merkle.get(key, root_addr).unwrap().as_deref(),
-    //             val.as_slice().into()
-    //         );
+        assert_eq!(merkle.get(&key).unwrap(), Some(Box::from(val)));
 
-    //         let removed_val = merkle.remove(key, root_addr).unwrap();
-    //         assert_eq!(removed_val.as_deref(), val.as_slice().into());
+        let removed_val = merkle.remove(&key).unwrap();
+        assert_eq!(removed_val, Some(Box::from(val)));
 
-    //         let fetched_val = merkle.get(key, root_addr).unwrap();
-    //         assert!(fetched_val.is_none());
-    //     }
+        let fetched_val = merkle.get(&key).unwrap();
+        assert!(fetched_val.is_none());
+    }
 
     //     #[test]
     //     fn remove_many() {
