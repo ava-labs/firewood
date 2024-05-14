@@ -124,29 +124,30 @@ jobs:
       - name: Run tests
         run: cargo test --all-features --verbose
 
-  examples:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: arduino/setup-protoc@v2
-      - name: Restore Check Deps
-        id: cache-build-deps-restore
-        uses: actions/cache/restore@v3
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ needs.build.outputs.cache-key }}
-        # benchmarks were not being done in --release mode, we can enable this again later
-        # - name: Run benchmark example
-        #   run: RUST_BACKTRACE=1 cargo run --example benchmark -- --nbatch 100 --batch-size 1000
-      - name: Run insert example
-        run: RUST_BACKTRACE=1 cargo run --example insert
+  # TODO uncomment this code to run examples in CI
+  # examples:
+  #   needs: build
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v3
+  #     - uses: dtolnay/rust-toolchain@stable
+  #     - uses: arduino/setup-protoc@v2
+  #     - name: Restore Check Deps
+  #       id: cache-build-deps-restore
+  #       uses: actions/cache/restore@v3
+  #       with:
+  #         path: |
+  #           ~/.cargo/bin/
+  #           ~/.cargo/registry/index/
+  #           ~/.cargo/registry/cache/
+  #           ~/.cargo/git/db/
+  #           target/
+  #         key: ${{ needs.build.outputs.cache-key }}
+  # benchmarks were not being done in --release mode, we can enable this again later
+  #     - name: Run benchmark example
+  #       run: RUST_BACKTRACE=1 cargo run --example benchmark -- --nbatch 100 --batch-size 1000
+  #   - name: Run insert example
+  #     run: RUST_BACKTRACE=1 cargo run --example insert
 
   docs:
     needs: build

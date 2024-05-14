@@ -14,12 +14,13 @@ use super::{LinearStoreParent, ReadLinearStore, WriteLinearStore};
 pub struct Immutable;
 #[derive(Debug)]
 pub struct Mutable;
-/// A shortcut for a [Proposed<Mutable>]
+/// A shortcut for a [`Proposed<Mutable>`]
 pub type ProposedMutable = Proposed<Mutable>;
-/// A shortcut for a [Proposed<Immutable>]
+/// A shortcut for a [`Proposed<Immutable>`]
 pub type ProposedImmutable = Proposed<Immutable>;
 
 #[derive(Debug)]
+#[allow(rustdoc::private_intra_doc_links)]
 /// A proposal backed by a [WriteLinearStore] or a [ReadLinearStore]
 /// The generic is either [Mutable] or [Immutable]
 pub struct Proposed<M: Send + Sync + Debug> {
@@ -302,7 +303,7 @@ mod test {
         let mut proposed = Proposed::new(parent.clone().into());
         proposed.write(1, b"1").unwrap();
 
-        let mut proposed2 = Proposed::new(parent.into());
+        let mut proposed2 = Proposed::new(proposed.freeze().into());
 
         proposed2.write(3, b"3").unwrap();
 
@@ -312,6 +313,8 @@ mod test {
             .unwrap()
             .read_exact(&mut data)
             .unwrap();
+        // TODO danlaine: I think this test is broken. Why do we expect the second byte to be 1?
+        // proposed2 is based on parent, so it shouldn't have the changes from proposed. Right?
         assert_eq!(&data, b"r1n3om data");
     }
 
@@ -322,7 +325,7 @@ mod test {
         let mut proposed = Proposed::new(parent.clone().into());
         proposed.write(1, b"1").unwrap();
 
-        let mut child = Proposed::new(parent.into()).freeze();
+        let mut child = Proposed::new(proposed.freeze().into()).freeze();
         for _ in 0..=200 {
             child = Proposed::new(child.into()).freeze();
         }

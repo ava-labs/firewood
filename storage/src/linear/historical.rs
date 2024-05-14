@@ -9,7 +9,7 @@ use super::{LinearStoreParent, ReadLinearStore};
 
 /// A linear store used for historical revisions
 ///
-/// A [Historical] [LinearStore] supports read operations only
+/// A [Historical] LinearStore supports read operations only
 #[derive(Debug)]
 pub struct Historical {
     /// (offset, value) for every area of this LinearStore modified in

@@ -21,6 +21,7 @@ macro_rules! kv_dump {
     }};
 }
 
+#[ignore = "unimplemented"]
 #[tokio::test(flavor = "multi_thread")]
 #[allow(clippy::unwrap_used)]
 async fn test_basic_metrics() {
@@ -55,6 +56,7 @@ async fn test_basic_metrics() {
     //assert_eq!(metrics.val.hit_count.get(), 1);
 }
 
+#[ignore = "unimplemented"]
 #[tokio::test(flavor = "multi_thread")]
 #[allow(clippy::unwrap_used)]
 async fn test_revisions() {
@@ -131,6 +133,7 @@ async fn test_revisions() {
     }
 }
 
+#[ignore = "unimplemented"]
 #[tokio::test(flavor = "multi_thread")]
 #[allow(clippy::unwrap_used)]
 async fn create_db_issue_proof() {

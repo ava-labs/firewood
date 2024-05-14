@@ -34,7 +34,7 @@ impl Node {
         }
     }
 
-    /// Returns a new Arc<Node> which is the same as `self` but with the given `partial_path`.
+    /// Returns a new `Arc<Node>` which is the same as `self` but with the given `partial_path`.
     pub fn new_with_partial_path(self: Arc<Node>, partial_path: Path) -> Node {
         match self.as_ref() {
             Node::Branch(b) => Node::Branch(Box::new(BranchNode {
