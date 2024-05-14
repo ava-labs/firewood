@@ -296,7 +296,6 @@ mod test {
         Ok(())
     }
 
-    #[ignore = "test is broken -- see comment"]
     #[test]
     fn nested() {
         let parent = MemStore::new(TEST_DATA.into());
@@ -304,7 +303,7 @@ mod test {
         let mut proposed = Proposed::new(parent.clone().into());
         proposed.write(1, b"1").unwrap();
 
-        let mut proposed2 = Proposed::new(parent.into());
+        let mut proposed2 = Proposed::new(proposed.freeze().into());
 
         proposed2.write(3, b"3").unwrap();
 
@@ -319,7 +318,6 @@ mod test {
         assert_eq!(&data, b"r1n3om data");
     }
 
-    #[ignore = "test is broken -- see comment"]
     #[test]
     fn deep_nest() {
         let parent = MemStore::new(TEST_DATA.into());
@@ -327,14 +325,12 @@ mod test {
         let mut proposed = Proposed::new(parent.clone().into());
         proposed.write(1, b"1").unwrap();
 
-        let mut child = Proposed::new(parent.into()).freeze();
+        let mut child = Proposed::new(proposed.freeze().into()).freeze();
         for _ in 0..=200 {
             child = Proposed::new(child.into()).freeze();
         }
         let mut data = [0u8; TEST_DATA.len()];
         child.stream_from(0).unwrap().read_exact(&mut data).unwrap();
-        // TODO danlaine: I think this test is broken. Why do we expect the second byte to be 1?
-        // Why would the changes in proposed be reflected in child?
         assert_eq!(&data, b"r1ndom data");
     }
 
