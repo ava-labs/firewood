@@ -1,7 +1,6 @@
 use super::{PersistedStore, StoreWrite};
-use std::sync::Arc;
 use thiserror::Error;
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::mpsc;
 
 #[derive(Debug, Error)]
 pub enum StoreError<T> {
@@ -10,37 +9,31 @@ pub enum StoreError<T> {
 }
 
 struct DiskRequester {
-    sender: mpsc::Sender<(Vec<StoreWrite>, Arc<Notify>)>,
+    sender: mpsc::UnboundedSender<Vec<StoreWrite>>,
 }
 
 impl DiskRequester {
-    const fn new(write_sender: mpsc::Sender<(Vec<StoreWrite>, Arc<Notify>)>) -> Self {
+    const fn new(write_sender: mpsc::UnboundedSender<Vec<StoreWrite>>) -> Self {
         Self {
             sender: write_sender,
         }
     }
 
-    pub async fn send_writes(&self, writes: Vec<StoreWrite>) {
-
-        let notifier = Arc::new(Notify::new());
+    pub fn send_writes(&self, writes: Vec<StoreWrite>) {
 
         self.sender
-            .send((writes, notifier.clone()))
-            .await
+            .send(writes)
             .map_err(StoreError::Send)
             .ok();
-
-        // wait on the notification
-        notifier.notified().await
     }
 }
 
 struct DiskScheduler {
-    receiver: mpsc::Receiver<(Vec<StoreWrite>, Arc<Notify>)>,
+    receiver: mpsc::UnboundedReceiver<Vec<StoreWrite>>,
 }
 
 impl DiskScheduler {
-    const fn new(write_receiver: mpsc::Receiver<(Vec<StoreWrite>, Arc<Notify>)>) -> Self {
+    const fn new(write_receiver: mpsc::UnboundedReceiver<Vec<StoreWrite>>) -> Self {
         Self {
             receiver: write_receiver,
         }
@@ -59,13 +52,10 @@ impl DiskScheduler {
                 loop {
                     while let Some(element) = receiver.recv().await {
                         // Write to the store
-                        let (writes, notifier) = element;
+                        let writes= element;
                         store.write_all(&writes).await.unwrap_or_else(|err| {
                             eprintln!("Error writing to store: {:?}", err);
                         });
-
-                        // Ack the writes are complete.
-                        notifier.notify_one();
                     }
                 }
             })
@@ -91,8 +81,7 @@ mod tests {
         let mut store = PersistedStore::new(file_path.clone()).await.unwrap();
 
         // Create the DiskScheduler and requster.
-        let queue_size = 10;
-        let (write_sender, write_receiver) = mpsc::channel(queue_size);
+        let (write_sender, write_receiver) = mpsc::unbounded_channel();
         let requester = DiskRequester::new(write_sender);
         let scheduler = DiskScheduler::new(write_receiver);
 
@@ -119,7 +108,7 @@ mod tests {
             .expect("thread spawn should succeed");
 
         // Enqueue the writes.
-        requester.send_writes(writes).await;
+        requester.send_writes(writes);
 
         // Check if the writes were processed
         let store = PersistedStore::new(file_path.clone()).await.unwrap();
