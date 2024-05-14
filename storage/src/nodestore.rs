@@ -81,17 +81,17 @@ fn area_size_to_index(n: u64) -> Result<u8, Error> {
 
 /// Objects cannot be stored at the zero address, so a [LinearAddress] is guaranteed not
 /// to be zero. This reserved zero can be used as a [None] value for some use cases. In particular,
-/// branches can use Option<LinearAddress> which is the same size as a [LinearAddress]
+/// branches can use `Option<LinearAddress>` which is the same size as a [LinearAddress]
 pub type LinearAddress = NonZeroU64;
 
-/// Each [StoredArea] contains an [Area] which is either a [Node] or a [FreedArea].
+/// Each [StoredArea] contains an [Area] which is either a [Node] or a [FreeArea].
 #[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
 enum Area<T, U> {
     Node(T),
     Free(U),
 }
 
-/// Every item stored in the [NodeStore]'s [LinearStore]  after the
+/// Every item stored in the [NodeStore]'s LinearStore  after the
 /// [NodeStoreHeader] is a [StoredArea].
 #[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
 struct StoredArea<T> {
@@ -101,11 +101,11 @@ struct StoredArea<T> {
 }
 
 /// [NodeStore] creates, reads, updates, and deletes [Node]s.
-/// It stores the nodes in a [LinearStore] that it manages.
-/// The first thing written in the [LinearStore] is a [NodeStoreHeader],
+/// It stores the nodes in a LinearStore that it manages.
+/// The first thing written in the LinearStore is a NodeStoreHeader,
 /// which contains the version and the free area list heads.
-/// Every subsequent write is a [StoredArea] containing a [Node] or a [FreedArea].
-/// The size of each allocation [NodeStore] makes from [LinearStore] is one of [AREA_SIZES].
+/// Every subsequent write is a StoredArea containing a [Node] or a FreeArea.
+/// The size of each allocation [NodeStore] makes from LinearStore is one of AREA_SIZES.
 #[derive(Debug)]
 pub struct NodeStore<T> {
     header: NodeStoreHeader,
@@ -130,7 +130,7 @@ impl<T: ReadLinearStore> NodeStore<T> {
     }
 
     /// Read a [Node] from the provided [LinearAddress].
-    /// `addr` is the address of a [StoredArea] in the [LinearStore].
+    /// `addr` is the address of a StoredArea in the LinearStore.
     pub fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
         debug_assert!(addr.get() % 8 == 0);
 
@@ -260,7 +260,7 @@ impl<T: WriteLinearStore> NodeStore<T> {
         Ok((addr, index))
     }
 
-    /// Allocates an area in the [LinearStore] large enough for the provided [Area].
+    /// Allocates an area in the LinearStore large enough for the provided Area.
     /// Returns the address of the allocated area.
     pub fn create_node(&mut self, node: Node) -> Result<LinearAddress, Error> {
         let addr = self.create_node_inner(node)?;
@@ -282,7 +282,7 @@ impl<T: WriteLinearStore> NodeStore<T> {
         area_bytes.len() as u64 + 1
     }
 
-    /// Allocates an area in the [LinearStore] but does not write it; returns
+    /// Allocates an area in the LinearStore but does not write it; returns
     /// where the node will go and the freelist size of the node
     ///
     /// Note: The node is removed from the freelist but it still contains a freed status
@@ -325,7 +325,7 @@ impl<T: WriteLinearStore> NodeStore<T> {
         Ok(size)
     }
 
-    /// The inner implementation of [create_node] that doesn't update the free lists.
+    /// The inner implementation of `create_node` that doesn't update the free lists.
     fn create_node_inner(&mut self, node: Node) -> Result<LinearAddress, Error> {
         let (addr, index) = self.allocate_node(&node)?;
 
@@ -346,7 +346,7 @@ impl<T: WriteLinearStore> NodeStore<T> {
     /// Update a [Node] that was previously at the provided address.
     /// This is complicated by the fact that a node might grow and not be able to fit a the given
     /// address, in which case we return [UpdateError::NodeMoved].
-    /// `addr` is the address of a [StoredArea] in the [LinearStore].
+    /// `addr` is the address of a StoredArea in the LinearStore.
     pub fn update_node(&mut self, addr: LinearAddress, node: Node) -> Result<(), UpdateError> {
         debug_assert!(addr.get() % 8 == 0);
 
@@ -466,7 +466,7 @@ struct Version {
 impl Version {
     const SIZE: u64 = std::mem::size_of::<Self>() as u64;
 
-    /// construct a [VersionHeader] from the firewood version
+    /// construct a [Version] header from the firewood version
     fn new() -> Self {
         let mut version_bytes: [u8; Self::SIZE as usize] = Default::default();
         let version = env!("CARGO_PKG_VERSION");
@@ -482,22 +482,22 @@ impl Version {
 type FreeLists = [Option<LinearAddress>; NUM_AREA_SIZES];
 
 /// Persisted metadata for a [NodeStore].
-/// The [NodeStoreHeader] is at the start of the [LinearStore].
+/// The [NodeStoreHeader] is at the start of the LinearStore.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct NodeStoreHeader {
     /// Identifies the version of firewood used to create this [NodeStore].
     version: Version,
     size: u64,
-    /// Element i is the pointer to the first free block of size BLOCK_SIZES[i].
+    /// Element i is the pointer to the first free block of size `BLOCK_SIZES[i]`.
     free_lists: FreeLists,
     root_address: Option<LinearAddress>,
 }
 
 impl NodeStoreHeader {
-    /// The first SIZE bytes of the [LinearStore] are the [NodeStoreHeader].
+    /// The first SIZE bytes of the LinearStore are the [NodeStoreHeader].
     /// The serialized NodeStoreHeader may be less than SIZE bytes but we
     /// reserve this much space for it since it can grow and it must always be
-    /// at the start of the [LinearStore] so it can't be moved in a resize.
+    /// at the start of the LinearStore so it can't be moved in a resize.
     const SIZE: u64 = {
         let max_size = Version::SIZE + 8 + 9 + FREE_LIST_MAX_SIZE;
         // Round up to the nearest multiple of MIN_AREA_SIZE
@@ -519,7 +519,7 @@ impl NodeStoreHeader {
     }
 }
 
-/// A [FreedArea] is stored at the start of the area that contained a node that
+/// A [FreeArea] is stored at the start of the area that contained a node that
 /// has been freed.
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 struct FreeArea {

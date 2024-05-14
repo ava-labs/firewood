@@ -14,12 +14,13 @@ use super::{LinearStoreParent, ReadLinearStore, WriteLinearStore};
 pub struct Immutable;
 #[derive(Debug)]
 pub struct Mutable;
-/// A shortcut for a [Proposed<Mutable>]
+/// A shortcut for a [`Proposed<Mutable>`]
 pub type ProposedMutable = Proposed<Mutable>;
-/// A shortcut for a [Proposed<Immutable>]
+/// A shortcut for a [`Proposed<Immutable>`]
 pub type ProposedImmutable = Proposed<Immutable>;
 
 #[derive(Debug)]
+#[allow(rustdoc::private_intra_doc_links)]
 /// A proposal backed by a [WriteLinearStore] or a [ReadLinearStore]
 /// The generic is either [Mutable] or [Immutable]
 pub struct Proposed<M: Send + Sync + Debug> {
