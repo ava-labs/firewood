@@ -3,10 +3,7 @@
 
 use std::fmt::{self, Debug};
 
-use serde::{
-    de::{SeqAccess, Visitor},
-    Deserialize, Serialize,
-};
+use serde::{de::Visitor, Deserialize, Serialize};
 use sha3::digest::{generic_array::GenericArray, typenum};
 
 /// A hash value inside a merkle trie
@@ -84,19 +81,16 @@ impl<'de> Visitor<'de> for TrieVisitor {
         formatter.write_str("an array of u8 hash bytes")
     }
 
-    #[inline]
-    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
     where
-        A: SeqAccess<'de>,
+        E: serde::de::Error,
     {
         let mut hash = TrieHash::default();
-        for (idx, dest) in hash.iter_mut().enumerate() {
-            if let Some(byte) = seq.next_element()? {
-                *dest = byte;
-            } else {
-                return Err(serde::de::Error::invalid_length(idx, &self));
-            }
+        if v.len() == hash.0.len() {
+            hash.0.copy_from_slice(v);
+            Ok(hash)
+        } else {
+            Err(E::invalid_length(v.len(), &self))
         }
-        Ok(hash)
     }
 }

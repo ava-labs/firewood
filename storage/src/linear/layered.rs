@@ -21,7 +21,7 @@ impl<'a> Layer<'a> {
     }
 }
 
-/// A [LayeredReader] is obtained by calling [Proposed::stream_from]
+/// A [LayeredReader] is obtained by calling `Proposed::stream_from`
 /// The P type parameter refers to the type of the parent of this layer
 /// The M type parameter is not specified here, but should always be
 /// read-only, since we do not support mutating parents of another
