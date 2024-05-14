@@ -219,7 +219,7 @@ impl RollingRevisionManager {
                 }
             })?;
         let node_store = merkle.freeze()?;
-        let merkle = Merkle::new(node_store.into());
+        let merkle = Merkle::new(node_store);
         Ok(merkle)
     }
 }

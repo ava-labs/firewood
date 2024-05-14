@@ -17,6 +17,7 @@ mod linear;
 mod node;
 mod nodestore;
 mod trie_hash;
+mod persisted;
 
 // re-export these so callers don't need to know where they are
 pub use linear::{LinearStoreParent, ReadLinearStore, WriteLinearStore};
