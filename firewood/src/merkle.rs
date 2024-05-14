@@ -343,32 +343,34 @@ impl<T: WriteLinearStore> Merkle<T> {
     pub fn insert(&mut self, key: &[u8], value: Box<[u8]>) -> Result<(), MerkleError> {
         let path = Path::from_nibbles_iterator(Nibbles::new(key).into_iter());
 
-        let Some(old_root_addr) = self.root_address() else {
-            // The trie is empty. Create a new leaf node with `value` and set
-            // it as the root.
-            let root = Node::Leaf(LeafNode {
-                partial_path: path,
-                value,
-            });
-            let root_addr = self.create_node(root)?;
-            self.set_root(root_addr)?;
-            return Ok(());
-        };
-        // The trie is non-empty.
-
         // The path from the root down to and including the node with the greatest prefix of `path`.
         let mut ancestors = PathIterator::new(self, key)?
             .collect::<Result<Vec<PathIterItem>, MerkleError>>()?
             .into_iter();
 
         let Some(greatest_prefix_node) = ancestors.next_back() else {
-            // There is no node (including the root) which is a prefix of `path`.
+            // There is no node (not even the root) which is a prefix of `path`.
+            // See if there is a root.
+            let Some(old_root_addr) = self.root_address() else {
+                // The trie is empty. Create a new leaf node with `value` and set
+                // it as the root.
+                let root = Node::Leaf(LeafNode {
+                    partial_path: path,
+                    value,
+                });
+                let root_addr = self.create_node(root)?;
+                self.set_root(root_addr)?;
+                return Ok(());
+            };
+            // There is a root but it's not a prefix of `path`.
             // Insert a new branch node above the existing root and make the
             // old root a child of the new branch node.
             //
             //  old_root  -->  new_root
-            //                    |
-            //                 old_root
+            //                 /       \
+            //              old_root   *new_leaf
+            //
+            // *Note that new_leaf is only created if `path` isn't a prefix of old root.
             let old_root = self.read_node(old_root_addr)?;
 
             let path_overlap = PrefixOverlap::from(old_root.partial_path().as_ref(), path.as_ref());
@@ -469,7 +471,6 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                 let mut new_branch: BranchNode = leaf.into();
                 *new_branch.child_mut(child_index) = Some(new_leaf_addr);
-
                 self.update_node(
                     ancestors,
                     greatest_prefix_node.addr,
@@ -522,7 +523,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 //                            |       \
                 //                         new_leaf*   child
                 //
-                // Note that new_leaf is only created if the remaining path is non-empty.
+                // *Note that new_leaf is only created if the remaining path is non-empty.
                 // Note that child may be a leaf or a branch node.
                 let child = self.read_node(child_addr)?;
 
@@ -550,7 +551,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                         ),
                     }),
                 };
-                let updated_child_addr = self.create_node(child)?;
+                let child_addr = self.create_node(child)?;
 
                 let mut new_branch = BranchNode {
                     children: Default::default(),
@@ -558,7 +559,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     value: None,
                     child_hashes: Default::default(),
                 };
-                *new_branch.child_mut(new_branch_to_child_index) = Some(updated_child_addr);
+                *new_branch.child_mut(new_branch_to_child_index) = Some(child_addr);
 
                 if let Some((&new_leaf_child_index, remaining_path)) =
                     path_overlap.unique_b.split_first()
@@ -580,7 +581,6 @@ impl<T: WriteLinearStore> Merkle<T> {
                     child_hashes: branch.child_hashes.clone(),
                 };
                 branch.update_child(child_index, Some(new_branch_addr));
-
                 self.update_node(
                     ancestors,
                     greatest_prefix_node.addr,
