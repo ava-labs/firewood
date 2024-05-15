@@ -115,12 +115,14 @@ mod test {
     }
 
     #[test]
-    fn neth_back() {
+    fn nth_back() {
         let mut iter = NibblesIterator::new(&TEST_BYTES);
         assert_eq!(iter.nth_back(0), Some(0xf));
         assert_eq!(iter.nth_back(0), Some(0xe));
         assert_eq!(iter.nth_back(1), Some(0xb));
         assert_eq!(iter.nth_back(2), Some(0xe));
+        assert_eq!(iter.nth_back(0), Some(0xd));
+        assert_eq!(iter.nth_back(0), None);
     }
 
     #[test]
