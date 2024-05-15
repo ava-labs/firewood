@@ -683,59 +683,61 @@ impl<T: WriteLinearStore> Merkle<T> {
                 return Ok(Some(removed_value.clone()));
             }
             Node::Leaf(leaf) => {
-                // Update the parent of the removed node.
-                let Some(removed_parent) = ancestors.next_back() else {
-                    // The removed node was the root.
-                    self.delete_node(removed.addr)?;
-                    self.set_root(None)?;
-                    return Ok(Some(leaf.value.clone()));
-                };
+                self.delete_node(removed.addr)?;
 
-                let removed_parent_addr = removed_parent.addr;
-                let removed_child_index = removed_parent
-                    .next_nibble
-                    .expect("parent has removed as a child");
-                let removed_parent = removed_parent
-                    .node
-                    .as_branch()
-                    .expect("parent of a node must be a branch");
+                while let Some(ancestor) = ancestors.next_back() {
+                    // Remove all ancestors until we find one that has a value
+                    // or multiple children.
+                    let ancestor_addr = ancestor.addr;
+                    let child_index = ancestor.next_nibble.expect("parent has a child");
+                    let ancestor = ancestor.node.as_branch().expect("parent must be a branch");
 
-                // See if the parent of the removed node has more than 1 child.
-                let num_children = removed_parent
-                    .children
-                    .iter()
-                    .filter(|addr| addr.is_some())
-                    .count();
+                    let num_children = ancestor
+                        .children
+                        .iter()
+                        .filter(|addr| addr.is_some())
+                        .count();
 
-                if num_children > 1 {
-                    // The parent has more than 1 child.
-                    // Remove `removed` from its parent.
-                    //    ...                     ...
-                    //     |            -->        |
-                    //  removed_parent       removed_parent
-                    //  /          \         /           \
-                    // removed    child    ...          child
-                    //
-                    // Note in the after diagram `child` may be the only child of `removed_parent`.
-                    let mut removed_parent = BranchNode {
-                        children: removed_parent.children,
-                        partial_path: removed_parent.partial_path.clone(),
-                        value: removed_parent.value.clone(),
-                        child_hashes: removed_parent.child_hashes.clone(),
-                    };
-                    removed_parent.update_child(removed_child_index, None);
+                    if num_children > 1 {
+                        // Update `ancestor` to remove its child.
+                        //    ...                     ...
+                        //     |            -->        |
+                        //  ancestor       ancestor
+                        //  /      \       /      \
+                        // ...    child  ...    child
+                        let mut ancestor = BranchNode {
+                            children: ancestor.children,
+                            partial_path: ancestor.partial_path.clone(),
+                            value: ancestor.value.clone(),
+                            child_hashes: ancestor.child_hashes.clone(),
+                        };
+                        ancestor.update_child(child_index, None);
+                        self.update_node(
+                            ancestors,
+                            ancestor_addr,
+                            Node::Branch(Box::new(ancestor)),
+                        )?;
+                        return Ok(Some(leaf.value.clone()));
+                    }
 
-                    self.delete_node(removed.addr)?;
-                    self.update_node(
-                        ancestors,
-                        removed_parent_addr,
-                        Node::Branch(Box::new(removed_parent)),
-                    )?;
-                    return Ok(Some(leaf.value.clone()));
+                    // The ancestor has only 1 child, which is now deleted.
+                    if let Some(ancestor_value) = &ancestor.value {
+                        // Turn the ancestor into a leaf.
+                        let ancestor = Node::Leaf(LeafNode {
+                            value: ancestor_value.clone(),
+                            partial_path: ancestor.partial_path.clone(),
+                        });
+                        self.update_node(ancestors, ancestor_addr, ancestor)?;
+                        return Ok(Some(leaf.value.clone()));
+                    }
+
+                    // The ancestor had 1 child and no value so it should be removed.
+                    self.delete_node(ancestor_addr)?;
                 }
 
-                // The parent has only 1 child, `removed`.
-                todo!()
+                // The trie is now empty.
+                self.set_root(None)?;
+                Ok(Some(leaf.value.clone()))
             }
         }
     }
