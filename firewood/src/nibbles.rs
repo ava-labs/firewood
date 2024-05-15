@@ -51,7 +51,7 @@ impl<'a> NibblesIterator<'a> {
         self.head == self.tail
     }
 
-    pub fn new(data: &'a [u8]) -> Self {
+    pub const fn new(data: &'a [u8]) -> Self {
         NibblesIterator {
             data,
             head: 0,
