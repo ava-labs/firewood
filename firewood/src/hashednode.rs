@@ -4,6 +4,7 @@
 use sha3::{Digest, Keccak256};
 use std::collections::HashMap;
 use std::io::Error;
+use std::io::ErrorKind::NotFound;
 use std::iter::once;
 use std::sync::{Arc, OnceLock};
 
@@ -22,7 +23,9 @@ use storage::{ReadLinearStore, WriteLinearStore};
 #[derive(Debug)]
 pub struct HashedNodeStore<T: ReadLinearStore> {
     nodestore: NodeStore<T>,
-    modified: HashMap<LinearAddress, (Arc<Node>, u8)>,
+    // Linear Address -> (Node, Node Size Index)
+    // None means the node was deleted.
+    modified: HashMap<LinearAddress, Option<(Arc<Node>, u8)>>,
     root_hash: OnceLock<TrieHash>,
 }
 
@@ -50,15 +53,24 @@ impl<T: ReadLinearStore> From<NodeStore<T>> for HashedNodeStore<T> {
 impl<T: ReadLinearStore> HashedNodeStore<T> {
     pub fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
         if let Some(modified_node) = self.modified.get(&addr) {
-            Ok(modified_node.0.clone())
+            if let Some((modified_node, _)) = modified_node {
+                Ok(modified_node.clone())
+            } else {
+                Err(Error::new(std::io::ErrorKind::Other, "Node not found"))
+            }
         } else {
             Ok(self.nodestore.read_node(addr)?)
         }
     }
 
     fn take_node(&mut self, addr: LinearAddress) -> Result<Node, Error> {
-        if let Some((modified_node, _)) = self.modified.remove(&addr) {
-            Ok(Arc::into_inner(modified_node).expect("no other references to this node can exist"))
+        if let Some(modified_node) = self.modified.remove(&addr) {
+            if let Some((modified_node, _)) = modified_node {
+                Ok(Arc::into_inner(modified_node)
+                    .expect("no other references to this node can exist"))
+            } else {
+                Err(Error::new(NotFound, "Node not found"))
+            }
         } else {
             let node = self.nodestore.read_node(addr)?;
             Ok((*node).clone())
@@ -160,7 +172,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     }
     pub fn create_node(&mut self, node: Node) -> Result<LinearAddress, Error> {
         let (addr, size) = self.nodestore.allocate_node(&node)?;
-        self.modified.insert(addr, (Arc::new(node), size));
+        self.modified.insert(addr, Some((Arc::new(node), size)));
         Ok(addr)
     }
 
@@ -169,7 +181,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         old_address: LinearAddress,
         node: Node,
     ) -> Result<(), UpdateError> {
-        let old_size = if let Some((_, old_size)) = self.modified.get(&old_address) {
+        let old_size = if let Some(Some((_, old_size))) = self.modified.get(&old_address) {
             *old_size
         } else {
             self.nodestore.node_size(old_address)?
@@ -181,7 +193,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
             return Err(UpdateError::NodeMoved(self.create_node(node)?));
         }
         self.modified
-            .insert(old_address, (Arc::new(node), old_size));
+            .insert(old_address, Some((Arc::new(node), old_size)));
 
         Ok(())
     }
