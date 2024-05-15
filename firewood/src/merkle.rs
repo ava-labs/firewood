@@ -692,24 +692,24 @@ impl<T: WriteLinearStore> Merkle<T> {
                 };
 
                 let removed_parent_addr = removed_parent.addr;
+                let removed_child_index = removed_parent
+                    .next_nibble
+                    .expect("parent has removed as a child");
                 let removed_parent = removed_parent
                     .node
                     .as_branch()
                     .expect("parent of a node must be a branch");
 
                 // See if the parent of the removed node has more than 1 child.
-                let mut removed_parent_children = removed_parent
+                let num_children = removed_parent
                     .children
                     .iter()
-                    .enumerate()
-                    .filter_map(|(index, addr)| addr.map(|addr| (index as u8, addr)));
+                    .filter(|addr| addr.is_some())
+                    .count();
 
-                let (child_index, _) = removed_parent_children
-                    .next()
-                    .expect("branch must have children");
-
-                if removed_parent_children.next().is_some() {
+                if num_children > 1 {
                     // The parent has more than 1 child.
+                    // Remove `removed` from its parent.
                     //    ...                     ...
                     //     |            -->        |
                     //  removed_parent       removed_parent
@@ -723,7 +723,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                         value: removed_parent.value.clone(),
                         child_hashes: removed_parent.child_hashes.clone(),
                     };
-                    removed_parent.update_child(child_index, None);
+                    removed_parent.update_child(removed_child_index, None);
 
                     self.delete_node(removed.addr)?;
                     self.update_node(
@@ -734,7 +734,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     return Ok(Some(leaf.value.clone()));
                 }
 
-                // The branch has only 1 child.
+                // The parent has only 1 child, `removed`.
                 todo!()
             }
         }
