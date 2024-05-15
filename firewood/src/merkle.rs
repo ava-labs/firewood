@@ -1064,8 +1064,10 @@ mod tests {
         // key1 (now has no value)
         //  |
         // key3
-
-        // Removing an already removed key is a no-op
+        let removed_val = merkle.remove(&key3).unwrap();
+        assert_eq!(removed_val, Some(Box::from(val3)));
+        assert!(merkle.get(&key3).unwrap().is_none());
+        assert!(merkle.remove(&key3).unwrap().is_none());
     }
 
     //     #[test]
