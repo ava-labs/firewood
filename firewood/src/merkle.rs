@@ -622,10 +622,24 @@ impl<T: WriteLinearStore> Merkle<T> {
                 };
 
                 // See if the branch has more than 1 child.
-                let num_children = branch.children.iter().filter(|c| c.is_some()).count();
+                let mut branch_children = branch
+                    .children
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, addr)| addr.map(|addr| (index as u8, addr)));
 
-                if num_children > 1 {
+                let (child_index, child_addr) =
+                    branch_children.next().expect("branch must have children");
+
+                if branch_children.next().is_some() {
                     // The branch has more than 1 child. Remove the value but keep the branch.
+                    //    ...                ...
+                    //     |      -->         |
+                    //  branch             branch (no value now)
+                    //  /    \            /      \
+                    // ...  child       ...     child
+                    //
+                    // Note in the after diagram `child` may be the only child of `branch`.
                     let branch = BranchNode {
                         children: branch.children,
                         partial_path: branch.partial_path.clone(),
@@ -637,17 +651,11 @@ impl<T: WriteLinearStore> Merkle<T> {
                 }
 
                 // The branch has only 1 child.
-                // Extend the child's partial path to include the branch's partial path.
-                let (child_index, child_addr) = branch
-                    .children
-                    .iter()
-                    .enumerate()
-                    .find_map(|(index, addr)| addr.map(|addr| (index as u8, addr)))
-                    .expect("branch must have children");
-
+                // The branch must be combined with its child since it now has no value.
                 let child = self.read_node(child_addr)?;
 
-                let child_new_partial_path = Path::from_nibbles_iterator(
+                // Extend the child's partial path to include the branch's partial path.
+                let combined_partial_path = Path::from_nibbles_iterator(
                     branch
                         .partial_path
                         .iter()
@@ -659,11 +667,11 @@ impl<T: WriteLinearStore> Merkle<T> {
                 let child = match &*child {
                     Node::Leaf(leaf) => Node::Leaf(LeafNode {
                         value: leaf.value.clone(),
-                        partial_path: child_new_partial_path,
+                        partial_path: combined_partial_path,
                     }),
                     Node::Branch(child) => Node::Branch(Box::new(BranchNode {
                         children: child.children,
-                        partial_path: child_new_partial_path,
+                        partial_path: combined_partial_path,
                         value: child.value.clone(),
                         child_hashes: child.child_hashes.clone(),
                     })),
@@ -673,7 +681,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 let Some(removed_parent) = ancestors.next_back() else {
                     // The removed node was the root.
                     self.delete_node(child_addr)?;
-                    let new_root_addr = self.update_node(ancestors, removed.addr, child)?;
+                    let new_root_addr = self.update_node(empty(), removed.addr, child)?;
                     self.set_root(Some(new_root_addr))?;
                     return Ok(Some(removed_value.clone()));
                 };
