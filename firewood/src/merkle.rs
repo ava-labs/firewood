@@ -374,7 +374,7 @@ impl<T: WriteLinearStore> Merkle<T> {
             });
 
             let new_root = self.create_node(leaf)?;
-            self.set_root(new_root)?;
+            self.set_root(Some(new_root))?;
             return Ok(Default::default());
         };
 
@@ -415,7 +415,7 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                 let new_root = Node::Branch(Box::new(new_root));
                 let new_root_addr = self.create_node(new_root)?;
-                self.set_root(new_root_addr)?;
+                self.set_root(Some(new_root_addr))?;
 
                 // Update the old root's partial path to be shorter since now it has a parent.
                 let new_child =
@@ -462,7 +462,7 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                 let new_root = Node::Branch(Box::new(new_root));
                 let new_root_addr = self.create_node(new_root)?;
-                self.set_root(new_root_addr)?;
+                self.set_root(Some(new_root_addr))?;
 
                 return Ok(vec![old_root_addr]);
             }
@@ -511,7 +511,7 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                             let Some(leaf_parent) = last_node_parent else {
                                 // There is no parent of this leaf. It must be the root.
-                                self.set_root(new_addr)?;
+                                self.set_root(Some(new_addr))?;
                                 return Ok(hash_invalidation_addresses);
                             };
 
@@ -585,7 +585,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                                 // Update its parent to point to the new address.
                                 let Some(last_node_parent) = traversal_path.pop() else {
                                     // There is no parent of this branch. It must be the root.
-                                    self.set_root(new_addr)?;
+                                    self.set_root(Some(new_addr))?;
                                     return Ok(hash_invalidation_addresses);
                                 };
 
@@ -842,7 +842,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                             // Update its parent to point to the new address.
                             let Some(last_node_parent) = traversal_path.pop() else {
                                 // There is no parent of this leaf. The new branch is the root.
-                                self.set_root(new_addr)?;
+                                self.set_root(Some(new_addr))?;
                                 return Ok(hash_invalidation_addresses);
                             };
 

@@ -198,7 +198,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         Ok(())
     }
 
-    pub fn set_root(&mut self, root_addr: LinearAddress) -> Result<(), Error> {
+    pub fn set_root(&mut self, root_addr: Option<LinearAddress>) -> Result<(), Error> {
         self.nodestore.set_root(root_addr)
     }
 }
@@ -265,7 +265,7 @@ mod test {
             value: Box::new(*b"abc"),
         });
         let addr = hns.create_node(node).unwrap();
-        hns.set_root(addr).unwrap();
+        hns.set_root(Some(addr)).unwrap();
 
         let frozen = hns.freeze().unwrap();
         assert_ne!(frozen.root_hash().unwrap(), Default::default());
