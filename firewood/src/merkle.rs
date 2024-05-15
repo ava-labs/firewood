@@ -652,58 +652,33 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                 // The branch has only 1 child.
                 // The branch must be combined with its child since it now has no value.
-                let child = self.read_node(child_addr)?;
+                //      ...                ...
+                //       |      -->         |
+                //     branch            combined
+                //       |
+                //     child
+                // where combined has `child`'s value.
 
-                // Extend the child's partial path to include the branch's partial path.
-                let combined_partial_path = Path::from_nibbles_iterator(
-                    branch
-                        .partial_path
-                        .iter()
-                        .chain(once(&child_index))
-                        .chain(child.partial_path().iter())
-                        .copied(),
-                );
+                let combined = {
+                    let child = self.read_node(child_addr)?;
 
-                let child = match &*child {
-                    Node::Leaf(leaf) => Node::Leaf(LeafNode {
-                        value: leaf.value.clone(),
-                        partial_path: combined_partial_path,
-                    }),
-                    Node::Branch(child) => Node::Branch(Box::new(BranchNode {
-                        children: child.children,
-                        partial_path: combined_partial_path,
-                        value: child.value.clone(),
-                        child_hashes: child.child_hashes.clone(),
-                    })),
-                };
+                    // `combined`'s partial path is the concatenation of `branch`'s partial path,
+                    // `child_index` and `child`'s partial path.
+                    let partial_path = Path::from_nibbles_iterator(
+                        branch
+                            .partial_path
+                            .iter()
+                            .chain(once(&child_index))
+                            .chain(child.partial_path().iter())
+                            .copied(),
+                    );
 
-                // Point the removed node's parent to the child, bypassing the removed node.
-                let Some(removed_parent) = ancestors.next_back() else {
-                    // The removed node was the root.
-                    self.delete_node(child_addr)?;
-                    let new_root_addr = self.update_node(empty(), removed.addr, child)?;
-                    self.set_root(Some(new_root_addr))?;
-                    return Ok(Some(removed_value.clone()));
+                    child.new_with_partial_path(partial_path)
                 };
 
                 self.delete_node(child_addr)?;
-                let child_addr = self.create_node(child)?;
 
-                let removed_parent_addr = removed_parent.addr;
-                let mut removed_parent = removed_parent
-                    .node
-                    .as_branch()
-                    .expect("parent of a node must be a branch")
-                    .deref()
-                    .clone();
-                removed_parent.update_child(child_index, Some(child_addr));
-
-                self.delete_node(removed.addr)?;
-                self.update_node(
-                    ancestors,
-                    removed_parent_addr,
-                    Node::Branch(Box::new(removed_parent)),
-                )?;
+                self.update_node(ancestors, removed.addr, combined)?;
 
                 return Ok(Some(removed_value.clone()));
             }
