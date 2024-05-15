@@ -55,9 +55,9 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
     pub fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
         if let Some(modified_node) = self.modified.get(&addr) {
             if let Some((modified_node, _)) = modified_node {
-                return Ok(modified_node.clone());
+                Ok(modified_node.clone())
             } else {
-                return Err(Error::new(std::io::ErrorKind::Other, "Node not found"));
+                Err(Error::new(std::io::ErrorKind::Other, "Node not found"))
             }
         } else {
             Ok(self.nodestore.read_node(addr)?)
@@ -73,10 +73,10 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
     fn take_node(&mut self, addr: LinearAddress) -> Result<Node, Error> {
         if let Some(modified_node) = self.modified.remove(&addr) {
             if let Some((modified_node, _)) = modified_node {
-                return Ok(Arc::into_inner(modified_node)
-                    .expect("no other references to this node can exist"));
+                Ok(Arc::into_inner(modified_node)
+                    .expect("no other references to this node can exist"))
             } else {
-                return Err(Error::new(NotFound, "Node not found"));
+                Err(Error::new(NotFound, "Node not found"))
             }
         } else {
             let node = self.nodestore.read_node(addr)?;
@@ -274,15 +274,12 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         old_address: LinearAddress,
         node: Node,
     ) -> Result<LinearAddress, MerkleError> {
-        let old_node_size_index = if let Some(modified_node) = self.modified.get(&old_address) {
-            if let Some((_, old_node_size_index)) = modified_node {
+        let old_node_size_index =
+            if let Some(Some((_, old_node_size_index))) = self.modified.get(&old_address) {
                 *old_node_size_index
             } else {
                 self.nodestore.node_size(old_address)?
-            }
-        } else {
-            self.nodestore.node_size(old_address)?
-        };
+            };
 
         // If the node was already modified, see if it still fits
         let new_address = if !self.nodestore.still_fits(old_node_size_index, &node)? {

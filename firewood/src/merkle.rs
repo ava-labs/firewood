@@ -680,7 +680,7 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                 self.update_node(ancestors, removed.addr, combined)?;
 
-                return Ok(Some(removed_value.clone()));
+                Ok(Some(removed_value.clone()))
             }
             Node::Leaf(leaf) => {
                 self.delete_node(removed.addr)?;
