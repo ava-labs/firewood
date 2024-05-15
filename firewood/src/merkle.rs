@@ -985,39 +985,35 @@ mod tests {
         assert!(merkle.remove(&key3).unwrap().is_none());
     }
 
-    //     #[test]
-    //     fn remove_many() {
-    //         let mut merkle = create_in_memory_merkle();
-    //         let root_addr = merkle.init_sentinel().unwrap();
+    #[test]
+    fn remove_many() {
+        let mut merkle = create_in_memory_merkle();
 
-    //         // insert values
-    //         for key_val in u8::MIN..=u8::MAX {
-    //             let key = &[key_val];
-    //             let val = &[key_val];
+        // insert key-value pairs
+        for key_val in u8::MIN..=u8::MAX {
+            let key = [key_val];
+            let val = [key_val];
 
-    //             merkle.insert(key, val.to_vec(), root_addr).unwrap();
+            merkle.insert(&key, Box::new(val)).unwrap();
+            let got = merkle.get(&key).unwrap().unwrap();
+            assert_eq!(&*got, val);
+        }
 
-    //             let fetched_val = merkle.get(key, root_addr).unwrap();
+        // remove key-value pairs
+        for key_val in u8::MIN..=u8::MAX {
+            let key = [key_val];
+            let val = [key_val];
 
-    //             // make sure the value was inserted
-    //             assert_eq!(fetched_val.as_deref(), val.as_slice().into());
-    //         }
+            let got = merkle.remove(&key).unwrap().unwrap();
+            assert_eq!(&*got, val);
 
-    //         // remove values
-    //         for key_val in u8::MIN..=u8::MAX {
-    //             let key = &[key_val];
-    //             let val = &[key_val];
+            // Removing an already removed key is a no-op
+            assert!(merkle.remove(&key).unwrap().is_none());
 
-    //             let Ok(removed_val) = merkle.remove(key, root_addr) else {
-    //                 panic!("({key_val}, {key_val}) missing");
-    //             };
-
-    //             assert_eq!(removed_val.as_deref(), val.as_slice().into());
-
-    //             let fetched_val = merkle.get(key, root_addr).unwrap();
-    //             assert!(fetched_val.is_none());
-    //         }
-    //     }
+            let got = merkle.get(&key).unwrap();
+            assert!(got.is_none());
+        }
+    }
 
     //     #[test]
     //     fn get_empty_proof() {
