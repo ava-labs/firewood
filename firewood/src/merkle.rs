@@ -2,7 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::hashednode::HashedNodeStore;
-use crate::nibbles::Nibbles;
+use crate::nibbles::NibblesIterator;
 use crate::proof::{Proof, ProofError};
 use crate::stream::{MerkleKeyValueStream, PathIterItem, PathIterator};
 use crate::v2::api;
@@ -162,7 +162,7 @@ impl<T: ReadLinearStore> Merkle<T> {
             .key_nibbles
             .iter()
             .copied()
-            .eq(Nibbles::new(key).into_iter())
+            .eq(NibblesIterator::new(key))
         {
             match &*last_node.node {
                 Node::Branch(branch) => Ok(branch.value.clone()),
@@ -362,8 +362,8 @@ impl<T: WriteLinearStore> Merkle<T> {
         key: &[u8],
         value: Box<[u8]>,
     ) -> Result<Vec<LinearAddress>, MerkleError> {
-        let key_nibbles = Nibbles::new(key); // how to get a &[u8] from this where each byte is a nibble?
-        let key_as_path = Path::from_nibbles_iterator(key_nibbles.into_iter()); // .as_ref() &[u8]
+        let key_nibbles = NibblesIterator::new(key);
+        let key_as_path = Path::from_nibbles_iterator(key_nibbles.into_iter());
 
         let Some(old_root_addr) = self.root_address() else {
             // The trie is empty. Create a new leaf node with `value` and set
@@ -475,7 +475,7 @@ impl<T: WriteLinearStore> Merkle<T> {
         let hash_invalidation_addresses: Vec<_> =
             traversal_path.iter().map(|item| item.addr).collect();
 
-        if last_node.key_nibbles.iter().eq(key_as_path.as_ref()) {
+        if last_node.key_nibbles.iter().eq(key_as_path.iter()) {
             // The last node in the traversal path is at `key`.
             // We're replacing the value in an existing key-value pair.
             match &*last_node.node {
