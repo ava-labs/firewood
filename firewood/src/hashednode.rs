@@ -1,8 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use sha3::digest::core_api::CoreWrapper;
-use sha3::{Digest, Keccak256, Keccak256Core};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::Error;
 use std::iter::once;
@@ -197,9 +196,9 @@ trait HasUpdate {
     fn update<T: AsRef<[u8]>>(&mut self, data: T);
 }
 
-impl HasUpdate for CoreWrapper<Keccak256Core> {
+impl HasUpdate for Sha256 {
     fn update<T: AsRef<[u8]>>(&mut self, data: T) {
-        sha3::Digest::update(self, data)
+        sha2::Digest::update(self, data)
     }
 }
 
@@ -211,7 +210,7 @@ impl HasUpdate for Vec<u8> {
 
 impl<T: ReadLinearStore> HashedNodeStore<T> {
     fn hash_internal(&self, node: &Node, path_prefix: &Path) -> TrieHash {
-        let mut hasher = Keccak256::new();
+        let mut hasher: Sha256 = Sha256::new();
         self.hash_internal_with(node, path_prefix, &mut hasher);
         hasher.finalize().into()
     }

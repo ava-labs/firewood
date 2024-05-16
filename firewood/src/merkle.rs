@@ -7,7 +7,7 @@ use crate::proof::{Proof, ProofError};
 use crate::stream::{MerkleKeyValueStream, PathIterItem, PathIterator};
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
-use sha3::{Digest, Keccak256};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::future::ready;
 use std::io::Write;
@@ -134,7 +134,7 @@ impl<T: ReadLinearStore> Merkle<T> {
                 &path.node,
                 &Path::from_nibbles_iterator(path.key_nibbles.iter().copied()),
             );
-            let mut hasher = Keccak256::new();
+            let mut hasher = Sha256::new();
             hasher.update(&hashable);
             let hash = hasher.finalize().into();
             proofs.insert(hash, hashable);
@@ -1513,7 +1513,7 @@ mod tests {
         let mut expected_hash = [0; 32];
 
         // TODO: merkleDB has different hash, 70efedfc5db7ea66f5b49ea566719633181d095fed089cce52224e11f889463a
-        let hex_hash = "f4ad11f330b8a1acc53691fe40529fa1957c487c0b96864ce1f3eeb86914d37a";
+        let hex_hash = "b4bfe7c31fb4b7cd245e74ab89fdb66f2286dc6831b57f112239e0b6131d321c";
         hex::decode_to_slice(hex_hash, &mut expected_hash).unwrap();
         assert_eq!(actual_hash, TrieHash::from(expected_hash));
 
