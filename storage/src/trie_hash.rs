@@ -4,10 +4,10 @@
 use std::fmt::{self, Debug};
 
 use serde::{de::Visitor, Deserialize, Serialize};
-use sha3::digest::{generic_array::GenericArray, typenum};
+use sha2::digest::{generic_array::GenericArray, typenum};
 
 /// A hash value inside a merkle trie
-/// We use the same type as returned by sha3 here to avoid copies
+/// We use the same type as returned by sha2 here to avoid copies
 #[derive(PartialEq, Eq, Clone, Default)]
 pub struct TrieHash(GenericArray<u8, typenum::U32>);
 
@@ -39,6 +39,23 @@ impl From<[u8; 32]> for TrieHash {
 impl From<GenericArray<u8, typenum::U32>> for TrieHash {
     fn from(value: GenericArray<u8, typenum::U32>) -> Self {
         TrieHash(value)
+    }
+}
+
+impl TryFrom<&[u8]> for TrieHash {
+    type Error = String;
+
+    fn try_from(v: &[u8]) -> Result<Self, Self::Error> {
+        if v.len() != TrieHash::len() {
+            return Err(format!(
+                "Invalid length for TrieHash: expected {}, got {}",
+                TrieHash::len(),
+                v.len()
+            ));
+        }
+        let mut hash = TrieHash::default();
+        hash.0.copy_from_slice(v);
+        Ok(hash)
     }
 }
 
@@ -85,12 +102,6 @@ impl<'de> Visitor<'de> for TrieVisitor {
     where
         E: serde::de::Error,
     {
-        let mut hash = TrieHash::default();
-        if v.len() == hash.0.len() {
-            hash.0.copy_from_slice(v);
-            Ok(hash)
-        } else {
-            Err(E::invalid_length(v.len(), &self))
-        }
+        TrieHash::try_from(v).map_err(serde::de::Error::custom)
     }
 }
