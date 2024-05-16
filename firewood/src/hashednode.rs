@@ -114,14 +114,16 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
                     .iter()
                     .zip(b.child_hashes.iter_mut())
                     .enumerate()
-                    .filter(|(_, (&addr, &mut ref hash))| {
-                        addr.is_some() && *hash == TrieHash::default()
+                    .filter_map(|(nibble, (&addr, &mut ref mut hash))| {
+                        if *hash != TrieHash::default() {
+                            None
+                        } else {
+                            addr.map(|addr| (nibble, (addr, hash)))
+                        }
                     })
                 {
                     // we found a child that needs hashing, so hash the child and assign it to the right spot in the child_hashes
                     // array
-                    let child_addr =
-                        child_addr.expect("guaranteed to be Some; fixme with fancier rust");
                     let mut child = self.take_node(child_addr)?;
                     let original_length = path_prefix.len();
                     path_prefix
