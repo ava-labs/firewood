@@ -42,23 +42,6 @@ impl From<GenericArray<u8, typenum::U32>> for TrieHash {
     }
 }
 
-impl TryFrom<&[u8]> for TrieHash {
-    type Error = String;
-
-    fn try_from(v: &[u8]) -> Result<Self, Self::Error> {
-        if v.len() != TrieHash::len() {
-            return Err(format!(
-                "Invalid length for TrieHash: expected {}, got {}",
-                TrieHash::len(),
-                v.len()
-            ));
-        }
-        let mut hash = TrieHash::default();
-        hash.0.copy_from_slice(v);
-        Ok(hash)
-    }
-}
-
 impl TrieHash {
     /// Return the length of a TrieHash
     const fn len() -> usize {
@@ -102,6 +85,12 @@ impl<'de> Visitor<'de> for TrieVisitor {
     where
         E: serde::de::Error,
     {
-        TrieHash::try_from(v).map_err(serde::de::Error::custom)
+        let mut hash = TrieHash::default();
+        if v.len() == hash.0.len() {
+            hash.0.copy_from_slice(v);
+            Ok(hash)
+        } else {
+            Err(E::invalid_length(v.len(), &self))
+        }
     }
 }
