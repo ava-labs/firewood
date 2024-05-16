@@ -2,7 +2,6 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::hashednode::HashedNodeStore;
-use crate::nibbles::NibblesIterator;
 use crate::proof::{Proof, ProofError};
 use crate::stream::{MerkleKeyValueStream, PathIterItem, PathIterator};
 use crate::v2::api;
@@ -10,11 +9,11 @@ use futures::{StreamExt, TryStreamExt};
 use std::collections::HashSet;
 use std::future::ready;
 use std::io::Write;
-use storage::Path;
 use storage::ReadLinearStore;
 use storage::TrieHash;
 use storage::{BranchNode, LeafNode, Node};
 use storage::{LinearAddress, UpdateError, WriteLinearStore};
+use storage::{NibblesIterator, Path};
 
 use std::ops::{Deref, DerefMut};
 use thiserror::Error;
