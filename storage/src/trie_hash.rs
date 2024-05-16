@@ -50,7 +50,7 @@ impl TrieHash {
 
     /// Returns true iff each element in this hash is 0.
     pub fn is_empty(&self) -> bool {
-        self.iter().all(|&elt| elt == 0)
+        *self == TrieHash::default()
     }
 }
 
