@@ -115,10 +115,10 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
                     .zip(b.child_hashes.iter_mut())
                     .enumerate()
                     .filter_map(|(nibble, (&addr, &mut ref mut hash))| {
-                        if *hash != TrieHash::default() {
-                            None
-                        } else {
+                        if *hash == TrieHash::default() {
                             addr.map(|addr| (nibble, (addr, hash)))
+                        } else {
+                            None
                         }
                     })
                 {
