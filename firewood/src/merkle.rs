@@ -629,9 +629,7 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                             let mut new_branch = BranchNode {
                                 children: Default::default(),
-                                partial_path: Path::from_nibbles_iterator(
-                                    prefix_overlap.shared.iter().copied(),
-                                ),
+                                partial_path: Path::from(prefix_overlap.shared),
                                 value: None,
                                 child_hashes: Default::default(),
                             };
@@ -726,9 +724,7 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                             let mut new_branch = BranchNode {
                                 children: Default::default(),
-                                partial_path: Path::from_nibbles_iterator(
-                                    prefix_overlap.shared.iter().copied(),
-                                ),
+                                partial_path: Path::from(prefix_overlap.shared),
                                 value: None,
                                 child_hashes: Default::default(),
                             };
