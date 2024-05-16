@@ -187,8 +187,6 @@ pub mod merkle;
 pub mod proof;
 pub mod stream;
 
-pub mod nibbles;
-
 pub mod logger;
 pub mod v2;
 
