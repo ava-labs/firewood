@@ -585,7 +585,7 @@ impl<T: WriteLinearStore> Merkle<T> {
     }
 
     pub fn remove(&mut self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
-        let path = Path::from_nibbles_iterator(Nibbles::new(key).into_iter());
+        let path = Path::from_nibbles_iterator(NibblesIterator::new(key).into_iter());
 
         // The path from the root down to and including the node with the greatest prefix of `path`.
         let mut ancestors = PathIterator::new(self, key)?
