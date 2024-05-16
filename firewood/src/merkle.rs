@@ -2,7 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::hashednode::HashedNodeStore;
-use crate::nibbles::Nibbles;
+use crate::nibbles::NibblesIterator;
 use crate::proof::{Proof, ProofError};
 use crate::stream::{MerkleKeyValueStream, PathIterItem, PathIterator};
 use crate::v2::api;
@@ -153,7 +153,7 @@ impl<T: ReadLinearStore> Merkle<T> {
             .key_nibbles
             .iter()
             .copied()
-            .eq(Nibbles::new(key).into_iter())
+            .eq(NibblesIterator::new(key))
         {
             match &*last_node.node {
                 Node::Branch(branch) => Ok(branch.value.clone()),
@@ -341,7 +341,7 @@ impl<T: ReadLinearStore> Merkle<T> {
 
 impl<T: WriteLinearStore> Merkle<T> {
     pub fn insert(&mut self, key: &[u8], value: Box<[u8]>) -> Result<(), MerkleError> {
-        let path = Path::from_nibbles_iterator(Nibbles::new(key).into_iter());
+        let path = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
         // The path from the root down to and including the node with the greatest prefix of `path`.
         let mut ancestors = PathIterator::new(self, key)?
@@ -384,15 +384,11 @@ impl<T: WriteLinearStore> Merkle<T> {
             let old_root = match &*old_root {
                 Node::Leaf(old_root) => Node::Leaf(LeafNode {
                     value: old_root.value.clone(),
-                    partial_path: Path::from_nibbles_iterator(
-                        old_root_partial_path.iter().copied(),
-                    ),
+                    partial_path: Path::from(old_root_partial_path),
                 }),
                 Node::Branch(old_root) => Node::Branch(Box::new(BranchNode {
                     children: old_root.children,
-                    partial_path: Path::from_nibbles_iterator(
-                        old_root_partial_path.iter().copied(),
-                    ),
+                    partial_path: Path::from(old_root_partial_path),
                     value: old_root.value.clone(),
                     child_hashes: old_root.child_hashes.clone(),
                 })),
@@ -400,7 +396,7 @@ impl<T: WriteLinearStore> Merkle<T> {
             let old_root_addr = self.update_node(empty(), old_root_addr, old_root)?;
 
             let mut new_root = BranchNode {
-                partial_path: Path::from_nibbles_iterator(path_overlap.shared.iter().copied()),
+                partial_path: Path::from(path_overlap.shared),
                 value: None,
                 children: Default::default(),
                 child_hashes: Default::default(),
@@ -412,7 +408,7 @@ impl<T: WriteLinearStore> Merkle<T> {
             {
                 let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
                     value,
-                    partial_path: Path::from_nibbles_iterator(remaining_path.iter().copied()),
+                    partial_path: Path::from(remaining_path),
                 }))?;
                 *new_root.child_mut(*new_leaf_child_index) = Some(new_leaf_addr);
             } else {
@@ -466,7 +462,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 //                        leaf
                 let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
                     value,
-                    partial_path: Path::from_nibbles_iterator(remaining_path.iter().copied()),
+                    partial_path: Path::from(remaining_path),
                 }))?;
 
                 let mut new_branch: BranchNode = leaf.into();
@@ -490,7 +486,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     //  ...   ...       ...  new_leaf   ...
                     let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
                         value,
-                        partial_path: Path::from_nibbles_iterator(remaining_path.iter().copied()),
+                        partial_path: Path::from(remaining_path),
                     }))?;
 
                     let mut branch = BranchNode {
@@ -538,24 +534,20 @@ impl<T: WriteLinearStore> Merkle<T> {
                 let child = match &*child {
                     Node::Branch(child) => Node::Branch(Box::new(BranchNode {
                         children: child.children,
-                        partial_path: Path::from_nibbles_iterator(
-                            child_partial_path.iter().copied(),
-                        ),
+                        partial_path: Path::from(child_partial_path),
                         value: child.value.clone(),
                         child_hashes: child.child_hashes.clone(),
                     })),
                     Node::Leaf(child) => Node::Leaf(LeafNode {
                         value: child.value.clone(),
-                        partial_path: Path::from_nibbles_iterator(
-                            child_partial_path.iter().copied(),
-                        ),
+                        partial_path: Path::from(child_partial_path),
                     }),
                 };
                 let child_addr = self.create_node(child)?;
 
                 let mut new_branch = BranchNode {
                     children: Default::default(),
-                    partial_path: Path::from_nibbles_iterator(path_overlap.shared.iter().copied()),
+                    partial_path: Path::from(path_overlap.shared),
                     value: None,
                     child_hashes: Default::default(),
                 };
@@ -566,7 +558,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 {
                     let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
                         value,
-                        partial_path: Path::from_nibbles_iterator(remaining_path.iter().copied()),
+                        partial_path: Path::from(remaining_path),
                     }))?;
                     *new_branch.child_mut(new_leaf_child_index) = Some(new_leaf_addr);
                 } else {

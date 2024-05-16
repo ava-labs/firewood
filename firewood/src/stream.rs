@@ -3,7 +3,7 @@
 
 use crate::{
     merkle::{Key, Merkle, MerkleError, Value},
-    nibbles::{Nibbles, NibblesIterator},
+    nibbles::NibblesIterator,
     v2::api,
 };
 
@@ -185,7 +185,7 @@ fn get_iterator_intial_state<T: ReadLinearStore>(
     // partial path at the start of each loop iteration.
     let mut matched_key_nibbles = vec![];
 
-    let mut unmatched_key_nibbles = Nibbles::new(key).into_iter();
+    let mut unmatched_key_nibbles = NibblesIterator::new(key);
 
     let mut iter_stack: Vec<IterationNode> = vec![];
 
@@ -406,7 +406,7 @@ impl<'a, 'b, T: ReadLinearStore> PathIterator<'a, 'b, T> {
             merkle,
             state: PathIteratorState::Iterating {
                 matched_key: vec![],
-                unmatched_key: Nibbles::new(key).into_iter(),
+                unmatched_key: NibblesIterator::new(key),
                 address: root_addr,
             },
         })
