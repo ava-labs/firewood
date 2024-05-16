@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crate::{merkle::Merkle, v2::api::HashKey};
 use nix::errno::Errno;
-use sha3::Digest;
+use sha2::Digest;
 use storage::ReadLinearStore;
 use thiserror::Error;
 
@@ -148,7 +148,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
 fn _generate_subproof_hash(encoded: &[u8]) -> Result<HashKey, ProofError> {
     match encoded.len() {
         0..=31 => {
-            let sub_hash = sha3::Keccak256::digest(encoded).into();
+            let sub_hash = sha2::Sha256::digest(encoded).into();
             Ok(sub_hash)
         }
 

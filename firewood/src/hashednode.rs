@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use sha3::{Digest, Keccak256};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::Error;
 use std::iter::once;
@@ -193,7 +193,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
     // hash a node
     // assumes all the children of a branch have their hashes filled in
     fn hash_internal(&self, node: &Node, path_prefix: &Path) -> TrieHash {
-        let mut hasher = Keccak256::new();
+        let mut hasher = Sha256::new();
         match *node {
             Node::Branch(ref branch) => {
                 // collect the full key
