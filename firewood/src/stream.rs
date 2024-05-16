@@ -3,14 +3,13 @@
 
 use crate::{
     merkle::{Key, Merkle, MerkleError, Value},
-    nibbles::NibblesIterator,
     v2::api,
 };
 
 use futures::{stream::FusedStream, Stream, StreamExt};
 use std::{cmp::Ordering, iter::once};
 use std::{sync::Arc, task::Poll};
-use storage::{BranchNode, LinearAddress, Node, ReadLinearStore};
+use storage::{BranchNode, LinearAddress, NibblesIterator, Node, ReadLinearStore};
 
 /// Represents an ongoing iteration over a node and its children.
 enum IterationNode {
