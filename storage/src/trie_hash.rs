@@ -47,6 +47,11 @@ impl TrieHash {
     const fn len() -> usize {
         std::mem::size_of::<TrieHash>()
     }
+
+    /// Returns true iff each element in this hash is 0.
+    pub fn is_empty(&self) -> bool {
+        *self == TrieHash::default()
+    }
 }
 
 impl Serialize for TrieHash {

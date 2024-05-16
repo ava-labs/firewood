@@ -114,9 +114,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
                     .iter()
                     .zip(b.child_hashes.iter_mut())
                     .enumerate()
-                    .filter(|(_, (&addr, &mut ref hash))| {
-                        addr.is_some() && *hash == TrieHash::default()
-                    })
+                    .filter(|(_, (&addr, &mut ref hash))| addr.is_some() && hash.is_empty())
                 {
                     // we found a child that needs hashing, so hash the child and assign it to the right spot in the child_hashes
                     // array
