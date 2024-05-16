@@ -114,9 +114,8 @@ impl<T: ReadLinearStore> Merkle<T> {
         self.0.root_address()
     }
 
-    // TODO: can we make this &self instead of &mut self?
-    pub fn root_hash(&mut self) -> Result<TrieHash, std::io::Error> {
-        self.0.root_hash()
+    pub fn root_hash(&self) -> Result<TrieHash, MerkleError> {
+        Ok(self.0.root_hash()?)
     }
 
     /// Constructs a merkle proof for key. The result contains all encoded nodes
@@ -1502,6 +1501,7 @@ mod tests {
         let merkle = merkle_build_test(items)?;
 
         merkle.dump().unwrap();
+        let _hash = merkle.root_hash()?;
         Ok(())
     }
 
