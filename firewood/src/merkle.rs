@@ -2,7 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::hashednode::HashedNodeStore;
-use crate::nibbles::Nibbles;
+use crate::nibbles::NibblesIterator;
 use crate::proof::{Proof, ProofError};
 use crate::stream::{MerkleKeyValueStream, PathIterItem, PathIterator};
 use crate::v2::api;
@@ -153,7 +153,7 @@ impl<T: ReadLinearStore> Merkle<T> {
             .key_nibbles
             .iter()
             .copied()
-            .eq(Nibbles::new(key).into_iter())
+            .eq(NibblesIterator::new(key))
         {
             match &*last_node.node {
                 Node::Branch(branch) => Ok(branch.value.clone()),
@@ -341,7 +341,7 @@ impl<T: ReadLinearStore> Merkle<T> {
 
 impl<T: WriteLinearStore> Merkle<T> {
     pub fn insert(&mut self, key: &[u8], value: Box<[u8]>) -> Result<(), MerkleError> {
-        let path = Path::from_nibbles_iterator(Nibbles::new(key).into_iter());
+        let path = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
         // The path from the root down to and including the node with the greatest prefix of `path`.
         let mut ancestors = PathIterator::new(self, key)?
