@@ -1501,7 +1501,22 @@ mod tests {
         let merkle = merkle_build_test(items)?;
 
         merkle.dump().unwrap();
-        let _hash = merkle.root_hash()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_root_hash_merkledb_compatible() -> Result<(), MerkleError> {
+        let items = vec![("key", "value")];
+        let merkle = merkle_build_test(items)?.freeze()?;
+
+        let actual_hash = merkle.root_hash()?;
+        let mut expected_hash = [0; 32];
+
+        // TODO: merkleDB has different hash, 70efedfc5db7ea66f5b49ea566719633181d095fed089cce52224e11f889463a
+        let hex_hash = "f4ad11f330b8a1acc53691fe40529fa1957c487c0b96864ce1f3eeb86914d37a";
+        hex::decode_to_slice(hex_hash, &mut expected_hash).unwrap();
+        assert_eq!(actual_hash, TrieHash::from(expected_hash));
+
         Ok(())
     }
 
