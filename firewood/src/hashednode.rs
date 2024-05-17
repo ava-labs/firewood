@@ -200,6 +200,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
     fn hash_internal(&self, node: &Node, path_prefix: &Path) -> TrieHash {
         let mut hasher = Sha256::new();
 
+        // Add children to hash pre-image
         match *node {
             Node::Branch(ref branch) => {
                 let children: Vec<(usize, &TrieHash)> = branch
@@ -219,39 +220,28 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                     hasher.update(nibble.encode_var_vec());
                     hasher.update(hash);
                 }
-
-                // collect the value
-                add_value_to_hasher(&mut hasher, branch.value.as_ref());
-
-                // collect the full key
-                let key: Box<_> = path_prefix
-                    .bytes_iter()
-                    .chain(branch.partial_path.bytes_iter())
-                    .collect();
-
-                let key_bit_length: u64 = key.len() as u64 * 8;
-                hasher.update(key_bit_length.encode_var_vec());
-
-                hasher.update(key);
             }
-            Node::Leaf(ref leaf) => {
+            Node::Leaf(_) => {
                 let num_children: u64 = 0;
                 hasher.update(num_children.encode_var_vec());
-
-                add_value_to_hasher(&mut hasher, Some(&leaf.value));
-
-                // collect and hash the key
-                let key: Box<_> = path_prefix
-                    .bytes_iter()
-                    .chain(leaf.partial_path.bytes_iter())
-                    .collect();
-
-                let key_bit_length: u64 = key.len() as u64 * 8;
-                hasher.update(key_bit_length.encode_var_vec());
-
-                hasher.update(key);
             }
         }
+
+        // Add value digest (if any) to hash pre-image
+        add_value_to_hasher(&mut hasher, node.value());
+
+        let key: Box<_> = path_prefix
+            .bytes_iter()
+            .chain(node.partial_path().bytes_iter())
+            .collect();
+
+        // Add key length (in bits) to hash pre-image
+        let key_bit_length: u64 = key.len() as u64 * 8;
+        hasher.update(key_bit_length.encode_var_vec());
+
+        // Add key to hash pre-image
+        hasher.update(key);
+
         hasher.finalize().into()
     }
 }
