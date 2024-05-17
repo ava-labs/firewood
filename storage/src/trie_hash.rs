@@ -24,6 +24,12 @@ impl std::ops::DerefMut for TrieHash {
     }
 }
 
+impl AsRef<[u8]> for TrieHash {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 impl Debug for TrieHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         write!(f, "{}", hex::encode(self.0))

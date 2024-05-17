@@ -199,30 +199,51 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
     // assumes all the children of a branch have their hashes filled in
     fn hash_internal(&self, node: &Node, path_prefix: &Path) -> TrieHash {
         let mut hasher = Sha256::new();
+
         match *node {
             Node::Branch(ref branch) => {
+                let children: Vec<(usize, &TrieHash)> = branch
+                    .children
+                    .iter()
+                    .enumerate()
+                    .zip(branch.child_hashes.iter())
+                    .filter_map(|((index, addr), hash)| addr.map(|_| (index, hash)))
+                    .collect();
+
+                let num_children = children.len() as u64;
+                hasher.update(num_children.encode_var_vec());
+
+                for (index, hash) in children {
+                    let nibble = index as u8;
+                    debug_assert_ne!(**hash, Default::default());
+                    hasher.update(nibble.encode_var_vec());
+                    hasher.update(hash);
+                }
+
+                // collect the value
+                if let Some(value) = &branch.value {
+                    let value_exists: u64 = 1;
+                    hasher.update(value_exists.encode_var_vec());
+
+                    let value_len = value.len() as u64;
+                    hasher.update(value_len.encode_var_vec());
+
+                    hasher.update(value);
+                } else {
+                    let value_exists: u64 = 0;
+                    hasher.update(value_exists.encode_var_vec());
+                }
+
                 // collect the full key
                 let key: Box<_> = path_prefix
                     .bytes_iter()
                     .chain(branch.partial_path.bytes_iter())
                     .collect();
+
+                let key_bit_length: u64 = key.len() as u64 * 8;
+                hasher.update(key_bit_length.encode_var_vec());
+
                 hasher.update(key);
-
-                // collect the value
-                if let Some(value) = &branch.value {
-                    hasher.update(value);
-                }
-
-                // collect the active child hashes (only the active ones)
-                for hash in branch
-                    .children
-                    .iter()
-                    .zip(branch.child_hashes.iter())
-                    .filter_map(|(addr, hash)| addr.map(|_| hash))
-                {
-                    debug_assert_ne!(**hash, Default::default());
-                    hasher.update(**hash)
-                }
             }
             Node::Leaf(ref leaf) => {
                 let num_children: u64 = 0;

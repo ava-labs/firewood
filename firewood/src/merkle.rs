@@ -930,6 +930,7 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
 mod tests {
     use super::*;
     use storage::MemStore;
+    use test_case::test_case;
 
     #[test]
     fn insert_one() {
@@ -1507,13 +1508,11 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_root_hash_merkledb_compatible() {
-        let items = vec![("key", "value")];
-        let mut merkle = merkle_build_test(items).unwrap().freeze().unwrap();
+    #[test_case(vec![("key","value")], "70efedfc5db7ea66f5b49ea566719633181d095fed089cce52224e11f889463a"; "branch with no partial path and value with PlainCodec")]
+    fn test_root_hash_merkledb_compatible(kvs: Vec<(&str, &str)>, expected_hash: &str) {
+        let mut merkle = merkle_build_test(kvs).unwrap().freeze().unwrap();
 
         // This hash is from merkledb
-        let expected_hash = "70efedfc5db7ea66f5b49ea566719633181d095fed089cce52224e11f889463a";
         let expected_hash: [u8; 32] = hex::decode(expected_hash).unwrap().try_into().unwrap();
 
         let actual_hash = merkle.root_hash().unwrap();
