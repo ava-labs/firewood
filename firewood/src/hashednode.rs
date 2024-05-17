@@ -200,18 +200,6 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
     fn hash_internal(&self, node: &Node, path_prefix: &Path) -> TrieHash {
         let mut hasher = Sha256::new();
 
-        // let value = node.value();
-        // let value_digest: Option<&Box<[u8]>> = value.map(|value| {
-        //     if value.len() < 32 {
-        //         let mut hasher = Sha256::new();
-        //         hasher.update(value);
-        //         let hash = hasher.finalize();
-        //         hash.as_slice().into()
-        //     } else {
-        //         value.to_owned()
-        //     }
-        // });
-
         match *node {
             Node::Branch(ref branch) => {
                 let children: Vec<(usize, &TrieHash)> = branch
@@ -233,18 +221,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                 }
 
                 // collect the value
-                if let Some(value) = &branch.value {
-                    let value_exists: u64 = 1;
-                    hasher.update(value_exists.encode_var_vec());
-
-                    let value_len = value.len() as u64;
-                    hasher.update(value_len.encode_var_vec());
-
-                    hasher.update(value);
-                } else {
-                    let value_exists: u64 = 0;
-                    hasher.update(value_exists.encode_var_vec());
-                }
+                add_value_to_hasher(&mut hasher, branch.value.as_ref());
 
                 // collect the full key
                 let key: Box<_> = path_prefix
@@ -261,22 +238,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                 let num_children: u64 = 0;
                 hasher.update(num_children.encode_var_vec());
 
-                let value_exists: u64 = 1;
-                hasher.update(value_exists.encode_var_vec());
-
-                let value_digest = if leaf.value.len() >= 32 {
-                    let mut hasher = Sha256::new();
-                    hasher.update(&leaf.value);
-                    hasher.finalize().as_slice().into()
-                } else {
-                    leaf.value.clone()
-                };
-
-                let value_len = value_digest.len() as u64;
-                hasher.update(value_len.encode_var_vec());
-
-                // collect and hash the value
-                hasher.update(&value_digest);
+                add_value_to_hasher(&mut hasher, Some(&leaf.value));
 
                 // collect and hash the key
                 let key: Box<_> = path_prefix
@@ -292,6 +254,29 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
         }
         hasher.finalize().into()
     }
+}
+
+fn add_value_to_hasher<T: AsRef<[u8]>>(hasher: &mut Sha256, value: Option<T>) {
+    let Some(value) = value else {
+        let value_exists: u64 = 0;
+        hasher.update(value_exists.encode_var_vec());
+        return;
+    };
+
+    let value = value.as_ref();
+
+    let value_exists: u64 = 1;
+    hasher.update(value_exists.encode_var_vec());
+
+    if value.len() >= 32 {
+        let value_hash = Sha256::digest(value);
+        hasher.update(value_hash.len().encode_var_vec());
+        hasher.update(&value_hash);
+    } else {
+        let value_len = value.len() as u64;
+        hasher.update(value_len.encode_var_vec());
+        hasher.update(value);
+    };
 }
 
 #[cfg(test)]
