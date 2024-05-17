@@ -1508,8 +1508,12 @@ mod tests {
         Ok(())
     }
 
-    #[test_case(vec![("key","value")], "70efedfc5db7ea66f5b49ea566719633181d095fed089cce52224e11f889463a"; "branch with no partial path and value with PlainCodec")]
-    fn test_root_hash_merkledb_compatible(kvs: Vec<(&str, &str)>, expected_hash: &str) {
+    #[test_case(vec![], "0000000000000000000000000000000000000000000000000000000000000000"; "empty trie")]
+    #[test_case(vec![(&[0],&[0])], "073615413d814b23383fc2c8d8af13abfffcb371b654b98dbf47dd74b1e4d1b9"; "just the root")]
+    #[test_case(vec![(&[0],&[0;32])], "ce7dd3d4119f8d064f9c4222134ee8a8e68b9d7dd73a824e37b450f5a9b0bfa2"; "just the root; value >= 32 bytes")]
+    #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1])], "c3bdc20aff5cba30f81ffd7689e94e1dbeece4a08e27f0104262431604cf45c6"; "root and leaf")]
+
+    fn test_root_hash_merkledb_compatible(kvs: Vec<(&[u8], &[u8])>, expected_hash: &str) {
         let mut merkle = merkle_build_test(kvs).unwrap().freeze().unwrap();
 
         // This hash is from merkledb
