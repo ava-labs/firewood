@@ -9,11 +9,11 @@ use futures::{StreamExt, TryStreamExt};
 use std::collections::HashSet;
 use std::future::ready;
 use std::io::Write;
-use storage::ReadLinearStore;
 use storage::TrieHash;
 use storage::{BranchNode, LeafNode, Node};
 use storage::{LinearAddress, UpdateError, WriteLinearStore};
 use storage::{NibblesIterator, Path};
+use storage::{ProposedImmutable, ReadLinearStore};
 
 use std::ops::{Deref, DerefMut};
 use thiserror::Error;
@@ -870,6 +870,10 @@ impl<T: WriteLinearStore> Merkle<T> {
         // };
         todo!()
     }
+
+    pub fn freeze(self) -> Result<Merkle<ProposedImmutable>, MerkleError> {
+        Ok(Merkle(self.0.freeze()?))
+    }
 }
 
 impl<T: WriteLinearStore> Merkle<T> {
@@ -1501,6 +1505,19 @@ mod tests {
 
         merkle.dump().unwrap();
         Ok(())
+    }
+
+    #[test]
+    fn test_root_hash_merkledb_compatible() {
+        let items = vec![("key", "value")];
+        let mut merkle = merkle_build_test(items).unwrap().freeze().unwrap();
+
+        // This hash is from merkledb
+        let expected_hash = "70efedfc5db7ea66f5b49ea566719633181d095fed089cce52224e11f889463a";
+        let expected_hash: [u8; 32] = hex::decode(expected_hash).unwrap().try_into().unwrap();
+
+        let actual_hash = merkle.root_hash().unwrap();
+        assert_eq!(actual_hash, TrieHash::from(expected_hash));
     }
 
     #[test]

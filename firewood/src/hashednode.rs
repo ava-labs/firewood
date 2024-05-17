@@ -7,11 +7,12 @@ use std::io::Error;
 use std::iter::once;
 use std::sync::{Arc, OnceLock};
 
+use storage::{LinearAddress, NodeStore};
 use storage::{Node, Path, ProposedImmutable};
+use storage::{ReadLinearStore, WriteLinearStore};
 use storage::{TrieHash, UpdateError};
 
-use storage::{LinearAddress, NodeStore};
-use storage::{ReadLinearStore, WriteLinearStore};
+use integer_encoding::VarInt;
 
 /// A [HashedNodeStore] keeps track of nodes as they change when they are backed by a LinearStore.
 /// This defers the writes of those nodes until all the changes are made to the trie as part of a
@@ -224,15 +225,28 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                 }
             }
             Node::Leaf(ref leaf) => {
+                let num_children: u64 = 0;
+                hasher.update(num_children.encode_var_vec());
+
+                let value_exists: u64 = 1;
+                hasher.update(value_exists.encode_var_vec());
+
+                let value_len = leaf.value.len() as u64;
+                hasher.update(value_len.encode_var_vec());
+
+                // collect and hash the value
+                hasher.update(&leaf.value);
+
                 // collect and hash the key
                 let key: Box<_> = path_prefix
                     .bytes_iter()
                     .chain(leaf.partial_path.bytes_iter())
                     .collect();
-                hasher.update(key);
 
-                // collect and hash the value
-                hasher.update(&leaf.value);
+                let key_bit_length: u64 = key.len() as u64 * 8;
+                hasher.update(key_bit_length.encode_var_vec());
+
+                hasher.update(key);
             }
         }
         hasher.finalize().into()
