@@ -210,7 +210,7 @@ impl HasUpdate for Vec<u8> {
 
 impl<T: ReadLinearStore> HashedNodeStore<T> {
     fn hash_internal(&self, node: &Node, path_prefix: &Path) -> TrieHash {
-        let mut hasher: Sha256 = Sha256::new();
+        let mut hasher = Sha256::new();
         self.hash_internal_with(node, path_prefix, &mut hasher);
         hasher.finalize().into()
     }
