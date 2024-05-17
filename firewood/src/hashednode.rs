@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use sha3::{Digest, Keccak256};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::Error;
 use std::iter::once;
@@ -124,12 +124,16 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
                     .iter()
                     .zip(b.child_hashes.iter_mut())
                     .enumerate()
-                    .filter(|(_, (&addr, &mut ref hash))| addr.is_some() && hash.is_empty())
+                    .filter_map(|(nibble, (&addr, &mut ref mut hash))| {
+                        if *hash == TrieHash::default() {
+                            addr.map(|addr| (nibble, (addr, hash)))
+                        } else {
+                            None
+                        }
+                    })
                 {
                     // we found a child that needs hashing, so hash the child and assign it to the right spot in the child_hashes
                     // array
-                    let child_addr =
-                        child_addr.expect("guaranteed to be Some; fixme with fancier rust");
                     let mut child = self.take_node(child_addr)?;
                     let original_length = path_prefix.len();
                     path_prefix
@@ -290,7 +294,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
     // hash a node
     // assumes all the children of a branch have their hashes filled in
     fn hash_internal(&self, node: &Node, path_prefix: &Path) -> TrieHash {
-        let mut hasher = Keccak256::new();
+        let mut hasher = Sha256::new();
         match *node {
             Node::Branch(ref branch) => {
                 // collect the full key

@@ -28,7 +28,7 @@ metered = "0.9.0"
 nix = {version = "0.28.0", features = ["fs", "uio"]}
 parking_lot = "0.12.1"
 serde = { version = "1.0", features = ["derive"] }
-sha3 = "0.10.8"
+sha2 = "0.10.8"
 thiserror = "1.0.57"
 tokio = { version = "1.36.0", features = ["rt", "sync", "macros", "rt-multi-thread"] }
 typed-builder = "0.18.1"
