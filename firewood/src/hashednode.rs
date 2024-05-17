@@ -200,6 +200,18 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
     fn hash_internal(&self, node: &Node, path_prefix: &Path) -> TrieHash {
         let mut hasher = Sha256::new();
 
+        // let value = node.value();
+        // let value_digest: Option<&Box<[u8]>> = value.map(|value| {
+        //     if value.len() < 32 {
+        //         let mut hasher = Sha256::new();
+        //         hasher.update(value);
+        //         let hash = hasher.finalize();
+        //         hash.as_slice().into()
+        //     } else {
+        //         value.to_owned()
+        //     }
+        // });
+
         match *node {
             Node::Branch(ref branch) => {
                 let children: Vec<(usize, &TrieHash)> = branch
@@ -252,11 +264,19 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                 let value_exists: u64 = 1;
                 hasher.update(value_exists.encode_var_vec());
 
-                let value_len = leaf.value.len() as u64;
+                let value_digest = if leaf.value.len() >= 32 {
+                    let mut hasher = Sha256::new();
+                    hasher.update(&leaf.value);
+                    hasher.finalize().as_slice().into()
+                } else {
+                    leaf.value.clone()
+                };
+
+                let value_len = value_digest.len() as u64;
                 hasher.update(value_len.encode_var_vec());
 
                 // collect and hash the value
-                hasher.update(&leaf.value);
+                hasher.update(&value_digest);
 
                 // collect and hash the key
                 let key: Box<_> = path_prefix
