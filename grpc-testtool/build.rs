@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // we want to import these proto files
-    let import_protos = ["sync", "rpcdb", "process-server"];
+    let import_protos = ["sync", "rpcdb", "process-server", "merkle"];
 
     let protos: Box<[PathBuf]> = import_protos
         .into_iter()
