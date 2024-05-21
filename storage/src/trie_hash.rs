@@ -4,10 +4,10 @@
 use std::fmt::{self, Debug};
 
 use serde::{de::Visitor, Deserialize, Serialize};
-use sha3::digest::{generic_array::GenericArray, typenum};
+use sha2::digest::{generic_array::GenericArray, typenum};
 
 /// A hash value inside a merkle trie
-/// We use the same type as returned by sha3 here to avoid copies
+/// We use the same type as returned by sha2 here to avoid copies
 #[derive(PartialEq, Eq, Clone, Default)]
 pub struct TrieHash(GenericArray<u8, typenum::U32>);
 
@@ -21,6 +21,12 @@ impl std::ops::Deref for TrieHash {
 impl std::ops::DerefMut for TrieHash {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
+    }
+}
+
+impl AsRef<[u8]> for TrieHash {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
     }
 }
 
