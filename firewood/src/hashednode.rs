@@ -273,7 +273,10 @@ fn add_value_to_hasher<T: AsRef<[u8]>>(hasher: &mut Sha256, value: Option<T>) {
 fn add_varint_to_hasher(hasher: &mut Sha256, value: u64) {
     let mut buf = [0u8; MAX_VARINT_SIZE];
     let len = value.encode_var(&mut buf);
-    hasher.update(&buf[..len]);
+    hasher.update(
+        buf.get(..len)
+            .expect("length is always less than MAX_VARINT_SIZE"),
+    );
 }
 
 #[cfg(test)]
