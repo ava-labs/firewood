@@ -205,18 +205,16 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
         // Add children to hash pre-image
         match *node {
             Node::Branch(ref branch) => {
-                let children: Vec<(usize, &TrieHash)> = branch
-                    .children
+                let child_iter = branch
+                    .child_hashes
                     .iter()
                     .enumerate()
-                    .zip(branch.child_hashes.iter())
-                    .filter_map(|((index, addr), hash)| addr.map(|_| (index, hash)))
-                    .collect();
+                    .filter(|hash| **hash.1 != Default::default());
 
-                let num_children = children.len() as u64;
+                let num_children = child_iter.clone().count() as u64;
                 add_varint_to_hasher(&mut hasher, num_children);
 
-                for (index, hash) in children {
+                for (index, hash) in child_iter {
                     debug_assert_ne!(**hash, Default::default());
                     add_varint_to_hasher(&mut hasher, index as u64);
                     hasher.update(hash);
