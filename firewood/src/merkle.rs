@@ -343,9 +343,10 @@ impl<T: WriteLinearStore> Merkle<T> {
         let path = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
         // The path from the root down to and including the node with the greatest prefix of `path`.
-        let mut ancestors = PathIterator::new(self, key)?
-            .collect::<Result<Vec<PathIterItem>, MerkleError>>()?
-            .into_iter();
+        let ancestors =
+            PathIterator::new(self, key)?.collect::<Result<Vec<PathIterItem>, MerkleError>>()?;
+
+        let mut ancestors = ancestors.iter();
 
         let Some(greatest_prefix_node) = ancestors.next_back() else {
             // There is no node (not even the root) which is a prefix of `path`.
@@ -544,7 +545,11 @@ impl<T: WriteLinearStore> Merkle<T> {
                         partial_path: Path::from(child_partial_path),
                     }),
                 };
-                let child_addr = self.create_node(child)?;
+                let child_addr = self.update_node(
+                    ancestors.clone().chain(once(greatest_prefix_node)),
+                    child_addr,
+                    child,
+                )?;
 
                 let mut new_branch = BranchNode {
                     children: Default::default(),
