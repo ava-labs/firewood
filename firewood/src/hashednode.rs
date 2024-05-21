@@ -230,10 +230,10 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
         // Add value digest (if any) to hash pre-image
         add_value_to_hasher(&mut hasher, node.value());
 
-        let key: Box<_> = path_prefix
-            .bytes_iter()
-            .chain(node.partial_path().bytes_iter())
-            .collect();
+        // TODO danlaine: Is there a cleaner way to do this with fewer clones?
+        let mut key = path_prefix.clone();
+        key.extend(node.partial_path().0.iter().copied());
+        let key = key.bytes();
 
         // Add key length (in bits) to hash pre-image
         let key_bit_length: u64 = key.len() as u64 * 8;
