@@ -192,7 +192,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     /// node didn't move during update.
     /// `ancestors` returns the ancestors of the updated node, from the root
     /// up to and including the updated node's parent.
-    pub fn fix_ancestors<A: DoubleEndedIterator<Item = PathIterItem>>(
+    pub fn fix_ancestors<'a, A: DoubleEndedIterator<Item = &'a PathIterItem>>(
         &mut self,
         mut ancestors: A,
         old_addr: LinearAddress,
@@ -257,7 +257,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     /// it doesn't fit in its current location. `ancestors` contains the nodes
     /// from the root up to an including `node`'s parent. Returns the new address
     /// of `node`, which may be the same as `old_address`.
-    pub fn update_node<A: DoubleEndedIterator<Item = PathIterItem>>(
+    pub fn update_node<'a, A: DoubleEndedIterator<Item = &'a PathIterItem>>(
         &mut self,
         ancestors: A,
         old_address: LinearAddress,
