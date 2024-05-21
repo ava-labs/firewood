@@ -7,11 +7,15 @@ use std::io::Error;
 use std::iter::once;
 use std::sync::{Arc, OnceLock};
 
+use storage::{LinearAddress, NodeStore};
 use storage::{Node, Path, ProposedImmutable};
+use storage::{ReadLinearStore, WriteLinearStore};
 use storage::{TrieHash, UpdateError};
 
-use storage::{LinearAddress, NodeStore};
-use storage::{ReadLinearStore, WriteLinearStore};
+use integer_encoding::VarInt;
+
+const MAX_VARINT_SIZE: usize = 10;
+const BITS_PER_NIBBLE: u64 = 4;
 
 /// A [HashedNodeStore] keeps track of nodes as they change when they are backed by a LinearStore.
 /// This defers the writes of those nodes until all the changes are made to the trie as part of a
@@ -198,45 +202,84 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
     // assumes all the children of a branch have their hashes filled in
     fn hash_internal(&self, node: &Node, path_prefix: &Path) -> TrieHash {
         let mut hasher = Sha256::new();
+
+        // Add children to hash pre-image
         match *node {
             Node::Branch(ref branch) => {
-                // collect the full key
-                let key: Box<_> = path_prefix
-                    .bytes_iter()
-                    .chain(branch.partial_path.bytes_iter())
-                    .collect();
-                hasher.update(key);
-
-                // collect the value
-                if let Some(value) = &branch.value {
-                    hasher.update(value);
-                }
-
-                // collect the active child hashes (only the active ones)
-                for hash in branch
-                    .children
+                let child_iter = branch
+                    .child_hashes
                     .iter()
-                    .zip(branch.child_hashes.iter())
-                    .filter_map(|(addr, hash)| addr.map(|_| hash))
-                {
+                    .enumerate()
+                    .filter(|hash| **hash.1 != Default::default());
+
+                let num_children = child_iter.clone().count() as u64;
+                add_varint_to_hasher(&mut hasher, num_children);
+
+                for (index, hash) in child_iter {
                     debug_assert_ne!(**hash, Default::default());
-                    hasher.update(**hash)
+                    add_varint_to_hasher(&mut hasher, index as u64);
+                    hasher.update(hash);
                 }
             }
-            Node::Leaf(ref leaf) => {
-                // collect and hash the key
-                let key: Box<_> = path_prefix
-                    .bytes_iter()
-                    .chain(leaf.partial_path.bytes_iter())
-                    .collect();
-                hasher.update(key);
-
-                // collect and hash the value
-                hasher.update(&leaf.value);
+            Node::Leaf(_) => {
+                let num_children: u64 = 0;
+                add_varint_to_hasher(&mut hasher, num_children);
             }
         }
+
+        // Add value digest (if any) to hash pre-image
+        add_value_to_hasher(&mut hasher, node.value());
+
+        let mut key_nibbles_iter = path_prefix
+            .iter()
+            .chain(node.partial_path().iter())
+            .copied();
+
+        // Add key length (in bits) to hash pre-image
+        let key_bit_len = BITS_PER_NIBBLE * key_nibbles_iter.clone().count() as u64;
+        add_varint_to_hasher(&mut hasher, key_bit_len);
+
+        // Add key to hash pre-image
+        while let Some(high_nibble) = key_nibbles_iter.next() {
+            let low_nibble = key_nibbles_iter.next().unwrap_or(0);
+            let byte = (high_nibble << 4) | low_nibble;
+            hasher.update([byte]);
+        }
+
         hasher.finalize().into()
     }
+}
+
+fn add_value_to_hasher<T: AsRef<[u8]>>(hasher: &mut Sha256, value: Option<T>) {
+    let Some(value) = value else {
+        let value_exists: u64 = 0;
+        add_varint_to_hasher(hasher, value_exists);
+        return;
+    };
+
+    let value_exists: u64 = 1;
+    add_varint_to_hasher(hasher, value_exists);
+
+    let value = value.as_ref();
+
+    if value.len() >= 32 {
+        let value_hash = Sha256::digest(value);
+        add_varint_to_hasher(hasher, value_hash.len() as u64);
+        hasher.update(value_hash);
+    } else {
+        add_varint_to_hasher(hasher, value.len() as u64);
+        hasher.update(value);
+    };
+}
+
+/// Encodes `value` as a varint and writes it to `hasher`.
+fn add_varint_to_hasher(hasher: &mut Sha256, value: u64) {
+    let mut buf = [0u8; MAX_VARINT_SIZE];
+    let len = value.encode_var(&mut buf);
+    hasher.update(
+        buf.get(..len)
+            .expect("length is always less than MAX_VARINT_SIZE"),
+    );
 }
 
 #[cfg(test)]

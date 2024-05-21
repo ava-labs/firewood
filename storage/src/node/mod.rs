@@ -49,4 +49,13 @@ impl Node {
             }),
         }
     }
+
+    /// Returns Some(value) inside the node, or None if the node is a branch
+    /// with no value.
+    pub fn value(&self) -> Option<&[u8]> {
+        match self {
+            Node::Branch(b) => b.value.as_deref(),
+            Node::Leaf(l) => Some(&l.value),
+        }
+    }
 }
