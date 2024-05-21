@@ -14,6 +14,8 @@ use storage::{TrieHash, UpdateError};
 
 use integer_encoding::VarInt;
 
+const MAX_VARINT_SIZE: usize = 10;
+
 /// A [HashedNodeStore] keeps track of nodes as they change when they are backed by a LinearStore.
 /// This defers the writes of those nodes until all the changes are made to the trie as part of a
 /// batch. It also supports a `freeze` method which consumes a [WriteLinearStore] backed [HashedNodeStore],
@@ -212,18 +214,17 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                     .collect();
 
                 let num_children = children.len() as u64;
-                hasher.update(num_children.encode_var_vec());
+                add_varint_to_hasher(&mut hasher, num_children);
 
                 for (index, hash) in children {
-                    let nibble = index as u8;
                     debug_assert_ne!(**hash, Default::default());
-                    hasher.update(nibble.encode_var_vec());
+                    add_varint_to_hasher(&mut hasher, index as u64);
                     hasher.update(hash);
                 }
             }
             Node::Leaf(_) => {
                 let num_children: u64 = 0;
-                hasher.update(num_children.encode_var_vec());
+                add_varint_to_hasher(&mut hasher, num_children);
             }
         }
 
@@ -237,7 +238,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
 
         // Add key length (in bits) to hash pre-image
         let key_bit_length: u64 = key.len() as u64 * 8;
-        hasher.update(key_bit_length.encode_var_vec());
+        add_varint_to_hasher(&mut hasher, key_bit_length);
 
         // Add key to hash pre-image
         hasher.update(key);
@@ -249,24 +250,30 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
 fn add_value_to_hasher<T: AsRef<[u8]>>(hasher: &mut Sha256, value: Option<T>) {
     let Some(value) = value else {
         let value_exists: u64 = 0;
-        hasher.update(value_exists.encode_var_vec());
+        add_varint_to_hasher(hasher, value_exists);
         return;
     };
 
     let value = value.as_ref();
 
     let value_exists: u64 = 1;
-    hasher.update(value_exists.encode_var_vec());
+    add_varint_to_hasher(hasher, value_exists);
 
     if value.len() >= 32 {
         let value_hash = Sha256::digest(value);
-        hasher.update(value_hash.len().encode_var_vec());
+        add_varint_to_hasher(hasher, value_hash.len() as u64);
         hasher.update(value_hash);
     } else {
-        let value_len = value.len() as u64;
-        hasher.update(value_len.encode_var_vec());
+        add_varint_to_hasher(hasher, value.len() as u64);
         hasher.update(value);
     };
+}
+
+/// Encodes `value` as a varint and writes it to `hasher`.
+fn add_varint_to_hasher(hasher: &mut Sha256, value: u64) {
+    let mut buf = [0u8; MAX_VARINT_SIZE];
+    let len = value.encode_var(&mut buf);
+    hasher.update(&buf[..len]);
 }
 
 #[cfg(test)]
