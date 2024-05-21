@@ -522,6 +522,8 @@ impl<T: WriteLinearStore> Merkle<T> {
                 // Note that child may be a leaf or a branch node.
                 let child = self.read_node(child_addr)?;
 
+                self.delete_node(child_addr)?;
+
                 let path_overlap = PrefixOverlap::from(child.partial_path(), remaining_path);
 
                 let (&new_branch_to_child_index, child_partial_path) = path_overlap
