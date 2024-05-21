@@ -523,8 +523,6 @@ impl<T: WriteLinearStore> Merkle<T> {
                 // Note that child may be a leaf or a branch node.
                 let child = self.read_node(child_addr)?;
 
-                self.delete_node(child_addr)?;
-
                 let path_overlap = PrefixOverlap::from(child.partial_path(), remaining_path);
 
                 let (&new_branch_to_child_index, child_partial_path) = path_overlap
@@ -593,10 +591,11 @@ impl<T: WriteLinearStore> Merkle<T> {
     pub fn remove(&mut self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
         let path = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
+        let ancestors =
+            PathIterator::new(self, key)?.collect::<Result<Vec<PathIterItem>, MerkleError>>()?;
+
         // The path from the root down to and including the node with the greatest prefix of `path`.
-        let mut ancestors = PathIterator::new(self, key)?
-            .collect::<Result<Vec<PathIterItem>, MerkleError>>()?
-            .into_iter();
+        let mut ancestors = ancestors.iter();
 
         let Some(greatest_prefix_node) = ancestors.next_back() else {
             // There is no node which is a prefix of `path`.
