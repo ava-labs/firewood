@@ -252,26 +252,33 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
 
 fn add_value_to_hasher<T: AsRef<[u8]>>(hasher: &mut Sha256, value: Option<T>) {
     let Some(value) = value else {
-        let value_exists: u64 = 0;
-        add_varint_to_hasher(hasher, value_exists);
+        let value_exists: u8 = 0;
+        hasher.update([value_exists]);
         return;
     };
 
-    let value_exists: u64 = 1;
-    add_varint_to_hasher(hasher, value_exists);
+    let value_exists: u8 = 1;
+    hasher.update([value_exists]);
 
     let value = value.as_ref();
 
     if value.len() >= 32 {
         let value_hash = Sha256::digest(value);
-        add_varint_to_hasher(hasher, value_hash.len() as u64);
-        hasher.update(value_hash);
+        add_len_and_value_to_hasher(hasher, &value_hash);
     } else {
-        add_varint_to_hasher(hasher, value.len() as u64);
-        hasher.update(value);
+        add_len_and_value_to_hasher(hasher, value);
     };
 }
 
+#[inline]
+/// Writes the length of `value` and `value` to `hasher`.
+fn add_len_and_value_to_hasher(hasher: &mut Sha256, value: &[u8]) {
+    let value_len = value.len();
+    hasher.update([value_len as u8]);
+    hasher.update(value);
+}
+
+#[inline]
 /// Encodes `value` as a varint and writes it to `hasher`.
 fn add_varint_to_hasher(hasher: &mut Sha256, value: u64) {
     let mut buf = [0u8; MAX_VARINT_SIZE];
