@@ -261,7 +261,7 @@ fn add_value_to_hasher<T: AsRef<[u8]>>(hasher: &mut Sha256, value: Option<T>) {
     if value.len() >= 32 {
         let value_hash = Sha256::digest(value);
         hasher.update(value_hash.len().encode_var_vec());
-        hasher.update(&value_hash);
+        hasher.update(value_hash);
     } else {
         let value_len = value.len() as u64;
         hasher.update(value_len.encode_var_vec());
