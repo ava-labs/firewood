@@ -197,12 +197,40 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     }
 }
 
+trait HasUpdate {
+    fn update<T: AsRef<[u8]>>(&mut self, data: T);
+}
+
+impl HasUpdate for Sha256 {
+    fn update<T: AsRef<[u8]>>(&mut self, data: T) {
+        sha2::Digest::update(self, data)
+    }
+}
+
+impl HasUpdate for Vec<u8> {
+    fn update<T: AsRef<[u8]>>(&mut self, data: T) {
+        self.extend(data.as_ref());
+    }
+}
+
 impl<T: ReadLinearStore> HashedNodeStore<T> {
+    /// Returns the serialized representation of `node` used as the pre-image
+    /// when hashing the node. The node is at the given `path_prefix`.
+    pub fn serialize_for_hashing(&self, node: &Node, path_prefix: &Path) -> Vec<u8> {
+        let mut hasher = vec![];
+        self.hash_internal_with(node, path_prefix, &mut hasher);
+        hasher
+    }
+
     // hash a node
     // assumes all the children of a branch have their hashes filled in
     fn hash_internal(&self, node: &Node, path_prefix: &Path) -> TrieHash {
-        let mut hasher = Sha256::new();
+        let mut hasher: Sha256 = Sha256::new();
+        self.hash_internal_with(node, path_prefix, &mut hasher);
+        hasher.finalize().into()
+    }
 
+    fn hash_internal_with<H: HasUpdate>(&self, node: &Node, path_prefix: &Path, hasher: &mut H) {
         // Add children to hash pre-image
         match *node {
             Node::Branch(ref branch) => {
@@ -213,22 +241,22 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                     .filter(|hash| **hash.1 != Default::default());
 
                 let num_children = child_iter.clone().count() as u64;
-                add_varint_to_hasher(&mut hasher, num_children);
+                add_varint_to_hasher(hasher, num_children);
 
                 for (index, hash) in child_iter {
                     debug_assert_ne!(**hash, Default::default());
-                    add_varint_to_hasher(&mut hasher, index as u64);
+                    add_varint_to_hasher(hasher, index as u64);
                     hasher.update(hash);
                 }
             }
             Node::Leaf(_) => {
                 let num_children: u64 = 0;
-                add_varint_to_hasher(&mut hasher, num_children);
+                add_varint_to_hasher(hasher, num_children);
             }
         }
 
         // Add value digest (if any) to hash pre-image
-        add_value_to_hasher(&mut hasher, node.value());
+        add_value_to_hasher(hasher, node.value());
 
         let mut key_nibbles_iter = path_prefix
             .iter()
@@ -237,7 +265,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
 
         // Add key length (in bits) to hash pre-image
         let key_bit_len = BITS_PER_NIBBLE * key_nibbles_iter.clone().count() as u64;
-        add_varint_to_hasher(&mut hasher, key_bit_len);
+        add_varint_to_hasher(hasher, key_bit_len);
 
         // Add key to hash pre-image
         while let Some(high_nibble) = key_nibbles_iter.next() {
@@ -245,12 +273,10 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
             let byte = (high_nibble << 4) | low_nibble;
             hasher.update([byte]);
         }
-
-        hasher.finalize().into()
     }
 }
 
-fn add_value_to_hasher<T: AsRef<[u8]>>(hasher: &mut Sha256, value: Option<T>) {
+fn add_value_to_hasher<H: HasUpdate, T: AsRef<[u8]>>(hasher: &mut H, value: Option<T>) {
     let Some(value) = value else {
         let value_exists: u8 = 0;
         hasher.update([value_exists]);
@@ -272,7 +298,7 @@ fn add_value_to_hasher<T: AsRef<[u8]>>(hasher: &mut Sha256, value: Option<T>) {
 
 #[inline]
 /// Writes the length of `value` and `value` to `hasher`.
-fn add_len_and_value_to_hasher(hasher: &mut Sha256, value: &[u8]) {
+fn add_len_and_value_to_hasher<H: HasUpdate>(hasher: &mut H, value: &[u8]) {
     let value_len = value.len();
     hasher.update([value_len as u8]);
     hasher.update(value);
@@ -280,7 +306,7 @@ fn add_len_and_value_to_hasher(hasher: &mut Sha256, value: &[u8]) {
 
 #[inline]
 /// Encodes `value` as a varint and writes it to `hasher`.
-fn add_varint_to_hasher(hasher: &mut Sha256, value: u64) {
+fn add_varint_to_hasher<H: HasUpdate>(hasher: &mut H, value: u64) {
     let mut buf = [0u8; MAX_VARINT_SIZE];
     let len = value.encode_var(&mut buf);
     hasher.update(
