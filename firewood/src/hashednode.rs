@@ -15,6 +15,7 @@ use storage::{TrieHash, UpdateError};
 use integer_encoding::VarInt;
 
 const MAX_VARINT_SIZE: usize = 10;
+const BITS_PER_NIBBLE: u64 = 4;
 
 /// A [HashedNodeStore] keeps track of nodes as they change when they are backed by a LinearStore.
 /// This defers the writes of those nodes until all the changes are made to the trie as part of a
@@ -229,17 +230,21 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
         // Add value digest (if any) to hash pre-image
         add_value_to_hasher(&mut hasher, node.value());
 
-        // TODO danlaine: Is there a cleaner way to do this with fewer clones?
-        let mut key = path_prefix.clone();
-        key.extend(node.partial_path().0.iter().copied());
-        let key = key.bytes();
+        let mut key_nibbles_iter = path_prefix
+            .iter()
+            .chain(node.partial_path().iter())
+            .copied();
 
         // Add key length (in bits) to hash pre-image
-        let key_bit_length: u64 = key.len() as u64 * 8;
-        add_varint_to_hasher(&mut hasher, key_bit_length);
+        let key_bit_len = BITS_PER_NIBBLE * key_nibbles_iter.clone().count() as u64;
+        add_varint_to_hasher(&mut hasher, key_bit_len);
 
         // Add key to hash pre-image
-        hasher.update(key);
+        while let Some(high_nibble) = key_nibbles_iter.next() {
+            let low_nibble = key_nibbles_iter.next().unwrap_or(0);
+            let byte = (high_nibble << 4) | low_nibble;
+            hasher.update([byte]);
+        }
 
         hasher.finalize().into()
     }
@@ -252,10 +257,10 @@ fn add_value_to_hasher<T: AsRef<[u8]>>(hasher: &mut Sha256, value: Option<T>) {
         return;
     };
 
-    let value = value.as_ref();
-
     let value_exists: u64 = 1;
     add_varint_to_hasher(hasher, value_exists);
+
+    let value = value.as_ref();
 
     if value.len() >= 32 {
         let value_hash = Sha256::digest(value);
