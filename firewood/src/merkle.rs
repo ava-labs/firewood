@@ -588,13 +588,19 @@ impl<T: WriteLinearStore> Merkle<T> {
         }
     }
 
+    /// Removes the value associated with the given `key`.
+    /// Returns the value that was removed, if any.
+    /// Otherwise returns `None`.
     pub fn remove(&mut self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
         let path = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
         let ancestors =
             PathIterator::new(self, key)?.collect::<Result<Vec<PathIterItem>, MerkleError>>()?;
 
-        // The path from the root down to and including the node with the greatest prefix of `path`.
+        // If the last element of ancestors doesn't contain the key/value pair we are looking for,
+        // then we can return early without making any changes
+
+        // The path from the root down to and including the node with the greatest prefix of `path`
         let mut ancestors = ancestors.iter();
 
         let Some(greatest_prefix_node) = ancestors.next_back() else {
@@ -618,7 +624,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     return Ok(None);
                 };
 
-                // See if the branch has more than 1 child.
+                // We know the key exists, so see if the branch has more than 1 child.
                 let mut branch_children = branch
                     .children
                     .iter()
@@ -654,7 +660,9 @@ impl<T: WriteLinearStore> Merkle<T> {
                 //     branch            combined
                 //       |
                 //     child
+                //
                 // where combined has `child`'s value.
+                // Note that child/combined may be a leaf or a branch.
 
                 let combined = {
                     let child = self.read_node(child_addr)?;
@@ -696,12 +704,13 @@ impl<T: WriteLinearStore> Merkle<T> {
                         .count();
 
                     if num_children > 1 {
+                        #[rustfmt::skip]
                         // Update `ancestor` to remove its child.
-                        //    ...                     ...
-                        //     |            -->        |
-                        //  ancestor       ancestor
-                        //  /      \       /      \
-                        // ...    child  ...    child
+                        //    ...                 ...
+                        //     |          -->      |
+                        //  ancestor            ancestor
+                        //  /      \               |
+                        // ...    child           ...
                         let mut ancestor = BranchNode {
                             children: ancestor.children,
                             partial_path: ancestor.partial_path.clone(),
@@ -985,6 +994,8 @@ mod tests {
         assert_eq!(removed_val, Some(Box::from(val3)));
         assert!(merkle.get(&key3).unwrap().is_none());
         assert!(merkle.remove(&key3).unwrap().is_none());
+
+        assert!(merkle.root_address().is_none());
     }
 
     #[test]
@@ -1015,6 +1026,7 @@ mod tests {
             let got = merkle.get(&key).unwrap();
             assert!(got.is_none());
         }
+        assert!(merkle.root_address().is_none());
     }
 
     //     #[test]
