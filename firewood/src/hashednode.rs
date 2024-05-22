@@ -309,10 +309,10 @@ impl HasUpdate for Vec<u8> {
 impl<T: ReadLinearStore> HashedNodeStore<T> {
     /// Returns the serialized representation of `node` used as the pre-image
     /// when hashing the node. The node is at the given `path_prefix`.
-    pub fn serialize_for_hashing(&self, node: &Node, path_prefix: &Path) -> Vec<u8> {
+    pub fn serialize_for_hashing(&self, node: &Node, path_prefix: &Path) -> Box<[u8]> {
         let mut hasher = vec![];
         self.hash_internal_with(node, path_prefix, &mut hasher);
-        hasher
+        hasher.into_boxed_slice()
     }
 
     // hash a node
