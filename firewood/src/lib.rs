@@ -190,4 +190,4 @@ pub mod stream;
 pub mod logger;
 pub mod v2;
 
-mod hashednode;
+pub mod hashednode;
