@@ -10,9 +10,9 @@ use std::collections::HashSet;
 use std::future::ready;
 use std::io::Write;
 use std::iter::{empty, once};
-use storage::TrieHash;
 use storage::{BranchNode, LeafNode, Node};
 use storage::{LinearAddress, WriteLinearStore};
+use storage::{MemStore, TrieHash};
 use storage::{NibblesIterator, Path};
 use storage::{ProposedImmutable, ReadLinearStore};
 
@@ -108,35 +108,8 @@ impl<T: ReadLinearStore> Merkle<T> {
         self.0.root_hash()
     }
 
-    /// Constructs a merkle proof for key. The result contains all encoded nodes
-    /// on the path to the value at key. The value itself is also included in the
-    /// last node and can be retrieved by verifying the proof.
-    ///
-    /// If the trie does not contain a value for key, the returned proof contains
-    /// all nodes of the longest existing prefix of the key, ending with the node
-    /// that proves the absence of the key (at least the root node).
     pub fn prove(&self, _key: &[u8]) -> Result<Proof, MerkleError> {
         todo!()
-        // let mut proofs = HashMap::new();
-        // if root_addr.is_null() {
-        //     return Ok(Proof(proofs));
-        // }
-
-        // let sentinel_node = self.get_node(root_addr)?;
-
-        // let path_iter = self.path_iter(sentinel_node, key.as_ref());
-
-        // let nodes = path_iter
-        //     .map(|result| result.map(|(_, node)| node))
-        //     .collect::<Result<Vec<NodeObjRef>, MerkleError>>()?;
-
-        // // Get the hashes of the nodes.
-        // for node in nodes.into_iter() {
-        //     let encoded = node.get_encoded(&self.store);
-        //     let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(encoded).into();
-        //     proofs.insert(hash, encoded.to_vec());
-        // }
-        // Ok(Proof(proofs))
     }
 
     pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
@@ -606,6 +579,10 @@ impl<T: WriteLinearStore> Merkle<T> {
     }
 }
 
+pub(super) fn create_in_memory_merkle() -> Merkle<MemStore> {
+    Merkle::new(HashedNodeStore::initialize(MemStore::new(vec![])).unwrap())
+}
+
 /// Returns an iterator where each element is the result of combining
 /// 2 nibbles of `nibbles`. If `nibbles` is odd length, panics in
 /// debug mode and drops the final nibble in release mode.
@@ -656,10 +633,6 @@ mod tests {
     fn insert_one() {
         let mut merkle = create_in_memory_merkle();
         merkle.insert(b"abc", Box::new([])).unwrap()
-    }
-
-    fn create_in_memory_merkle() -> Merkle<MemStore> {
-        Merkle::new(HashedNodeStore::initialize(MemStore::new(vec![])).unwrap())
     }
 
     // use super::*;

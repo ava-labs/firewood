@@ -1,9 +1,9 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::v2::api::HashKey;
+use crate::{merkle::create_in_memory_merkle, v2::api::HashKey};
 use nix::errno::Errno;
-use storage::Node;
+use storage::{BranchNode, TrieHash};
 use thiserror::Error;
 
 use crate::{db::DbError, merkle::MerkleError};
@@ -62,15 +62,16 @@ impl From<DbError> for ProofError {
     }
 }
 
-/// A proof that a given key-value pair either exists or does not exist in a trie.
-///
-/// The generic N represents the storage for the node
 #[derive(Clone, Debug)]
-pub struct Proof {
-    pub key: Box<[u8]>,
-    pub value: Option<Box<[u8]>>,
-    pub path: Box<[Node]>,
+pub struct ProofNode {
+    pub key: Box<[u8]>,                  // TODO danlaine: should this be generic?
+    pub value_digest: Option<Box<[u8]>>, // TODO danlaine: should this be generic?
+    pub child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN],
 }
+
+/// A proof that a given key-value pair either exists or does not exist in a trie.
+#[derive(Clone, Debug)]
+pub struct Proof(pub Box<[ProofNode]>);
 
 impl Proof {
     /// verify_proof checks merkle proofs. The given proof must contain the value for
@@ -83,6 +84,12 @@ impl Proof {
         _key: K,
         _root_hash: HashKey,
     ) -> Result<Option<Vec<u8>>, ProofError> {
+        // TODO danlaine: Verify the proof is well-formed
+
+        let mut _in_memory_merkle = create_in_memory_merkle();
+
+        // TODO insert key-value pairs
+
         todo!()
     }
 
