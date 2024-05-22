@@ -241,11 +241,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
 
         let mut updated_parent = parent.clone();
 
-        *updated_parent.child_mut(child_index as u8) = Some(new_addr);
-        *updated_parent
-            .child_hashes
-            .get_mut(child_index)
-            .expect("old_addr must be a child") = Default::default();
+        updated_parent.update_child_address(child_index, new_addr);
 
         let updated_parent = Node::Branch(updated_parent);
         self.update_node(ancestors, old_parent_address, updated_parent)?;
