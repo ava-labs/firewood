@@ -2,20 +2,19 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::hashednode::HashedNodeStore;
-use crate::nibbles::Nibbles;
 use crate::proof::{Proof, ProofError};
 use crate::stream::{MerkleKeyValueStream, PathIterItem, PathIterator};
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
-use sha3::{Digest, Keccak256};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::future::ready;
 use std::io::Write;
-use storage::ReadLinearStore;
 use storage::TrieHash;
 use storage::{BranchNode, LeafNode, Node};
 use storage::{LinearAddress, UpdateError, WriteLinearStore};
-use storage::{Path, ProposedImmutable};
+use storage::{NibblesIterator, Path};
+use storage::{ProposedImmutable, ReadLinearStore};
 
 use std::ops::{Deref, DerefMut};
 use thiserror::Error;
@@ -131,14 +130,14 @@ impl<T: ReadLinearStore> Merkle<T> {
         let path_iter = PathIterator::new(self, key)?;
         for path in path_iter {
             let path = path?;
-            let hashable = self.0.hashable_contents(
+            let serialized_node = self.0.serialize_for_hashing(
                 &path.node,
                 &Path::from_nibbles_iterator(path.key_nibbles.iter().copied()),
             );
-            let mut hasher = Keccak256::new();
-            hasher.update(&hashable);
+            let mut hasher: Sha256 = Sha256::new();
+            hasher.update(&serialized_node);
             let hash = hasher.finalize().into();
-            proofs.insert(hash, hashable);
+            proofs.insert(hash, serialized_node);
         }
         Ok(Proof(proofs))
     }
@@ -156,7 +155,7 @@ impl<T: ReadLinearStore> Merkle<T> {
             .key_nibbles
             .iter()
             .copied()
-            .eq(Nibbles::new(key).into_iter())
+            .eq(NibblesIterator::new(key))
         {
             match &*last_node.node {
                 Node::Branch(branch) => Ok(branch.value.clone()),
@@ -356,8 +355,8 @@ impl<T: WriteLinearStore> Merkle<T> {
         key: &[u8],
         value: Box<[u8]>,
     ) -> Result<Vec<LinearAddress>, MerkleError> {
-        let key_nibbles = Nibbles::new(key); // how to get a &[u8] from this where each byte is a nibble?
-        let key_as_path = Path::from_nibbles_iterator(key_nibbles.into_iter()); // .as_ref() &[u8]
+        let key_nibbles = NibblesIterator::new(key);
+        let key_as_path = Path::from_nibbles_iterator(key_nibbles.into_iter());
 
         let Some(old_root_addr) = self.root_address() else {
             // The trie is empty. Create a new leaf node with `value` and set
@@ -469,7 +468,7 @@ impl<T: WriteLinearStore> Merkle<T> {
         let hash_invalidation_addresses: Vec<_> =
             traversal_path.iter().map(|item| item.addr).collect();
 
-        if last_node.key_nibbles.iter().eq(key_as_path.as_ref()) {
+        if last_node.key_nibbles.iter().eq(key_as_path.iter()) {
             // The last node in the traversal path is at `key`.
             // We're replacing the value in an existing key-value pair.
             match &*last_node.node {
@@ -623,9 +622,7 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                             let mut new_branch = BranchNode {
                                 children: Default::default(),
-                                partial_path: Path::from_nibbles_iterator(
-                                    prefix_overlap.shared.iter().copied(),
-                                ),
+                                partial_path: Path::from(prefix_overlap.shared),
                                 value: None,
                                 child_hashes: Default::default(),
                             };
@@ -720,9 +717,7 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                             let mut new_branch = BranchNode {
                                 children: Default::default(),
-                                partial_path: Path::from_nibbles_iterator(
-                                    prefix_overlap.shared.iter().copied(),
-                                ),
+                                partial_path: Path::from(prefix_overlap.shared),
                                 value: None,
                                 child_hashes: Default::default(),
                             };
@@ -930,6 +925,7 @@ mod tests {
     use super::*;
     use rand::{rngs::StdRng, thread_rng, Rng as _, SeedableRng as _};
     use storage::MemStore;
+    use test_case::test_case;
 
     #[test]
     fn insert_one() {
@@ -1503,6 +1499,24 @@ mod tests {
 
         merkle.dump().unwrap();
         Ok(())
+    }
+
+    #[test_case(vec![], "0000000000000000000000000000000000000000000000000000000000000000"; "empty trie")]
+    #[test_case(vec![(&[0],&[0])], "073615413d814b23383fc2c8d8af13abfffcb371b654b98dbf47dd74b1e4d1b9"; "root")]
+    #[test_case(vec![(&[0,1],&[0,1])], "28e67ae4054c8cdf3506567aa43f122224fe65ef1ab3e7b7899f75448a69a6fd"; "root with partial path")]
+    #[test_case(vec![(&[0],&[1;32])], "ba0283637f46fa807280b7d08013710af08dfdc236b9b22f9d66e60592d6c8a3"; "leaf value >= 32 bytes")]
+    #[test_case(vec![(&[0],&[0]),(&[0,1],&[1;32])], "3edbf1fdd345db01e47655bcd0a9a456857c4093188cf35c5c89b8b0fb3de17e"; "branch value >= 32 bytes")]
+    #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1])], "c3bdc20aff5cba30f81ffd7689e94e1dbeece4a08e27f0104262431604cf45c6"; "root with leaf child")]
+    #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1]),(&[0,1,2],&[0,1,2])], "229011c50ad4d5c2f4efe02b8db54f361ad295c4eee2bf76ea4ad1bb92676f97"; "root with branch child")]
+    #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1]),(&[0,8],&[0,8]),(&[0,1,2],&[0,1,2])], "a683b4881cb540b969f885f538ba5904699d480152f350659475a962d6240ef9"; "root with branch child and leaf child")]
+    fn test_root_hash_merkledb_compatible(kvs: Vec<(&[u8], &[u8])>, expected_hash: &str) {
+        let mut merkle = merkle_build_test(kvs).unwrap().freeze().unwrap();
+
+        // This hash is from merkledb
+        let expected_hash: [u8; 32] = hex::decode(expected_hash).unwrap().try_into().unwrap();
+
+        let actual_hash = merkle.root_hash().unwrap();
+        assert_eq!(actual_hash, TrieHash::from(expected_hash));
     }
 
     #[test]

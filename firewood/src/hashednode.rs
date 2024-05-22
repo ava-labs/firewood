@@ -1,18 +1,21 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use sha3::digest::core_api::CoreWrapper;
-use sha3::{Digest, Keccak256, Keccak256Core};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::Error;
 use std::iter::once;
 use std::sync::{Arc, OnceLock};
 
+use storage::{LinearAddress, NodeStore};
 use storage::{Node, Path, ProposedImmutable};
+use storage::{ReadLinearStore, WriteLinearStore};
 use storage::{TrieHash, UpdateError};
 
-use storage::{LinearAddress, NodeStore};
-use storage::{ReadLinearStore, WriteLinearStore};
+use integer_encoding::VarInt;
+
+const MAX_VARINT_SIZE: usize = 10;
+const BITS_PER_NIBBLE: u64 = 4;
 
 /// A [HashedNodeStore] keeps track of nodes as they change when they are backed by a LinearStore.
 /// This defers the writes of those nodes until all the changes are made to the trie as part of a
@@ -116,14 +119,16 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
                     .iter()
                     .zip(b.child_hashes.iter_mut())
                     .enumerate()
-                    .filter(|(_, (&addr, &mut ref hash))| {
-                        addr.is_some() && *hash == TrieHash::default()
+                    .filter_map(|(nibble, (&addr, &mut ref mut hash))| {
+                        if *hash == TrieHash::default() {
+                            addr.map(|addr| (nibble, (addr, hash)))
+                        } else {
+                            None
+                        }
                     })
                 {
                     // we found a child that needs hashing, so hash the child and assign it to the right spot in the child_hashes
                     // array
-                    let child_addr =
-                        child_addr.expect("guaranteed to be Some; fixme with fancier rust");
                     let mut child = self.take_node(child_addr)?;
                     let original_length = path_prefix.len();
                     path_prefix
@@ -197,9 +202,9 @@ trait HasUpdate {
     fn update<T: AsRef<[u8]>>(&mut self, data: T);
 }
 
-impl HasUpdate for CoreWrapper<Keccak256Core> {
+impl HasUpdate for Sha256 {
     fn update<T: AsRef<[u8]>>(&mut self, data: T) {
-        sha3::Digest::update(self, data)
+        sha2::Digest::update(self, data)
     }
 }
 
@@ -210,13 +215,9 @@ impl HasUpdate for Vec<u8> {
 }
 
 impl<T: ReadLinearStore> HashedNodeStore<T> {
-    fn hash_internal(&self, node: &Node, path_prefix: &Path) -> TrieHash {
-        let mut hasher = Keccak256::new();
-        self.hash_internal_with(node, path_prefix, &mut hasher);
-        hasher.finalize().into()
-    }
-
-    pub fn hashable_contents(&self, node: &Node, path_prefix: &Path) -> Vec<u8> {
+    /// Returns the serialized representation of `node` used as the pre-image
+    /// when hashing the node. The node is at the given `path_prefix`.
+    pub fn serialize_for_hashing(&self, node: &Node, path_prefix: &Path) -> Vec<u8> {
         let mut hasher = vec![];
         self.hash_internal_with(node, path_prefix, &mut hasher);
         hasher
@@ -224,45 +225,95 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
 
     // hash a node
     // assumes all the children of a branch have their hashes filled in
+    fn hash_internal(&self, node: &Node, path_prefix: &Path) -> TrieHash {
+        let mut hasher: Sha256 = Sha256::new();
+        self.hash_internal_with(node, path_prefix, &mut hasher);
+        hasher.finalize().into()
+    }
+
     fn hash_internal_with<H: HasUpdate>(&self, node: &Node, path_prefix: &Path, hasher: &mut H) {
+        // Add children to hash pre-image
         match *node {
             Node::Branch(ref branch) => {
-                // collect the full key
-                let key: Box<_> = path_prefix
-                    .bytes_iter()
-                    .chain(branch.partial_path.bytes_iter())
-                    .collect();
-                hasher.update(key);
-
-                // collect the value
-                if let Some(value) = &branch.value {
-                    hasher.update(value);
-                }
-
-                // collect the active child hashes (only the active ones)
-                for hash in branch
-                    .children
+                let child_iter = branch
+                    .child_hashes
                     .iter()
-                    .zip(branch.child_hashes.iter())
-                    .filter_map(|(addr, hash)| addr.map(|_| hash))
-                {
+                    .enumerate()
+                    .filter(|hash| **hash.1 != Default::default());
+
+                let num_children = child_iter.clone().count() as u64;
+                add_varint_to_hasher(hasher, num_children);
+
+                for (index, hash) in child_iter {
                     debug_assert_ne!(**hash, Default::default());
-                    hasher.update(**hash)
+                    add_varint_to_hasher(hasher, index as u64);
+                    hasher.update(hash);
                 }
             }
-            Node::Leaf(ref leaf) => {
-                // collect and hash the key
-                let key: Box<_> = path_prefix
-                    .bytes_iter()
-                    .chain(leaf.partial_path.bytes_iter())
-                    .collect();
-                hasher.update(key);
-
-                // collect and hash the value
-                hasher.update(&leaf.value);
+            Node::Leaf(_) => {
+                let num_children: u64 = 0;
+                add_varint_to_hasher(hasher, num_children);
             }
         }
+
+        // Add value digest (if any) to hash pre-image
+        add_value_to_hasher(hasher, node.value());
+
+        let mut key_nibbles_iter = path_prefix
+            .iter()
+            .chain(node.partial_path().iter())
+            .copied();
+
+        // Add key length (in bits) to hash pre-image
+        let key_bit_len = BITS_PER_NIBBLE * key_nibbles_iter.clone().count() as u64;
+        add_varint_to_hasher(hasher, key_bit_len);
+
+        // Add key to hash pre-image
+        while let Some(high_nibble) = key_nibbles_iter.next() {
+            let low_nibble = key_nibbles_iter.next().unwrap_or(0);
+            let byte = (high_nibble << 4) | low_nibble;
+            hasher.update([byte]);
+        }
     }
+}
+
+fn add_value_to_hasher<H: HasUpdate, T: AsRef<[u8]>>(hasher: &mut H, value: Option<T>) {
+    let Some(value) = value else {
+        let value_exists: u8 = 0;
+        hasher.update([value_exists]);
+        return;
+    };
+
+    let value_exists: u8 = 1;
+    hasher.update([value_exists]);
+
+    let value = value.as_ref();
+
+    if value.len() >= 32 {
+        let value_hash = Sha256::digest(value);
+        add_len_and_value_to_hasher(hasher, &value_hash);
+    } else {
+        add_len_and_value_to_hasher(hasher, value);
+    };
+}
+
+#[inline]
+/// Writes the length of `value` and `value` to `hasher`.
+fn add_len_and_value_to_hasher<H: HasUpdate>(hasher: &mut H, value: &[u8]) {
+    let value_len = value.len();
+    hasher.update([value_len as u8]);
+    hasher.update(value);
+}
+
+#[inline]
+/// Encodes `value` as a varint and writes it to `hasher`.
+fn add_varint_to_hasher<H: HasUpdate>(hasher: &mut H, value: u64) {
+    let mut buf = [0u8; MAX_VARINT_SIZE];
+    let len = value.encode_var(&mut buf);
+    hasher.update(
+        buf.get(..len)
+            .expect("length is always less than MAX_VARINT_SIZE"),
+    );
 }
 
 #[cfg(test)]
