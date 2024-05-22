@@ -108,7 +108,7 @@ fn bench_merkle<const N: usize>(criterion: &mut Criterion) {
         });
 }
 
-fn bench_db<const N: usize>(criterion: &mut Criterion) {
+fn _bench_db<const N: usize>(criterion: &mut Criterion) {
     const KEY_LEN: usize = 4;
     let mut rng = StdRng::seed_from_u64(1234);
 
@@ -155,7 +155,7 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = Criterion::default().with_profiler(FlamegraphProfiler::Init(100));
-    targets = /*bench_trie_hash, TODO danlaine use or remove*/ bench_merkle::<3>, bench_db::<100>
+    targets = /*bench_trie_hash,  bench_db::<100> TODO danlaine use or remove*/ bench_merkle::<3>,
 }
 
 criterion_main!(benches);
