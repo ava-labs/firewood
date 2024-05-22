@@ -6,11 +6,14 @@
 use criterion::{criterion_group, criterion_main, profiler::Profiler, BatchSize, Criterion};
 use firewood::{
     db::{BatchOp, DbConfig},
+    hashednode::HashedNodeStore,
+    merkle::Merkle,
     v2::api::{Db, Proposal},
 };
 use pprof::ProfilerGuard;
 use rand::{distributions::Alphanumeric, rngs::StdRng, Rng, SeedableRng};
 use std::{fs::File, iter::repeat_with, os::raw::c_int, path::Path};
+use storage::MemStore;
 
 // To enable flamegraph output
 // cargo bench --bench shale-bench -- --profile-time=N
@@ -70,64 +73,39 @@ impl Profiler for FlamegraphProfiler {
 //         });
 // }
 
-fn bench_merkle<const N: usize>(_criterion: &mut Criterion) {
-    todo!();
+#[allow(clippy::unwrap_used)]
+fn bench_merkle<const N: usize>(criterion: &mut Criterion) {
+    const KEY_LEN: usize = 32;
+    let mut rng = StdRng::seed_from_u64(1234);
 
-    // TODO danlaine: uncomment or remove
-    // const TEST_MEM_SIZE: u64 = 20_000_000;
-    // const KEY_LEN: usize = 4;
-    // let mut rng = StdRng::seed_from_u64(1234);
+    criterion
+        .benchmark_group("Merkle")
+        .sample_size(30)
+        .bench_function("insert", |b| {
+            b.iter_batched(
+                || {
+                    let store = MemStore::new(vec![]);
+                    let hns = HashedNodeStore::initialize(store).unwrap();
+                    let merkle = Merkle::new(hns);
+                    let keys: Vec<Box<[u8]>> = repeat_with(|| {
+                        (&mut rng)
+                            .sample_iter(&Alphanumeric)
+                            .take(KEY_LEN)
+                            .collect()
+                    })
+                    .take(N)
+                    .collect();
 
-    // criterion
-    //     .benchmark_group("Merkle")
-    //     .sample_size(30)
-    //     .bench_function("insert", |b| {
-    //         b.iter_batched(
-    //             || {
-    //                 let merkle_payload_header = DiskAddress::from(0);
-
-    //                 #[allow(clippy::unwrap_used)]
-    //                 let merkle_payload_header_ref = StoredView::addr_to_obj(
-    //                     &InMemLinearStore::new(2 * ChunkHeader::SERIALIZED_LEN, 9),
-    //                     merkle_payload_header,
-    //                     ChunkHeader::SERIALIZED_LEN,
-    //                 )
-    //                 .unwrap();
-
-    //                 #[allow(clippy::unwrap_used)]
-    //                 let store = Store::new(
-    //                     InMemLinearStore::new(TEST_MEM_SIZE, 0),
-    //                     InMemLinearStore::new(TEST_MEM_SIZE, 1),
-    //                     merkle_payload_header_ref,
-    //                     ObjCache::new(1 << 20),
-    //                     4096,
-    //                     4096,
-    //                 )
-    //                 .unwrap();
-
-    //                 let merkle = MerkleWithEncoder::new(store);
-    //                 #[allow(clippy::unwrap_used)]
-    //                 let sentinel_addr = merkle.init_sentinel().unwrap();
-
-    //                 let keys: Vec<Vec<u8>> = repeat_with(|| {
-    //                     (&mut rng)
-    //                         .sample_iter(&Alphanumeric)
-    //                         .take(KEY_LEN)
-    //                         .collect()
-    //                 })
-    //                 .take(N)
-    //                 .collect();
-
-    //                 (merkle, sentinel_addr, keys)
-    //             },
-    //             #[allow(clippy::unwrap_used)]
-    //             |(mut merkle, sentinel_addr, keys)| {
-    //                 keys.into_iter()
-    //                     .for_each(|key| merkle.insert(key, vec![b'v'], sentinel_addr).unwrap())
-    //             },
-    //             BatchSize::SmallInput,
-    //         );
-    //     });
+                    (merkle, keys)
+                },
+                |(mut merkle, keys)| {
+                    keys.into_iter()
+                        .for_each(|key| merkle.insert(&key, Box::from([b'v'])).unwrap());
+                    merkle.freeze().unwrap()
+                },
+                BatchSize::SmallInput,
+            );
+        });
 }
 
 fn bench_db<const N: usize>(criterion: &mut Criterion) {
