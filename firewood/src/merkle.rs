@@ -125,7 +125,7 @@ impl<T: ReadLinearStore> Merkle<T> {
     /// If the trie does not contain a value for key, the returned proof contains
     /// all nodes of the longest existing prefix of the key, ending with the node
     /// that proves the absence of the key (at least the root node).
-    pub fn prove(&self, key: &[u8]) -> Result<Proof<Vec<u8>>, MerkleError> {
+    pub fn prove(&self, key: &[u8]) -> Result<Proof<Box<[u8]>>, MerkleError> {
         let mut proofs = HashMap::new();
         let path_iter = PathIterator::new(self, key)?;
         for path in path_iter {
