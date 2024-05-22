@@ -1,12 +1,9 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::collections::HashMap;
-
 use crate::{merkle::Merkle, v2::api::HashKey};
 use nix::errno::Errno;
-use sha2::Digest;
-use storage::ReadLinearStore;
+use storage::{Node, ReadLinearStore};
 use thiserror::Error;
 
 use crate::{db::DbError, merkle::MerkleError};
@@ -65,24 +62,17 @@ impl From<DbError> for ProofError {
     }
 }
 
-/// A proof that a single key is present
+/// A proof that a given key-value pair either exists or does not exist in a trie.
 ///
 /// The generic N represents the storage for the node
 #[derive(Clone, Debug)]
-pub struct Proof<N>(pub HashMap<HashKey, N>);
-
-/// `SubProof` contains the value or the hash of a node that maps
-/// to a single proof step. If reaches an end step during proof verification,
-/// the `SubProof` should be the `Value` variant.
-
-#[derive(Debug)]
-#[allow(dead_code)] // TODO use or remove this type
-enum SubProof {
-    Value(Vec<u8>),
-    Hash(HashKey),
+pub struct Proof {
+    pub key: Box<[u8]>,
+    pub value: Option<Box<[u8]>>,
+    pub path: Box<[Node]>,
 }
 
-impl<N: AsRef<[u8]> + Send> Proof<N> {
+impl Proof {
     /// verify_proof checks merkle proofs. The given proof must contain the value for
     /// key in a trie with the given root hash. VerifyProof returns an error if the
     /// proof contains invalid trie nodes or the wrong value.
@@ -96,35 +86,33 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
         todo!()
     }
 
-    pub fn extend(&mut self, other: Proof<N>) {
-        self.0.extend(other.0)
-    }
+    // TODO danlaine: This should go somewhere else.
+    // Proof code should be separate from range proof code.
+    // pub fn verify_range_proof<K, V>(
+    //     &self,
+    //     _root_hash: HashKey,
+    //     _first_key: K,
+    //     _last_key: K,
+    //     keys: Vec<K>,
+    //     vals: Vec<V>,
+    // ) -> Result<bool, ProofError>
+    // where
+    //     K: AsRef<[u8]>,
+    //     V: AsRef<[u8]>,
+    // {
+    //     if keys.len() != vals.len() {
+    //         return Err(ProofError::InconsistentProofData);
+    //     }
 
-    pub fn verify_range_proof<K, V>(
-        &self,
-        _root_hash: HashKey,
-        _first_key: K,
-        _last_key: K,
-        keys: Vec<K>,
-        vals: Vec<V>,
-    ) -> Result<bool, ProofError>
-    where
-        K: AsRef<[u8]>,
-        V: AsRef<[u8]>,
-    {
-        if keys.len() != vals.len() {
-            return Err(ProofError::InconsistentProofData);
-        }
+    //     // Ensure the received batch is monotonic increasing and contains no deletions
+    //     #[allow(clippy::indexing_slicing)]
+    //     if !keys.windows(2).all(|w| w[0].as_ref() < w[1].as_ref()) {
+    //         return Err(ProofError::NonMonotonicIncreaseRange);
+    //     }
 
-        // Ensure the received batch is monotonic increasing and contains no deletions
-        #[allow(clippy::indexing_slicing)]
-        if !keys.windows(2).all(|w| w[0].as_ref() < w[1].as_ref()) {
-            return Err(ProofError::NonMonotonicIncreaseRange);
-        }
-
-        // create an empty merkle trie in memory
-        todo!();
-    }
+    //     // create an empty merkle trie in memory
+    //     todo!();
+    // }
 
     /// proofToPath converts a merkle proof to trie node path. The main purpose of
     /// this function is recovering a node path from the merkle proof stream. All
@@ -143,29 +131,4 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     {
         todo!()
     }
-}
-
-fn _generate_subproof_hash(encoded: &[u8]) -> Result<HashKey, ProofError> {
-    match encoded.len() {
-        0..=31 => {
-            let sub_hash = sha2::Sha256::digest(encoded).into();
-            Ok(sub_hash)
-        }
-
-        32 => {
-            let sub_hash = encoded
-                .try_into()
-                .expect("slice length checked in match arm");
-
-            Ok(sub_hash)
-        }
-
-        len => Err(ProofError::DecodeError(Box::new(
-            bincode::ErrorKind::Custom(format!("invalid proof length: {len}")),
-        ))),
-    }
-}
-
-fn _generate_subproof(encoded: &[u8]) -> Result<SubProof, ProofError> {
-    Ok(SubProof::Hash(_generate_subproof_hash(encoded)?))
 }

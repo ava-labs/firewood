@@ -115,7 +115,7 @@ impl<T: ReadLinearStore> Merkle<T> {
     /// If the trie does not contain a value for key, the returned proof contains
     /// all nodes of the longest existing prefix of the key, ending with the node
     /// that proves the absence of the key (at least the root node).
-    pub fn prove(&self, _key: &[u8]) -> Result<Proof<Vec<u8>>, MerkleError> {
+    pub fn prove(&self, _key: &[u8]) -> Result<Proof, MerkleError> {
         todo!()
         // let mut proofs = HashMap::new();
         // if root_addr.is_null() {
@@ -163,17 +163,17 @@ impl<T: ReadLinearStore> Merkle<T> {
         }
     }
 
-    pub fn verify_proof<N: AsRef<[u8]> + Send>(
+    pub fn verify_proof(
         &self,
         _key: &[u8],
-        _proof: &Proof<N>,
+        _proof: &Proof,
     ) -> Result<Option<Vec<u8>>, MerkleError> {
         todo!()
     }
 
-    pub fn verify_range_proof<N: AsRef<[u8]> + Send, V: AsRef<[u8]>>(
+    pub fn verify_range_proof<V: AsRef<[u8]>>(
         &self,
-        _proof: &Proof<N>,
+        _proof: &Proof,
         _first_key: &[u8],
         _last_key: &[u8],
         _keys: Vec<&[u8]>,
