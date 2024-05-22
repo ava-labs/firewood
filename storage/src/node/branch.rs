@@ -69,32 +69,13 @@ impl BranchNode {
             .as_ref()
     }
 
-    /// consume a branch node, finding the old child address and setting it
-    /// to a new one. Also invalidates the hash for it.
-    pub fn update_child_address(
-        &self,
-        old_child_addr: LinearAddress,
-        new_child_addr: Option<LinearAddress>,
-    ) -> BranchNode {
-        let mut new_children = self.children;
-        let (index, child_ref) = new_children
-            .iter_mut()
-            .enumerate()
-            .find(|(_, &mut child_addr)| child_addr == Some(old_child_addr))
-            .expect("child was not in the parent");
-        *child_ref = new_child_addr;
-
-        let mut new_child_hashes = self.child_hashes.clone();
-        *new_child_hashes
-            .get_mut(index)
-            .expect("arrays are same size, so offset into one must match the other") =
-            Default::default();
-        BranchNode {
-            partial_path: self.partial_path.clone(),
-            value: self.value.clone(),
-            children: new_children,
-            child_hashes: new_child_hashes,
-        }
+    /// Updates the child at the given index to the new address.
+    pub fn update_child_address(&mut self, child_index: usize, new_addr: LinearAddress) {
+        *self.child_mut(child_index as u8) = Some(new_addr);
+        *self
+            .child_hashes
+            .get_mut(child_index)
+            .expect("child_index must exist") = Default::default();
     }
 
     /// Update the child address of a branch node and invalidate the hash
