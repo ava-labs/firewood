@@ -163,11 +163,7 @@ impl<T: ReadLinearStore> Merkle<T> {
         }
     }
 
-    pub fn verify_proof(
-        &self,
-        _key: &[u8],
-        _proof: &Proof,
-    ) -> Result<Option<Vec<u8>>, MerkleError> {
+    pub fn verify_proof(&self, _proof: &Proof) -> Result<bool, MerkleError> {
         todo!()
     }
 

@@ -1,9 +1,9 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{merkle::Merkle, v2::api::HashKey};
+use crate::v2::api::HashKey;
 use nix::errno::Errno;
-use storage::{Node, ReadLinearStore};
+use storage::Node;
 use thiserror::Error;
 
 use crate::{db::DbError, merkle::MerkleError};
@@ -113,22 +113,4 @@ impl Proof {
     //     // create an empty merkle trie in memory
     //     todo!();
     // }
-
-    /// proofToPath converts a merkle proof to trie node path. The main purpose of
-    /// this function is recovering a node path from the merkle proof stream. All
-    /// necessary nodes will be resolved and leave the remaining as hashnode.
-    ///
-    /// The given edge proof is allowed to be an existent or non-existent proof.
-    fn _proof_to_path<K, T: ReadLinearStore>(
-        &self,
-        _key: K,
-        _root_hash: HashKey,
-        _in_mem_merkle: &mut Merkle<T>,
-        _allow_non_existent_node: bool,
-    ) -> Result<Option<Vec<u8>>, ProofError>
-    where
-        K: AsRef<[u8]>,
-    {
-        todo!()
-    }
 }
