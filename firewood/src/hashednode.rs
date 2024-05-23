@@ -149,12 +149,11 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
                     modified = true;
                     self.nodestore.update_in_place(child_addr, &child)?;
                 }
-                let hash = hash_node(node, path_prefix);
                 if modified {
                     self.nodestore.update_in_place(node_addr, node)?;
                     self.modified.remove(&node_addr);
                 }
-                Ok(hash)
+                Ok(hash_node(node, path_prefix))
             }
             Node::Leaf(_) => Ok(hash_node(node, path_prefix)),
         }
