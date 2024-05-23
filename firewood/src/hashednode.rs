@@ -4,10 +4,11 @@
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::Error;
-use std::iter::once;
+use std::iter::{once, Chain};
+use std::slice::Iter;
 use std::sync::{Arc, OnceLock};
 
-use storage::TrieHash;
+use storage::{BranchNode, TrieHash};
 use storage::{LinearAddress, NodeStore};
 use storage::{Node, Path, ProposedImmutable};
 use storage::{ReadLinearStore, WriteLinearStore};
@@ -86,7 +87,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                 .root_hash
                 .get_or_try_init(|| {
                     let node = self.read_node(addr)?;
-                    Ok(self.hash_internal(&node, &Path(Default::default())))
+                    Ok(hash_node(&node, &Path(Default::default())))
                 })
                 .cloned();
             #[cfg(not(nightly))]
@@ -97,7 +98,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                         .nodestore
                         .read_node(addr)
                         .expect("TODO: use get_or_try_init once it's available");
-                    self.hash_internal(&node, &Path(Default::default()))
+                    hash_node(&node, &Path(Default::default()))
                 })
                 .clone());
             result
@@ -148,14 +149,14 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
                     modified = true;
                     self.nodestore.update_in_place(child_addr, &child)?;
                 }
-                let hash = self.hash_internal(node, path_prefix);
+                let hash = hash_node(node, path_prefix);
                 if modified {
                     self.nodestore.update_in_place(node_addr, node)?;
                     self.modified.remove(&node_addr);
                 }
                 Ok(hash)
             }
-            Node::Leaf(_) => Ok(self.hash_internal(node, path_prefix)),
+            Node::Leaf(_) => Ok(hash_node(node, path_prefix)),
         }
     }
 
@@ -312,104 +313,124 @@ impl HasUpdate for Vec<u8> {
     }
 }
 
-impl<T: ReadLinearStore> HashedNodeStore<T> {
-    /// Returns the serialized representation of `node` used as the pre-image
-    /// when hashing the node. The node is at the given `path_prefix`.
-    pub fn serialize_for_hashing(&self, node: &Node, path_prefix: &Path) -> Box<[u8]> {
-        let mut hasher = vec![];
-        self.hash_internal_with(node, path_prefix, &mut hasher);
-        hasher.into_boxed_slice()
-    }
+/// Contains the fields that are serialized to hash a node.
+pub struct HashPreimage<'a, K: Iterator<Item = &'a u8> + Clone> {
+    pub key: K,
+    pub value: Option<&'a [u8]>,
+    pub children: Option<&'a [TrieHash; BranchNode::MAX_CHILDREN]>,
+}
 
-    // hash a node
-    // assumes all the children of a branch have their hashes filled in
-    fn hash_internal(&self, node: &Node, path_prefix: &Path) -> TrieHash {
-        let mut hasher: Sha256 = Sha256::new();
-        self.hash_internal_with(node, path_prefix, &mut hasher);
-        hasher.finalize().into()
-    }
-
-    fn hash_internal_with<H: HasUpdate>(&self, node: &Node, path_prefix: &Path, hasher: &mut H) {
-        // Add children to hash pre-image
-        match *node {
-            Node::Branch(ref branch) => {
-                let child_iter = branch
-                    .child_hashes
-                    .iter()
-                    .enumerate()
-                    .filter(|hash| **hash.1 != Default::default());
-
-                let num_children = child_iter.clone().count() as u64;
-                add_varint_to_hasher(hasher, num_children);
-
-                for (index, hash) in child_iter {
-                    debug_assert_ne!(**hash, Default::default());
-                    add_varint_to_hasher(hasher, index as u64);
-                    hasher.update(hash);
-                }
-            }
-            Node::Leaf(_) => {
-                let num_children: u64 = 0;
-                add_varint_to_hasher(hasher, num_children);
-            }
-        }
-
-        // Add value digest (if any) to hash pre-image
-        add_value_to_hasher(hasher, node.value());
-
-        let mut key_nibbles_iter = path_prefix
-            .iter()
-            .chain(node.partial_path().iter())
-            .copied();
-
-        // Add key length (in bits) to hash pre-image
-        let key_bit_len = BITS_PER_NIBBLE * key_nibbles_iter.clone().count() as u64;
-        add_varint_to_hasher(hasher, key_bit_len);
-
-        // Add key to hash pre-image
-        while let Some(high_nibble) = key_nibbles_iter.next() {
-            let low_nibble = key_nibbles_iter.next().unwrap_or(0);
-            let byte = (high_nibble << 4) | low_nibble;
-            hasher.update([byte]);
+impl<'a> HashPreimage<'a, Chain<Iter<'a, u8>, Iter<'a, u8>>> {
+    fn from(node: &'a Node, path_prefix: &'a Path) -> Self {
+        HashPreimage {
+            key: path_prefix.iter().chain(node.partial_path().iter()),
+            value: match *node {
+                Node::Branch(ref branch) => branch.value.as_ref().map(|v| v.as_ref()),
+                Node::Leaf(ref leaf) => Some(leaf.value.as_ref()),
+            },
+            children: match *node {
+                Node::Branch(ref branch) => Some(&branch.child_hashes),
+                Node::Leaf(_) => None,
+            },
         }
     }
 }
 
-fn add_value_to_hasher<H: HasUpdate, T: AsRef<[u8]>>(hasher: &mut H, value: Option<T>) {
+impl<'a, K: Iterator<Item = &'a u8> + Clone> HashPreimage<'a, K> {
+    /// Calls `buf.Update` for each byte in the pre-image of `node`.
+    fn write<H: HasUpdate>(mut self, buf: &mut H) {
+        if let Some(children) = self.children {
+            let children_iter = children
+                .iter()
+                .enumerate()
+                .filter(|(_, hash)| **hash != Default::default());
+
+            let num_children = children_iter.clone().count() as u64;
+            add_varint_to_buf(buf, num_children);
+
+            for (index, hash) in children_iter {
+                add_varint_to_buf(buf, index as u64);
+                buf.update(hash);
+            }
+        } else {
+            let num_children: u64 = 0;
+            add_varint_to_buf(buf, num_children);
+        }
+
+        // Add value digest (if any) to hash pre-image
+        add_value_to_buf(buf, self.value);
+
+        // Add key length (in bits) to hash pre-image
+        let key_bit_len = BITS_PER_NIBBLE * self.key.clone().count() as u64;
+        add_varint_to_buf(buf, key_bit_len);
+
+        // Add key to hash pre-image
+        while let Some(high_nibble) = self.key.next() {
+            let low_nibble = self.key.next().unwrap_or(&0);
+            let byte = (high_nibble << 4) | low_nibble;
+            buf.update([byte]);
+        }
+    }
+}
+
+/// Returns the SHA-256 hash of the `preimage`.
+pub fn hash<'a, K: Iterator<Item = &'a u8> + Clone>(preimage: HashPreimage<'a, K>) -> TrieHash {
+    let mut hasher: Sha256 = Sha256::new();
+    preimage.write(&mut hasher);
+    hasher.finalize().into()
+}
+
+/// Returns the hash of `node` which is at the given `path_prefix`.
+pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
+    let mut hasher: Sha256 = Sha256::new();
+    HashPreimage::from(node, path_prefix).write(&mut hasher);
+    hasher.finalize().into()
+}
+
+/// Returns the serialized representation of `node` used as the pre-image
+/// when hashing the node. The node is at the given `path_prefix`.
+pub fn hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
+    let mut buf = vec![];
+    HashPreimage::from(node, path_prefix).write(&mut buf);
+    buf.into_boxed_slice()
+}
+
+fn add_value_to_buf<H: HasUpdate, T: AsRef<[u8]>>(buf: &mut H, value: Option<T>) {
     let Some(value) = value else {
         let value_exists: u8 = 0;
-        hasher.update([value_exists]);
+        buf.update([value_exists]);
         return;
     };
 
     let value_exists: u8 = 1;
-    hasher.update([value_exists]);
+    buf.update([value_exists]);
 
     let value = value.as_ref();
 
     if value.len() >= 32 {
         let value_hash = Sha256::digest(value);
-        add_len_and_value_to_hasher(hasher, &value_hash);
+        add_len_and_value_to_buf(buf, &value_hash);
     } else {
-        add_len_and_value_to_hasher(hasher, value);
+        add_len_and_value_to_buf(buf, value);
     };
 }
 
 #[inline]
 /// Writes the length of `value` and `value` to `hasher`.
-fn add_len_and_value_to_hasher<H: HasUpdate>(hasher: &mut H, value: &[u8]) {
+fn add_len_and_value_to_buf<H: HasUpdate>(buf: &mut H, value: &[u8]) {
     let value_len = value.len();
-    hasher.update([value_len as u8]);
-    hasher.update(value);
+    buf.update([value_len as u8]);
+    buf.update(value);
 }
 
 #[inline]
 /// Encodes `value` as a varint and writes it to `hasher`.
-fn add_varint_to_hasher<H: HasUpdate>(hasher: &mut H, value: u64) {
-    let mut buf = [0u8; MAX_VARINT_SIZE];
-    let len = value.encode_var(&mut buf);
-    hasher.update(
-        buf.get(..len)
+fn add_varint_to_buf<H: HasUpdate>(buf: &mut H, value: u64) {
+    let mut buf_arr = [0u8; MAX_VARINT_SIZE];
+    let len = value.encode_var(&mut buf_arr);
+    buf.update(
+        buf_arr
+            .get(..len)
             .expect("length is always less than MAX_VARINT_SIZE"),
     );
 }
