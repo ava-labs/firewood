@@ -86,7 +86,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                 .root_hash
                 .get_or_try_init(|| {
                     let node = self.read_node(addr)?;
-                    Ok(to_hash(&node, &Path(Default::default())))
+                    Ok(node_hash(&node, &Path(Default::default())))
                 })
                 .cloned();
             #[cfg(not(nightly))]
@@ -97,7 +97,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                         .nodestore
                         .read_node(addr)
                         .expect("TODO: use get_or_try_init once it's available");
-                    to_hash(&node, &Path(Default::default()))
+                    node_hash(&node, &Path(Default::default()))
                 })
                 .clone());
             result
@@ -152,9 +152,9 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
                     self.nodestore.update_in_place(node_addr, node)?;
                     self.modified.remove(&node_addr);
                 }
-                Ok(to_hash(node, path_prefix))
+                Ok(node_hash(node, path_prefix))
             }
-            Node::Leaf(_) => Ok(to_hash(node, path_prefix)),
+            Node::Leaf(_) => Ok(node_hash(node, path_prefix)),
         }
     }
 
@@ -365,7 +365,7 @@ pub(crate) fn _hash<'a, K: Iterator<Item = &'a u8> + Clone, V: AsRef<[u8]>>(
 }
 
 /// Writes the pre-image of `node`, which is at `path_prefix`, to `buf`.
-fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut H) {
+fn write_node_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut H) {
     let key = path_prefix.iter().chain(node.partial_path().iter());
 
     let children = match *node {
@@ -400,17 +400,17 @@ fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut 
 }
 
 /// Returns the hash of `node` which is at `path_prefix`.
-pub fn to_hash(node: &Node, path_prefix: &Path) -> TrieHash {
+pub fn node_hash(node: &Node, path_prefix: &Path) -> TrieHash {
     let mut hasher: Sha256 = Sha256::new();
-    write_hash_preimage(node, path_prefix, &mut hasher);
+    write_node_hash_preimage(node, path_prefix, &mut hasher);
     hasher.finalize().into()
 }
 
 /// Returns the serialized representation of `node` used as the pre-image
 /// when hashing the node. The node is at the given `path_prefix`.
-pub fn to_hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
+pub fn node_hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
     let mut buf = vec![];
-    write_hash_preimage(node, path_prefix, &mut buf);
+    write_node_hash_preimage(node, path_prefix, &mut buf);
     buf.into_boxed_slice()
 }
 
