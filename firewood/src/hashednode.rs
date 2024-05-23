@@ -56,8 +56,8 @@ impl<T: ReadLinearStore> From<NodeStore<T>> for HashedNodeStore<T> {
 
 impl<T: ReadLinearStore> HashedNodeStore<T> {
     pub fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
-        if let Some(modified_node) = self.modified.get(&addr) {
-            Ok(modified_node.0.clone())
+        if let Some((modified_node, _)) = self.modified.get(&addr) {
+            Ok(modified_node.clone())
         } else {
             Ok(self.nodestore.read_node(addr)?)
         }
@@ -158,6 +158,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
             Node::Leaf(_) => Ok(self.hash_internal(node, path_prefix)),
         }
     }
+
     pub fn freeze(mut self) -> Result<HashedNodeStore<ProposedImmutable>, Error> {
         // fill in all remaining hashes, including the root hash
         if let Some(root_address) = self.root_address() {
@@ -174,10 +175,15 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
             root_hash: Default::default(),
         })
     }
+
     pub fn create_node(&mut self, node: Node) -> Result<LinearAddress, Error> {
         let (addr, size) = self.nodestore.allocate_node(&node)?;
         self.modified.insert(addr, (Arc::new(node), size));
         Ok(addr)
+    }
+
+    pub fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error> {
+        self.nodestore.delete_node(addr)
     }
 
     /// Fixes the trie after a node is updated.
@@ -199,7 +205,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         new_addr: LinearAddress,
     ) -> Result<(), MerkleError> {
         let Some(parent) = ancestors.next_back() else {
-            self.set_root(new_addr)?;
+            self.set_root(Some(new_addr))?;
             return Ok(());
         };
 
@@ -285,7 +291,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         Ok(new_address)
     }
 
-    pub fn set_root(&mut self, root_addr: LinearAddress) -> Result<(), Error> {
+    pub fn set_root(&mut self, root_addr: Option<LinearAddress>) -> Result<(), Error> {
         self.nodestore.set_root(root_addr)
     }
 }
@@ -424,7 +430,7 @@ mod test {
             value: Box::new(*b"abc"),
         });
         let addr = hns.create_node(node).unwrap();
-        hns.set_root(addr).unwrap();
+        hns.set_root(Some(addr)).unwrap();
 
         let frozen = hns.freeze().unwrap();
         assert_ne!(frozen.root_hash().unwrap(), Default::default());
