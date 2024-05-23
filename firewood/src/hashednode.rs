@@ -4,8 +4,7 @@
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::Error;
-use std::iter::{once, Chain};
-use std::slice::Iter;
+use std::iter::once;
 use std::sync::{Arc, OnceLock};
 
 use storage::{BranchNode, TrieHash};
@@ -315,24 +314,8 @@ impl HasUpdate for Vec<u8> {
 /// Contains the fields that are serialized to hash a node.
 pub struct HashPreimage<'a, K: Iterator<Item = &'a u8> + Clone> {
     key: K,
-    value: Option<&'a [u8]>,
+    value_digest: Option<&'a [u8]>,
     children: Option<&'a [TrieHash; BranchNode::MAX_CHILDREN]>,
-}
-
-impl<'a> HashPreimage<'a, Chain<Iter<'a, u8>, Iter<'a, u8>>> {
-    fn from(node: &'a Node, path_prefix: &'a Path) -> Self {
-        HashPreimage {
-            key: path_prefix.iter().chain(node.partial_path().iter()),
-            value: match *node {
-                Node::Branch(ref branch) => branch.value.as_ref().map(|v| v.as_ref()),
-                Node::Leaf(ref leaf) => Some(leaf.value.as_ref()),
-            },
-            children: match *node {
-                Node::Branch(ref branch) => Some(&branch.child_hashes),
-                Node::Leaf(_) => None,
-            },
-        }
-    }
 }
 
 impl<'a, K: Iterator<Item = &'a u8> + Clone> HashPreimage<'a, K> {
@@ -357,7 +340,7 @@ impl<'a, K: Iterator<Item = &'a u8> + Clone> HashPreimage<'a, K> {
         }
 
         // Add value digest (if any) to hash pre-image
-        add_value_to_buf(buf, self.value);
+        add_value_digest_to_buf(buf, self.value_digest);
 
         // Add key length (in bits) to hash pre-image
         let key_bit_len = BITS_PER_NIBBLE * self.key.clone().count() as u64;
@@ -380,22 +363,64 @@ pub fn hash<'a, K: Iterator<Item = &'a u8> + Clone>(preimage: HashPreimage<'a, K
 }
 
 /// Returns the hash of `node` which is at the given `path_prefix`.
-pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
+fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut H) {
+    let key = path_prefix.iter().chain(node.partial_path().iter());
+
+    let children = match *node {
+        Node::Branch(ref branch) => Some(&branch.child_hashes),
+        Node::Leaf(_) => None,
+    };
+
+    let value = match *node {
+        Node::Branch(ref branch) => branch.value.as_ref().map(|v| v.as_ref()),
+        Node::Leaf(ref leaf) => Some(leaf.value.as_ref()),
+    };
+
+    let Some(value) = value else {
+        HashPreimage {
+            key,
+            value_digest: value,
+            children,
+        }
+        .write(buf);
+        return;
+    };
+
+    if value.len() >= 32 {
+        let value_digest = Sha256::digest(value);
+        HashPreimage {
+            key,
+            value_digest: Some(value_digest.as_ref()),
+            children,
+        }
+        .write(buf);
+    } else {
+        HashPreimage {
+            key,
+            value_digest: Some(value),
+            children,
+        }
+        .write(buf);
+    }
+}
+
+/// TODO comment
+fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
     let mut hasher: Sha256 = Sha256::new();
-    HashPreimage::from(node, path_prefix).write(&mut hasher);
+    write_hash_preimage(node, path_prefix, &mut hasher);
     hasher.finalize().into()
 }
 
 /// Returns the serialized representation of `node` used as the pre-image
 /// when hashing the node. The node is at the given `path_prefix`.
-pub fn hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
-    let mut buf = vec![];
-    HashPreimage::from(node, path_prefix).write(&mut buf);
-    buf.into_boxed_slice()
-}
+// pub fn hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
+//     let mut buf = vec![];
+//     HashPreimage::from(node, path_prefix).write(&mut buf);
+//     buf.into_boxed_slice()
+// }
 
-fn add_value_to_buf<H: HasUpdate, T: AsRef<[u8]>>(buf: &mut H, value: Option<T>) {
-    let Some(value) = value else {
+fn add_value_digest_to_buf<H: HasUpdate, T: AsRef<[u8]>>(buf: &mut H, value_digest: Option<T>) {
+    let Some(value_digest) = value_digest else {
         let value_exists: u8 = 0;
         buf.update([value_exists]);
         return;
@@ -403,15 +428,7 @@ fn add_value_to_buf<H: HasUpdate, T: AsRef<[u8]>>(buf: &mut H, value: Option<T>)
 
     let value_exists: u8 = 1;
     buf.update([value_exists]);
-
-    let value = value.as_ref();
-
-    if value.len() >= 32 {
-        let value_hash = Sha256::digest(value);
-        add_len_and_value_to_buf(buf, &value_hash);
-    } else {
-        add_len_and_value_to_buf(buf, value);
-    };
+    add_len_and_value_to_buf(buf, value_digest.as_ref());
 }
 
 #[inline]
