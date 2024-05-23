@@ -314,9 +314,9 @@ impl HasUpdate for Vec<u8> {
 
 /// Contains the fields that are serialized to hash a node.
 pub struct HashPreimage<'a, K: Iterator<Item = &'a u8> + Clone> {
-    pub key: K,
-    pub value: Option<&'a [u8]>,
-    pub children: Option<&'a [TrieHash; BranchNode::MAX_CHILDREN]>,
+    key: K,
+    value: Option<&'a [u8]>,
+    children: Option<&'a [TrieHash; BranchNode::MAX_CHILDREN]>,
 }
 
 impl<'a> HashPreimage<'a, Chain<Iter<'a, u8>, Iter<'a, u8>>> {
