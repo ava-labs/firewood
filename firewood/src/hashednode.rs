@@ -3,10 +3,8 @@
 
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::hash::Hash;
 use std::io::Error;
-use std::iter::{once, Chain};
-use std::slice::Iter;
+use std::iter::once;
 use std::sync::{Arc, OnceLock};
 
 use storage::{BranchNode, TrieHash};
@@ -88,7 +86,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                 .root_hash
                 .get_or_try_init(|| {
                     let node = self.read_node(addr)?;
-                    Ok(hash_node(&node, &Path(Default::default())))
+                    Ok(to_hash(&node, &Path(Default::default())))
                 })
                 .cloned();
             #[cfg(not(nightly))]
@@ -99,7 +97,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                         .nodestore
                         .read_node(addr)
                         .expect("TODO: use get_or_try_init once it's available");
-                    hash_node(&node, &Path(Default::default()))
+                    to_hash(&node, &Path(Default::default()))
                 })
                 .clone());
             result
@@ -154,9 +152,9 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
                     self.nodestore.update_in_place(node_addr, node)?;
                     self.modified.remove(&node_addr);
                 }
-                Ok(hash_node(node, path_prefix))
+                Ok(to_hash(node, path_prefix))
             }
-            Node::Leaf(_) => Ok(hash_node(node, path_prefix)),
+            Node::Leaf(_) => Ok(to_hash(node, path_prefix)),
         }
     }
 
@@ -314,10 +312,10 @@ impl HasUpdate for Vec<u8> {
 }
 
 /// Contains the fields that are serialized to hash a node.
-pub struct HashPreimage<'a, K: Iterator<Item = &'a u8> + Clone, V: AsRef<[u8]>> {
-    key: K,
-    value_digest: Option<V>,
-    children: Option<&'a [TrieHash; BranchNode::MAX_CHILDREN]>,
+pub(crate) struct HashPreimage<'a, K: Iterator<Item = &'a u8> + Clone, V: AsRef<[u8]>> {
+    pub(crate) key: K,
+    pub(crate) value_digest: Option<V>,
+    pub(crate) children: Option<&'a [TrieHash; BranchNode::MAX_CHILDREN]>,
 }
 
 impl<'a, K: Iterator<Item = &'a u8> + Clone, V: AsRef<[u8]>> HashPreimage<'a, K, V> {
@@ -358,7 +356,7 @@ impl<'a, K: Iterator<Item = &'a u8> + Clone, V: AsRef<[u8]>> HashPreimage<'a, K,
 }
 
 /// Returns the SHA-256 hash of the `preimage`.
-pub fn hash<'a, K: Iterator<Item = &'a u8> + Clone, V: AsRef<[u8]>>(
+pub(crate) fn _hash<'a, K: Iterator<Item = &'a u8> + Clone, V: AsRef<[u8]>>(
     preimage: HashPreimage<'a, K, V>,
 ) -> TrieHash {
     let mut hasher: Sha256 = Sha256::new();
@@ -366,11 +364,8 @@ pub fn hash<'a, K: Iterator<Item = &'a u8> + Clone, V: AsRef<[u8]>>(
     hasher.finalize().into()
 }
 
-/// Returns the hash of `node` which is at the given `path_prefix`.
-fn write_hash_preimage<'a, H: HasUpdate>(
-    node: &'a Node,
-    path_prefix: &'a Path,
-) -> HashPreimage<'a, _, _> {
+/// Writes the pre-image of `node`, which is at `path_prefix`, to `buf`.
+fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut H) {
     let key = path_prefix.iter().chain(node.partial_path().iter());
 
     let children = match *node {
@@ -385,35 +380,39 @@ fn write_hash_preimage<'a, H: HasUpdate>(
 
     match value {
         Some(value) if value.len() >= 32 => {
-            let hash = Sha256::digest(value);
+            let value_hash = Sha256::digest(value);
             HashPreimage {
                 key,
-                value_digest: Some(hash),
+                value_digest: Some(value_hash),
                 children,
             }
+            .write(buf);
         }
-        _ => HashPreimage {
-            key,
-            value_digest: value,
-            children,
-        },
+        _ => {
+            HashPreimage {
+                key,
+                value_digest: value,
+                children,
+            }
+            .write(buf);
+        }
     }
 }
 
-/// TODO comment
-fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
+/// Returns the hash of `node` which is at `path_prefix`.
+pub fn to_hash(node: &Node, path_prefix: &Path) -> TrieHash {
     let mut hasher: Sha256 = Sha256::new();
-    let preimage = write_hash_preimage(node, path_prefix);
+    write_hash_preimage(node, path_prefix, &mut hasher);
     hasher.finalize().into()
 }
 
 /// Returns the serialized representation of `node` used as the pre-image
 /// when hashing the node. The node is at the given `path_prefix`.
-// pub fn hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
-//     let mut buf = vec![];
-//     HashPreimage::from(node, path_prefix).write(&mut buf);
-//     buf.into_boxed_slice()
-// }
+pub fn to_hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
+    let mut buf = vec![];
+    write_hash_preimage(node, path_prefix, &mut buf);
+    buf.into_boxed_slice()
+}
 
 fn add_value_digest_to_buf<H: HasUpdate, T: AsRef<[u8]>>(buf: &mut H, value_digest: Option<T>) {
     let Some(value_digest) = value_digest else {
