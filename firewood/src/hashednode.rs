@@ -408,7 +408,7 @@ pub fn node_hash(node: &Node, path_prefix: &Path) -> TrieHash {
 
 /// Returns the serialized representation of `node` used as the pre-image
 /// when hashing the node. The node is at the given `path_prefix`.
-pub fn node_hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
+pub fn hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
     let mut buf = vec![];
     write_node_hash_preimage(node, path_prefix, &mut buf);
     buf.into_boxed_slice()
