@@ -376,7 +376,9 @@ fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut 
                     (index, None)
                 }
             }) {
-                children[index] = hash;
+                *children
+                    .get_mut(index)
+                    .expect("both arrays are same length so should never OOB") = hash;
             }
             children
         }
@@ -394,7 +396,7 @@ fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut 
             HashPreimage {
                 key,
                 value_digest: Some(value_hash),
-                children: children,
+                children,
             }
             .write(buf);
         }
@@ -402,7 +404,7 @@ fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut 
             HashPreimage {
                 key,
                 value_digest: value,
-                children: children,
+                children,
             }
             .write(buf);
         }
