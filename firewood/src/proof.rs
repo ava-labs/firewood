@@ -74,11 +74,10 @@ pub struct ProofNode {
 pub struct Proof(pub Box<[ProofNode]>);
 
 impl Proof {
-    /// verify_proof checks merkle proofs. The given proof must contain the value for
-    /// key in a trie with the given root hash. VerifyProof returns an error if the
-    /// proof contains invalid trie nodes or the wrong value.
-    ///
-    /// The generic N represents the storage for the node
+    /// Returns the value associate with the given `key` in the trie revision
+    /// with the given `root_hash`. If the key does not exist in the trie, returns `None`.
+    /// Returns an error if the proof is invalid or doesn't prove the key-value pair for
+    /// the given `root_hash`.
     pub fn verify<K: AsRef<[u8]>>(
         &self,
         _key: K,
