@@ -138,6 +138,8 @@ impl<T: ReadLinearStore> Merkle<T> {
         }
     }
 
+    // TODO danlaine: Do we need this? I think the `verify` method on `Proof`
+    // should be enough.
     pub fn verify_proof(&self, _proof: &Proof) -> Result<bool, MerkleError> {
         todo!()
     }
