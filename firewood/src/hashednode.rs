@@ -356,8 +356,8 @@ impl<'a, K: Iterator<Item = u8> + Clone, V: AsRef<[u8]>> HashPreimage<'a, K, V> 
 }
 
 /// Returns the SHA-256 hash of the `preimage`.
-pub(crate) fn _hash<'a, K: Iterator<Item = u8> + Clone, V: AsRef<[u8]>>(
-    preimage: HashPreimage<'a, K, V>,
+pub(crate) fn _hash<K: Iterator<Item = u8> + Clone, V: AsRef<[u8]>>(
+    preimage: HashPreimage<'_, K, V>,
 ) -> TrieHash {
     let mut hasher: Sha256 = Sha256::new();
     preimage.write(&mut hasher);
