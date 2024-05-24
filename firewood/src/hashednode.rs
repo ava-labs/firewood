@@ -427,7 +427,7 @@ fn add_value_digest_to_buf<H: HasUpdate, T: AsRef<[u8]>>(buf: &mut H, value_dige
 }
 
 #[inline]
-/// Writes the length of `value` and `value` to `hasher`.
+/// Writes the length of `value` and `value` to `buf`.
 fn add_len_and_value_to_buf<H: HasUpdate>(buf: &mut H, value: &[u8]) {
     let value_len = value.len();
     buf.update([value_len as u8]);
@@ -435,7 +435,7 @@ fn add_len_and_value_to_buf<H: HasUpdate>(buf: &mut H, value: &[u8]) {
 }
 
 #[inline]
-/// Encodes `value` as a varint and writes it to `hasher`.
+/// Encodes `value` as a varint and writes it to `buf`.
 fn add_varint_to_buf<H: HasUpdate>(buf: &mut H, value: u64) {
     let mut buf_arr = [0u8; MAX_VARINT_SIZE];
     let len = value.encode_var(&mut buf_arr);
