@@ -10,9 +10,9 @@ use std::collections::HashSet;
 use std::future::ready;
 use std::io::Write;
 use std::iter::{empty, once};
+use storage::TrieHash;
 use storage::{BranchNode, LeafNode, Node};
 use storage::{LinearAddress, WriteLinearStore};
-use storage::{MemStore, TrieHash};
 use storage::{NibblesIterator, Path};
 use storage::{ProposedImmutable, ReadLinearStore};
 
@@ -730,10 +730,6 @@ impl<T: WriteLinearStore> Merkle<T> {
     }
 }
 
-pub(super) fn create_in_memory_merkle() -> Merkle<MemStore> {
-    Merkle::new(HashedNodeStore::initialize(MemStore::new(vec![])).unwrap())
-}
-
 /// Returns an iterator where each element is the result of combining
 /// 2 nibbles of `nibbles`. If `nibbles` is odd length, panics in
 /// debug mode and drops the final nibble in release mode.
@@ -784,6 +780,13 @@ mod tests {
     fn insert_one() {
         let mut merkle = create_in_memory_merkle();
         merkle.insert(b"abc", Box::new([])).unwrap()
+    }
+
+    pub(super) fn create_in_memory_merkle() -> Merkle<MemStore> {
+        Merkle::new(
+            HashedNodeStore::initialize(MemStore::new(vec![]))
+                .expect("writing to an in-memory store"),
+        )
     }
 
     // use super::*;

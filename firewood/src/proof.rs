@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{merkle::create_in_memory_merkle, v2::api::HashKey};
+use crate::v2::api::HashKey;
 use nix::errno::Errno;
 use storage::{BranchNode, TrieHash};
 use thiserror::Error;
