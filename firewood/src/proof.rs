@@ -84,11 +84,17 @@ impl Proof {
         _key: K,
         _root_hash: HashKey,
     ) -> Result<Option<Vec<u8>>, ProofError> {
-        // TODO danlaine: Verify the proof is well-formed
+        // Verify the proof is well-formed
 
-        let mut _in_memory_merkle = create_in_memory_merkle();
-
-        // TODO insert key-value pairs
+        let mut nodes = self.0.iter();
+        while let Some(node) = nodes.next() {
+            if let Some(next_node) = nodes.next() {
+                // Verify that each node's key is a prefix of the next node's key
+                if !next_node.key.starts_with(node.key.as_ref()) {
+                    return Err(ProofError::InvalidData); // TODO danlaine: more specific error
+                }
+            }
+        }
 
         todo!()
     }
