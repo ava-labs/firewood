@@ -108,6 +108,8 @@ impl<T: ReadLinearStore> Merkle<T> {
         self.0.root_hash()
     }
 
+    /// Returns a proof that the given key has a certain value,
+    /// or that the key isn't in the trie.
     pub fn prove(&self, _key: &[u8]) -> Result<Proof, MerkleError> {
         todo!()
     }
