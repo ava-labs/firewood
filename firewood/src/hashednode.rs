@@ -86,7 +86,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                 .root_hash
                 .get_or_try_init(|| {
                     let node = self.read_node(addr)?;
-                    Ok(node_hash(&node, &Path(Default::default())))
+                    Ok(hash_node(&node, &Path(Default::default())))
                 })
                 .cloned();
             #[cfg(not(nightly))]
@@ -97,7 +97,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                         .nodestore
                         .read_node(addr)
                         .expect("TODO: use get_or_try_init once it's available");
-                    node_hash(&node, &Path(Default::default()))
+                    hash_node(&node, &Path(Default::default()))
                 })
                 .clone());
             result
@@ -152,9 +152,9 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
                     self.nodestore.update_in_place(node_addr, node)?;
                     self.modified.remove(&node_addr);
                 }
-                Ok(node_hash(node, path_prefix))
+                Ok(hash_node(node, path_prefix))
             }
-            Node::Leaf(_) => Ok(node_hash(node, path_prefix)),
+            Node::Leaf(_) => Ok(hash_node(node, path_prefix)),
         }
     }
 
@@ -403,7 +403,7 @@ fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut 
 }
 
 /// Returns the hash of `node` which is at `path_prefix`.
-pub fn node_hash(node: &Node, path_prefix: &Path) -> TrieHash {
+pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
     let mut hasher: Sha256 = Sha256::new();
     write_hash_preimage(node, path_prefix, &mut hasher);
     hasher.finalize().into()
