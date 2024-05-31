@@ -113,6 +113,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
 
 impl<T: WriteLinearStore> HashedNodeStore<T> {
     // recursively hash this node
+    // this should only be called when freezing the merkle
     fn hash(
         &mut self,
         node_addr: LinearAddress,

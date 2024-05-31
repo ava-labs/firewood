@@ -104,8 +104,8 @@ impl From<RevisionManagerError> for Error {
 /// and a vector of all key/value pairs
 #[derive(Debug)]
 pub struct RangeProof<K, V> {
-    pub first_key_proof: Proof<Vec<u8>>,
-    pub last_key_proof: Proof<Vec<u8>>,
+    pub first_key_proof: Proof<Box<[u8]>>,
+    pub last_key_proof: Proof<Box<[u8]>>,
     pub middle: Vec<(K, V)>,
 }
 
