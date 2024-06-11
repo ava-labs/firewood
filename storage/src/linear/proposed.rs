@@ -1,11 +1,14 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
 use std::io::{Error, Read};
 use std::marker::PhantomData;
 use std::sync::{Arc, RwLock};
+
+use crate::nodestore::AreaIndex;
+use crate::{LinearAddress, Node};
 
 use super::layered::{Layer, LayeredReader};
 use super::{LinearStoreParent, ReadLinearStore, WriteLinearStore};
@@ -24,11 +27,8 @@ pub type ProposedImmutable = Proposed<Immutable>;
 /// A proposal backed by a [WriteLinearStore] or a [ReadLinearStore]
 /// The generic is either [Mutable] or [Immutable]
 pub struct Proposed<M: Send + Sync + Debug> {
-    /// The new data in a proposal
-    pub new: BTreeMap<u64, Box<[u8]>>,
-    /// The old data in a proposal
-    pub old: BTreeMap<u64, Box<[u8]>>,
     parent: RwLock<LinearStoreParent>,
+    changed: HashMap<LinearAddress, (Node, AreaIndex)>,
     phantom_data: PhantomData<M>,
 }
 
@@ -37,8 +37,7 @@ impl ProposedMutable {
     pub fn new(parent: LinearStoreParent) -> Self {
         Self {
             parent: RwLock::new(parent),
-            new: Default::default(),
-            old: Default::default(),
+            changed: Default::default(),
             phantom_data: PhantomData,
         }
     }
@@ -46,9 +45,8 @@ impl ProposedMutable {
     /// Freeze a mutable proposal, consuming it, and making it immutable
     pub fn freeze(self) -> ProposedImmutable {
         ProposedImmutable {
-            old: self.old,
-            new: self.new,
             parent: self.parent,
+            changed: Default::default(),
             phantom_data: PhantomData,
         }
     }
@@ -198,9 +196,8 @@ impl WriteLinearStore for ProposedMutable {
 
     fn freeze(self) -> ProposedImmutable {
         Proposed {
-            new: self.new,
-            old: self.old,
             parent: self.parent,
+            changed: self.changed,
             phantom_data: Default::default(),
         }
     }
