@@ -44,9 +44,13 @@ const AREA_SIZES: [u64; 21] = [
     1 << 23, // 16 MiB
 ];
 
+/// The type of an index into the [AREA_SIZES] array
+/// This is not usize because we can store this as a single byte
+type AreaIndex = u8;
+
 // TODO danlaine: have type for index in AREA_SIZES
 // Implement try_into() for it.
-const MIN_AREA_SIZE_LOG: u8 = 3;
+const MIN_AREA_SIZE_LOG: AreaIndex = 3;
 const NUM_AREA_SIZES: usize = AREA_SIZES.len();
 const MIN_AREA_SIZE: u64 = AREA_SIZES[0];
 const MAX_AREA_SIZE: u64 = AREA_SIZES[NUM_AREA_SIZES - 1];
@@ -58,7 +62,7 @@ const FREE_LIST_MAX_SIZE: u64 = NUM_AREA_SIZES as u64 * SOME_FREE_LIST_ELT_SIZE;
 const BRANCH_CHILDREN: usize = 16;
 
 /// Returns the index in `BLOCK_SIZES` of the smallest block size >= `n`.
-fn area_size_to_index(n: u64) -> Result<u8, Error> {
+fn area_size_to_index(n: u64) -> Result<AreaIndex, Error> {
     if n > MAX_AREA_SIZE {
         return Err(Error::new(
             ErrorKind::InvalidData,
@@ -76,7 +80,7 @@ fn area_size_to_index(n: u64) -> Result<u8, Error> {
         log += 1;
     }
 
-    Ok(log as u8 - MIN_AREA_SIZE_LOG)
+    Ok(log as AreaIndex - MIN_AREA_SIZE_LOG)
 }
 
 /// Objects cannot be stored at the zero address, so a [LinearAddress] is guaranteed not
@@ -96,7 +100,7 @@ enum Area<T, U> {
 #[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
 struct StoredArea<T> {
     /// Index in [AREA_SIZES] of this area's size
-    area_size_index: u8,
+    area_size_index: AreaIndex,
     area: T,
 }
 
@@ -115,10 +119,10 @@ pub struct NodeStore<T> {
 impl<T: ReadLinearStore> NodeStore<T> {
     /// Returns (index, area_size) for the [StoredArea] at `addr`.
     /// `index` is the index of `area_size` in [AREA_SIZES].
-    fn area_index_and_size(&self, addr: LinearAddress) -> Result<(u8, u64), Error> {
+    fn area_index_and_size(&self, addr: LinearAddress) -> Result<(AreaIndex, u64), Error> {
         let mut area_stream = self.linear_store.stream_from(addr.get())?;
 
-        let index: u8 = bincode::deserialize_from(&mut area_stream)
+        let index: AreaIndex = bincode::deserialize_from(&mut area_stream)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
         let size = *AREA_SIZES.get(index as usize).ok_or(Error::new(
@@ -223,7 +227,7 @@ impl<T: WriteLinearStore> NodeStore<T> {
     /// and the index of the free list that was used.
     /// If there are no free areas big enough for `n` bytes, returns None.
     /// TODO danlaine: If we return a larger area than requested, we should split it.
-    fn allocate_from_freed(&mut self, n: u64) -> Result<Option<(LinearAddress, u8)>, Error> {
+    fn allocate_from_freed(&mut self, n: u64) -> Result<Option<(LinearAddress, AreaIndex)>, Error> {
         // Find the smallest free list that can fit this size.
         let index = area_size_to_index(n)?;
 
@@ -243,7 +247,7 @@ impl<T: WriteLinearStore> NodeStore<T> {
                 self.header.free_lists[index] = free_head.next_free_block;
 
                 // Return the address of the newly allocated block.
-                return Ok(Some((free_stored_area_addr, index as u8)));
+                return Ok(Some((free_stored_area_addr, index as AreaIndex)));
             }
             // No free blocks in this list, try the next size up.
         }
@@ -251,7 +255,7 @@ impl<T: WriteLinearStore> NodeStore<T> {
         Ok(None)
     }
 
-    fn allocate_from_end(&mut self, n: u64) -> Result<(LinearAddress, u8), Error> {
+    fn allocate_from_end(&mut self, n: u64) -> Result<(LinearAddress, AreaIndex), Error> {
         let index = area_size_to_index(n)?;
         let area_size = AREA_SIZES[index as usize];
         let addr = LinearAddress::new(self.header.size).expect("node store size can't be 0");
@@ -288,7 +292,7 @@ impl<T: WriteLinearStore> NodeStore<T> {
     /// Note: The node is removed from the freelist but it still contains a freed status
     /// in the linearstore. The caller must eventually call [NodeStore::update_node] or
     /// [NodeStore::delete_node] on this node
-    pub fn allocate_node(&mut self, node: &Node) -> Result<(LinearAddress, u8), Error> {
+    pub fn allocate_node(&mut self, node: &Node) -> Result<(LinearAddress, AreaIndex), Error> {
         let stored_area_size = Self::stored_len(node);
 
         // Attempt to allocate from a free list.
@@ -310,14 +314,14 @@ impl<T: WriteLinearStore> NodeStore<T> {
     }
 
     /// Checks to see if a new Node will fit into an existing allocated node space
-    pub fn still_fits(&mut self, old_size: u8, node: &Node) -> Result<bool, Error> {
+    pub fn still_fits(&mut self, old_size: AreaIndex, node: &Node) -> Result<bool, Error> {
         let stored_area_size = Self::stored_len(node);
         let required_index = area_size_to_index(stored_area_size)?;
         Ok(required_index <= old_size)
     }
 
     /// Get the size of the space allocated to a node a specific address
-    pub fn node_size(&self, addr: LinearAddress) -> Result<u8, Error> {
+    pub fn node_size(&self, addr: LinearAddress) -> Result<AreaIndex, Error> {
         let size = 0;
         self.linear_store
             .stream_from(addr.into())?
@@ -540,16 +544,19 @@ mod tests {
         // TODO: rustify using: for size in AREA_SIZES
         for (i, &area_size) in AREA_SIZES.iter().enumerate() {
             // area size is at top of range
-            assert_eq!(area_size_to_index(area_size).unwrap(), i as u8);
+            assert_eq!(area_size_to_index(area_size).unwrap(), i as AreaIndex);
 
             if i > 0 {
                 // 1 less than top of range stays in range
-                assert_eq!(area_size_to_index(area_size - 1).unwrap(), i as u8);
+                assert_eq!(area_size_to_index(area_size - 1).unwrap(), i as AreaIndex);
             }
 
             if i < NUM_AREA_SIZES - 1 {
                 // 1 more than top of range goes to next range
-                assert_eq!(area_size_to_index(area_size + 1).unwrap(), (i + 1) as u8);
+                assert_eq!(
+                    area_size_to_index(area_size + 1).unwrap(),
+                    (i + 1) as AreaIndex
+                );
             }
         }
 
