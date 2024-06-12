@@ -46,7 +46,7 @@ const AREA_SIZES: [u64; 21] = [
 
 /// The type of an index into the [AREA_SIZES] array
 /// This is not usize because we can store this as a single byte
-type AreaIndex = u8;
+pub type AreaIndex = u8;
 
 // TODO danlaine: have type for index in AREA_SIZES
 // Implement try_into() for it.
@@ -483,7 +483,7 @@ impl Version {
     }
 }
 
-type FreeLists = [Option<LinearAddress>; NUM_AREA_SIZES];
+pub type FreeLists = [Option<LinearAddress>; NUM_AREA_SIZES];
 
 /// Persisted metadata for a [NodeStore].
 /// The [NodeStoreHeader] is at the start of the LinearStore.
