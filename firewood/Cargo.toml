@@ -38,11 +38,8 @@ logger = ["log"]
 
 [dev-dependencies]
 criterion = {version = "0.5.1", features = ["async_tokio"]}
-keccak-hasher = "0.15.3"
 rand = "0.8.5"
 triehash = "0.8.4"
-assert_cmd = "2.0.13"
-predicates = "3.1.0"
 clap = { version = "4.5.0", features = ['derive'] }
 pprof = { version = "0.13.0", features = ["flamegraph"] }
 
