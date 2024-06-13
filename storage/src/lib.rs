@@ -13,6 +13,7 @@
 //! However, [NodeStore] can also be backed by a [WriteLinearStore]. These
 //! support writes.
 
+mod hashednode;
 mod linear;
 mod node;
 mod nodestore;
@@ -28,4 +29,5 @@ pub use linear::{
     filebacked::FileBacked, historical::Historical, memory::MemStore, proposed::Proposed,
 };
 
+pub use hashednode::HashedNodeStore;
 pub use trie_hash::TrieHash;

@@ -1,14 +1,15 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{
-    merkle::{Key, Merkle, MerkleError, Value},
-    v2::api,
-};
+use crate::merkle::{Key, Merkle, MerkleError, Value};
+use crate::v2::api;
 
-use futures::{stream::FusedStream, Stream, StreamExt};
-use std::{cmp::Ordering, iter::once};
-use std::{sync::Arc, task::Poll};
+use futures::stream::FusedStream;
+use futures::{Stream, StreamExt};
+use std::cmp::Ordering;
+use std::iter::once;
+use std::sync::Arc;
+use std::task::Poll;
 use storage::{BranchNode, LinearAddress, NibblesIterator, Node, PathIterItem, ReadLinearStore};
 
 /// Represents an ongoing iteration over a node and its children.
@@ -554,9 +555,7 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
-    use crate::hashednode::HashedNodeStore;
-
-    use storage::MemStore;
+    use storage::{HashedNodeStore, MemStore};
 
     use super::*;
     use test_case::test_case;

@@ -7,18 +7,17 @@ use std::io::Error;
 use std::iter::once;
 use std::sync::{Arc, OnceLock};
 
-use storage::TrieHash;
-use storage::{LinearAddress, NodeStore};
-use storage::{Node, Path, ProposedImmutable};
-use storage::{ReadLinearStore, WriteLinearStore};
+use crate::{
+    LinearAddress, Node, NodeStore, Path, ProposedImmutable, ReadLinearStore, TrieHash,
+    WriteLinearStore,
+};
 
 use integer_encoding::VarInt;
 
 const MAX_VARINT_SIZE: usize = 10;
 const BITS_PER_NIBBLE: u64 = 4;
 
-use crate::merkle::MerkleError;
-use storage::PathIterItem;
+use crate::PathIterItem;
 
 /// A [HashedNodeStore] keeps track of nodes as they change when they are backed by a LinearStore.
 /// This defers the writes of those nodes until all the changes are made to the trie as part of a
@@ -34,6 +33,7 @@ pub struct HashedNodeStore<T: ReadLinearStore> {
 }
 
 impl<T: WriteLinearStore> HashedNodeStore<T> {
+    /// Initalize a HashedNodeStore
     pub fn initialize(linearstore: T) -> Result<Self, Error> {
         let nodestore = NodeStore::initialize(linearstore)?;
         Ok(HashedNodeStore {
@@ -55,6 +55,7 @@ impl<T: ReadLinearStore> From<NodeStore<T>> for HashedNodeStore<T> {
 }
 
 impl<T: ReadLinearStore> HashedNodeStore<T> {
+    /// Read a node at a given LinearAddress
     pub fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
         if let Some((modified_node, _)) = self.modified.get(&addr) {
             Ok(modified_node.clone())
@@ -78,6 +79,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
         }
     }
 
+    /// Obtain the root hash of a finalized HashedNodeStore
     pub fn root_hash(&self) -> Result<TrieHash, Error> {
         debug_assert!(self.modified.is_empty());
         if let Some(addr) = self.nodestore.root_address() {
@@ -106,6 +108,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
         }
     }
 
+    /// Get the address of the root of the nodestore
     pub const fn root_address(&self) -> Option<LinearAddress> {
         self.nodestore.root_address()
     }
@@ -159,6 +162,8 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         }
     }
 
+    /// Freeze a HashedNodeStore making it immutable
+    /// This has the side effect of computing the hashes for this trie
     pub fn freeze(mut self) -> Result<HashedNodeStore<ProposedImmutable>, Error> {
         // fill in all remaining hashes, including the root hash
         if let Some(root_address) = self.root_address() {
@@ -176,12 +181,14 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         })
     }
 
+    /// Create a new node
     pub fn create_node(&mut self, node: Node) -> Result<LinearAddress, Error> {
         let (addr, size) = self.nodestore.allocate_node(&node)?;
         self.modified.insert(addr, (Arc::new(node), size));
         Ok(addr)
     }
 
+    /// Delete a node
     pub fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error> {
         self.nodestore.delete_node(addr)
     }
@@ -203,7 +210,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         mut ancestors: A,
         old_addr: LinearAddress,
         new_addr: LinearAddress,
-    ) -> Result<(), MerkleError> {
+    ) -> Result<(), Error> {
         let Some(parent) = ancestors.next_back() else {
             self.set_root(Some(new_addr))?;
             return Ok(());
@@ -257,7 +264,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         ancestors: A,
         old_address: LinearAddress,
         node: Node,
-    ) -> Result<LinearAddress, MerkleError> {
+    ) -> Result<LinearAddress, Error> {
         let old_node_size_index =
             if let Some((_, old_node_size_index)) = self.modified.get(&old_address) {
                 *old_node_size_index
@@ -284,6 +291,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         Ok(new_address)
     }
 
+    /// set the root node of the HashedNodeStore
     pub fn set_root(&mut self, root_addr: Option<LinearAddress>) -> Result<(), Error> {
         self.nodestore.set_root(root_addr)
     }
@@ -410,7 +418,7 @@ fn add_varint_to_hasher<H: HasUpdate>(hasher: &mut H, value: u64) {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod test {
-    use storage::{MemStore, Path};
+    use crate::{MemStore, Path};
 
     use super::*;
 
@@ -418,7 +426,7 @@ mod test {
     fn freeze_test() {
         let memstore = MemStore::new(vec![]);
         let mut hns = HashedNodeStore::initialize(memstore).unwrap();
-        let node = Node::Leaf(storage::LeafNode {
+        let node = Node::Leaf(crate::LeafNode {
             partial_path: Path(Default::default()),
             value: Box::new(*b"abc"),
         });

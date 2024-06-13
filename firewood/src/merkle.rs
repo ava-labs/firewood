@@ -1,7 +1,6 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::hashednode::HashedNodeStore;
 use crate::proof::{Proof, ProofError};
 use crate::stream::{MerkleKeyValueStream, PathIterator};
 use crate::v2::api;
@@ -11,8 +10,8 @@ use std::future::ready;
 use std::io::Write;
 use std::iter::{empty, once};
 use storage::{
-    BranchNode, LeafNode, LinearAddress, NibblesIterator, Node, Path, PathIterItem,
-    ProposedImmutable, ReadLinearStore, TrieHash, WriteLinearStore,
+    BranchNode, HashedNodeStore, LeafNode, LinearAddress, NibblesIterator, Node, Path,
+    PathIterItem, ProposedImmutable, ReadLinearStore, TrieHash, WriteLinearStore,
 };
 
 use std::ops::{Deref, DerefMut};
