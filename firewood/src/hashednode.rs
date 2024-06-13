@@ -18,7 +18,7 @@ const MAX_VARINT_SIZE: usize = 10;
 const BITS_PER_NIBBLE: u64 = 4;
 
 use crate::merkle::MerkleError;
-use crate::stream::PathIterItem;
+use storage::PathIterItem;
 
 /// A [HashedNodeStore] keeps track of nodes as they change when they are backed by a LinearStore.
 /// This defers the writes of those nodes until all the changes are made to the trie as part of a
@@ -81,7 +81,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
     pub fn root_hash(&self) -> Result<TrieHash, Error> {
         debug_assert!(self.modified.is_empty());
         if let Some(addr) = self.nodestore.root_address() {
-            #[cfg(nightly)]
+            #[cfg(feature = "nightly")]
             let result = self
                 .root_hash
                 .get_or_try_init(|| {
@@ -89,7 +89,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                     Ok(self.hash_internal(&node, &Path(Default::default())))
                 })
                 .cloned();
-            #[cfg(not(nightly))]
+            #[cfg(not(feature = "nightly"))]
             let result = Ok(self
                 .root_hash
                 .get_or_init(|| {
@@ -198,7 +198,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     /// node didn't move during update.
     /// `ancestors` returns the ancestors of the updated node, from the root
     /// up to and including the updated node's parent.
-    pub fn fix_ancestors<'a, A: DoubleEndedIterator<Item = &'a PathIterItem>>(
+    fn fix_ancestors<'a, A: DoubleEndedIterator<Item = &'a PathIterItem>>(
         &mut self,
         mut ancestors: A,
         old_addr: LinearAddress,
@@ -212,24 +212,18 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         let old_parent_address = parent.addr;
 
         // The parent of the updated node.
-        let parent = parent
+        let parent_branch = parent
             .node
             .as_branch()
             .expect("parent of a node is a branch");
 
         // The index of the updated node in `parent`'s children array.
-        let child_index = parent
-            .children
-            .iter()
-            .enumerate()
-            .find(|(_, child_addr)| **child_addr == Some(old_addr))
-            .map(|(child_index, _)| child_index)
-            .expect("parent has node as child");
+        let child_index = parent.next_nibble.expect("must have a nibble address") as usize;
 
         // True iff the moved node's hash was already marked as invalid
         // in `parent` because we never computed it or we invalidated it in
         // a previous traversal
-        let child_hash_already_invalidated = parent
+        let child_hash_already_invalidated = parent_branch
             .child_hashes
             .get(child_index)
             .expect("index is a nibble")
@@ -245,7 +239,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
             return Ok(());
         }
 
-        let mut updated_parent = parent.clone();
+        let mut updated_parent = parent_branch.clone();
 
         updated_parent.update_child_address(child_index, new_addr);
 
@@ -255,10 +249,9 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         Ok(())
     }
 
-    /// Updates the node at `old_address` to be `node`. The node will be moved if
-    /// it doesn't fit in its current location. `ancestors` contains the nodes
-    /// from the root up to an including `node`'s parent. Returns the new address
-    /// of `node`, which may be the same as `old_address`.
+    /// Updates the node at `old_address` to be `node`. The node may move.
+    /// `ancestors` contains the nodes from the root up to an including `node`'s
+    /// parent. Returns the new address of `node`, which may be the same as `old_address`.
     pub fn update_node<'a, A: DoubleEndedIterator<Item = &'a PathIterItem>>(
         &mut self,
         ancestors: A,

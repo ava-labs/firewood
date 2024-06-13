@@ -12,7 +12,7 @@ pub mod path;
 pub use branch::BranchNode;
 pub use leaf::LeafNode;
 
-use crate::Path;
+use crate::{LinearAddress, Path};
 
 /// A node, either a Branch or Leaf
 
@@ -58,4 +58,22 @@ impl Node {
             Node::Leaf(l) => Some(&l.value),
         }
     }
+}
+
+/// A path iterator item, which has the key nibbles up to this point,
+/// a node, the address of the node, and the nibble that points to the
+/// next child down the list
+#[derive(Debug)]
+pub struct PathIterItem {
+    /// The key of the node at `address` as nibbles.
+    pub key_nibbles: Box<[u8]>,
+    /// A reference to the node
+    pub node: Arc<Node>,
+    /// The address of `node` in the linear store.
+    pub addr: LinearAddress,
+    /// The next item returned by the iterator is a child of `node`.
+    /// Specifically, it's the child at index `next_nibble` in `node`'s
+    /// children array.
+    /// None if `node` is the last node in the path.
+    pub next_nibble: Option<u8>,
 }
