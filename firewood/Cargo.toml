@@ -34,7 +34,9 @@ test-case = "3.3.1"
 integer-encoding = "4.0.0"
 
 [features]
+default = []
 logger = ["log"]
+nightly = []
 
 [dev-dependencies]
 criterion = {version = "0.5.1", features = ["async_tokio"]}
