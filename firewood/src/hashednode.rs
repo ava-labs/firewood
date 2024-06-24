@@ -350,15 +350,6 @@ impl<'a, K: Iterator<Item = u8> + Clone, V: AsRef<[u8]>> HashPreimage<'a, K, V> 
     }
 }
 
-/// Returns the SHA-256 hash of the `preimage`.
-pub(crate) fn _hash<K: Iterator<Item = u8> + Clone, V: AsRef<[u8]>>(
-    preimage: HashPreimage<'_, K, V>,
-) -> TrieHash {
-    let mut hasher: Sha256 = Sha256::new();
-    preimage.write(&mut hasher);
-    hasher.finalize().into()
-}
-
 /// Writes the pre-image of `node`, which is at `path_prefix`, to `buf`.
 fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut H) {
     let key = path_prefix
@@ -421,7 +412,9 @@ pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
 /// Returns the serialized representation of `node` used as the pre-image
 /// when hashing the node. The node is at the given `path_prefix`.
 pub fn hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
-    let mut buf = vec![];
+    // Key, 3 options, value digest
+    let est_len = node.partial_path().len() + path_prefix.len() + 3 + TrieHash::default().len();
+    let mut buf = Vec::with_capacity(est_len);
     write_hash_preimage(node, path_prefix, &mut buf);
     buf.into_boxed_slice()
 }
