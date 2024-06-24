@@ -412,7 +412,9 @@ pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
 /// Returns the serialized representation of `node` used as the pre-image
 /// when hashing the node. The node is at the given `path_prefix`.
 pub fn hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
-    let mut buf = vec![];
+    // Key, 2 options, value digest
+    let est_len = node.partial_path().len() + path_prefix.len() + 2 + TrieHash::default().len();
+    let mut buf = Vec::with_capacity(est_len);
     write_hash_preimage(node, path_prefix, &mut buf);
     buf.into_boxed_slice()
 }
