@@ -7,6 +7,23 @@ use crate::{LeafNode, LinearAddress, Path, TrieHash};
 use std::fmt::{Debug, Error as FmtError, Formatter};
 
 #[derive(PartialEq, Eq, Clone, Serialize, Deserialize)]
+pub enum Child {
+    HashOnly(TrieHash),
+    AddressOnly(LinearAddress),
+    HashAddress(TrieHash, LinearAddress),
+}
+
+impl Child {
+    fn update_address(self, new_addr: LinearAddress) -> Child {
+        match self {
+            Child::HashOnly(hash) => Child::HashAddress(hash, new_addr),
+            Child::AddressOnly(_) => Child::AddressOnly(new_addr),
+            Child::HashAddress(hash, _) => Child::HashAddress(hash, new_addr),
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Clone, Serialize, Deserialize)]
 /// A branch node
 pub struct BranchNode {
     /// The partial path for this branch
@@ -15,13 +32,11 @@ pub struct BranchNode {
     /// The value of the data for this branch, if any
     pub value: Option<Box<[u8]>>,
 
-    /// The children of this branch
-    pub children: [Option<LinearAddress>; Self::MAX_CHILDREN],
-
-    /// The hashes for each child
-    /// TODO: Serialize only non-zero ones. We know how many from the 'children' array
-    /// and can reconstruct it without storing blanks for each non-existent child
-    pub child_hashes: [TrieHash; Self::MAX_CHILDREN],
+    /// The children of this branch.
+    /// Each element is (child hash, child address).
+    /// The former is None if we don't know its hash.
+    ///
+    pub children: [Child; Self::MAX_CHILDREN],
 }
 
 impl Debug for BranchNode {
@@ -30,8 +45,21 @@ impl Debug for BranchNode {
         write!(f, r#" path="{:?}""#, self.partial_path)?;
 
         for (i, c) in self.children.iter().enumerate() {
-            if let Some(c) = c {
-                write!(f, " ({i:x} {c:?})")?;
+            match c {
+                Child::HashOnly(hash) => write!(
+                    f,
+                    "(index: {i:?}), address=?, hash={:?})",
+                    hex::encode(&hash)
+                )?,
+                Child::AddressOnly(address) => {
+                    write!(f, "(index: {i:?}), address={:?}, hash=?", address)?
+                }
+                Child::HashAddress(hash, address) => write!(
+                    f,
+                    "(index: {i:?}), address={:?}, hash={:?})",
+                    address,
+                    hex::encode(&hash)
+                )?,
             }
         }
 
@@ -50,23 +78,22 @@ impl BranchNode {
     /// The maximum number of children in a [BranchNode]
     pub const MAX_CHILDREN: usize = 16;
 
+    /// TODO danlaine fix comment
     /// Obtain a mutable reference to a child address within a branch
     /// This convenience method takes a u8 as the nibble offset
     /// Panics if `child_index` >= [BranchNode::MAX_CHILDREN].
-    pub fn child_mut(&mut self, child_index: u8) -> &mut Option<LinearAddress> {
+    pub fn child_mut(&mut self, child_index: u8) -> &mut Child {
         self.children
             .get_mut(child_index as usize)
             .expect("child_index is in bounds")
     }
 
+    /// TODO danlaine fix comment
     /// Returns the address of the child at the given index.
     /// None if there is no child at that index.
     /// Panics if `child_index` >= [BranchNode::MAX_CHILDREN].
-    pub fn child(&self, child_index: u8) -> Option<&LinearAddress> {
-        self.children
-            .get(child_index as usize)
-            .expect("child_index is in bounds")
-            .as_ref()
+    pub fn child(&self, child_index: u8) -> Option<&Child> {
+        self.children.get(child_index as usize)
     }
 
     /// Updates the child at the given index to the new address.
