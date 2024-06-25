@@ -31,7 +31,7 @@ impl Debug for BranchNode {
             match c {
                 None => {}
                 Some((address, None)) => {
-                    write!(f, "(index: {i:?}), address={:?}, hash=?", address)?
+                    write!(f, "(index: {i:?}), address={address:?}, hash=None")?
                 }
                 Some((address, Some(hash))) => write!(
                     f,
