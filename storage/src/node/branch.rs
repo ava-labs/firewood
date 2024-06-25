@@ -40,23 +40,6 @@ impl Debug for BranchNode {
                     hex::encode(&hash)
                 )?,
             }
-            // TODO danlaine: remove
-            // match c {
-            //     Child::HashOnly(hash) => write!(
-            //         f,
-            //         "(index: {i:?}), address=?, hash={:?})",
-            //         hex::encode(&hash)
-            //     )?,
-            //     Child::AddressOnly(address) => {
-            //         write!(f, "(index: {i:?}), address={:?}, hash=?", address)?
-            //     }
-            //     Child::HashAddress(hash, address) => write!(
-            //         f,
-            //         "(index: {i:?}), address={:?}, hash={:?})",
-            //         address,
-            //         hex::encode(&hash)
-            //     )?,
-            // }
         }
 
         write!(
@@ -94,17 +77,6 @@ impl BranchNode {
             .and_then(|c| c.as_ref().map(|(addr, _)| addr))
     }
 
-    /// Updates the child at the given index to the new address.
-    pub fn update_child_address(&mut self, _child_index: usize, _new_addr: LinearAddress) {
-        todo!("TODO")
-
-        // *self.child_mut(child_index as u8) = Some(new_addr);
-        // *self
-        //     .child_hashes
-        //     .get_mut(child_index)
-        //     .expect("child_index must exist") = Default::default();
-    }
-
     /// Update the child address of a branch node and invalidate the hash
     pub fn update_child(&mut self, child_index: u8, new_child_addr: Option<LinearAddress>) {
         match new_child_addr {
@@ -115,16 +87,7 @@ impl BranchNode {
                 *self.child_mut(child_index) = Some((new_child_addr, None));
             }
         }
-        // self.invalidate_child_hash(child_index);
     }
-
-    // TODO danlaine: remove
-    // pub(crate) fn invalidate_child_hash(&mut self, child_index: u8) {
-    //     *self
-    //         .child_hashes
-    //         .get_mut(child_index as usize)
-    //         .expect("nibble") = Default::default();
-    // }
 }
 
 impl From<&LeafNode> for BranchNode {
