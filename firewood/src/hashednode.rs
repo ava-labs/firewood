@@ -124,22 +124,26 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
                 // We found a branch, so find all the children that need hashing
                 let mut modified = false;
 
-                for (nibble, &child_addr, ref mut child_hash) in b
-                    .children
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, c)| c.as_ref().map(|(addr, hash)| (i, addr, hash)))
+                for (nibble, child) in b.children.iter_mut().enumerate()
+                // .filter_map(|(i, ref mut c)| {
+                //     c.as_ref().map(|(addr, ref mut hash)| (i, (addr, hash)))
+                // })
+                // mutable (index, (address, Maybe hash))
                 {
+                    let Some((child_addr, child_hash)) = child else {
+                        continue;
+                    };
+
                     // we found a child that needs hashing, so hash it
-                    let mut child = self.take_node(child_addr)?;
+                    let mut child = self.take_node(*child_addr)?;
                     let original_length = path_prefix.len();
                     path_prefix
                         .0
                         .extend(b.partial_path.0.iter().copied().chain(once(nibble as u8)));
-                    *child_hash = &Some(self.hash(child_addr, &mut child, path_prefix)?);
+                    *child_hash = Some(self.hash(*child_addr, &mut child, path_prefix)?);
                     path_prefix.0.truncate(original_length);
                     modified = true;
-                    self.nodestore.update_in_place(child_addr, &child)?;
+                    self.nodestore.update_in_place(*child_addr, &child)?;
                 }
                 if modified {
                     self.nodestore.update_in_place(node_addr, node)?;
