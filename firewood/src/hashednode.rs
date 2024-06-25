@@ -355,9 +355,13 @@ fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut 
 
     let children = match *node {
         Node::Branch(ref branch) => {
-            let child_hashes: Option<&[TrieHash; BranchNode::MAX_CHILDREN]> = Default::default();
+            let mut child_hashes: [TrieHash; BranchNode::MAX_CHILDREN] = Default::default();
 
             for (i, child_addr) in branch.children.iter().enumerate() {
+                child_hashes[i] = match child_addr {
+                    Some((_, Some(hash))) => hash.clone(), // TODO danlaine: remove clone
+                    _ => Default::default(),
+                };
 
                 // let child_hash = branch
                 //     .child_hashes
@@ -368,7 +372,7 @@ fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut 
                 // }
             }
 
-            todo!()
+            Some(child_hashes)
             // Some(&branch.child_hashes)
         }
         Node::Leaf(_) => None,
@@ -385,7 +389,7 @@ fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut 
             HashPreimage {
                 key,
                 value_digest: Some(value_hash),
-                children,
+                children: children.as_ref(),
             }
             .write(buf);
         }
@@ -393,7 +397,7 @@ fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut 
             HashPreimage {
                 key,
                 value_digest: value,
-                children,
+                children: children.as_ref(),
             }
             .write(buf);
         }
