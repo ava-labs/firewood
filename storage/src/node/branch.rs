@@ -40,6 +40,7 @@ impl Debug for BranchNode {
                     hex::encode(&hash)
                 )?,
             }
+            // TODO danlaine: remove
             // match c {
             //     Child::HashOnly(hash) => write!(
             //         f,

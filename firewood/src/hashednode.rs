@@ -81,7 +81,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
     pub fn root_hash(&self) -> Result<TrieHash, Error> {
         debug_assert!(self.modified.is_empty());
         if let Some(addr) = self.nodestore.root_address() {
-            #[cfg(feature = "nightly")]
+            #[cfg(nightly)]
             let result = self
                 .root_hash
                 .get_or_try_init(|| {
@@ -89,7 +89,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                     Ok(hash_node(&node, &Path(Default::default())))
                 })
                 .cloned();
-            #[cfg(not(feature = "nightly"))]
+            #[cfg(not(nightly))]
             let result = Ok(self
                 .root_hash
                 .get_or_init(|| {
