@@ -474,7 +474,7 @@ impl<T: WriteLinearStore> Merkle<T> {
             }
             Node::Branch(branch) => {
                 // See if `branch` has a child at `child_index` already.
-                let Some(&child_addr) = branch.child(child_index) else {
+                let Some((&child_addr, _)) = branch.child(child_index) else {
                     // Create a new leaf at empty `child_index`.
                     //     ...                ...
                     //      |      -->         |

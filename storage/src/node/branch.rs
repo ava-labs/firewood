@@ -54,14 +54,16 @@ impl BranchNode {
     /// The maximum number of children in a [BranchNode]
     pub const MAX_CHILDREN: usize = 16;
 
-    /// TODO danlaine fix comment
-    /// Returns the address of the child at the given index.
+    /// Returns the address of the child at the given index, and the hash,
+    /// which is None if we don't know the hash.
     /// None if there is no child at that index.
     /// Panics if `child_index` >= [BranchNode::MAX_CHILDREN].
-    pub fn child(&self, child_index: u8) -> Option<&LinearAddress> {
+    pub fn child(&self, child_index: u8) -> Option<(&LinearAddress, Option<&TrieHash>)> {
         self.children
             .get(child_index as usize)
-            .and_then(|c| c.as_ref().map(|(addr, _)| addr))
+            .expect("child_index is in bounds")
+            .as_ref()
+            .map(|(address, hash)| (address, hash.as_ref()))
     }
 
     /// Update the child at `child_index` to be `new_child_addr`.
