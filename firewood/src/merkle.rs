@@ -300,7 +300,8 @@ impl<T: ReadLinearStore> Merkle<T> {
                 for (childidx, child) in b.children.iter().enumerate() {
                     match child {
                         None => {}
-                        Some(childaddr) => {
+                        Some((childaddr, _)) => {
+                            // TODO danlaine: print hash
                             if !seen.insert(*childaddr) {
                                 // we have already seen this child, so
                                 writeln!(
@@ -389,7 +390,8 @@ impl<T: WriteLinearStore> Merkle<T> {
                     children: old_root.children,
                     partial_path: Path::from(old_root_partial_path),
                     value: old_root.value.clone(),
-                    child_hashes: old_root.child_hashes.clone(),
+                    // TODO danlaine: remove
+                    //  child_hashes: old_root.child_hashes.clone(),
                 })),
             };
             let old_root_addr = self.update_node(empty(), old_root_addr, old_root)?;
@@ -398,7 +400,8 @@ impl<T: WriteLinearStore> Merkle<T> {
                 partial_path: Path::from(path_overlap.shared),
                 value: None,
                 children: Default::default(),
-                child_hashes: Default::default(),
+                // TODO danlaine: remove
+                // child_hashes: Default::default(),
             };
             *new_root.child_mut(old_root_child_index) = Some(old_root_addr);
 
@@ -441,7 +444,8 @@ impl<T: WriteLinearStore> Merkle<T> {
                     children: node.children,
                     partial_path: node.partial_path.clone(),
                     value: Some(value),
-                    child_hashes: node.child_hashes.clone(),
+                    // TODO danlaine: remove
+                    // child_hashes: node.child_hashes.clone(),
                 })),
             };
 
@@ -492,7 +496,8 @@ impl<T: WriteLinearStore> Merkle<T> {
                         children: branch.children,
                         partial_path: branch.partial_path.clone(),
                         value: branch.value.clone(),
-                        child_hashes: branch.child_hashes.clone(),
+                        // TODO danlaine: remove
+                        // child_hashes: branch.child_hashes.clone(),
                     };
                     // We don't need to call update_child because we know there is no
                     // child at `child_index` whose hash we need to invalidate.
@@ -535,7 +540,8 @@ impl<T: WriteLinearStore> Merkle<T> {
                         children: child.children,
                         partial_path: Path::from(child_partial_path),
                         value: child.value.clone(),
-                        child_hashes: child.child_hashes.clone(),
+                        // TODO danlaine: remove
+                        // child_hashes: child.child_hashes.clone(),
                     })),
                     Node::Leaf(child) => Node::Leaf(LeafNode {
                         value: child.value.clone(),
@@ -552,7 +558,8 @@ impl<T: WriteLinearStore> Merkle<T> {
                     children: Default::default(),
                     partial_path: Path::from(path_overlap.shared),
                     value: None,
-                    child_hashes: Default::default(),
+                    // TODO danlaine: remove
+                    // child_hashes: Default::default(),
                 };
                 *new_branch.child_mut(new_branch_to_child_index) = Some(child_addr);
 
@@ -573,7 +580,8 @@ impl<T: WriteLinearStore> Merkle<T> {
                     children: branch.children,
                     partial_path: branch.partial_path.clone(),
                     value: branch.value.clone(),
-                    child_hashes: branch.child_hashes.clone(),
+                    // TODO danlaine: remove
+                    // child_hashes: branch.child_hashes.clone(),
                 };
                 branch.update_child(child_index, Some(new_branch_addr));
                 self.update_node(
@@ -646,7 +654,8 @@ impl<T: WriteLinearStore> Merkle<T> {
                         children: branch.children,
                         partial_path: branch.partial_path.clone(),
                         value: None,
-                        child_hashes: branch.child_hashes.clone(),
+                        // TODO danlaine: remove
+                        // child_hashes: branch.child_hashes.clone(),
                     };
                     self.update_node(ancestors, removed.addr, Node::Branch(Box::new(branch)))?;
                     return Ok(Some(removed_value.clone()));
@@ -714,7 +723,8 @@ impl<T: WriteLinearStore> Merkle<T> {
                             children: ancestor.children,
                             partial_path: ancestor.partial_path.clone(),
                             value: ancestor.value.clone(),
-                            child_hashes: ancestor.child_hashes.clone(),
+                             // TODO danlaine: remove
+                            // child_hashes: ancestor.child_hashes.clone(),
                         };
                         ancestor.update_child(child_index, None);
                         self.update_node(

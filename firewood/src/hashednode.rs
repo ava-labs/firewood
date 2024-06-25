@@ -121,32 +121,26 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     ) -> Result<TrieHash, Error> {
         match node {
             Node::Branch(b) => {
-                // We found a branch, so find all the children that ned hashing
+                // We found a branch, so find all the children that need hashing
                 let mut modified = false;
-                for (nibble, (child_addr, &mut ref mut child_hash)) in b
+
+                for (nibble, (child_addr, ref mut child_hash)) in b
                     .children
                     .iter()
-                    .zip(b.child_hashes.iter_mut())
                     .enumerate()
-                    .filter_map(|(nibble, (&addr, &mut ref mut hash))| {
-                        if *hash == TrieHash::default() {
-                            addr.map(|addr| (nibble, (addr, hash)))
-                        } else {
-                            None
-                        }
-                    })
+                    .filter_map(|(i, c)| c.as_ref().map(|(addr, hash)| (i, (addr, hash))))
                 {
                     // we found a child that needs hashing, so hash the child and assign it to the right spot in the child_hashes
                     // array
-                    let mut child = self.take_node(child_addr)?;
+                    let mut child = self.take_node(*child_addr)?;
                     let original_length = path_prefix.len();
                     path_prefix
                         .0
                         .extend(b.partial_path.0.iter().copied().chain(once(nibble as u8)));
-                    *child_hash = self.hash(child_addr, &mut child, path_prefix)?;
+                    *child_hash = &Some(self.hash(*child_addr, &mut child, path_prefix)?);
                     path_prefix.0.truncate(original_length);
                     modified = true;
-                    self.nodestore.update_in_place(child_addr, &child)?;
+                    self.nodestore.update_in_place(*child_addr, &child)?;
                 }
                 if modified {
                     self.nodestore.update_in_place(node_addr, node)?;
@@ -356,7 +350,23 @@ fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut 
         .copied();
 
     let children = match *node {
-        Node::Branch(ref branch) => Some(&branch.child_hashes),
+        Node::Branch(ref branch) => {
+            let child_hashes: Option<&[TrieHash; BranchNode::MAX_CHILDREN]> = Default::default();
+
+            for (i, child_addr) in branch.children.iter().enumerate() {
+
+                // let child_hash = branch
+                //     .child_hashes
+                //     .get(i)
+                //     .expect("child_hashes is always the same length as children");
+                // if *child_addr != Default::default() {
+                //     child_hashes[i] = child_hash;
+                // }
+            }
+
+            todo!()
+            // Some(&branch.child_hashes)
+        }
         Node::Leaf(_) => None,
     };
 

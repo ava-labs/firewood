@@ -608,7 +608,6 @@ mod tests {
             partial_path: Path::from([6, 7, 8]),
             value: Some(vec![9, 10, 11].into_boxed_slice()),
             children: Default::default(),
-            child_hashes: Default::default(),
         }));
 
         let old_size = node_store.header.size;
@@ -658,7 +657,6 @@ mod tests {
             partial_path: Path::from([6, 7, 8]),
             value: Some(vec![9, 10, 11].into_boxed_slice()),
             children: Default::default(),
-            child_hashes: Default::default(),
         }));
 
         // The new node is larger than the old node, so we need to allocate a new area
