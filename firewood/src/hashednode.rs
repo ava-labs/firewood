@@ -220,7 +220,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
             .expect("index is a nibble")
         {
             Some((_, None)) => true,
-            None => true, // TODO danlaine: is this right?
+            None => unreachable!("parent must have node as a child"),
             _ => false,
         };
 
