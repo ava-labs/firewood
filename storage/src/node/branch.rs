@@ -55,16 +55,6 @@ impl BranchNode {
     pub const MAX_CHILDREN: usize = 16;
 
     /// TODO danlaine fix comment
-    /// Obtain a mutable reference to a child address within a branch
-    /// This convenience method takes a u8 as the nibble offset
-    /// Panics if `child_index` >= [BranchNode::MAX_CHILDREN].
-    pub fn child_mut(&mut self, child_index: u8) -> &mut Option<(LinearAddress, Option<TrieHash>)> {
-        self.children
-            .get_mut(child_index as usize)
-            .expect("child_index is in bounds")
-    }
-
-    /// TODO danlaine fix comment
     /// Returns the address of the child at the given index.
     /// None if there is no child at that index.
     /// Panics if `child_index` >= [BranchNode::MAX_CHILDREN].
@@ -74,14 +64,20 @@ impl BranchNode {
             .and_then(|c| c.as_ref().map(|(addr, _)| addr))
     }
 
-    /// Update the child address of a branch node and invalidate the hash
+    /// Update the child at `child_index` to be `new_child_addr`.
+    /// If `new_child_addr` is None, the child is removed.
     pub fn update_child(&mut self, child_index: u8, new_child_addr: Option<LinearAddress>) {
+        let child = self
+            .children
+            .get_mut(child_index as usize)
+            .expect("child_index is in bounds");
+
         match new_child_addr {
             None => {
-                *self.child_mut(child_index) = None;
+                *child = None;
             }
             Some(new_child_addr) => {
-                *self.child_mut(child_index) = Some((new_child_addr, None));
+                *child = Some((new_child_addr, None));
             }
         }
     }
