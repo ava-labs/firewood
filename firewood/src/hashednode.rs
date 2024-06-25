@@ -124,12 +124,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
                 // We found a branch, so find all the children that need hashing
                 let mut modified = false;
 
-                for (nibble, child) in b.children.iter_mut().enumerate()
-                // .filter_map(|(i, ref mut c)| {
-                //     c.as_ref().map(|(addr, ref mut hash)| (i, (addr, hash)))
-                // })
-                // mutable (index, (address, Maybe hash))
-                {
+                for (nibble, child) in b.children.iter_mut().enumerate() {
                     let Some((child_addr, child_hash)) = child else {
                         continue;
                     };
@@ -365,18 +360,9 @@ fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut 
                     Some((_, Some(hash))) => hash.clone(), // TODO danlaine: remove clone
                     _ => Default::default(),
                 };
-
-                // let child_hash = branch
-                //     .child_hashes
-                //     .get(i)
-                //     .expect("child_hashes is always the same length as children");
-                // if *child_addr != Default::default() {
-                //     child_hashes[i] = child_hash;
-                // }
             }
 
             Some(child_hashes)
-            // Some(&branch.child_hashes)
         }
         Node::Leaf(_) => None,
     };
