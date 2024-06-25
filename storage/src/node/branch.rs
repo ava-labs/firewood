@@ -30,14 +30,11 @@ impl Debug for BranchNode {
         for (i, c) in self.children.iter().enumerate() {
             match c {
                 None => {}
-                Some((address, None)) => {
-                    write!(f, "(index: {i:?}), address={address:?}, hash=None")?
-                }
-                Some((address, Some(hash))) => write!(
+                Some((address, hash)) => write!(
                     f,
                     "(index: {i:?}), address={:?}, hash={:?})",
                     address,
-                    hex::encode(hash)
+                    hash.as_ref().map(|hash| hex::encode(hash)),
                 )?,
             }
         }
