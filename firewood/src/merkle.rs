@@ -387,7 +387,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     partial_path: Path::from(old_root_partial_path),
                 }),
                 Node::Branch(old_root) => Node::Branch(Box::new(BranchNode {
-                    children: old_root.children,
+                    children: old_root.children.clone(), // TODO danlaine: can we avoid cloning?
                     partial_path: Path::from(old_root_partial_path),
                     value: old_root.value.clone(),
                     // TODO danlaine: remove
@@ -403,16 +403,16 @@ impl<T: WriteLinearStore> Merkle<T> {
                 // TODO danlaine: remove
                 // child_hashes: Default::default(),
             };
-            *new_root.child_mut(old_root_child_index) = Some(old_root_addr);
+            new_root.update_child(old_root_child_index, Some(old_root_addr));
 
-            if let Some((new_leaf_child_index, remaining_path)) =
+            if let Some((&new_leaf_child_index, remaining_path)) =
                 path_overlap.unique_b.split_first()
             {
                 let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
                     value,
                     partial_path: Path::from(remaining_path),
                 }))?;
-                *new_root.child_mut(*new_leaf_child_index) = Some(new_leaf_addr);
+                new_root.update_child(new_leaf_child_index, Some(new_leaf_addr));
             } else {
                 new_root.value = Some(value);
             }
@@ -441,7 +441,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     partial_path: node.partial_path.clone(),
                 }),
                 Node::Branch(node) => Node::Branch(Box::new(BranchNode {
-                    children: node.children,
+                    children: node.children.clone(), // TODO danlaine: can we avoid this clone?
                     partial_path: node.partial_path.clone(),
                     value: Some(value),
                     // TODO danlaine: remove
@@ -469,7 +469,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 }))?;
 
                 let mut new_branch: BranchNode = leaf.into();
-                *new_branch.child_mut(child_index) = Some(new_leaf_addr);
+                new_branch.update_child(child_index, Some(new_leaf_addr));
                 self.update_node(
                     ancestors,
                     greatest_prefix_node.addr,
@@ -493,7 +493,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     }))?;
 
                     let mut branch = BranchNode {
-                        children: branch.children,
+                        children: branch.children.clone(), // TODO danlaine: can we avoid this clone?
                         partial_path: branch.partial_path.clone(),
                         value: branch.value.clone(),
                         // TODO danlaine: remove
@@ -501,7 +501,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     };
                     // We don't need to call update_child because we know there is no
                     // child at `child_index` whose hash we need to invalidate.
-                    *branch.child_mut(child_index) = Some(new_leaf_addr);
+                    branch.update_child(child_index, Some(new_leaf_addr));
 
                     self.update_node(
                         ancestors,
@@ -537,7 +537,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 // Update `child` to shorten its partial path.
                 let child = match &*child {
                     Node::Branch(child) => Node::Branch(Box::new(BranchNode {
-                        children: child.children,
+                        children: child.children.clone(), // TODO danlaine: can we avoid this clone?
                         partial_path: Path::from(child_partial_path),
                         value: child.value.clone(),
                         // TODO danlaine: remove
@@ -561,7 +561,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     // TODO danlaine: remove
                     // child_hashes: Default::default(),
                 };
-                *new_branch.child_mut(new_branch_to_child_index) = Some(child_addr);
+                new_branch.update_child(new_branch_to_child_index, Some(child_addr));
 
                 if let Some((&new_leaf_child_index, remaining_path)) =
                     path_overlap.unique_b.split_first()
@@ -570,14 +570,14 @@ impl<T: WriteLinearStore> Merkle<T> {
                         value,
                         partial_path: Path::from(remaining_path),
                     }))?;
-                    *new_branch.child_mut(new_leaf_child_index) = Some(new_leaf_addr);
+                    new_branch.update_child(new_leaf_child_index, Some(new_leaf_addr));
                 } else {
                     new_branch.value = Some(value);
                 }
                 let new_branch_addr = self.create_node(Node::Branch(Box::new(new_branch)))?;
 
                 let mut branch = BranchNode {
-                    children: branch.children,
+                    children: branch.children.clone(), // TODO danlaine: can we avoid this clone?
                     partial_path: branch.partial_path.clone(),
                     value: branch.value.clone(),
                     // TODO danlaine: remove
@@ -636,9 +636,9 @@ impl<T: WriteLinearStore> Merkle<T> {
                     .children
                     .iter()
                     .enumerate()
-                    .filter_map(|(index, addr)| addr.map(|addr| (index as u8, addr)));
+                    .filter_map(|(index, addr)| addr.as_ref().map(|addr| (index as u8, addr)));
 
-                let (child_index, child_addr) =
+                let (child_index, (child_addr, _)) =
                     branch_children.next().expect("branch must have children");
 
                 if branch_children.next().is_some() {
@@ -651,7 +651,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     //
                     // Note in the after diagram `child` may be the only child of `branch`.
                     let branch = BranchNode {
-                        children: branch.children,
+                        children: branch.children.clone(), // TODO danlaine: can we avoid this clone?
                         partial_path: branch.partial_path.clone(),
                         value: None,
                         // TODO danlaine: remove
@@ -673,7 +673,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 // Note that child/combined may be a leaf or a branch.
 
                 let combined = {
-                    let child = self.read_node(child_addr)?;
+                    let child = self.read_node(*child_addr)?;
 
                     // `combined`'s partial path is the concatenation of `branch`'s partial path,
                     // `child_index` and `child`'s partial path.
@@ -689,7 +689,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     child.new_with_partial_path(partial_path)
                 };
 
-                self.delete_node(child_addr)?;
+                self.delete_node(*child_addr)?;
 
                 self.update_node(ancestors, removed.addr, combined)?;
 
@@ -720,7 +720,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                         //  /      \               |
                         // ...    child           ...
                         let mut ancestor = BranchNode {
-                            children: ancestor.children,
+                            children: ancestor.children.clone() , // TODO danlaine: can we avoid this clone?
                             partial_path: ancestor.partial_path.clone(),
                             value: ancestor.value.clone(),
                              // TODO danlaine: remove

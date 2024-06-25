@@ -211,16 +211,20 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
             .expect("parent of a node is a branch");
 
         // The index of the updated node in `parent`'s children array.
-        let child_index = parent.next_nibble.expect("must have a nibble address") as usize;
+        let child_index = parent.next_nibble.expect("must have a nibble address");
 
         // True iff the moved node's hash was already marked as invalid
         // in `parent` because we never computed it or we invalidated it in
         // a previous traversal
-        let child_hash_already_invalidated = parent_branch
-            .child_hashes
-            .get(child_index)
+        let child_hash_already_invalidated = match parent_branch
+            .children
+            .get(child_index as usize)
             .expect("index is a nibble")
-            .is_empty();
+        {
+            Some((_, None)) => true,
+            None => true, // TODO danlaine: is this right?
+            _ => false,
+        };
 
         if child_hash_already_invalidated && old_addr == new_addr {
             // We already invalidated the moved node's hash, which means we must
@@ -234,7 +238,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
 
         let mut updated_parent = parent_branch.clone();
 
-        updated_parent.update_child_address(child_index, new_addr);
+        updated_parent.update_child(child_index, Some(new_addr));
 
         let updated_parent = Node::Branch(updated_parent);
         self.update_node(ancestors, old_parent_address, updated_parent)?;

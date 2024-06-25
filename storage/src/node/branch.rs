@@ -94,7 +94,7 @@ impl BranchNode {
     }
 
     /// Updates the child at the given index to the new address.
-    pub fn update_child_address(&mut self, child_index: usize, new_addr: LinearAddress) {
+    pub fn update_child_address(&mut self, _child_index: usize, _new_addr: LinearAddress) {
         todo!("TODO")
 
         // *self.child_mut(child_index as u8) = Some(new_addr);

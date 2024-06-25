@@ -245,7 +245,7 @@ fn get_iterator_intial_state<T: ReadLinearStore>(
                     });
 
                     #[allow(clippy::indexing_slicing)]
-                    let Some(child_addr) = branch.children[next_unmatched_key_nibble as usize] else {
+                    let Some((child_addr, _)) = branch.children[next_unmatched_key_nibble as usize] else {
                         return Ok(NodeStreamState::Iterating { iter_stack });
                     };
 
@@ -465,7 +465,7 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                                 };
 
                                 #[allow(clippy::indexing_slicing)]
-                                let Some(child_addr) =
+                                let Some((child_addr, _)) =
                                     branch.children[next_unmatched_key_nibble as usize]
                                 else {
                                     // There's no child at the index of the next nibble in the key.
@@ -536,9 +536,10 @@ where
 fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (u8, LinearAddress)> {
     branch
         .children
+        .clone() // TODO danlaine: can we remove clone?
         .into_iter()
         .enumerate()
-        .filter_map(|(pos, child_addr)| child_addr.map(|child_addr| (pos as u8, child_addr)))
+        .filter_map(|(pos, child_addr)| child_addr.map(|(child_addr, _)| (pos as u8, child_addr)))
 }
 
 fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
