@@ -17,8 +17,7 @@ pub struct BranchNode {
 
     /// The children of this branch.
     /// Each element is (child hash, child address).
-    /// The former is None if we don't know its hash.
-    ///
+    /// The latter is None if we don't know its hash.
     pub children: [Option<(LinearAddress, Option<TrieHash>)>; Self::MAX_CHILDREN],
 }
 

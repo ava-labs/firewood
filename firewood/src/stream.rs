@@ -536,7 +536,7 @@ where
 fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (u8, LinearAddress)> {
     branch
         .children
-        .clone() // TODO danlaine: can we remove clone?
+        .clone() // TODO danlaine: Remove clone
         .into_iter()
         .enumerate()
         .filter_map(|(pos, child_addr)| child_addr.map(|(child_addr, _)| (pos as u8, child_addr)))
