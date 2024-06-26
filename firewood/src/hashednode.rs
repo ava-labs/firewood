@@ -219,8 +219,8 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
             .get(child_index as usize)
             .expect("index is a nibble")
         {
-            Some((_, None)) => true,
             None => unreachable!("parent must have node as a child"),
+            Some((_, None)) => true,
             _ => false,
         };
 
@@ -357,7 +357,7 @@ fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut 
 
             for (i, child_addr) in branch.children.iter().enumerate() {
                 child_hashes[i] = match child_addr {
-                    Some((_, Some(hash))) => hash.clone(), // TODO danlaine: remove clone
+                    Some((_, Some(hash))) => hash.clone(),
                     _ => Default::default(),
                 };
             }

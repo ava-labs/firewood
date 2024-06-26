@@ -16,8 +16,9 @@ pub struct BranchNode {
     pub value: Option<Box<[u8]>>,
 
     /// The children of this branch.
-    /// Each element is (child hash, child address).
-    /// The latter is None if we don't know its hash.
+    /// Element i is the child at index i, or None if there is no child at that index.
+    /// Each element is (child_hash, child_address).
+    /// child_address is None if we don't know the child's hash.
     pub children: [Option<(LinearAddress, Option<TrieHash>)>; Self::MAX_CHILDREN],
 }
 
