@@ -707,7 +707,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                         //  /      \               |
                         // ...    child           ...
                         let mut ancestor = BranchNode {
-                            children: ancestor.children.clone(), 
+                            children: ancestor.children.clone(),
                             partial_path: ancestor.partial_path.clone(),
                             value: ancestor.value.clone(),
                         };
@@ -1405,7 +1405,7 @@ mod tests {
             ("horse", "stallion"),
             ("ddd", "ok"),
         ];
-        let  merkle = merkle_build_test(items)?;
+        let merkle = merkle_build_test(items)?;
 
         merkle.dump().unwrap();
         Ok(())
