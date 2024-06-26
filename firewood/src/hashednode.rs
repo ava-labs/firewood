@@ -129,6 +129,10 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
                         continue;
                     };
 
+                    if child_hash.is_some() {
+                        continue;
+                    }
+
                     // we found a child that needs hashing, so hash it
                     let mut child = self.take_node(*child_addr)?;
                     let original_length = path_prefix.len();
