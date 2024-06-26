@@ -52,13 +52,14 @@ use std::sync::Arc;
 /// Lets assume we have the following:
 ///  - bytes "on disk":   (0, 1, 2) `LinearStore<FileBacked>`
 ///  - bytes in proposal: (   3   ) `LinearStore<Proposed<FileBacked, ReadOnly>>`
+///
 /// that is, we're changing the second byte (1) to (3)
 ///
 /// To commit:
 ///  - Convert the `LinearStore<FileBacked>` to `LinearStore<Committed>` taking the
-/// old pages from the `LinearStore<Proposed<FileBacked, Readonly>>`
+///    old pages from the `LinearStore<Proposed<FileBacked, Readonly>>`
 ///  - Change any direct child proposals from `LinearStore<Proposed<Proposed, Readonly>>`
-/// into `LinearStore<FileBacked>`
+///    into `LinearStore<FileBacked>`
 ///  - Invalidate any other `LinearStore` that is a child of `LinearStore<FileBacked>`
 ///  - Flush all the `Proposed<FileBacked, ReadOnly>::new` bytes to disk
 ///  - Convert the `LinearStore<Proposed<FileBacked, Readonly>>` to `LinearStore<FileBacked>`

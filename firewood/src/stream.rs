@@ -9,7 +9,7 @@ use crate::{
 use futures::{stream::FusedStream, Stream, StreamExt};
 use std::{cmp::Ordering, iter::once};
 use std::{sync::Arc, task::Poll};
-use storage::{BranchNode, LinearAddress, NibblesIterator, Node, ReadLinearStore};
+use storage::{BranchNode, LinearAddress, NibblesIterator, Node, PathIterItem, ReadLinearStore};
 
 /// Represents an ongoing iteration over a node and its children.
 enum IterationNode {
@@ -355,6 +355,7 @@ impl<'a, T: ReadLinearStore> Stream for MerkleKeyValueStream<'a, T> {
     }
 }
 
+#[derive(Debug)]
 enum PathIteratorState<'a> {
     Iterating {
         /// The key, as nibbles, of the node at `address`, without the
@@ -370,23 +371,11 @@ enum PathIteratorState<'a> {
     Exhausted,
 }
 
-pub struct PathIterItem {
-    /// The key of the node at `address` as nibbles.
-    pub key_nibbles: Box<[u8]>,
-    pub node: Arc<Node>,
-    /// The address of `node` in the linear store.
-    pub addr: LinearAddress,
-    /// The next item returned by the iterator is a child of `node`.
-    /// Specifically, it's the child at index `next_nibble` in `node`'s
-    /// children array.
-    /// None if `node` is the last node in the path.
-    pub next_nibble: Option<u8>,
-}
-
 /// Iterates over all nodes on the path to a given key starting from the root.
 /// All nodes are branch nodes except possibly the last, which may be a leaf.
 /// All returned nodes have keys which are a prefix of the given key.
 /// If the given key is in the trie, the last node is at that key.
+#[derive(Debug)]
 pub struct PathIterator<'a, 'b, T: ReadLinearStore> {
     state: PathIteratorState<'b>,
     merkle: &'a Merkle<T>,
@@ -516,6 +505,7 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
 /// * [Ordering::Less] if the node is before the key.
 /// * [Ordering::Equal] if the node is a prefix of the key.
 /// * [Ordering::Greater] if the node is after the key.
+///
 /// The second returned element is the unmatched portion of the key after the
 /// partial path has been matched.
 fn compare_partial_path<'a, I1, I2>(

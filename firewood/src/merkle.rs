@@ -3,18 +3,17 @@
 
 use crate::hashednode::HashedNodeStore;
 use crate::proof::{Proof, ProofError};
-use crate::stream::{MerkleKeyValueStream, PathIterItem, PathIterator};
+use crate::stream::{MerkleKeyValueStream, PathIterator};
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
 use std::collections::HashSet;
 use std::future::ready;
 use std::io::Write;
 use std::iter::{empty, once};
-use storage::TrieHash;
-use storage::{BranchNode, LeafNode, Node};
-use storage::{LinearAddress, WriteLinearStore};
-use storage::{NibblesIterator, Path};
-use storage::{ProposedImmutable, ReadLinearStore};
+use storage::{
+    BranchNode, LeafNode, LinearAddress, NibblesIterator, Node, Path, PathIterItem,
+    ProposedImmutable, ReadLinearStore, TrieHash, WriteLinearStore,
+};
 
 use std::ops::{Deref, DerefMut};
 use thiserror::Error;
