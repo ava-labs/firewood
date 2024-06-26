@@ -325,14 +325,15 @@ impl<T: ReadLinearStore> Merkle<T> {
         Ok(())
     }
 
-    pub fn dump(&mut self) -> Result<String, std::io::Error> {
+    pub fn dump(&self) -> Result<String, std::io::Error> {
         let mut result = vec![];
         writeln!(result, "digraph Merkle {{")?;
         if let Some(addr) = self.root_address() {
             writeln!(result, " root -> {addr}")?;
             let mut seen = HashSet::new();
-            let root_hash = self.root_hash()?;
-            self.dump_node(addr, Some(&root_hash), &mut seen, &mut result)?;
+            // TODO danlaine: Figure out a way to print the root hash instead of
+            // passing None. self.root_hash takes in &mut self but dump takes &self.
+            self.dump_node(addr, None, &mut seen, &mut result)?;
         }
         write!(result, "}}")?;
 
@@ -1404,7 +1405,7 @@ mod tests {
             ("horse", "stallion"),
             ("ddd", "ok"),
         ];
-        let mut merkle = merkle_build_test(items)?;
+        let  merkle = merkle_build_test(items)?;
 
         merkle.dump().unwrap();
         Ok(())
