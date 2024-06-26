@@ -304,28 +304,28 @@ impl HasUpdate for Vec<u8> {
 pub(crate) struct HashPreimage<'a, K: Iterator<Item = u8> + Clone, V: AsRef<[u8]>> {
     pub(crate) key: K,
     pub(crate) value_digest: Option<V>,
-    pub(crate) children: Option<&'a [TrieHash; BranchNode::MAX_CHILDREN]>,
+    pub(crate) children: &'a [Option<(LinearAddress, Option<TrieHash>)>; BranchNode::MAX_CHILDREN],
 }
 
 impl<'a, K: Iterator<Item = u8> + Clone, V: AsRef<[u8]>> HashPreimage<'a, K, V> {
     /// Calls `buf.Update` for each byte in the pre-image of `node`.
     fn write<H: HasUpdate>(mut self, buf: &mut H) {
-        if let Some(children) = self.children {
-            let children_iter = children
-                .iter()
-                .enumerate()
-                .filter(|(_, hash)| **hash != Default::default());
+        // Iterates over children whose hashes are present.
+        let children_iter = self
+            .children
+            .iter()
+            .enumerate()
+            .filter_map(|(i, child_option)| match child_option {
+                Some((_, Some(hash))) => Some((i, hash)),
+                _ => None,
+            });
 
-            let num_children = children_iter.clone().count() as u64;
-            add_varint_to_buf(buf, num_children);
+        let num_children = children_iter.clone().count() as u64;
+        add_varint_to_buf(buf, num_children);
 
-            for (index, hash) in children_iter {
-                add_varint_to_buf(buf, index as u64);
-                buf.update(hash);
-            }
-        } else {
-            let num_children: u64 = 0;
-            add_varint_to_buf(buf, num_children);
+        for (index, hash) in children_iter {
+            add_varint_to_buf(buf, index as u64);
+            buf.update(hash);
         }
 
         // Add value digest (if any) to hash pre-image
@@ -352,19 +352,8 @@ fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut 
         .copied();
 
     let children = match *node {
-        Node::Branch(ref branch) => {
-            let mut child_hashes: [TrieHash; BranchNode::MAX_CHILDREN] = Default::default();
-
-            for (i, child_addr) in branch.children.iter().enumerate() {
-                *child_hashes.get_mut(i).expect("arrays are same size") = match child_addr {
-                    Some((_, Some(hash))) => hash.clone(),
-                    _ => Default::default(),
-                };
-            }
-
-            Some(child_hashes)
-        }
-        Node::Leaf(_) => None,
+        Node::Branch(ref branch) => &branch.children,
+        Node::Leaf(_) => &Default::default(),
     };
 
     let value = match *node {
@@ -378,7 +367,7 @@ fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut 
             HashPreimage {
                 key,
                 value_digest: Some(value_hash),
-                children: children.as_ref(),
+                children,
             }
             .write(buf);
         }
@@ -386,7 +375,7 @@ fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut 
             HashPreimage {
                 key,
                 value_digest: value,
-                children: children.as_ref(),
+                children,
             }
             .write(buf);
         }
