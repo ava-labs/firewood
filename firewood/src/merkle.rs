@@ -707,7 +707,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                         //  /      \               |
                         // ...    child           ...
                         let mut ancestor = BranchNode {
-                            children: ancestor.children.clone() , 
+                            children: ancestor.children.clone(), 
                             partial_path: ancestor.partial_path.clone(),
                             value: ancestor.value.clone(),
                         };
