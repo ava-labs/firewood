@@ -34,7 +34,7 @@ impl Debug for BranchNode {
                     f,
                     "(index: {i:?}), address={:?}, hash={:?})",
                     address,
-                    hash.as_ref().map(|hash| hex::encode(hash)),
+                    hash.as_ref().map(hex::encode),
                 )?,
             }
         }

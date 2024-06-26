@@ -356,7 +356,7 @@ fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut 
             let mut child_hashes: [TrieHash; BranchNode::MAX_CHILDREN] = Default::default();
 
             for (i, child_addr) in branch.children.iter().enumerate() {
-                child_hashes[i] = match child_addr {
+                *child_hashes.get_mut(i).expect("arrays are same size") = match child_addr {
                     Some((_, Some(hash))) => hash.clone(),
                     _ => Default::default(),
                 };
