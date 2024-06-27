@@ -8,7 +8,7 @@ use sha2::digest::{generic_array::GenericArray, typenum};
 
 /// A hash value inside a merkle trie
 /// We use the same type as returned by sha2 here to avoid copies
-#[derive(PartialEq, Eq, Clone, Default, Copy)]
+#[derive(PartialEq, Eq, Clone, Default)]
 pub struct TrieHash(GenericArray<u8, typenum::U32>);
 
 impl std::ops::Deref for TrieHash {

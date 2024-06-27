@@ -41,7 +41,7 @@ impl Node {
             Node::Branch(b) => Node::Branch(Box::new(BranchNode {
                 partial_path,
                 value: b.value.clone(),
-                children: b.children,
+                children: b.children.clone(),
             })),
             Node::Leaf(l) => Node::Leaf(LeafNode {
                 partial_path,
