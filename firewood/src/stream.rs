@@ -533,7 +533,7 @@ where
     (Ordering::Equal, unmatched_key_nibbles_iter)
 }
 
-/// Returns an iterator that returns (`pos`,`child_addr`) for each non-empty child of `branch`,
+/// Returns an iterator that returns (`pos`,`child`) for each non-empty child of `branch`,
 /// where `pos` is the position of the child in `branch`'s children array.
 fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (u8, LinearAddress)> {
     branch
@@ -541,7 +541,7 @@ fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (u8,
         .clone()
         .into_iter()
         .enumerate()
-        .filter_map(|(pos, child_addr)| match child_addr {
+        .filter_map(|(pos, child)| match child {
             storage::Child::None => None,
             storage::Child::Address(addr) | storage::Child::AddressWithHash(addr, _) => {
                 Some((pos as u8, addr))
