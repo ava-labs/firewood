@@ -710,7 +710,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     let num_children = ancestor
                         .children
                         .iter()
-                        .filter(|child| matches!(child, Child::None))
+                        .filter(|child| !matches!(child, Child::None))
                         .count();
 
                     if num_children > 1 {
