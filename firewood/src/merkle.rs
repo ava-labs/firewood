@@ -641,7 +641,6 @@ impl<T: WriteLinearStore> Merkle<T> {
                             Child::Address(addr) => Some((index as u8, *addr)),
                             Child::AddressWithHash(addr, _) => Some((index as u8, *addr)),
                         });
-                // .filter_map(|(index, addr)| addr.map(|addr| (index as u8, addr)));
 
                 let (child_index, child_addr) =
                     branch_children.next().expect("branch must have children");

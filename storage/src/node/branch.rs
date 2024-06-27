@@ -68,9 +68,7 @@ impl BranchNode {
     /// The maximum number of children in a [BranchNode]
     pub const MAX_CHILDREN: usize = 16;
 
-    /// Returns the address of the child at the given index, and the hash,
-    /// which is None if we don't know the hash.
-    /// None if there is no child at that index.
+    /// Returns the address of the child at the given index.
     /// Panics if `child_index` >= [BranchNode::MAX_CHILDREN].
     pub fn child(&self, child_index: u8) -> &Child {
         self.children
