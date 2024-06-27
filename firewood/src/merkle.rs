@@ -305,10 +305,10 @@ impl<T: ReadLinearStore> Merkle<T> {
                 write_attributes!(writer, b, &b.value.clone().unwrap_or(Box::from([])));
                 writeln!(writer, "\"]")?;
                 for (childidx, child) in b.children.iter().enumerate() {
-                    let (child_addr, _) = match child {
+                    let child_addr = match child {
                         Child::None => continue,
-                        Child::Address(addr) => (*addr, None),
-                        Child::AddressWithHash(addr, hash) => (*addr, Some(hash)),
+                        Child::Address(addr) => *addr,
+                        Child::AddressWithHash(addr, _) => *addr,
                     };
 
                     if !seen.insert(child_addr) {
