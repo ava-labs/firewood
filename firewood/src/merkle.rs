@@ -483,37 +483,33 @@ impl<T: WriteLinearStore> Merkle<T> {
             }
             Node::Branch(branch) => {
                 // See if `branch` has a child at `child_index` already.
-                let child_addr = match branch.child(child_index) {
-                    Child::Address(addr) => *addr,
-                    Child::AddressWithHash(addr, _) => *addr,
-                    Child::None => {
-                        // Create a new leaf at empty `child_index`.
-                        //     ...                ...
-                        //      |      -->         |
-                        //    branch             branch
-                        //    /   \           /    |        \
-                        //  ...   ...       ...  new_leaf   ...
-                        let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
-                            value,
-                            partial_path: Path::from(remaining_path),
-                        }))?;
+                let Some(child_addr) = branch.child(child_index).address() else {
+                    // Create a new leaf at empty `child_index`.
+                    //     ...                ...
+                    //      |      -->         |
+                    //    branch             branch
+                    //    /   \           /    |        \
+                    //  ...   ...       ...  new_leaf   ...
+                    let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
+                        value,
+                        partial_path: Path::from(remaining_path),
+                    }))?;
 
-                        let mut branch = BranchNode {
-                            children: branch.children,
-                            partial_path: branch.partial_path.clone(),
-                            value: branch.value.clone(),
-                        };
-                        // We don't need to call update_child because we know there is no
-                        // child at `child_index` whose hash we need to invalidate.
-                        branch.update_child(child_index, Some(new_leaf_addr));
+                    let mut branch = BranchNode {
+                        children: branch.children,
+                        partial_path: branch.partial_path.clone(),
+                        value: branch.value.clone(),
+                    };
+                    // We don't need to call update_child because we know there is no
+                    // child at `child_index` whose hash we need to invalidate.
+                    branch.update_child(child_index, Some(new_leaf_addr));
 
-                        self.update_node(
-                            ancestors,
-                            greatest_prefix_node.addr,
-                            Node::Branch(Box::new(branch)),
-                        )?;
-                        return Ok(());
-                    }
+                    self.update_node(
+                        ancestors,
+                        greatest_prefix_node.addr,
+                        Node::Branch(Box::new(branch)),
+                    )?;
+                    return Ok(());
                 };
 
                 // There is a child at `child_index` already.
@@ -636,10 +632,12 @@ impl<T: WriteLinearStore> Merkle<T> {
                         .children
                         .iter()
                         .enumerate()
-                        .filter_map(|(index, addr)| match addr {
-                            Child::None => None,
-                            Child::Address(addr) => Some((index as u8, *addr)),
-                            Child::AddressWithHash(addr, _) => Some((index as u8, *addr)),
+                        .filter_map(|(index, child)| {
+                            if let Some(child_addr) = child.address() {
+                                Some((index as u8, child_addr))
+                            } else {
+                                None
+                            }
                         });
 
                 let (child_index, child_addr) =

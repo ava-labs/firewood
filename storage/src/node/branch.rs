@@ -18,6 +18,16 @@ pub enum Child {
     AddressWithHash(LinearAddress, TrieHash),
 }
 
+impl Child {
+    /// Returns the address of the child, or None if there is no child.
+    pub fn address(&self) -> Option<LinearAddress> {
+        match self {
+            Child::None => None,
+            Child::Address(addr) | Child::AddressWithHash(addr, _) => Some(*addr),
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Clone, Serialize, Deserialize)]
 /// A branch node
 pub struct BranchNode {

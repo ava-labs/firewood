@@ -245,12 +245,10 @@ fn get_iterator_intial_state<T: ReadLinearStore>(
                     });
 
                     #[allow(clippy::indexing_slicing)]
-                    let child_addr = match branch.children[next_unmatched_key_nibble as usize] {
-                        storage::Child::None => {
-                            return Ok(NodeStreamState::Iterating { iter_stack })
-                        }
-                        storage::Child::Address(addr) => addr,
-                        storage::Child::AddressWithHash(addr, _) => addr,
+                    let Some(child_addr) =
+                        branch.children[next_unmatched_key_nibble as usize].address()
+                    else {
+                        return Ok(NodeStreamState::Iterating { iter_stack });
                     };
 
                     addr = child_addr;
@@ -469,22 +467,19 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                                 };
 
                                 #[allow(clippy::indexing_slicing)]
-                                let child_addr =
-                                    match branch.children[next_unmatched_key_nibble as usize] {
-                                        storage::Child::None => {
-                                            // There's no child at the index of the next nibble in the key.
-                                            // There's no node at `key` in this trie so we're done.
-                                            self.state = PathIteratorState::Exhausted;
-                                            return Some(Ok(PathIterItem {
-                                                key_nibbles: node_key.clone(),
-                                                node: node.clone(),
-                                                addr,
-                                                next_nibble: None,
-                                            }));
-                                        }
-                                        storage::Child::Address(addr) => addr,
-                                        storage::Child::AddressWithHash(addr, _) => addr,
-                                    };
+                                let Some(child_addr) =
+                                    branch.children[next_unmatched_key_nibble as usize].address()
+                                else {
+                                    // There's no child at the index of the next nibble in the key.
+                                    // There's no node at `key` in this trie so we're done.
+                                    self.state = PathIteratorState::Exhausted;
+                                    return Some(Ok(PathIterItem {
+                                        key_nibbles: node_key.clone(),
+                                        node: node.clone(),
+                                        addr,
+                                        next_nibble: None,
+                                    }));
+                                };
 
                                 matched_key.push(next_unmatched_key_nibble);
                                 let node_address = *address;
