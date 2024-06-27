@@ -90,15 +90,16 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                 })
                 .cloned();
             #[cfg(not(nightly))]
-            let hash = self.root_hash.get_or_init(|| {
-                let node = self
-                    .nodestore
-                    .read_node(addr)
-                    .expect("TODO: use get_or_try_init once it's available");
-
-                hash_node(&node, &Path(Default::default()))
-            });
-            Ok(hash.clone())
+            Ok(self
+                .root_hash
+                .get_or_init(|| {
+                    let node = self
+                        .nodestore
+                        .read_node(addr)
+                        .expect("TODO: use get_or_try_init once it's available");
+                    hash_node(&node, &Path(Default::default()))
+                })
+                .clone())
         } else {
             Ok(TrieHash::default())
         }
