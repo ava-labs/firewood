@@ -90,17 +90,13 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                 })
                 .cloned();
             #[cfg(not(nightly))]
-            let result = Ok(self
-                .root_hash
-                .get_or_init(|| {
-                    let node = self
-                        .nodestore
-                        .read_node(addr)
-                        .expect("TODO: use get_or_try_init once it's available");
-                    hash_node(&node, &Path(Default::default()))
-                })
-                .clone());
-            result
+            Ok(*self.root_hash.get_or_init(|| {
+                let node = self
+                    .nodestore
+                    .read_node(addr)
+                    .expect("TODO: use get_or_try_init once it's available");
+                hash_node(&node, &Path(Default::default()))
+            }))
         } else {
             Ok(TrieHash::default())
         }
@@ -126,11 +122,12 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
 
                 for (nibble, child) in b.children.iter_mut().enumerate() {
                     let Child::Address(child_addr) = child else {
+                        // There is no child or we already know its hash.
                         continue;
                     };
-                    let child_addr = *child_addr;
 
-                    // we found a child that needs hashing, so hash it
+                    // Hash this child.
+                    let child_addr = *child_addr;
                     let mut child_node = self.take_node(child_addr)?;
                     let original_length = path_prefix.len();
                     path_prefix

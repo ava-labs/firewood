@@ -396,7 +396,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     partial_path: Path::from(old_root_partial_path),
                 }),
                 Node::Branch(old_root) => Node::Branch(Box::new(BranchNode {
-                    children: old_root.children.clone(),
+                    children: old_root.children,
                     partial_path: Path::from(old_root_partial_path),
                     value: old_root.value.clone(),
                 })),
@@ -446,7 +446,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     partial_path: node.partial_path.clone(),
                 }),
                 Node::Branch(node) => Node::Branch(Box::new(BranchNode {
-                    children: node.children.clone(),
+                    children: node.children,
                     partial_path: node.partial_path.clone(),
                     value: Some(value),
                 })),
@@ -499,7 +499,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                         }))?;
 
                         let mut branch = BranchNode {
-                            children: branch.children.clone(),
+                            children: branch.children,
                             partial_path: branch.partial_path.clone(),
                             value: branch.value.clone(),
                         };
@@ -542,7 +542,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 // Update `child` to shorten its partial path.
                 let child = match &*child {
                     Node::Branch(child) => Node::Branch(Box::new(BranchNode {
-                        children: child.children.clone(),
+                        children: child.children,
                         partial_path: Path::from(child_partial_path),
                         value: child.value.clone(),
                     })),
@@ -578,7 +578,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 let new_branch_addr = self.create_node(Node::Branch(Box::new(new_branch)))?;
 
                 let mut branch = BranchNode {
-                    children: branch.children.clone(),
+                    children: branch.children,
                     partial_path: branch.partial_path.clone(),
                     value: branch.value.clone(),
                 };
@@ -656,7 +656,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     //
                     // Note in the after diagram `child` may be the only child of `branch`.
                     let branch = BranchNode {
-                        children: branch.children.clone(),
+                        children: branch.children,
                         partial_path: branch.partial_path.clone(),
                         value: None,
                     };
@@ -723,7 +723,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                         //  /      \               |
                         // ...    child           ...
                         let mut ancestor = BranchNode {
-                            children: ancestor.children.clone(),
+                            children: ancestor.children,
                             partial_path: ancestor.partial_path.clone(),
                             value: ancestor.value.clone(),
                         };

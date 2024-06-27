@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{LeafNode, LinearAddress, Path, TrieHash};
 use std::fmt::{Debug, Error as FmtError, Formatter};
 
-#[derive(PartialEq, Eq, Clone, Serialize, Deserialize, Default, Debug)]
+#[derive(PartialEq, Eq, Clone, Serialize, Deserialize, Default, Debug, Copy)]
 /// A child of a branch node.
 pub enum Child {
     #[default]
@@ -86,13 +86,9 @@ impl BranchNode {
             .get_mut(child_index as usize)
             .expect("child_index is in bounds");
 
-        match new_child_addr {
-            None => {
-                *child = Child::None;
-            }
-            Some(new_child_addr) => {
-                *child = Child::Address(new_child_addr);
-            }
+        *child = match new_child_addr {
+            None => Child::None,
+            Some(new_child_addr) => Child::Address(new_child_addr),
         }
     }
 }
