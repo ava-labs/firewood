@@ -316,7 +316,7 @@ impl<'a, K: Iterator<Item = u8> + Clone, V: AsRef<[u8]>> HashPreimage<'a, K, V> 
             .children
             .iter()
             .enumerate()
-            .filter_map(|(i, child_option)| match child_option {
+            .filter_map(|(i, child)| match child {
                 Child::AddressWithHash(_, hash) => Some((i, hash)),
                 _ => None,
             });
