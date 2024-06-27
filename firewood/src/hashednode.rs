@@ -7,7 +7,7 @@ use std::io::Error;
 use std::iter::once;
 use std::sync::{Arc, OnceLock};
 
-use storage::{BranchNode, TrieHash};
+use storage::{BranchNode, Child, TrieHash};
 use storage::{LinearAddress, NodeStore};
 use storage::{Node, Path, ProposedImmutable};
 use storage::{ReadLinearStore, WriteLinearStore};
@@ -125,24 +125,24 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
                 let mut modified = false;
 
                 for (nibble, child) in b.children.iter_mut().enumerate() {
-                    let Some((child_addr, child_hash)) = child else {
+                    let Child::Address(child_addr) = child else {
                         continue;
                     };
-
-                    if child_hash.is_some() {
-                        continue;
-                    }
+                    let child_addr = *child_addr;
 
                     // we found a child that needs hashing, so hash it
-                    let mut child = self.take_node(*child_addr)?;
+                    let mut child_node = self.take_node(child_addr)?;
                     let original_length = path_prefix.len();
                     path_prefix
                         .0
                         .extend(b.partial_path.0.iter().copied().chain(once(nibble as u8)));
-                    *child_hash = Some(self.hash(*child_addr, &mut child, path_prefix)?);
+                    *child = Child::AddressWithHash(
+                        child_addr,
+                        self.hash(child_addr, &mut child_node, path_prefix)?,
+                    );
                     path_prefix.0.truncate(original_length);
                     modified = true;
-                    self.nodestore.update_in_place(*child_addr, &child)?;
+                    self.nodestore.update_in_place(child_addr, &child_node)?;
                 }
                 if modified {
                     self.nodestore.update_in_place(node_addr, node)?;
@@ -223,9 +223,9 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
             .get(child_index as usize)
             .expect("index is a nibble")
         {
-            None => unreachable!("parent must have node as a child"),
-            Some((_, None)) => true,
-            _ => false,
+            Child::None => unreachable!("parent must have node as a child"),
+            Child::Address(_) => true,
+            Child::AddressWithHash(_, _) => false,
         };
 
         if child_hash_already_invalidated && old_addr == new_addr {
@@ -308,7 +308,7 @@ impl HasUpdate for Vec<u8> {
 pub(crate) struct HashPreimage<'a, K: Iterator<Item = u8> + Clone, V: AsRef<[u8]>> {
     pub(crate) key: K,
     pub(crate) value_digest: Option<V>,
-    pub(crate) children: &'a [Option<(LinearAddress, Option<TrieHash>)>; BranchNode::MAX_CHILDREN],
+    pub(crate) children: &'a [Child; BranchNode::MAX_CHILDREN],
 }
 
 impl<'a, K: Iterator<Item = u8> + Clone, V: AsRef<[u8]>> HashPreimage<'a, K, V> {
@@ -320,7 +320,7 @@ impl<'a, K: Iterator<Item = u8> + Clone, V: AsRef<[u8]>> HashPreimage<'a, K, V> 
             .iter()
             .enumerate()
             .filter_map(|(i, child_option)| match child_option {
-                Some((_, Some(hash))) => Some((i, hash)),
+                Child::AddressWithHash(_, hash) => Some((i, hash)),
                 _ => None,
             });
 

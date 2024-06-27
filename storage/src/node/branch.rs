@@ -6,6 +6,18 @@ use serde::{Deserialize, Serialize};
 use crate::{LeafNode, LinearAddress, Path, TrieHash};
 use std::fmt::{Debug, Error as FmtError, Formatter};
 
+#[derive(PartialEq, Eq, Clone, Serialize, Deserialize, Default, Debug)]
+/// A child of a branch node.
+pub enum Child {
+    #[default]
+    /// There is no child at this index.
+    None,
+    /// We know the child's address but not its hash.
+    Address(LinearAddress),
+    /// We know the child's address and hash.
+    AddressWithHash(LinearAddress, TrieHash),
+}
+
 #[derive(PartialEq, Eq, Clone, Serialize, Deserialize)]
 /// A branch node
 pub struct BranchNode {
@@ -19,7 +31,7 @@ pub struct BranchNode {
     /// Element i is the child at index i, or None if there is no child at that index.
     /// Each element is (child_hash, child_address).
     /// child_address is None if we don't know the child's hash.
-    pub children: [Option<(LinearAddress, Option<TrieHash>)>; Self::MAX_CHILDREN],
+    pub children: [Child; Self::MAX_CHILDREN],
 }
 
 impl Debug for BranchNode {
@@ -29,12 +41,14 @@ impl Debug for BranchNode {
 
         for (i, c) in self.children.iter().enumerate() {
             match c {
-                None => {}
-                Some((address, hash)) => write!(
+                Child::None => {}
+                Child::Address(addr) => {
+                    write!(f, "(index: {i:?}), address={addr:?}, hash=unknown)",)?
+                }
+                Child::AddressWithHash(addr, hash) => write!(
                     f,
-                    "(index: {i:?}), address={:?}, hash={:?})",
-                    address,
-                    hash.as_ref().map(hex::encode),
+                    "(index: {i:?}), address={addr:?}, hash={:?})",
+                    hex::encode(hash),
                 )?,
             }
         }
@@ -58,12 +72,10 @@ impl BranchNode {
     /// which is None if we don't know the hash.
     /// None if there is no child at that index.
     /// Panics if `child_index` >= [BranchNode::MAX_CHILDREN].
-    pub fn child(&self, child_index: u8) -> Option<(&LinearAddress, Option<&TrieHash>)> {
+    pub fn child(&self, child_index: u8) -> &Child {
         self.children
             .get(child_index as usize)
             .expect("child_index is in bounds")
-            .as_ref()
-            .map(|(address, hash)| (address, hash.as_ref()))
     }
 
     /// Update the child at `child_index` to be `new_child_addr`.
@@ -76,10 +88,10 @@ impl BranchNode {
 
         match new_child_addr {
             None => {
-                *child = None;
+                *child = Child::None;
             }
             Some(new_child_addr) => {
-                *child = Some((new_child_addr, None));
+                *child = Child::Address(new_child_addr);
             }
         }
     }

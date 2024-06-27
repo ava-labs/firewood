@@ -11,7 +11,7 @@ use std::future::ready;
 use std::io::Write;
 use std::iter::{empty, once};
 use storage::{
-    BranchNode, LeafNode, LinearAddress, NibblesIterator, Node, Path, PathIterItem,
+    BranchNode, Child, LeafNode, LinearAddress, NibblesIterator, Node, Path, PathIterItem,
     ProposedImmutable, ReadLinearStore, TrieHash, WriteLinearStore,
 };
 
@@ -286,12 +286,18 @@ impl<T: ReadLinearStore> Merkle<T> {
 
     pub fn dump_node(
         &self,
-        addr: LinearAddress,
-        hash: Option<&TrieHash>,
+        node: &Child,
         seen: &mut HashSet<LinearAddress>,
         writer: &mut dyn Write,
     ) -> Result<(), std::io::Error> {
-        let node = self.read_node(addr)?;
+        let (addr, hash) = match node {
+            Child::None => return Ok(()),
+            Child::Address(addr) => (addr, None),
+            Child::AddressWithHash(addr, hash) => (addr, Some(hash)),
+        };
+
+        let node = self.read_node(*addr)?;
+
         match &*node {
             Node::Branch(b) => {
                 write!(writer, "  {addr}[label=\"@{addr} hash={hash:?}")?;
@@ -299,20 +305,21 @@ impl<T: ReadLinearStore> Merkle<T> {
                 write_attributes!(writer, b, &b.value.clone().unwrap_or(Box::from([])));
                 writeln!(writer, "\"]")?;
                 for (childidx, child) in b.children.iter().enumerate() {
-                    match child {
-                        None => {}
-                        Some((childaddr, child_hash)) => {
-                            if !seen.insert(*childaddr) {
-                                // we have already seen this child, so
-                                writeln!(
-                                    writer,
-                                    "  {addr} -> {childaddr}[label=\"{childidx} (dup)\" color=red]"
-                                )?;
-                            } else {
-                                writeln!(writer, "  {addr} -> {childaddr}[label=\"{childidx}\"]")?;
-                                self.dump_node(*childaddr, child_hash.as_ref(), seen, writer)?;
-                            }
-                        }
+                    let (child_addr, _) = match child {
+                        Child::None => continue,
+                        Child::Address(addr) => (*addr, None),
+                        Child::AddressWithHash(addr, hash) => (*addr, Some(hash)),
+                    };
+
+                    if !seen.insert(child_addr) {
+                        // we have already seen this child, so
+                        writeln!(
+                            writer,
+                            "  {addr} -> {child_addr}[label=\"{childidx} (dup)\" color=red]"
+                        )?;
+                    } else {
+                        writeln!(writer, "  {addr} -> {child_addr}[label=\"{childidx}\"]")?;
+                        self.dump_node(child, seen, writer)?;
                     }
                 }
             }
@@ -331,9 +338,8 @@ impl<T: ReadLinearStore> Merkle<T> {
         if let Some(addr) = self.root_address() {
             writeln!(result, " root -> {addr}")?;
             let mut seen = HashSet::new();
-            // TODO danlaine: Figure out a way to print the root hash instead of
-            // passing None. self.root_hash takes in &mut self but dump takes &self.
-            self.dump_node(addr, None, &mut seen, &mut result)?;
+            let root = Child::Address(addr);
+            self.dump_node(&root, &mut seen, &mut result)?;
         }
         write!(result, "}}")?;
 
@@ -477,33 +483,37 @@ impl<T: WriteLinearStore> Merkle<T> {
             }
             Node::Branch(branch) => {
                 // See if `branch` has a child at `child_index` already.
-                let Some((&child_addr, _)) = branch.child(child_index) else {
-                    // Create a new leaf at empty `child_index`.
-                    //     ...                ...
-                    //      |      -->         |
-                    //    branch             branch
-                    //    /   \           /    |        \
-                    //  ...   ...       ...  new_leaf   ...
-                    let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
-                        value,
-                        partial_path: Path::from(remaining_path),
-                    }))?;
+                let child_addr = match branch.child(child_index) {
+                    Child::Address(addr) => *addr,
+                    Child::AddressWithHash(addr, _) => *addr,
+                    Child::None => {
+                        // Create a new leaf at empty `child_index`.
+                        //     ...                ...
+                        //      |      -->         |
+                        //    branch             branch
+                        //    /   \           /    |        \
+                        //  ...   ...       ...  new_leaf   ...
+                        let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
+                            value,
+                            partial_path: Path::from(remaining_path),
+                        }))?;
 
-                    let mut branch = BranchNode {
-                        children: branch.children.clone(),
-                        partial_path: branch.partial_path.clone(),
-                        value: branch.value.clone(),
-                    };
-                    // We don't need to call update_child because we know there is no
-                    // child at `child_index` whose hash we need to invalidate.
-                    branch.update_child(child_index, Some(new_leaf_addr));
+                        let mut branch = BranchNode {
+                            children: branch.children.clone(),
+                            partial_path: branch.partial_path.clone(),
+                            value: branch.value.clone(),
+                        };
+                        // We don't need to call update_child because we know there is no
+                        // child at `child_index` whose hash we need to invalidate.
+                        branch.update_child(child_index, Some(new_leaf_addr));
 
-                    self.update_node(
-                        ancestors,
-                        greatest_prefix_node.addr,
-                        Node::Branch(Box::new(branch)),
-                    )?;
-                    return Ok(());
+                        self.update_node(
+                            ancestors,
+                            greatest_prefix_node.addr,
+                            Node::Branch(Box::new(branch)),
+                        )?;
+                        return Ok(());
+                    }
                 };
 
                 // There is a child at `child_index` already.
@@ -621,13 +631,19 @@ impl<T: WriteLinearStore> Merkle<T> {
                 };
 
                 // We know the key exists, so see if the branch has more than 1 child.
-                let mut branch_children = branch
-                    .children
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, addr)| addr.as_ref().map(|addr| (index as u8, addr)));
+                let mut branch_children =
+                    branch
+                        .children
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, addr)| match addr {
+                            Child::None => None,
+                            Child::Address(addr) => Some((index as u8, *addr)),
+                            Child::AddressWithHash(addr, _) => Some((index as u8, *addr)),
+                        });
+                // .filter_map(|(index, addr)| addr.map(|addr| (index as u8, addr)));
 
-                let (child_index, (child_addr, _)) =
+                let (child_index, child_addr) =
                     branch_children.next().expect("branch must have children");
 
                 if branch_children.next().is_some() {
@@ -660,7 +676,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 // Note that child/combined may be a leaf or a branch.
 
                 let combined = {
-                    let child = self.read_node(*child_addr)?;
+                    let child = self.read_node(child_addr)?;
 
                     // `combined`'s partial path is the concatenation of `branch`'s partial path,
                     // `child_index` and `child`'s partial path.
@@ -676,7 +692,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     child.new_with_partial_path(partial_path)
                 };
 
-                self.delete_node(*child_addr)?;
+                self.delete_node(child_addr)?;
 
                 self.update_node(ancestors, removed.addr, combined)?;
 
@@ -695,7 +711,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     let num_children = ancestor
                         .children
                         .iter()
-                        .filter(|addr| addr.is_some())
+                        .filter(|child| matches!(child, Child::None))
                         .count();
 
                     if num_children > 1 {
