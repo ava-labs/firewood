@@ -290,18 +290,15 @@ impl<T: ReadLinearStore> Merkle<T> {
         seen: &mut HashSet<LinearAddress>,
         writer: &mut dyn Write,
     ) -> Result<(), std::io::Error> {
-        let (addr, hash) = match node {
-            Child::None => return Ok(()),
-            Child::Address(addr) => (addr, None),
-            Child::AddressWithHash(addr, hash) => (addr, Some(hash)),
+        let Some(addr) = node.address() else {
+            // This is a None child, so there is nothing to dump.
+            return Ok(());
         };
 
-        let node = self.read_node(*addr)?;
+        write!(writer, "  {addr}[label=\"{node:?}")?;
 
-        match &*node {
+        match &*self.read_node(addr)? {
             Node::Branch(b) => {
-                write!(writer, "  {addr}[label=\"@{addr} hash={hash:?}")?;
-
                 write_attributes!(writer, b, &b.value.clone().unwrap_or(Box::from([])));
                 writeln!(writer, "\"]")?;
                 for (childidx, child) in b.children.iter().enumerate() {
@@ -324,7 +321,6 @@ impl<T: ReadLinearStore> Merkle<T> {
                 }
             }
             Node::Leaf(l) => {
-                write!(writer, "  {addr}[label=\"@{addr} hash={hash:?}")?;
                 write_attributes!(writer, l, &l.value);
                 writeln!(writer, "\" shape=rect]")?;
             }
