@@ -286,37 +286,35 @@ impl<T: ReadLinearStore> Merkle<T> {
 
     pub fn dump_node(
         &self,
-        node: &Child,
+        addr: LinearAddress,
+        hash: Option<&TrieHash>,
         seen: &mut HashSet<LinearAddress>,
         writer: &mut dyn Write,
     ) -> Result<(), std::io::Error> {
-        let Some(addr) = node.address() else {
-            // This is a None child, so there is nothing to dump.
-            return Ok(());
-        };
-
-        write!(writer, "  {addr}[label=\"{node:?}")?;
+        write!(writer, "  {addr}[label=\"addr:{addr:?} hash:{hash:?}")?;
 
         match &*self.read_node(addr)? {
             Node::Branch(b) => {
                 write_attributes!(writer, b, &b.value.clone().unwrap_or(Box::from([])));
                 writeln!(writer, "\"]")?;
                 for (childidx, child) in b.children.iter().enumerate() {
-                    let child_addr = match child {
+                    let (child_addr, child_hash) = match child {
                         Child::None => continue,
-                        Child::Address(addr) => *addr,
-                        Child::AddressWithHash(addr, _) => *addr,
+                        Child::Address(addr) => (*addr, None),
+                        Child::AddressWithHash(addr, hash) => (*addr, Some(hash)),
                     };
 
-                    if !seen.insert(child_addr) {
-                        // we have already seen this child, so
+                    let inserted = seen.insert(child_addr);
+                    if !inserted {
+                        // We have already seen this child, which shouldn't happen.
+                        // Indicate this with a red edge.
                         writeln!(
                             writer,
                             "  {addr} -> {child_addr}[label=\"{childidx} (dup)\" color=red]"
                         )?;
                     } else {
                         writeln!(writer, "  {addr} -> {child_addr}[label=\"{childidx}\"]")?;
-                        self.dump_node(child, seen, writer)?;
+                        self.dump_node(child_addr, child_hash, seen, writer)?;
                     }
                 }
             }
@@ -334,8 +332,7 @@ impl<T: ReadLinearStore> Merkle<T> {
         if let Some(addr) = self.root_address() {
             writeln!(result, " root -> {addr}")?;
             let mut seen = HashSet::new();
-            let root = Child::Address(addr);
-            self.dump_node(&root, &mut seen, &mut result)?;
+            self.dump_node(addr, None, &mut seen, &mut result)?;
         }
         write!(result, "}}")?;
 
