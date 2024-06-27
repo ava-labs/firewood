@@ -543,8 +543,9 @@ fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (u8,
         .enumerate()
         .filter_map(|(pos, child_addr)| match child_addr {
             storage::Child::None => None,
-            storage::Child::Address(addr) => Some((pos as u8, addr)),
-            storage::Child::AddressWithHash(addr, _) => Some((pos as u8, addr)),
+            storage::Child::Address(addr) | storage::Child::AddressWithHash(addr, _) => {
+                Some((pos as u8, addr))
+            }
         })
 }
 
