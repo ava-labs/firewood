@@ -310,6 +310,7 @@ impl<'a, K: Iterator<Item = u8> + Clone, V: AsRef<[u8]>> HashPreimage<'a, K, V> 
             .enumerate()
             .filter_map(|(i, child)| match child {
                 Child::AddressWithHash(_, hash) => Some((i, hash)),
+                Child::Address(_) => unreachable!("all children should have hashes"),
                 _ => None,
             });
 
