@@ -120,6 +120,7 @@ impl<T: ReadLinearStore> Merkle<T> {
             let mut child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] = Default::default();
             if let Some(branch) = node.node.as_branch() {
                 for (i, child) in branch.children.iter().enumerate() {
+                    #[allow(clippy::indexing_slicing)]
                     if let Child::AddressWithHash(_, hash) = child {
                         child_hashes[i] = Some(hash.clone());
                     } else {
