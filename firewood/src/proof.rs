@@ -64,8 +64,13 @@ impl From<DbError> for ProofError {
 
 #[derive(Clone, Debug)]
 pub struct ProofNode {
-    pub key: Box<[u8]>,                  // TODO danlaine: should this be generic?
+    /// The key this node is at.
+    pub key: Box<[u8]>, // TODO danlaine: should this be generic?
+    /// None if the node has no value.
+    /// The value associated with `key` if the value is < 32 bytes.
+    /// The hash of the value if it's >= than 32 bytes.
     pub value_digest: Option<Box<[u8]>>, // TODO danlaine: should this be generic?
+    /// The hash of each child, or None if the child does not exist.
     pub child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN],
 }
 
