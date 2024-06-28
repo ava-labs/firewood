@@ -110,6 +110,10 @@ impl<T: ReadLinearStore> Merkle<T> {
     /// Returns a proof that the given key has a certain value,
     /// or that the key isn't in the trie.
     pub fn prove(&self, key: &[u8]) -> Result<Proof, MerkleError> {
+        if self.root_address().is_none() {
+            return Err(MerkleError::Empty);
+        }
+
         // Get the path to the key
         let path_iter = self.path_iter(key)?;
 
@@ -1021,15 +1025,12 @@ mod tests {
         assert!(merkle.root_address().is_none());
     }
 
-    //     #[test]
-    //     fn get_empty_proof() {
-    //         let merkle = create_in_memory_merkle();
-    //         let root_addr = merkle.init_sentinel().unwrap();
-
-    //         let proof = merkle.prove(b"any-key", root_addr).unwrap();
-
-    //         assert!(proof.0.is_empty());
-    //     }
+    #[test]
+    fn get_empty_proof() {
+        let merkle = create_in_memory_merkle();
+        let proof = merkle.prove(b"any-key").unwrap();
+        assert!(proof.0.is_empty());
+    }
 
     //     #[tokio::test]
     //     async fn empty_range_proof() {
