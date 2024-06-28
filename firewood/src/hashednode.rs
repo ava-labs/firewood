@@ -7,7 +7,7 @@ use std::io::Error;
 use std::iter::once;
 use std::sync::{Arc, OnceLock};
 
-use storage::{BranchNode, TrieHash};
+use storage::{BranchNode, Child, TrieHash};
 use storage::{LinearAddress, NodeStore};
 use storage::{Node, Path, ProposedImmutable};
 use storage::{ReadLinearStore, WriteLinearStore};
@@ -81,7 +81,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
     pub fn root_hash(&self) -> Result<TrieHash, Error> {
         debug_assert!(self.modified.is_empty());
         if let Some(addr) = self.nodestore.root_address() {
-            #[cfg(feature = "nightly")]
+            #[cfg(nightly)]
             let result = self
                 .root_hash
                 .get_or_try_init(|| {
@@ -89,8 +89,8 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                     Ok(hash_node(&node, &Path(Default::default())))
                 })
                 .cloned();
-            #[cfg(not(feature = "nightly"))]
-            let result = Ok(self
+            #[cfg(not(nightly))]
+            Ok(self
                 .root_hash
                 .get_or_init(|| {
                     let node = self
@@ -99,8 +99,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                         .expect("TODO: use get_or_try_init once it's available");
                     hash_node(&node, &Path(Default::default()))
                 })
-                .clone());
-            result
+                .clone())
         } else {
             Ok(TrieHash::default())
         }
@@ -121,32 +120,29 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     ) -> Result<TrieHash, Error> {
         match node {
             Node::Branch(b) => {
-                // We found a branch, so find all the children that ned hashing
+                // We found a branch, so find all the children that need hashing
                 let mut modified = false;
-                for (nibble, (child_addr, &mut ref mut child_hash)) in b
-                    .children
-                    .iter()
-                    .zip(b.child_hashes.iter_mut())
-                    .enumerate()
-                    .filter_map(|(nibble, (&addr, &mut ref mut hash))| {
-                        if *hash == TrieHash::default() {
-                            addr.map(|addr| (nibble, (addr, hash)))
-                        } else {
-                            None
-                        }
-                    })
-                {
-                    // we found a child that needs hashing, so hash the child and assign it to the right spot in the child_hashes
-                    // array
-                    let mut child = self.take_node(child_addr)?;
+
+                for (nibble, child) in b.children.iter_mut().enumerate() {
+                    let Child::Address(child_addr) = child else {
+                        // There is no child or we already know its hash.
+                        continue;
+                    };
+
+                    // Hash this child.
+                    let child_addr = *child_addr;
+                    let mut child_node = self.take_node(child_addr)?;
                     let original_length = path_prefix.len();
                     path_prefix
                         .0
                         .extend(b.partial_path.0.iter().copied().chain(once(nibble as u8)));
-                    *child_hash = self.hash(child_addr, &mut child, path_prefix)?;
+                    *child = Child::AddressWithHash(
+                        child_addr,
+                        self.hash(child_addr, &mut child_node, path_prefix)?,
+                    );
                     path_prefix.0.truncate(original_length);
                     modified = true;
-                    self.nodestore.update_in_place(child_addr, &child)?;
+                    self.nodestore.update_in_place(child_addr, &child_node)?;
                 }
                 if modified {
                     self.nodestore.update_in_place(node_addr, node)?;
@@ -217,18 +213,14 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
             .expect("parent of a node is a branch");
 
         // The index of the updated node in `parent`'s children array.
-        let child_index = parent.next_nibble.expect("must have a nibble address") as usize;
+        let child_index = parent.next_nibble.expect("must have a nibble address");
 
-        // True iff the moved node's hash was already marked as invalid
-        // in `parent` because we never computed it or we invalidated it in
-        // a previous traversal
-        let child_hash_already_invalidated = parent_branch
-            .child_hashes
-            .get(child_index)
-            .expect("index is a nibble")
-            .is_empty();
+        let child = parent_branch
+            .children
+            .get(child_index as usize)
+            .expect("index is a nibble");
 
-        if child_hash_already_invalidated && old_addr == new_addr {
+        if matches!(child, Child::Address(..)) && old_addr == new_addr {
             // We already invalidated the moved node's hash, which means we must
             // have already invalidated the parent's hash in its parent, and so
             // on, up to the root.
@@ -240,7 +232,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
 
         let mut updated_parent = parent_branch.clone();
 
-        updated_parent.update_child_address(child_index, new_addr);
+        updated_parent.update_child(child_index, Some(new_addr));
 
         let updated_parent = Node::Branch(updated_parent);
         self.update_node(ancestors, old_parent_address, updated_parent)?;
@@ -308,28 +300,29 @@ impl HasUpdate for Vec<u8> {
 pub(crate) struct HashPreimage<'a, K: Iterator<Item = u8> + Clone, V: AsRef<[u8]>> {
     pub(crate) key: K,
     pub(crate) value_digest: Option<V>,
-    pub(crate) children: Option<&'a [TrieHash; BranchNode::MAX_CHILDREN]>,
+    pub(crate) children: &'a [Child; BranchNode::MAX_CHILDREN],
 }
 
 impl<'a, K: Iterator<Item = u8> + Clone, V: AsRef<[u8]>> HashPreimage<'a, K, V> {
     /// Calls `buf.Update` for each byte in the pre-image of `node`.
     fn write<H: HasUpdate>(mut self, buf: &mut H) {
-        if let Some(children) = self.children {
-            let children_iter = children
-                .iter()
-                .enumerate()
-                .filter(|(_, hash)| **hash != Default::default());
+        // Iterates over children whose hashes are present.
+        let children_iter = self
+            .children
+            .iter()
+            .enumerate()
+            .filter_map(|(i, child)| match child {
+                Child::AddressWithHash(_, hash) => Some((i, hash)),
+                Child::Address(_) => unreachable!("all children should have hashes"),
+                _ => None,
+            });
 
-            let num_children = children_iter.clone().count() as u64;
-            add_varint_to_buf(buf, num_children);
+        let num_children = children_iter.clone().count() as u64;
+        add_varint_to_buf(buf, num_children);
 
-            for (index, hash) in children_iter {
-                add_varint_to_buf(buf, index as u64);
-                buf.update(hash);
-            }
-        } else {
-            let num_children: u64 = 0;
-            add_varint_to_buf(buf, num_children);
+        for (index, hash) in children_iter {
+            add_varint_to_buf(buf, index as u64);
+            buf.update(hash);
         }
 
         // Add value digest (if any) to hash pre-image
@@ -356,8 +349,8 @@ fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut 
         .copied();
 
     let children = match *node {
-        Node::Branch(ref branch) => Some(&branch.child_hashes),
-        Node::Leaf(_) => None,
+        Node::Branch(ref branch) => &branch.children,
+        Node::Leaf(_) => &Default::default(),
     };
 
     let value = match *node {

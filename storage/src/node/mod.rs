@@ -10,6 +10,7 @@ mod leaf;
 pub mod path;
 
 pub use branch::BranchNode;
+pub use branch::Child;
 pub use leaf::LeafNode;
 
 use crate::{LinearAddress, Path};
@@ -40,8 +41,7 @@ impl Node {
             Node::Branch(b) => Node::Branch(Box::new(BranchNode {
                 partial_path,
                 value: b.value.clone(),
-                children: b.children,
-                child_hashes: b.child_hashes.clone(),
+                children: b.children.clone(),
             })),
             Node::Leaf(l) => Node::Leaf(LeafNode {
                 partial_path,

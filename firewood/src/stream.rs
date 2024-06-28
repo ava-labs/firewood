@@ -245,7 +245,9 @@ fn get_iterator_intial_state<T: ReadLinearStore>(
                     });
 
                     #[allow(clippy::indexing_slicing)]
-                    let Some(child_addr) = branch.children[next_unmatched_key_nibble as usize] else {
+                    let Some(child_addr) =
+                        branch.children[next_unmatched_key_nibble as usize].address()
+                    else {
                         return Ok(NodeStreamState::Iterating { iter_stack });
                     };
 
@@ -466,7 +468,7 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
 
                                 #[allow(clippy::indexing_slicing)]
                                 let Some(child_addr) =
-                                    branch.children[next_unmatched_key_nibble as usize]
+                                    branch.children[next_unmatched_key_nibble as usize].address()
                                 else {
                                     // There's no child at the index of the next nibble in the key.
                                     // There's no node at `key` in this trie so we're done.
@@ -531,14 +533,20 @@ where
     (Ordering::Equal, unmatched_key_nibbles_iter)
 }
 
-/// Returns an iterator that returns (`pos`,`child_addr`) for each non-empty child of `branch`,
+/// Returns an iterator that returns (`pos`,`child`) for each non-empty child of `branch`,
 /// where `pos` is the position of the child in `branch`'s children array.
 fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (u8, LinearAddress)> {
     branch
         .children
+        .clone()
         .into_iter()
         .enumerate()
-        .filter_map(|(pos, child_addr)| child_addr.map(|child_addr| (pos as u8, child_addr)))
+        .filter_map(|(pos, child)| match child {
+            storage::Child::None => None,
+            storage::Child::Address(addr) | storage::Child::AddressWithHash(addr, _) => {
+                Some((pos as u8, addr))
+            }
+        })
 }
 
 fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
