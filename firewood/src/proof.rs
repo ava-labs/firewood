@@ -90,32 +90,4 @@ impl Proof {
     ) -> Result<Option<Vec<u8>>, ProofError> {
         todo!()
     }
-
-    // TODO danlaine: This should go somewhere else.
-    // Proof code should be separate from range proof code.
-    // pub fn verify_range_proof<K, V>(
-    //     &self,
-    //     _root_hash: HashKey,
-    //     _first_key: K,
-    //     _last_key: K,
-    //     keys: Vec<K>,
-    //     vals: Vec<V>,
-    // ) -> Result<bool, ProofError>
-    // where
-    //     K: AsRef<[u8]>,
-    //     V: AsRef<[u8]>,
-    // {
-    //     if keys.len() != vals.len() {
-    //         return Err(ProofError::InconsistentProofData);
-    //     }
-
-    //     // Ensure the received batch is monotonic increasing and contains no deletions
-    //     #[allow(clippy::indexing_slicing)]
-    //     if !keys.windows(2).all(|w| w[0].as_ref() < w[1].as_ref()) {
-    //         return Err(ProofError::NonMonotonicIncreaseRange);
-    //     }
-
-    //     // create an empty merkle trie in memory
-    //     todo!();
-    // }
 }
