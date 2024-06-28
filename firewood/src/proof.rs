@@ -74,7 +74,7 @@ pub struct ProofNode {
 pub struct Proof(pub Box<[ProofNode]>);
 
 impl Proof {
-    /// Returns the value associate with the given `key` in the trie revision
+    /// Returns the value associated with the given `key` in the trie revision
     /// with the given `root_hash`. If the key does not exist in the trie, returns `None`.
     /// Returns an error if the proof is invalid or doesn't prove the key-value pair for
     /// the given `root_hash`.

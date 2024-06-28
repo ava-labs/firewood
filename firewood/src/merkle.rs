@@ -783,7 +783,7 @@ mod tests {
     pub(super) fn create_in_memory_merkle() -> Merkle<MemStore> {
         Merkle::new(
             HashedNodeStore::initialize(MemStore::new(vec![]))
-                .expect("writing to an in-memory store"),
+                .expect("writes to an in-memory store never fail"),
         )
     }
 
