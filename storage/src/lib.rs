@@ -7,27 +7,29 @@
 //!
 //! Nodes are stored at a [LinearAddress] within a [NodeStore]
 //!
-//! The [NodeStore] maintains a free list and the [LinearAddress] of a root node.
+//! The [NodeStore] maintains a the [LinearAddress] of the root node
+//! for this revision.
 //!
-//! A [NodeStore] is typically backed by a [ReadLinearStore] which is immutable.
-//! However, [NodeStore] can also be backed by a [WriteLinearStore]. These
-//! support writes.
+//! A [NodeStore] has a generic argument which indicates what kind of
+//! revision the nodestore represents. Possible options are:
+//!  - [Committed] for a committed revision
+//!  - [ProposedImmutable] for a revision which proposed and has all the k/v inserts completed
+//!  - [ProposedMutable] for a revision being created as a proposal
+//! 
+//! The [ProposedMutable] revision is likely to have some incomplete hash values. These
+//! get filled in when converting the [NodeStore] to a [NodeStore<ProposedImmutable>].
+//! 
+//! Proposed [NodeStore]s contain some extra data, notably an updated freelist and a
+//! list of the new nodes yet to be written to disk.
 
-mod linear;
 mod node;
 mod nodestore;
 mod trie_hash;
+mod revisions;
 
 // re-export these so callers don't need to know where they are
-pub use linear::{LinearStoreParent, ReadLinearStore, WriteLinearStore};
-pub use node::{
-    path::NibblesIterator, path::Path, BranchNode, Child, LeafNode, Node, PathIterItem,
-};
+pub use node::{path::NibblesIterator, path::Path, BranchNode, LeafNode, Node, PathIterItem, Child};
 pub use nodestore::{LinearAddress, NodeStore, UpdateError};
-
-pub use linear::proposed::{ProposedImmutable, ProposedMutable};
-pub use linear::{
-    filebacked::FileBacked, historical::Historical, memory::MemStore, proposed::Proposed,
-};
+pub use revisions::{Committed, ProposedImmutable, ProposedMutable, filebacked::FileBacked};
 
 pub use trie_hash::TrieHash;

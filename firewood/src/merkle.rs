@@ -12,8 +12,7 @@ use std::io::Write;
 use std::iter::{empty, once};
 use storage::{
     BranchNode, Child, LeafNode, LinearAddress, NibblesIterator, Node, Path, PathIterItem,
-    ProposedImmutable, ReadLinearStore, TrieHash, WriteLinearStore,
-};
+    ProposedImmutable, TrieHash};
 
 use std::ops::{Deref, DerefMut};
 use thiserror::Error;
@@ -42,9 +41,9 @@ pub enum MerkleError {
 }
 
 #[derive(Debug)]
-pub struct Merkle<T: ReadLinearStore>(HashedNodeStore<T>);
+pub struct Merkle<T>(HashedNodeStore<T>);
 
-impl<T: ReadLinearStore> Deref for Merkle<T> {
+impl<T> Deref for Merkle<T> {
     type Target = HashedNodeStore<T>;
 
     fn deref(&self) -> &Self::Target {
@@ -52,7 +51,7 @@ impl<T: ReadLinearStore> Deref for Merkle<T> {
     }
 }
 
-impl<T: ReadLinearStore> DerefMut for Merkle<T> {
+impl<T> DerefMut for Merkle<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
@@ -93,7 +92,7 @@ macro_rules! write_attributes {
     };
 }
 
-impl<T: ReadLinearStore> Merkle<T> {
+impl<T> Merkle<T> {
     pub const fn new(store: HashedNodeStore<T>) -> Merkle<T> {
         Merkle(store)
     }
@@ -340,7 +339,8 @@ impl<T: ReadLinearStore> Merkle<T> {
     }
 }
 
-impl<T: WriteLinearStore> Merkle<T> {
+// TODO: restrict T to writable storage systems
+impl<T> Merkle<T> {
     pub fn insert(&mut self, key: &[u8], value: Box<[u8]>) -> Result<(), MerkleError> {
         let path = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
@@ -749,7 +749,8 @@ impl<T: WriteLinearStore> Merkle<T> {
     }
 }
 
-impl<T: WriteLinearStore> Merkle<T> {
+// TODO: restrict T to writeable
+impl<T> Merkle<T> {
     pub fn put_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError> {
         self.create_node(node).map_err(MerkleError::Format)
     }

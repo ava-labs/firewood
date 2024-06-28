@@ -7,10 +7,7 @@ use crate::stream::MerkleKeyValueStream;
 use crate::v2::api::{self, HashKey, KeyType, ValueType};
 pub use crate::v2::api::{Batch, BatchOp};
 use async_trait::async_trait;
-use storage::ProposedMutable;
-use storage::ReadLinearStore;
-use storage::TrieHash;
-use storage::{Historical as HistoricalStore, WriteLinearStore};
+use storage::{Committed, NodeStore, ProposedMutable, TrieHash};
 
 use crate::manager::{RevisionManager, RevisionManagerConfig};
 use metered::metered;
@@ -65,7 +62,7 @@ pub struct HistoricalRev<T> {
 }
 
 #[async_trait]
-impl<T: ReadLinearStore> api::DbView for HistoricalRev<T> {
+impl<T: Send + Sync> api::DbView for HistoricalRev<T> {
     type Stream<'a> = MerkleKeyValueStream<'a, T> where Self: 'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
@@ -100,7 +97,7 @@ impl<T: ReadLinearStore> api::DbView for HistoricalRev<T> {
     }
 }
 
-impl<T: ReadLinearStore> HistoricalRev<T> {
+impl<T> HistoricalRev<T> {
     pub fn stream(&self) -> MerkleKeyValueStream<'_, T> {
         todo!()
     }
@@ -147,7 +144,7 @@ pub struct Proposal<T> {
 }
 
 #[async_trait]
-impl<T: WriteLinearStore> api::Proposal for Proposal<T> {
+impl<T: Send + Sync> api::Proposal for Proposal<T> {
     type Proposal = Proposal<T>;
 
     async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
@@ -163,7 +160,7 @@ impl<T: WriteLinearStore> api::Proposal for Proposal<T> {
 }
 
 #[async_trait]
-impl<T: WriteLinearStore> api::DbView for Proposal<T> {
+impl<T: Send + Sync> api::DbView for Proposal<T> {
     type Stream<'a> = MerkleKeyValueStream<'a, T> where T: 'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
@@ -224,16 +221,16 @@ pub struct Db {
 
 #[async_trait]
 impl api::Db for Db {
-    type Historical = HistoricalRev<HistoricalStore>;
+    type Historical = HistoricalRev<NodeStore<Committed>>;
 
     type Proposal = Proposal<ProposedMutable>;
 
     async fn revision(
         &self,
         _root_hash: HashKey,
-    ) -> Result<Arc<HistoricalRev<HistoricalStore>>, api::Error> {
+    ) -> Result<Arc<HistoricalRev<NodeStore<Committed>>>, api::Error> {
         let store = self.manager.revision(_root_hash)?;
-        Ok(Arc::new(HistoricalRev::<HistoricalStore> {
+        Ok(Arc::new(HistoricalRev::<NodeStore<Committed>> {
             _historical: store,
         }))
     }
