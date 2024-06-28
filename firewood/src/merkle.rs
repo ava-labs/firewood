@@ -1,8 +1,8 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::hashednode::HashedNodeStore;
-use crate::proof::{Proof, ProofError};
+use crate::hashednode::{value_digest, HashedNodeStore};
+use crate::proof::{Proof, ProofError, ProofNode};
 use crate::stream::{MerkleKeyValueStream, PathIterator};
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
@@ -23,8 +23,8 @@ pub type Value = Vec<u8>;
 
 #[derive(Debug, Error)]
 pub enum MerkleError {
-    #[error("uninitialized")]
-    Uninitialized,
+    #[error("can't generate proof for empty node")]
+    Empty,
     #[error("read only")]
     ReadOnly,
     #[error("node not a branch node")]
@@ -109,8 +109,33 @@ impl<T: ReadLinearStore> Merkle<T> {
 
     /// Returns a proof that the given key has a certain value,
     /// or that the key isn't in the trie.
-    pub fn prove(&self, _key: &[u8]) -> Result<Proof, MerkleError> {
-        todo!()
+    pub fn prove(&self, key: &[u8]) -> Result<Proof, MerkleError> {
+        // Get the path to the key
+        let path_iter = self.path_iter(key)?;
+
+        let mut proof = Vec::new();
+        for node in path_iter {
+            let node = node?;
+
+            let mut child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] = Default::default();
+            if let Some(branch) = node.node.as_branch() {
+                for (i, child) in branch.children.iter().enumerate() {
+                    if let Child::AddressWithHash(_, hash) = child {
+                        child_hashes[i] = Some(hash.clone());
+                    } else {
+                        panic!("is this possible?")
+                    }
+                }
+            }
+
+            proof.push(ProofNode {
+                key: node.key_nibbles.clone(),
+                value_digest: value_digest(node.node.value()),
+                child_hashes,
+            });
+        }
+
+        Ok(Proof(proof.into_boxed_slice()))
     }
 
     pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {

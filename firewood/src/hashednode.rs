@@ -341,6 +341,16 @@ impl<'a, K: Iterator<Item = u8> + Clone, V: AsRef<[u8]>> HashPreimage<'a, K, V> 
     }
 }
 
+pub fn value_digest<T: AsRef<[u8]>>(value: Option<T>) -> Option<Box<[u8]>> {
+    match value {
+        None => None,
+        Some(value) if value.as_ref().len() >= 32 => {
+            Some(Sha256::digest(value).to_vec().into_boxed_slice())
+        }
+        Some(value) => Some(Box::from(value.as_ref())),
+    }
+}
+
 /// Writes the pre-image of `node`, which is at `path_prefix`, to `buf`.
 fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut H) {
     let key = path_prefix
