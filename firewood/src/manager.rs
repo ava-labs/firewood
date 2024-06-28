@@ -12,10 +12,7 @@ use typed_builder::TypedBuilder;
 
 use crate::v2::api::HashKey;
 
-use storage::FileBacked;
-use storage::Historical;
-use storage::ProposedImmutable;
-use storage::{LinearStoreParent, ReadLinearStore};
+use storage::{Committed, FileBacked, NodeStore, ProposedImmutable};
 
 #[derive(Clone, Debug, TypedBuilder)]
 pub struct RevisionManagerConfig {
@@ -27,8 +24,8 @@ pub struct RevisionManagerConfig {
 #[derive(Debug)]
 pub(crate) struct RevisionManager {
     max_revisions: usize,
-    filebacked: FileBacked,
-    historical: VecDeque<Arc<Historical>>,
+    filebacked: Arc<FileBacked>,
+    historical: VecDeque<Arc<NodeStore<Committed>>>,
     proposals: Vec<Arc<ProposedImmutable>>, // TODO: Should be Vec<Weak<ProposedImmutable>>
     committing_proposals: VecDeque<Arc<ProposedImmutable>>,
     // TODO: by_hash: HashMap<TrieHash, LinearStore>
@@ -43,7 +40,7 @@ impl RevisionManager {
     ) -> Result<Self, Error> {
         Ok(Self {
             max_revisions: config.max_revisions,
-            filebacked: FileBacked::new(filename, truncate)?,
+            filebacked: FileBacked::new(filename, truncate)?.into(),
             historical: Default::default(),
             proposals: Default::default(),
             committing_proposals: Default::default(),

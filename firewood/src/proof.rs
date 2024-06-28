@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use crate::{merkle::Merkle, v2::api::HashKey};
 use nix::errno::Errno;
 use sha2::Digest;
-use storage::ReadLinearStore;
 use thiserror::Error;
 
 use crate::{db::DbError, merkle::MerkleError};
@@ -131,7 +130,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     /// necessary nodes will be resolved and leave the remaining as hashnode.
     ///
     /// The given edge proof is allowed to be an existent or non-existent proof.
-    fn _proof_to_path<K, T: ReadLinearStore>(
+    fn _proof_to_path<K, T>(
         &self,
         _key: K,
         _root_hash: HashKey,

@@ -15,10 +15,7 @@ use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use super::ReadLinearStore;
-
 #[derive(Debug)]
-/// A [ReadLinearStore] backed by a file
 pub struct FileBacked {
     fd: Mutex<File>,
 }
@@ -37,14 +34,14 @@ impl FileBacked {
     }
 }
 
-impl ReadLinearStore for FileBacked {
-    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, Error> {
+impl FileBacked {
+    pub fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, Error> {
         let mut fd = self.fd.lock().expect("p");
         fd.seek(std::io::SeekFrom::Start(addr))?;
         Ok(Box::new(fd.try_clone().expect("poisoned lock")))
     }
 
-    fn size(&self) -> Result<u64, Error> {
+    pub fn size(&self) -> Result<u64, Error> {
         self.fd
             .lock()
             .expect("poisoned lock")
@@ -55,7 +52,7 @@ impl ReadLinearStore for FileBacked {
 impl FileBacked {
     /// Write to the backend filestore. This does not implement [crate::WriteLinearStore]
     /// because we don't want someone accidentally writing nodes directly to disk
-    pub fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
+    pub fn write(&self, offset: u64, object: &[u8]) -> Result<usize, Error> {
         self.fd
             .lock()
             .expect("poisoned lock")
