@@ -80,29 +80,29 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
 
     pub fn root_hash(&self) -> Result<TrieHash, Error> {
         debug_assert!(self.modified.is_empty());
-        if let Some(addr) = self.nodestore.root_address() {
-            #[cfg(nightly)]
-            let result = self
-                .root_hash
-                .get_or_try_init(|| {
-                    let node = self.read_node(addr)?;
-                    Ok(hash_node(&node, &Path(Default::default())))
-                })
-                .cloned();
-            #[cfg(not(nightly))]
-            Ok(self
-                .root_hash
-                .get_or_init(|| {
-                    let node = self
-                        .nodestore
-                        .read_node(addr)
-                        .expect("TODO: use get_or_try_init once it's available");
-                    hash_node(&node, &Path(Default::default()))
-                })
-                .clone())
-        } else {
-            Ok(TrieHash::default())
-        }
+        let Some(addr) = self.nodestore.root_address() else {
+            return Ok(TrieHash::default());
+        };
+
+        // TODO danlaine: Uncomment this once get_or_try_init is stable
+        // return self
+        //     .root_hash
+        //     .get_or_try_init(|| {
+        //         let node = self.read_node(addr)?;
+        //         Ok(hash_node(&node, &Path(Default::default())))
+        //     })
+        //     .cloned();
+
+        Ok(self
+            .root_hash
+            .get_or_init(|| {
+                let node = self
+                    .nodestore
+                    .read_node(addr)
+                    .expect("TODO: use get_or_try_init once it's available");
+                hash_node(&node, &Path(Default::default()))
+            })
+            .clone())
     }
 
     pub const fn root_address(&self) -> Option<LinearAddress> {
