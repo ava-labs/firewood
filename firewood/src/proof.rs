@@ -3,7 +3,7 @@
 
 use crate::{hashednode::value_digest, v2::api::HashKey};
 use nix::errno::Errno;
-use storage::{BranchNode, Child, NibblesIterator, Path, PathIterItem, TrieHash};
+use storage::{BranchNode, Child, NibblesIterator, PathIterItem, TrieHash};
 use thiserror::Error;
 
 use crate::{db::DbError, merkle::MerkleError};
