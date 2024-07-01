@@ -3,7 +3,7 @@
 
 use crate::{hashednode::value_digest, v2::api::HashKey};
 use nix::errno::Errno;
-use storage::{BranchNode, Child, PathIterItem, TrieHash};
+use storage::{BranchNode, Child, NibblesIterator, Path, PathIterItem, TrieHash};
 use thiserror::Error;
 
 use crate::{db::DbError, merkle::MerkleError};
@@ -24,6 +24,12 @@ pub enum ProofError {
     InvalidData,
     #[error("invalid proof")]
     InvalidProof,
+    #[error("proof can't be empty")]
+    Empty,
+    #[error("each proof node key should be a prefix of the proven key")]
+    ShouldBePrefixOfProvenKey,
+    #[error("each proof node key should be a prefix of the next key")]
+    ShouldBePrefixOfNextKey,
     #[error("invalid edge keys")]
     InvalidEdgeKeys,
     #[error("node insertion error")]
@@ -107,9 +113,32 @@ impl Proof {
     /// the given `root_hash`.
     pub fn verify<K: AsRef<[u8]>>(
         &self,
-        _key: K,
+        key: K,
         _root_hash: HashKey,
     ) -> Result<Option<Vec<u8>>, ProofError> {
+        let key: Vec<u8> = NibblesIterator::new(key.as_ref()).collect();
+
+        if self.0.is_empty() {
+            return Err(ProofError::Empty);
+        }
+
+        for i in 0..self.0.len() - 1 {
+            let node = &self.0[i];
+            let node_key: Vec<u8> = NibblesIterator::new(&node.key).collect();
+
+            // Assert `node_key` is a prefix of `key`
+            if !key.starts_with(&node_key) {
+                return Err(ProofError::ShouldBePrefixOfProvenKey);
+            }
+
+            // Assert `node_key` is a prefix of the next node's key
+            let next_node = &self.0[i + 1];
+            let next_node_key: Vec<u8> = NibblesIterator::new(&next_node.key).collect();
+            if next_node_key.len() <= node_key.len() || !next_node_key.starts_with(&node_key) {
+                return Err(ProofError::ShouldBePrefixOfNextKey);
+            }
+        }
+
         todo!()
     }
 }
