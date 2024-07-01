@@ -1,9 +1,9 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::v2::api::HashKey;
+use crate::{hashednode::value_digest, v2::api::HashKey};
 use nix::errno::Errno;
-use storage::{BranchNode, TrieHash};
+use storage::{BranchNode, Child, PathIterItem, TrieHash};
 use thiserror::Error;
 
 use crate::{db::DbError, merkle::MerkleError};
@@ -72,6 +72,28 @@ pub struct ProofNode {
     pub value_digest: Option<Box<[u8]>>, // TODO danlaine: should this be generic?
     /// The hash of each child, or None if the child does not exist.
     pub child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN],
+}
+
+impl From<PathIterItem> for ProofNode {
+    fn from(item: PathIterItem) -> Self {
+        let mut child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] = Default::default();
+
+        if let Some(branch) = item.node.as_branch() {
+            for (i, child) in branch.children.iter().enumerate() {
+                match child {
+                    Child::None => {}
+                    Child::Address(_) => unreachable!("TODO danlaine: is this reachable?"),
+                    Child::AddressWithHash(_, hash) => child_hashes[i] = Some(hash.clone()),
+                }
+            }
+        }
+
+        Self {
+            key: item.key_nibbles,
+            value_digest: value_digest(item.node.value()),
+            child_hashes,
+        }
+    }
 }
 
 /// A proof that a given key-value pair either exists or does not exist in a trie.

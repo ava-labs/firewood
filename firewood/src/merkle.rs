@@ -119,30 +119,30 @@ impl<T: ReadLinearStore> Merkle<T> {
         let mut proof = Vec::new();
         for node in path_iter {
             let node = node?;
-
-            let mut child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] = Default::default();
-            if let Some(branch) = node.node.as_branch() {
-                for (i, child) in branch.children.iter().enumerate() {
-                    #[allow(clippy::indexing_slicing)]
-                    if let Child::AddressWithHash(_, hash) = child {
-                        child_hashes[i] = Some(hash.clone());
-                    } else {
-                        panic!("TODO is this possible?")
-                    }
-                }
-            }
-
-            proof.push(ProofNode {
-                key: node.key_nibbles,
-                value_digest: value_digest(node.node.value()),
-                child_hashes,
-            });
+            proof.push(ProofNode::from(node));
         }
 
         if proof.is_empty() {
             // No nodes, even the root, are before `key`.
             // The root alone proves the non-existence of `key`.
             let root = self.read_node(root_addr)?;
+
+            let mut child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] = Default::default();
+            if let Some(branch) = root.as_branch() {
+                for (i, child) in branch.children.iter().enumerate() {
+                    match child {
+                        Child::None => {}
+                        Child::Address(_) => unreachable!("TODO is this reachable?"),
+                        Child::AddressWithHash(_, hash) => child_hashes[i] = Some(hash.clone()),
+                    }
+                }
+            }
+
+            proof.push(ProofNode {
+                key: root.partial_path().bytes(),
+                value_digest: value_digest(root.value()),
+                child_hashes,
+            })
         }
 
         Ok(Proof(proof.into_boxed_slice()))
@@ -1033,8 +1033,8 @@ mod tests {
     #[test]
     fn get_empty_proof() {
         let merkle = create_in_memory_merkle();
-        let proof = merkle.prove(b"any-key").unwrap();
-        assert!(proof.0.is_empty());
+        let proof = merkle.prove(b"any-key");
+        assert!(matches!(proof.unwrap_err(), MerkleError::Empty));
     }
 
     //     #[tokio::test]
