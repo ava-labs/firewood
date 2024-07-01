@@ -18,6 +18,7 @@ const MAX_VARINT_SIZE: usize = 10;
 const BITS_PER_NIBBLE: u64 = 4;
 
 use crate::merkle::MerkleError;
+use crate::proof::ProofNode;
 use storage::PathIterItem;
 
 /// A [HashedNodeStore] keeps track of nodes as they change when they are backed by a LinearStore.
@@ -297,30 +298,30 @@ impl HasUpdate for Vec<u8> {
 }
 
 /// Contains the fields that are serialized to hash a node.
-pub(crate) struct HashPreimage<'a, K: Iterator<Item = u8> + Clone, V: AsRef<[u8]>> {
+pub(crate) struct HashPreimage<'a, K, V, C>
+where
+    K: Iterator<Item = u8> + Clone,
+    V: AsRef<[u8]>,
+    C: Iterator<Item = (usize, &'a TrieHash)> + Clone,
+{
     pub(crate) key: K,
     pub(crate) value_digest: Option<V>,
-    pub(crate) children: &'a [Child; BranchNode::MAX_CHILDREN],
+    pub(crate) children: C,
 }
 
-impl<'a, K: Iterator<Item = u8> + Clone, V: AsRef<[u8]>> HashPreimage<'a, K, V> {
+impl<
+        'a,
+        K: Iterator<Item = u8> + Clone,
+        V: AsRef<[u8]>,
+        C: Iterator<Item = (usize, &'a TrieHash)> + Clone,
+    > HashPreimage<'a, K, V, C>
+{
     /// Calls `buf.Update` for each byte in the pre-image of `node`.
     fn write<H: HasUpdate>(mut self, buf: &mut H) {
-        // Iterates over children whose hashes are present.
-        let children_iter = self
-            .children
-            .iter()
-            .enumerate()
-            .filter_map(|(i, child)| match child {
-                Child::AddressWithHash(_, hash) => Some((i, hash)),
-                Child::Address(_) => unreachable!("all children should have hashes"),
-                _ => None,
-            });
-
-        let num_children = children_iter.clone().count() as u64;
+        let num_children = self.children.clone().count() as u64;
         add_varint_to_buf(buf, num_children);
 
-        for (index, hash) in children_iter {
+        for (index, hash) in self.children {
             add_varint_to_buf(buf, index as u64);
             buf.update(hash);
         }
@@ -351,48 +352,28 @@ pub fn value_digest<T: AsRef<[u8]>>(value: Option<T>) -> Option<Box<[u8]>> {
     }
 }
 
-/// Writes the pre-image of `node`, which is at `path_prefix`, to `buf`.
-fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut H) {
-    let key = path_prefix
-        .iter()
-        .chain(node.partial_path().iter())
-        .copied();
+/// Returns the hash of `node`.
+pub fn hash_proof_node(node: &ProofNode) -> TrieHash {
+    let mut hasher: Sha256 = Sha256::new();
 
-    let children = match *node {
-        Node::Branch(ref branch) => &branch.children,
-        Node::Leaf(_) => &Default::default(),
-    };
-
-    let value = match *node {
-        Node::Branch(ref branch) => branch.value.as_ref().map(|v| v.as_ref()),
-        Node::Leaf(ref leaf) => Some(leaf.value.as_ref()),
-    };
-
-    match value {
-        Some(value) if value.len() >= 32 => {
-            let value_hash = Sha256::digest(value);
-            HashPreimage {
-                key,
-                value_digest: Some(value_hash),
-                children,
-            }
-            .write(buf);
-        }
-        _ => {
-            HashPreimage {
-                key,
-                value_digest: value,
-                children,
-            }
-            .write(buf);
-        }
+    HashPreimage {
+        key: node.key.iter().copied(),
+        value_digest: node.value_digest.as_ref().map(|v| v.as_ref()),
+        children: node
+            .child_hashes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, hash)| hash.as_ref().map(|h| (i, h))),
     }
+    .write(&mut hasher);
+
+    hasher.finalize().into()
 }
 
 /// Returns the hash of `node` which is at `path_prefix`.
 pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
     let mut hasher: Sha256 = Sha256::new();
-    write_hash_preimage(node, path_prefix, &mut hasher);
+    write_hash_preimage(&mut hasher, node, path_prefix);
     hasher.finalize().into()
 }
 
@@ -402,8 +383,41 @@ pub fn hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
     // Key, 3 options, value digest
     let est_len = node.partial_path().len() + path_prefix.len() + 3 + TrieHash::default().len();
     let mut buf = Vec::with_capacity(est_len);
-    write_hash_preimage(node, path_prefix, &mut buf);
+    write_hash_preimage(&mut buf, node, path_prefix);
     buf.into_boxed_slice()
+}
+
+fn write_hash_preimage<H: HasUpdate>(buf: &mut H, node: &Node, path_prefix: &Path) {
+    let key = path_prefix
+        .iter()
+        .chain(node.partial_path().iter())
+        .copied();
+    let value = node.value().map(|v| v.as_ref());
+    let mut children: [Option<&TrieHash>; BranchNode::MAX_CHILDREN] = Default::default();
+
+    if let Some(branch) = node.as_branch() {
+        for (i, child) in branch.children.iter().enumerate() {
+            match child {
+                Child::None => {}
+                Child::Address(_) => unreachable!("TODO danlaine: is this unreachable?"),
+                Child::AddressWithHash(_, hash) => {
+                    children[i] = Some(hash);
+                }
+            }
+        }
+    }
+
+    let children = children
+        .iter()
+        .enumerate()
+        .filter_map(|(i, hash)| hash.map(|h| (i, h)));
+
+    HashPreimage {
+        key,
+        value_digest: value_digest(value),
+        children,
+    }
+    .write(buf);
 }
 
 fn add_value_digest_to_buf<H: HasUpdate, T: AsRef<[u8]>>(buf: &mut H, value_digest: Option<T>) {

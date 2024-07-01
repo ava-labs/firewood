@@ -110,13 +110,12 @@ impl<T: ReadLinearStore> Merkle<T> {
     /// Returns a proof that the given key has a certain value,
     /// or that the key isn't in the trie.
     pub fn prove(&self, key: &[u8]) -> Result<Proof, MerkleError> {
-        if self.root_address().is_none() {
+        let Some(root_addr) = self.root_address() else {
             return Err(MerkleError::Empty);
-        }
+        };
 
         // Get the path to the key
         let path_iter = self.path_iter(key)?;
-
         let mut proof = Vec::new();
         for node in path_iter {
             let node = node?;
@@ -128,16 +127,22 @@ impl<T: ReadLinearStore> Merkle<T> {
                     if let Child::AddressWithHash(_, hash) = child {
                         child_hashes[i] = Some(hash.clone());
                     } else {
-                        panic!("is this possible?")
+                        panic!("TODO is this possible?")
                     }
                 }
             }
 
             proof.push(ProofNode {
-                key: node.key_nibbles.clone(),
+                key: node.key_nibbles,
                 value_digest: value_digest(node.node.value()),
                 child_hashes,
             });
+        }
+
+        if proof.is_empty() {
+            // No nodes, even the root, are before `key`.
+            // The root alone proves the non-existence of `key`.
+            let root = self.read_node(root_addr)?;
         }
 
         Ok(Proof(proof.into_boxed_slice()))
