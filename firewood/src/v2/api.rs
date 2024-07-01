@@ -1,8 +1,8 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::merkle::MerkleError;
-pub use crate::merkle::Proof;
+use crate::manager::RevisionManagerError;
+use crate::{merkle::MerkleError, proof::Proof};
 use async_trait::async_trait;
 use futures::Stream;
 use std::{fmt::Debug, sync::Arc};
@@ -74,7 +74,7 @@ pub enum Error {
     },
 
     #[error("IO error: {0}")]
-    IO(std::io::Error),
+    IO(#[from] std::io::Error),
 
     #[error("Invalid proposal")]
     InvalidProposal,
@@ -88,6 +88,13 @@ pub enum Error {
 
 impl From<MerkleError> for Error {
     fn from(err: MerkleError) -> Self {
+        // TODO: do a better job
+        Error::InternalError(Box::new(err))
+    }
+}
+
+impl From<RevisionManagerError> for Error {
+    fn from(err: RevisionManagerError) -> Self {
         // TODO: do a better job
         Error::InternalError(Box::new(err))
     }
@@ -134,7 +141,7 @@ pub trait Db {
     async fn propose<K: KeyType, V: ValueType>(
         &self,
         data: Batch<K, V>,
-    ) -> Result<Self::Proposal, Error>;
+    ) -> Result<Arc<Self::Proposal>, Error>;
 }
 
 /// A view of the database at a specific time. These are wrapped with
@@ -231,5 +238,5 @@ pub trait Proposal: DbView + Send + Sync {
     async fn propose<K: KeyType, V: ValueType>(
         self: Arc<Self>,
         data: Batch<K, V>,
-    ) -> Result<Self::Proposal, Error>;
+    ) -> Result<Arc<Self::Proposal>, Error>;
 }

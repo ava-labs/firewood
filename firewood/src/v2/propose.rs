@@ -6,9 +6,9 @@ use std::{collections::BTreeMap, fmt::Debug, sync::Arc};
 use async_trait::async_trait;
 use futures::stream::Empty;
 
-use crate::{merkle::Proof, v2::api};
-
 use super::api::{KeyType, ValueType};
+use crate::proof::Proof;
+use crate::v2::api;
 
 #[derive(Clone, Debug)]
 pub(crate) enum KeyOp<V: ValueType> {
@@ -85,7 +85,7 @@ impl<T> Proposal<T> {
     pub(crate) fn new<K: KeyType, V: ValueType>(
         base: ProposalBase<T>,
         batch: api::Batch<K, V>,
-    ) -> Self {
+    ) -> Arc<Self> {
         let delta = batch
             .into_iter()
             .map(|op| match op {
@@ -96,7 +96,7 @@ impl<T> Proposal<T> {
             })
             .collect();
 
-        Self { base, delta }
+        Arc::new(Self { base, delta })
     }
 }
 
@@ -156,7 +156,7 @@ impl<T: api::DbView + Send + Sync> api::Proposal for Proposal<T> {
     async fn propose<K: KeyType, V: ValueType>(
         self: Arc<Self>,
         data: api::Batch<K, V>,
-    ) -> Result<Self::Proposal, api::Error> {
+    ) -> Result<Arc<Self::Proposal>, api::Error> {
         // find the Arc for this base proposal from the parent
         Ok(Proposal::new(ProposalBase::Proposal(self), data))
     }
