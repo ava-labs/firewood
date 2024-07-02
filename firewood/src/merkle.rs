@@ -130,14 +130,10 @@ impl<T: ReadLinearStore> Merkle<T> {
 
             let mut child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] = Default::default();
             if let Some(branch) = root.as_branch() {
-                for (i, child) in branch.children.iter().enumerate() {
-                    // TODO danlaine: can we avoid indexing?
-                    #[allow(clippy::indexing_slicing)]
-                    match child {
-                        Child::None => {}
-                        Child::Address(_) => unreachable!("TODO is this reachable?"),
-                        Child::AddressWithHash(_, hash) => child_hashes[i] = Some(hash.clone()),
-                    }
+                // TODO danlaine: can we avoid indexing?
+                #[allow(clippy::indexing_slicing)]
+                for (i, hash) in branch.children_iter() {
+                    child_hashes[i] = Some(hash.clone());
                 }
             }
 
