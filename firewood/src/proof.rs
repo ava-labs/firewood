@@ -87,6 +87,8 @@ impl From<PathIterItem> for ProofNode {
 
         if let Some(branch) = item.node.as_branch() {
             for (i, child) in branch.children.iter().enumerate() {
+                // TODO danlaine: can we avoid indexing?
+                #[allow(clippy::indexing_slicing)]
                 match child {
                     Child::None => {}
                     Child::Address(_) => unreachable!("TODO danlaine: is this reachable?"),
@@ -131,6 +133,8 @@ impl Proof {
         }
 
         for i in 0..self.0.len() - 1 {
+            // TODO danlaine: can we avoid indexing?
+            #[allow(clippy::indexing_slicing)]
             let node = &self.0[i];
             let node_key: Vec<u8> = NibblesIterator::new(&node.key).collect();
 
@@ -140,6 +144,8 @@ impl Proof {
             }
 
             // Assert `node_key` is a prefix of the next node's key
+            // TODO danlaine: can we avoid indexing?
+            #[allow(clippy::indexing_slicing)]
             let next_node = &self.0[i + 1];
             let next_node_key: Vec<u8> = NibblesIterator::new(&next_node.key).collect();
             if next_node_key.len() <= node_key.len() || !next_node_key.starts_with(&node_key) {

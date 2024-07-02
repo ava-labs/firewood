@@ -414,27 +414,27 @@ impl HasPartialPath for storage::LeafNode {
 }
 
 trait HasValue {
-    fn value<'a>(&'a self) -> Option<&'a [u8]>;
+    fn value(&self) -> Option<&[u8]>;
 }
 
 impl HasValue for storage::BranchNode {
-    fn value<'a>(&'a self) -> Option<&'a [u8]> {
+    fn value(&self) -> Option<&[u8]> {
         self.value.as_deref()
     }
 }
 
 impl HasValue for storage::LeafNode {
-    fn value<'a>(&'a self) -> Option<&'a [u8]> {
+    fn value(&self) -> Option<&[u8]> {
         Some(&self.value)
     }
 }
 
 trait HasChildren {
-    fn children<'a>(&'a self) -> impl Iterator<Item = (usize, &'a TrieHash)> + Clone;
+    fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone;
 }
 
 impl HasChildren for storage::BranchNode {
-    fn children<'a>(&'a self) -> impl Iterator<Item = (usize, &'a TrieHash)> + Clone {
+    fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
         self.children
             .iter()
             .enumerate()
@@ -447,7 +447,7 @@ impl HasChildren for storage::BranchNode {
 }
 
 impl HasChildren for storage::LeafNode {
-    fn children<'a>(&'a self) -> impl Iterator<Item = (usize, &'a TrieHash)> + Clone {
+    fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
         iter::empty()
     }
 }
@@ -513,11 +513,11 @@ fn add_value_digest_to_buf<H: HasUpdate>(buf: &mut H, value_digest: Option<Value
 
     match value_digest {
         ValueDigest::Value(value) if value.as_ref().len() >= 32 => {
-            let hash = Sha256::digest(value.as_ref());
+            let hash = Sha256::digest(value);
             add_len_and_value_to_buf(buf, hash.as_ref());
         }
         ValueDigest::Value(value) => {
-            add_len_and_value_to_buf(buf, value.as_ref());
+            add_len_and_value_to_buf(buf, value);
         }
         ValueDigest::Hash(hash) => {
             add_len_and_value_to_buf(buf, hash.as_ref());
