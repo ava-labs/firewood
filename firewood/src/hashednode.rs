@@ -359,18 +359,6 @@ fn write_preimage<H: HasUpdate, P: Preimage>(buf: &mut H, preimage: P) {
     }
 }
 
-// TODO danlaine: do we need this?
-// pub fn value_digest<'a>(value: Option<&'a [u8]>) -> Option<ValueDigest> {
-//     match value {
-//         None => None,
-//         Some(value) if value.as_ref().len() >= 32 => {
-//             let hash = Sha256::digest(value.as_ref());
-//             Some(ValueDigest::Hash(hash.to_vec().into_boxed_slice()))
-//         }
-//         Some(value) => Some(ValueDigest::Value(value)),
-//     }
-// }
-
 /// Returns the hash of `node`.
 pub fn hash_proof_node(node: &ProofNode) -> TrieHash {
     let mut hasher: Sha256 = Sha256::new();
