@@ -4,7 +4,7 @@
 use crate::v2::api::HashKey;
 use nix::errno::Errno;
 use sha2::{Digest, Sha256};
-use storage::{BranchNode, Child, NibblesIterator, PathIterItem, TrieHash};
+use storage::{BranchNode, NibblesIterator, PathIterItem, TrieHash};
 use thiserror::Error;
 
 use crate::{db::DbError, merkle::MerkleError};
@@ -86,14 +86,10 @@ impl From<PathIterItem> for ProofNode {
         let mut child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] = Default::default();
 
         if let Some(branch) = item.node.as_branch() {
-            for (i, child) in branch.children.iter().enumerate() {
-                // TODO danlaine: can we avoid indexing?
-                #[allow(clippy::indexing_slicing)]
-                match child {
-                    Child::None => {}
-                    Child::Address(_) => unreachable!("TODO danlaine: is this reachable?"),
-                    Child::AddressWithHash(_, hash) => child_hashes[i] = Some(hash.clone()),
-                }
+            // TODO danlaine: can we avoid indexing?
+            #[allow(clippy::indexing_slicing)]
+            for (i, hash) in branch.children_iter() {
+                child_hashes[i] = Some(hash.clone());
             }
         }
 

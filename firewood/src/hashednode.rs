@@ -435,14 +435,7 @@ trait HasChildren {
 
 impl HasChildren for storage::BranchNode {
     fn children_iter(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
-        self.children
-            .iter()
-            .enumerate()
-            .filter_map(|(i, child)| match child {
-                Child::AddressWithHash(_, hash) => Some((i, hash)),
-                Child::Address(_) => unreachable!("TODO danlaine: is this reachable?"),
-                _ => None,
-            })
+        self.children_iter()
     }
 }
 
