@@ -397,73 +397,108 @@ pub fn hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
     buf.into_boxed_slice()
 }
 
-struct NodeAndPrefix<'a> {
-    node: &'a Node,
+trait HasPartialPath {
+    fn partial_path(&self) -> impl Iterator<Item = u8> + Clone;
+}
+
+impl HasPartialPath for storage::BranchNode {
+    fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
+        self.partial_path.0.iter().copied()
+    }
+}
+
+impl HasPartialPath for storage::LeafNode {
+    fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
+        self.partial_path.0.iter().copied()
+    }
+}
+
+trait HasValue {
+    fn value<'a>(&'a self) -> Option<&'a [u8]>;
+}
+
+impl HasValue for storage::BranchNode {
+    fn value<'a>(&'a self) -> Option<&'a [u8]> {
+        self.value.as_deref()
+    }
+}
+
+impl HasValue for storage::LeafNode {
+    fn value<'a>(&'a self) -> Option<&'a [u8]> {
+        Some(&self.value)
+    }
+}
+
+trait HasChildren {
+    fn children<'a>(&'a self) -> impl Iterator<Item = (usize, &'a TrieHash)> + Clone;
+}
+
+impl HasChildren for storage::BranchNode {
+    fn children<'a>(&'a self) -> impl Iterator<Item = (usize, &'a TrieHash)> + Clone {
+        self.children
+            .iter()
+            .enumerate()
+            .filter_map(|(i, child)| match child {
+                Child::AddressWithHash(_, hash) => Some((i, hash)),
+                Child::Address(_) => unreachable!("TODO danlaine: is this reachable?"),
+                _ => None,
+            })
+    }
+}
+
+impl HasChildren for storage::LeafNode {
+    fn children<'a>(&'a self) -> impl Iterator<Item = (usize, &'a TrieHash)> + Clone {
+        iter::empty()
+    }
+}
+
+struct NodeAndPrefix<'a, N: HasPartialPath + HasValue + HasChildren> {
+    node: &'a N,
     prefix: &'a Path,
 }
 
-impl<'a> Preimage for NodeAndPrefix<'a> {
+impl<'a, N: HasPartialPath + HasValue + HasChildren> Preimage for NodeAndPrefix<'a, N> {
     fn key(&self) -> impl Iterator<Item = u8> + Clone {
         self.prefix
             .0
             .iter()
-            .chain(self.node.partial_path().iter())
             .copied()
+            .chain(self.node.partial_path())
     }
 
     fn value_digest(&self) -> Option<ValueDigest> {
-        match self.node.value().as_ref() {
+        match self.node.value() {
             None => None,
             Some(value) if value.len() >= 32 => {
-                Some(ValueDigest::Hash(value.to_vec().into_boxed_slice()))
+                let hash = Sha256::digest(value);
+                Some(ValueDigest::Hash(hash.to_vec().into_boxed_slice()))
             }
             Some(value) => Some(ValueDigest::Value(value)),
         }
     }
 
     fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
-        iter::empty()
+        self.node.children()
     }
 }
 
 fn write_hash_preimage<H: HasUpdate>(buf: &mut H, node: &Node, path_prefix: &Path) {
-    // match node {
-    //     Node::Branch(b) => {
-    //         if let Some(value) = b.value() {
-    //             let preimage = NodeAndPrefix {
-    //                 node,
-    //                 prefix: path_prefix,
-    //                 value_digest: value_digest(Some(value)),
-    //             };
-    //             write_preimage(buf, preimage);
-    //         } else {
-    //             let preimage = NodeAndPrefix {
-    //                 node,
-    //                 prefix: path_prefix,
-    //                 value_digest: None,
-    //             };
-    //             write_preimage(buf, preimage);
-    //         }
-    //         let preimage = NodeAndPrefix {
-    //             node: node,
-    //             prefix: path_prefix,
-    //         };
-    //         write_preimage(buf, preimage);
-    //     }
-    //     Node::Leaf(l) => {
-    //         let preimage = NodeAndPrefix {
-    //             node: l,
-    //             prefix: path_prefix,
-    //         };
-    //         write_preimage(buf, preimage);
-    //     }
-    // }
-    let preimage = NodeAndPrefix {
-        node,
-        prefix: path_prefix,
-    };
-
-    write_preimage(buf, preimage);
+    match node {
+        Node::Branch(node) => {
+            let preimage = NodeAndPrefix {
+                node: node.as_ref(),
+                prefix: path_prefix,
+            };
+            write_preimage(buf, preimage);
+        }
+        Node::Leaf(node) => {
+            let preimage = NodeAndPrefix {
+                node,
+                prefix: path_prefix,
+            };
+            write_preimage(buf, preimage);
+        }
+    }
 }
 
 fn add_value_digest_to_buf<H: HasUpdate>(buf: &mut H, value_digest: Option<ValueDigest>) {
