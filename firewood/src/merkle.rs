@@ -2,10 +2,11 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::hashednode::HashedNodeStore;
-use crate::proof::{Proof, ProofError};
+use crate::proof::{Proof, ProofError, ProofNode};
 use crate::stream::{MerkleKeyValueStream, PathIterator};
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::future::ready;
 use std::io::Write;
@@ -23,8 +24,8 @@ pub type Value = Vec<u8>;
 
 #[derive(Debug, Error)]
 pub enum MerkleError {
-    #[error("uninitialized")]
-    Uninitialized,
+    #[error("can't generate proof for empty node")]
+    Empty,
     #[error("read only")]
     ReadOnly,
     #[error("node not a branch node")]
@@ -107,35 +108,51 @@ impl<T: ReadLinearStore> Merkle<T> {
         self.0.root_hash()
     }
 
-    /// Constructs a merkle proof for key. The result contains all encoded nodes
-    /// on the path to the value at key. The value itself is also included in the
-    /// last node and can be retrieved by verifying the proof.
-    ///
-    /// If the trie does not contain a value for key, the returned proof contains
-    /// all nodes of the longest existing prefix of the key, ending with the node
-    /// that proves the absence of the key (at least the root node).
-    pub fn prove(&self, _key: &[u8]) -> Result<Proof<Vec<u8>>, MerkleError> {
-        todo!()
-        // let mut proofs = HashMap::new();
-        // if root_addr.is_null() {
-        //     return Ok(Proof(proofs));
-        // }
+    /// Returns a proof that the given key has a certain value,
+    /// or that the key isn't in the trie.
+    pub fn prove(&self, key: &[u8]) -> Result<Proof, MerkleError> {
+        let Some(root_addr) = self.root_address() else {
+            return Err(MerkleError::Empty);
+        };
 
-        // let sentinel_node = self.get_node(root_addr)?;
+        // Get the path to the key
+        let path_iter = self.path_iter(key)?;
+        let mut proof = Vec::new();
+        for node in path_iter {
+            let node = node?;
+            proof.push(ProofNode::from(node));
+        }
 
-        // let path_iter = self.path_iter(sentinel_node, key.as_ref());
+        if proof.is_empty() {
+            // No nodes, even the root, are before `key`.
+            // The root alone proves the non-existence of `key`.
+            let root: std::sync::Arc<Node> = self.read_node(root_addr)?;
 
-        // let nodes = path_iter
-        //     .map(|result| result.map(|(_, node)| node))
-        //     .collect::<Result<Vec<NodeObjRef>, MerkleError>>()?;
+            let mut child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] = Default::default();
+            if let Some(branch) = root.as_branch() {
+                // TODO danlaine: can we avoid indexing?
+                #[allow(clippy::indexing_slicing)]
+                for (i, hash) in branch.children_iter() {
+                    child_hashes[i] = Some(hash.clone());
+                }
+            }
 
-        // // Get the hashes of the nodes.
-        // for node in nodes.into_iter() {
-        //     let encoded = node.get_encoded(&self.store);
-        //     let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(encoded).into();
-        //     proofs.insert(hash, encoded.to_vec());
-        // }
-        // Ok(Proof(proofs))
+            proof.push(ProofNode {
+                // TODO remove duplicate code with ProofNode::From<PathIterItem>
+                key: root.partial_path().bytes(),
+                value_digest: match root.value() {
+                    None => None,
+                    Some(value) if value.len() >= 32 => {
+                        let hash = Sha256::digest(value);
+                        Some(hash.to_vec().into_boxed_slice())
+                    }
+                    Some(value) => Some(value.into()),
+                },
+                child_hashes,
+            })
+        }
+
+        Ok(Proof(proof.into_boxed_slice()))
     }
 
     pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
@@ -162,17 +179,9 @@ impl<T: ReadLinearStore> Merkle<T> {
         }
     }
 
-    pub fn verify_proof<N: AsRef<[u8]> + Send>(
+    pub fn verify_range_proof<V: AsRef<[u8]>>(
         &self,
-        _key: &[u8],
-        _proof: &Proof<N>,
-    ) -> Result<Option<Vec<u8>>, MerkleError> {
-        todo!()
-    }
-
-    pub fn verify_range_proof<N: AsRef<[u8]> + Send, V: AsRef<[u8]>>(
-        &self,
-        _proof: &Proof<N>,
+        _proof: &Proof,
         _first_key: &[u8],
         _last_key: &[u8],
         _keys: Vec<&[u8]>,
@@ -807,8 +816,11 @@ mod tests {
         merkle.insert(b"abc", Box::new([])).unwrap()
     }
 
-    fn create_in_memory_merkle() -> Merkle<MemStore> {
-        Merkle::new(HashedNodeStore::initialize(MemStore::new(vec![])).unwrap())
+    pub(super) fn create_in_memory_merkle() -> Merkle<MemStore> {
+        Merkle::new(
+            HashedNodeStore::initialize(MemStore::new(vec![]))
+                .expect("writes to an in-memory store never fail"),
+        )
     }
 
     // use super::*;
@@ -1025,15 +1037,12 @@ mod tests {
         assert!(merkle.root_address().is_none());
     }
 
-    //     #[test]
-    //     fn get_empty_proof() {
-    //         let merkle = create_in_memory_merkle();
-    //         let root_addr = merkle.init_sentinel().unwrap();
-
-    //         let proof = merkle.prove(b"any-key", root_addr).unwrap();
-
-    //         assert!(proof.0.is_empty());
-    //     }
+    #[test]
+    fn get_empty_proof() {
+        let merkle = create_in_memory_merkle();
+        let proof = merkle.prove(b"any-key");
+        assert!(matches!(proof.unwrap_err(), MerkleError::Empty));
+    }
 
     //     #[tokio::test]
     //     async fn empty_range_proof() {
