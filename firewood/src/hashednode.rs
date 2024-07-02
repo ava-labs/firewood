@@ -430,11 +430,11 @@ impl HasValue for storage::LeafNode {
 }
 
 trait HasChildren {
-    fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone;
+    fn children_iter(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone;
 }
 
 impl HasChildren for storage::BranchNode {
-    fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
+    fn children_iter(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
         self.children
             .iter()
             .enumerate()
@@ -447,7 +447,7 @@ impl HasChildren for storage::BranchNode {
 }
 
 impl HasChildren for storage::LeafNode {
-    fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
+    fn children_iter(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
         iter::empty()
     }
 }
@@ -478,7 +478,7 @@ impl<'a, N: HasPartialPath + HasValue + HasChildren> Preimage for NodeAndPrefix<
     }
 
     fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
-        self.node.children()
+        self.node.children_iter()
     }
 }
 
