@@ -1,8 +1,9 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{hashednode::value_digest, v2::api::HashKey};
+use crate::v2::api::HashKey;
 use nix::errno::Errno;
+use sha2::{Digest, Sha256};
 use storage::{BranchNode, Child, NibblesIterator, PathIterItem, TrieHash};
 use thiserror::Error;
 
@@ -96,7 +97,14 @@ impl From<PathIterItem> for ProofNode {
 
         Self {
             key: item.key_nibbles,
-            value_digest: value_digest(item.node.value()),
+            value_digest: match item.node.value() {
+                None => None,
+                Some(value) if value.len() >= 32 => {
+                    let hash = Sha256::digest(value);
+                    Some(hash.to_vec().into_boxed_slice())
+                }
+                Some(value) => Some(value.into()),
+            },
             child_hashes,
         }
     }

@@ -1,11 +1,12 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::hashednode::{value_digest, HashedNodeStore};
+use crate::hashednode::HashedNodeStore;
 use crate::proof::{Proof, ProofError, ProofNode};
 use crate::stream::{MerkleKeyValueStream, PathIterator};
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::future::ready;
 use std::io::Write;
@@ -125,7 +126,7 @@ impl<T: ReadLinearStore> Merkle<T> {
         if proof.is_empty() {
             // No nodes, even the root, are before `key`.
             // The root alone proves the non-existence of `key`.
-            let root = self.read_node(root_addr)?;
+            let root: std::sync::Arc<Node> = self.read_node(root_addr)?;
 
             let mut child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] = Default::default();
             if let Some(branch) = root.as_branch() {
@@ -139,8 +140,16 @@ impl<T: ReadLinearStore> Merkle<T> {
             }
 
             proof.push(ProofNode {
+                // TODO remove duplicate code with ProofNode::From<PathIterItem>
                 key: root.partial_path().bytes(),
-                value_digest: value_digest(root.value()),
+                value_digest: match root.value() {
+                    None => None,
+                    Some(value) if value.len() >= 32 => {
+                        let hash = Sha256::digest(value);
+                        Some(hash.to_vec().into_boxed_slice())
+                    }
+                    Some(value) => Some(value.into()),
+                },
                 child_hashes,
             })
         }
