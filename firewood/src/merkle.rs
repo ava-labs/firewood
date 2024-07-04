@@ -1025,6 +1025,30 @@ mod tests {
         assert!(merkle.root_address().is_none());
     }
 
+    #[test]
+    fn test_bug() {
+        let mut merkle = create_in_memory_merkle();
+
+        merkle.insert(&[0], Box::new([0])).unwrap();
+        assert_eq!(merkle.get(&[0]).unwrap(), Some(Box::from([0])));
+
+        merkle.insert(&[1], Box::new([1])).unwrap();
+        assert_eq!(merkle.get(&[1]).unwrap(), Some(Box::from([1])));
+
+        merkle.insert(&[2], Box::new([2])).unwrap();
+        assert_eq!(merkle.get(&[2]).unwrap(), Some(Box::from([2])));
+
+        let merkle = merkle.freeze().unwrap();
+
+        assert_eq!(merkle.get(&[0]).unwrap(), Some(Box::from([0])));
+        assert_eq!(merkle.get(&[1]).unwrap(), Some(Box::from([1])));
+        assert_eq!(merkle.get(&[2]).unwrap(), Some(Box::from([2])));
+
+        for result in merkle.path_iter(&[2]).unwrap() {
+            result.unwrap();
+        }
+    }
+
     //     #[test]
     //     fn get_empty_proof() {
     //         let merkle = create_in_memory_merkle();
