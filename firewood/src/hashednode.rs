@@ -64,11 +64,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
     }
 
     // recursively hash this node
-    fn hash(
-        &mut self,
-        node_addr: LinearAddress,
-        path_prefix: &mut Path,
-    ) -> Result<TrieHash, Error> {
+    fn hash(&self, node_addr: LinearAddress, path_prefix: &mut Path) -> Result<TrieHash, Error> {
         let node = self.read_node(node_addr)?;
 
         match &*node {
@@ -119,25 +115,8 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
         Ok(self
             .root_hash
             .get_or_init(|| {
-                let node = self
-                    .nodestore
-                    .read_node(addr)
-                    .expect("TODO: use get_or_try_init once it's available");
-
-                let hash = match &*node {
-                    Node::Branch(b) => {
-                        let children_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] =
-                            Default::default();
-
-                        // TODO fix
-                        hash_branch(b, &Path(Default::default()), children_hashes)
-                    }
-                    Node::Leaf(l) => hash_leaf(l, &Path(Default::default())),
-                };
-
+                let hash = self.hash(addr, &mut Path(Default::default())).unwrap();
                 hash
-
-                // hash_node(&node, &Path(Default::default()))
             })
             .clone())
     }
