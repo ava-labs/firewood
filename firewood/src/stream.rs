@@ -536,7 +536,6 @@ where
 fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (u8, LinearAddress)> {
     branch
         .children
-        .clone()
         .into_iter()
         .enumerate()
         .filter_map(|(pos, child)| child.map(|addr| (pos as u8, addr)))

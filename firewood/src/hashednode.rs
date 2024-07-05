@@ -73,6 +73,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                 let mut children_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] =
                     Default::default();
 
+                #[allow(clippy::indexing_slicing)]
                 for (index, child) in b.children.iter().enumerate() {
                     let Some(child_addr) = child else {
                         // There is no child or we already know its hash.
@@ -85,15 +86,16 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                     path_prefix
                         .0
                         .extend(b.partial_path.0.iter().copied().chain(once(index as u8)));
+
                     children_hashes[index] = Some(self.hash(child_addr, path_prefix)?);
                     path_prefix.0.truncate(original_length);
                 }
 
-                let hash = hash_branch(&b, path_prefix, children_hashes);
+                let hash = hash_branch(b, path_prefix, children_hashes);
 
                 Ok(hash)
             }
-            Node::Leaf(l) => Ok(hash_leaf(&l, path_prefix)),
+            Node::Leaf(l) => Ok(hash_leaf(l, path_prefix)),
         }
     }
 
@@ -115,7 +117,10 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
         Ok(self
             .root_hash
             // TODO danlaine: avoid unwrap() below
-            .get_or_init(|| self.hash(root_addr, &mut Path(Default::default())).unwrap())
+            .get_or_init(|| {
+                self.hash(root_addr, &mut Path(Default::default()))
+                    .expect("TODO danlaine remove this unwrap")
+            })
             .clone())
     }
 
@@ -129,7 +134,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     // and clears `self.modified`.
     fn flush(&mut self) -> Result<(), Error> {
         for (node_addr, (node, _)) in self.modified.iter() {
-            self.nodestore.update_in_place(*node_addr, &node)?;
+            self.nodestore.update_in_place(*node_addr, node)?;
         }
         self.modified.clear();
         Ok(())
@@ -288,21 +293,8 @@ pub fn hash_leaf<'a>(node: &'a LeafNode, path_prefix: &'a Path) -> TrieHash {
     .into()
 }
 
-// pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
-//     match node {
-//         Node::Branch(node) => NodeAndPrefix {
-//             node: node.as_ref(),
-//             prefix: path_prefix,
-//         }
-//         .into(),
-//         Node::Leaf(node) => NodeAndPrefix {
-//             node,
-//             prefix: path_prefix,
-//         }
-//         .into(),
-//     }
-// }
-
+// TODO danlaine: Uncomment this function, which will be needed
+// for proof generation / verification.
 /// Returns the serialized representation of `node` used as the pre-image
 /// when hashing the node. The node is at the given `path_prefix`.
 // pub fn hash_preimage<'a, C: Iterator<Item = (usize, &'a TrieHash)> + Clone>(
