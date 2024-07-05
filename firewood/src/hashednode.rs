@@ -340,7 +340,7 @@ pub(super) enum ValueDigest<'a> {
     /// A node's value.
     Value(&'a [u8]),
     /// The hash of a a node's value.
-    Hash(Box<[u8]>),
+    _Hash(Box<[u8]>),
 }
 
 trait Hashable {
@@ -434,32 +434,6 @@ impl HashableNode for storage::LeafNode {
     }
 }
 
-impl Hashable for &ProofNode {
-    fn key(&self) -> impl Iterator<Item = u8> + Clone {
-        self.key.as_ref().iter().copied()
-    }
-
-    fn value_digest(&self) -> Option<ValueDigest> {
-        match self.value_digest.as_ref() {
-            None => None,
-            Some(value) if value.len() > 32 => {
-                unreachable!("TODO danlaine: prevent this from happening. The digest should never be more than 32 bytes.")
-            }
-            Some(value) if value.len() == 32 => {
-                Some(ValueDigest::Hash(value.to_vec().into_boxed_slice()))
-            }
-            Some(value) => Some(ValueDigest::Value(value)),
-        }
-    }
-
-    fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
-        self.child_hashes
-            .iter()
-            .enumerate()
-            .filter_map(|(i, hash)| hash.as_ref().map(|h| (i, h)))
-    }
-}
-
 struct NodeAndPrefix<'a, N: HashableNode> {
     node: &'a N,
     prefix: &'a Path,
@@ -507,7 +481,7 @@ fn add_value_digest_to_buf<H: HasUpdate>(buf: &mut H, value_digest: Option<Value
         ValueDigest::Value(value) => {
             add_len_and_value_to_buf(buf, value);
         }
-        ValueDigest::Hash(hash) => {
+        ValueDigest::_Hash(hash) => {
             add_len_and_value_to_buf(buf, hash.as_ref());
         }
     }
