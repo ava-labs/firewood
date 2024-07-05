@@ -63,21 +63,6 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
         }
     }
 
-    // Returns a actual node instead of just an arc to it. This node is then
-    // owned by the caller.
-    // If the node was previously modified, then it will consume the modified Arc
-    // and return the inner value. This assumes no other references to that Arc
-    // exist at this time (that is, no iterators are active on the HashedNodeStore)
-    // If the node was not modified, a clone of the node is returned
-    fn take_node(&mut self, addr: LinearAddress) -> Result<Node, Error> {
-        if let Some((modified_node, _)) = self.modified.remove(&addr) {
-            Ok(Arc::into_inner(modified_node).expect("no other references to this node can exist"))
-        } else {
-            let node = self.nodestore.read_node(addr)?;
-            Ok((*node).clone())
-        }
-    }
-
     pub fn root_hash(&self) -> Result<TrieHash, Error> {
         debug_assert!(self.modified.is_empty());
         let Some(addr) = self.nodestore.root_address() else {
@@ -106,7 +91,8 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                         let children_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] =
                             Default::default();
 
-                        todo!()
+                        // TODO fix
+                        hash_branch(b, &Path(Default::default()), children_hashes)
                     }
                     Node::Leaf(l) => hash_leaf(l, &Path(Default::default())),
                 };
@@ -128,18 +114,25 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     fn hash(
         &mut self,
         node_addr: LinearAddress,
-        node: &mut Node,
         path_prefix: &mut Path,
     ) -> Result<TrieHash, Error> {
+        let node = if let Some((modified_node, _)) = self.modified.remove(&node_addr) {
+            let node =
+                Arc::into_inner(modified_node).expect("no other references to this node can exist");
+            self.nodestore.update_in_place(node_addr, &node)?;
+            node
+        } else {
+            let node = self.nodestore.read_node(node_addr)?;
+            (*node).clone()
+        };
+
         match node {
             Node::Branch(b) => {
                 // We found a branch, so find all the children that need hashing
-                let mut modified = false;
-
                 let mut children_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] =
                     Default::default();
 
-                for (index, child) in b.children.iter_mut().enumerate() {
+                for (index, child) in b.children.iter().enumerate() {
                     let Some(child_addr) = child else {
                         // There is no child or we already know its hash.
                         continue;
@@ -147,24 +140,15 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
 
                     // Hash this child.
                     let child_addr = *child_addr;
-                    let mut child_node = self.take_node(child_addr)?;
                     let original_length = path_prefix.len();
                     path_prefix
                         .0
                         .extend(b.partial_path.0.iter().copied().chain(once(index as u8)));
-                    children_hashes[index] =
-                        Some(self.hash(child_addr, &mut child_node, path_prefix)?);
+                    children_hashes[index] = Some(self.hash(child_addr, path_prefix)?);
                     path_prefix.0.truncate(original_length);
-                    modified = true;
-                    self.nodestore.update_in_place(child_addr, &child_node)?;
                 }
 
-                let hash = hash_branch(b, path_prefix, children_hashes);
-
-                if modified {
-                    self.nodestore.update_in_place(node_addr, node)?;
-                    self.modified.remove(&node_addr);
-                }
+                let hash = hash_branch(&b, path_prefix, children_hashes);
 
                 Ok(hash)
             }
@@ -175,10 +159,10 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     pub fn freeze(mut self) -> Result<HashedNodeStore<ProposedImmutable>, Error> {
         // fill in all remaining hashes, including the root hash
         if let Some(root_address) = self.root_address() {
-            let mut root_node = self.take_node(root_address)?;
-            let hash = self.hash(root_address, &mut root_node, &mut Path(Default::default()))?;
+            let hash = self.hash(root_address, &mut Path(Default::default()))?;
+            // Print hash as hex:
+            println!("{:x?}", hash);
             let _ = self.root_hash.set(hash);
-            self.nodestore.update_in_place(root_address, &root_node)?;
         }
         assert!(self.modified.is_empty());
         let frozen_nodestore = self.nodestore.freeze();
