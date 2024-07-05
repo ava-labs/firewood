@@ -99,7 +99,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
 
     pub fn root_hash(&self) -> Result<TrieHash, Error> {
         debug_assert!(self.modified.is_empty());
-        let Some(addr) = self.nodestore.root_address() else {
+        let Some(root_addr) = self.nodestore.root_address() else {
             return Ok(TrieHash::default());
         };
 
@@ -114,10 +114,8 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
 
         Ok(self
             .root_hash
-            .get_or_init(|| {
-                let hash = self.hash(addr, &mut Path(Default::default())).unwrap();
-                hash
-            })
+            // TODO danlaine: avoid unwrap() below
+            .get_or_init(|| self.hash(root_addr, &mut Path(Default::default())).unwrap())
             .clone())
     }
 
@@ -127,7 +125,8 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
 }
 
 impl<T: WriteLinearStore> HashedNodeStore<T> {
-    // recursively hash this node
+    // Writes all of the nodes in `self.modified` to the linear store
+    // and clears `self.modified`.
     fn flush(&mut self) -> Result<(), Error> {
         for (node_addr, (node, _)) in self.modified.iter() {
             self.nodestore.update_in_place(*node_addr, &node)?;
@@ -137,16 +136,15 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     }
 
     pub fn freeze(mut self) -> Result<HashedNodeStore<ProposedImmutable>, Error> {
-        // fill in all remaining hashes, including the root hash
-        if let Some(root_address) = self.root_address() {
-            self.flush()?;
+        self.flush()?;
+        assert!(self.modified.is_empty());
 
+        if let Some(root_address) = self.root_address() {
             let hash = self.hash(root_address, &mut Path(Default::default()))?;
             // Print hash as hex:
             println!("{:x?}", hash);
             let _ = self.root_hash.set(hash);
         }
-        assert!(self.modified.is_empty());
         let frozen_nodestore = self.nodestore.freeze();
         Ok(HashedNodeStore {
             nodestore: frozen_nodestore,
