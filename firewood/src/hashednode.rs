@@ -7,7 +7,7 @@ use std::io::Error;
 use std::iter::{self, once};
 use std::sync::{Arc, OnceLock};
 
-use storage::{Child, TrieHash};
+use storage::{BranchNode, TrieHash};
 use storage::{LinearAddress, NodeStore};
 use storage::{Node, Path, ProposedImmutable};
 use storage::{ReadLinearStore, WriteLinearStore};
@@ -123,8 +123,11 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
                 // We found a branch, so find all the children that need hashing
                 let mut modified = false;
 
-                for (nibble, child) in b.children.iter_mut().enumerate() {
-                    let Child::Address(child_addr) = child else {
+                let mut children_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] =
+                    Default::default();
+
+                for (index, child) in b.children.iter_mut().enumerate() {
+                    let Some(child_addr) = child else {
                         // There is no child or we already know its hash.
                         continue;
                     };
@@ -135,11 +138,9 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
                     let original_length = path_prefix.len();
                     path_prefix
                         .0
-                        .extend(b.partial_path.0.iter().copied().chain(once(nibble as u8)));
-                    *child = Child::AddressWithHash(
-                        child_addr,
-                        self.hash(child_addr, &mut child_node, path_prefix)?,
-                    );
+                        .extend(b.partial_path.0.iter().copied().chain(once(index as u8)));
+                    children_hashes[index] =
+                        Some(self.hash(child_addr, &mut child_node, path_prefix)?);
                     path_prefix.0.truncate(original_length);
                     modified = true;
                     self.nodestore.update_in_place(child_addr, &child_node)?;
@@ -215,12 +216,13 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         // The index of the updated node in `parent`'s children array.
         let child_index = parent.next_nibble.expect("must have a nibble address");
 
-        let child = parent_branch
-            .children
-            .get(child_index as usize)
-            .expect("index is a nibble");
+        // TODO danlaine: is this needed anymore?
+        // let child = parent_branch
+        //     .children
+        //     .get(child_index as usize)
+        //     .expect("index is a nibble");
 
-        if matches!(child, Child::Address(..)) && old_addr == new_addr {
+        if old_addr == new_addr {
             // We already invalidated the moved node's hash, which means we must
             // have already invalidated the parent's hash in its parent, and so
             // on, up to the root.

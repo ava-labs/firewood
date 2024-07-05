@@ -11,7 +11,7 @@ use std::future::ready;
 use std::io::Write;
 use std::iter::{empty, once};
 use storage::{
-    BranchNode, Child, LeafNode, LinearAddress, NibblesIterator, Node, Path, PathIterItem,
+    BranchNode, LeafNode, LinearAddress, NibblesIterator, Node, Path, PathIterItem,
     ProposedImmutable, ReadLinearStore, TrieHash, WriteLinearStore,
 };
 
@@ -287,22 +287,18 @@ impl<T: ReadLinearStore> Merkle<T> {
     pub fn dump_node(
         &self,
         addr: LinearAddress,
-        hash: Option<&TrieHash>,
         seen: &mut HashSet<LinearAddress>,
         writer: &mut dyn Write,
     ) -> Result<(), std::io::Error> {
-        write!(writer, "  {addr}[label=\"addr:{addr:?} hash:{hash:?}")?;
+        write!(writer, "  {addr}[label=\"addr:{addr:?}")?;
 
         match &*self.read_node(addr)? {
             Node::Branch(b) => {
                 write_attributes!(writer, b, &b.value.clone().unwrap_or(Box::from([])));
                 writeln!(writer, "\"]")?;
                 for (childidx, child) in b.children.iter().enumerate() {
-                    let (child_addr, child_hash) = match child {
-                        Child::None => continue,
-                        Child::Address(addr) => (*addr, None),
-                        Child::AddressWithHash(addr, hash) => (*addr, Some(hash)),
-                    };
+                    let Some(child_addr) = child else { continue };
+                    let child_addr = *child_addr;
 
                     let inserted = seen.insert(child_addr);
                     if !inserted {
@@ -314,7 +310,7 @@ impl<T: ReadLinearStore> Merkle<T> {
                         )?;
                     } else {
                         writeln!(writer, "  {addr} -> {child_addr}[label=\"{childidx}\"]")?;
-                        self.dump_node(child_addr, child_hash, seen, writer)?;
+                        self.dump_node(child_addr, seen, writer)?;
                     }
                 }
             }
@@ -332,7 +328,7 @@ impl<T: ReadLinearStore> Merkle<T> {
         if let Some(addr) = self.root_address() {
             writeln!(result, " root -> {addr}")?;
             let mut seen = HashSet::new();
-            self.dump_node(addr, None, &mut seen, &mut result)?;
+            self.dump_node(addr, &mut seen, &mut result)?;
         }
         write!(result, "}}")?;
 
@@ -476,7 +472,7 @@ impl<T: WriteLinearStore> Merkle<T> {
             }
             Node::Branch(branch) => {
                 // See if `branch` has a child at `child_index` already.
-                let Some(child_addr) = branch.child(child_index).address() else {
+                let Some(child_addr) = branch.child(child_index) else {
                     // Create a new leaf at empty `child_index`.
                     //     ...                ...
                     //      |      -->         |
@@ -504,6 +500,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     )?;
                     return Ok(());
                 };
+                let child_addr = *child_addr;
 
                 // There is a child at `child_index` already.
                 // Note that `child` can't be a prefix of the key we're inserting
@@ -620,14 +617,11 @@ impl<T: WriteLinearStore> Merkle<T> {
                 };
 
                 // We know the key exists, so see if the branch has more than 1 child.
-                let mut branch_children =
-                    branch
-                        .children
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(index, child)| {
-                            child.address().map(|child_addr| (index as u8, child_addr))
-                        });
+                let mut branch_children = branch
+                    .children
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, child)| child.map(|child_addr| (index as u8, child_addr)));
 
                 let (child_index, child_addr) =
                     branch_children.next().expect("branch must have children");
@@ -697,7 +691,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     let num_children = ancestor
                         .children
                         .iter()
-                        .filter(|child| !matches!(child, Child::None))
+                        .filter(|child| child.is_some())
                         .count();
 
                     if num_children > 1 {
