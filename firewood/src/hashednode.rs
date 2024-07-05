@@ -139,17 +139,20 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         self.flush()?;
         assert!(self.modified.is_empty());
 
-        if let Some(root_address) = self.root_address() {
+        let root_hash = if let Some(root_address) = self.root_address() {
             let hash = self.hash(root_address, &mut Path(Default::default()))?;
-            // Print hash as hex:
-            println!("{:x?}", hash);
-            let _ = self.root_hash.set(hash);
-        }
+            let once_hash = OnceLock::new();
+            let _ = once_hash.set(hash);
+            once_hash
+        } else {
+            Default::default()
+        };
+
         let frozen_nodestore = self.nodestore.freeze();
         Ok(HashedNodeStore {
             nodestore: frozen_nodestore,
             modified: Default::default(),
-            root_hash: Default::default(),
+            root_hash,
         })
     }
 
