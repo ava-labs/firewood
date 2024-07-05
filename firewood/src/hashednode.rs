@@ -4,10 +4,10 @@
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::Error;
-use std::iter::once;
+use std::iter::{self, once};
 use std::sync::{Arc, OnceLock};
 
-use storage::{BranchNode, Child, TrieHash};
+use storage::{Child, TrieHash};
 use storage::{LinearAddress, NodeStore};
 use storage::{Node, Path, ProposedImmutable};
 use storage::{ReadLinearStore, WriteLinearStore};
@@ -280,7 +280,47 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     }
 }
 
-trait HasUpdate {
+pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
+    match node {
+        Node::Branch(node) => NodeAndPrefix {
+            node: node.as_ref(),
+            prefix: path_prefix,
+        }
+        .into(),
+        Node::Leaf(node) => NodeAndPrefix {
+            node,
+            prefix: path_prefix,
+        }
+        .into(),
+    }
+}
+
+/// Returns the serialized representation of `node` used as the pre-image
+/// when hashing the node. The node is at the given `path_prefix`.
+pub fn hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
+    // Key, 3 options, value digest
+    let est_len = node.partial_path().len() + path_prefix.len() + 3 + TrieHash::default().len();
+    let mut buf = Vec::with_capacity(est_len);
+    match node {
+        Node::Branch(node) => {
+            NodeAndPrefix {
+                node: node.as_ref(),
+                prefix: path_prefix,
+            }
+            .write(&mut buf);
+        }
+        Node::Leaf(node) => {
+            NodeAndPrefix {
+                node,
+                prefix: path_prefix,
+            }
+            .write(&mut buf);
+        }
+    }
+    buf.into_boxed_slice()
+}
+
+pub(super) trait HasUpdate {
     fn update<T: AsRef<[u8]>>(&mut self, data: T);
 }
 
@@ -296,107 +336,160 @@ impl HasUpdate for Vec<u8> {
     }
 }
 
-/// Contains the fields that are serialized to hash a node.
-pub(crate) struct HashPreimage<'a, K: Iterator<Item = u8> + Clone, V: AsRef<[u8]>> {
-    pub(crate) key: K,
-    pub(crate) value_digest: Option<V>,
-    pub(crate) children: &'a [Child; BranchNode::MAX_CHILDREN],
+pub(super) enum ValueDigest<'a> {
+    /// A node's value.
+    Value(&'a [u8]),
+    /// The hash of a a node's value.
+    Hash(Box<[u8]>),
 }
 
-impl<'a, K: Iterator<Item = u8> + Clone, V: AsRef<[u8]>> HashPreimage<'a, K, V> {
-    /// Calls `buf.Update` for each byte in the pre-image of `node`.
-    fn write<H: HasUpdate>(mut self, buf: &mut H) {
-        // Iterates over children whose hashes are present.
-        let children_iter = self
-            .children
-            .iter()
-            .enumerate()
-            .filter_map(|(i, child)| match child {
-                Child::AddressWithHash(_, hash) => Some((i, hash)),
-                Child::Address(_) => unreachable!("all children should have hashes"),
-                _ => None,
-            });
+trait Hashable {
+    /// The key of the node where each byte is a nibble.
+    fn key(&self) -> impl Iterator<Item = u8> + Clone;
+    /// The node's value or hash.
+    fn value_digest(&self) -> Option<ValueDigest>;
+    /// Each element is a child's index and hash.
+    /// Yields 0 elements if the node is a leaf.
+    fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone;
+}
 
-        let num_children = children_iter.clone().count() as u64;
+pub(super) trait Preimage {
+    /// Returns the hash of this preimage.
+    fn to_hash(self) -> TrieHash;
+    /// Write this hash preimage to `buf`.
+    fn write(self, buf: &mut impl HasUpdate);
+}
+
+// Implement Preimage for all types that implement Hashable
+impl<T> Preimage for T
+where
+    T: Hashable,
+{
+    fn to_hash(self) -> TrieHash {
+        let mut hasher = Sha256::new();
+        self.write(&mut hasher);
+        hasher.finalize().into()
+    }
+
+    fn write(self, buf: &mut impl HasUpdate) {
+        let children = self.children();
+
+        let num_children = children.clone().count() as u64;
         add_varint_to_buf(buf, num_children);
 
-        for (index, hash) in children_iter {
+        for (index, hash) in children {
             add_varint_to_buf(buf, index as u64);
             buf.update(hash);
         }
 
         // Add value digest (if any) to hash pre-image
-        add_value_digest_to_buf(buf, self.value_digest);
+        add_value_digest_to_buf(buf, self.value_digest());
 
         // Add key length (in bits) to hash pre-image
-        let key_bit_len = BITS_PER_NIBBLE * self.key.clone().count() as u64;
+        let mut key = self.key();
+        // let mut key = key.as_ref().iter();
+        let key_bit_len = BITS_PER_NIBBLE * key.clone().count() as u64;
         add_varint_to_buf(buf, key_bit_len);
 
         // Add key to hash pre-image
-        while let Some(high_nibble) = self.key.next() {
-            let low_nibble = self.key.next().unwrap_or(0);
+        while let Some(high_nibble) = key.next() {
+            let low_nibble = key.next().unwrap_or(0);
             let byte = (high_nibble << 4) | low_nibble;
             buf.update([byte]);
         }
     }
 }
 
-/// Writes the pre-image of `node`, which is at `path_prefix`, to `buf`.
-fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut H) {
-    let key = path_prefix
-        .iter()
-        .chain(node.partial_path().iter())
-        .copied();
+trait HashableNode {
+    fn partial_path(&self) -> impl Iterator<Item = u8> + Clone;
+    fn value(&self) -> Option<&[u8]>;
+    fn children_iter(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone;
+}
 
-    let children = match *node {
-        Node::Branch(ref branch) => &branch.children,
-        Node::Leaf(_) => &Default::default(),
-    };
+impl HashableNode for storage::BranchNode {
+    fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
+        self.partial_path.0.iter().copied()
+    }
 
-    let value = match *node {
-        Node::Branch(ref branch) => branch.value.as_ref().map(|v| v.as_ref()),
-        Node::Leaf(ref leaf) => Some(leaf.value.as_ref()),
-    };
+    fn value(&self) -> Option<&[u8]> {
+        self.value.as_deref()
+    }
 
-    match value {
-        Some(value) if value.len() >= 32 => {
-            let value_hash = Sha256::digest(value);
-            HashPreimage {
-                key,
-                value_digest: Some(value_hash),
-                children,
-            }
-            .write(buf);
-        }
-        _ => {
-            HashPreimage {
-                key,
-                value_digest: value,
-                children,
-            }
-            .write(buf);
-        }
+    fn children_iter(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
+        self.children_iter()
     }
 }
 
-/// Returns the hash of `node` which is at `path_prefix`.
-pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
-    let mut hasher: Sha256 = Sha256::new();
-    write_hash_preimage(node, path_prefix, &mut hasher);
-    hasher.finalize().into()
+impl HashableNode for storage::LeafNode {
+    fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
+        self.partial_path.0.iter().copied()
+    }
+
+    fn value(&self) -> Option<&[u8]> {
+        Some(&self.value)
+    }
+
+    fn children_iter(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
+        iter::empty()
+    }
 }
 
-/// Returns the serialized representation of `node` used as the pre-image
-/// when hashing the node. The node is at the given `path_prefix`.
-pub fn hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
-    // Key, 3 options, value digest
-    let est_len = node.partial_path().len() + path_prefix.len() + 3 + TrieHash::default().len();
-    let mut buf = Vec::with_capacity(est_len);
-    write_hash_preimage(node, path_prefix, &mut buf);
-    buf.into_boxed_slice()
+impl Hashable for &ProofNode {
+    fn key(&self) -> impl Iterator<Item = u8> + Clone {
+        self.key.as_ref().iter().copied()
+    }
+
+    fn value_digest(&self) -> Option<ValueDigest> {
+        match self.value_digest.as_ref() {
+            None => None,
+            Some(value) if value.len() > 32 => {
+                unreachable!("TODO danlaine: prevent this from happening. The digest should never be more than 32 bytes.")
+            }
+            Some(value) if value.len() == 32 => {
+                Some(ValueDigest::Hash(value.to_vec().into_boxed_slice()))
+            }
+            Some(value) => Some(ValueDigest::Value(value)),
+        }
+    }
+
+    fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
+        self.child_hashes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, hash)| hash.as_ref().map(|h| (i, h)))
+    }
 }
 
-fn add_value_digest_to_buf<H: HasUpdate, T: AsRef<[u8]>>(buf: &mut H, value_digest: Option<T>) {
+struct NodeAndPrefix<'a, N: HashableNode> {
+    node: &'a N,
+    prefix: &'a Path,
+}
+
+impl<'a, N: HashableNode> From<NodeAndPrefix<'a, N>> for TrieHash {
+    fn from(node: NodeAndPrefix<'a, N>) -> Self {
+        node.to_hash()
+    }
+}
+
+impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
+    fn key(&self) -> impl Iterator<Item = u8> + Clone {
+        self.prefix
+            .0
+            .iter()
+            .copied()
+            .chain(self.node.partial_path())
+    }
+
+    fn value_digest(&self) -> Option<ValueDigest> {
+        self.node.value().map(ValueDigest::Value)
+    }
+
+    fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
+        self.node.children_iter()
+    }
+}
+
+fn add_value_digest_to_buf<H: HasUpdate>(buf: &mut H, value_digest: Option<ValueDigest>) {
     let Some(value_digest) = value_digest else {
         let value_exists: u8 = 0;
         buf.update([value_exists]);
@@ -405,7 +498,19 @@ fn add_value_digest_to_buf<H: HasUpdate, T: AsRef<[u8]>>(buf: &mut H, value_dige
 
     let value_exists: u8 = 1;
     buf.update([value_exists]);
-    add_len_and_value_to_buf(buf, value_digest.as_ref());
+
+    match value_digest {
+        ValueDigest::Value(value) if value.as_ref().len() >= 32 => {
+            let hash = Sha256::digest(value);
+            add_len_and_value_to_buf(buf, hash.as_ref());
+        }
+        ValueDigest::Value(value) => {
+            add_len_and_value_to_buf(buf, value);
+        }
+        ValueDigest::Hash(hash) => {
+            add_len_and_value_to_buf(buf, hash.as_ref());
+        }
+    }
 }
 
 #[inline]
