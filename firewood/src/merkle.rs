@@ -102,8 +102,7 @@ impl<T: ReadLinearStore> Merkle<T> {
         self.0.root_address()
     }
 
-    // TODO: can we make this &self instead of &mut self?
-    pub fn root_hash(&mut self) -> Result<TrieHash, std::io::Error> {
+    pub fn root_hash(&self) -> Result<TrieHash, std::io::Error> {
         self.0.root_hash()
     }
 
@@ -1416,7 +1415,7 @@ mod tests {
     #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1]),(&[0,1,2],&[0,1,2])], "229011c50ad4d5c2f4efe02b8db54f361ad295c4eee2bf76ea4ad1bb92676f97"; "root with branch child")]
     #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1]),(&[0,8],&[0,8]),(&[0,1,2],&[0,1,2])], "a683b4881cb540b969f885f538ba5904699d480152f350659475a962d6240ef9"; "root with branch child and leaf child")]
     fn test_root_hash_merkledb_compatible(kvs: Vec<(&[u8], &[u8])>, expected_hash: &str) {
-        let mut merkle = merkle_build_test(kvs).unwrap().freeze().unwrap();
+        let merkle = merkle_build_test(kvs).unwrap().freeze().unwrap();
 
         // This hash is from merkledb
         let expected_hash: [u8; 32] = hex::decode(expected_hash).unwrap().try_into().unwrap();
