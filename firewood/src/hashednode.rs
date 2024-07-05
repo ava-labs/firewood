@@ -205,12 +205,6 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         // The index of the updated node in `parent`'s children array.
         let child_index = parent.next_nibble.expect("must have a nibble address");
 
-        // TODO danlaine: is this needed anymore?
-        // let child = parent_branch
-        //     .children
-        //     .get(child_index as usize)
-        //     .expect("index is a nibble");
-
         if old_addr == new_addr {
             // We already invalidated the moved node's hash, which means we must
             // have already invalidated the parent's hash in its parent, and so
