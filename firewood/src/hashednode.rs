@@ -4,10 +4,10 @@
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::Error;
-use std::iter::{self, once};
+use std::iter::once;
 use std::sync::{Arc, OnceLock};
 
-use storage::{BranchNode, TrieHash};
+use storage::{BranchNode, LeafNode, TrieHash};
 use storage::{LinearAddress, NodeStore};
 use storage::{Node, Path, ProposedImmutable};
 use storage::{ReadLinearStore, WriteLinearStore};
@@ -100,7 +100,20 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                     .nodestore
                     .read_node(addr)
                     .expect("TODO: use get_or_try_init once it's available");
-                hash_node(&node, &Path(Default::default()))
+
+                let hash = match &*node {
+                    Node::Branch(b) => {
+                        let children_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] =
+                            Default::default();
+
+                        todo!()
+                    }
+                    Node::Leaf(l) => hash_leaf(l, &Path(Default::default())),
+                };
+
+                hash
+
+                // hash_node(&node, &Path(Default::default()))
             })
             .clone())
     }
@@ -145,13 +158,17 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
                     modified = true;
                     self.nodestore.update_in_place(child_addr, &child_node)?;
                 }
+
+                let hash = hash_branch(b, path_prefix, children_hashes);
+
                 if modified {
                     self.nodestore.update_in_place(node_addr, node)?;
                     self.modified.remove(&node_addr);
                 }
-                Ok(hash_node(node, path_prefix))
+
+                Ok(hash)
             }
-            Node::Leaf(_) => Ok(hash_node(node, path_prefix)),
+            Node::Leaf(l) => Ok(hash_leaf(&l, path_prefix)),
         }
     }
 
@@ -282,45 +299,73 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     }
 }
 
-pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
-    match node {
-        Node::Branch(node) => NodeAndPrefix {
-            node: node.as_ref(),
-            prefix: path_prefix,
-        }
-        .into(),
-        Node::Leaf(node) => NodeAndPrefix {
-            node,
-            prefix: path_prefix,
-        }
-        .into(),
+pub fn hash_branch<'a>(
+    node: &'a BranchNode,
+    path_prefix: &'a Path,
+    children: [Option<TrieHash>; BranchNode::MAX_CHILDREN],
+) -> TrieHash {
+    NodeAndPrefix {
+        node,
+        prefix: path_prefix,
+        children,
     }
+    .into()
 }
+
+pub fn hash_leaf<'a>(node: &'a LeafNode, path_prefix: &'a Path) -> TrieHash {
+    NodeAndPrefix {
+        node,
+        prefix: path_prefix,
+        children: Default::default(),
+    }
+    .into()
+}
+
+// pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
+//     match node {
+//         Node::Branch(node) => NodeAndPrefix {
+//             node: node.as_ref(),
+//             prefix: path_prefix,
+//         }
+//         .into(),
+//         Node::Leaf(node) => NodeAndPrefix {
+//             node,
+//             prefix: path_prefix,
+//         }
+//         .into(),
+//     }
+// }
 
 /// Returns the serialized representation of `node` used as the pre-image
 /// when hashing the node. The node is at the given `path_prefix`.
-pub fn hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
-    // Key, 3 options, value digest
-    let est_len = node.partial_path().len() + path_prefix.len() + 3 + TrieHash::default().len();
-    let mut buf = Vec::with_capacity(est_len);
-    match node {
-        Node::Branch(node) => {
-            NodeAndPrefix {
-                node: node.as_ref(),
-                prefix: path_prefix,
-            }
-            .write(&mut buf);
-        }
-        Node::Leaf(node) => {
-            NodeAndPrefix {
-                node,
-                prefix: path_prefix,
-            }
-            .write(&mut buf);
-        }
-    }
-    buf.into_boxed_slice()
-}
+// pub fn hash_preimage<'a, C: Iterator<Item = (usize, &'a TrieHash)> + Clone>(
+//     node: &Node,
+//     children: C,
+//     path_prefix: &Path,
+// ) -> Box<[u8]> {
+//     // Key, 3 options, value digest
+//     let est_len = node.partial_path().len() + path_prefix.len() + 3 + TrieHash::default().len();
+//     let mut buf = Vec::with_capacity(est_len);
+//     match node {
+//         Node::Branch(node) => {
+//             NodeAndPrefix {
+//                 node,
+//                 prefix: path_prefix,
+//                 children,
+//             }
+//             .write(&mut buf);
+//         }
+//         Node::Leaf(node) => {
+//             NodeAndPrefix {
+//                 node,
+//                 prefix: path_prefix,
+//                 children: iter::empty(),
+//             }
+//             .write(&mut buf);
+//         }
+//     }
+//     buf.into_boxed_slice()
+// }
 
 pub(super) trait HasUpdate {
     fn update<T: AsRef<[u8]>>(&mut self, data: T);
@@ -406,10 +451,9 @@ where
 trait HashableNode {
     fn partial_path(&self) -> impl Iterator<Item = u8> + Clone;
     fn value(&self) -> Option<&[u8]>;
-    fn children_iter(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone;
 }
 
-impl HashableNode for storage::BranchNode {
+impl<'a> HashableNode for &'a storage::BranchNode {
     fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
         self.partial_path.0.iter().copied()
     }
@@ -417,13 +461,9 @@ impl HashableNode for storage::BranchNode {
     fn value(&self) -> Option<&[u8]> {
         self.value.as_deref()
     }
-
-    fn children_iter(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
-        self.children_iter()
-    }
 }
 
-impl HashableNode for storage::LeafNode {
+impl<'a> HashableNode for &'a storage::LeafNode {
     fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
         self.partial_path.0.iter().copied()
     }
@@ -431,15 +471,12 @@ impl HashableNode for storage::LeafNode {
     fn value(&self) -> Option<&[u8]> {
         Some(&self.value)
     }
-
-    fn children_iter(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
-        iter::empty()
-    }
 }
 
 struct NodeAndPrefix<'a, N: HashableNode> {
-    node: &'a N,
+    node: N,
     prefix: &'a Path,
+    children: [Option<TrieHash>; BranchNode::MAX_CHILDREN],
 }
 
 impl<'a, N: HashableNode> From<NodeAndPrefix<'a, N>> for TrieHash {
@@ -462,7 +499,10 @@ impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
     }
 
     fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
-        self.node.children_iter()
+        self.children
+            .iter()
+            .enumerate()
+            .filter_map(|(index, hash)| hash.as_ref().map(|hash| (index, hash)))
     }
 }
 
