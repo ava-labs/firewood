@@ -7,12 +7,12 @@ use crate::stream::MerkleKeyValueStream;
 use crate::v2::api::{self, HashKey, KeyType, ValueType};
 pub use crate::v2::api::{Batch, BatchOp};
 use async_trait::async_trait;
-use storage::{Committed, NodeStore, ProposedMutable, TrieHash};
+use storage::{Committed, FileStore, NodeStore, ProposedMutable, TrieHash};
 
 use crate::manager::{RevisionManager, RevisionManagerConfig};
 use metered::metered;
 use std::error::Error;
-use std::fmt;
+use std::fmt::{self, Debug};
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
@@ -56,14 +56,14 @@ impl From<std::io::Error> for DbError {
 impl Error for DbError {}
 
 #[derive(Debug)]
-pub struct HistoricalRev<T> {
+pub struct HistoricalRev<T: Debug + Send + Sync> {
     // TODO: add Merkle wrapping here
     _historical: Arc<T>,
 }
 
 #[async_trait]
-impl<T: Send + Sync> api::DbView for HistoricalRev<T> {
-    type Stream<'a> = MerkleKeyValueStream<'a, T> where Self: 'a;
+impl<T: Debug + Send + Sync> api::DbView for HistoricalRev<T> {
+    type Stream<'a> = MerkleKeyValueStream<'a, T, FileStore> where Self: 'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         todo!()
@@ -97,12 +97,12 @@ impl<T: Send + Sync> api::DbView for HistoricalRev<T> {
     }
 }
 
-impl<T> HistoricalRev<T> {
-    pub fn stream(&self) -> MerkleKeyValueStream<'_, T> {
+impl<T: Debug + Send + Sync> HistoricalRev<T> {
+    pub fn stream(&self) -> MerkleKeyValueStream<'_, T, FileStore> {
         todo!()
     }
 
-    pub fn stream_from(&self, _start_key: &[u8]) -> MerkleKeyValueStream<'_, T> {
+    pub fn stream_from(&self, _start_key: &[u8]) -> MerkleKeyValueStream<'_, T, FileStore> {
         todo!()
     }
 
@@ -139,12 +139,13 @@ impl<T> HistoricalRev<T> {
 }
 
 /// TODO danlaine: implement
-pub struct Proposal<T> {
+#[derive(Debug)]
+pub struct Proposal<T: Debug> {
     _proposal: T,
 }
 
 #[async_trait]
-impl<T: Send + Sync> api::Proposal for Proposal<T> {
+impl<T: Debug + Send + Sync> api::Proposal for Proposal<T> {
     type Proposal = Proposal<T>;
 
     async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
@@ -160,8 +161,8 @@ impl<T: Send + Sync> api::Proposal for Proposal<T> {
 }
 
 #[async_trait]
-impl<T: Send + Sync> api::DbView for Proposal<T> {
-    type Stream<'a> = MerkleKeyValueStream<'a, T> where T: 'a;
+impl<T: Debug + Send + Sync> api::DbView for Proposal<T> {
+    type Stream<'a> = MerkleKeyValueStream<'a, T, FileStore> where T: 'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
         todo!()
@@ -221,16 +222,16 @@ pub struct Db {
 
 #[async_trait]
 impl api::Db for Db {
-    type Historical = HistoricalRev<NodeStore<Committed>>;
+    type Historical = HistoricalRev<NodeStore<Committed, FileStore>>;
 
     type Proposal = Proposal<ProposedMutable>;
 
     async fn revision(
         &self,
         _root_hash: HashKey,
-    ) -> Result<Arc<HistoricalRev<NodeStore<Committed>>>, api::Error> {
+    ) -> Result<Arc<HistoricalRev<NodeStore<Committed, FileStore>>>, api::Error> {
         let store = self.manager.revision(_root_hash)?;
-        Ok(Arc::new(HistoricalRev::<NodeStore<Committed>> {
+        Ok(Arc::new(HistoricalRev::<NodeStore<Committed, FileStore>> {
             _historical: store,
         }))
     }

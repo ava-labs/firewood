@@ -2,6 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::collections::HashMap;
+use std::fmt::Debug;
 
 use crate::{merkle::Merkle, v2::api::HashKey};
 use nix::errno::Errno;
@@ -130,11 +131,11 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     /// necessary nodes will be resolved and leave the remaining as hashnode.
     ///
     /// The given edge proof is allowed to be an existent or non-existent proof.
-    fn _proof_to_path<K, T>(
+    fn _proof_to_path<K, T: Debug + Send + Sync, S: Debug + Send + Sync>(
         &self,
         _key: K,
         _root_hash: HashKey,
-        _in_mem_merkle: &mut Merkle<T>,
+        _in_mem_merkle: &mut Merkle<T, S>,
         _allow_non_existent_node: bool,
     ) -> Result<Option<Vec<u8>>, ProofError>
     where

@@ -12,9 +12,9 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::node::Node;
-use crate::revisions::filebacked::FileBacked;
-use crate::revisions::Committed;
-use crate::revisions::proposed::{ProposedImmutable, ProposedMutable};
+use crate::revisions::proposed::{Proposed, ProposedImmutable, ProposedMutable};
+use crate::revisions::{self, Committed};
+use crate::revisions::{ReadableStorage, WritableStorage};
 
 /// [NodeStore] divides the linear store into blocks of different sizes.
 /// [AREA_SIZES] is every valid block size.
@@ -55,9 +55,6 @@ const MAX_AREA_SIZE: u64 = AREA_SIZES[NUM_AREA_SIZES - 1];
 
 const SOME_FREE_LIST_ELT_SIZE: u64 = 1 + std::mem::size_of::<LinearAddress>() as u64;
 const FREE_LIST_MAX_SIZE: u64 = NUM_AREA_SIZES as u64 * SOME_FREE_LIST_ELT_SIZE;
-
-/// Number of children in a branch
-const BRANCH_CHILDREN: usize = 16;
 
 /// Returns the index in `BLOCK_SIZES` of the smallest block size >= `n`.
 fn area_size_to_index(n: u64) -> Result<AreaIndex, Error> {
@@ -103,28 +100,30 @@ struct StoredArea<T> {
 }
 
 /// [NodeStore] creates, reads, updates, and deletes [Node]s.
-/// To read a node, the [NodeStore] can the [LinearAddress] of
+/// To read a node, the [NodeStore] uses the [LinearAddress] of
 /// the node.
-/// It stores the nodes in a [FileBacked] store that it manages.
 /// The first thing written in the LinearStore is a NodeStoreHeader,
 /// which contains the version and the free area list heads.
 /// Every subsequent write is a StoredArea containing a [Node] or a FreeArea.
 /// The size of each allocation [NodeStore] makes from LinearStore is one of AREA_SIZES.
+/// The first type parameter is the revision type, which can be either [Committed] or [Proposed].
+/// The second type parameter indicates the backing store, either a [FileStore] or a [MemStore].
 #[derive(Debug)]
-pub struct NodeStore<T> {
+pub struct NodeStore<T: Sync + Send, S: Send + Sync> {
     header: NodeStoreHeader,
-    disk: Arc<FileBacked>,
     deleted_nodes: Vec<(LinearAddress, AreaIndex)>,
     revision_type: T,
+    storage: Arc<S>,
 }
 
-impl NodeStore<Committed> {
-    /// Open an existing [NodeStore] from a [ReadLinearStore]
+/// Methods to generate a base [Committed] NodeStore, either by creating a fresh one
+/// using [NodeStore<Committed>::new] or opening an existing file
+impl<S: WritableStorage> NodeStore<Committed, S> {
+    /// Open an existing [NodeStore]
     ///
-    /// This method reads the header previously created from a call to
-    /// [NodeStore::initialize]
-    pub fn open(disk: Arc<FileBacked>) -> Result<Self, Error> {
-        let mut stream = disk.stream_from(0)?;
+    /// This method reads the header previously created from a call to [NodeStore::initialize]
+    pub fn open(storage: Arc<S>) -> Result<Self, Error> {
+        let mut stream = storage.stream_from(0)?;
 
         let header: NodeStoreHeader = bincode::deserialize_from(&mut stream)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
@@ -133,15 +132,15 @@ impl NodeStore<Committed> {
 
         Ok(Self {
             header,
-            disk,
             deleted_nodes: Default::default(),
             revision_type: Committed,
+            storage,
         })
     }
 
-    /// Create a new [NodeStore] backed by a [WriteLinearStore], and clobber
+    /// Create a new, empty, [Committed] [NodeStore] and clobber
     /// the underlying store with an empty freelist and no root node
-    pub fn initialize(disk: Arc<FileBacked>) -> Result<Self, Error> {
+    pub fn initialize(storage: Arc<S>) -> Result<Self, Error> {
         let header = NodeStoreHeader {
             version: Version::new(),
             free_lists: Default::default(),
@@ -156,22 +155,22 @@ impl NodeStore<Committed> {
             )
         })?;
 
-        disk.write(0, header_bytes.as_slice())?;
+        storage.write(0, header_bytes.as_slice())?;
 
         Ok(Self {
             header,
-            disk,
+            storage,
             deleted_nodes: Default::default(),
             revision_type: Committed,
         })
     }
 }
 
-impl<T> NodeStore<T> {
+impl<T: Sync + Send, S: ReadableStorage> NodeStore<T, S> {
     /// Returns (index, area_size) for the [StoredArea] at `addr`.
     /// `index` is the index of `area_size` in [AREA_SIZES].
     fn area_index_and_size(&self, addr: LinearAddress) -> Result<(AreaIndex, u64), Error> {
-        let mut area_stream = self.disk.stream_from(addr.get())?;
+        let mut area_stream = self.storage.stream_from(addr.get())?;
 
         let index: AreaIndex = bincode::deserialize_from(&mut area_stream)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
@@ -191,7 +190,7 @@ impl<T> NodeStore<T> {
 
         let addr = addr.get() + 1; // Skip the index byte
 
-        let area_stream = self.disk.stream_from(addr)?;
+        let area_stream = self.storage.stream_from(addr)?;
         let area: Area<Node, FreeArea> = bincode::deserialize_from(area_stream)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
@@ -210,7 +209,22 @@ impl<T> NodeStore<T> {
     }
 }
 
-impl NodeStore<ProposedImmutable> {
+impl<S: WritableStorage + Send + Sync> NodeStore<ProposedMutable, S> {
+    /// Creates a new instance of `NodeStore`.
+    ///
+    /// # Arguments
+    ///
+    /// * `parent` - The parent node store.
+    /// * `storage` - The storage implementation.
+    pub fn new(parent: Arc<revisions::NodeStoreParent>, storage: Arc<S>) -> Self {
+        NodeStore {
+            header: NodeStoreHeader::new(),
+            storage,
+            deleted_nodes: Default::default(),
+            revision_type: Proposed::new(parent),
+        }
+    }
+
     // TODO danlaine: Write only the parts of the header that have changed instead of the whole thing
     fn write_header(&mut self) -> Result<(), Error> {
         let header_bytes = bincode::serialize(&self.header).map_err(|e| {
@@ -220,7 +234,7 @@ impl NodeStore<ProposedImmutable> {
             )
         })?;
 
-        self.disk.write(0, header_bytes.as_slice())?;
+        self.storage.write(0, header_bytes.as_slice())?;
 
         Ok(())
     }
@@ -242,7 +256,7 @@ impl NodeStore<ProposedImmutable> {
                 // Update the free list head.
                 // Skip the index byte and Area discriminant byte
                 let free_area_addr = free_stored_area_addr.get() + 2;
-                let free_head_stream = self.disk.stream_from(free_area_addr)?;
+                let free_head_stream = self.storage.stream_from(free_area_addr)?;
                 let free_head: FreeArea = bincode::deserialize_from(free_head_stream)
                     .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
@@ -271,7 +285,6 @@ impl NodeStore<ProposedImmutable> {
     /// Returns the address of the allocated area.
     pub fn create_node(&mut self, node: Node) -> Result<LinearAddress, Error> {
         let addr = self.create_node_inner(node)?;
-        self.write_header()?;
         Ok(addr)
     }
 
@@ -308,7 +321,7 @@ impl NodeStore<ProposedImmutable> {
                 // size of this freelist item into the linear store
                 // TODO: This works, but think about if we can do better than this somehow.
                 let (addr, index) = self.allocate_from_end(stored_area_size)?;
-                self.disk.write(addr.into(), &[index])?;
+                self.storage.write(addr.into(), &[index])?;
                 (addr, index)
             }
         };
@@ -326,7 +339,7 @@ impl NodeStore<ProposedImmutable> {
     /// Get the size of the space allocated to a node a specific address
     pub fn node_size(&self, addr: LinearAddress) -> Result<AreaIndex, Error> {
         let size = 0;
-        self.disk
+        self.storage
             .stream_from(addr.into())?
             .read_exact(&mut [size])?;
         Ok(size)
@@ -344,7 +357,7 @@ impl NodeStore<ProposedImmutable> {
         let stored_area_bytes =
             bincode::serialize(&stored_area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
-        self.disk.write(addr.get(), stored_area_bytes.as_slice())?;
+        self.storage.write(addr.get(), stored_area_bytes.as_slice())?;
 
         Ok(addr)
     }
@@ -368,7 +381,7 @@ impl NodeStore<ProposedImmutable> {
         if new_stored_area_size <= old_stored_area_size {
             // the new node fits in the old node's area
             let addr = addr.get() + 1; // Skip the index byte
-            self.disk.write(addr, new_area_bytes.as_slice())?;
+            self.storage.write(addr, new_area_bytes.as_slice())?;
             return Ok(());
         }
 
@@ -388,7 +401,7 @@ impl NodeStore<ProposedImmutable> {
             bincode::serialize(&new_area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
         let addr = addr.get() + 1; // Skip the index byte
-        self.disk.write(addr, new_area_bytes.as_slice())?;
+        self.storage.write(addr, new_area_bytes.as_slice())?;
         Ok(())
     }
 
@@ -411,29 +424,26 @@ impl NodeStore<ProposedImmutable> {
         let stored_area_bytes =
             bincode::serialize(&stored_area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
-        self.disk.write(addr.into(), &stored_area_bytes)?;
+        self.storage.write(addr.into(), &stored_area_bytes)?;
 
         // The newly freed block is now the head of the free list.
         self.header.free_lists[area_size_index as usize] = Some(addr);
-
-        self.write_header()?;
 
         Ok(())
     }
 
     /// Write the root [LinearAddress] of the [NodeStore]
-    pub fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), Error> {
+    pub fn set_root(&mut self, addr: Option<LinearAddress>) {
         self.header.root_address = addr;
-        self.write_header()
     }
 }
 
-impl NodeStore<ProposedMutable> {
+impl<S: Send + Sync> NodeStore<ProposedMutable, S> {
     /// Freeze a writable NodeStore into a ProposedImmutable
-    pub fn freeze(self) -> NodeStore<ProposedImmutable> {
+    pub fn freeze(self) -> NodeStore<ProposedImmutable, S> {
         NodeStore {
             header: self.header,
-            disk: self.disk,
+            storage: self.storage,
             deleted_nodes: self.deleted_nodes,
             revision_type: self.revision_type.freeze(),
         }

@@ -3,17 +3,20 @@
 
 // hash benchmarks; run with 'cargo bench'
 
-use criterion::{criterion_group, criterion_main, profiler::Profiler, BatchSize, Criterion};
-use firewood::{
-    db::{BatchOp, DbConfig},
-    hashednode::HashedNodeStore,
-    merkle::Merkle,
-    v2::api::{Db, Proposal},
-};
+use criterion::profiler::Profiler;
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
+use firewood::db::{BatchOp, DbConfig};
+use firewood::hashednode::HashedNodeStore;
+use firewood::merkle::Merkle;
+use firewood::v2::api::{Db, Proposal};
 use pprof::ProfilerGuard;
-use rand::{distributions::Alphanumeric, rngs::StdRng, Rng, SeedableRng};
-use std::{fs::File, iter::repeat_with, os::raw::c_int, path::Path};
-use storage::MemStore;
+use rand::distributions::Alphanumeric;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
+use std::fs::File;
+use std::iter::repeat_with;
+use std::os::raw::c_int;
+use std::path::Path;
 
 // To enable flamegraph output
 // cargo bench --bench shale-bench -- --profile-time=N
@@ -85,8 +88,7 @@ fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criter
         .bench_function("insert", |b| {
             b.iter_batched(
                 || {
-                    let store = MemStore::new(vec![]);
-                    let hns = HashedNodeStore::initialize(store).unwrap();
+                    let hns = HashedNodeStore::new_memory(0);
                     let merkle = Merkle::new(hns);
 
                     let keys: Vec<Vec<u8>> = repeat_with(|| {

@@ -15,12 +15,15 @@ use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use super::{ReadableStorage, WritableStorage};
+
+/// FileStore represents a synchronous file layer for I/O operations.
 #[derive(Debug)]
-pub struct FileBacked {
+pub struct FileStore {
     fd: Mutex<File>,
 }
 
-impl FileBacked {
+impl FileStore {
     /// Create or open a file at a given path
     pub fn new(path: PathBuf, truncate: bool) -> Result<Self, Error> {
         let fd = OpenOptions::new()
@@ -34,14 +37,14 @@ impl FileBacked {
     }
 }
 
-impl FileBacked {
-    pub fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, Error> {
+impl ReadableStorage for FileStore {
+    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, Error> {
         let mut fd = self.fd.lock().expect("p");
         fd.seek(std::io::SeekFrom::Start(addr))?;
         Ok(Box::new(fd.try_clone().expect("poisoned lock")))
     }
 
-    pub fn size(&self) -> Result<u64, Error> {
+    fn size(&self) -> Result<u64, Error> {
         self.fd
             .lock()
             .expect("poisoned lock")
@@ -49,10 +52,10 @@ impl FileBacked {
     }
 }
 
-impl FileBacked {
+impl WritableStorage for FileStore {
     /// Write to the backend filestore. This does not implement [crate::WriteLinearStore]
     /// because we don't want someone accidentally writing nodes directly to disk
-    pub fn write(&self, offset: u64, object: &[u8]) -> Result<usize, Error> {
+    fn write(&self, offset: u64, object: &[u8]) -> Result<usize, Error> {
         self.fd
             .lock()
             .expect("poisoned lock")

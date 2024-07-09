@@ -2,37 +2,42 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::{
-    io::{Cursor, Read},
+    io::{Cursor, Read}, sync::Mutex,
 };
 
-#[derive(Debug, Clone, Default)]
+use super::{ReadableStorage, WritableStorage};
+
+#[derive(Debug, Default)]
 /// An in-memory impelementation of [WriteLinearStore]
 pub struct MemStore {
-    bytes: Vec<u8>,
+    bytes: Mutex<Vec<u8>>,
 }
 
 impl MemStore {
     /// Create a new, empty [MemStore]
     pub const fn new(bytes: Vec<u8>) -> Self {
-        Self { bytes }
+        Self { bytes: Mutex::new(bytes) }
     }
 }
 
-impl MemStore {
-    pub fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, std::io::Error> {
+impl WritableStorage for MemStore {
+    fn write(&self, offset: u64, object: &[u8]) -> Result<usize, std::io::Error> {
         let offset = offset as usize;
-        if offset + object.len() > self.bytes.len() {
-            self.bytes.resize(offset + object.len(), 0);
+        let mut guard = self.bytes.lock().expect("poisoned lock");
+        if offset + object.len() > guard.len() {
+            guard.resize(offset + object.len(), 0);
         }
-        self.bytes[offset..offset + object.len()].copy_from_slice(object);
+        guard[offset..offset + object.len()].copy_from_slice(object);
         Ok(object.len())
     }
 }
 
-impl MemStore {
+impl ReadableStorage for MemStore {
     fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, std::io::Error> {
         let bytes = self
             .bytes
+            .lock()
+            .expect("poisoned lock")
             .get(addr as usize..)
             .unwrap_or_default()
             .to_owned();
@@ -41,7 +46,7 @@ impl MemStore {
     }
 
     fn size(&self) -> Result<u64, std::io::Error> {
-        Ok(self.bytes.len() as u64)
+        Ok(self.bytes.lock().expect("poisoned lock").len() as u64)
     }
 }
 
@@ -61,7 +66,7 @@ mod test {
     #[test_case(&[(0,&[1, 2, 3]),(2,&[4])],(0,&[1,2,4]); "overwrite end of store")]
     #[test_case(&[(0,&[1, 2, 3]),(2,&[4,5])],(0,&[1,2,4,5]); "overwrite/extend end of store")]
     fn test_in_mem_write_linear_store(writes: &[(u64, &[u8])], expected: (u64, &[u8])) {
-        let mut store = MemStore { bytes: vec![] };
+        let store = MemStore { bytes: Mutex::new(vec![]) };
         assert_eq!(store.size().unwrap(), 0);
 
         for write in writes {

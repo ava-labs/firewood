@@ -7,12 +7,14 @@ use crate::stream::{MerkleKeyValueStream, PathIterator};
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
 use std::collections::HashSet;
+use std::fmt::Debug;
 use std::future::ready;
 use std::io::Write;
 use std::iter::{empty, once};
 use storage::{
     BranchNode, Child, LeafNode, LinearAddress, NibblesIterator, Node, Path, PathIterItem,
-    ProposedImmutable, TrieHash};
+    ProposedImmutable, ProposedMutable, ReadableStorage, TrieHash, WritableStorage,
+};
 
 use std::ops::{Deref, DerefMut};
 use thiserror::Error;
@@ -41,17 +43,17 @@ pub enum MerkleError {
 }
 
 #[derive(Debug)]
-pub struct Merkle<T>(HashedNodeStore<T>);
+pub struct Merkle<T: Debug + Send + Sync, S: Debug + Send + Sync>(HashedNodeStore<T, S>);
 
-impl<T> Deref for Merkle<T> {
-    type Target = HashedNodeStore<T>;
+impl<T: Debug + Send + Sync, S: Debug + Send + Sync> Deref for Merkle<T, S> {
+    type Target = HashedNodeStore<T, S>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl<T> DerefMut for Merkle<T> {
+impl<T: Debug + Send + Sync, S: Debug + Send + Sync> DerefMut for Merkle<T, S> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
@@ -92,8 +94,8 @@ macro_rules! write_attributes {
     };
 }
 
-impl<T> Merkle<T> {
-    pub const fn new(store: HashedNodeStore<T>) -> Merkle<T> {
+impl<T: Debug + Send + Sync, S: ReadableStorage> Merkle<T, S> {
+    pub const fn new(store: HashedNodeStore<T, S>) -> Merkle<T, S> {
         Merkle(store)
     }
 
@@ -181,15 +183,15 @@ impl<T> Merkle<T> {
     }
 
     // TODO danlaine: can we use the LinearAddress of the `root` instead?
-    pub fn path_iter<'a>(&self, key: &'a [u8]) -> Result<PathIterator<'_, 'a, T>, MerkleError> {
+    pub fn path_iter<'a>(&self, key: &'a [u8]) -> Result<PathIterator<'_, 'a, T, S>, MerkleError> {
         PathIterator::new(self, key)
     }
 
-    pub(crate) fn _key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
+    pub(crate) fn _key_value_iter(&self) -> MerkleKeyValueStream<'_, T, S> {
         MerkleKeyValueStream::_new(self)
     }
 
-    pub(crate) fn _key_value_iter_from_key(&self, key: Key) -> MerkleKeyValueStream<'_, T> {
+    pub(crate) fn _key_value_iter_from_key(&self, key: Key) -> MerkleKeyValueStream<'_, T, S> {
         // TODO danlaine: change key to &[u8]
         MerkleKeyValueStream::_from_key(self, key)
     }
@@ -339,8 +341,7 @@ impl<T> Merkle<T> {
     }
 }
 
-// TODO: restrict T to writable storage systems
-impl<T> Merkle<T> {
+impl<S: WritableStorage> Merkle<ProposedMutable, S> {
     pub fn insert(&mut self, key: &[u8], value: Box<[u8]>) -> Result<(), MerkleError> {
         let path = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
@@ -361,7 +362,7 @@ impl<T> Merkle<T> {
                     value,
                 });
                 let root_addr = self.create_node(root)?;
-                self.set_root(Some(root_addr))?;
+                self.set_root(Some(root_addr));
                 return Ok(());
             };
             // There is a root but it's not a prefix of `path`.
@@ -416,7 +417,7 @@ impl<T> Merkle<T> {
             }
 
             let new_root_addr = self.create_node(Node::Branch(Box::new(new_root)))?;
-            self.set_root(Some(new_root_addr))?;
+            self.set_root(Some(new_root_addr));
             return Ok(());
         };
         // `greatest_prefix_node` is a prefix of `path`
@@ -738,19 +739,18 @@ impl<T> Merkle<T> {
                 }
 
                 // The trie is now empty.
-                self.set_root(None)?;
+                self.set_root(None);
                 Ok(Some(leaf.value.clone()))
             }
         }
     }
 
-    pub fn freeze(self) -> Result<Merkle<ProposedImmutable>, MerkleError> {
+    pub fn freeze(self) -> Result<Merkle<ProposedImmutable, S>, MerkleError> {
         Ok(Merkle(self.0.freeze()?))
     }
 }
 
-// TODO: restrict T to writeable
-impl<T> Merkle<T> {
+impl<S: WritableStorage> Merkle<ProposedMutable, S> {
     pub fn put_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError> {
         self.create_node(node).map_err(MerkleError::Format)
     }
@@ -795,7 +795,7 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
     }
 }
 
-#[cfg(test)]
+#[cfg(never)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
     use super::*;

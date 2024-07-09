@@ -3,11 +3,12 @@
 
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::io::Error;
 use std::iter::once;
 use std::sync::{Arc, OnceLock};
 
-use storage::{BranchNode, Child, Committed, FileBacked, TrieHash};
+use storage::{BranchNode, Child, Committed, FileStore, MemStore, NodeStoreParent, ProposedMutable, ReadableStorage, TrieHash, WritableStorage};
 use storage::{LinearAddress, NodeStore};
 use storage::{Node, Path, ProposedImmutable};
 
@@ -26,13 +27,13 @@ use storage::PathIterItem;
 /// backed HashedNodeStore for future operations. `freeze` is called when the batch is completed and is
 /// used to obtain the merkle trie for the proposal.
 #[derive(Debug)]
-pub struct HashedNodeStore<T> {
-    nodestore: NodeStore<T>,
+pub struct HashedNodeStore<T: Debug + Send + Sync, S: Debug + Send + Sync> {
+    nodestore: NodeStore<T, S>,
     modified: HashMap<LinearAddress, (Arc<Node>, u8)>,
     root_hash: OnceLock<TrieHash>,
 }
-impl<T> HashedNodeStore<T> {
-    pub fn initialize(linearstore: Arc<FileBacked>) -> Result<HashedNodeStore<Committed>, Error> {
+impl<T: Debug + Send + Sync> HashedNodeStore<T, FileStore> {
+    pub fn initialize(linearstore: Arc<FileStore>) -> Result<HashedNodeStore<Committed, FileStore>, Error> {
         let nodestore = NodeStore::initialize(linearstore.clone())?;
         Ok(HashedNodeStore {
             nodestore,
@@ -41,9 +42,24 @@ impl<T> HashedNodeStore<T> {
         })
     }
 }
+impl HashedNodeStore<ProposedMutable, MemStore> {
+    pub fn new_memory(bytes: usize) -> HashedNodeStore<ProposedMutable, MemStore> {
+        
+        let empty_parent = Arc::new(NodeStoreParent::Committed(Committed{}));
+        let empty_revision = Arc::new(MemStore::new(vec![0; bytes]));
+        HashedNodeStore {
+            nodestore: NodeStore::<ProposedMutable, MemStore>::new(
+                empty_parent,
+                empty_revision,
+            ),
+            modified: Default::default(),
+            root_hash: Default::default(),
+        }
+    }
+}
 
-impl<T> From<NodeStore<T>> for HashedNodeStore<T> {
-    fn from(nodestore: NodeStore<T>) -> Self {
+impl<T: Debug + Send + Sync, S: Debug + Send + Sync> From<NodeStore<T, S>> for HashedNodeStore<T, S> {
+    fn from(nodestore: NodeStore<T, S>) -> Self {
         HashedNodeStore {
             nodestore,
             modified: Default::default(),
@@ -52,7 +68,7 @@ impl<T> From<NodeStore<T>> for HashedNodeStore<T> {
     }
 }
 
-impl<T> HashedNodeStore<T> {
+impl<T: Debug + Send + Sync, S: ReadableStorage> HashedNodeStore<T, S> {
     pub fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
         if let Some((modified_node, _)) = self.modified.get(&addr) {
             Ok(modified_node.clone())
@@ -108,7 +124,7 @@ impl<T> HashedNodeStore<T> {
     }
 }
 
-impl<T> HashedNodeStore<T> {
+impl<S: WritableStorage> HashedNodeStore<ProposedMutable, S> {
     // recursively hash this node
     fn hash(
         &mut self,
@@ -152,7 +168,7 @@ impl<T> HashedNodeStore<T> {
         }
     }
 
-    pub fn freeze(mut self) -> Result<HashedNodeStore<ProposedImmutable>, Error> {
+    pub fn freeze(mut self) -> Result<HashedNodeStore<ProposedImmutable, S>, Error> {
         // fill in all remaining hashes, including the root hash
         if let Some(root_address) = self.root_address() {
             let mut root_node = self.take_node(root_address)?;
@@ -198,7 +214,6 @@ impl<T> HashedNodeStore<T> {
         new_addr: LinearAddress,
     ) -> Result<(), MerkleError> {
         let Some(parent) = ancestors.next_back() else {
-            self.set_root(Some(new_addr))?;
             return Ok(());
         };
 
@@ -273,8 +288,8 @@ impl<T> HashedNodeStore<T> {
         Ok(new_address)
     }
 
-    pub fn set_root(&mut self, root_addr: Option<LinearAddress>) -> Result<(), Error> {
-        self.nodestore.set_root(root_addr)
+    pub fn set_root(&mut self, root_addr: Option<LinearAddress>) {
+        self.nodestore.set_root(root_addr);
     }
 }
 

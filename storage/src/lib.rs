@@ -15,21 +15,26 @@
 //!  - [Committed] for a committed revision
 //!  - [ProposedImmutable] for a revision which proposed and has all the k/v inserts completed
 //!  - [ProposedMutable] for a revision being created as a proposal
-//! 
+//!
 //! The [ProposedMutable] revision is likely to have some incomplete hash values. These
 //! get filled in when converting the [NodeStore] to a [NodeStore<ProposedImmutable>].
-//! 
+//!
 //! Proposed [NodeStore]s contain some extra data, notably an updated freelist and a
 //! list of the new nodes yet to be written to disk.
 
 mod node;
 mod nodestore;
-mod trie_hash;
 mod revisions;
+mod trie_hash;
 
 // re-export these so callers don't need to know where they are
-pub use node::{path::NibblesIterator, path::Path, BranchNode, LeafNode, Node, PathIterItem, Child};
+pub use node::{
+    path::NibblesIterator, path::Path, BranchNode, Child, LeafNode, Node, PathIterItem,
+};
 pub use nodestore::{LinearAddress, NodeStore, UpdateError};
-pub use revisions::{Committed, ProposedImmutable, ProposedMutable, filebacked::FileBacked};
+pub use revisions::{
+    filestore::FileStore, memstore::MemStore, Committed, ProposedImmutable, ProposedMutable,
+};
+pub use revisions::{ReadableStorage, WritableStorage, NodeStoreParent};
 
 pub use trie_hash::TrieHash;

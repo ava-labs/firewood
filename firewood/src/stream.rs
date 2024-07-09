@@ -9,7 +9,8 @@ use crate::{
 use futures::{stream::FusedStream, Stream, StreamExt};
 use std::{cmp::Ordering, iter::once};
 use std::{sync::Arc, task::Poll};
-use storage::{BranchNode, LinearAddress, NibblesIterator, Node, PathIterItem};
+use std::fmt::Debug;
+use storage::{BranchNode, LinearAddress, NibblesIterator, Node, PathIterItem, ReadableStorage};
 
 /// Represents an ongoing iteration over a node and its children.
 enum IterationNode {
@@ -67,12 +68,12 @@ impl NodeStreamState {
 }
 
 #[derive(Debug)]
-pub struct MerkleNodeStream<'a, T> {
+pub struct MerkleNodeStream<'a, T: Debug + Send + Sync, S: Debug + Send + Sync> {
     state: NodeStreamState,
-    merkle: &'a Merkle<T>,
+    merkle: &'a Merkle<T, S>,
 }
 
-impl<'a, T> FusedStream for MerkleNodeStream<'a, T> {
+impl<'a, T: Debug + Send + Sync, S: ReadableStorage> FusedStream for MerkleNodeStream<'a, T, S> {
     fn is_terminated(&self) -> bool {
         // The top of `iter_stack` is the next node to return.
         // If `iter_stack` is empty, there are no more nodes to visit.
@@ -80,10 +81,10 @@ impl<'a, T> FusedStream for MerkleNodeStream<'a, T> {
     }
 }
 
-impl<'a, T> MerkleNodeStream<'a, T> {
+impl<'a, T: Debug + Send + Sync, S: Debug + Send + Sync> MerkleNodeStream<'a, T, S> {
     /// Returns a new iterator that will iterate over all the nodes in `merkle`
     /// with keys greater than or equal to `key`.
-    pub(super) fn new(merkle: &'a Merkle<T>, key: Key) -> Self {
+    pub(super) fn new(merkle: &'a Merkle<T, S>, key: Key) -> Self {
         Self {
             state: NodeStreamState::new(key),
             merkle,
@@ -91,7 +92,7 @@ impl<'a, T> MerkleNodeStream<'a, T> {
     }
 }
 
-impl<'a, T> Stream for MerkleNodeStream<'a, T> {
+impl<'a, T: Debug + Send + Sync, S: ReadableStorage> Stream for MerkleNodeStream<'a, T, S> {
     type Item = Result<(Key, Arc<Node>), api::Error>;
 
     fn poll_next(
@@ -171,8 +172,8 @@ impl<'a, T> Stream for MerkleNodeStream<'a, T> {
 }
 
 /// Returns the initial state for an iterator over the given `merkle` which starts at `key`.
-fn get_iterator_intial_state<T>(
-    merkle: &Merkle<T>,
+fn get_iterator_intial_state<T: Debug + Send + Sync, S: ReadableStorage>(
+    merkle: &Merkle<T, S>,
     key: &[u8],
 ) -> Result<NodeStreamState, api::Error> {
     let Some(mut addr) = merkle.root_address() else {
@@ -261,16 +262,16 @@ fn get_iterator_intial_state<T>(
 }
 
 #[derive(Debug)]
-enum MerkleKeyValueStreamState<'a, T> {
+enum MerkleKeyValueStreamState<'a, T: Debug + Send + Sync, S: ReadableStorage> {
     /// The iterator state is lazily initialized when poll_next is called
     /// for the first time. The iteration start key is stored here.
     _Uninitialized(Key),
     /// The iterator works by iterating over the nodes in the merkle trie
     /// and returning the key-value pairs for nodes that have values.
-    Initialized { node_iter: MerkleNodeStream<'a, T> },
+    Initialized { node_iter: MerkleNodeStream<'a, T, S> },
 }
 
-impl<'a, T> MerkleKeyValueStreamState<'a, T> {
+impl<'a, T: Debug + Send + Sync, S: ReadableStorage> MerkleKeyValueStreamState<'a, T, S> {
     /// Returns a new iterator that will iterate over all the key-value pairs in `merkle`.
     fn _new() -> Self {
         Self::_Uninitialized(Box::new([]))
@@ -284,26 +285,26 @@ impl<'a, T> MerkleKeyValueStreamState<'a, T> {
 }
 
 #[derive(Debug)]
-pub struct MerkleKeyValueStream<'a, T> {
-    state: MerkleKeyValueStreamState<'a, T>,
-    merkle: &'a Merkle<T>,
+pub struct MerkleKeyValueStream<'a, T: Debug + Send + Sync, S: ReadableStorage> {
+    state: MerkleKeyValueStreamState<'a, T, S>,
+    merkle: &'a Merkle<T, S>,
 }
 
-impl<'a, T> FusedStream for MerkleKeyValueStream<'a, T> {
+impl<'a, T: Debug + Send + Sync, S: ReadableStorage> FusedStream for MerkleKeyValueStream<'a, T, S> {
     fn is_terminated(&self) -> bool {
         matches!(&self.state, MerkleKeyValueStreamState::Initialized { node_iter } if node_iter.is_terminated())
     }
 }
 
-impl<'a, T> MerkleKeyValueStream<'a, T> {
-    pub(super) fn _new(merkle: &'a Merkle<T>) -> Self {
+impl<'a, T: Debug + Send + Sync, S: ReadableStorage> MerkleKeyValueStream<'a, T, S> {
+    pub(super) fn _new(merkle: &'a Merkle<T, S>) -> Self {
         Self {
             state: MerkleKeyValueStreamState::_new(),
             merkle,
         }
     }
 
-    pub(super) fn _from_key(merkle: &'a Merkle<T>, key: Key) -> Self {
+    pub(super) fn _from_key(merkle: &'a Merkle<T, S>, key: Key) -> Self {
         Self {
             state: MerkleKeyValueStreamState::_with_key(key),
             merkle,
@@ -311,7 +312,7 @@ impl<'a, T> MerkleKeyValueStream<'a, T> {
     }
 }
 
-impl<'a, T> Stream for MerkleKeyValueStream<'a, T> {
+impl<'a, T: Debug + Send + Sync, S: ReadableStorage> Stream for MerkleKeyValueStream<'a, T, S> {
     type Item = Result<(Key, Value), api::Error>;
 
     fn poll_next(
@@ -378,13 +379,13 @@ enum PathIteratorState<'a> {
 /// All returned nodes have keys which are a prefix of the given key.
 /// If the given key is in the trie, the last node is at that key.
 #[derive(Debug)]
-pub struct PathIterator<'a, 'b, T> {
+pub struct PathIterator<'a, 'b, T: Debug + Send + Sync, S: ReadableStorage> {
     state: PathIteratorState<'b>,
-    merkle: &'a Merkle<T>,
+    merkle: &'a Merkle<T, S>,
 }
 
-impl<'a, 'b, T> PathIterator<'a, 'b, T> {
-    pub(super) fn new(merkle: &'a Merkle<T>, key: &'b [u8]) -> Result<Self, MerkleError> {
+impl<'a, 'b, T: Debug + Send + Sync, S: ReadableStorage> PathIterator<'a, 'b, T, S> {
+    pub(super) fn new(merkle: &'a Merkle<T, S>, key: &'b [u8]) -> Result<Self, MerkleError> {
         let Some(root_addr) = merkle.root_address() else {
             return Ok(Self {
                 state: PathIteratorState::Exhausted,
@@ -403,7 +404,7 @@ impl<'a, 'b, T> PathIterator<'a, 'b, T> {
     }
 }
 
-impl<'a, 'b, T> Iterator for PathIterator<'a, 'b, T> {
+impl<'a, 'b, T: Debug + Send + Sync, S: ReadableStorage> Iterator for PathIterator<'a, 'b, T, S> {
     type Item = Result<PathIterItem, MerkleError>;
 
     fn next(&mut self) -> Option<Self::Item> {
