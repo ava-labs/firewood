@@ -130,19 +130,13 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
 }
 
 impl<T: WriteLinearStore> HashedNodeStore<T> {
-    // Writes all of the nodes in `self.modified` to the linear store
-    // and clears `self.modified`.
-    fn flush(&mut self) -> Result<(), Error> {
+    pub fn freeze(mut self) -> Result<HashedNodeStore<ProposedImmutable>, Error> {
+        // Writes all nodes in `self.modified` to the underylying store.
         for (node_addr, (node, _)) in self.modified.iter() {
+            // Space was allocated for this node with `allocate_node`.
             self.nodestore.update_in_place(*node_addr, node)?;
         }
         self.modified.clear();
-        Ok(())
-    }
-
-    pub fn freeze(mut self) -> Result<HashedNodeStore<ProposedImmutable>, Error> {
-        self.flush()?;
-        assert!(self.modified.is_empty());
 
         let root_hash = if let Some(root_address) = self.root_address() {
             let hash = self.hash(root_address, &mut Path(Default::default()))?;
