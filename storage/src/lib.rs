@@ -9,6 +9,8 @@
 //!
 //! The [NodeStore] maintains a the [LinearAddress] of the root node
 //! for this revision.
+//! The [NodeStore] maintains a the [LinearAddress] of the root node
+//! for this revision.
 //!
 //! A [NodeStore] has a generic argument which indicates what kind of
 //! revision the nodestore represents. Possible options are:
