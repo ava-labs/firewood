@@ -76,7 +76,6 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
                 #[allow(clippy::indexing_slicing)]
                 for (index, child) in b.children.iter().enumerate() {
                     let Some(child_addr) = child else {
-                        // There is no child or we already know its hash.
                         continue;
                     };
 
