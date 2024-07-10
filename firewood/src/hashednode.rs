@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::Error;
 use std::iter::{self, once};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use storage::{Child, TrieHash, UpdateError};
 use storage::{LinearAddress, NodeStore};
@@ -30,7 +30,7 @@ use storage::PathIterItem;
 pub struct HashedNodeStore<T: ReadLinearStore> {
     nodestore: NodeStore<T>,
     added: HashMap<LinearAddress, (Arc<Node>, u8)>,
-    root_hash: OnceLock<TrieHash>,
+    root_hash: Option<TrieHash>,
 }
 
 impl<T: WriteLinearStore> HashedNodeStore<T> {
@@ -63,31 +63,13 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
         }
     }
 
-    pub fn root_hash(&self) -> Result<TrieHash, Error> {
+    /// Returns the hash of the root of this trie.
+    /// Returns None if the trie is empty.
+    /// Assumes `freeze` has already been called on this store.
+    /// TODO enforce this assumption with the type system.
+    pub fn root_hash(&self) -> Option<&TrieHash> {
         debug_assert!(self.added.is_empty());
-        let Some(addr) = self.nodestore.root_address() else {
-            return Ok(TrieHash::default());
-        };
-
-        // TODO danlaine: Uncomment this once get_or_try_init is stable
-        // return self
-        //     .root_hash
-        //     .get_or_try_init(|| {
-        //         let node = self.read_node(addr)?;
-        //         Ok(hash_node(&node, &Path(Default::default())))
-        //     })
-        //     .cloned();
-
-        Ok(self
-            .root_hash
-            .get_or_init(|| {
-                let node = self
-                    .nodestore
-                    .read_node(addr)
-                    .expect("TODO: use get_or_try_init once it's available");
-                hash_node(&node, &Path(Default::default()))
-            })
-            .clone())
+        self.root_hash.as_ref()
     }
 
     pub const fn root_address(&self) -> Option<LinearAddress> {
@@ -152,12 +134,9 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         let root_hash = if let Some(root_address) = self.root_address() {
             let (hash, root_address) = self.hash(root_address, &mut Path(Default::default()))?;
             self.nodestore.set_root(Some(root_address))?;
-
-            let root_hash = OnceLock::new();
-            let _ = root_hash.set(hash);
-            root_hash
+            Some(hash)
         } else {
-            Default::default()
+            None
         };
         assert!(self.added.is_empty());
         let frozen_nodestore = self.nodestore.freeze();
@@ -524,6 +503,6 @@ mod test {
         hns.set_root(Some(addr)).unwrap();
 
         let frozen = hns.freeze().unwrap();
-        assert_ne!(frozen.root_hash().unwrap(), Default::default());
+        assert_ne!(frozen.root_hash(), None);
     }
 }
