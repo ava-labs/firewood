@@ -79,7 +79,7 @@ impl<T: ReadLinearStore> api::DbView for HistoricalRev<T> {
     async fn single_key_proof<K: api::KeyType>(
         &self,
         _key: K,
-    ) -> Result<Option<Proof<Vec<u8>>>, api::Error> {
+    ) -> Result<Option<Proof>, api::Error> {
         todo!()
     }
 
@@ -124,14 +124,14 @@ impl<T: ReadLinearStore> HistoricalRev<T> {
         todo!()
     }
 
-    pub fn prove(&self, _key: &[u8]) -> Result<Proof<Vec<u8>>, MerkleError> {
+    pub fn prove(&self, _key: &[u8]) -> Result<Proof, MerkleError> {
         todo!()
     }
 
     /// Verifies a range proof is valid for a set of keys.
-    pub fn verify_range_proof<N: AsRef<[u8]> + Send, V: AsRef<[u8]>>(
+    pub fn verify_range_proof<V: AsRef<[u8]>>(
         &self,
-        _proof: Proof<N>,
+        _proof: Proof,
         _first_key: &[u8],
         _last_key: &[u8],
         _keys: Vec<&[u8]>,
@@ -177,7 +177,7 @@ impl<T: WriteLinearStore> api::DbView for Proposal<T> {
         todo!()
     }
 
-    async fn single_key_proof<K>(&self, _key: K) -> Result<Option<Proof<Vec<u8>>>, api::Error>
+    async fn single_key_proof<K>(&self, _key: K) -> Result<Option<Proof>, api::Error>
     where
         K: api::KeyType,
     {

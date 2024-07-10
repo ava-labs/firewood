@@ -1,15 +1,12 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::collections::HashMap;
-
-use crate::{merkle::Merkle, v2::api::HashKey};
-use nix::errno::Errno;
-use sha2::Digest;
-use storage::ReadLinearStore;
-use thiserror::Error;
-
+use crate::hashednode::{Preimage, ValueDigest};
 use crate::{db::DbError, merkle::MerkleError};
+use nix::errno::Errno;
+use sha2::{Digest, Sha256};
+use storage::{BranchNode, NibblesIterator, PathIterItem, TrieHash};
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ProofError {
@@ -27,6 +24,24 @@ pub enum ProofError {
     InvalidData,
     #[error("invalid proof")]
     InvalidProof,
+    #[error("unexpected hash")]
+    UnexpectedHash,
+    #[error("unexpected value")]
+    UnexpectedValue,
+    #[error("value mismatch")]
+    ValueMismatch,
+    #[error("expected value but got None")]
+    ExpectedValue,
+    #[error("proof can't be empty")]
+    Empty,
+    #[error("each proof node key should be a prefix of the proven key")]
+    ShouldBePrefixOfProvenKey,
+    #[error("each proof node key should be a prefix of the next key")]
+    ShouldBePrefixOfNextKey,
+    #[error("child index is out of bounds")]
+    ChildIndexOutOfBounds,
+    #[error("only nodes with even length key can have values")]
+    ValueAtOddNibbleLength,
     #[error("invalid edge keys")]
     InvalidEdgeKeys,
     #[error("node insertion error")]
@@ -65,107 +80,197 @@ impl From<DbError> for ProofError {
     }
 }
 
-/// A proof that a single key is present
-///
-/// The generic N represents the storage for the node
 #[derive(Clone, Debug)]
-pub struct Proof<N>(pub HashMap<HashKey, N>);
-
-/// `SubProof` contains the value or the hash of a node that maps
-/// to a single proof step. If reaches an end step during proof verification,
-/// the `SubProof` should be the `Value` variant.
-
-#[derive(Debug)]
-#[allow(dead_code)] // TODO use or remove this type
-enum SubProof {
-    Value(Vec<u8>),
-    Hash(HashKey),
+pub struct ProofNode {
+    /// The key this node is at. Each byte is a nibble.
+    pub key: Box<[u8]>,
+    /// None if the node has no value.
+    /// The value associated with `key` if the value is < 32 bytes.
+    /// The hash of the value if the node's value is >= 32 bytes.
+    /// TODO danlaine: Can we enforce that this is at most 32 bytes?
+    pub value_digest: Option<Box<[u8]>>,
+    /// The hash of each child, or None if the child does not exist.
+    pub child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN],
 }
 
-impl<N: AsRef<[u8]> + Send> Proof<N> {
-    /// verify_proof checks merkle proofs. The given proof must contain the value for
-    /// key in a trie with the given root hash. VerifyProof returns an error if the
-    /// proof contains invalid trie nodes or the wrong value.
-    ///
-    /// The generic N represents the storage for the node
-    pub fn verify<K: AsRef<[u8]>>(
+impl From<PathIterItem> for ProofNode {
+    fn from(item: PathIterItem) -> Self {
+        let mut child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] = Default::default();
+
+        if let Some(branch) = item.node.as_branch() {
+            // TODO danlaine: can we avoid indexing?
+            #[allow(clippy::indexing_slicing)]
+            for (i, hash) in branch.children_iter() {
+                child_hashes[i] = Some(hash.clone());
+            }
+        }
+
+        Self {
+            key: item.key_nibbles,
+            value_digest: item.node.value().map(|value| value.into()),
+            child_hashes,
+        }
+    }
+}
+
+impl From<&ProofNode> for TrieHash {
+    fn from(node: &ProofNode) -> Self {
+        node.to_hash()
+    }
+}
+
+/// A proof that a given key-value pair either exists or does not exist in a trie.
+#[derive(Clone, Debug)]
+pub struct Proof(pub Box<[ProofNode]>);
+
+impl Proof {
+    pub fn verify<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         &self,
-        _key: K,
-        _root_hash: HashKey,
-    ) -> Result<Option<Vec<u8>>, ProofError> {
+        key: K,
+        expected_value: Option<V>,
+        root_hash: &TrieHash,
+    ) -> Result<(), ProofError> {
+        match self.value_digest(key, root_hash)? {
+            None => {
+                // This proof proves that `key` maps to None.
+                if expected_value.is_some() {
+                    return Err(ProofError::ExpectedValue);
+                }
+            }
+            Some(ValueDigest::Value(got_value)) => {
+                // This proof proves that `key` maps to `got_value`.
+                let Some(expected_value) = expected_value else {
+                    // We were expecting `key` to map to None.
+                    return Err(ProofError::UnexpectedValue);
+                };
+
+                if got_value != expected_value.as_ref() {
+                    // `key` maps to an unexpected value.
+                    return Err(ProofError::ValueMismatch);
+                }
+            }
+            Some(ValueDigest::Hash(got_hash)) => {
+                // This proof proves that `key` maps to a value
+                // whose hash is `got_hash`.
+                let Some(expected_value) = expected_value else {
+                    // We were expecting `key` to map to None.
+                    return Err(ProofError::UnexpectedValue);
+                };
+
+                let value_hash = Sha256::digest(expected_value.as_ref());
+                if got_hash.as_ref() != value_hash.as_slice() {
+                    // `key` maps to an unexpected value.
+                    return Err(ProofError::ValueMismatch);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns the value digest associated with the given `key` in the trie revision
+    /// with the given `root_hash`. If the key does not exist in the trie, returns `None`.
+    /// Returns an error if the proof is invalid or doesn't prove the key for the
+    /// given revision.
+    fn value_digest<K: AsRef<[u8]>>(
+        &self,
+        key: K,
+        root_hash: &TrieHash,
+    ) -> Result<Option<ValueDigest>, ProofError> {
+        let key: Vec<u8> = NibblesIterator::new(key.as_ref()).collect();
+
+        let Some(last_node) = self.0.last() else {
+            return Err(ProofError::Empty);
+        };
+
+        let mut expected_hash = root_hash;
+
+        // TODO danlaine: Is there a better way to do this loop?
+        for i in 0..self.0.len() {
+            #[allow(clippy::indexing_slicing)]
+            let node = &self.0[i];
+
+            if node.to_hash() != *expected_hash {
+                return Err(ProofError::UnexpectedHash);
+            }
+
+            // Assert that only nodes whose keys are an even number of nibbles
+            // have a `value_digest`.
+            if node.key.len() % 2 != 0 && node.value_digest.is_some() {
+                return Err(ProofError::ValueAtOddNibbleLength);
+            }
+
+            if i != self.0.len() - 1 {
+                // Assert that every node's key is a prefix of the proven key,
+                // with the exception of the last node, which is a suffix of the
+                // proven key in exclusion proofs.
+                let next_nibble = next_nibble(&mut node.key.iter(), &mut key.iter())?;
+
+                let Some(next_nibble) = next_nibble else {
+                    return Err(ProofError::ShouldBePrefixOfProvenKey);
+                };
+
+                expected_hash = node
+                    .child_hashes
+                    .get(next_nibble as usize)
+                    .ok_or(ProofError::ChildIndexOutOfBounds)?
+                    .as_ref()
+                    .ok_or(ProofError::NodeNotInTrie)?;
+
+                // Assert that each node's key is a prefix of the next node's key.
+                #[allow(clippy::indexing_slicing)]
+                let next_node_key = &self.0[i + 1].key;
+                if !is_prefix(&mut node.key.iter(), &mut next_node_key.iter()) {
+                    return Err(ProofError::ShouldBePrefixOfNextKey);
+                }
+            }
+        }
+
+        if last_node.key.len() == key.len() {
+            // This is an inclusion proof.
+            return Ok(last_node.value_digest.as_ref().map(|value| {
+                if value.len() < 32 {
+                    ValueDigest::Value(value)
+                } else {
+                    // TODO danlaine: I think we can remove this copy by not
+                    // requiring Hash to own its data.
+                    ValueDigest::Hash(value.to_vec().into_boxed_slice())
+                }
+            }));
+        }
+
         todo!()
     }
-
-    pub fn extend(&mut self, other: Proof<N>) {
-        self.0.extend(other.0)
-    }
-
-    pub fn verify_range_proof<K, V>(
-        &self,
-        _root_hash: HashKey,
-        _first_key: K,
-        _last_key: K,
-        keys: Vec<K>,
-        vals: Vec<V>,
-    ) -> Result<bool, ProofError>
-    where
-        K: AsRef<[u8]>,
-        V: AsRef<[u8]>,
-    {
-        if keys.len() != vals.len() {
-            return Err(ProofError::InconsistentProofData);
-        }
-
-        // Ensure the received batch is monotonic increasing and contains no deletions
-        #[allow(clippy::indexing_slicing)]
-        if !keys.windows(2).all(|w| w[0].as_ref() < w[1].as_ref()) {
-            return Err(ProofError::NonMonotonicIncreaseRange);
-        }
-
-        // create an empty merkle trie in memory
-        todo!();
-    }
-
-    /// proofToPath converts a merkle proof to trie node path. The main purpose of
-    /// this function is recovering a node path from the merkle proof stream. All
-    /// necessary nodes will be resolved and leave the remaining as hashnode.
-    ///
-    /// The given edge proof is allowed to be an existent or non-existent proof.
-    fn _proof_to_path<K, T: ReadLinearStore>(
-        &self,
-        _key: K,
-        _root_hash: HashKey,
-        _in_mem_merkle: &mut Merkle<T>,
-        _allow_non_existent_node: bool,
-    ) -> Result<Option<Vec<u8>>, ProofError>
-    where
-        K: AsRef<[u8]>,
-    {
-        todo!()
-    }
 }
 
-fn _generate_subproof_hash(encoded: &[u8]) -> Result<HashKey, ProofError> {
-    match encoded.len() {
-        0..=31 => {
-            let sub_hash = sha2::Sha256::digest(encoded).into();
-            Ok(sub_hash)
+/// Returns the next nibble in `c` after `b`.
+/// Returns an error if `b` is not a prefix of `c`.
+fn next_nibble<'a, I>(b: &mut I, c: &mut I) -> Result<Option<u8>, ProofError>
+where
+    I: Iterator<Item = &'a u8>,
+{
+    // Check if b is a prefix of c
+    for b_item in b {
+        match c.next() {
+            Some(c_item) if b_item == c_item => continue,
+            _ => return Err(ProofError::ShouldBePrefixOfNextKey),
         }
-
-        32 => {
-            let sub_hash = encoded
-                .try_into()
-                .expect("slice length checked in match arm");
-
-            Ok(sub_hash)
-        }
-
-        len => Err(ProofError::DecodeError(Box::new(
-            bincode::ErrorKind::Custom(format!("invalid proof length: {len}")),
-        ))),
     }
+
+    // If a is a prefix, return the first element in c after b
+    Ok(c.next().copied())
 }
 
-fn _generate_subproof(encoded: &[u8]) -> Result<SubProof, ProofError> {
-    Ok(SubProof::Hash(_generate_subproof_hash(encoded)?))
+fn is_prefix<'a, I>(b: &mut I, c: &mut I) -> bool
+where
+    I: Iterator<Item = &'a u8>,
+{
+    for b_item in b {
+        let Some(c_item) = c.next() else {
+            return false;
+        };
+        if b_item != c_item {
+            return false;
+        }
+    }
+    true
 }

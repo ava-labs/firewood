@@ -18,6 +18,7 @@ const MAX_VARINT_SIZE: usize = 10;
 const BITS_PER_NIBBLE: u64 = 4;
 
 use crate::merkle::MerkleError;
+use crate::proof::ProofNode;
 use storage::PathIterItem;
 
 /// A [HashedNodeStore] keeps track of nodes as they change when they are backed by a LinearStore.
@@ -315,7 +316,7 @@ pub(super) enum ValueDigest<'a> {
     Value(&'a [u8]),
     /// The hash of a a node's value.
     /// TODO danlaine: Use this variant when implement ProofNode
-    _Hash(Box<[u8]>),
+    Hash(Box<[u8]>),
 }
 
 trait Hashable {
@@ -438,6 +439,32 @@ impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
     }
 }
 
+impl Hashable for &ProofNode {
+    fn key(&self) -> impl Iterator<Item = u8> + Clone {
+        self.key.as_ref().iter().copied()
+    }
+
+    fn value_digest(&self) -> Option<ValueDigest> {
+        match self.value_digest.as_ref() {
+            None => None,
+            Some(value) if value.len() > 32 => {
+                unreachable!("TODO danlaine: prevent this from happening. The digest should never be more than 32 bytes.")
+            }
+            Some(value) if value.len() == 32 => {
+                Some(ValueDigest::Hash(value.to_vec().into_boxed_slice()))
+            }
+            Some(value) => Some(ValueDigest::Value(value)),
+        }
+    }
+
+    fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
+        self.child_hashes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, hash)| hash.as_ref().map(|h| (i, h)))
+    }
+}
+
 fn add_value_digest_to_buf<H: HasUpdate>(buf: &mut H, value_digest: Option<ValueDigest>) {
     let Some(value_digest) = value_digest else {
         let value_exists: u8 = 0;
@@ -456,7 +483,7 @@ fn add_value_digest_to_buf<H: HasUpdate>(buf: &mut H, value_digest: Option<Value
         ValueDigest::Value(value) => {
             add_len_and_value_to_buf(buf, value);
         }
-        ValueDigest::_Hash(hash) => {
+        ValueDigest::Hash(hash) => {
             add_len_and_value_to_buf(buf, hash.as_ref());
         }
     }
