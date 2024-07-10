@@ -7,7 +7,7 @@ use std::io::Error;
 use std::iter::{self, once};
 use std::sync::Arc;
 
-use storage::{BranchNode, Child, LeafNode, TrieHash, UpdateError};
+use storage::{Child, TrieHash, UpdateError};
 use storage::{LinearAddress, NodeStore};
 use storage::{Node, Path, ProposedImmutable};
 use storage::{ReadLinearStore, WriteLinearStore};
@@ -261,7 +261,11 @@ pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
             }
             .into()
         }
-        Node::Leaf(node) => hash_leaf(node, path_prefix),
+        Node::Leaf(node) => NodeAndPrefix {
+            node,
+            prefix: path_prefix,
+        }
+        .into(),
     }
 }
 
