@@ -107,7 +107,7 @@ impl BranchNode {
             #[allow(clippy::indexing_slicing)]
             |(i, child)| match child {
                 Child::None => None,
-                Child::Address(_) => unreachable!("TODO is this reachable?"),
+                Child::Address(_) => unreachable!("child should have a hash if it has an address"),
                 Child::AddressWithHash(_, hash) => Some((i, hash)),
             },
         )

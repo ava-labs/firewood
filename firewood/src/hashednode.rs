@@ -248,11 +248,19 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
 
 pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
     match node {
-        Node::Branch(node) => NodeAndPrefix {
-            node: node.as_ref(),
-            prefix: path_prefix,
+        Node::Branch(node) => {
+            // All child hashes should be filled in.
+            // TODO danlaine: Enforce this with the type system.
+            debug_assert!(node
+                .children
+                .iter()
+                .all(|c| !matches!(c, Child::Address(..))));
+            NodeAndPrefix {
+                node: node.as_ref(),
+                prefix: path_prefix,
+            }
+            .into()
         }
-        .into(),
         Node::Leaf(node) => NodeAndPrefix {
             node,
             prefix: path_prefix,
