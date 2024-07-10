@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::hashednode::{Preimage, ValueDigest};
+use crate::hashednode::{hash, ValueDigest};
 use crate::merkle::MerkleError;
 use sha2::{Digest, Sha256};
 use storage::{BranchNode, NibblesIterator, PathIterItem, TrieHash};
@@ -81,7 +81,7 @@ impl From<PathIterItem> for ProofNode {
 
 impl From<&ProofNode> for TrieHash {
     fn from(node: &ProofNode) -> Self {
-        node.to_hash()
+        hash(node)
     }
 }
 
@@ -137,11 +137,11 @@ impl Proof {
     /// with the given `root_hash`. If the key does not exist in the trie, returns `None`.
     /// Returns an error if the proof is invalid or doesn't prove the key for the
     /// given revision.
-    fn value_digest<K: AsRef<[u8]>>(
-        &self,
+    fn value_digest<'a, K: AsRef<[u8]>>(
+        &'a self,
         key: K,
         root_hash: &TrieHash,
-    ) -> Result<Option<ValueDigest>, ProofError> {
+    ) -> Result<Option<ValueDigest<&'a [u8], Box<[u8]>>>, ProofError> {
         let key: Vec<u8> = NibblesIterator::new(key.as_ref()).collect();
 
         let Some(last_node) = self.0.last() else {
@@ -155,7 +155,7 @@ impl Proof {
             #[allow(clippy::indexing_slicing)]
             let node = &self.0[i];
 
-            if node.to_hash() != *expected_hash {
+            if hash(node) != *expected_hash {
                 return Err(ProofError::UnexpectedHash);
             }
 
@@ -195,7 +195,7 @@ impl Proof {
             // This is an inclusion proof.
             return Ok(last_node.value_digest.as_ref().map(|value| {
                 if value.len() < 32 {
-                    ValueDigest::Value(value)
+                    ValueDigest::Value(value.as_ref())
                 } else {
                     // TODO danlaine: I think we can remove this copy by not
                     // requiring Hash to own its data.
