@@ -805,9 +805,32 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use super::*;
+    use rand::{rngs::StdRng, Rng, SeedableRng};
     use storage::MemStore;
     use test_case::test_case;
+
+    // Returns n random key-value pairs.
+    fn generate_random_kvs(seed: u64, n: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
+        println!("Used seed: {}", seed);
+
+        let mut rng = StdRng::seed_from_u64(seed);
+
+        let mut kvs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+        for _ in 0..n {
+            let key_len = rng.gen_range(1..=4096);
+            let key: Vec<u8> = (0..key_len).map(|_| rng.gen()).collect();
+
+            let val_len = rng.gen_range(1..=4096);
+            let val: Vec<u8> = (0..val_len).map(|_| rng.gen()).collect();
+
+            kvs.push((key, val));
+        }
+
+        kvs
+    }
 
     #[test]
     fn test_get_regression() {
@@ -1064,13 +1087,21 @@ mod tests {
         assert!(matches!(proof.unwrap_err(), MerkleError::Empty));
     }
 
-    #[test_case(vec![(&[],&[])] ; "leaf without partial path encoding with Bincode")]
-
-    fn single_key_proof(kvs: Vec<(&[u8], &[u8])>) {
+    #[test]
+    fn single_key_proof() {
         let mut merkle = create_in_memory_merkle();
 
+        let seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        const TEST_SIZE: usize = 1;
+
+        let kvs = generate_random_kvs(seed, TEST_SIZE);
+
         for (key, val) in &kvs {
-            merkle.insert(key, Box::from(*val)).unwrap();
+            merkle.insert(key, val.clone().into_boxed_slice()).unwrap();
         }
 
         let merkle = merkle.freeze().unwrap();
@@ -1078,7 +1109,7 @@ mod tests {
         let root_hash = merkle.root_hash().unwrap();
 
         for (key, value) in kvs {
-            let proof = merkle.prove(key).unwrap();
+            let proof = merkle.prove(&key).unwrap();
 
             proof.verify(key, Some(value), root_hash).unwrap();
         }

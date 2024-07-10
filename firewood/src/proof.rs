@@ -64,7 +64,16 @@ impl From<PathIterItem> for ProofNode {
 
         Self {
             key: item.key_nibbles,
-            value_digest: item.node.value().map(|value| value.into()),
+            value_digest: item.node.value().map(|value| {
+                if value.len() < 32 {
+                    value.to_vec().into_boxed_slice()
+                } else {
+                    // TODO danlaine: I think we can remove this copy by not
+                    // requiring Hash to own its data.
+                    let hash = Sha256::digest(value);
+                    hash.as_slice().to_vec().into_boxed_slice()
+                }
+            }),
             child_hashes,
         }
     }
@@ -195,7 +204,8 @@ impl Proof {
             }));
         }
 
-        todo!()
+        // This is an exclusion proof.
+        Ok(None)
     }
 }
 
