@@ -44,16 +44,6 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     }
 }
 
-impl<T: ReadLinearStore> From<NodeStore<T>> for HashedNodeStore<T> {
-    fn from(nodestore: NodeStore<T>) -> Self {
-        HashedNodeStore {
-            nodestore,
-            added: Default::default(),
-            root_hash: Default::default(),
-        }
-    }
-}
-
 impl<T: ReadLinearStore> HashedNodeStore<T> {
     pub fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
         if let Some((modified_node, _)) = self.added.get(&addr) {
