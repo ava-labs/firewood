@@ -85,11 +85,10 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
             // This node wasn't modified, so we must have all of its child hashes
             // since we got it from `self.nodestore`. We can hash it and return.
             let node = self.nodestore.read_node(node_addr)?;
-            let hash = hash_node(&node, path_prefix);
-            return Ok((hash, node_addr));
+            return Ok((hash_node(&node, path_prefix), node_addr));
         };
 
-        let hash = match node {
+        match node {
             Node::Branch(ref mut b) => {
                 for (nibble, child) in b.children.iter_mut().enumerate() {
                     let Child::Address(child_addr) = child else {
@@ -111,7 +110,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
                 }
             }
             Node::Leaf(_) => {}
-        };
+        }
 
         let hash = hash_node(&node, path_prefix);
         match self.nodestore.update_node(node_addr, node) {
@@ -264,14 +263,6 @@ pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
         }
         Node::Leaf(node) => hash_leaf(node, path_prefix),
     }
-}
-
-pub fn hash_leaf(leaf: &LeafNode, path_prefix: &Path) -> TrieHash {
-    NodeAndPrefix {
-        node: leaf,
-        prefix: path_prefix,
-    }
-    .into()
 }
 
 /// Returns the serialized representation of `node` used as the pre-image
