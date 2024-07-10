@@ -34,12 +34,13 @@ pub struct HashedNodeStore<T: ReadLinearStore> {
 }
 
 impl<T: WriteLinearStore> HashedNodeStore<T> {
-    pub fn initialize(linearstore: T) -> Result<Self, Error> {
+    /// Returns a new empty HashedNodeStore that uses `linearstore` as the backing store.
+    pub fn new(linearstore: T) -> Result<Self, Error> {
         let nodestore = NodeStore::initialize(linearstore)?;
         Ok(HashedNodeStore {
             nodestore,
             added: Default::default(),
-            root_hash: Default::default(),
+            root_hash: None,
         })
     }
 }
@@ -129,9 +130,8 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
             None
         };
         assert!(self.added.is_empty());
-        let frozen_nodestore = self.nodestore.freeze();
         Ok(HashedNodeStore {
-            nodestore: frozen_nodestore,
+            nodestore: self.nodestore.freeze(),
             added: Default::default(),
             root_hash,
         })
@@ -484,7 +484,7 @@ mod test {
     #[test]
     fn freeze_test() {
         let memstore = MemStore::new(vec![]);
-        let mut hns = HashedNodeStore::initialize(memstore).unwrap();
+        let mut hns = HashedNodeStore::new(memstore).unwrap();
         let node = Node::Leaf(storage::LeafNode {
             partial_path: Path(Default::default()),
             value: Box::new(*b"abc"),

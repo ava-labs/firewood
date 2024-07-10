@@ -831,7 +831,7 @@ mod tests {
     }
 
     fn create_in_memory_merkle() -> Merkle<MemStore> {
-        Merkle::new(HashedNodeStore::initialize(MemStore::new(vec![])).unwrap())
+        Merkle::new(HashedNodeStore::new(MemStore::new(vec![])).unwrap())
     }
 
     // use super::*;
@@ -1411,7 +1411,7 @@ mod tests {
     fn merkle_build_test<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         items: Vec<(K, V)>,
     ) -> Result<Merkle<MemStore>, MerkleError> {
-        let mut merkle = Merkle::new(HashedNodeStore::initialize(MemStore::new(vec![])).unwrap());
+        let mut merkle = Merkle::new(HashedNodeStore::new(MemStore::new(vec![])).unwrap());
         for (k, v) in items.iter() {
             merkle.insert(k.as_ref(), Box::from(v.as_ref()))?;
             println!("{}", merkle.dump()?);
