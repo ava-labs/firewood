@@ -7,7 +7,7 @@ use std::io::Error;
 use std::iter::{self, once};
 use std::sync::Arc;
 
-use storage::{Child, TrieHash, UpdateError};
+use storage::{BranchNode, Child, LeafNode, TrieHash, UpdateError};
 use storage::{LinearAddress, NodeStore};
 use storage::{Node, Path, ProposedImmutable};
 use storage::{ReadLinearStore, WriteLinearStore};
@@ -85,7 +85,12 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
             // This node wasn't modified, so we must have all of its child hashes
             // since we got it from `self.nodestore`. We can hash it and return.
             let node = self.nodestore.read_node(node_addr)?;
-            return Ok((hash_node(&node, path_prefix), node_addr));
+            let hash = match &*node {
+                Node::Branch(node) => hash_branch(&node, path_prefix),
+                Node::Leaf(ref node) => hash_leaf(&node, path_prefix),
+            };
+
+            return Ok((hash, node_addr));
         };
 
         match node {
@@ -112,7 +117,10 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
             Node::Leaf(_) => {}
         }
 
-        let hash = hash_node(&node, path_prefix);
+        let hash = match node {
+            Node::Branch(ref node) => hash_branch(node, path_prefix),
+            Node::Leaf(ref node) => hash_leaf(node, path_prefix),
+        };
         match self.nodestore.update_node(node_addr, node) {
             Ok(()) => Ok((hash, node_addr)),
             Err(UpdateError::NodeMoved(new_addr)) => Ok((hash, new_addr)),
@@ -246,19 +254,20 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     }
 }
 
-pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
-    match node {
-        Node::Branch(node) => NodeAndPrefix {
-            node: node.as_ref(),
-            prefix: path_prefix,
-        }
-        .into(),
-        Node::Leaf(node) => NodeAndPrefix {
-            node,
-            prefix: path_prefix,
-        }
-        .into(),
+pub fn hash_branch(branch: &BranchNode, path_prefix: &Path) -> TrieHash {
+    NodeAndPrefix {
+        node: branch,
+        prefix: path_prefix,
     }
+    .into()
+}
+
+pub fn hash_leaf(leaf: &LeafNode, path_prefix: &Path) -> TrieHash {
+    NodeAndPrefix {
+        node: leaf,
+        prefix: path_prefix,
+    }
+    .into()
 }
 
 /// Returns the serialized representation of `node` used as the pre-image
