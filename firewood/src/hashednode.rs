@@ -7,7 +7,7 @@ use std::io::Error;
 use std::iter::{self, once};
 use std::sync::{Arc, OnceLock};
 
-use storage::{Child, TrieHash};
+use storage::{Child, TrieHash, UpdateError};
 use storage::{LinearAddress, NodeStore};
 use storage::{Node, Path, ProposedImmutable};
 use storage::{ReadLinearStore, WriteLinearStore};
@@ -29,7 +29,7 @@ use storage::PathIterItem;
 #[derive(Debug)]
 pub struct HashedNodeStore<T: ReadLinearStore> {
     nodestore: NodeStore<T>,
-    modified: HashMap<LinearAddress, (Arc<Node>, u8)>,
+    added: HashMap<LinearAddress, (Arc<Node>, u8)>,
     root_hash: OnceLock<TrieHash>,
 }
 
@@ -38,7 +38,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         let nodestore = NodeStore::initialize(linearstore)?;
         Ok(HashedNodeStore {
             nodestore,
-            modified: Default::default(),
+            added: Default::default(),
             root_hash: Default::default(),
         })
     }
@@ -48,7 +48,7 @@ impl<T: ReadLinearStore> From<NodeStore<T>> for HashedNodeStore<T> {
     fn from(nodestore: NodeStore<T>) -> Self {
         HashedNodeStore {
             nodestore,
-            modified: Default::default(),
+            added: Default::default(),
             root_hash: Default::default(),
         }
     }
@@ -56,30 +56,15 @@ impl<T: ReadLinearStore> From<NodeStore<T>> for HashedNodeStore<T> {
 
 impl<T: ReadLinearStore> HashedNodeStore<T> {
     pub fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
-        if let Some((modified_node, _)) = self.modified.get(&addr) {
+        if let Some((modified_node, _)) = self.added.get(&addr) {
             Ok(modified_node.clone())
         } else {
             Ok(self.nodestore.read_node(addr)?)
         }
     }
 
-    // Returns a actual node instead of just an arc to it. This node is then
-    // owned by the caller.
-    // If the node was previously modified, then it will consume the modified Arc
-    // and return the inner value. This assumes no other references to that Arc
-    // exist at this time (that is, no iterators are active on the HashedNodeStore)
-    // If the node was not modified, a clone of the node is returned
-    fn take_node(&mut self, addr: LinearAddress) -> Result<Node, Error> {
-        if let Some((modified_node, _)) = self.modified.remove(&addr) {
-            Ok(Arc::into_inner(modified_node).expect("no other references to this node can exist"))
-        } else {
-            let node = self.nodestore.read_node(addr)?;
-            Ok((*node).clone())
-        }
-    }
-
     pub fn root_hash(&self) -> Result<TrieHash, Error> {
-        debug_assert!(self.modified.is_empty());
+        debug_assert!(self.added.is_empty());
         let Some(addr) = self.nodestore.root_address() else {
             return Ok(TrieHash::default());
         };
@@ -111,69 +96,81 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
 }
 
 impl<T: WriteLinearStore> HashedNodeStore<T> {
-    // recursively hash this node
+    // Hashes the node at `node_addr` and all of its children recursively.
+    // Returns the hash of the node and the address of the node.
     fn hash(
         &mut self,
         node_addr: LinearAddress,
-        node: &mut Node,
         path_prefix: &mut Path,
-    ) -> Result<TrieHash, Error> {
-        match node {
-            Node::Branch(b) => {
-                // We found a branch, so find all the children that need hashing
-                let mut modified = false;
+    ) -> Result<(TrieHash, LinearAddress), Error> {
+        let modified = self.added.remove(&node_addr);
 
+        let mut node = if let Some((modified_node, _)) = modified {
+            // This node was modified and needs to be rehashed and written to `self.nodestore`.
+            Arc::into_inner(modified_node).expect("no other references to this node can exist")
+        } else {
+            // This node wasn't modified, so we must have all of its child hashes
+            // since we got it from `self.nodestore`. We can hash it and return.
+            let node = self.nodestore.read_node(node_addr)?;
+            return Ok((hash_node(&node, path_prefix), node_addr));
+        };
+
+        match node {
+            Node::Branch(ref mut b) => {
                 for (nibble, child) in b.children.iter_mut().enumerate() {
                     let Child::Address(child_addr) = child else {
                         // There is no child or we already know its hash.
                         continue;
                     };
 
-                    // Hash this child.
+                    // Hash this child and update
                     let child_addr = *child_addr;
-                    let mut child_node = self.take_node(child_addr)?;
                     let original_length = path_prefix.len();
                     path_prefix
                         .0
                         .extend(b.partial_path.0.iter().copied().chain(once(nibble as u8)));
-                    *child = Child::AddressWithHash(
-                        child_addr,
-                        self.hash(child_addr, &mut child_node, path_prefix)?,
-                    );
+
+                    let (child_hash, child_addr) = self.hash(child_addr, path_prefix)?;
+
+                    *child = Child::AddressWithHash(child_addr, child_hash);
                     path_prefix.0.truncate(original_length);
-                    modified = true;
-                    self.nodestore.update_in_place(child_addr, &child_node)?;
                 }
-                if modified {
-                    self.nodestore.update_in_place(node_addr, node)?;
-                    self.modified.remove(&node_addr);
-                }
-                Ok(hash_node(node, path_prefix))
             }
-            Node::Leaf(_) => Ok(hash_node(node, path_prefix)),
+            Node::Leaf(_) => {}
+        }
+
+        let hash = hash_node(&node, path_prefix);
+        match self.nodestore.update_node(node_addr, node) {
+            Ok(()) => Ok((hash, node_addr)),
+            Err(UpdateError::NodeMoved(new_addr)) => Ok((hash, new_addr)),
+            Err(UpdateError::Io(e)) => Err(e),
         }
     }
 
     pub fn freeze(mut self) -> Result<HashedNodeStore<ProposedImmutable>, Error> {
         // fill in all remaining hashes, including the root hash
-        if let Some(root_address) = self.root_address() {
-            let mut root_node = self.take_node(root_address)?;
-            let hash = self.hash(root_address, &mut root_node, &mut Path(Default::default()))?;
-            let _ = self.root_hash.set(hash);
-            self.nodestore.update_in_place(root_address, &root_node)?;
-        }
-        assert!(self.modified.is_empty());
+        let root_hash = if let Some(root_address) = self.root_address() {
+            let (hash, root_address) = self.hash(root_address, &mut Path(Default::default()))?;
+            self.nodestore.set_root(Some(root_address))?;
+
+            let root_hash = OnceLock::new();
+            let _ = root_hash.set(hash);
+            root_hash
+        } else {
+            Default::default()
+        };
+        assert!(self.added.is_empty());
         let frozen_nodestore = self.nodestore.freeze();
         Ok(HashedNodeStore {
             nodestore: frozen_nodestore,
-            modified: Default::default(),
-            root_hash: Default::default(),
+            added: Default::default(),
+            root_hash,
         })
     }
 
     pub fn create_node(&mut self, node: Node) -> Result<LinearAddress, Error> {
         let (addr, size) = self.nodestore.allocate_node(&node)?;
-        self.modified.insert(addr, (Arc::new(node), size));
+        self.added.insert(addr, (Arc::new(node), size));
         Ok(addr)
     }
 
@@ -250,7 +247,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         node: Node,
     ) -> Result<LinearAddress, MerkleError> {
         let old_node_size_index =
-            if let Some((_, old_node_size_index)) = self.modified.get(&old_address) {
+            if let Some((_, old_node_size_index)) = self.added.get(&old_address) {
                 *old_node_size_index
             } else {
                 self.nodestore.node_size(old_address)?
@@ -258,14 +255,14 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
 
         // If the node was already modified, see if it still fits
         let new_address = if !self.nodestore.still_fits(old_node_size_index, &node)? {
-            self.modified.remove(&old_address);
+            self.added.remove(&old_address);
             self.nodestore.delete_node(old_address)?;
             let (new_address, new_node_size_index) = self.nodestore.allocate_node(&node)?;
-            self.modified
+            self.added
                 .insert(new_address, (Arc::new(node), new_node_size_index));
             new_address
         } else {
-            self.modified
+            self.added
                 .insert(old_address, (Arc::new(node), old_node_size_index));
             old_address
         };
