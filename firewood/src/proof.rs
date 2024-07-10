@@ -2,28 +2,15 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::hashednode::{Preimage, ValueDigest};
-use crate::{db::DbError, merkle::MerkleError};
-use nix::errno::Errno;
+use crate::merkle::MerkleError;
 use sha2::{Digest, Sha256};
 use storage::{BranchNode, NibblesIterator, PathIterItem, TrieHash};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ProofError {
-    #[error("decoding error")]
-    DecodeError(#[from] bincode::Error),
-    #[error("no such node")]
-    NoSuchNode,
-    #[error("proof node missing")]
-    ProofNodeMissing,
-    #[error("inconsistent proof data")]
-    InconsistentProofData,
     #[error("non-monotonic range increase")]
     NonMonotonicIncreaseRange,
-    #[error("invalid data")]
-    InvalidData,
-    #[error("invalid proof")]
-    InvalidProof,
     #[error("unexpected hash")]
     UnexpectedHash,
     #[error("unexpected value")]
@@ -42,42 +29,12 @@ pub enum ProofError {
     ChildIndexOutOfBounds,
     #[error("only nodes with even length key can have values")]
     ValueAtOddNibbleLength,
-    #[error("invalid edge keys")]
-    InvalidEdgeKeys,
-    #[error("node insertion error")]
-    NodesInsertionError,
     #[error("node not in trie")]
     NodeNotInTrie,
-    #[error("invalid node {0:?}")]
-    InvalidNode(#[from] MerkleError),
+    #[error("{0:?}")]
+    Merkle(#[from] MerkleError),
     #[error("empty range")]
     EmptyRange,
-    #[error("fork left")]
-    ForkLeft,
-    #[error("fork right")]
-    ForkRight,
-    #[error("system error: {0:?}")]
-    SystemError(Errno),
-    #[error("invalid root hash")]
-    InvalidRootHash,
-}
-
-impl From<DbError> for ProofError {
-    fn from(d: DbError) -> ProofError {
-        match d {
-            DbError::InvalidParams => ProofError::InvalidProof,
-            DbError::Merkle(e) => ProofError::InvalidNode(e),
-            DbError::System(e) => ProofError::SystemError(e),
-            DbError::KeyNotFound => ProofError::InvalidEdgeKeys,
-            DbError::CreateError => ProofError::NoSuchNode,
-            // TODO: fix better by adding a new error to ProofError
-            #[allow(clippy::unwrap_used)]
-            DbError::IO(e) => {
-                ProofError::SystemError(nix::errno::Errno::from_raw(e.raw_os_error().unwrap()))
-            }
-            DbError::InvalidProposal => ProofError::InvalidProof,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]

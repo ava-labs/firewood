@@ -1080,7 +1080,7 @@ mod tests {
         for (key, value) in kvs {
             let proof = merkle.prove(key).unwrap();
 
-            proof.verify(key, Some(value), &root_hash).unwrap();
+            proof.verify(key, Some(value), root_hash).unwrap();
         }
     }
 
