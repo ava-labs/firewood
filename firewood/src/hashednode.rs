@@ -85,15 +85,11 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
             // This node wasn't modified, so we must have all of its child hashes
             // since we got it from `self.nodestore`. We can hash it and return.
             let node = self.nodestore.read_node(node_addr)?;
-            let hash = match &*node {
-                Node::Branch(node) => hash_branch(&node, path_prefix),
-                Node::Leaf(ref node) => hash_leaf(&node, path_prefix),
-            };
-
+            let hash = hash_node(&node, path_prefix);
             return Ok((hash, node_addr));
         };
 
-        match node {
+        let hash = match node {
             Node::Branch(ref mut b) => {
                 for (nibble, child) in b.children.iter_mut().enumerate() {
                     let Child::Address(child_addr) = child else {
@@ -115,12 +111,9 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
                 }
             }
             Node::Leaf(_) => {}
-        }
-
-        let hash = match node {
-            Node::Branch(ref node) => hash_branch(node, path_prefix),
-            Node::Leaf(ref node) => hash_leaf(node, path_prefix),
         };
+
+        let hash = hash_node(&node, path_prefix);
         match self.nodestore.update_node(node_addr, node) {
             Ok(()) => Ok((hash, node_addr)),
             Err(UpdateError::NodeMoved(new_addr)) => Ok((hash, new_addr)),
@@ -254,12 +247,23 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     }
 }
 
-pub fn hash_branch(branch: &BranchNode, path_prefix: &Path) -> TrieHash {
-    NodeAndPrefix {
-        node: branch,
-        prefix: path_prefix,
+pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
+    match node {
+        Node::Branch(node) => {
+            // All child hashes should be filled in.
+            // TODO danlaine: Enforce this with the type system.
+            debug_assert!(node
+                .children
+                .iter()
+                .all(|c| !matches!(c, Child::Address(..))));
+            NodeAndPrefix {
+                node: node.as_ref(),
+                prefix: path_prefix,
+            }
+            .into()
+        }
+        Node::Leaf(node) => hash_leaf(node, path_prefix),
     }
-    .into()
 }
 
 pub fn hash_leaf(leaf: &LeafNode, path_prefix: &Path) -> TrieHash {
