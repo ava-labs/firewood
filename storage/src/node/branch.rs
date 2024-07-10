@@ -99,6 +99,19 @@ impl BranchNode {
             Some(new_child_addr) => Child::Address(new_child_addr),
         }
     }
+
+    /// Returns (index, hash) for each child that has a hash set.
+    pub fn children_iter(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
+        self.children.iter().enumerate().filter_map(
+            // TODO danlaine: can we avoid indexing?
+            #[allow(clippy::indexing_slicing)]
+            |(i, child)| match child {
+                Child::None => None,
+                Child::Address(_) => unreachable!("child should have a hash if it has an address"),
+                Child::AddressWithHash(_, hash) => Some((i, hash)),
+            },
+        )
+    }
 }
 
 impl From<&LeafNode> for BranchNode {

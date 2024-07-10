@@ -580,7 +580,7 @@ mod tests {
     }
 
     pub(super) fn create_test_merkle() -> Merkle<MemStore> {
-        Merkle::new(HashedNodeStore::initialize(MemStore::new(vec![])).unwrap())
+        Merkle::new(HashedNodeStore::new(MemStore::new(vec![])).unwrap())
     }
 
     #[test_case(&[]; "empty key")]

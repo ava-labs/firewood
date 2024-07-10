@@ -4,10 +4,10 @@
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::Error;
-use std::iter::once;
-use std::sync::{Arc, OnceLock};
+use std::iter::{self, once};
+use std::sync::Arc;
 
-use storage::{BranchNode, Child, TrieHash};
+use storage::{Child, TrieHash, UpdateError};
 use storage::{LinearAddress, NodeStore};
 use storage::{Node, Path, ProposedImmutable};
 use storage::{ReadLinearStore, WriteLinearStore};
@@ -29,80 +29,38 @@ use storage::PathIterItem;
 #[derive(Debug)]
 pub struct HashedNodeStore<T: ReadLinearStore> {
     nodestore: NodeStore<T>,
-    modified: HashMap<LinearAddress, (Arc<Node>, u8)>,
-    root_hash: OnceLock<TrieHash>,
+    added: HashMap<LinearAddress, (Arc<Node>, u8)>,
+    root_hash: Option<TrieHash>,
 }
 
 impl<T: WriteLinearStore> HashedNodeStore<T> {
-    pub fn initialize(linearstore: T) -> Result<Self, Error> {
+    /// Returns a new empty HashedNodeStore that uses `linearstore` as the backing store.
+    pub fn new(linearstore: T) -> Result<Self, Error> {
         let nodestore = NodeStore::initialize(linearstore)?;
         Ok(HashedNodeStore {
             nodestore,
-            modified: Default::default(),
-            root_hash: Default::default(),
+            added: Default::default(),
+            root_hash: None,
         })
-    }
-}
-
-impl<T: ReadLinearStore> From<NodeStore<T>> for HashedNodeStore<T> {
-    fn from(nodestore: NodeStore<T>) -> Self {
-        HashedNodeStore {
-            nodestore,
-            modified: Default::default(),
-            root_hash: Default::default(),
-        }
     }
 }
 
 impl<T: ReadLinearStore> HashedNodeStore<T> {
     pub fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
-        if let Some((modified_node, _)) = self.modified.get(&addr) {
+        if let Some((modified_node, _)) = self.added.get(&addr) {
             Ok(modified_node.clone())
         } else {
             Ok(self.nodestore.read_node(addr)?)
         }
     }
 
-    // Returns a actual node instead of just an arc to it. This node is then
-    // owned by the caller.
-    // If the node was previously modified, then it will consume the modified Arc
-    // and return the inner value. This assumes no other references to that Arc
-    // exist at this time (that is, no iterators are active on the HashedNodeStore)
-    // If the node was not modified, a clone of the node is returned
-    fn take_node(&mut self, addr: LinearAddress) -> Result<Node, Error> {
-        if let Some((modified_node, _)) = self.modified.remove(&addr) {
-            Ok(Arc::into_inner(modified_node).expect("no other references to this node can exist"))
-        } else {
-            let node = self.nodestore.read_node(addr)?;
-            Ok((*node).clone())
-        }
-    }
-
-    pub fn root_hash(&self) -> Result<TrieHash, Error> {
-        debug_assert!(self.modified.is_empty());
-        let Some(addr) = self.nodestore.root_address() else {
-            return Ok(TrieHash::default());
-        };
-
-        // TODO danlaine: Uncomment this once get_or_try_init is stable
-        // return self
-        //     .root_hash
-        //     .get_or_try_init(|| {
-        //         let node = self.read_node(addr)?;
-        //         Ok(hash_node(&node, &Path(Default::default())))
-        //     })
-        //     .cloned();
-
-        Ok(self
-            .root_hash
-            .get_or_init(|| {
-                let node = self
-                    .nodestore
-                    .read_node(addr)
-                    .expect("TODO: use get_or_try_init once it's available");
-                hash_node(&node, &Path(Default::default()))
-            })
-            .clone())
+    /// Returns the hash of the root of this trie.
+    /// Returns None if the trie is empty.
+    /// Assumes `freeze` has already been called on this store.
+    /// TODO enforce this assumption with the type system.
+    pub fn root_hash(&self) -> Option<&TrieHash> {
+        debug_assert!(self.added.is_empty());
+        self.root_hash.as_ref()
     }
 
     pub const fn root_address(&self) -> Option<LinearAddress> {
@@ -111,69 +69,77 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
 }
 
 impl<T: WriteLinearStore> HashedNodeStore<T> {
-    // recursively hash this node
+    // Hashes the node at `node_addr` and all of its children recursively.
+    // Returns the hash of the node and the address of the node.
     fn hash(
         &mut self,
         node_addr: LinearAddress,
-        node: &mut Node,
         path_prefix: &mut Path,
-    ) -> Result<TrieHash, Error> {
-        match node {
-            Node::Branch(b) => {
-                // We found a branch, so find all the children that need hashing
-                let mut modified = false;
+    ) -> Result<(TrieHash, LinearAddress), Error> {
+        let modified = self.added.remove(&node_addr);
 
+        let mut node = if let Some((modified_node, _)) = modified {
+            // This node was modified and needs to be rehashed and written to `self.nodestore`.
+            Arc::into_inner(modified_node).expect("no other references to this node can exist")
+        } else {
+            // This node wasn't modified, so we must have all of its child hashes
+            // since we got it from `self.nodestore`. We can hash it and return.
+            let node = self.nodestore.read_node(node_addr)?;
+            return Ok((hash_node(&node, path_prefix), node_addr));
+        };
+
+        match node {
+            Node::Branch(ref mut b) => {
                 for (nibble, child) in b.children.iter_mut().enumerate() {
                     let Child::Address(child_addr) = child else {
                         // There is no child or we already know its hash.
                         continue;
                     };
 
-                    // Hash this child.
+                    // Hash this child and update
                     let child_addr = *child_addr;
-                    let mut child_node = self.take_node(child_addr)?;
                     let original_length = path_prefix.len();
                     path_prefix
                         .0
                         .extend(b.partial_path.0.iter().copied().chain(once(nibble as u8)));
-                    *child = Child::AddressWithHash(
-                        child_addr,
-                        self.hash(child_addr, &mut child_node, path_prefix)?,
-                    );
+
+                    let (child_hash, child_addr) = self.hash(child_addr, path_prefix)?;
+
+                    *child = Child::AddressWithHash(child_addr, child_hash);
                     path_prefix.0.truncate(original_length);
-                    modified = true;
-                    self.nodestore.update_in_place(child_addr, &child_node)?;
                 }
-                if modified {
-                    self.nodestore.update_in_place(node_addr, node)?;
-                    self.modified.remove(&node_addr);
-                }
-                Ok(hash_node(node, path_prefix))
             }
-            Node::Leaf(_) => Ok(hash_node(node, path_prefix)),
+            Node::Leaf(_) => {}
+        }
+
+        let hash = hash_node(&node, path_prefix);
+        match self.nodestore.update_node(node_addr, node) {
+            Ok(()) => Ok((hash, node_addr)),
+            Err(UpdateError::NodeMoved(new_addr)) => Ok((hash, new_addr)),
+            Err(UpdateError::Io(e)) => Err(e),
         }
     }
 
     pub fn freeze(mut self) -> Result<HashedNodeStore<ProposedImmutable>, Error> {
         // fill in all remaining hashes, including the root hash
-        if let Some(root_address) = self.root_address() {
-            let mut root_node = self.take_node(root_address)?;
-            let hash = self.hash(root_address, &mut root_node, &mut Path(Default::default()))?;
-            let _ = self.root_hash.set(hash);
-            self.nodestore.update_in_place(root_address, &root_node)?;
-        }
-        assert!(self.modified.is_empty());
-        let frozen_nodestore = self.nodestore.freeze();
+        let root_hash = if let Some(root_address) = self.root_address() {
+            let (hash, root_address) = self.hash(root_address, &mut Path(Default::default()))?;
+            self.nodestore.set_root(Some(root_address))?;
+            Some(hash)
+        } else {
+            None
+        };
+        assert!(self.added.is_empty());
         Ok(HashedNodeStore {
-            nodestore: frozen_nodestore,
-            modified: Default::default(),
-            root_hash: Default::default(),
+            nodestore: self.nodestore.freeze(),
+            added: Default::default(),
+            root_hash,
         })
     }
 
     pub fn create_node(&mut self, node: Node) -> Result<LinearAddress, Error> {
         let (addr, size) = self.nodestore.allocate_node(&node)?;
-        self.modified.insert(addr, (Arc::new(node), size));
+        self.added.insert(addr, (Arc::new(node), size));
         Ok(addr)
     }
 
@@ -250,7 +216,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         node: Node,
     ) -> Result<LinearAddress, MerkleError> {
         let old_node_size_index =
-            if let Some((_, old_node_size_index)) = self.modified.get(&old_address) {
+            if let Some((_, old_node_size_index)) = self.added.get(&old_address) {
                 *old_node_size_index
             } else {
                 self.nodestore.node_size(old_address)?
@@ -258,14 +224,14 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
 
         // If the node was already modified, see if it still fits
         let new_address = if !self.nodestore.still_fits(old_node_size_index, &node)? {
-            self.modified.remove(&old_address);
+            self.added.remove(&old_address);
             self.nodestore.delete_node(old_address)?;
             let (new_address, new_node_size_index) = self.nodestore.allocate_node(&node)?;
-            self.modified
+            self.added
                 .insert(new_address, (Arc::new(node), new_node_size_index));
             new_address
         } else {
-            self.modified
+            self.added
                 .insert(old_address, (Arc::new(node), old_node_size_index));
             old_address
         };
@@ -280,7 +246,55 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     }
 }
 
-trait HasUpdate {
+pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
+    match node {
+        Node::Branch(node) => {
+            // All child hashes should be filled in.
+            // TODO danlaine: Enforce this with the type system.
+            debug_assert!(node
+                .children
+                .iter()
+                .all(|c| !matches!(c, Child::Address(..))));
+            NodeAndPrefix {
+                node: node.as_ref(),
+                prefix: path_prefix,
+            }
+            .into()
+        }
+        Node::Leaf(node) => NodeAndPrefix {
+            node,
+            prefix: path_prefix,
+        }
+        .into(),
+    }
+}
+
+/// Returns the serialized representation of `node` used as the pre-image
+/// when hashing the node. The node is at the given `path_prefix`.
+pub fn hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
+    // Key, 3 options, value digest
+    let est_len = node.partial_path().len() + path_prefix.len() + 3 + TrieHash::default().len();
+    let mut buf = Vec::with_capacity(est_len);
+    match node {
+        Node::Branch(node) => {
+            NodeAndPrefix {
+                node: node.as_ref(),
+                prefix: path_prefix,
+            }
+            .write(&mut buf);
+        }
+        Node::Leaf(node) => {
+            NodeAndPrefix {
+                node,
+                prefix: path_prefix,
+            }
+            .write(&mut buf);
+        }
+    }
+    buf.into_boxed_slice()
+}
+
+pub(super) trait HasUpdate {
     fn update<T: AsRef<[u8]>>(&mut self, data: T);
 }
 
@@ -296,107 +310,135 @@ impl HasUpdate for Vec<u8> {
     }
 }
 
-/// Contains the fields that are serialized to hash a node.
-pub(crate) struct HashPreimage<'a, K: Iterator<Item = u8> + Clone, V: AsRef<[u8]>> {
-    pub(crate) key: K,
-    pub(crate) value_digest: Option<V>,
-    pub(crate) children: &'a [Child; BranchNode::MAX_CHILDREN],
+pub(super) enum ValueDigest<'a> {
+    /// A node's value.
+    Value(&'a [u8]),
+    /// The hash of a a node's value.
+    /// TODO danlaine: Use this variant when implement ProofNode
+    _Hash(Box<[u8]>),
 }
 
-impl<'a, K: Iterator<Item = u8> + Clone, V: AsRef<[u8]>> HashPreimage<'a, K, V> {
-    /// Calls `buf.Update` for each byte in the pre-image of `node`.
-    fn write<H: HasUpdate>(mut self, buf: &mut H) {
-        // Iterates over children whose hashes are present.
-        let children_iter = self
-            .children
-            .iter()
-            .enumerate()
-            .filter_map(|(i, child)| match child {
-                Child::AddressWithHash(_, hash) => Some((i, hash)),
-                Child::Address(_) => unreachable!("all children should have hashes"),
-                _ => None,
-            });
+trait Hashable {
+    /// The key of the node where each byte is a nibble.
+    fn key(&self) -> impl Iterator<Item = u8> + Clone;
+    /// The node's value or hash.
+    fn value_digest(&self) -> Option<ValueDigest>;
+    /// Each element is a child's index and hash.
+    /// Yields 0 elements if the node is a leaf.
+    fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone;
+}
 
-        let num_children = children_iter.clone().count() as u64;
+pub(super) trait Preimage {
+    /// Returns the hash of this preimage.
+    fn to_hash(self) -> TrieHash;
+    /// Write this hash preimage to `buf`.
+    fn write(self, buf: &mut impl HasUpdate);
+}
+
+// Implement Preimage for all types that implement Hashable
+impl<T> Preimage for T
+where
+    T: Hashable,
+{
+    fn to_hash(self) -> TrieHash {
+        let mut hasher = Sha256::new();
+        self.write(&mut hasher);
+        hasher.finalize().into()
+    }
+
+    fn write(self, buf: &mut impl HasUpdate) {
+        let children = self.children();
+
+        let num_children = children.clone().count() as u64;
         add_varint_to_buf(buf, num_children);
 
-        for (index, hash) in children_iter {
+        for (index, hash) in children {
             add_varint_to_buf(buf, index as u64);
             buf.update(hash);
         }
 
         // Add value digest (if any) to hash pre-image
-        add_value_digest_to_buf(buf, self.value_digest);
+        add_value_digest_to_buf(buf, self.value_digest());
 
         // Add key length (in bits) to hash pre-image
-        let key_bit_len = BITS_PER_NIBBLE * self.key.clone().count() as u64;
+        let mut key = self.key();
+        // let mut key = key.as_ref().iter();
+        let key_bit_len = BITS_PER_NIBBLE * key.clone().count() as u64;
         add_varint_to_buf(buf, key_bit_len);
 
         // Add key to hash pre-image
-        while let Some(high_nibble) = self.key.next() {
-            let low_nibble = self.key.next().unwrap_or(0);
+        while let Some(high_nibble) = key.next() {
+            let low_nibble = key.next().unwrap_or(0);
             let byte = (high_nibble << 4) | low_nibble;
             buf.update([byte]);
         }
     }
 }
 
-/// Writes the pre-image of `node`, which is at `path_prefix`, to `buf`.
-fn write_hash_preimage<H: HasUpdate>(node: &Node, path_prefix: &Path, buf: &mut H) {
-    let key = path_prefix
-        .iter()
-        .chain(node.partial_path().iter())
-        .copied();
+trait HashableNode {
+    fn partial_path(&self) -> impl Iterator<Item = u8> + Clone;
+    fn value(&self) -> Option<&[u8]>;
+    fn children_iter(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone;
+}
 
-    let children = match *node {
-        Node::Branch(ref branch) => &branch.children,
-        Node::Leaf(_) => &Default::default(),
-    };
+impl HashableNode for storage::BranchNode {
+    fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
+        self.partial_path.0.iter().copied()
+    }
 
-    let value = match *node {
-        Node::Branch(ref branch) => branch.value.as_ref().map(|v| v.as_ref()),
-        Node::Leaf(ref leaf) => Some(leaf.value.as_ref()),
-    };
+    fn value(&self) -> Option<&[u8]> {
+        self.value.as_deref()
+    }
 
-    match value {
-        Some(value) if value.len() >= 32 => {
-            let value_hash = Sha256::digest(value);
-            HashPreimage {
-                key,
-                value_digest: Some(value_hash),
-                children,
-            }
-            .write(buf);
-        }
-        _ => {
-            HashPreimage {
-                key,
-                value_digest: value,
-                children,
-            }
-            .write(buf);
-        }
+    fn children_iter(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
+        self.children_iter()
     }
 }
 
-/// Returns the hash of `node` which is at `path_prefix`.
-pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
-    let mut hasher: Sha256 = Sha256::new();
-    write_hash_preimage(node, path_prefix, &mut hasher);
-    hasher.finalize().into()
+impl HashableNode for storage::LeafNode {
+    fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
+        self.partial_path.0.iter().copied()
+    }
+
+    fn value(&self) -> Option<&[u8]> {
+        Some(&self.value)
+    }
+
+    fn children_iter(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
+        iter::empty()
+    }
 }
 
-/// Returns the serialized representation of `node` used as the pre-image
-/// when hashing the node. The node is at the given `path_prefix`.
-pub fn hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
-    // Key, 3 options, value digest
-    let est_len = node.partial_path().len() + path_prefix.len() + 3 + TrieHash::default().len();
-    let mut buf = Vec::with_capacity(est_len);
-    write_hash_preimage(node, path_prefix, &mut buf);
-    buf.into_boxed_slice()
+struct NodeAndPrefix<'a, N: HashableNode> {
+    node: &'a N,
+    prefix: &'a Path,
 }
 
-fn add_value_digest_to_buf<H: HasUpdate, T: AsRef<[u8]>>(buf: &mut H, value_digest: Option<T>) {
+impl<'a, N: HashableNode> From<NodeAndPrefix<'a, N>> for TrieHash {
+    fn from(node: NodeAndPrefix<'a, N>) -> Self {
+        node.to_hash()
+    }
+}
+
+impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
+    fn key(&self) -> impl Iterator<Item = u8> + Clone {
+        self.prefix
+            .0
+            .iter()
+            .copied()
+            .chain(self.node.partial_path())
+    }
+
+    fn value_digest(&self) -> Option<ValueDigest> {
+        self.node.value().map(ValueDigest::Value)
+    }
+
+    fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
+        self.node.children_iter()
+    }
+}
+
+fn add_value_digest_to_buf<H: HasUpdate>(buf: &mut H, value_digest: Option<ValueDigest>) {
     let Some(value_digest) = value_digest else {
         let value_exists: u8 = 0;
         buf.update([value_exists]);
@@ -405,7 +447,19 @@ fn add_value_digest_to_buf<H: HasUpdate, T: AsRef<[u8]>>(buf: &mut H, value_dige
 
     let value_exists: u8 = 1;
     buf.update([value_exists]);
-    add_len_and_value_to_buf(buf, value_digest.as_ref());
+
+    match value_digest {
+        ValueDigest::Value(value) if value.as_ref().len() >= 32 => {
+            let hash = Sha256::digest(value);
+            add_len_and_value_to_buf(buf, hash.as_ref());
+        }
+        ValueDigest::Value(value) => {
+            add_len_and_value_to_buf(buf, value);
+        }
+        ValueDigest::_Hash(hash) => {
+            add_len_and_value_to_buf(buf, hash.as_ref());
+        }
+    }
 }
 
 #[inline]
@@ -438,7 +492,7 @@ mod test {
     #[test]
     fn freeze_test() {
         let memstore = MemStore::new(vec![]);
-        let mut hns = HashedNodeStore::initialize(memstore).unwrap();
+        let mut hns = HashedNodeStore::new(memstore).unwrap();
         let node = Node::Leaf(storage::LeafNode {
             partial_path: Path(Default::default()),
             value: Box::new(*b"abc"),
@@ -447,6 +501,6 @@ mod test {
         hns.set_root(Some(addr)).unwrap();
 
         let frozen = hns.freeze().unwrap();
-        assert_ne!(frozen.root_hash().unwrap(), Default::default());
+        assert_ne!(frozen.root_hash(), None);
     }
 }
