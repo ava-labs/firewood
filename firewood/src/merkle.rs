@@ -6,6 +6,7 @@ use crate::proof::{Proof, ProofError, ProofNode};
 use crate::stream::{MerkleKeyValueStream, PathIterator};
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::future::ready;
 use std::io::Write;
@@ -138,7 +139,16 @@ impl<T: ReadLinearStore> Merkle<T> {
 
             proof.push(ProofNode {
                 key: root.partial_path().bytes(),
-                value_digest: root.value().map(|value| value.into()),
+                value_digest: root.value().map(|value| {
+                    if value.len() < 32 {
+                        value.to_vec().into_boxed_slice()
+                    } else {
+                        // TODO danlaine: I think we can remove this copy by not
+                        // requiring Hash to own its data.
+                        let hash = Sha256::digest(value);
+                        hash.as_slice().to_vec().into_boxed_slice()
+                    }
+                }),
                 child_hashes,
             })
         }
