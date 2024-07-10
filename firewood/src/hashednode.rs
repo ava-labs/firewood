@@ -315,7 +315,6 @@ pub(super) enum ValueDigest<'a> {
     /// A node's value.
     Value(&'a [u8]),
     /// The hash of a a node's value.
-    /// TODO danlaine: Use this variant when implement ProofNode
     Hash(Box<[u8]>),
 }
 
