@@ -37,15 +37,13 @@ pub enum ProofError {
     EmptyRange,
 }
 
-pub type OwnedValueDigest = ValueDigest<Box<[u8]>, Box<[u8]>>;
-
 #[derive(Clone, Debug)]
 pub struct ProofNode {
     /// The key this node is at. Each byte is a nibble.
     pub key: Box<[u8]>,
     /// None if the node does not have a value.
     /// Otherwise, the node's value or the hash of its value.
-    pub value_digest: Option<OwnedValueDigest>,
+    pub value_digest: Option<ValueDigest<Box<[u8]>>>,
     /// The hash of each child, or None if the child does not exist.
     pub child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN],
 }
@@ -134,7 +132,7 @@ impl Proof {
         &self,
         key: K,
         root_hash: &TrieHash,
-    ) -> Result<Option<&OwnedValueDigest>, ProofError> {
+    ) -> Result<Option<&ValueDigest<Box<[u8]>>>, ProofError> {
         let key: Vec<u8> = NibblesIterator::new(key.as_ref()).collect();
 
         let Some(last_node) = self.0.last() else {

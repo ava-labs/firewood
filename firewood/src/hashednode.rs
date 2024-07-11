@@ -311,22 +311,21 @@ impl HasUpdate for Vec<u8> {
 
 #[derive(Clone, Debug)]
 /// A ValueDigest is either a node's value or the hash of its value.
-pub enum ValueDigest<V, H> {
-    Value(V),
+pub enum ValueDigest<T> {
+    Value(T),
     /// TODO this variant will be used when we deserialize a proof node
     /// from a remote Firewood instance. The serialized proof node they
     /// send us may the hash of the value, not the value itself.
-    _Hash(H),
+    _Hash(T),
 }
 
 pub(crate) trait Hashable {
-    type V: AsRef<[u8]>;
-    type H: AsRef<[u8]>;
+    type T: AsRef<[u8]>;
 
     /// The key of the node where each byte is a nibble.
     fn key(&self) -> impl Iterator<Item = u8> + Clone;
     /// The node's value or hash.
-    fn value_digest(&self) -> Option<ValueDigest<Self::V, Self::H>>;
+    fn value_digest(&self) -> Option<ValueDigest<Self::T>>;
     /// Each element is a child's index and hash.
     /// Yields 0 elements if the node is a leaf.
     fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone;
@@ -342,8 +341,7 @@ pub(super) trait Preimage {
 // Implement Preimage for all types that implement Hashable
 impl<T: Hashable> Preimage for T
 where
-    T::V: AsRef<[u8]>,
-    T::H: AsRef<[u8]>,
+    T::T: AsRef<[u8]>,
 {
     fn to_hash(&self) -> TrieHash {
         let mut hasher = Sha256::new();
@@ -426,8 +424,7 @@ impl<'a, N: HashableNode> From<NodeAndPrefix<'a, N>> for TrieHash {
 }
 
 impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
-    type V = &'a [u8];
-    type H = &'a [u8];
+    type T = &'a [u8];
 
     fn key(&self) -> impl Iterator<Item = u8> + Clone {
         self.prefix
@@ -437,7 +434,7 @@ impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
             .chain(self.node.partial_path())
     }
 
-    fn value_digest(&self) -> Option<ValueDigest<&'a [u8], &'a [u8]>> {
+    fn value_digest(&self) -> Option<ValueDigest<&'a [u8]>> {
         self.node.value().map(ValueDigest::Value)
     }
 
@@ -447,14 +444,13 @@ impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
 }
 
 impl<'a> Hashable for &'a ProofNode {
-    type V = &'a [u8];
-    type H = &'a [u8];
+    type T = &'a [u8];
 
     fn key(&self) -> impl Iterator<Item = u8> + Clone {
         self.key.as_ref().iter().copied()
     }
 
-    fn value_digest(&self) -> Option<ValueDigest<&'a [u8], &'a [u8]>> {
+    fn value_digest(&self) -> Option<ValueDigest<&'a [u8]>> {
         self.value_digest.as_ref().map(|vd| match vd {
             ValueDigest::Value(v) => ValueDigest::Value(v.as_ref()),
             ValueDigest::_Hash(h) => ValueDigest::_Hash(h.as_ref()),
@@ -469,9 +465,9 @@ impl<'a> Hashable for &'a ProofNode {
     }
 }
 
-fn add_value_digest_to_buf<U: HasUpdate, V: AsRef<[u8]>, H: AsRef<[u8]>>(
-    buf: &mut U,
-    value_digest: Option<ValueDigest<V, H>>,
+fn add_value_digest_to_buf<H: HasUpdate, T: AsRef<[u8]>>(
+    buf: &mut H,
+    value_digest: Option<ValueDigest<T>>,
 ) {
     let Some(value_digest) = value_digest else {
         let value_exists: u8 = 0;
