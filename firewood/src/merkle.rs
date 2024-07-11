@@ -108,7 +108,7 @@ impl<T: ReadLinearStore> Merkle<T> {
 
     /// Returns a proof that the given key has a certain value,
     /// or that the key isn't in the trie.
-    pub fn prove(&self, key: &[u8]) -> Result<Proof, MerkleError> {
+    pub fn prove(&self, key: &[u8]) -> Result<Proof<ProofNode>, MerkleError> {
         let Some(root_addr) = self.root_address() else {
             return Err(MerkleError::Empty);
         };
@@ -175,14 +175,14 @@ impl<T: ReadLinearStore> Merkle<T> {
     pub fn verify_proof(
         &self,
         _key: &[u8],
-        _proof: &Proof,
+        _proof: &Proof<ProofNode>,
     ) -> Result<Option<Vec<u8>>, MerkleError> {
         todo!()
     }
 
     pub fn verify_range_proof<V: AsRef<[u8]>>(
         &self,
-        _proof: &Proof,
+        _proof: &Proof<ProofNode>,
         _first_key: &[u8],
         _last_key: &[u8],
         _keys: Vec<&[u8]>,

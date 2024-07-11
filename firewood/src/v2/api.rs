@@ -2,6 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::manager::RevisionManagerError;
+use crate::proof::ProofNode;
 use crate::{merkle::MerkleError, proof::Proof};
 use async_trait::async_trait;
 use futures::Stream;
@@ -104,8 +105,8 @@ impl From<RevisionManagerError> for Error {
 /// and a vector of all key/value pairs
 #[derive(Debug)]
 pub struct RangeProof<K, V> {
-    pub first_key_proof: Proof,
-    pub last_key_proof: Proof,
+    pub first_key_proof: Proof<ProofNode>,
+    pub last_key_proof: Proof<ProofNode>,
     pub middle: Vec<(K, V)>,
 }
 
@@ -166,7 +167,8 @@ pub trait DbView {
     async fn val<K: KeyType>(&self, key: K) -> Result<Option<Vec<u8>>, Error>;
 
     /// Obtain a proof for a single key
-    async fn single_key_proof<K: KeyType>(&self, key: K) -> Result<Option<Proof>, Error>;
+    async fn single_key_proof<K: KeyType>(&self, key: K)
+        -> Result<Option<Proof<ProofNode>>, Error>;
 
     /// Obtain a range proof over a set of keys
     ///

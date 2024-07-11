@@ -319,7 +319,7 @@ pub enum ValueDigest<V, H> {
     _Hash(H),
 }
 
-pub(crate) trait Hashable {
+pub trait Hashable {
     type V: AsRef<[u8]>;
     type H: AsRef<[u8]>;
 
@@ -458,6 +458,29 @@ impl<'a> Hashable for &'a ProofNode {
         self.value_digest.as_ref().map(|vd| match vd {
             ValueDigest::Value(v) => ValueDigest::Value(v.as_ref()),
             ValueDigest::_Hash(h) => ValueDigest::_Hash(h.as_ref()),
+        })
+    }
+
+    fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
+        self.child_hashes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, hash)| hash.as_ref().map(|h| (i, h)))
+    }
+}
+
+impl Hashable for ProofNode {
+    type V = Box<[u8]>;
+    type H = Box<[u8]>;
+
+    fn key(&self) -> impl Iterator<Item = u8> + Clone {
+        self.key.as_ref().iter().copied()
+    }
+
+    fn value_digest(&self) -> Option<ValueDigest<Self::V, Self::H>> {
+        self.value_digest.as_ref().map(|vd| match vd {
+            ValueDigest::Value(v) => ValueDigest::Value(v.clone()),
+            ValueDigest::_Hash(h) => ValueDigest::_Hash(h.clone()),
         })
     }
 

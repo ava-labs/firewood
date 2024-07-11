@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::hashednode::{Preimage, ValueDigest};
+use crate::hashednode::{Hashable, Preimage, ValueDigest};
 use crate::merkle::MerkleError;
 use sha2::{Digest, Sha256};
 use storage::{BranchNode, NibblesIterator, PathIterItem, TrieHash};
@@ -81,9 +81,9 @@ impl From<&ProofNode> for TrieHash {
 
 /// A proof that a given key-value pair either exists or does not exist in a trie.
 #[derive(Clone, Debug)]
-pub struct Proof(pub Box<[ProofNode]>);
+pub struct Proof<T: Hashable>(pub Box<[T]>);
 
-impl Proof {
+impl<T: Hashable> Proof<T> {
     pub fn verify<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         &self,
         key: K,
@@ -134,7 +134,7 @@ impl Proof {
         &self,
         key: K,
         root_hash: &TrieHash,
-    ) -> Result<Option<&OwnedValueDigest>, ProofError> {
+    ) -> Result<Option<ValueDigest<T::V, T::H>>, ProofError> {
         let key: Vec<u8> = NibblesIterator::new(key.as_ref()).collect();
 
         let Some(last_node) = self.0.last() else {
@@ -154,7 +154,7 @@ impl Proof {
 
             // Assert that only nodes whose keys are an even number of nibbles
             // have a `value_digest`.
-            if node.key.len() % 2 != 0 && node.value_digest.is_some() {
+            if node.key().count() % 2 != 0 && node.value_digest().is_some() {
                 return Err(ProofError::ValueAtOddNibbleLength);
             }
 
@@ -162,30 +162,36 @@ impl Proof {
                 // Assert that every node's key is a prefix of the proven key,
                 // with the exception of the last node, which is a suffix of the
                 // proven key in exclusion proofs.
-                let next_nibble = next_nibble(&mut node.key.iter(), &mut key.iter())?;
+                let next_nibble = next_nibble(node.key(), key.iter().copied())?;
 
                 let Some(next_nibble) = next_nibble else {
                     return Err(ProofError::ShouldBePrefixOfProvenKey);
                 };
 
                 expected_hash = node
-                    .child_hashes
-                    .get(next_nibble as usize)
-                    .ok_or(ProofError::ChildIndexOutOfBounds)?
-                    .as_ref()
-                    .ok_or(ProofError::NodeNotInTrie)?;
+                    .children()
+                    .find(|(i, _)| *i == next_nibble as usize)
+                    .map(|(_, hash)| hash)
+                    .ok_or(ProofError::ChildIndexOutOfBounds)?;
+
+                // expected_hash = node
+                //     .child_hashes
+                //     .get(next_nibble as usize)
+                //     .ok_or(ProofError::ChildIndexOutOfBounds)?
+                //     .as_ref()
+                //     .ok_or(ProofError::NodeNotInTrie)?;
 
                 // Assert that each node's key is a prefix of the next node's key.
                 #[allow(clippy::indexing_slicing)]
-                let next_node_key = &self.0[i + 1].key;
-                if !is_prefix(&mut node.key.iter(), &mut next_node_key.iter()) {
+                let next_node_key = self.0[i + 1].key();
+                if !is_prefix(node.key(), next_node_key) {
                     return Err(ProofError::ShouldBePrefixOfNextKey);
                 }
             }
         }
 
-        if last_node.key.len() == key.len() {
-            return Ok(last_node.value_digest.as_ref());
+        if last_node.key().count() == key.len() {
+            return Ok(last_node.value_digest());
         }
 
         // This is an exclusion proof.
@@ -195,10 +201,14 @@ impl Proof {
 
 /// Returns the next nibble in `c` after `b`.
 /// Returns an error if `b` is not a prefix of `c`.
-fn next_nibble<'a, I>(b: &mut I, c: &mut I) -> Result<Option<u8>, ProofError>
+fn next_nibble<I, J>(b: I, c: J) -> Result<Option<u8>, ProofError>
 where
-    I: Iterator<Item = &'a u8>,
+    I: IntoIterator<Item = u8>,
+    J: IntoIterator<Item = u8>,
 {
+    let b = b.into_iter();
+    let mut c = c.into_iter();
+
     // Check if b is a prefix of c
     for b_item in b {
         match c.next() {
@@ -208,13 +218,16 @@ where
     }
 
     // If a is a prefix, return the first element in c after b
-    Ok(c.next().copied())
+    Ok(c.next())
 }
 
-fn is_prefix<'a, I>(b: &mut I, c: &mut I) -> bool
+fn is_prefix<I, J>(b: I, c: J) -> bool
 where
-    I: Iterator<Item = &'a u8>,
+    I: IntoIterator<Item = u8>,
+    J: IntoIterator<Item = u8>,
 {
+    let b = b.into_iter();
+    let mut c = c.into_iter();
     for b_item in b {
         let Some(c_item) = c.next() else {
             return false;

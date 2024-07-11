@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use futures::stream::Empty;
 
 use super::api::{KeyType, ValueType};
-use crate::proof::Proof;
+use crate::proof::{Proof, ProofNode};
 use crate::v2::api;
 
 #[derive(Clone, Debug)]
@@ -125,7 +125,10 @@ impl<T: api::DbView + Send + Sync> api::DbView for Proposal<T> {
         }
     }
 
-    async fn single_key_proof<K: KeyType>(&self, _key: K) -> Result<Option<Proof>, api::Error> {
+    async fn single_key_proof<K: KeyType>(
+        &self,
+        _key: K,
+    ) -> Result<Option<Proof<ProofNode>>, api::Error> {
         todo!();
     }
 

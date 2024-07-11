@@ -2,7 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::merkle::MerkleError;
-use crate::proof::{Proof, ProofError};
+use crate::proof::{Proof, ProofError, ProofNode};
 use crate::stream::MerkleKeyValueStream;
 use crate::v2::api::{self, HashKey, KeyType, ValueType};
 pub use crate::v2::api::{Batch, BatchOp};
@@ -77,7 +77,7 @@ impl<T: ReadLinearStore> api::DbView for HistoricalRev<T> {
     async fn single_key_proof<K: api::KeyType>(
         &self,
         _key: K,
-    ) -> Result<Option<Proof>, api::Error> {
+    ) -> Result<Option<Proof<ProofNode>>, api::Error> {
         todo!()
     }
 
@@ -122,14 +122,14 @@ impl<T: ReadLinearStore> HistoricalRev<T> {
         todo!()
     }
 
-    pub fn prove(&self, _key: &[u8]) -> Result<Proof, MerkleError> {
+    pub fn prove(&self, _key: &[u8]) -> Result<Proof<ProofNode>, MerkleError> {
         todo!()
     }
 
     /// Verifies a range proof is valid for a set of keys.
     pub fn verify_range_proof<V: AsRef<[u8]>>(
         &self,
-        _proof: Proof,
+        _proof: Proof<ProofNode>,
         _first_key: &[u8],
         _last_key: &[u8],
         _keys: Vec<&[u8]>,
@@ -175,7 +175,7 @@ impl<T: WriteLinearStore> api::DbView for Proposal<T> {
         todo!()
     }
 
-    async fn single_key_proof<K>(&self, _key: K) -> Result<Option<Proof>, api::Error>
+    async fn single_key_proof<K>(&self, _key: K) -> Result<Option<Proof<ProofNode>>, api::Error>
     where
         K: api::KeyType,
     {
