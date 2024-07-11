@@ -315,22 +315,17 @@ impl HasUpdate for Vec<u8> {
     }
 }
 
-pub(super) enum ValueDigest<V, H>
-where
-    V: AsRef<[u8]>,
-    H: AsRef<[u8]>,
-{
-    /// A node's value.
+#[derive(Clone, Debug)]
+/// A ValueDigest is either a node's value or the hash of its value.
+pub enum ValueDigest<V, H> {
     Value(V),
-    /// The hash of a a node's value.
-    Hash(H),
+    /// TODO this variant will be used when we deserialize a proof node
+    /// from a remote Firewood instance. The serialized proof node they
+    /// send us may the hash of the value, not the value itself.
+    _Hash(H),
 }
 
-pub(crate) trait Hashable<V, H>
-where
-    V: AsRef<[u8]>,
-    H: AsRef<[u8]>,
-{
+pub(crate) trait Hashable<V, H> {
     /// The key of the node where each byte is a nibble.
     fn key(&self) -> impl Iterator<Item = u8> + Clone;
     /// The node's value or hash.
@@ -427,7 +422,7 @@ impl<'a, N: HashableNode> From<NodeAndPrefix<'a, N>> for TrieHash {
     }
 }
 
-impl<'a, N: HashableNode> Hashable<&'a [u8], Box<[u8]>> for NodeAndPrefix<'a, N> {
+impl<'a, N: HashableNode> Hashable<&'a [u8], &'a [u8]> for NodeAndPrefix<'a, N> {
     fn key(&self) -> impl Iterator<Item = u8> + Clone {
         self.prefix
             .0
@@ -436,7 +431,7 @@ impl<'a, N: HashableNode> Hashable<&'a [u8], Box<[u8]>> for NodeAndPrefix<'a, N>
             .chain(self.node.partial_path())
     }
 
-    fn value_digest(&self) -> Option<ValueDigest<&'a [u8], Box<[u8]>>> {
+    fn value_digest(&self) -> Option<ValueDigest<&'a [u8], &'a [u8]>> {
         self.node.value().map(ValueDigest::Value)
     }
 
@@ -445,22 +440,16 @@ impl<'a, N: HashableNode> Hashable<&'a [u8], Box<[u8]>> for NodeAndPrefix<'a, N>
     }
 }
 
-impl<'a> Hashable<&'a [u8], Box<[u8]>> for &'a ProofNode {
+impl<'a> Hashable<&'a [u8], &'a [u8]> for &'a ProofNode {
     fn key(&self) -> impl Iterator<Item = u8> + Clone {
         self.key.as_ref().iter().copied()
     }
 
-    fn value_digest(&self) -> Option<ValueDigest<&'a [u8], Box<[u8]>>> {
-        match self.value_digest.as_ref() {
-            None => None,
-            Some(value) if value.len() > 32 => {
-                unreachable!("TODO danlaine: prevent this from happening. The digest should never be more than 32 bytes.")
-            }
-            Some(value) if value.len() == 32 => {
-                Some(ValueDigest::Hash(value.to_vec().into_boxed_slice()))
-            }
-            Some(value) => Some(ValueDigest::Value(value)),
-        }
+    fn value_digest(&self) -> Option<ValueDigest<&'a [u8], &'a [u8]>> {
+        self.value_digest.as_ref().map(|vd| match vd {
+            ValueDigest::Value(v) => ValueDigest::Value(v.as_ref()),
+            ValueDigest::_Hash(h) => ValueDigest::_Hash(h.as_ref()),
+        })
     }
 
     fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
@@ -492,7 +481,7 @@ fn add_value_digest_to_buf<U: HasUpdate, V: AsRef<[u8]>, H: AsRef<[u8]>>(
         ValueDigest::Value(value) => {
             add_len_and_value_to_buf(buf, value);
         }
-        ValueDigest::Hash(hash) => {
+        ValueDigest::_Hash(hash) => {
             add_len_and_value_to_buf(buf, hash);
         }
     }

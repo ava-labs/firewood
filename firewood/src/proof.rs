@@ -37,15 +37,15 @@ pub enum ProofError {
     EmptyRange,
 }
 
+pub type OwnedValueDigest = ValueDigest<Box<[u8]>, Box<[u8]>>;
+
 #[derive(Clone, Debug)]
 pub struct ProofNode {
     /// The key this node is at. Each byte is a nibble.
     pub key: Box<[u8]>,
-    /// None if the node has no value.
-    /// The value associated with `key` if the value is < 32 bytes.
-    /// The hash of the value if the node's value is >= 32 bytes.
-    /// TODO danlaine: Can we enforce that this is at most 32 bytes?
-    pub value_digest: Option<Box<[u8]>>,
+    /// None if the node does not have a value.
+    /// Otherwise, the node's value or the hash of its value.
+    pub value_digest: Option<OwnedValueDigest>,
     /// The hash of each child, or None if the child does not exist.
     pub child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN],
 }
@@ -64,16 +64,10 @@ impl From<PathIterItem> for ProofNode {
 
         Self {
             key: item.key_nibbles,
-            value_digest: item.node.value().map(|value| {
-                if value.len() < 32 {
-                    value.to_vec().into_boxed_slice()
-                } else {
-                    // TODO danlaine: I think we can remove this copy by not
-                    // requiring Hash to own its data.
-                    let hash = Sha256::digest(value);
-                    hash.as_slice().to_vec().into_boxed_slice()
-                }
-            }),
+            value_digest: item
+                .node
+                .value()
+                .map(|value| ValueDigest::Value(value.to_vec().into_boxed_slice())),
             child_hashes,
         }
     }
@@ -96,33 +90,32 @@ impl Proof {
         expected_value: Option<V>,
         root_hash: &TrieHash,
     ) -> Result<(), ProofError> {
-        match self.value_digest(key, root_hash)? {
-            None => {
-                // This proof proves that `key` maps to None.
-                if expected_value.is_some() {
-                    return Err(ProofError::ExpectedValue);
-                }
-            }
-            Some(ValueDigest::Value(got_value)) => {
-                // This proof proves that `key` maps to `got_value`.
-                let Some(expected_value) = expected_value else {
-                    // We were expecting `key` to map to None.
-                    return Err(ProofError::UnexpectedValue);
-                };
+        let value_digest = self.value_digest(key, root_hash)?;
 
-                if got_value != expected_value.as_ref() {
+        let Some(value_digest) = value_digest else {
+            // This proof proves that `key` maps to None.
+            if expected_value.is_some() {
+                return Err(ProofError::ExpectedValue);
+            }
+            return Ok(());
+        };
+
+        let Some(expected_value) = expected_value else {
+            // We were expecting `key` to map to None.
+            return Err(ProofError::UnexpectedValue);
+        };
+
+        match value_digest {
+            ValueDigest::Value(got_value) => {
+                // This proof proves that `key` maps to `got_value`.
+                if got_value.as_ref() != expected_value.as_ref() {
                     // `key` maps to an unexpected value.
                     return Err(ProofError::ValueMismatch);
                 }
             }
-            Some(ValueDigest::Hash(got_hash)) => {
+            ValueDigest::_Hash(got_hash) => {
                 // This proof proves that `key` maps to a value
                 // whose hash is `got_hash`.
-                let Some(expected_value) = expected_value else {
-                    // We were expecting `key` to map to None.
-                    return Err(ProofError::UnexpectedValue);
-                };
-
                 let value_hash = Sha256::digest(expected_value.as_ref());
                 if got_hash.as_ref() != value_hash.as_slice() {
                     // `key` maps to an unexpected value.
@@ -137,11 +130,11 @@ impl Proof {
     /// with the given `root_hash`. If the key does not exist in the trie, returns `None`.
     /// Returns an error if the proof is invalid or doesn't prove the key for the
     /// given revision.
-    fn value_digest<'a, K: AsRef<[u8]>>(
-        &'a self,
+    fn value_digest<K: AsRef<[u8]>>(
+        &self,
         key: K,
         root_hash: &TrieHash,
-    ) -> Result<Option<ValueDigest<&'a [u8], Box<[u8]>>>, ProofError> {
+    ) -> Result<Option<&OwnedValueDigest>, ProofError> {
         let key: Vec<u8> = NibblesIterator::new(key.as_ref()).collect();
 
         let Some(last_node) = self.0.last() else {
@@ -192,16 +185,7 @@ impl Proof {
         }
 
         if last_node.key.len() == key.len() {
-            // This is an inclusion proof.
-            return Ok(last_node.value_digest.as_ref().map(|value| {
-                if value.len() < 32 {
-                    ValueDigest::Value(value.as_ref())
-                } else {
-                    // TODO danlaine: I think we can remove this copy by not
-                    // requiring Hash to own its data.
-                    ValueDigest::Hash(value.to_vec().into_boxed_slice())
-                }
-            }));
+            return Ok(last_node.value_digest.as_ref());
         }
 
         // This is an exclusion proof.
