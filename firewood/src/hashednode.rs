@@ -334,9 +334,9 @@ pub(crate) trait Hashable {
 
 pub(super) trait Preimage {
     /// Returns the hash of this preimage.
-    fn to_hash(self) -> TrieHash;
+    fn to_hash(&self) -> TrieHash;
     /// Write this hash preimage to `buf`.
-    fn write(self, buf: &mut impl HasUpdate);
+    fn write(&self, buf: &mut impl HasUpdate);
 }
 
 // Implement Preimage for all types that implement Hashable
@@ -345,13 +345,13 @@ where
     T::V: AsRef<[u8]>,
     T::H: AsRef<[u8]>,
 {
-    fn to_hash(self) -> TrieHash {
+    fn to_hash(&self) -> TrieHash {
         let mut hasher = Sha256::new();
         self.write(&mut hasher);
         hasher.finalize().into()
     }
 
-    fn write(self, buf: &mut impl HasUpdate) {
+    fn write(&self, buf: &mut impl HasUpdate) {
         let children = self.children();
 
         let num_children = children.clone().count() as u64;
