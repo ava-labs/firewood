@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::hashednode::{hash, ValueDigest};
+use crate::hashednode::{Preimage, ValueDigest};
 use crate::merkle::MerkleError;
 use sha2::{Digest, Sha256};
 use storage::{BranchNode, NibblesIterator, PathIterItem, TrieHash};
@@ -75,7 +75,7 @@ impl From<PathIterItem> for ProofNode {
 
 impl From<&ProofNode> for TrieHash {
     fn from(node: &ProofNode) -> Self {
-        hash(node)
+        node.to_hash()
     }
 }
 
@@ -148,7 +148,7 @@ impl Proof {
             #[allow(clippy::indexing_slicing)]
             let node = &self.0[i];
 
-            if hash(node) != *expected_hash {
+            if node.to_hash() != *expected_hash {
                 return Err(ProofError::UnexpectedHash);
             }
 

@@ -278,23 +278,17 @@ pub fn hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
     let mut buf = Vec::with_capacity(est_len);
     match node {
         Node::Branch(node) => {
-            write_hash_preimage(
-                NodeAndPrefix {
-                    node: node.as_ref(),
-                    prefix: path_prefix,
-                },
-                &mut buf,
-            );
+            NodeAndPrefix {
+                node: node.as_ref(),
+                prefix: path_prefix,
+            }
+            .write(&mut buf);
         }
-        Node::Leaf(node) => {
-            write_hash_preimage(
-                NodeAndPrefix {
-                    node,
-                    prefix: path_prefix,
-                },
-                &mut buf,
-            );
+        Node::Leaf(node) => NodeAndPrefix {
+            node,
+            prefix: path_prefix,
         }
+        .write(&mut buf),
     }
     buf.into_boxed_slice()
 }
@@ -325,59 +319,64 @@ pub enum ValueDigest<V, H> {
     _Hash(H),
 }
 
-pub(crate) trait Hashable<V, H>
-where
-    V: AsRef<[u8]>,
-    H: AsRef<[u8]>,
-{
+pub(crate) trait Hashable {
+    type V;
+    type H;
+
     /// The key of the node where each byte is a nibble.
     fn key(&self) -> impl Iterator<Item = u8> + Clone;
     /// The node's value or hash.
-    fn value_digest(&self) -> Option<ValueDigest<V, H>>;
+    fn value_digest(&self) -> Option<ValueDigest<Self::V, Self::H>>;
     /// Each element is a child's index and hash.
     /// Yields 0 elements if the node is a leaf.
     fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone;
 }
 
-pub(crate) fn hash<V, H>(preimage: impl Hashable<V, H>) -> TrieHash
-where
-    V: AsRef<[u8]>,
-    H: AsRef<[u8]>,
-{
-    let mut hasher = Sha256::new();
-    write_hash_preimage(preimage, &mut hasher);
-    hasher.finalize().into()
+pub(super) trait Preimage {
+    /// Returns the hash of this preimage.
+    fn to_hash(self) -> TrieHash;
+    /// Write this hash preimage to `buf`.
+    fn write(self, buf: &mut impl HasUpdate);
 }
 
-fn write_hash_preimage<V, H>(preimage: impl Hashable<V, H>, buf: &mut impl HasUpdate)
+// Implement Preimage for all types that implement Hashable
+impl<T: Hashable> Preimage for T
 where
-    V: AsRef<[u8]>,
-    H: AsRef<[u8]>,
+    T::V: AsRef<[u8]>,
+    T::H: AsRef<[u8]>,
 {
-    let children = preimage.children();
-
-    let num_children = children.clone().count() as u64;
-    add_varint_to_buf(buf, num_children);
-
-    for (index, hash) in children {
-        add_varint_to_buf(buf, index as u64);
-        buf.update(hash);
+    fn to_hash(self) -> TrieHash {
+        let mut hasher = Sha256::new();
+        self.write(&mut hasher);
+        hasher.finalize().into()
     }
 
-    // Add value digest (if any) to hash pre-image
-    add_value_digest_to_buf(buf, preimage.value_digest());
+    fn write(self, buf: &mut impl HasUpdate) {
+        let children = self.children();
 
-    // Add key length (in bits) to hash pre-image
-    let mut key = preimage.key();
-    // let mut key = key.as_ref().iter();
-    let key_bit_len = BITS_PER_NIBBLE * key.clone().count() as u64;
-    add_varint_to_buf(buf, key_bit_len);
+        let num_children = children.clone().count() as u64;
+        add_varint_to_buf(buf, num_children);
 
-    // Add key to hash pre-image
-    while let Some(high_nibble) = key.next() {
-        let low_nibble = key.next().unwrap_or(0);
-        let byte = (high_nibble << 4) | low_nibble;
-        buf.update([byte]);
+        for (index, hash) in children {
+            add_varint_to_buf(buf, index as u64);
+            buf.update(hash);
+        }
+
+        // Add value digest (if any) to hash pre-image
+        add_value_digest_to_buf(buf, self.value_digest());
+
+        // Add key length (in bits) to hash pre-image
+        let mut key = self.key();
+        // let mut key = key.as_ref().iter();
+        let key_bit_len = BITS_PER_NIBBLE * key.clone().count() as u64;
+        add_varint_to_buf(buf, key_bit_len);
+
+        // Add key to hash pre-image
+        while let Some(high_nibble) = key.next() {
+            let low_nibble = key.next().unwrap_or(0);
+            let byte = (high_nibble << 4) | low_nibble;
+            buf.update([byte]);
+        }
     }
 }
 
@@ -422,11 +421,14 @@ struct NodeAndPrefix<'a, N: HashableNode> {
 
 impl<'a, N: HashableNode> From<NodeAndPrefix<'a, N>> for TrieHash {
     fn from(node: NodeAndPrefix<'a, N>) -> Self {
-        hash(node)
+        node.to_hash()
     }
 }
 
-impl<'a, N: HashableNode> Hashable<&'a [u8], &'a [u8]> for NodeAndPrefix<'a, N> {
+impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
+    type V = &'a [u8];
+    type H = &'a [u8];
+
     fn key(&self) -> impl Iterator<Item = u8> + Clone {
         self.prefix
             .0
@@ -444,7 +446,10 @@ impl<'a, N: HashableNode> Hashable<&'a [u8], &'a [u8]> for NodeAndPrefix<'a, N> 
     }
 }
 
-impl<'a> Hashable<&'a [u8], &'a [u8]> for &'a ProofNode {
+impl<'a> Hashable for &'a ProofNode {
+    type V = &'a [u8];
+    type H = &'a [u8];
+
     fn key(&self) -> impl Iterator<Item = u8> + Clone {
         self.key.as_ref().iter().copied()
     }
