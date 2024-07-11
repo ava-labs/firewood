@@ -325,7 +325,11 @@ pub enum ValueDigest<V, H> {
     _Hash(H),
 }
 
-pub(crate) trait Hashable<V, H> {
+pub(crate) trait Hashable<V, H>
+where
+    V: AsRef<[u8]>,
+    H: AsRef<[u8]>,
+{
     /// The key of the node where each byte is a nibble.
     fn key(&self) -> impl Iterator<Item = u8> + Clone;
     /// The node's value or hash.
