@@ -1113,7 +1113,23 @@ mod tests {
         for (key, value) in kvs {
             let proof = merkle.prove(&key).unwrap();
 
-            proof.verify(key, Some(value), root_hash).unwrap();
+            proof
+                .verify(key.clone(), Some(value.clone()), root_hash)
+                .unwrap();
+
+            {
+                // Test that the proof is invalid when the value is different
+                let mut value = value.clone();
+                value[0] = value[0].wrapping_add(1);
+                assert!(proof.verify(key.clone(), Some(value), root_hash).is_err());
+            }
+
+            {
+                // Test that the proof is invalid when the hash is different
+                assert!(proof
+                    .verify(key, Some(value), &TrieHash::default())
+                    .is_err());
+            }
         }
     }
 
