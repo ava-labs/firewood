@@ -1,6 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use crate::hashednode::Hashable;
 use crate::merkle::MerkleError;
 use crate::proof::{Proof, ProofError, ProofNode};
 use crate::stream::MerkleKeyValueStream;
@@ -86,7 +87,7 @@ impl<T: ReadLinearStore> api::DbView for HistoricalRev<T> {
         _first_key: Option<K>,
         _last_key: Option<K>,
         _limit: Option<usize>,
-    ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>>>, api::Error> {
+    ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>, ProofNode>>, api::Error> {
         todo!()
     }
 
@@ -129,7 +130,7 @@ impl<T: ReadLinearStore> HistoricalRev<T> {
     /// Verifies a range proof is valid for a set of keys.
     pub fn verify_range_proof<V: AsRef<[u8]>>(
         &self,
-        _proof: &Proof<ProofNode>,
+        _proof: &Proof<impl Hashable>,
         _first_key: &[u8],
         _last_key: &[u8],
         _keys: Vec<&[u8]>,
@@ -187,7 +188,7 @@ impl<T: WriteLinearStore> api::DbView for Proposal<T> {
         _first_key: Option<K>,
         _last_key: Option<K>,
         _limit: Option<usize>,
-    ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>>>, api::Error>
+    ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>, ProofNode>>, api::Error>
     where
         K: api::KeyType,
     {

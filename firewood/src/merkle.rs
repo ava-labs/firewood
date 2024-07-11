@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::hashednode::{HashedNodeStore, ValueDigest};
+use crate::hashednode::{Hashable, HashedNodeStore, ValueDigest};
 use crate::proof::{Proof, ProofError, ProofNode};
 use crate::stream::{MerkleKeyValueStream, PathIterator};
 use crate::v2::api;
@@ -175,14 +175,14 @@ impl<T: ReadLinearStore> Merkle<T> {
     pub fn verify_proof(
         &self,
         _key: &[u8],
-        _proof: &Proof<ProofNode>,
+        _proof: &Proof<impl Hashable>,
     ) -> Result<Option<Vec<u8>>, MerkleError> {
         todo!()
     }
 
     pub fn verify_range_proof<V: AsRef<[u8]>>(
         &self,
-        _proof: &Proof<ProofNode>,
+        _proof: &Proof<impl Hashable>,
         _first_key: &[u8],
         _last_key: &[u8],
         _keys: Vec<&[u8]>,
@@ -210,7 +210,7 @@ impl<T: ReadLinearStore> Merkle<T> {
         first_key: Option<&[u8]>,
         last_key: Option<&[u8]>,
         limit: Option<usize>,
-    ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>>>, api::Error> {
+    ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>, ProofNode>>, api::Error> {
         if let (Some(k1), Some(k2)) = (&first_key, &last_key) {
             if k1 > k2 {
                 return Err(api::Error::InvalidRange {

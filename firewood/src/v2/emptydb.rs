@@ -79,7 +79,7 @@ impl DbView for HistoricalImpl {
         _first_key: Option<K>,
         _last_key: Option<K>,
         _limit: Option<usize>,
-    ) -> Result<Option<RangeProof<Vec<u8>, Vec<u8>>>, Error> {
+    ) -> Result<Option<RangeProof<Vec<u8>, Vec<u8>, ProofNode>>, Error> {
         Ok(None)
     }
 
