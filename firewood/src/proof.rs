@@ -174,13 +174,6 @@ impl<T: Hashable> Proof<T> {
                     .map(|(_, hash)| hash)
                     .ok_or(ProofError::ChildIndexOutOfBounds)?;
 
-                // expected_hash = node
-                //     .child_hashes
-                //     .get(next_nibble as usize)
-                //     .ok_or(ProofError::ChildIndexOutOfBounds)?
-                //     .as_ref()
-                //     .ok_or(ProofError::NodeNotInTrie)?;
-
                 // Assert that each node's key is a prefix of the next node's key.
                 #[allow(clippy::indexing_slicing)]
                 let next_node_key = self.0[i + 1].key();

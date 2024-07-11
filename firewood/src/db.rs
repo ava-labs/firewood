@@ -129,7 +129,7 @@ impl<T: ReadLinearStore> HistoricalRev<T> {
     /// Verifies a range proof is valid for a set of keys.
     pub fn verify_range_proof<V: AsRef<[u8]>>(
         &self,
-        _proof: Proof<ProofNode>,
+        _proof: &Proof<ProofNode>,
         _first_key: &[u8],
         _last_key: &[u8],
         _keys: Vec<&[u8]>,
