@@ -69,8 +69,6 @@ pub struct PathIterItem {
     pub key_nibbles: Box<[u8]>,
     /// A reference to the node
     pub node: Arc<Node>,
-    /// The address of `node` in the linear store.
-    pub addr: LinearAddress,
     /// The next item returned by the iterator is a child of `node`.
     /// Specifically, it's the child at index `next_nibble` in `node`'s
     /// children array.

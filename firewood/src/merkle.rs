@@ -451,7 +451,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 })),
             };
 
-            self.update_node(ancestors, greatest_prefix_node.addr, node)?;
+            //self.update_node(ancestors, greatest_prefix_node.addr, node)?;
 
             return Ok(());
         };
@@ -476,11 +476,11 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                 let mut new_branch: BranchNode = leaf.into();
                 new_branch.update_child(child_index, Child::Node(new_leaf));
-                self.update_node(
-                    ancestors,
-                    greatest_prefix_node.addr,
-                    Node::Branch(Box::new(new_branch)),
-                )?;
+                // self.update_node(
+                //     ancestors,
+                //     greatest_prefix_node.addr,
+                //     Node::Branch(Box::new(new_branch)),
+                // )?;
 
                 Ok(())
             }
@@ -511,11 +511,11 @@ impl<T: WriteLinearStore> Merkle<T> {
                     // child at `child_index` whose hash we need to invalidate.
                     branch.update_child(child_index, Child::Node(new_leaf));
 
-                    self.update_node(
-                        ancestors,
-                        greatest_prefix_node.addr,
-                        Node::Branch(Box::new(branch)),
-                    )?;
+                    // self.update_node(
+                    //     ancestors,
+                    //     greatest_prefix_node.addr,
+                    //     Node::Branch(Box::new(branch)),
+                    // )?;
                     return Ok(());
                 };
 
@@ -591,11 +591,11 @@ impl<T: WriteLinearStore> Merkle<T> {
                     value: branch.value.clone(),
                 };
                 branch.update_child(child_index, Child::Node(new_branch));
-                self.update_node(
-                    ancestors,
-                    greatest_prefix_node.addr,
-                    Node::Branch(Box::new(branch)),
-                )?;
+                // self.update_node(
+                //     ancestors,
+                //     greatest_prefix_node.addr,
+                //     Node::Branch(Box::new(branch)),
+                // )?;
 
                 Ok(())
             }
@@ -665,7 +665,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                         partial_path: branch.partial_path.clone(),
                         value: None,
                     };
-                    self.update_node(ancestors, removed.addr, Node::Branch(Box::new(branch)))?;
+                    //self.update_node(ancestors, removed.addr, Node::Branch(Box::new(branch)))?;
                     return Ok(Some(removed_value.clone()));
                 }
 
@@ -699,17 +699,17 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                 self.delete_node(child_addr)?;
 
-                self.update_node(ancestors, removed.addr, combined)?;
+                //self.update_node(ancestors, removed.addr, combined)?;
 
                 Ok(Some(removed_value.clone()))
             }
             Node::Leaf(leaf) => {
-                self.delete_node(removed.addr)?;
+                // self.delete_node(removed.addr)?;
 
                 while let Some(ancestor) = ancestors.next_back() {
                     // Remove all ancestors until we find one that has a value
                     // or multiple children.
-                    let ancestor_addr = ancestor.addr;
+                    // let ancestor_addr = ancestor.addr;
                     let child_index = ancestor.next_nibble.expect("parent has a child");
                     let ancestor = ancestor.node.as_branch().expect("parent must be a branch");
 
@@ -733,11 +733,11 @@ impl<T: WriteLinearStore> Merkle<T> {
                             value: ancestor.value.clone(),
                         };
                         ancestor.update_child(child_index, Child::None);
-                        self.update_node(
-                            ancestors,
-                            ancestor_addr,
-                            Node::Branch(Box::new(ancestor)),
-                        )?;
+                        // self.update_node(
+                        //     ancestors,
+                        //     ancestor_addr,
+                        //     Node::Branch(Box::new(ancestor)),
+                        // )?;
                         return Ok(Some(leaf.value.clone()));
                     }
 
@@ -748,12 +748,12 @@ impl<T: WriteLinearStore> Merkle<T> {
                             value: ancestor_value.clone(),
                             partial_path: ancestor.partial_path.clone(),
                         });
-                        self.update_node(ancestors, ancestor_addr, ancestor)?;
+                        // self.update_node(ancestors, ancestor_addr, ancestor)?;
                         return Ok(Some(leaf.value.clone()));
                     }
 
                     // The ancestor had 1 child and no value so it should be removed.
-                    self.delete_node(ancestor_addr)?;
+                    //self.delete_node(ancestor_addr)?;
                 }
 
                 // The trie is now empty.

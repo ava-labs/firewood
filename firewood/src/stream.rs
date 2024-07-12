@@ -448,7 +448,6 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                                 Some(Ok(PathIterItem {
                                     key_nibbles: node_key.clone(),
                                     node: node.clone(),
-                                    addr,
                                     next_nibble: None,
                                 }))
                             }
@@ -461,7 +460,6 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                                     return Some(Ok(PathIterItem {
                                         key_nibbles: node_key.clone(),
                                         node: node.clone(),
-                                        addr,
                                         next_nibble: None,
                                     }));
                                 };
@@ -476,7 +474,6 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                                     return Some(Ok(PathIterItem {
                                         key_nibbles: node_key.clone(),
                                         node: node.clone(),
-                                        addr,
                                         next_nibble: None,
                                     }));
                                 };
@@ -489,7 +486,6 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                                 Some(Ok(PathIterItem {
                                     key_nibbles: node_key,
                                     node: node.clone(),
-                                    addr: node_address,
                                     next_nibble: Some(next_unmatched_key_nibble),
                                 }))
                             }
