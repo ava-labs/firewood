@@ -375,7 +375,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     self.set_root(Root::Node(root))?;
                     return Ok(());
                 }
-                Root::AddrWithHash((addr, _hash)) => &*self.read_node(*addr)?,
+                Root::AddrWithHash(addr, _hash) => &*self.read_node(*addr)?,
                 Root::Node(node) => node,
             };
 

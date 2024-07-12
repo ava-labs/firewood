@@ -23,7 +23,7 @@ use storage::PathIterItem;
 #[derive(Debug)]
 pub enum Root {
     None,
-    AddrWithHash((LinearAddress, TrieHash)),
+    AddrWithHash(LinearAddress, TrieHash),
     Node(Node),
 }
 /// A [HashedNodeStore] keeps track of nodes as they change when they are backed by a LinearStore.
@@ -146,7 +146,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
 
         match root {
             Root::None => todo!(),
-            Root::AddrWithHash(root_address) => {
+            Root::AddrWithHash(_root_address, _) => {
                 todo!()
                 // let (hash, root_address) =
                 //     self.hash(*root_address, &mut Path(Default::default()))?;
