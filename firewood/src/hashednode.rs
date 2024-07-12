@@ -35,7 +35,6 @@ pub enum Root {
 #[derive(Debug)]
 pub struct HashedNodeStore<T: ReadLinearStore> {
     nodestore: NodeStore<T>,
-    root_hash: Option<TrieHash>,
     root: Root,
 }
 
@@ -45,7 +44,6 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         let nodestore = NodeStore::initialize(linearstore)?;
         Ok(HashedNodeStore {
             nodestore,
-            root_hash: None,
             root: Root::None,
         })
     }
@@ -54,14 +52,6 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
 impl<T: ReadLinearStore> HashedNodeStore<T> {
     pub fn read_node(&self, addr: LinearAddress) -> Result<Node, Error> {
         Ok(self.nodestore.read_node(addr)?)
-    }
-
-    /// Returns the hash of the root of this trie.
-    /// Returns None if the trie is empty.
-    /// Assumes `freeze` has already been called on this store.
-    /// TODO enforce this assumption with the type system.
-    pub fn root_hash(&self) -> Option<&TrieHash> {
-        self.root_hash.as_ref()
     }
 
     pub const fn root(&self) -> &Root {
@@ -138,19 +128,21 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         let root = self.root();
 
         match root {
-            Root::None => todo!(),
-            Root::AddrWithHash(_root_address, _) => {
-                todo!()
-                // let (hash, root_address) =
-                //     self.hash(*root_address, &mut Path(Default::default()))?;
-                // self.nodestore.set_root(Some(root_address))?;
-                // assert!(self.added.is_empty());
-                // Ok(HashedNodeStore {
-                //     nodestore: self.nodestore.freeze(),
-                //     added: Default::default(),
-                //     root_hash: Some(hash),
-                //     root: todo!(),
-                // })
+            Root::None => {
+                self.nodestore.set_root(None)?;
+                Ok(HashedNodeStore {
+                    nodestore: self.nodestore.freeze(),
+                    root: Root::None, // TODO do this better. We have `root` above.
+                })
+            }
+            Root::AddrWithHash(addr, hash) => {
+                let hash = hash.clone(); // Todo can we avoid this clone?
+                let addr = *addr;
+                self.nodestore.set_root(Some(addr))?;
+                Ok(HashedNodeStore {
+                    nodestore: self.nodestore.freeze(),
+                    root: Root::AddrWithHash(addr, hash),
+                })
             }
             Root::Node(_) => todo!(),
         }
@@ -547,6 +539,6 @@ mod test {
         hns.set_root(Root::Node(node)).unwrap();
 
         let frozen = hns.freeze().unwrap();
-        assert_ne!(frozen.root_hash(), None);
+        assert!(!matches!(frozen.root(), Root::None));
     }
 }
