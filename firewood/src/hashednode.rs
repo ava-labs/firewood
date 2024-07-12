@@ -173,100 +173,118 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     /// node didn't move during update.
     /// `ancestors` returns the ancestors of the updated node, from the root
     /// up to and including the updated node's parent.
-    fn fix_ancestors<'a, A: DoubleEndedIterator<Item = &'a PathIterItem>>(
-        &mut self,
-        mut ancestors: A,
-        old_addr: LinearAddress,
-        new_addr: LinearAddress,
-    ) -> Result<(), MerkleError> {
-        todo!()
-        // let Some(parent) = ancestors.next_back() else {
-        //     self.set_root(Some(new_addr))?;
-        //     return Ok(());
-        // };
+    // fn fix_ancestors<'a, A: DoubleEndedIterator<Item = &'a PathIterItem>>(
+    //     &mut self,
+    //     mut ancestors: A,
+    //     mut node: Node,
+    // ) -> Result<(), MerkleError> {
+    //     loop {
+    //         let Some(ancestor) = ancestors.next_back() else {
+    //             // This is the root.
+    //             self.set_root(Root::Node(node))?;
+    //             return Ok(());
+    //         };
 
-        // let old_parent_address = parent.addr;
+    //         let index = ancestor.next_nibble.expect("parent has a child");
+    //         let ancestor = &*ancestor.node;
 
-        // // The parent of the updated node.
-        // let parent_branch = parent
-        //     .node
-        //     .as_branch()
-        //     .expect("parent of a node is a branch");
+    //         // Clone ancestor and change its child at `index`:
+    //         let mut ancestor_branch = ancestor
+    //             .as_branch()
+    //             .expect("parent must be a branch")
+    //             .clone();
+    //         ancestor_branch.update_child(index, Child::Node(node));
 
-        // // The index of the updated node in `parent`'s children array.
-        // let child_index = parent.next_nibble.expect("must have a nibble address");
+    //         node = Node::Branch(ancestor_branch);
+    //     }
 
-        // let child = parent_branch
-        //     .children
-        //     .get(child_index as usize)
-        //     .expect("index is a nibble");
+    //     // let Some(parent) = ancestors.next_back() else {
+    //     //     self.set_root(Some(new_addr))?;
+    //     //     return Ok(());
+    //     // };
 
-        // if matches!(child, Child::Address(..)) && old_addr == new_addr {
-        //     // We already invalidated the moved node's hash, which means we must
-        //     // have already invalidated the parent's hash in its parent, and so
-        //     // on, up to the root.
-        //     // The updated node didn't move, so we don't need to update
-        //     // `parent`'s pointer to the updated node.
-        //     // We're done fixing the ancestors.
-        //     return Ok(());
-        // }
+    //     // let old_parent_address = parent.addr;
 
-        // let mut updated_parent = parent_branch.clone();
+    //     // // The parent of the updated node.
+    //     // let parent_branch = parent
+    //     //     .node
+    //     //     .as_branch()
+    //     //     .expect("parent of a node is a branch");
 
-        // updated_parent.update_child(child_index, Some(new_addr));
+    //     // // The index of the updated node in `parent`'s children array.
+    //     // let child_index = parent.next_nibble.expect("must have a nibble address");
 
-        // let updated_parent = Node::Branch(updated_parent);
-        // self.update_node(ancestors, old_parent_address, updated_parent)?;
+    //     // let child = parent_branch
+    //     //     .children
+    //     //     .get(child_index as usize)
+    //     //     .expect("index is a nibble");
 
-        // Ok(())
-    }
+    //     // if matches!(child, Child::Address(..)) && old_addr == new_addr {
+    //     //     // We already invalidated the moved node's hash, which means we must
+    //     //     // have already invalidated the parent's hash in its parent, and so
+    //     //     // on, up to the root.
+    //     //     // The updated node didn't move, so we don't need to update
+    //     //     // `parent`'s pointer to the updated node.
+    //     //     // We're done fixing the ancestors.
+    //     //     return Ok(());
+    //     // }
+
+    //     // let mut updated_parent = parent_branch.clone();
+
+    //     // updated_parent.update_child(child_index, Some(new_addr));
+
+    //     // let updated_parent = Node::Branch(updated_parent);
+    //     // self.update_node(ancestors, old_parent_address, updated_parent)?;
+
+    //     // Ok(())
+    // }
 
     /// Updates the node at `old_address` to be `node`. The node may move.
     /// `ancestors` contains the nodes from the root up to an including `node`'s
     /// parent. Returns the new address of `node`, which may be the same as `old_address`.
-    pub fn update_node<'a, A: DoubleEndedIterator<Item = &'a PathIterItem>>(
-        &mut self,
-        mut ancestors: A,
-        old_address: LinearAddress,
-        node: Node,
-    ) -> Result<LinearAddress, MerkleError> {
-        // let old_node_size_index =
-        //     if let Some((_, old_node_size_index)) = self.added.get(&old_address) {
-        //         *old_node_size_index
-        //     } else {
-        //         self.nodestore.node_size(old_address)?
-        //     };
+    // pub fn update_node<'a, A: DoubleEndedIterator<Item = &'a PathIterItem>>(
+    //     &mut self,
+    //     mut ancestors: A,
+    //     old_address: LinearAddress,
+    //     node: Node,
+    // ) -> Result<LinearAddress, MerkleError> {
+    // let old_node_size_index =
+    //     if let Some((_, old_node_size_index)) = self.added.get(&old_address) {
+    //         *old_node_size_index
+    //     } else {
+    //         self.nodestore.node_size(old_address)?
+    //     };
 
-        // // If the node was already modified, see if it still fits
-        // let new_address = if !self.nodestore.still_fits(old_node_size_index, &node)? {
-        //     self.added.remove(&old_address);
-        //     self.nodestore.delete_node(old_address)?;
-        //     let (new_address, new_node_size_index) = self.nodestore.allocate_node(&node)?;
-        //     self.added
-        //         .insert(new_address, (Arc::new(node), new_node_size_index));
-        //     new_address
-        // } else {
-        //     self.added
-        //         .insert(old_address, (Arc::new(node), old_node_size_index));
-        //     old_address
-        // };
+    // // If the node was already modified, see if it still fits
+    // let new_address = if !self.nodestore.still_fits(old_node_size_index, &node)? {
+    //     self.added.remove(&old_address);
+    //     self.nodestore.delete_node(old_address)?;
+    //     let (new_address, new_node_size_index) = self.nodestore.allocate_node(&node)?;
+    //     self.added
+    //         .insert(new_address, (Arc::new(node), new_node_size_index));
+    //     new_address
+    // } else {
+    //     self.added
+    //         .insert(old_address, (Arc::new(node), old_node_size_index));
+    //     old_address
+    // };
 
-        // self.fix_ancestors(ancestors, old_address, new_address)?;
+    // self.fix_ancestors(ancestors, old_address, new_address)?;
 
-        // Ok(new_address)
+    // Ok(new_address)
 
-        self.added.remove(&old_address);
-        self.nodestore.delete_node(old_address)?;
+    //     self.added.remove(&old_address);
+    //     self.nodestore.delete_node(old_address)?;
 
-        loop {
-            let Some(ancestor) = ancestors.next_back() else {
-                return Ok(LinearAddress::new(0).unwrap()); // todo remove address
-            };
+    //     loop {
+    //         let Some(ancestor) = ancestors.next_back() else {
+    //             return Ok(LinearAddress::new(0).unwrap()); // todo remove address
+    //         };
 
-            // TODO Update child in ancestor
-            todo!()
-        }
-    }
+    //         // TODO Update child in ancestor
+    //         todo!()
+    //     }
+    // }
 
     pub fn set_root(&mut self, root: Root) -> Result<(), Error> {
         self.root = root;
