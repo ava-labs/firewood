@@ -3,8 +3,11 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{LeafNode, LinearAddress, Path, TrieHash};
-use std::fmt::{Debug, Error as FmtError, Formatter};
+use crate::{LeafNode, LinearAddress, Node, Path, TrieHash};
+use std::{
+    fmt::{Debug, Error as FmtError, Formatter},
+    sync::Arc,
+};
 
 #[derive(PartialEq, Eq, Clone, Serialize, Deserialize, Default, Debug)]
 /// A child of a branch node.
@@ -14,6 +17,7 @@ pub enum Child {
     None,
     /// We know the child's address but not its hash.
     Address(LinearAddress),
+    Node(),
     /// We know the child's address and hash.
     AddressWithHash(LinearAddress, TrieHash),
 }
@@ -23,6 +27,7 @@ impl Child {
     pub fn address(&self) -> Option<LinearAddress> {
         match self {
             Child::None => None,
+            Child::Node() => None,
             Child::Address(addr) | Child::AddressWithHash(addr, _) => Some(*addr),
         }
     }
@@ -52,6 +57,7 @@ impl Debug for BranchNode {
         for (i, c) in self.children.iter().enumerate() {
             match c {
                 Child::None => {}
+                Child::Node() => {} //TODO
                 Child::Address(addr) => {
                     write!(f, "(index: {i:?}), address={addr:?}, hash=unknown)",)?
                 }
@@ -107,6 +113,7 @@ impl BranchNode {
             #[allow(clippy::indexing_slicing)]
             |(i, child)| match child {
                 Child::None => None,
+                Child::Node() => None, // TODO
                 Child::Address(_) => unreachable!("child should have a hash if it has an address"),
                 Child::AddressWithHash(_, hash) => Some((i, hash)),
             },

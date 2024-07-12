@@ -299,6 +299,7 @@ impl<T: ReadLinearStore> Merkle<T> {
                 for (childidx, child) in b.children.iter().enumerate() {
                     let (child_addr, child_hash) = match child {
                         Child::None => continue,
+                        Child::Node() => continue, // TODO
                         Child::Address(addr) => (*addr, None),
                         Child::AddressWithHash(addr, hash) => (*addr, Some(hash)),
                     };
