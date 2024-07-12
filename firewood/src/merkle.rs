@@ -98,8 +98,8 @@ impl<T: ReadLinearStore> Merkle<T> {
         Merkle(store)
     }
 
-    pub const fn root_address(&self) -> Option<LinearAddress> {
-        todo!()
+    pub const fn root(&self) -> &Root {
+        self.0.root()
     }
 
     pub fn root_hash(&self) -> Option<&TrieHash> {
@@ -328,11 +328,12 @@ impl<T: ReadLinearStore> Merkle<T> {
     pub fn dump(&self) -> Result<String, std::io::Error> {
         let mut result = vec![];
         writeln!(result, "digraph Merkle {{")?;
-        if let Some(addr) = self.root_address() {
-            writeln!(result, " root -> {addr}")?;
-            let mut seen = HashSet::new();
-            self.dump_node(addr, None, &mut seen, &mut result)?;
-        }
+        // TODO fix
+        // if let Some(addr) = self.root() {
+        //     writeln!(result, " root -> {addr}")?;
+        //     let mut seen = HashSet::new();
+        //     self.dump_node(addr, None, &mut seen, &mut result)?;
+        // }
         write!(result, "}}")?;
 
         Ok(String::from_utf8_lossy(&result).to_string())
@@ -1095,7 +1096,7 @@ mod tests {
         assert!(merkle.get(&key3).unwrap().is_none());
         assert!(merkle.remove(&key3).unwrap().is_none());
 
-        assert!(merkle.root_address().is_none());
+        assert!(matches!(merkle.root(), Root::None));
     }
 
     #[test]
@@ -1126,7 +1127,7 @@ mod tests {
             let got = merkle.get(&key).unwrap();
             assert!(got.is_none());
         }
-        assert!(merkle.root_address().is_none());
+        assert!(matches!(merkle.root(), Root::None));
     }
 
     //     #[test]

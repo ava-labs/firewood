@@ -184,9 +184,19 @@ fn get_iterator_intial_state<T: ReadLinearStore>(
     merkle: &Merkle<T>,
     key: &[u8],
 ) -> Result<NodeStreamState, api::Error> {
-    let Some(mut addr) = merkle.root_address() else {
-        // This merkle is empty.
-        return Ok(NodeStreamState::Iterating { iter_stack: vec![] });
+    let mut node = match merkle.root() {
+        Root::None => {
+            // This merkle is empty.
+            return Ok(NodeStreamState::Iterating { iter_stack: vec![] });
+        }
+        Root::AddrWithHash(addr, _) => {
+            // The root is a branch node.
+            merkle.read_node(*addr)?
+        }
+        Root::Node(node) => {
+            // The root is a leaf node.
+            Arc::new(node.clone())
+        }
     };
 
     // Invariant: `matched_key_nibbles` is the path before `node`'s
@@ -198,8 +208,6 @@ fn get_iterator_intial_state<T: ReadLinearStore>(
     let mut iter_stack: Vec<IterationNode> = vec![];
 
     loop {
-        let node = merkle.read_node(addr)?;
-
         // See if `node`'s key is a prefix of `key`.
         let partial_path = node.partial_path();
 
@@ -253,14 +261,18 @@ fn get_iterator_intial_state<T: ReadLinearStore>(
                         ),
                     });
 
-                    #[allow(clippy::indexing_slicing)]
-                    let Some(child_addr) =
-                        branch.children[next_unmatched_key_nibble as usize].address()
-                    else {
-                        return Ok(NodeStreamState::Iterating { iter_stack });
-                    };
+                    // #[allow(clippy::indexing_slicing)]
+                    // let Some(child_addr) =
+                    //     branch.children[next_unmatched_key_nibble as usize].address()
+                    // else {
+                    //     return Ok(NodeStreamState::Iterating { iter_stack });
+                    // };
 
-                    addr = child_addr;
+                    node = match &branch.children[next_unmatched_key_nibble as usize] {
+                        Child::None => return Ok(NodeStreamState::Iterating { iter_stack }),
+                        Child::AddressWithHash(addr, _) => merkle.read_node(*addr)?,
+                        Child::Node(node) => Arc::new(node.clone()), // TODO can we avoid ARCing this?
+                    };
 
                     matched_key_nibbles.push(next_unmatched_key_nibble);
                 }
