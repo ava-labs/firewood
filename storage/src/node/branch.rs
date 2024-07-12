@@ -17,7 +17,7 @@ pub enum Child {
     None,
     /// We know the child's address but not its hash.
     Address(LinearAddress),
-    Node(),
+    Node(Node),
     /// We know the child's address and hash.
     AddressWithHash(LinearAddress, TrieHash),
 }
@@ -27,7 +27,7 @@ impl Child {
     pub fn address(&self) -> Option<LinearAddress> {
         match self {
             Child::None => None,
-            Child::Node() => None,
+            Child::Node(_) => None,
             Child::Address(addr) | Child::AddressWithHash(addr, _) => Some(*addr),
         }
     }
@@ -57,7 +57,7 @@ impl Debug for BranchNode {
         for (i, c) in self.children.iter().enumerate() {
             match c {
                 Child::None => {}
-                Child::Node() => {} //TODO
+                Child::Node(_) => {} //TODO
                 Child::Address(addr) => {
                     write!(f, "(index: {i:?}), address={addr:?}, hash=unknown)",)?
                 }
@@ -113,7 +113,7 @@ impl BranchNode {
             #[allow(clippy::indexing_slicing)]
             |(i, child)| match child {
                 Child::None => None,
-                Child::Node() => None, // TODO
+                Child::Node(_) => None, // TODO
                 Child::Address(_) => unreachable!("child should have a hash if it has an address"),
                 Child::AddressWithHash(_, hash) => Some((i, hash)),
             },
