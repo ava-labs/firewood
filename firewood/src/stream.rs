@@ -2,6 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::{
+    hashednode::Root,
     merkle::{Key, Merkle, MerkleError, Value},
     v2::api,
 };
@@ -376,7 +377,7 @@ enum PathIteratorState<'a> {
         /// prefix of the key we're traversing to.
         matched_key: Vec<u8>,
         unmatched_key: NibblesIterator<'a>,
-        address: LinearAddress,
+        node: Arc<Node>,
     },
     Exhausted,
 }
@@ -400,12 +401,23 @@ impl<'a, 'b, T: ReadLinearStore> PathIterator<'a, 'b, T> {
             });
         };
 
+        let root = match merkle.root() {
+            Root::None => {
+                return Ok(Self {
+                    state: PathIteratorState::Exhausted,
+                    merkle,
+                })
+            }
+            Root::AddrWithHash(addr, _) => merkle.read_node(*addr)?,
+            Root::Node(node) => Arc::new(node.clone()), // todo remove clone
+        };
+
         Ok(Self {
             merkle,
             state: PathIteratorState::Iterating {
                 matched_key: vec![],
                 unmatched_key: NibblesIterator::new(key),
-                address: root_addr,
+                node: root,
             },
         })
     }
@@ -424,14 +436,14 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
             PathIteratorState::Iterating {
                 matched_key,
                 unmatched_key,
-                address,
+                node,
             } => {
-                let node = match merkle.read_node(*address) {
-                    Ok(node) => node,
-                    Err(e) => return Some(Err(e.into())),
-                };
+                // let node = match merkle.read_node(*address) {
+                //     Ok(node) => node,
+                //     Err(e) => return Some(Err(e.into())),
+                // };
 
-                let partial_path = match &*node {
+                let partial_path = match &**node {
                     Node::Branch(branch) => &branch.partial_path,
                     Node::Leaf(leaf) => &leaf.partial_path,
                 };
@@ -447,15 +459,15 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                     Ordering::Equal => {
                         matched_key.extend(partial_path.iter());
                         let node_key = matched_key.clone().into_boxed_slice();
-                        let addr = *address;
 
-                        match &*node {
+                        match &**node {
                             Node::Leaf(_) => {
                                 // We're at a leaf so we're done.
+                                let node = node.clone();
                                 self.state = PathIteratorState::Exhausted;
                                 Some(Ok(PathIterItem {
                                     key_nibbles: node_key.clone(),
-                                    node: node.clone(),
+                                    node: node,
                                     next_nibble: None,
                                 }))
                             }
@@ -464,38 +476,82 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                                 // Find its child (if any) that matches the next nibble in the key.
                                 let Some(next_unmatched_key_nibble) = unmatched_key.next() else {
                                     // We're at the node at `key` so we're done.
+                                    let node = node.clone();
                                     self.state = PathIteratorState::Exhausted;
                                     return Some(Ok(PathIterItem {
                                         key_nibbles: node_key.clone(),
-                                        node: node.clone(),
+                                        node: node,
                                         next_nibble: None,
                                     }));
                                 };
 
-                                #[allow(clippy::indexing_slicing)]
-                                let Some(child_addr) =
-                                    branch.children[next_unmatched_key_nibble as usize].address()
-                                else {
-                                    // There's no child at the index of the next nibble in the key.
-                                    // There's no node at `key` in this trie so we're done.
-                                    self.state = PathIteratorState::Exhausted;
-                                    return Some(Ok(PathIterItem {
-                                        key_nibbles: node_key.clone(),
-                                        node: node.clone(),
-                                        next_nibble: None,
-                                    }));
-                                };
+                                // #[allow(clippy::indexing_slicing)]
+                                // let Some(child_addr) =
+                                //     branch.children[next_unmatched_key_nibble as usize].address()
+                                // else {
+                                //     // There's no child at the index of the next nibble in the key.
+                                //     // There's no node at `key` in this trie so we're done.
+                                //     self.state = PathIteratorState::Exhausted;
+                                //     return Some(Ok(PathIterItem {
+                                //         key_nibbles: node_key.clone(),
+                                //         node: node.clone(),
+                                //         next_nibble: None,
+                                //     }));
+                                // };
+                                match &branch.children[next_unmatched_key_nibble as usize] {
+                                    Child::None => {
+                                        // There's no child at the index of the next nibble in the key.
+                                        // There's no node at `key` in this trie so we're done.
+                                        let node = node.clone();
+                                        self.state = PathIteratorState::Exhausted;
+                                        return Some(Ok(PathIterItem {
+                                            key_nibbles: node_key.clone(),
+                                            node: node,
+                                            next_nibble: None,
+                                        }));
+                                    }
+                                    Child::AddressWithHash(child_addr, _) => {
+                                        let child = match merkle.read_node(*child_addr) {
+                                            Ok(child) => child,
+                                            Err(e) => return Some(Err(e.into())),
+                                        };
 
-                                matched_key.push(next_unmatched_key_nibble);
-                                let node_address = *address;
+                                        let node_key = matched_key.clone().into_boxed_slice();
+                                        matched_key.push(next_unmatched_key_nibble);
 
-                                *address = child_addr;
+                                        *node = child.clone();
 
-                                Some(Ok(PathIterItem {
-                                    key_nibbles: node_key,
-                                    node: node.clone(),
-                                    next_nibble: Some(next_unmatched_key_nibble),
-                                }))
+                                        Some(Ok(PathIterItem {
+                                            key_nibbles: node_key,
+                                            node: child.clone(),
+                                            next_nibble: Some(next_unmatched_key_nibble),
+                                        }))
+                                    }
+                                    Child::Node(child) => {
+                                        let node_key = matched_key.clone().into_boxed_slice();
+                                        matched_key.push(next_unmatched_key_nibble);
+                                        // let node_address = *address;
+
+                                        *node = Arc::new(child.clone());
+
+                                        Some(Ok(PathIterItem {
+                                            key_nibbles: node_key,
+                                            node: node.clone(),
+                                            next_nibble: Some(next_unmatched_key_nibble),
+                                        }))
+                                    }
+                                }
+
+                                //matched_key.push(next_unmatched_key_nibble);
+                                // let node_address = *address;
+
+                                // *address = child_addr;
+
+                                // Some(Ok(PathIterItem {
+                                //     key_nibbles: node_key,
+                                //     node: node.clone(),
+                                //     next_nibble: Some(next_unmatched_key_nibble),
+                                //   }))
                             }
                         }
                     }
