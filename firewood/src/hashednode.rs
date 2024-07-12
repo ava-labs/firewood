@@ -7,7 +7,7 @@ use std::io::Error;
 use std::iter::{self, once};
 use std::sync::Arc;
 
-use storage::{Child, TrieHash, UpdateError};
+use storage::{Child, TrieHash};
 use storage::{LinearAddress, NodeStore};
 use storage::{Node, Path, ProposedImmutable};
 use storage::{ReadLinearStore, WriteLinearStore};
@@ -23,7 +23,7 @@ use storage::PathIterItem;
 #[derive(Debug)]
 pub enum Root {
     None,
-    Addr(LinearAddress),
+    AddrWithHash((LinearAddress, TrieHash)),
     Node(Node),
 }
 /// A [HashedNodeStore] keeps track of nodes as they change when they are backed by a LinearStore.
@@ -146,7 +146,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
 
         match root {
             Root::None => todo!(),
-            Root::Addr(root_address) => {
+            Root::AddrWithHash(root_address) => {
                 todo!()
                 // let (hash, root_address) =
                 //     self.hash(*root_address, &mut Path(Default::default()))?;
