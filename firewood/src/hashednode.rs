@@ -89,7 +89,6 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
                     };
 
                     // Hash this child and update
-                    // let child_addr = *child_addr;
                     let original_length = path_prefix.len();
                     path_prefix
                         .0
@@ -297,10 +296,7 @@ pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
         Node::Branch(node) => {
             // All child hashes should be filled in.
             // TODO danlaine: Enforce this with the type system.
-            debug_assert!(node
-                .children
-                .iter()
-                .all(|c| matches!(c, Child::AddressWithHash(..))));
+            debug_assert!(node.children.iter().all(|c| !matches!(c, Child::Node(..))));
             NodeAndPrefix {
                 node: node.as_ref(),
                 prefix: path_prefix,
