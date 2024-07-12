@@ -20,6 +20,12 @@ const BITS_PER_NIBBLE: u64 = 4;
 use crate::merkle::MerkleError;
 use storage::PathIterItem;
 
+#[derive(Debug)]
+enum Root {
+    None,
+    Addr(LinearAddress),
+    Node(Node),
+}
 /// A [HashedNodeStore] keeps track of nodes as they change when they are backed by a LinearStore.
 /// This defers the writes of those nodes until all the changes are made to the trie as part of a
 /// batch. It also supports a `freeze` method which consumes a [WriteLinearStore] backed [HashedNodeStore],
@@ -31,6 +37,7 @@ pub struct HashedNodeStore<T: ReadLinearStore> {
     nodestore: NodeStore<T>,
     added: HashMap<LinearAddress, (Arc<Node>, u8)>,
     root_hash: Option<TrieHash>,
+    root: Root,
 }
 
 impl<T: WriteLinearStore> HashedNodeStore<T> {
@@ -41,6 +48,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
             nodestore,
             added: Default::default(),
             root_hash: None,
+            root: Root::None,
         })
     }
 }
@@ -63,8 +71,8 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
         self.root_hash.as_ref()
     }
 
-    pub const fn root_address(&self) -> Option<LinearAddress> {
-        self.nodestore.root_address()
+    pub const fn root(&self) -> &Root {
+        &self.root
     }
 }
 
@@ -122,19 +130,31 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
 
     pub fn freeze(mut self) -> Result<HashedNodeStore<ProposedImmutable>, Error> {
         // fill in all remaining hashes, including the root hash
-        let root_hash = if let Some(root_address) = self.root_address() {
-            let (hash, root_address) = self.hash(root_address, &mut Path(Default::default()))?;
-            self.nodestore.set_root(Some(root_address))?;
-            Some(hash)
-        } else {
-            None
-        };
-        assert!(self.added.is_empty());
-        Ok(HashedNodeStore {
-            nodestore: self.nodestore.freeze(),
-            added: Default::default(),
-            root_hash,
-        })
+        // let root_hash = match self.root_address() {
+        //     let (hash, root_address) = self.hash(root_address, &mut Path(Default::default()))?;
+        //     self.nodestore.set_root(Some(root_address))?;
+        //     Some(hash)
+        // } else {
+        //     None
+        // };
+        let root = self.root();
+
+        match root {
+            Root::None => todo!(),
+            Root::Addr(root_address) => {
+                let (hash, root_address) =
+                    self.hash(*root_address, &mut Path(Default::default()))?;
+                self.nodestore.set_root(Some(root_address))?;
+                assert!(self.added.is_empty());
+                Ok(HashedNodeStore {
+                    nodestore: self.nodestore.freeze(),
+                    added: Default::default(),
+                    root_hash: Some(hash),
+                    root: todo!(),
+                })
+            }
+            Root::Node(_) => todo!(),
+        }
     }
 
     pub fn create_node(&mut self, node: Node) -> Result<LinearAddress, Error> {

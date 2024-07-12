@@ -99,7 +99,7 @@ impl<T: ReadLinearStore> Merkle<T> {
     }
 
     pub const fn root_address(&self) -> Option<LinearAddress> {
-        self.0.root_address()
+        todo!()
     }
 
     pub fn root_hash(&self) -> Option<&TrieHash> {
