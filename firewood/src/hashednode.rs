@@ -226,34 +226,46 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     /// parent. Returns the new address of `node`, which may be the same as `old_address`.
     pub fn update_node<'a, A: DoubleEndedIterator<Item = &'a PathIterItem>>(
         &mut self,
-        ancestors: A,
+        mut ancestors: A,
         old_address: LinearAddress,
         node: Node,
     ) -> Result<LinearAddress, MerkleError> {
-        let old_node_size_index =
-            if let Some((_, old_node_size_index)) = self.added.get(&old_address) {
-                *old_node_size_index
-            } else {
-                self.nodestore.node_size(old_address)?
+        // let old_node_size_index =
+        //     if let Some((_, old_node_size_index)) = self.added.get(&old_address) {
+        //         *old_node_size_index
+        //     } else {
+        //         self.nodestore.node_size(old_address)?
+        //     };
+
+        // // If the node was already modified, see if it still fits
+        // let new_address = if !self.nodestore.still_fits(old_node_size_index, &node)? {
+        //     self.added.remove(&old_address);
+        //     self.nodestore.delete_node(old_address)?;
+        //     let (new_address, new_node_size_index) = self.nodestore.allocate_node(&node)?;
+        //     self.added
+        //         .insert(new_address, (Arc::new(node), new_node_size_index));
+        //     new_address
+        // } else {
+        //     self.added
+        //         .insert(old_address, (Arc::new(node), old_node_size_index));
+        //     old_address
+        // };
+
+        // self.fix_ancestors(ancestors, old_address, new_address)?;
+
+        // Ok(new_address)
+
+        self.added.remove(&old_address);
+        self.nodestore.delete_node(old_address)?;
+
+        loop {
+            let Some(ancestor) = ancestors.next_back() else {
+                return Ok(LinearAddress::new(0).unwrap()); // todo remove address
             };
 
-        // If the node was already modified, see if it still fits
-        let new_address = if !self.nodestore.still_fits(old_node_size_index, &node)? {
-            self.added.remove(&old_address);
-            self.nodestore.delete_node(old_address)?;
-            let (new_address, new_node_size_index) = self.nodestore.allocate_node(&node)?;
-            self.added
-                .insert(new_address, (Arc::new(node), new_node_size_index));
-            new_address
-        } else {
-            self.added
-                .insert(old_address, (Arc::new(node), old_node_size_index));
-            old_address
-        };
-
-        self.fix_ancestors(ancestors, old_address, new_address)?;
-
-        Ok(new_address)
+            // TODO Update child in ancestor
+            todo!()
+        }
     }
 
     pub fn set_root(&mut self, root: Root) -> Result<(), Error> {
