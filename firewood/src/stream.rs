@@ -141,9 +141,7 @@ impl<'a, T: ReadLinearStore> Stream for MerkleNodeStream<'a, T> {
 
                             let child = match child {
                                 Child::None => unreachable!("TODO make this unreachable"),
-                                Child::Address(addr) | Child::AddressWithHash(addr, _) => {
-                                    merkle.read_node(addr)?
-                                }
+                                Child::AddressWithHash(addr, _) => merkle.read_node(addr)?,
                                 Child::Node(node) => Arc::new(node), // TODO can we avoid ARCing this?
                             };
 

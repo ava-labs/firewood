@@ -81,37 +81,38 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     // Returns the hash of the node and the address of the node.
     fn hash(
         &mut self,
-        node_addr: LinearAddress,
+        mut node: Node,
         path_prefix: &mut Path,
     ) -> Result<(TrieHash, LinearAddress), Error> {
-        let modified = self.added.remove(&node_addr);
+        // let modified = self.added.remove(&node_addr);
 
-        let mut node = if let Some((modified_node, _)) = modified {
-            // This node was modified and needs to be rehashed and written to `self.nodestore`.
-            Arc::into_inner(modified_node).expect("no other references to this node can exist")
-        } else {
-            // This node wasn't modified, so we must have all of its child hashes
-            // since we got it from `self.nodestore`. We can hash it and return.
-            let node = self.nodestore.read_node(node_addr)?;
-            return Ok((hash_node(&node, path_prefix), node_addr));
-        };
+        // let mut node = if let Some((modified_node, _)) = modified {
+        //     // This node was modified and needs to be rehashed and written to `self.nodestore`.
+        //     Arc::into_inner(modified_node).expect("no other references to this node can exist")
+        // } else {
+        //     // This node wasn't modified, so we must have all of its child hashes
+        //     // since we got it from `self.nodestore`. We can hash it and return.
+        //     let node = self.nodestore.read_node(node_addr)?;
+        //     return Ok((hash_node(&node, path_prefix), node_addr));
+        // };
 
         match node {
             Node::Branch(ref mut b) => {
                 for (nibble, child) in b.children.iter_mut().enumerate() {
-                    let Child::Address(child_addr) = child else {
+                    // Take child from b.children:
+                    let Child::Node(child_node) = std::mem::replace(child, Child::None) else {
                         // There is no child or we already know its hash.
                         continue;
                     };
 
                     // Hash this child and update
-                    let child_addr = *child_addr;
+                    // let child_addr = *child_addr;
                     let original_length = path_prefix.len();
                     path_prefix
                         .0
                         .extend(b.partial_path.0.iter().copied().chain(once(nibble as u8)));
 
-                    let (child_hash, child_addr) = self.hash(child_addr, path_prefix)?;
+                    let (child_hash, child_addr) = self.hash(child_node, path_prefix)?;
 
                     *child = Child::AddressWithHash(child_addr, child_hash);
                     path_prefix.0.truncate(original_length);
@@ -121,10 +122,14 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         }
 
         let hash = hash_node(&node, path_prefix);
-        match self.nodestore.update_node(node_addr, node) {
-            Ok(()) => Ok((hash, node_addr)),
-            Err(UpdateError::NodeMoved(new_addr)) => Ok((hash, new_addr)),
-            Err(UpdateError::Io(e)) => Err(e),
+        // match self.nodestore.update_node(node_addr, node) {
+        //     Ok(()) => Ok((hash, node_addr)),
+        //     Err(UpdateError::NodeMoved(new_addr)) => Ok((hash, new_addr)),
+        //     Err(UpdateError::Io(e)) => Err(e),
+        // }
+        match self.nodestore.create_node(node) {
+            Ok(addr) => Ok((hash, addr)),
+            Err(e) => Err(e),
         }
     }
 
@@ -142,16 +147,17 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         match root {
             Root::None => todo!(),
             Root::Addr(root_address) => {
-                let (hash, root_address) =
-                    self.hash(*root_address, &mut Path(Default::default()))?;
-                self.nodestore.set_root(Some(root_address))?;
-                assert!(self.added.is_empty());
-                Ok(HashedNodeStore {
-                    nodestore: self.nodestore.freeze(),
-                    added: Default::default(),
-                    root_hash: Some(hash),
-                    root: todo!(),
-                })
+                todo!()
+                // let (hash, root_address) =
+                //     self.hash(*root_address, &mut Path(Default::default()))?;
+                // self.nodestore.set_root(Some(root_address))?;
+                // assert!(self.added.is_empty());
+                // Ok(HashedNodeStore {
+                //     nodestore: self.nodestore.freeze(),
+                //     added: Default::default(),
+                //     root_hash: Some(hash),
+                //     root: todo!(),
+                // })
             }
             Root::Node(_) => todo!(),
         }
@@ -301,7 +307,7 @@ pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
             debug_assert!(node
                 .children
                 .iter()
-                .all(|c| !matches!(c, Child::Address(..))));
+                .all(|c| matches!(c, Child::AddressWithHash(..))));
             NodeAndPrefix {
                 node: node.as_ref(),
                 prefix: path_prefix,

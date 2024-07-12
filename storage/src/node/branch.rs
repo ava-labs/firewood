@@ -15,8 +15,6 @@ pub enum Child {
     #[default]
     /// There is no child at this index.
     None,
-    /// We know the child's address but not its hash.
-    Address(LinearAddress),
     Node(Node),
     /// We know the child's address and hash.
     AddressWithHash(LinearAddress, TrieHash),
@@ -28,7 +26,7 @@ impl Child {
         match self {
             Child::None => None,
             Child::Node(_) => None,
-            Child::Address(addr) | Child::AddressWithHash(addr, _) => Some(*addr),
+            Child::AddressWithHash(addr, _) => Some(*addr),
         }
     }
 }
@@ -58,9 +56,6 @@ impl Debug for BranchNode {
             match c {
                 Child::None => {}
                 Child::Node(_) => {} //TODO
-                Child::Address(addr) => {
-                    write!(f, "(index: {i:?}), address={addr:?}, hash=unknown)",)?
-                }
                 Child::AddressWithHash(addr, hash) => write!(
                     f,
                     "(index: {i:?}), address={addr:?}, hash={:?})",
@@ -111,7 +106,6 @@ impl BranchNode {
             |(i, child)| match child {
                 Child::None => None,
                 Child::Node(_) => None, // TODO
-                Child::Address(_) => unreachable!("child should have a hash if it has an address"),
                 Child::AddressWithHash(_, hash) => Some((i, hash)),
             },
         )

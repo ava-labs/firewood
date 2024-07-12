@@ -300,7 +300,6 @@ impl<T: ReadLinearStore> Merkle<T> {
                     let (child_addr, child_hash) = match child {
                         Child::None => continue,
                         Child::Node(_) => continue, // TODO
-                        Child::Address(addr) => (*addr, None),
                         Child::AddressWithHash(addr, hash) => (*addr, Some(hash)),
                     };
 
