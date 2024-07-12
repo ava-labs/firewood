@@ -9,7 +9,9 @@ use crate::{
 use futures::{stream::FusedStream, Stream, StreamExt};
 use std::{cmp::Ordering, iter::once};
 use std::{sync::Arc, task::Poll};
-use storage::{BranchNode, LinearAddress, NibblesIterator, Node, PathIterItem, ReadLinearStore};
+use storage::{
+    BranchNode, Child, LinearAddress, NibblesIterator, Node, PathIterItem, ReadLinearStore,
+};
 
 /// Represents an ongoing iteration over a node and its children.
 enum IterationNode {
@@ -25,7 +27,7 @@ enum IterationNode {
         key: Key,
         /// Returns the non-empty children of this node and their positions
         /// in the node's children array.
-        children_iter: Box<dyn Iterator<Item = (u8, LinearAddress)> + Send>,
+        children_iter: Box<dyn Iterator<Item = (u8, Child)> + Send>,
     },
 }
 
@@ -132,12 +134,20 @@ impl<'a, T: ReadLinearStore> Stream for MerkleNodeStream<'a, T> {
                             ref mut children_iter,
                         } => {
                             // We returned `node` already. Visit its next child.
-                            let Some((pos, child_addr)) = children_iter.next() else {
+                            let Some((pos, child)) = children_iter.next() else {
                                 // We visited all this node's descendants. Go back to its parent.
                                 continue;
                             };
 
-                            let child = merkle.read_node(child_addr)?;
+                            let child = match child {
+                                Child::None => unreachable!("TODO make this unreachable"),
+                                Child::Address(addr) | Child::AddressWithHash(addr, _) => {
+                                    merkle.read_node(addr)?
+                                }
+                                Child::Node(node) => Arc::new(node), // TODO can we avoid ARCing this?
+                            };
+
+                            // let child = merkle.read_node(child_addr)?;
 
                             let partial_path = match &*child {
                                 Node::Branch(branch) => branch.partial_path.iter().copied(),
@@ -531,7 +541,7 @@ where
 
 /// Returns an iterator that returns (`pos`,`child`) for each non-empty child of `branch`,
 /// where `pos` is the position of the child in `branch`'s children array.
-fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (u8, LinearAddress)> {
+fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (u8, Child)> {
     branch
         .children
         .clone()
@@ -539,10 +549,7 @@ fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (u8,
         .enumerate()
         .filter_map(|(pos, child)| match child {
             storage::Child::None => None,
-            storage::Child::Node(_) => None, // TODO
-            storage::Child::Address(addr) | storage::Child::AddressWithHash(addr, _) => {
-                Some((pos as u8, addr))
-            }
+            _ => Some((pos as u8, child)),
         })
 }
 
