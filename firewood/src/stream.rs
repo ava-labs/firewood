@@ -394,13 +394,6 @@ pub struct PathIterator<'a, 'b, T: ReadLinearStore> {
 
 impl<'a, 'b, T: ReadLinearStore> PathIterator<'a, 'b, T> {
     pub(super) fn new(merkle: &'a Merkle<T>, key: &'b [u8]) -> Result<Self, MerkleError> {
-        let Some(root_addr) = merkle.root_address() else {
-            return Ok(Self {
-                state: PathIteratorState::Exhausted,
-                merkle,
-            });
-        };
-
         let root = match merkle.root() {
             Root::None => {
                 return Ok(Self {
