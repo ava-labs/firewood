@@ -7,7 +7,7 @@ use crate::stream::MerkleKeyValueStream;
 use crate::v2::api::{self, HashKey, KeyType, ValueType};
 pub use crate::v2::api::{Batch, BatchOp};
 use async_trait::async_trait;
-use storage::{Committed, FileStore, NodeStore, ProposedMutable, TrieHash};
+use storage::{Committed, FileStore, NodeStore, ProposedMutable, ReadChangedNode, TrieHash};
 
 use crate::manager::{RevisionManager, RevisionManagerConfig};
 use metered::metered;
@@ -62,7 +62,7 @@ pub struct HistoricalRev<T: Debug + Send + Sync> {
 }
 
 #[async_trait]
-impl<T: Debug + Send + Sync> api::DbView for HistoricalRev<T> {
+impl<T: ReadChangedNode, S: Debug + Send + Sync> api::DbView for HistoricalRev<NodeStore<T, S>> {
     type Stream<'a> = MerkleKeyValueStream<'a, T, FileStore> where Self: 'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
@@ -97,7 +97,7 @@ impl<T: Debug + Send + Sync> api::DbView for HistoricalRev<T> {
     }
 }
 
-impl<T: Debug + Send + Sync> HistoricalRev<T> {
+impl<T: ReadChangedNode, S: Debug + Send + Sync> HistoricalRev<NodeStore<T, S>> {
     pub fn stream(&self) -> MerkleKeyValueStream<'_, T, FileStore> {
         todo!()
     }
@@ -145,7 +145,7 @@ pub struct Proposal<T: Debug> {
 }
 
 #[async_trait]
-impl<T: Debug + Send + Sync> api::Proposal for Proposal<T> {
+impl<T: ReadChangedNode> api::Proposal for Proposal<T> {
     type Proposal = Proposal<T>;
 
     async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
@@ -161,7 +161,7 @@ impl<T: Debug + Send + Sync> api::Proposal for Proposal<T> {
 }
 
 #[async_trait]
-impl<T: Debug + Send + Sync> api::DbView for Proposal<T> {
+impl<T: ReadChangedNode> api::DbView for Proposal<T> {
     type Stream<'a> = MerkleKeyValueStream<'a, T, FileStore> where T: 'a;
 
     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {

@@ -13,8 +13,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::node::Node;
 use crate::revisions::proposed::{Proposed, ProposedImmutable, ProposedMutable};
-use crate::revisions::{self, Committed};
+use crate::revisions::Committed;
 use crate::revisions::{ReadableStorage, WritableStorage};
+use crate::{NodeStoreParent, ReadChangedNode};
 
 /// [NodeStore] divides the linear store into blocks of different sizes.
 /// [AREA_SIZES] is every valid block size.
@@ -110,10 +111,23 @@ struct StoredArea<T> {
 /// The second type parameter indicates the backing store, either a [FileStore] or a [MemStore].
 #[derive(Debug)]
 pub struct NodeStore<T: Sync + Send, S: Send + Sync> {
+    // The header from the underlying storage system
     header: NodeStoreHeader,
     deleted_nodes: Vec<(LinearAddress, AreaIndex)>,
-    revision_type: T,
+    pub revision_type: T,
     storage: Arc<S>,
+}
+
+impl From<Committed> for NodeStoreParent {
+    fn from(_: Committed) -> Self {
+        NodeStoreParent::Committed(Committed {})
+    }
+}
+
+impl From<ProposedImmutable> for NodeStoreParent {
+    fn from(p: ProposedImmutable) -> Self {
+        NodeStoreParent::Proposed(p)
+    }
 }
 
 /// Methods to generate a base [Committed] NodeStore, either by creating a fresh one
@@ -166,6 +180,16 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     }
 }
 
+impl<T: ReadChangedNode, S: ReadableStorage> NodeStore<T, S> {
+    pub fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
+        let proposal_nodes = &self.revision_type;
+        if let Some(node) = proposal_nodes.read_changed_node(addr) {
+            return Ok(node.clone());
+        }
+        self.read_node_from_disk(addr)
+    }
+}
+
 impl<T: Sync + Send, S: ReadableStorage> NodeStore<T, S> {
     /// Returns (index, area_size) for the [StoredArea] at `addr`.
     /// `index` is the index of `area_size` in [AREA_SIZES].
@@ -185,7 +209,7 @@ impl<T: Sync + Send, S: ReadableStorage> NodeStore<T, S> {
 
     /// Read a [Node] from the provided [LinearAddress].
     /// `addr` is the address of a StoredArea in the LinearStore.
-    pub fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
+    pub fn read_node_from_disk(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
         debug_assert!(addr.get() % 8 == 0);
 
         let addr = addr.get() + 1; // Skip the index byte
@@ -209,20 +233,22 @@ impl<T: Sync + Send, S: ReadableStorage> NodeStore<T, S> {
     }
 }
 
-impl<S: WritableStorage + Send + Sync> NodeStore<ProposedMutable, S> {
-    /// Creates a new instance of `NodeStore`.
+impl<S: WritableStorage> NodeStore<ProposedMutable, S> {
+    /// Creates a new proposed instance of `NodeStore`.
     ///
     /// # Arguments
     ///
     /// * `parent` - The parent node store.
     /// * `storage` - The storage implementation.
-    pub fn new(parent: Arc<revisions::NodeStoreParent>, storage: Arc<S>) -> Self {
-        NodeStore {
-            header: NodeStoreHeader::new(),
-            storage,
+    pub fn new<T: Into<NodeStoreParent> + Send + Sync>(parent: NodeStore<T, S>) -> Self {
+        let mut store = NodeStore {
+            header: parent.header.clone(),
             deleted_nodes: Default::default(),
-            revision_type: Proposed::new(parent),
-        }
+            revision_type: Proposed::new(parent.revision_type.into().into()),
+            storage: parent.storage.clone(),
+        };
+        store.write_header().expect("failed to write header");
+        store
     }
 
     // TODO danlaine: Write only the parts of the header that have changed instead of the whole thing
@@ -321,7 +347,6 @@ impl<S: WritableStorage + Send + Sync> NodeStore<ProposedMutable, S> {
                 // size of this freelist item into the linear store
                 // TODO: This works, but think about if we can do better than this somehow.
                 let (addr, index) = self.allocate_from_end(stored_area_size)?;
-                self.storage.write(addr.into(), &[index])?;
                 (addr, index)
             }
         };
@@ -357,7 +382,8 @@ impl<S: WritableStorage + Send + Sync> NodeStore<ProposedMutable, S> {
         let stored_area_bytes =
             bincode::serialize(&stored_area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
-        self.storage.write(addr.get(), stored_area_bytes.as_slice())?;
+        self.storage
+            .write(addr.get(), stored_area_bytes.as_slice())?;
 
         Ok(addr)
     }
@@ -501,8 +527,8 @@ pub type FreeLists = [Option<LinearAddress>; NUM_AREA_SIZES];
 
 /// Persisted metadata for a [NodeStore].
 /// The [NodeStoreHeader] is at the start of the LinearStore.
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-struct NodeStoreHeader {
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct NodeStoreHeader {
     /// Identifies the version of firewood used to create this [NodeStore].
     version: Version,
     size: u64,
@@ -526,15 +552,6 @@ impl NodeStoreHeader {
             max_size + MIN_AREA_SIZE - remainder
         }
     };
-
-    fn new() -> Self {
-        Self {
-            size: 0,
-            root_address: None,
-            version: Version::new(),
-            free_lists: Default::default(),
-        }
-    }
 }
 
 /// A [FreeArea] is stored at the start of the area that contained a node that

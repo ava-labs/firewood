@@ -37,6 +37,6 @@ pub use nodestore::{LinearAddress, NodeStore, UpdateError};
 pub use revisions::{
     filestore::FileStore, memstore::MemStore, Committed, ProposedImmutable, ProposedMutable,
 };
-pub use revisions::{ReadableStorage, WritableStorage, NodeStoreParent};
+pub use revisions::{NodeStoreParent, ReadChangedNode, ReadableStorage, WritableStorage};
 
 pub use trie_hash::TrieHash;

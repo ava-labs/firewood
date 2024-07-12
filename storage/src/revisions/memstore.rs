@@ -2,7 +2,8 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::{
-    io::{Cursor, Read}, sync::Mutex,
+    io::{Cursor, Read},
+    sync::Mutex,
 };
 
 use super::{ReadableStorage, WritableStorage};
@@ -16,7 +17,9 @@ pub struct MemStore {
 impl MemStore {
     /// Create a new, empty [MemStore]
     pub const fn new(bytes: Vec<u8>) -> Self {
-        Self { bytes: Mutex::new(bytes) }
+        Self {
+            bytes: Mutex::new(bytes),
+        }
     }
 }
 
@@ -66,7 +69,9 @@ mod test {
     #[test_case(&[(0,&[1, 2, 3]),(2,&[4])],(0,&[1,2,4]); "overwrite end of store")]
     #[test_case(&[(0,&[1, 2, 3]),(2,&[4,5])],(0,&[1,2,4,5]); "overwrite/extend end of store")]
     fn test_in_mem_write_linear_store(writes: &[(u64, &[u8])], expected: (u64, &[u8])) {
-        let store = MemStore { bytes: Mutex::new(vec![]) };
+        let store = MemStore {
+            bytes: Mutex::new(vec![]),
+        };
         assert_eq!(store.size().unwrap(), 0);
 
         for write in writes {

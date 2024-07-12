@@ -8,7 +8,10 @@ use std::io::Error;
 use std::iter::once;
 use std::sync::{Arc, OnceLock};
 
-use storage::{BranchNode, Child, Committed, FileStore, MemStore, NodeStoreParent, ProposedMutable, ReadableStorage, TrieHash, WritableStorage};
+use storage::{
+    BranchNode, Child, Committed, FileStore, MemStore, ProposedMutable, ReadChangedNode,
+    ReadableStorage, TrieHash, WritableStorage,
+};
 use storage::{LinearAddress, NodeStore};
 use storage::{Node, Path, ProposedImmutable};
 
@@ -33,7 +36,9 @@ pub struct HashedNodeStore<T: Debug + Send + Sync, S: Debug + Send + Sync> {
     root_hash: OnceLock<TrieHash>,
 }
 impl<T: Debug + Send + Sync> HashedNodeStore<T, FileStore> {
-    pub fn initialize(linearstore: Arc<FileStore>) -> Result<HashedNodeStore<Committed, FileStore>, Error> {
+    pub fn initialize(
+        linearstore: Arc<FileStore>,
+    ) -> Result<HashedNodeStore<Committed, FileStore>, Error> {
         let nodestore = NodeStore::initialize(linearstore.clone())?;
         Ok(HashedNodeStore {
             nodestore,
@@ -43,22 +48,20 @@ impl<T: Debug + Send + Sync> HashedNodeStore<T, FileStore> {
     }
 }
 impl HashedNodeStore<ProposedMutable, MemStore> {
-    pub fn new_memory(bytes: usize) -> HashedNodeStore<ProposedMutable, MemStore> {
-        
-        let empty_parent = Arc::new(NodeStoreParent::Committed(Committed{}));
-        let empty_revision = Arc::new(MemStore::new(vec![0; bytes]));
+    pub fn new_memory() -> HashedNodeStore<ProposedMutable, MemStore> {
+        let storage = Arc::new(MemStore::new(vec![]));
+        let empty_parent = NodeStore::initialize(storage).expect("memory should always work");
         HashedNodeStore {
-            nodestore: NodeStore::<ProposedMutable, MemStore>::new(
-                empty_parent,
-                empty_revision,
-            ),
+            nodestore: NodeStore::<ProposedMutable, MemStore>::new(empty_parent),
             modified: Default::default(),
             root_hash: Default::default(),
         }
     }
 }
 
-impl<T: Debug + Send + Sync, S: Debug + Send + Sync> From<NodeStore<T, S>> for HashedNodeStore<T, S> {
+impl<T: Debug + Send + Sync, S: Debug + Send + Sync> From<NodeStore<T, S>>
+    for HashedNodeStore<T, S>
+{
     fn from(nodestore: NodeStore<T, S>) -> Self {
         HashedNodeStore {
             nodestore,
@@ -68,12 +71,12 @@ impl<T: Debug + Send + Sync, S: Debug + Send + Sync> From<NodeStore<T, S>> for H
     }
 }
 
-impl<T: Debug + Send + Sync, S: ReadableStorage> HashedNodeStore<T, S> {
+impl<T: ReadChangedNode, S: ReadableStorage> HashedNodeStore<T, S> {
     pub fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
-        if let Some((modified_node, _)) = self.modified.get(&addr) {
+        if let Some(modified_node) = self.nodestore.revision_type.read_changed_node(addr) {
             Ok(modified_node.clone())
         } else {
-            Ok(self.nodestore.read_node(addr)?)
+            self.nodestore.read_node_from_disk(addr)
         }
     }
 
@@ -87,11 +90,13 @@ impl<T: Debug + Send + Sync, S: ReadableStorage> HashedNodeStore<T, S> {
         if let Some((modified_node, _)) = self.modified.remove(&addr) {
             Ok(Arc::into_inner(modified_node).expect("no other references to this node can exist"))
         } else {
-            let node = self.nodestore.read_node(addr)?;
+            let node = self.read_node(addr)?;
             Ok((*node).clone())
         }
     }
+}
 
+impl<T: ReadChangedNode, S: ReadableStorage> HashedNodeStore<T, S> {
     pub fn root_hash(&self) -> Result<TrieHash, Error> {
         debug_assert!(self.modified.is_empty());
         if let Some(addr) = self.nodestore.root_address() {

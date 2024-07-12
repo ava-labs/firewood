@@ -88,7 +88,7 @@ fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criter
         .bench_function("insert", |b| {
             b.iter_batched(
                 || {
-                    let hns = HashedNodeStore::new_memory(0);
+                    let hns = HashedNodeStore::new_memory();
                     let merkle = Merkle::new(hns);
 
                     let keys: Vec<Vec<u8>> = repeat_with(|| {

@@ -2,14 +2,17 @@
 // See the file LICENSE.md for licensing terms.
 
 pub mod committed;
-pub mod proposed;
 pub mod filestore;
 pub mod memstore;
+pub mod proposed;
 
-use std::io::{Error, Read};
 use std::fmt::Debug;
+use std::io::{Error, Read};
+use std::sync::Arc;
 
 pub use proposed::{ProposedImmutable, ProposedMutable};
+
+use crate::{LinearAddress, Node};
 
 pub use self::committed::Committed;
 
@@ -35,7 +38,7 @@ pub trait ReadableStorage: Debug + Sync + Send {
     /// # Returns
     ///
     /// A `Result` containing a boxed `Read` trait object, or an `Error` if the operation fails.
-    
+
     fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, Error>;
 
     /// Return the size of the underlying storage, in bytes
@@ -55,4 +58,12 @@ pub trait WritableStorage: ReadableStorage {
     ///
     /// The number of bytes written, or an error if the write operation fails.
     fn write(&self, offset: u64, object: &[u8]) -> Result<usize, Error>;
+}
+
+/// Trait for reading changed nodes. If a proposal, this recursively reads proposals until it finds a changed node
+/// otherwise it returns None, indicating that the node has not changed in any parent proposal and can be read from disk
+///
+/// Both [Committed] and [ProposedImmutable] implement this trait; the former always returns None.
+pub trait ReadChangedNode: Debug + Send + Sync {
+    fn read_changed_node(&self, _addr: LinearAddress) -> Option<Arc<Node>>;
 }

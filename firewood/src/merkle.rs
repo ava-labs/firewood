@@ -13,7 +13,8 @@ use std::io::Write;
 use std::iter::{empty, once};
 use storage::{
     BranchNode, Child, LeafNode, LinearAddress, NibblesIterator, Node, Path, PathIterItem,
-    ProposedImmutable, ProposedMutable, ReadableStorage, TrieHash, WritableStorage,
+    ProposedImmutable, ProposedMutable, ReadChangedNode, ReadableStorage, TrieHash,
+    WritableStorage,
 };
 
 use std::ops::{Deref, DerefMut};
@@ -94,7 +95,7 @@ macro_rules! write_attributes {
     };
 }
 
-impl<T: Debug + Send + Sync, S: ReadableStorage> Merkle<T, S> {
+impl<T: ReadChangedNode, S: ReadableStorage> Merkle<T, S> {
     pub const fn new(store: HashedNodeStore<T, S>) -> Merkle<T, S> {
         Merkle(store)
     }
@@ -795,7 +796,7 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
     }
 }
 
-#[cfg(never)]
+#[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
     use super::*;
@@ -808,8 +809,8 @@ mod tests {
         merkle.insert(b"abc", Box::new([])).unwrap()
     }
 
-    fn create_in_memory_merkle() -> Merkle<MemStore> {
-        Merkle::new(HashedNodeStore::initialize(MemStore::new(vec![])).unwrap())
+    fn create_in_memory_merkle() -> Merkle<ProposedMutable, MemStore> {
+        Merkle::new(HashedNodeStore::new_memory())
     }
 
     // use super::*;
@@ -1388,8 +1389,8 @@ mod tests {
 
     fn merkle_build_test<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         items: Vec<(K, V)>,
-    ) -> Result<Merkle<MemStore>, MerkleError> {
-        let mut merkle = Merkle::new(HashedNodeStore::initialize(MemStore::new(vec![])).unwrap());
+    ) -> Result<Merkle<ProposedMutable, MemStore>, MerkleError> {
+        let mut merkle = Merkle::new(HashedNodeStore::new_memory());
         for (k, v) in items.iter() {
             merkle.insert(k.as_ref(), Box::from(v.as_ref()))?;
             println!("{}", merkle.dump()?);
