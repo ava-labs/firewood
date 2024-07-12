@@ -144,7 +144,15 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
                     root: Root::AddrWithHash(addr, hash),
                 })
             }
-            Root::Node(_) => todo!(),
+            Root::Node(node) => {
+                // TODO avoid clone
+                let (hash, addr) = self.hash(node.clone(), &mut Path(Default::default()))?;
+                self.nodestore.set_root(Some(addr))?;
+                Ok(HashedNodeStore {
+                    nodestore: self.nodestore.freeze(),
+                    root: Root::AddrWithHash(addr, hash),
+                })
+            }
         }
     }
 

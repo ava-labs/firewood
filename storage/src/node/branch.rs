@@ -4,10 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{LeafNode, LinearAddress, Node, Path, TrieHash};
-use std::{
-    fmt::{Debug, Error as FmtError, Formatter},
-    sync::Arc,
-};
+use std::fmt::{Debug, Error as FmtError, Formatter};
 
 #[derive(PartialEq, Eq, Clone, Serialize, Deserialize, Default, Debug)]
 /// A child of a branch node.
@@ -18,17 +15,6 @@ pub enum Child {
     Node(Node),
     /// We know the child's address and hash.
     AddressWithHash(LinearAddress, TrieHash),
-}
-
-impl Child {
-    /// Returns the address of the child, or None if there is no child.
-    pub fn address(&self) -> Option<LinearAddress> {
-        match self {
-            Child::None => None,
-            Child::Node(_) => None,
-            Child::AddressWithHash(addr, _) => Some(*addr),
-        }
-    }
 }
 
 #[derive(PartialEq, Eq, Clone, Serialize, Deserialize)]

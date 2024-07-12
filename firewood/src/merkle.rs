@@ -9,7 +9,7 @@ use futures::{StreamExt, TryStreamExt};
 use std::collections::HashSet;
 use std::future::ready;
 use std::io::Write;
-use std::iter::{empty, once};
+use std::iter::once;
 use storage::{
     BranchNode, Child, LeafNode, LinearAddress, NibblesIterator, Node, Path, PathIterItem,
     ProposedImmutable, ReadLinearStore, TrieHash, WriteLinearStore,
@@ -708,11 +708,12 @@ impl<T: WriteLinearStore> Merkle<T> {
                         .children
                         .iter()
                         .enumerate()
-                        .filter_map(|(index, child)| {
-                            child.address().map(|child_addr| (index as u8, child_addr))
+                        .filter_map(|(index, child)| match child {
+                            Child::None => None,
+                            _ => Some((index as u8, child)),
                         });
 
-                let (child_index, child_addr) =
+                let (child_index, child) =
                     branch_children.next().expect("branch must have children");
 
                 if branch_children.next().is_some() {
@@ -748,7 +749,14 @@ impl<T: WriteLinearStore> Merkle<T> {
                 // Note that child/combined may be a leaf or a branch.
 
                 let combined = {
-                    let child = self.read_node(child_addr)?;
+                    let (child, child_addr) = match child {
+                        Child::None => unreachable!(),
+                        Child::Node(node) => (node, None),
+                        Child::AddressWithHash(addr, _) => (&self.read_node(*addr)?, Some(*addr)),
+                    };
+                    if let Some(child_addr) = child_addr {
+                        self.delete_node(child_addr)?;
+                    }
 
                     // `combined`'s partial path is the concatenation of `branch`'s partial path,
                     // `child_index` and `child`'s partial path.
@@ -763,8 +771,6 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                     child.new_with_partial_path(partial_path)
                 };
-
-                self.delete_node(child_addr)?;
 
                 self.fix_ancestors(ancestors, combined)?;
 
