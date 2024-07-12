@@ -401,23 +401,27 @@ impl<T: WriteLinearStore> Merkle<T> {
                 value: None,
                 children: Default::default(),
             };
-            new_root.update_child(old_root_child_index, Some(old_root_addr));
+            new_root.update_child(old_root_child_index, Child::Address(old_root_addr));
 
             if let Some((&new_leaf_child_index, remaining_path)) =
                 path_overlap.unique_b.split_first()
             {
-                let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
+                // let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
+                //     value,
+                //     partial_path: Path::from(remaining_path),
+                // }))?;
+                let new_leaf = Node::Leaf(LeafNode {
                     value,
                     partial_path: Path::from(remaining_path),
-                }))?;
-                new_root.update_child(new_leaf_child_index, Some(new_leaf_addr));
+                });
+                new_root.update_child(new_leaf_child_index, Child::Node(new_leaf));
             } else {
                 new_root.value = Some(value);
             }
 
             //let new_root_addr = self.create_node(Node::Branch(Box::new(new_root)))?;
             // self.set_root(Some(new_root_addr))?;
-            self.set_root(Root::Node(Node::Branch(Box::new(new_root))));
+            self.set_root(Root::Node(Node::Branch(Box::new(new_root))))?;
 
             return Ok(());
         };
@@ -461,13 +465,17 @@ impl<T: WriteLinearStore> Merkle<T> {
                 //     leaf            new_branch
                 //                         |
                 //                        leaf
-                let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
+                // let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
+                // value,
+                // partial_path: Path::from(remaining_path),
+                // }))?;
+                let new_leaf = Node::Leaf(LeafNode {
                     value,
                     partial_path: Path::from(remaining_path),
-                }))?;
+                });
 
                 let mut new_branch: BranchNode = leaf.into();
-                new_branch.update_child(child_index, Some(new_leaf_addr));
+                new_branch.update_child(child_index, Child::Node(new_leaf));
                 self.update_node(
                     ancestors,
                     greatest_prefix_node.addr,
@@ -485,10 +493,14 @@ impl<T: WriteLinearStore> Merkle<T> {
                     //    branch             branch
                     //    /   \           /    |        \
                     //  ...   ...       ...  new_leaf   ...
-                    let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
+                    // let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
+                    //     value,
+                    //     partial_path: Path::from(remaining_path),
+                    // }))?;
+                    let new_leaf = Node::Leaf(LeafNode {
                         value,
                         partial_path: Path::from(remaining_path),
-                    }))?;
+                    });
 
                     let mut branch = BranchNode {
                         children: branch.children.clone(),
@@ -497,7 +509,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     };
                     // We don't need to call update_child because we know there is no
                     // child at `child_index` whose hash we need to invalidate.
-                    branch.update_child(child_index, Some(new_leaf_addr));
+                    branch.update_child(child_index, Child::Node(new_leaf));
 
                     self.update_node(
                         ancestors,
@@ -553,27 +565,32 @@ impl<T: WriteLinearStore> Merkle<T> {
                     partial_path: Path::from(path_overlap.shared),
                     value: None,
                 };
-                new_branch.update_child(new_branch_to_child_index, Some(child_addr));
+                new_branch.update_child(new_branch_to_child_index, Child::Address(child_addr));
 
                 if let Some((&new_leaf_child_index, remaining_path)) =
                     path_overlap.unique_b.split_first()
                 {
-                    let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
+                    // let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
+                    //     value,
+                    //     partial_path: Path::from(remaining_path),
+                    // }))?;
+                    let new_leaf = Node::Leaf(LeafNode {
                         value,
                         partial_path: Path::from(remaining_path),
-                    }))?;
-                    new_branch.update_child(new_leaf_child_index, Some(new_leaf_addr));
+                    });
+                    new_branch.update_child(new_leaf_child_index, Child::Node(new_leaf));
                 } else {
                     new_branch.value = Some(value);
                 }
-                let new_branch_addr = self.create_node(Node::Branch(Box::new(new_branch)))?;
+                //let new_branch_addr = self.create_node(Node::Branch(Box::new(new_branch)))?;
+                let new_branch = Node::Branch(Box::new(new_branch));
 
                 let mut branch = BranchNode {
                     children: branch.children.clone(),
                     partial_path: branch.partial_path.clone(),
                     value: branch.value.clone(),
                 };
-                branch.update_child(child_index, Some(new_branch_addr));
+                branch.update_child(child_index, Child::Node(new_branch));
                 self.update_node(
                     ancestors,
                     greatest_prefix_node.addr,
@@ -715,7 +732,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                             partial_path: ancestor.partial_path.clone(),
                             value: ancestor.value.clone(),
                         };
-                        ancestor.update_child(child_index, None);
+                        ancestor.update_child(child_index, Child::None);
                         self.update_node(
                             ancestors,
                             ancestor_addr,

@@ -94,16 +94,13 @@ impl BranchNode {
 
     /// Update the child at `child_index` to be `new_child_addr`.
     /// If `new_child_addr` is None, the child is removed.
-    pub fn update_child(&mut self, child_index: u8, new_child_addr: Option<LinearAddress>) {
+    pub fn update_child(&mut self, child_index: u8, new_child: Child) {
         let child = self
             .children
             .get_mut(child_index as usize)
             .expect("child_index is in bounds");
 
-        *child = match new_child_addr {
-            None => Child::None,
-            Some(new_child_addr) => Child::Address(new_child_addr),
-        }
+        *child = new_child;
     }
 
     /// Returns (index, hash) for each child that has a hash set.
