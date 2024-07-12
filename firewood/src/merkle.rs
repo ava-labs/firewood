@@ -768,12 +768,6 @@ impl<T: WriteLinearStore> Merkle<T> {
     }
 }
 
-impl<T: WriteLinearStore> Merkle<T> {
-    pub fn put_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError> {
-        self.create_node(node).map_err(MerkleError::Format)
-    }
-}
-
 /// Returns an iterator where each element is the result of combining
 /// 2 nibbles of `nibbles`. If `nibbles` is odd length, panics in
 /// debug mode and drops the final nibble in release mode.

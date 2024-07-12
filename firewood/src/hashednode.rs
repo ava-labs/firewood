@@ -157,12 +157,6 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         }
     }
 
-    pub fn create_node(&mut self, node: Node) -> Result<LinearAddress, Error> {
-        let (addr, size) = self.nodestore.allocate_node(&node)?;
-        self.added.insert(addr, (Arc::new(node), size));
-        Ok(addr)
-    }
-
     pub fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error> {
         self.nodestore.delete_node(addr)
     }
