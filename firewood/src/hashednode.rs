@@ -21,7 +21,7 @@ use crate::merkle::MerkleError;
 use storage::PathIterItem;
 
 #[derive(Debug)]
-enum Root {
+pub enum Root {
     None,
     Addr(LinearAddress),
     Node(Node),
@@ -185,45 +185,46 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         old_addr: LinearAddress,
         new_addr: LinearAddress,
     ) -> Result<(), MerkleError> {
-        let Some(parent) = ancestors.next_back() else {
-            self.set_root(Some(new_addr))?;
-            return Ok(());
-        };
+        todo!()
+        // let Some(parent) = ancestors.next_back() else {
+        //     self.set_root(Some(new_addr))?;
+        //     return Ok(());
+        // };
 
-        let old_parent_address = parent.addr;
+        // let old_parent_address = parent.addr;
 
-        // The parent of the updated node.
-        let parent_branch = parent
-            .node
-            .as_branch()
-            .expect("parent of a node is a branch");
+        // // The parent of the updated node.
+        // let parent_branch = parent
+        //     .node
+        //     .as_branch()
+        //     .expect("parent of a node is a branch");
 
-        // The index of the updated node in `parent`'s children array.
-        let child_index = parent.next_nibble.expect("must have a nibble address");
+        // // The index of the updated node in `parent`'s children array.
+        // let child_index = parent.next_nibble.expect("must have a nibble address");
 
-        let child = parent_branch
-            .children
-            .get(child_index as usize)
-            .expect("index is a nibble");
+        // let child = parent_branch
+        //     .children
+        //     .get(child_index as usize)
+        //     .expect("index is a nibble");
 
-        if matches!(child, Child::Address(..)) && old_addr == new_addr {
-            // We already invalidated the moved node's hash, which means we must
-            // have already invalidated the parent's hash in its parent, and so
-            // on, up to the root.
-            // The updated node didn't move, so we don't need to update
-            // `parent`'s pointer to the updated node.
-            // We're done fixing the ancestors.
-            return Ok(());
-        }
+        // if matches!(child, Child::Address(..)) && old_addr == new_addr {
+        //     // We already invalidated the moved node's hash, which means we must
+        //     // have already invalidated the parent's hash in its parent, and so
+        //     // on, up to the root.
+        //     // The updated node didn't move, so we don't need to update
+        //     // `parent`'s pointer to the updated node.
+        //     // We're done fixing the ancestors.
+        //     return Ok(());
+        // }
 
-        let mut updated_parent = parent_branch.clone();
+        // let mut updated_parent = parent_branch.clone();
 
-        updated_parent.update_child(child_index, Some(new_addr));
+        // updated_parent.update_child(child_index, Some(new_addr));
 
-        let updated_parent = Node::Branch(updated_parent);
-        self.update_node(ancestors, old_parent_address, updated_parent)?;
+        // let updated_parent = Node::Branch(updated_parent);
+        // self.update_node(ancestors, old_parent_address, updated_parent)?;
 
-        Ok(())
+        // Ok(())
     }
 
     /// Updates the node at `old_address` to be `node`. The node may move.
@@ -261,8 +262,10 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         Ok(new_address)
     }
 
-    pub fn set_root(&mut self, root_addr: Option<LinearAddress>) -> Result<(), Error> {
-        self.nodestore.set_root(root_addr)
+    pub fn set_root(&mut self, root: Root) -> Result<(), Error> {
+        self.root = root;
+        Ok(())
+        // self.nodestore.set_root(root_addr)
     }
 }
 
@@ -517,8 +520,8 @@ mod test {
             partial_path: Path(Default::default()),
             value: Box::new(*b"abc"),
         });
-        let addr = hns.create_node(node).unwrap();
-        hns.set_root(Some(addr)).unwrap();
+        // let addr = hns.create_node(node).unwrap();
+        hns.set_root(Root::Node(node)).unwrap();
 
         let frozen = hns.freeze().unwrap();
         assert_ne!(frozen.root_hash(), None);

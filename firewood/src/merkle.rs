@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::hashednode::HashedNodeStore;
+use crate::hashednode::{HashedNodeStore, Root};
 use crate::proof::{Proof, ProofError};
 use crate::stream::{MerkleKeyValueStream, PathIterator};
 use crate::v2::api;
@@ -360,8 +360,8 @@ impl<T: WriteLinearStore> Merkle<T> {
                     partial_path: path,
                     value,
                 });
-                let root_addr = self.create_node(root)?;
-                self.set_root(Some(root_addr))?;
+                // let root_addr = self.create_node(root)?;
+                self.set_root(Root::Node(root))?;
                 return Ok(());
             };
             // There is a root but it's not a prefix of `path`.
@@ -415,8 +415,10 @@ impl<T: WriteLinearStore> Merkle<T> {
                 new_root.value = Some(value);
             }
 
-            let new_root_addr = self.create_node(Node::Branch(Box::new(new_root)))?;
-            self.set_root(Some(new_root_addr))?;
+            //let new_root_addr = self.create_node(Node::Branch(Box::new(new_root)))?;
+            // self.set_root(Some(new_root_addr))?;
+            self.set_root(Root::Node(Node::Branch(Box::new(new_root))));
+
             return Ok(());
         };
         // `greatest_prefix_node` is a prefix of `path`
@@ -738,7 +740,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 }
 
                 // The trie is now empty.
-                self.set_root(None)?;
+                self.set_root(Root::None)?;
                 Ok(Some(leaf.value.clone()))
             }
         }
