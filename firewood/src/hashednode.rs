@@ -35,7 +35,6 @@ pub enum Root {
 #[derive(Debug)]
 pub struct HashedNodeStore<T: ReadLinearStore> {
     nodestore: NodeStore<T>,
-    added: HashMap<LinearAddress, (Arc<Node>, u8)>,
     root_hash: Option<TrieHash>,
     root: Root,
 }
@@ -46,7 +45,6 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         let nodestore = NodeStore::initialize(linearstore)?;
         Ok(HashedNodeStore {
             nodestore,
-            added: Default::default(),
             root_hash: None,
             root: Root::None,
         })
@@ -54,12 +52,8 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
 }
 
 impl<T: ReadLinearStore> HashedNodeStore<T> {
-    pub fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
-        if let Some((modified_node, _)) = self.added.get(&addr) {
-            Ok(modified_node.clone())
-        } else {
-            Ok(self.nodestore.read_node(addr)?)
-        }
+    pub fn read_node(&self, addr: LinearAddress) -> Result<Node, Error> {
+        Ok(self.nodestore.read_node(addr)?)
     }
 
     /// Returns the hash of the root of this trie.
@@ -67,7 +61,6 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
     /// Assumes `freeze` has already been called on this store.
     /// TODO enforce this assumption with the type system.
     pub fn root_hash(&self) -> Option<&TrieHash> {
-        debug_assert!(self.added.is_empty());
         self.root_hash.as_ref()
     }
 

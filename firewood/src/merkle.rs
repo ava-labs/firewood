@@ -292,7 +292,7 @@ impl<T: ReadLinearStore> Merkle<T> {
     ) -> Result<(), std::io::Error> {
         write!(writer, "  {addr}[label=\"addr:{addr:?} hash:{hash:?}")?;
 
-        match &*self.read_node(addr)? {
+        match &self.read_node(addr)? {
             Node::Branch(b) => {
                 write_attributes!(writer, b, &b.value.clone().unwrap_or(Box::from([])));
                 writeln!(writer, "\"]")?;
@@ -376,7 +376,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     self.set_root(Root::Node(root))?;
                     return Ok(());
                 }
-                Root::AddrWithHash(addr, _hash) => &*self.read_node(*addr)?,
+                Root::AddrWithHash(addr, _hash) => &self.read_node(*addr)?,
                 Root::Node(node) => node,
             };
 
@@ -572,7 +572,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     .expect("child can't be prefix of key");
 
                 // Update `child` to shorten its partial path.
-                let child = match &*child {
+                let child = match &child {
                     Node::Branch(child) => Node::Branch(Box::new(BranchNode {
                         children: child.children.clone(),
                         partial_path: Path::from(child_partial_path),

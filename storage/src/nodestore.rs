@@ -135,7 +135,7 @@ impl<T: ReadLinearStore> NodeStore<T> {
 
     /// Read a [Node] from the provided [LinearAddress].
     /// `addr` is the address of a StoredArea in the LinearStore.
-    pub fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
+    pub fn read_node(&self, addr: LinearAddress) -> Result<Node, Error> {
         debug_assert!(addr.get() % 8 == 0);
 
         let addr = addr.get() + 1; // Skip the index byte
@@ -145,7 +145,7 @@ impl<T: ReadLinearStore> NodeStore<T> {
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
         match area {
-            Area::Node(node) => Ok(Arc::new(node)),
+            Area::Node(node) => Ok(node),
             Area::Free(_) => Err(Error::new(
                 ErrorKind::InvalidData,
                 "Attempted to read a freed area",
@@ -600,7 +600,7 @@ mod tests {
 
             // Should be able to read the leaf back
             let read_leaf = node_store.read_node(leaf_addr).unwrap();
-            assert_eq!(*read_leaf, leaf);
+            assert_eq!(read_leaf, leaf);
         }
 
         // Create another node
@@ -635,7 +635,7 @@ mod tests {
 
             // Should be able to read the branch back
             let read_leaf2 = node_store.read_node(branch_addr).unwrap();
-            assert_eq!(*read_leaf2, branch);
+            assert_eq!(read_leaf2, branch);
         }
     }
 
@@ -679,7 +679,7 @@ mod tests {
 
         // The new node should be readable
         let read_branch = node_store.read_node(branch_addr).unwrap();
-        assert_eq!(*read_branch, branch);
+        assert_eq!(read_branch, branch);
 
         // The old node should be deleted
         assert!(node_store.read_node(leaf_addr).is_err());
@@ -718,7 +718,7 @@ mod tests {
 
         // The new node should be readable
         let read_leaf2 = node_store.read_node(leaf1_addr).unwrap();
-        assert_eq!(*read_leaf2, leaf2);
+        assert_eq!(read_leaf2, leaf2);
     }
 
     #[test]

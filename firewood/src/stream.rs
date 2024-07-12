@@ -143,12 +143,12 @@ impl<'a, T: ReadLinearStore> Stream for MerkleNodeStream<'a, T> {
                             let child = match child {
                                 Child::None => unreachable!("TODO make this unreachable"),
                                 Child::AddressWithHash(addr, _) => merkle.read_node(addr)?,
-                                Child::Node(node) => Arc::new(node), // TODO can we avoid ARCing this?
+                                Child::Node(node) => node,
                             };
 
                             // let child = merkle.read_node(child_addr)?;
 
-                            let partial_path = match &*child {
+                            let partial_path = match &child {
                                 Node::Branch(branch) => branch.partial_path.iter().copied(),
                                 Node::Leaf(leaf) => leaf.partial_path.iter().copied(),
                             };
@@ -167,7 +167,7 @@ impl<'a, T: ReadLinearStore> Stream for MerkleNodeStream<'a, T> {
 
                             iter_stack.push(IterationNode::Unvisited {
                                 key: child_key,
-                                node: child.clone(),
+                                node: Arc::new(child),
                             });
                             return self.poll_next(_cx);
                         }
@@ -195,7 +195,7 @@ fn get_iterator_intial_state<T: ReadLinearStore>(
         }
         Root::Node(node) => {
             // The root is a leaf node.
-            Arc::new(node.clone())
+            node.clone()
         }
     };
 
@@ -227,15 +227,15 @@ fn get_iterator_intial_state<T: ReadLinearStore>(
                 // `node` is after `key`. Visit it first.
                 iter_stack.push(IterationNode::Unvisited {
                     key: Box::from(matched_key_nibbles),
-                    node: node.clone(),
+                    node: Arc::new(node),
                 });
                 return Ok(NodeStreamState::Iterating { iter_stack });
             }
-            Ordering::Equal => match &*node {
+            Ordering::Equal => match &node {
                 Node::Leaf(_) => {
                     iter_stack.push(IterationNode::Unvisited {
                         key: matched_key_nibbles.clone().into_boxed_slice(),
-                        node: node.clone(),
+                        node: Arc::new(node),
                     });
                     return Ok(NodeStreamState::Iterating { iter_stack });
                 }
@@ -244,7 +244,7 @@ fn get_iterator_intial_state<T: ReadLinearStore>(
                         // There is no more key to traverse.
                         iter_stack.push(IterationNode::Unvisited {
                             key: matched_key_nibbles.clone().into_boxed_slice(),
-                            node: node.clone(),
+                            node: Arc::new(node),
                         });
 
                         return Ok(NodeStreamState::Iterating { iter_stack });
@@ -271,7 +271,7 @@ fn get_iterator_intial_state<T: ReadLinearStore>(
                     node = match &branch.children[next_unmatched_key_nibble as usize] {
                         Child::None => return Ok(NodeStreamState::Iterating { iter_stack }),
                         Child::AddressWithHash(addr, _) => merkle.read_node(*addr)?,
-                        Child::Node(node) => Arc::new(node.clone()), // TODO can we avoid ARCing this?
+                        Child::Node(node) => node.clone(), // TODO can we avoid ARCing this?
                     };
 
                     matched_key_nibbles.push(next_unmatched_key_nibble);
@@ -414,7 +414,7 @@ impl<'a, 'b, T: ReadLinearStore> PathIterator<'a, 'b, T> {
                 })
             }
             Root::AddrWithHash(addr, _) => merkle.read_node(*addr)?,
-            Root::Node(node) => Arc::new(node.clone()), // todo remove clone
+            Root::Node(node) => node.clone(), // todo remove clone
         };
 
         Ok(Self {
@@ -422,7 +422,7 @@ impl<'a, 'b, T: ReadLinearStore> PathIterator<'a, 'b, T> {
             state: PathIteratorState::Iterating {
                 matched_key: vec![],
                 unmatched_key: NibblesIterator::new(key),
-                node: root,
+                node: Arc::new(root),
             },
         })
     }
@@ -524,24 +524,25 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                                         let node_key = matched_key.clone().into_boxed_slice();
                                         matched_key.push(next_unmatched_key_nibble);
 
-                                        *node = child.clone();
+                                        let ret = node.clone();
+                                        *node = Arc::new(child.clone());
 
                                         Some(Ok(PathIterItem {
                                             key_nibbles: node_key,
-                                            node: child.clone(),
+                                            node: ret,
                                             next_nibble: Some(next_unmatched_key_nibble),
                                         }))
                                     }
                                     Child::Node(child) => {
                                         let node_key = matched_key.clone().into_boxed_slice();
                                         matched_key.push(next_unmatched_key_nibble);
-                                        // let node_address = *address;
 
+                                        let ret = node.clone();
                                         *node = Arc::new(child.clone());
 
                                         Some(Ok(PathIterItem {
                                             key_nibbles: node_key,
-                                            node: node.clone(),
+                                            node: ret,
                                             next_nibble: Some(next_unmatched_key_nibble),
                                         }))
                                     }
