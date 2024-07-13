@@ -12,6 +12,8 @@ pub enum Child {
     #[default]
     /// There is no child at this index.
     None,
+    /// There is a child at this index, but we haven't hashed it
+    /// or written it to storage yet.
     Node(Node),
     /// We know the child's address and hash.
     AddressWithHash(LinearAddress, TrieHash),

@@ -10,9 +10,7 @@ use crate::{
 use futures::{stream::FusedStream, Stream, StreamExt};
 use std::{cmp::Ordering, iter::once};
 use std::{sync::Arc, task::Poll};
-use storage::{
-    BranchNode, Child, LinearAddress, NibblesIterator, Node, PathIterItem, ReadLinearStore,
-};
+use storage::{BranchNode, Child, NibblesIterator, Node, PathIterItem, ReadLinearStore};
 
 /// Represents an ongoing iteration over a node and its children.
 enum IterationNode {

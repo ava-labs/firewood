@@ -330,6 +330,16 @@ impl<T: ReadLinearStore> Merkle<T> {
         //     let mut seen = HashSet::new();
         //     self.dump_node(addr, None, &mut seen, &mut result)?;
         // }
+        match self.root() {
+            Root::None => {}
+            Root::AddrWithHash(addr, hash) => {
+                writeln!(result, " root -> {addr}")?;
+                let mut seen = HashSet::new();
+                self.dump_node(*addr, Some(hash), &mut seen, &mut result)?;
+            }
+            Root::Node(_) => todo!(),
+        }
+
         write!(result, "}}")?;
 
         Ok(String::from_utf8_lossy(&result).to_string())
@@ -349,18 +359,7 @@ impl<T: WriteLinearStore> Merkle<T> {
         let Some(greatest_prefix_node) = ancestors.next_back() else {
             // There is no node (not even the root) which is a prefix of `path`.
             // See if there is a root.
-            // let Some(old_root_addr) = self.root_address() else {
-            //     // The trie is empty. Create a new leaf node with `value` and set
-            //     // it as the root.
-            //     let root = Node::Leaf(LeafNode {
-            //         partial_path: path,
-            //         value,
-            //     });
-            //     // let root_addr = self.create_node(root)?;
-            //     self.set_root(Root::Node(root))?;
-            //     return Ok(());
-            // };
-            let old_root = match self.0.root() {
+            let old_root = match self.root() {
                 Root::None => {
                     // The trie is empty. Create a new leaf node with `value` and set
                     // it as the root.
@@ -368,7 +367,6 @@ impl<T: WriteLinearStore> Merkle<T> {
                         partial_path: path,
                         value,
                     });
-                    // let root_addr = self.create_node(root)?;
                     self.set_root(Root::Node(root))?;
                     return Ok(());
                 }
@@ -385,8 +383,6 @@ impl<T: WriteLinearStore> Merkle<T> {
             //              old_root   *new_leaf
             //
             // *Note that new_leaf is only created if `path` isn't a prefix of old root.
-            // let old_root = self.read_node(old_root_addr)?;
-
             let path_overlap = PrefixOverlap::from(old_root.partial_path().as_ref(), path.as_ref());
 
             let (&old_root_child_index, old_root_partial_path) = path_overlap
@@ -420,10 +416,6 @@ impl<T: WriteLinearStore> Merkle<T> {
             if let Some((&new_leaf_child_index, remaining_path)) =
                 path_overlap.unique_b.split_first()
             {
-                // let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
-                //     value,
-                //     partial_path: Path::from(remaining_path),
-                // }))?;
                 let new_leaf = Node::Leaf(LeafNode {
                     value,
                     partial_path: Path::from(remaining_path),
@@ -432,9 +424,6 @@ impl<T: WriteLinearStore> Merkle<T> {
             } else {
                 new_root.value = Some(value);
             }
-
-            //let new_root_addr = self.create_node(Node::Branch(Box::new(new_root)))?;
-            // self.set_root(Some(new_root_addr))?;
 
             let new_root = Node::Branch(Box::new(new_root));
             self.set_root(Root::Node(new_root))?;
@@ -467,10 +456,6 @@ impl<T: WriteLinearStore> Merkle<T> {
             };
 
             return self.fix_ancestors(ancestors, node);
-
-            //self.update_node(ancestors, greatest_prefix_node.addr, node)?;
-
-            // return Ok(());
         };
 
         match &*greatest_prefix_node.node {
@@ -482,10 +467,6 @@ impl<T: WriteLinearStore> Merkle<T> {
                 //     leaf            new_branch
                 //                         |
                 //                        leaf
-                // let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
-                // value,
-                // partial_path: Path::from(remaining_path),
-                // }))?;
                 let new_leaf = Node::Leaf(LeafNode {
                     value,
                     partial_path: Path::from(remaining_path),
@@ -497,13 +478,6 @@ impl<T: WriteLinearStore> Merkle<T> {
                 let new_branch = Node::Branch(Box::new(new_branch));
 
                 return self.fix_ancestors(ancestors, new_branch);
-
-                // self.update_node(
-                //     ancestors,
-                //     greatest_prefix_node.addr,
-                //     Node::Branch(Box::new(new_branch)),
-                // )?;
-                // Ok(())
             }
             Node::Branch(branch) => {
                 // See if `branch` has a child at `child_index` already.
@@ -515,10 +489,6 @@ impl<T: WriteLinearStore> Merkle<T> {
                         //    branch             branch
                         //    /   \           /    |        \
                         //  ...   ...       ...  new_leaf   ...
-                        // let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
-                        //     value,
-                        //     partial_path: Path::from(remaining_path),
-                        // }))?;
                         let new_leaf = Node::Leaf(LeafNode {
                             value,
                             partial_path: Path::from(remaining_path),
@@ -542,43 +512,6 @@ impl<T: WriteLinearStore> Merkle<T> {
                     self.delete_node(*child_addr)?;
                 }
 
-                // let Some(child_addr) = branch.child(child_index).address() else {
-                //     // Create a new leaf at empty `child_index`.
-                //     //     ...                ...
-                //     //      |      -->         |
-                //     //    branch             branch
-                //     //    /   \           /    |        \
-                //     //  ...   ...       ...  new_leaf   ...
-                //     // let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
-                //     //     value,
-                //     //     partial_path: Path::from(remaining_path),
-                //     // }))?;
-                //     let new_leaf = Node::Leaf(LeafNode {
-                //         value,
-                //         partial_path: Path::from(remaining_path),
-                //     });
-
-                //     let mut branch = BranchNode {
-                //         children: branch.children.clone(),
-                //         partial_path: branch.partial_path.clone(),
-                //         value: branch.value.clone(),
-                //     };
-                //     // We don't need to call update_child because we know there is no
-                //     // child at `child_index` whose hash we need to invalidate.
-                //     branch.update_child(child_index, Child::Node(new_leaf));
-
-                //     let branch = Node::Branch(Box::new(branch));
-
-                //     return self.fix_ancestors(ancestors, branch);
-
-                //     // self.update_node(
-                //     //     ancestors,
-                //     //     greatest_prefix_node.addr,
-                //     //     Node::Branch(Box::new(branch)),
-                //     // )?;
-                //     // return Ok(());
-                // };
-
                 // There is a child at `child_index` already.
                 // Note that `child` can't be a prefix of the key we're inserting
                 // because it's deeper than `branch`, which is guaranteed to be the
@@ -593,9 +526,6 @@ impl<T: WriteLinearStore> Merkle<T> {
                 //
                 // *Note that new_leaf is only created if the remaining path is non-empty.
                 // Note that child may be a leaf or a branch node.
-                // let child = self.read_node(child_addr)?;
-                // self.delete_node(child_addr)?;
-
                 let path_overlap = PrefixOverlap::from(child.partial_path(), remaining_path);
 
                 let (&new_branch_to_child_index, child_partial_path) = path_overlap
@@ -615,11 +545,6 @@ impl<T: WriteLinearStore> Merkle<T> {
                         partial_path: Path::from(child_partial_path),
                     }),
                 };
-                // let child_addr = self.update_node(
-                //     ancestors.clone().chain(once(greatest_prefix_node)),
-                //     child_addr,
-                //     child,
-                // )?;
 
                 let mut new_branch = BranchNode {
                     children: Default::default(),
@@ -631,10 +556,6 @@ impl<T: WriteLinearStore> Merkle<T> {
                 if let Some((&new_leaf_child_index, remaining_path)) =
                     path_overlap.unique_b.split_first()
                 {
-                    // let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
-                    //     value,
-                    //     partial_path: Path::from(remaining_path),
-                    // }))?;
                     let new_leaf = Node::Leaf(LeafNode {
                         value,
                         partial_path: Path::from(remaining_path),
@@ -643,7 +564,6 @@ impl<T: WriteLinearStore> Merkle<T> {
                 } else {
                     new_branch.value = Some(value);
                 }
-                //let new_branch_addr = self.create_node(Node::Branch(Box::new(new_branch)))?;
                 let new_branch = Node::Branch(Box::new(new_branch));
 
                 let mut branch = BranchNode {
@@ -652,16 +572,9 @@ impl<T: WriteLinearStore> Merkle<T> {
                     value: branch.value.clone(),
                 };
                 branch.update_child(child_index, Child::Node(new_branch));
-                // self.update_node(
-                //     ancestors,
-                //     greatest_prefix_node.addr,
-                //     Node::Branch(Box::new(branch)),
-                // )?;
                 let branch = Node::Branch(Box::new(branch));
 
-                return self.fix_ancestors(ancestors, branch);
-
-                // Ok(())
+                self.fix_ancestors(ancestors, branch)
             }
         }
     }
@@ -733,7 +646,6 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                     self.fix_ancestors(ancestors, branch)?;
 
-                    //self.update_node(ancestors, removed.addr, Node::Branch(Box::new(branch)))?;
                     return Ok(Some(removed_value.clone()));
                 }
 
@@ -774,17 +686,12 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                 self.fix_ancestors(ancestors, combined)?;
 
-                //self.update_node(ancestors, removed.addr, combined)?;
-
                 Ok(Some(removed_value.clone()))
             }
             Node::Leaf(leaf) => {
-                // self.delete_node(removed.addr)?;
-
                 while let Some(ancestor) = ancestors.next_back() {
                     // Remove all ancestors until we find one that has a value
                     // or multiple children.
-                    // let ancestor_addr = ancestor.addr;
                     let child_index = ancestor.next_nibble.expect("parent has a child");
                     let ancestor = ancestor.node.as_branch().expect("parent must be a branch");
 
@@ -812,11 +719,6 @@ impl<T: WriteLinearStore> Merkle<T> {
                         let ancestor = Node::Branch(Box::new(ancestor));
                         self.fix_ancestors(ancestors, ancestor)?;
 
-                        // self.update_node(
-                        //     ancestors,
-                        //     ancestor_addr,
-                        //     Node::Branch(Box::new(ancestor)),
-                        // )?;
                         return Ok(Some(leaf.value.clone()));
                     }
 
@@ -828,7 +730,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                             partial_path: ancestor.partial_path.clone(),
                         });
                         self.fix_ancestors(ancestors, ancestor)?;
-                        // self.update_node(ancestors, ancestor_addr, ancestor)?;
+
                         return Ok(Some(leaf.value.clone()));
                     }
 

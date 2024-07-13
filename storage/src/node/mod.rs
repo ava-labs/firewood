@@ -13,7 +13,7 @@ pub use branch::BranchNode;
 pub use branch::Child;
 pub use leaf::LeafNode;
 
-use crate::{LinearAddress, Path};
+use crate::Path;
 
 /// A node, either a Branch or Leaf
 

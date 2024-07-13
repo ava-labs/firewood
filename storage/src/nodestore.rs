@@ -9,7 +9,6 @@
 /// and a [FreeSpaceHeader] at the beginning
 use std::io::{Error, ErrorKind, Write};
 use std::num::NonZeroU64;
-use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
