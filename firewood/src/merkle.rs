@@ -574,6 +574,78 @@ impl<T: WriteLinearStore> Merkle<T> {
         }
     }
 
+    pub fn insert2(
+        &mut self,
+        node: &mut Node,
+        key: &[u8],
+        value: Box<[u8]>,
+    ) -> Result<(), MerkleError> {
+        match node {
+            Node::Branch(branch) => {
+                // This is a branch node. Find the child that matches the key.
+                let path_overlap = PrefixOverlap::from(branch.partial_path.as_ref(), key);
+                let (child_index, remaining_path) = path_overlap
+                    .unique_b
+                    .split_first()
+                    .expect("branch should be prefix of key");
+
+                let child = match &branch.children[*child_index as usize] {
+                    Child::None => {
+                        // There is no child at `child_index`. Create a new leaf node.
+                        let new_leaf = Node::Leaf(LeafNode {
+                            value,
+                            partial_path: Path::from(remaining_path),
+                        });
+                        branch.update_child(*child_index, Child::Node(new_leaf));
+                        return Ok(());
+                    }
+                    Child::Node(node) => node,
+                    Child::AddressWithHash(addr, _) => {
+                        // There is a child at `child_index` but it's not loaded.
+                        // Load it and continue.
+                        let node = self.read_node(*addr)?;
+                        branch.update_child(*child_index, Child::Node(node));
+                        node
+                    }
+                };
+
+                // Recurse into the child.
+                Self::insert2(self, &mut child, remaining_path, value)
+            }
+            Node::Leaf(leaf) => {
+                // This is a leaf node. If the key matches the leaf's key, update the value.
+                if leaf.partial_path.as_ref() == key {
+                    leaf.value = value;
+                    return Ok(());
+                }
+
+                // The key doesn't match the leaf's key. Make it into a branch and put a
+                // new leaf below.
+                let path_overlap = PrefixOverlap::from(leaf.partial_path.as_ref(), key);
+                let (leaf_child_index, leaf_partial_path) = path_overlap
+                    .unique_a
+                    .split_first()
+                    .expect("leaf shouldn't be prefix of key");
+
+                let new_leaf = Node::Leaf(LeafNode {
+                    value,
+                    partial_path: Path::from(leaf_partial_path),
+                });
+
+                let mut new_branch = BranchNode {
+                    partial_path: Path::from(path_overlap.shared),
+                    value: Some(leaf.value.clone()),
+                    children: Default::default(),
+                };
+                new_branch.update_child(*leaf_child_index, Child::Node(new_leaf));
+
+                *node = Node::Branch(Box::new(new_branch));
+
+                todo!()
+            }
+        }
+    }
+
     /// Removes the value associated with the given `key`.
     /// Returns the value that was removed, if any.
     /// Otherwise returns `None`.
