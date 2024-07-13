@@ -436,11 +436,6 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                 unmatched_key,
                 node,
             } => {
-                // let node = match merkle.read_node(*address) {
-                //     Ok(node) => node,
-                //     Err(e) => return Some(Err(e.into())),
-                // };
-
                 let partial_path = match &**node {
                     Node::Branch(branch) => &branch.partial_path,
                     Node::Leaf(leaf) => &leaf.partial_path,
@@ -529,17 +524,6 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                                         }))
                                     }
                                 }
-
-                                //matched_key.push(next_unmatched_key_nibble);
-                                // let node_address = *address;
-
-                                // *address = child_addr;
-
-                                // Some(Ok(PathIterItem {
-                                //     key_nibbles: node_key,
-                                //     node: node.clone(),
-                                //     next_nibble: Some(next_unmatched_key_nibble),
-                                //   }))
                             }
                         }
                     }
