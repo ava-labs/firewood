@@ -822,30 +822,29 @@ mod tests {
     use storage::MemStore;
     use test_case::test_case;
 
-    // TODO uncomment
-    // #[test]
-    // fn test_get_regression() {
-    //     let mut merkle = create_in_memory_merkle();
+    #[test]
+    fn test_get_regression() {
+        let mut merkle = create_in_memory_merkle();
 
-    //     merkle.insert(&[0], Box::new([0])).unwrap();
-    //     assert_eq!(merkle.get(&[0]).unwrap(), Some(Box::from([0])));
+        merkle.insert(&[0], Box::new([0])).unwrap();
+        assert_eq!(merkle.get(&[0]).unwrap(), Some(Box::from([0])));
 
-    //     merkle.insert(&[1], Box::new([1])).unwrap();
-    //     assert_eq!(merkle.get(&[1]).unwrap(), Some(Box::from([1])));
+        merkle.insert(&[1], Box::new([1])).unwrap();
+        assert_eq!(merkle.get(&[1]).unwrap(), Some(Box::from([1])));
 
-    //     merkle.insert(&[2], Box::new([2])).unwrap();
-    //     assert_eq!(merkle.get(&[2]).unwrap(), Some(Box::from([2])));
+        merkle.insert(&[2], Box::new([2])).unwrap();
+        assert_eq!(merkle.get(&[2]).unwrap(), Some(Box::from([2])));
 
-    //     let merkle = merkle.freeze().unwrap();
+        let merkle = merkle.freeze().unwrap();
 
-    //     assert_eq!(merkle.get(&[0]).unwrap(), Some(Box::from([0])));
-    //     assert_eq!(merkle.get(&[1]).unwrap(), Some(Box::from([1])));
-    //     assert_eq!(merkle.get(&[2]).unwrap(), Some(Box::from([2])));
+        assert_eq!(merkle.get(&[0]).unwrap(), Some(Box::from([0])));
+        assert_eq!(merkle.get(&[1]).unwrap(), Some(Box::from([1])));
+        assert_eq!(merkle.get(&[2]).unwrap(), Some(Box::from([2])));
 
-    //     for result in merkle.path_iter(&[2]).unwrap() {
-    //         result.unwrap();
-    //     }
-    // }
+        for result in merkle.path_iter(&[2]).unwrap() {
+            result.unwrap();
+        }
+    }
 
     #[test]
     fn insert_one() {
