@@ -324,12 +324,6 @@ impl<T: ReadLinearStore> Merkle<T> {
     pub fn dump(&self) -> Result<String, std::io::Error> {
         let mut result = vec![];
         writeln!(result, "digraph Merkle {{")?;
-        // TODO fix
-        // if let Some(addr) = self.root() {
-        //     writeln!(result, " root -> {addr}")?;
-        //     let mut seen = HashSet::new();
-        //     self.dump_node(addr, None, &mut seen, &mut result)?;
-        // }
         match self.root() {
             Root::None => {}
             Root::AddrWithHash(addr, hash) => {
@@ -337,7 +331,7 @@ impl<T: ReadLinearStore> Merkle<T> {
                 let mut seen = HashSet::new();
                 self.dump_node(*addr, Some(hash), &mut seen, &mut result)?;
             }
-            Root::Node(_) => todo!(),
+            Root::Node(_) => {} // TODO implement this
         }
 
         write!(result, "}}")?;
