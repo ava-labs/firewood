@@ -472,7 +472,7 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                 let new_branch = Node::Branch(Box::new(new_branch));
 
-                return self.fix_ancestors(ancestors, new_branch);
+                self.fix_ancestors(ancestors, new_branch)
             }
             Node::Branch(branch) => {
                 // See if `branch` has a child at `child_index` already.

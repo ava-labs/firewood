@@ -3,7 +3,6 @@
 
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
-use std::hash::Hash;
 use std::io::Error;
 use std::iter::{self, once};
 
@@ -53,7 +52,7 @@ impl<T: ReadLinearStore> HashedNodeStore<T> {
         if self.deleted.contains(&addr) {
             return Err(Error::new(std::io::ErrorKind::NotFound, "Node not found"));
         }
-        Ok(self.nodestore.read_node(addr)?)
+        self.nodestore.read_node(addr)
     }
 
     pub const fn root(&self) -> &Root {

@@ -259,14 +259,9 @@ fn get_iterator_intial_state<T: ReadLinearStore>(
                         ),
                     });
 
-                    // #[allow(clippy::indexing_slicing)]
-                    // let Some(child_addr) =
-                    //     branch.children[next_unmatched_key_nibble as usize].address()
-                    // else {
-                    //     return Ok(NodeStreamState::Iterating { iter_stack });
-                    // };
-
-                    node = match &branch.children[next_unmatched_key_nibble as usize] {
+                    #[allow(clippy::indexing_slicing)]
+                    let child = &branch.children[next_unmatched_key_nibble as usize];
+                    node = match child {
                         Child::None => return Ok(NodeStreamState::Iterating { iter_stack }),
                         Child::AddressWithHash(addr, _) => merkle.read_node(*addr)?,
                         Child::Node(node) => node.clone(), // TODO can we avoid ARCing this?
@@ -470,7 +465,7 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                                 self.state = PathIteratorState::Exhausted;
                                 Some(Ok(PathIterItem {
                                     key_nibbles: node_key.clone(),
-                                    node: node,
+                                    node,
                                     next_nibble: None,
                                 }))
                             }
@@ -483,35 +478,24 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                                     self.state = PathIteratorState::Exhausted;
                                     return Some(Ok(PathIterItem {
                                         key_nibbles: node_key.clone(),
-                                        node: node,
+                                        node,
                                         next_nibble: None,
                                     }));
                                 };
 
-                                // #[allow(clippy::indexing_slicing)]
-                                // let Some(child_addr) =
-                                //     branch.children[next_unmatched_key_nibble as usize].address()
-                                // else {
-                                //     // There's no child at the index of the next nibble in the key.
-                                //     // There's no node at `key` in this trie so we're done.
-                                //     self.state = PathIteratorState::Exhausted;
-                                //     return Some(Ok(PathIterItem {
-                                //         key_nibbles: node_key.clone(),
-                                //         node: node.clone(),
-                                //         next_nibble: None,
-                                //     }));
-                                // };
-                                match &branch.children[next_unmatched_key_nibble as usize] {
+                                #[allow(clippy::indexing_slicing)]
+                                let child = &branch.children[next_unmatched_key_nibble as usize];
+                                match child {
                                     Child::None => {
                                         // There's no child at the index of the next nibble in the key.
                                         // There's no node at `key` in this trie so we're done.
                                         let node = node.clone();
                                         self.state = PathIteratorState::Exhausted;
-                                        return Some(Ok(PathIterItem {
+                                        Some(Ok(PathIterItem {
                                             key_nibbles: node_key.clone(),
-                                            node: node,
+                                            node,
                                             next_nibble: None,
-                                        }));
+                                        }))
                                     }
                                     Child::AddressWithHash(child_addr, _) => {
                                         let child = match merkle.read_node(*child_addr) {
