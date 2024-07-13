@@ -440,6 +440,7 @@ impl<'a, 'b, T: ReadLinearStore> Iterator for PathIterator<'a, 'b, T> {
                     Node::Branch(branch) => &branch.partial_path,
                     Node::Leaf(leaf) => &leaf.partial_path,
                 };
+                println!("partial_path: {:?}", partial_path);
 
                 let (comparison, unmatched_key) =
                     compare_partial_path(partial_path.iter(), unmatched_key);
