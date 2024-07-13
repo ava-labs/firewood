@@ -2,6 +2,8 @@
 // See the file LICENSE.md for licensing terms.
 
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
+use std::hash::Hash;
 use std::io::Error;
 use std::iter::{self, once};
 
@@ -30,6 +32,7 @@ pub enum Root {
 #[derive(Debug)]
 pub struct HashedNodeStore<T: ReadLinearStore> {
     nodestore: NodeStore<T>,
+    deleted: HashSet<LinearAddress>,
     root: Root,
 }
 
@@ -39,6 +42,7 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
         let nodestore = NodeStore::initialize(linearstore)?;
         Ok(HashedNodeStore {
             nodestore,
+            deleted: HashSet::new(),
             root: Root::None,
         })
     }
@@ -46,6 +50,9 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
 
 impl<T: ReadLinearStore> HashedNodeStore<T> {
     pub fn read_node(&self, addr: LinearAddress) -> Result<Node, Error> {
+        if self.deleted.contains(&addr) {
+            return Err(Error::new(std::io::ErrorKind::NotFound, "Node not found"));
+        }
         Ok(self.nodestore.read_node(addr)?)
     }
 
@@ -94,11 +101,15 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     }
 
     pub fn freeze(mut self) -> Result<HashedNodeStore<ProposedImmutable>, Error> {
+        for addr in self.deleted.iter() {
+            self.nodestore.delete_node(*addr)?;
+        }
         match self.root() {
             Root::None => {
                 self.nodestore.set_root(None)?;
                 Ok(HashedNodeStore {
                     nodestore: self.nodestore.freeze(),
+                    deleted: self.deleted,
                     root: Root::None, // TODO do this better. We have `root` above.
                 })
             }
@@ -108,15 +119,18 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
                 self.nodestore.set_root(Some(addr))?;
                 Ok(HashedNodeStore {
                     nodestore: self.nodestore.freeze(),
+                    deleted: self.deleted,
                     root: Root::AddrWithHash(addr, hash),
                 })
             }
             Root::Node(node) => {
                 // TODO avoid clone
+
                 let (hash, addr) = self.hash(node.clone(), &mut Path(Default::default()))?;
                 self.nodestore.set_root(Some(addr))?;
                 Ok(HashedNodeStore {
                     nodestore: self.nodestore.freeze(),
+                    deleted: self.deleted,
                     root: Root::AddrWithHash(addr, hash),
                 })
             }
@@ -124,7 +138,9 @@ impl<T: WriteLinearStore> HashedNodeStore<T> {
     }
 
     pub fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error> {
-        self.nodestore.delete_node(addr)
+        self.deleted.insert(addr);
+        Ok(())
+        // self.nodestore.delete_node(addr)
     }
 
     pub fn set_root(&mut self, root: Root) -> Result<(), Error> {
