@@ -744,6 +744,9 @@ impl<T: WriteLinearStore> Merkle<T> {
         Ok(Merkle(self.0.freeze()?))
     }
 
+    /// Updates parent --> child references in the trie after `node` has been changed.
+    /// `ancestors` is the path from the root down to the parent of `node`.
+    /// TODO do we handle root deletion correctly?
     fn fix_ancestors<'a, A: DoubleEndedIterator<Item = &'a PathIterItem>>(
         &mut self,
         mut ancestors: A,
@@ -764,6 +767,11 @@ impl<T: WriteLinearStore> Merkle<T> {
                 .as_branch()
                 .expect("parent must be a branch")
                 .clone();
+
+            if let Child::AddressWithHash(node_addr, _) = ancestor_branch.child(index) {
+                self.delete_node(*node_addr)?;
+            };
+
             ancestor_branch.update_child(index, Child::Node(node));
 
             node = Node::Branch(ancestor_branch);
