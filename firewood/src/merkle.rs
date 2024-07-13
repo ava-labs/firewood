@@ -391,7 +391,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 .expect("old_root shouldn't be prefix of path");
 
             // Shorten the partial path of `old_root` since it has a parent now.
-            let old_root = match &*old_root {
+            let old_root = match old_root {
                 Node::Leaf(old_root) => Node::Leaf(LeafNode {
                     value: old_root.value.clone(),
                     partial_path: Path::from(old_root_partial_path),
