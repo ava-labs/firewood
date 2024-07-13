@@ -359,7 +359,7 @@ impl<T: WriteLinearStore> Merkle<T> {
         let Some(greatest_prefix_node) = ancestors.next_back() else {
             // There is no node (not even the root) which is a prefix of `path`.
             // See if there is a root.
-            let old_root = match self.root() {
+            let (old_root, old_root_addr) = match self.root() {
                 Root::None => {
                     // The trie is empty. Create a new leaf node with `value` and set
                     // it as the root.
@@ -370,8 +370,8 @@ impl<T: WriteLinearStore> Merkle<T> {
                     self.set_root(Root::Node(root))?;
                     return Ok(());
                 }
-                Root::AddrWithHash(addr, _hash) => &self.read_node(*addr)?,
-                Root::Node(node) => node,
+                Root::AddrWithHash(addr, _) => (&self.read_node(*addr)?, Some(*addr)),
+                Root::Node(node) => (node, None),
             };
 
             // There is a root but it's not a prefix of `path`.
@@ -403,9 +403,6 @@ impl<T: WriteLinearStore> Merkle<T> {
                 })),
             };
 
-            // TODO remove this old root
-            // let old_root_addr = self.update_node(empty(), old_root_addr, old_root)?;
-
             let mut new_root = BranchNode {
                 partial_path: Path::from(path_overlap.shared),
                 value: None,
@@ -423,6 +420,10 @@ impl<T: WriteLinearStore> Merkle<T> {
                 new_root.update_child(new_leaf_child_index, Child::Node(new_leaf));
             } else {
                 new_root.value = Some(value);
+            }
+
+            if let Some(old_root_addr) = old_root_addr {
+                self.delete_node(old_root_addr)?;
             }
 
             let new_root = Node::Branch(Box::new(new_root));
