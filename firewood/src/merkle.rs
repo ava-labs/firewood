@@ -353,7 +353,7 @@ impl<T: WriteLinearStore> Merkle<T> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
         // println!("key: {:?}", key);
 
-        let mut root = match self.root() {
+        let root = match self.root() {
             Root::None => {
                 // The trie is empty. Create a new leaf node with `value` and set
                 // it as the root.
@@ -368,46 +368,55 @@ impl<T: WriteLinearStore> Merkle<T> {
             Root::Node(node) => node.clone(), //todo avoid clone
         };
 
-        let root_path = root.partial_path();
+        let root = self.insert2(root, key.as_ref(), value)?;
+        self.set_root(Root::Node(root))?;
+        Ok(())
+    }
 
-        // If the key is not a suffix of root_path, create a new branch node
-        // whose partial path is the common prefix of the key and root_path.
-        let path_overlap = PrefixOverlap::from(root_path.as_ref(), key.as_ref());
+    /// Insert `key` into this merkle. Start looking from `node`.
+    pub fn insert2(
+        &mut self,
+        mut node: Node,
+        key: &[u8],
+        value: Box<[u8]>,
+    ) -> Result<Node, MerkleError> {
+        let path_overlap = PrefixOverlap::from(node.partial_path().as_ref(), key);
 
+        // 4 possibilities:
+        // 1. They are equal
+        // 2. The key is a prefix of the node.
+        // 3. The node is a prefix of the key.
+        // 4. Neither is a prefix of the other
+
+        // 1. They are equal
         if path_overlap.unique_a.is_empty() && path_overlap.unique_b.is_empty() {
-            // The key is the same as the root path. Update the root value.
-            match &mut root {
+            match &mut node {
                 Node::Branch(branch) => {
                     branch.value = Some(value);
+                    return Ok(node);
                 }
                 Node::Leaf(leaf) => {
                     leaf.value = value;
+                    return Ok(node);
                 }
             }
-            self.set_root(Root::Node(root))?;
-            return Ok(());
         }
 
-        // TODO delete:
-        // 1. Paths are equal
-        // 2. Key is a prefix of the root path
-        // 3. Key is a suffix of the root path
-        // 4. Neither is a prefix of other
-
+        // 2. The key is a prefix of the node.
         if path_overlap.unique_b.is_empty() {
-            // The key is a prefix of the root.
-            // Make a new branch node with the root as a child.
-            let mut new_root = BranchNode {
-                partial_path: Path::from(path_overlap.shared),
+            // Make a branch node that has `value` and make
+            // the current node a child of the branch.
+            let mut branch = BranchNode {
+                partial_path: path_overlap.shared.into(),
                 value: Some(value),
                 children: Default::default(),
             };
+
             let (child_index, child_partial_path) = path_overlap.unique_a.split_first().unwrap();
             let child_index = *child_index;
-            let child_partial_path = Path::from(child_partial_path);
+            let child_partial_path: Path = child_partial_path.into();
 
-            // Shorten the partial path of the root since its a child now.
-            match root {
+            match node {
                 Node::Branch(ref mut branch) => {
                     branch.partial_path = child_partial_path;
                 }
@@ -416,129 +425,160 @@ impl<T: WriteLinearStore> Merkle<T> {
                 }
             }
 
-            new_root.update_child(child_index, Child::Node(root));
-            self.set_root(Root::Node(Node::Branch(new_root.into())))?;
-            return Ok(());
+            branch.update_child(child_index, Child::Node(node));
+
+            return Ok(Node::Branch(Box::new(branch)));
         }
 
-        if !path_overlap.unique_a.is_empty() && !path_overlap.unique_b.is_empty() {
-            // Key isn't a suffix of root key or vice versa.
-            // Create a new branch node with the root as a child
-            // and a new leaf node as a child.
-            let new_leaf = Node::Leaf(LeafNode {
-                partial_path: Path::from(path_overlap.unique_b),
-                value,
-            });
+        // 3. The node is a prefix of the key.
+        if path_overlap.unique_a.is_empty() {
+            let (child_index, child_partial_path) = path_overlap.unique_b.split_first().unwrap();
+            let child_index = *child_index;
+            let child_partial_path: Path = child_partial_path.into();
 
-            let mut new_root = BranchNode {
-                partial_path: Path::from(path_overlap.shared),
-                value: None,
-                children: Default::default(),
-            };
-
-            let idx_b = path_overlap.unique_b[0];
-
-            let (root_child_index, root_partial_path) =
-                path_overlap.unique_a.split_first().unwrap();
-            let root_child_index = *root_child_index;
-            let root_partial_path = Path::from(root_partial_path);
-
-            // Shorten the partial path of the root since its a child now.
-            match root {
+            match node {
                 Node::Branch(ref mut branch) => {
-                    branch.partial_path = root_partial_path;
+                    let child =
+                        std::mem::replace(&mut branch.children[child_index as usize], Child::None);
+
+                    let child = match child {
+                        Child::None => {
+                            let new_leaf = Node::Leaf(LeafNode {
+                                value,
+                                partial_path: child_partial_path,
+                            });
+                            branch.update_child(child_index, Child::Node(new_leaf));
+                            return Ok(node);
+                        }
+                        Child::Node(node) => node,
+                        Child::AddressWithHash(addr, _) => self.read_node(addr)?,
+                    };
+
+                    let child = self.insert2(child, child_partial_path.as_ref(), value)?;
+                    branch.update_child(child_index, Child::Node(child));
+                    return Ok(node);
                 }
                 Node::Leaf(ref mut leaf) => {
-                    leaf.partial_path = root_partial_path;
+                    // Turn this node into a branch node.
+                    let mut branch = BranchNode {
+                        partial_path: leaf.partial_path.clone(),
+                        value: Some(leaf.value.clone()),
+                        children: Default::default(),
+                    };
+
+                    let new_leaf = Node::Leaf(LeafNode {
+                        value,
+                        partial_path: child_partial_path,
+                    });
+
+                    branch.update_child(child_index, Child::Node(new_leaf));
+
+                    return Ok(Node::Branch(Box::new(branch)));
                 }
             }
-
-            new_root.update_child(root_child_index, Child::Node(root));
-            new_root.update_child(idx_b, Child::Node(new_leaf));
-
-            self.set_root(Root::Node(Node::Branch(new_root.into())))?;
-            return Ok(());
         }
 
-        let skip = path_overlap.shared.len();
-        let root = self.insert2(root, key.as_ref().get(skip..).unwrap(), value)?;
-        self.set_root(Root::Node(root))?;
-        Ok(())
-    }
+        // 4. Neither is a prefix of the other.
+        // Make a branch node that has both the current node and a new leaf node as children.
+        let mut branch = BranchNode {
+            partial_path: path_overlap.shared.into(),
+            value: None,
+            children: Default::default(),
+        };
 
-    pub fn insert2(
-        &mut self,
-        mut node: Node,
-        key: &[u8],
-        value: Box<[u8]>,
-    ) -> Result<Node, MerkleError> {
+        let (node_index, node_partial_path) = path_overlap.unique_a.split_first().unwrap();
+        let node_index = *node_index;
+        let node_partial_path: Path = node_partial_path.into();
+
+        let (leaf_index, leaf_partial_path) = path_overlap.unique_b.split_first().unwrap();
+        let leaf_index = *leaf_index;
+        let leaf_partial_path: Path = leaf_partial_path.into();
+
         match node {
             Node::Branch(ref mut branch) => {
-                if key.len() == 0 {
-                    // The key is empty. Update the value of the branch.
-                    branch.value = Some(value);
-                    return Ok(node);
-                }
-
-                let Some((child_index, key)) = key.split_first() else {
-                    unreachable!("TODO fix")
-                };
-
-                let child =
-                    std::mem::replace(&mut branch.children[*child_index as usize], Child::None);
-
-                let child = match child {
-                    Child::None => {
-                        // There is no child at `child_index`. Create a new leaf node.
-                        let new_leaf = Node::Leaf(LeafNode {
-                            value,
-                            partial_path: Path::from(key),
-                        });
-                        branch.update_child(*child_index, Child::Node(new_leaf));
-                        return Ok(node);
-                    }
-                    Child::Node(node) => node,
-                    Child::AddressWithHash(addr, _) => {
-                        // There is a child at `child_index` but it's not loaded.
-                        // Load it and continue.
-                        self.read_node(addr)?
-                    }
-                };
-
-                // Recurse into the child.
-                let child = Self::insert2(self, child, key, value)?;
-
-                // Update the child in the branch.
-                branch.update_child(*child_index, Child::Node(child));
-
-                Ok(node)
+                branch.partial_path = node_partial_path;
             }
             Node::Leaf(ref mut leaf) => {
-                // This is a leaf node. If the key matches the leaf's key, update the value.
-                if leaf.partial_path.as_ref() == key {
-                    leaf.value = value;
-                    return Ok(node);
-                }
-
-                let Some((child_index, key)) = key.split_first() else {
-                    unreachable!("TODO fix")
-                };
-
-                let new_leaf = Node::Leaf(LeafNode {
-                    value,
-                    partial_path: Path::from(key),
-                });
-
-                let mut new_branch = BranchNode {
-                    partial_path: leaf.partial_path.clone(),
-                    value: Some(leaf.value.clone()),
-                    children: Default::default(),
-                };
-                new_branch.update_child(*child_index, Child::Node(new_leaf));
-
-                Ok(Node::Branch(Box::new(new_branch)))
+                leaf.partial_path = node_partial_path;
             }
         }
+        branch.update_child(node_index, Child::Node(node));
+
+        let new_leaf = Node::Leaf(LeafNode {
+            value,
+            partial_path: leaf_partial_path,
+        });
+        branch.update_child(leaf_index, Child::Node(new_leaf));
+
+        Ok(Node::Branch(Box::new(branch)))
+
+        // match node {
+        //     Node::Branch(ref mut branch) => {
+        //         if key.len() == 0 {
+        //             // The key is empty. Update the value of the branch.
+        //             branch.value = Some(value);
+        //             return Ok(node);
+        //         }
+
+        //         let Some((child_index, key)) = key.split_first() else {
+        //             unreachable!("TODO fix")
+        //         };
+
+        //         let child =
+        //             std::mem::replace(&mut branch.children[*child_index as usize], Child::None);
+
+        //         let child = match child {
+        //             Child::None => {
+        //                 // There is no child at `child_index`. Create a new leaf node.
+        //                 let new_leaf = Node::Leaf(LeafNode {
+        //                     value,
+        //                     partial_path: Path::from(key),
+        //                 });
+        //                 branch.update_child(*child_index, Child::Node(new_leaf));
+        //                 return Ok(node);
+        //             }
+        //             Child::Node(node) => node,
+        //             Child::AddressWithHash(addr, _) => {
+        //                 // There is a child at `child_index` but it's not loaded.
+        //                 // Load it and continue.
+        //                 self.read_node(addr)?
+        //             }
+        //         };
+
+        //         // Recurse into the child.
+        //         let child = Self::insert2(self, child, key, value)?;
+
+        //         // Update the child in the branch.
+        //         branch.update_child(*child_index, Child::Node(child));
+
+        //         Ok(node)
+        //     }
+        //     Node::Leaf(ref mut leaf) => {
+        //         // This is a leaf node. If the key matches the leaf's key, update the value.
+        //         if leaf.partial_path.as_ref() == key {
+        //             leaf.value = value;
+        //             return Ok(node);
+        //         }
+
+        //         let Some((child_index, key)) = key.split_first() else {
+        //             unreachable!("TODO fix")
+        //         };
+
+        //         let new_leaf = Node::Leaf(LeafNode {
+        //             value,
+        //             partial_path: Path::from(key),
+        //         });
+
+        //         let mut new_branch = BranchNode {
+        //             partial_path: leaf.partial_path.clone(),
+        //             value: Some(leaf.value.clone()),
+        //             children: Default::default(),
+        //         };
+        //         new_branch.update_child(*child_index, Child::Node(new_leaf));
+
+        //         Ok(Node::Branch(Box::new(new_branch)))
+        //     }
+        // }
     }
 
     /// Removes the value associated with the given `key`.
