@@ -10,7 +10,6 @@ use std::collections::HashSet;
 use std::future::ready;
 use std::io::Write;
 use std::iter::once;
-use std::path;
 use storage::{
     BranchNode, Child, LeafNode, LinearAddress, NibblesIterator, Node, Path, PathIterItem,
     ProposedImmutable, ReadLinearStore, TrieHash, WriteLinearStore,
@@ -351,9 +350,10 @@ impl<T: ReadLinearStore> Merkle<T> {
 impl<T: WriteLinearStore> Merkle<T> {
     pub fn insert(&mut self, key: &[u8], value: Box<[u8]>) -> Result<(), MerkleError> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
-        // println!("key: {:?}", key);
 
-        let root = match self.root() {
+        let root = std::mem::replace(&mut self.0.root, Root::None);
+
+        let root = match root {
             Root::None => {
                 // The trie is empty. Create a new leaf node with `value` and set
                 // it as the root.
@@ -364,8 +364,8 @@ impl<T: WriteLinearStore> Merkle<T> {
                 self.set_root(Root::Node(root))?;
                 return Ok(());
             }
-            Root::AddrWithHash(addr, _) => self.read_node(*addr)?,
-            Root::Node(node) => node.clone(), //todo avoid clone
+            Root::AddrWithHash(addr, _) => self.read_node(addr)?,
+            Root::Node(node) => node,
         };
 
         let root = self.insert2(root, key.as_ref(), value)?;

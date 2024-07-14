@@ -959,65 +959,65 @@ mod tests {
     }
 
     // TODO uncomment
-    // #[tokio::test]
-    // async fn key_value_table_test() {
-    //     let mut merkle = create_test_merkle();
+    #[tokio::test]
+    async fn key_value_table_test() {
+        let mut merkle = create_test_merkle();
 
-    //     // Insert key-values in reverse order to ensure iterator
-    //     // doesn't just return the keys in insertion order.
-    //     for i in (0..=u8::MAX).rev() {
-    //         for j in (0..=u8::MAX).rev() {
-    //             let key = &[i, j];
-    //             let value = Box::new([i, j]);
+        // Insert key-values in reverse order to ensure iterator
+        // doesn't just return the keys in insertion order.
+        for i in (0..=u8::MAX).rev() {
+            for j in (0..=u8::MAX).rev() {
+                let key = &[i, j];
+                let value = Box::new([i, j]);
 
-    //             merkle.insert(key, value).unwrap();
-    //         }
-    //     }
+                merkle.insert(key, value).unwrap();
+            }
+        }
 
-    //     // Test with no start key
-    //     let mut stream = merkle._key_value_iter();
-    //     for i in 0..=u8::MAX {
-    //         for j in 0..=u8::MAX {
-    //             let expected_key = vec![i, j];
-    //             let expected_value = vec![i, j];
+        // Test with no start key
+        let mut stream = merkle._key_value_iter();
+        for i in 0..=u8::MAX {
+            for j in 0..=u8::MAX {
+                let expected_key = vec![i, j];
+                let expected_value = vec![i, j];
 
-    //             assert_eq!(
-    //                 stream.next().await.unwrap().unwrap(),
-    //                 (expected_key.into_boxed_slice(), expected_value),
-    //                 "i: {}, j: {}",
-    //                 i,
-    //                 j,
-    //             );
-    //         }
-    //     }
-    //     check_stream_is_done(stream).await;
+                assert_eq!(
+                    stream.next().await.unwrap().unwrap(),
+                    (expected_key.into_boxed_slice(), expected_value),
+                    "i: {}, j: {}",
+                    i,
+                    j,
+                );
+            }
+        }
+        check_stream_is_done(stream).await;
 
-    //     // Test with start key
-    //     for i in 0..=u8::MAX {
-    //         let mut stream = merkle._key_value_iter_from_key(vec![i].into_boxed_slice());
-    //         for j in 0..=u8::MAX {
-    //             let expected_key = vec![i, j];
-    //             let expected_value = vec![i, j];
-    //             assert_eq!(
-    //                 stream.next().await.unwrap().unwrap(),
-    //                 (expected_key.into_boxed_slice(), expected_value),
-    //                 "i: {}, j: {}",
-    //                 i,
-    //                 j,
-    //             );
-    //         }
-    //         if i == u8::MAX {
-    //             check_stream_is_done(stream).await;
-    //         } else {
-    //             assert_eq!(
-    //                 stream.next().await.unwrap().unwrap(),
-    //                 (vec![i + 1, 0].into_boxed_slice(), vec![i + 1, 0]),
-    //                 "i: {}",
-    //                 i,
-    //             );
-    //         }
-    //     }
-    // }
+        // Test with start key
+        for i in 0..=u8::MAX {
+            let mut stream = merkle._key_value_iter_from_key(vec![i].into_boxed_slice());
+            for j in 0..=u8::MAX {
+                let expected_key = vec![i, j];
+                let expected_value = vec![i, j];
+                assert_eq!(
+                    stream.next().await.unwrap().unwrap(),
+                    (expected_key.into_boxed_slice(), expected_value),
+                    "i: {}, j: {}",
+                    i,
+                    j,
+                );
+            }
+            if i == u8::MAX {
+                check_stream_is_done(stream).await;
+            } else {
+                assert_eq!(
+                    stream.next().await.unwrap().unwrap(),
+                    (vec![i + 1, 0].into_boxed_slice(), vec![i + 1, 0]),
+                    "i: {}",
+                    i,
+                );
+            }
+        }
+    }
 
     #[tokio::test]
     async fn key_value_fused_full() {

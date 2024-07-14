@@ -32,7 +32,7 @@ pub enum Root {
 pub struct HashedNodeStore<T: ReadLinearStore> {
     nodestore: NodeStore<T>,
     deleted: HashSet<LinearAddress>,
-    root: Root,
+    pub(super) root: Root,
 }
 
 impl<T: WriteLinearStore> HashedNodeStore<T> {
