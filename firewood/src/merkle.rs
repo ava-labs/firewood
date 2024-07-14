@@ -461,8 +461,8 @@ impl<T: WriteLinearStore> Merkle<T> {
                 Node::Leaf(ref mut leaf) => {
                     // Turn this node into a branch node.
                     let mut branch = BranchNode {
-                        partial_path: leaf.partial_path.clone(),
-                        value: Some(leaf.value.clone()),
+                        partial_path: std::mem::replace(&mut leaf.partial_path, Path::new()),
+                        value: Some(std::mem::take(&mut leaf.value)),
                         children: Default::default(),
                     };
 
@@ -511,74 +511,6 @@ impl<T: WriteLinearStore> Merkle<T> {
         branch.update_child(leaf_index, Child::Node(new_leaf));
 
         Ok(Node::Branch(Box::new(branch)))
-
-        // match node {
-        //     Node::Branch(ref mut branch) => {
-        //         if key.len() == 0 {
-        //             // The key is empty. Update the value of the branch.
-        //             branch.value = Some(value);
-        //             return Ok(node);
-        //         }
-
-        //         let Some((child_index, key)) = key.split_first() else {
-        //             unreachable!("TODO fix")
-        //         };
-
-        //         let child =
-        //             std::mem::replace(&mut branch.children[*child_index as usize], Child::None);
-
-        //         let child = match child {
-        //             Child::None => {
-        //                 // There is no child at `child_index`. Create a new leaf node.
-        //                 let new_leaf = Node::Leaf(LeafNode {
-        //                     value,
-        //                     partial_path: Path::from(key),
-        //                 });
-        //                 branch.update_child(*child_index, Child::Node(new_leaf));
-        //                 return Ok(node);
-        //             }
-        //             Child::Node(node) => node,
-        //             Child::AddressWithHash(addr, _) => {
-        //                 // There is a child at `child_index` but it's not loaded.
-        //                 // Load it and continue.
-        //                 self.read_node(addr)?
-        //             }
-        //         };
-
-        //         // Recurse into the child.
-        //         let child = Self::insert2(self, child, key, value)?;
-
-        //         // Update the child in the branch.
-        //         branch.update_child(*child_index, Child::Node(child));
-
-        //         Ok(node)
-        //     }
-        //     Node::Leaf(ref mut leaf) => {
-        //         // This is a leaf node. If the key matches the leaf's key, update the value.
-        //         if leaf.partial_path.as_ref() == key {
-        //             leaf.value = value;
-        //             return Ok(node);
-        //         }
-
-        //         let Some((child_index, key)) = key.split_first() else {
-        //             unreachable!("TODO fix")
-        //         };
-
-        //         let new_leaf = Node::Leaf(LeafNode {
-        //             value,
-        //             partial_path: Path::from(key),
-        //         });
-
-        //         let mut new_branch = BranchNode {
-        //             partial_path: leaf.partial_path.clone(),
-        //             value: Some(leaf.value.clone()),
-        //             children: Default::default(),
-        //         };
-        //         new_branch.update_child(*child_index, Child::Node(new_leaf));
-
-        //         Ok(Node::Branch(Box::new(new_branch)))
-        //     }
-        // }
     }
 
     /// Removes the value associated with the given `key`.

@@ -78,7 +78,6 @@ impl Path {
     }
 
     /// Creates an empty Path
-    #[cfg(test)]
     pub fn new() -> Self {
         Path(SmallVec::new())
     }
