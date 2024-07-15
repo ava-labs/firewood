@@ -387,9 +387,16 @@ impl<T: WriteLinearStore> Merkle<T> {
         // 4. Neither is an ancestor of the other
         let path_overlap = PrefixOverlap::from(node.partial_path().as_ref(), key);
 
+        let clean_args = |index_and_path: Option<(&u8, &[u8])>| -> Option<(u8, Path)> {
+            match index_and_path {
+                Some((index, path)) => Some((*index, path.into())),
+                None => None,
+            }
+        };
+
         match (
-            path_overlap.unique_b.split_first(),
-            path_overlap.unique_a.split_first(),
+            clean_args(path_overlap.unique_b.split_first()),
+            clean_args(path_overlap.unique_a.split_first()),
         ) {
             (None, None) => {
                 // 1. The node is at `key`
@@ -403,7 +410,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 }
                 return Ok(node);
             }
-            (None, Some((child_index, child_path))) => {
+            (None, Some((child_index, partial_path))) => {
                 // 2. The key is above the node (i.e. its ancestor)
                 // Make a new branch node and insert the current node as a child.
                 //    ...                ...
@@ -411,9 +418,6 @@ impl<T: WriteLinearStore> Merkle<T> {
                 //    node               branch
                 //                        |
                 //                       node
-                let child_index = *child_index;
-                let partial_path: Path = child_path.into();
-
                 let mut branch = BranchNode {
                     partial_path: path_overlap.shared.into(),
                     value: Some(value),
@@ -433,15 +437,13 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                 return Ok(Node::Branch(Box::new(branch)));
             }
-            (Some((child_index, child_path)), None) => {
+            (Some((child_index, partial_path)), None) => {
                 // 3. The key is below the node (i.e. its descendant)
                 //    ...                         ...
                 //     |                           |
                 //    node         -->            node
                 //     |                           |
                 //    ... (key may be below)       ... (key is below)
-                let child_index = *child_index;
-                let partial_path: Path = child_path.into();
                 match node {
                     Node::Branch(ref mut branch) => {
                         let child = match std::mem::take(&mut branch.children[child_index as usize])
@@ -490,11 +492,6 @@ impl<T: WriteLinearStore> Merkle<T> {
                 //    node         -->            branch
                 //     |                           |    \
                 //                               node   key
-                let node_index = *node_index;
-                let node_partial_path: Path = node_partial_path.into();
-                let key_index = *key_index;
-                let key_partial_path: Path = key_partial_path.into();
-
                 // Make a branch node that has both the current node and a new leaf node as children.
                 let mut branch = BranchNode {
                     partial_path: path_overlap.shared.into(),
