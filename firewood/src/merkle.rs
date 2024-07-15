@@ -55,16 +55,16 @@ impl<T: ReadLinearStore> NodeReader for NodeStore<T> {
 }
 
 pub trait NodeWriter: NodeReader {
-    fn create_node(&self, node: Node) -> Result<LinearAddress, MerkleError>;
-    fn delete_node(&self, addr: LinearAddress) -> Result<(), MerkleError>;
+    fn create_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError>;
+    fn delete_node(&mut self, addr: LinearAddress) -> Result<(), MerkleError>;
 }
 
 impl<T: WriteLinearStore> NodeWriter for NodeStore<T> {
-    fn create_node(&self, node: Node) -> Result<LinearAddress, MerkleError> {
+    fn create_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError> {
         self.create_node(node).map_err(Into::into)
     }
 
-    fn delete_node(&self, addr: LinearAddress) -> Result<(), MerkleError> {
+    fn delete_node(&mut self, addr: LinearAddress) -> Result<(), MerkleError> {
         self.delete_node(addr).map_err(Into::into)
     }
 }
@@ -182,38 +182,19 @@ impl<T: NodeReader + NodeWriter> Merkle<T, Mutable> {
         }
 
         match root {
-            Root::None => {
-                Ok(Merkle {
-                    deleted: deleted,
-                    nodestore: nodestore,
-                    root: root,
-                    mutable: PhantomData,
-                })
-
-                // self.nodestore.set_root(None)?;
-                // Ok(HashedNodeStore {
-                //     nodestore: self.nodestore.freeze(),
-                //     deleted: self.deleted,
-                //     root: Root::None, // TODO do this better. We have `root` above.
-                // })
-            }
-            Root::AddrWithHash(addr, hash) => {
-                Ok(Merkle {
-                    nodestore: nodestore,
-                    root: Root::AddrWithHash(addr, hash),
-                    deleted,
-                    mutable: PhantomData,
-                })
-
-                // self.nodestore.set_root(Some(addr))?;
-                // Ok(HashedNodeStore {
-                //     nodestore: self.nodestore.freeze(),
-                //     deleted: self.deleted,
-                //     root: Root::AddrWithHash(addr, hash),
-                // })
-            }
+            Root::None => Ok(Merkle {
+                deleted: deleted,
+                nodestore: nodestore,
+                root: root,
+                mutable: PhantomData,
+            }),
+            Root::AddrWithHash(addr, hash) => Ok(Merkle {
+                nodestore: nodestore,
+                root: Root::AddrWithHash(addr, hash),
+                deleted,
+                mutable: PhantomData,
+            }),
             Root::Node(node) => {
-                // TODO avoid clone
                 let (hash, addr) = hash(&mut nodestore, node, &mut Path(Default::default()))?;
                 Ok(Merkle {
                     nodestore,
@@ -221,12 +202,6 @@ impl<T: NodeReader + NodeWriter> Merkle<T, Mutable> {
                     deleted,
                     mutable: PhantomData,
                 })
-                // self.nodestore.set_root(Some(addr))?;
-                // Ok(HashedNodeStore {
-                //     nodestore: self.nodestore.freeze(),
-                //     deleted: self.deleted,
-                //     root: Root::AddrWithHash(addr, hash),
-                // })
             }
         }
     }
