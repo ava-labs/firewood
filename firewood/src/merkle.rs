@@ -116,78 +116,82 @@ macro_rules! write_attributes {
     };
 }
 
-// Hashes `node`, which is at the given `path_prefix`, and its children recursively,
-// then writes the `node` to `self.nodestore`. Returns its hash and address.
-fn hash<T: NodeWriter>(
-    nodestore: &mut T,
-    mut node: Node,
-    path_prefix: &mut Path,
-) -> Result<(TrieHash, LinearAddress), MerkleError> {
-    match node {
-        Node::Branch(ref mut b) => {
-            for (nibble, child) in b.children.iter_mut().enumerate() {
-                // Take child from b.children
-                let Child::Node(child_node) = std::mem::replace(child, Child::None) else {
-                    // There is no child or we already know its hash.
-                    continue;
-                };
-
-                // Hash this child and update
-                let original_length = path_prefix.len();
-                path_prefix
-                    .0
-                    .extend(b.partial_path.0.iter().copied().chain(once(nibble as u8)));
-
-                let (child_hash, child_addr) = hash(nodestore, child_node, path_prefix)?;
-
-                *child = Child::AddressWithHash(child_addr, child_hash);
-                path_prefix.0.truncate(original_length);
-            }
+impl<T: NodeReader> Merkle<T, Immutable> {
+    pub fn root_hash(&self) -> Option<&TrieHash> {
+        match &self.root {
+            Root::None => None,
+            Root::AddrWithHash(_, hash) => Some(hash),
+            Root::Node(_) => unreachable!("root node should be hashed"),
         }
-        Node::Leaf(_) => {}
     }
-
-    let hash = hash_node(&node, path_prefix);
-    let addr = nodestore.create_node(node)?;
-    Ok((hash, addr))
 }
 
-impl<T: NodeReader + NodeWriter> Merkle<T, Mutable> {
-    pub fn freeze(self) -> Result<Merkle<impl NodeReader, Immutable>, MerkleError> {
-        let Self {
-            mut nodestore,
-            deleted,
-            root,
-            mutable: _,
-        } = self;
-
-        for addr in deleted.iter() {
-            nodestore.delete_node(*addr)?;
+impl<T: NodeWriter> Merkle<T, Mutable> {
+    /// Hashes the trie and returns the merkle as its immutable variant.
+    pub fn hash(mut self) -> Result<Merkle<impl NodeReader, Immutable>, MerkleError> {
+        for addr in self.deleted.iter() {
+            self.nodestore.delete_node(*addr)?;
         }
 
-        match root {
+        match std::mem::take(&mut self.root) {
             Root::None => Ok(Merkle {
-                deleted,
-                nodestore,
-                root,
+                deleted: self.deleted,
+                nodestore: self.nodestore,
+                root: self.root,
                 mutable: PhantomData,
             }),
             Root::AddrWithHash(addr, hash) => Ok(Merkle {
-                nodestore,
+                nodestore: self.nodestore,
                 root: Root::AddrWithHash(addr, hash),
-                deleted,
+                deleted: self.deleted,
                 mutable: PhantomData,
             }),
             Root::Node(node) => {
-                let (hash, addr) = hash(&mut nodestore, node, &mut Path(Default::default()))?;
+                let (hash, addr) = self.hash_helper(node, &mut Path(Default::default()))?;
                 Ok(Merkle {
-                    nodestore,
+                    nodestore: self.nodestore,
                     root: Root::AddrWithHash(addr, hash),
-                    deleted,
+                    deleted: self.deleted,
                     mutable: PhantomData,
                 })
             }
         }
+    }
+
+    // Hashes `node`, which is at the given `path_prefix`, and its children recursively,
+    // then writes the `node` to `self.nodestore`. Returns its hash and address.
+    fn hash_helper(
+        &mut self,
+        mut node: Node,
+        path_prefix: &mut Path,
+    ) -> Result<(TrieHash, LinearAddress), MerkleError> {
+        match node {
+            Node::Branch(ref mut b) => {
+                for (nibble, child) in b.children.iter_mut().enumerate() {
+                    // Take child from b.children
+                    let Child::Node(child_node) = std::mem::replace(child, Child::None) else {
+                        // There is no child or we already know its hash.
+                        continue;
+                    };
+
+                    // Hash this child and update
+                    let original_length = path_prefix.len();
+                    path_prefix
+                        .0
+                        .extend(b.partial_path.0.iter().copied().chain(once(nibble as u8)));
+
+                    let (child_hash, child_addr) = self.hash_helper(child_node, path_prefix)?;
+
+                    *child = Child::AddressWithHash(child_addr, child_hash);
+                    path_prefix.0.truncate(original_length);
+                }
+            }
+            Node::Leaf(_) => {}
+        }
+
+        let hash = hash_node(&node, path_prefix);
+        let addr = self.nodestore.create_node(node)?;
+        Ok((hash, addr))
     }
 }
 
@@ -926,7 +930,7 @@ mod tests {
         merkle.insert(&[2], Box::new([2])).unwrap();
         assert_eq!(merkle.get(&[2]).unwrap(), Some(Box::from([2])));
 
-        let merkle = merkle.freeze().unwrap();
+        let merkle = merkle.hash().unwrap();
 
         assert_eq!(merkle.get(&[0]).unwrap(), Some(Box::from([0])));
         assert_eq!(merkle.get(&[1]).unwrap(), Some(Box::from([1])));
@@ -1558,7 +1562,7 @@ mod tests {
     #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1]),(&[0,1,2],&[0,1,2])], Some("229011c50ad4d5c2f4efe02b8db54f361ad295c4eee2bf76ea4ad1bb92676f97"); "root with branch child")]
     #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1]),(&[0,8],&[0,8]),(&[0,1,2],&[0,1,2])], Some("a683b4881cb540b969f885f538ba5904699d480152f350659475a962d6240ef9"); "root with branch child and leaf child")]
     fn test_root_hash_merkledb_compatible(kvs: Vec<(&[u8], &[u8])>, expected_hash: Option<&str>) {
-        let merkle = merkle_build_test(kvs).unwrap().freeze().unwrap();
+        let merkle = merkle_build_test(kvs).unwrap().hash().unwrap();
 
         // let Some(got_hash) = merkle.root_hash() else {
         //     assert!(expected_hash.is_none());

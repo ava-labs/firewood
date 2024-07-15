@@ -99,7 +99,7 @@ fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criter
                 |(mut merkle, keys)| {
                     keys.into_iter()
                         .for_each(|key| merkle.insert(&key, Box::new(*b"v")).unwrap());
-                    let _frozen = merkle.freeze();
+                    let _frozen = merkle.hash();
                 },
                 BatchSize::SmallInput,
             );
