@@ -536,13 +536,7 @@ impl<T: WriteLinearStore> Merkle<T> {
         };
 
         let (root, removed_value) = self.remove_helper(root, &key)?;
-
-        if let Some(root) = root {
-            self.set_root(root.into())?;
-        } else {
-            self.set_root(Root::None)?;
-        }
-
+        self.set_root(root.into())?;
         Ok(removed_value)
     }
 
@@ -568,9 +562,7 @@ impl<T: WriteLinearStore> Merkle<T> {
             unique_key
                 .split_first()
                 .map(|(index, path)| (*index, Path::from(path))),
-            unique_node
-                .split_first()
-                .map(|(index, path)| (*index, Path::from(path))),
+            unique_node.split_first(),
         ) {
             (_, Some(_)) => {
                 // Case (2) or (4)
@@ -726,30 +718,18 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                         // The child's partial path is the concatenation of its (now removed) parent,
                         // its (former) child index, and its partial path.
-                        match child {
-                            Node::Branch(ref mut child_branch) => {
-                                let partial_path = Path::from_nibbles_iterator(
-                                    branch
-                                        .partial_path
-                                        .iter()
-                                        .copied()
-                                        .chain(once(child_index as u8))
-                                        .chain(child_branch.partial_path.iter().copied()),
-                                );
-                                child_branch.partial_path = partial_path;
-                            }
-                            Node::Leaf(ref mut leaf) => {
-                                let partial_path = Path::from_nibbles_iterator(
-                                    branch
-                                        .partial_path
-                                        .iter()
-                                        .copied()
-                                        .chain(once(child_index as u8))
-                                        .chain(leaf.partial_path.iter().copied()),
-                                );
-                                leaf.partial_path = partial_path;
-                            }
-                        }
+                        let branch_partial_path =
+                            std::mem::replace(&mut branch.partial_path, Path::new());
+
+                        let child_partial_path = Path::from_nibbles_iterator(
+                            branch_partial_path
+                                .iter()
+                                .chain(once(&(child_index as u8)))
+                                .chain(child.partial_path().iter())
+                                .copied(),
+                        );
+                        child.update_partial_path(child_partial_path);
+
                         Ok((Some(child), removed_value))
                     }
                 }
