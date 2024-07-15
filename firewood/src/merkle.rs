@@ -385,7 +385,7 @@ impl<T: WriteLinearStore> Merkle<T> {
         // 2. The key is above the node (i.e. its ancestor)
         // 3. The key is below the node (i.e. its descendant)
         // 4. Neither is an ancestor of the other
-        let path_overlap = PrefixOverlap::from(node.partial_path().as_ref(), key);
+        let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
 
         let clean_args = |index_and_path: Option<(&u8, &[u8])>| -> Option<(u8, Path)> {
             match index_and_path {
@@ -395,8 +395,8 @@ impl<T: WriteLinearStore> Merkle<T> {
         };
 
         match (
-            clean_args(path_overlap.unique_b.split_first()),
             clean_args(path_overlap.unique_a.split_first()),
+            clean_args(path_overlap.unique_b.split_first()),
         ) {
             (None, None) => {
                 // 1. The node is at `key`
