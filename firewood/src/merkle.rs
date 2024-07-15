@@ -7,15 +7,16 @@ use crate::stream::{MerkleKeyValueStream, PathIterator};
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
 use std::collections::HashSet;
+use std::fmt::Debug;
 use std::future::ready;
 use std::io::Write;
 use std::iter::once;
+use std::marker::PhantomData;
 use storage::{
     BranchNode, Child, LeafNode, LinearAddress, NibblesIterator, Node, NodeStore, Path,
-    ProposedImmutable, ReadLinearStore, TrieHash, WriteLinearStore,
+    ReadLinearStore, TrieHash, WriteLinearStore,
 };
 
-use std::ops::{Deref, DerefMut};
 use thiserror::Error;
 
 pub type Key = Box<[u8]>;
@@ -39,13 +40,45 @@ pub enum MerkleError {
     BinarySerdeError(String),
     #[error("invalid utf8")]
     UTF8Error,
+    #[error("node not found")]
+    NodeNotFound,
 }
 
+pub trait NodeReader {
+    fn read_node(&self, addr: LinearAddress) -> Result<Node, MerkleError>;
+}
+
+impl<T: ReadLinearStore> NodeReader for NodeStore<T> {
+    fn read_node(&self, addr: LinearAddress) -> Result<Node, MerkleError> {
+        self.read_node(addr).map_err(Into::into)
+    }
+}
+
+pub trait NodeWriter: NodeReader {
+    fn create_node(&self, node: Node) -> Result<LinearAddress, MerkleError>;
+    fn delete_node(&self, addr: LinearAddress) -> Result<(), MerkleError>;
+}
+
+impl<T: WriteLinearStore> NodeWriter for NodeStore<T> {
+    fn create_node(&self, node: Node) -> Result<LinearAddress, MerkleError> {
+        self.create_node(node).map_err(Into::into)
+    }
+
+    fn delete_node(&self, addr: LinearAddress) -> Result<(), MerkleError> {
+        self.delete_node(addr).map_err(Into::into)
+    }
+}
+
+pub type Mutable = ();
+
+pub type Immutable = ();
+
 #[derive(Debug)]
-pub struct MutableMerkle<T: WriteLinearStore> {
-    nodestore: NodeStore<T>,
+pub struct Merkle<T: NodeReader, M> {
+    nodestore: T,
     deleted: HashSet<LinearAddress>,
     pub(super) root: Root,
+    mutable: PhantomData<M>,
 }
 
 // todo remove
@@ -99,55 +132,62 @@ macro_rules! write_attributes {
     };
 }
 
-impl<T: WriteLinearStore> MutableMerkle<T> {
-    // Hashes `node`, which is at the given `path_prefix`, and its children recursively,
-    // then writes the `node` to `self.nodestore`. Returns its hash and address.
-    fn hash(
-        &mut self,
-        mut node: Node,
-        path_prefix: &mut Path,
-    ) -> Result<(TrieHash, LinearAddress), MerkleError> {
-        match node {
-            Node::Branch(ref mut b) => {
-                for (nibble, child) in b.children.iter_mut().enumerate() {
-                    // Take child from b.children:
-                    let Child::Node(child_node) = std::mem::replace(child, Child::None) else {
-                        // There is no child or we already know its hash.
-                        continue;
-                    };
+// Hashes `node`, which is at the given `path_prefix`, and its children recursively,
+// then writes the `node` to `self.nodestore`. Returns its hash and address.
+fn hash<T: NodeWriter>(
+    nodestore: &mut T,
+    mut node: Node,
+    path_prefix: &mut Path,
+) -> Result<(TrieHash, LinearAddress), MerkleError> {
+    match node {
+        Node::Branch(ref mut b) => {
+            for (nibble, child) in b.children.iter_mut().enumerate() {
+                // Take child from b.children
+                let Child::Node(child_node) = std::mem::replace(child, Child::None) else {
+                    // There is no child or we already know its hash.
+                    continue;
+                };
 
-                    // Hash this child and update
-                    let original_length = path_prefix.len();
-                    path_prefix
-                        .0
-                        .extend(b.partial_path.0.iter().copied().chain(once(nibble as u8)));
+                // Hash this child and update
+                let original_length = path_prefix.len();
+                path_prefix
+                    .0
+                    .extend(b.partial_path.0.iter().copied().chain(once(nibble as u8)));
 
-                    let (child_hash, child_addr) = self.hash(child_node, path_prefix)?;
+                let (child_hash, child_addr) = hash(nodestore, child_node, path_prefix)?;
 
-                    *child = Child::AddressWithHash(child_addr, child_hash);
-                    path_prefix.0.truncate(original_length);
-                }
+                *child = Child::AddressWithHash(child_addr, child_hash);
+                path_prefix.0.truncate(original_length);
             }
-            Node::Leaf(_) => {}
         }
-
-        let hash = hash_node(&node, path_prefix);
-        match self.nodestore.create_node(node) {
-            Ok(addr) => Ok((hash, addr)),
-            Err(e) => Err(MerkleError::IO(e)),
-        }
+        Node::Leaf(_) => {}
     }
 
-    pub fn freeze(mut self) -> Result<ImmutableMerkle<impl ReadLinearStore>, MerkleError> {
-        // for addr in self.deleted.iter() {
-        //     self.deleted.insert(*addr);
-        // }
+    let hash = hash_node(&node, path_prefix);
+    let addr = nodestore.create_node(node)?;
+    Ok((hash, addr))
+}
 
-        match self.root() {
+impl<T: NodeReader + NodeWriter> Merkle<T, Mutable> {
+    pub fn freeze(self) -> Result<Merkle<impl NodeReader, Immutable>, MerkleError> {
+        let Self {
+            mut nodestore,
+            deleted,
+            root,
+            mutable: _,
+        } = self;
+
+        for addr in deleted.iter() {
+            nodestore.delete_node(*addr)?;
+        }
+
+        match root {
             Root::None => {
-                Ok(ImmutableMerkle {
-                    nodestore: self.nodestore.freeze(),
-                    root: Root::None,
+                Ok(Merkle {
+                    deleted: deleted,
+                    nodestore: nodestore,
+                    root: root,
+                    mutable: PhantomData,
                 })
 
                 // self.nodestore.set_root(None)?;
@@ -158,12 +198,11 @@ impl<T: WriteLinearStore> MutableMerkle<T> {
                 // })
             }
             Root::AddrWithHash(addr, hash) => {
-                let hash = hash.clone(); // Todo can we avoid this clone?
-                let addr = *addr;
-
-                Ok(ImmutableMerkle {
-                    nodestore: self.nodestore.freeze(),
+                Ok(Merkle {
+                    nodestore: nodestore,
                     root: Root::AddrWithHash(addr, hash),
+                    deleted,
+                    mutable: PhantomData,
                 })
 
                 // self.nodestore.set_root(Some(addr))?;
@@ -175,10 +214,12 @@ impl<T: WriteLinearStore> MutableMerkle<T> {
             }
             Root::Node(node) => {
                 // TODO avoid clone
-                let (hash, addr) = self.hash(node.clone(), &mut Path(Default::default()))?;
-                Ok(ImmutableMerkle {
-                    nodestore: self.nodestore.freeze(),
+                let (hash, addr) = hash(&mut nodestore, node, &mut Path(Default::default()))?;
+                Ok(Merkle {
+                    nodestore,
                     root: Root::AddrWithHash(addr, hash),
+                    deleted,
+                    mutable: PhantomData,
                 })
                 // self.nodestore.set_root(Some(addr))?;
                 // Ok(HashedNodeStore {
@@ -189,21 +230,22 @@ impl<T: WriteLinearStore> MutableMerkle<T> {
             }
         }
     }
+}
 
-    pub fn new(linear_store: T) -> Result<MutableMerkle<T>, MerkleError> {
-        Ok(MutableMerkle {
-            nodestore: NodeStore::initialize(linear_store).map_err(|e| MerkleError::IO(e))?,
+impl<T: NodeReader, M> Merkle<T, M> {
+    pub fn new(nodestore: T) -> Result<Merkle<T, Mutable>, MerkleError> {
+        // TODO handle getting root on initialization
+        Ok(Merkle {
+            nodestore,
             deleted: HashSet::new(),
             root: Root::None,
+            mutable: PhantomData::<Mutable>,
         })
     }
 
-    pub fn read_node(&self, addr: LinearAddress) -> Result<Node, std::io::Error> {
+    pub fn read_node(&self, addr: LinearAddress) -> Result<Node, MerkleError> {
         if self.deleted.contains(&addr) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "Node not found",
-            ));
+            return Err(MerkleError::NodeNotFound);
         }
         self.nodestore.read_node(addr)
     }
@@ -314,15 +356,15 @@ impl<T: WriteLinearStore> MutableMerkle<T> {
     }
 
     // TODO danlaine: can we use the LinearAddress of the `root` instead?
-    pub fn path_iter<'a>(&self, key: &'a [u8]) -> Result<PathIterator<'_, 'a, T>, MerkleError> {
+    pub fn path_iter<'a>(&self, key: &'a [u8]) -> Result<PathIterator<'_, 'a, T, M>, MerkleError> {
         PathIterator::new(self, key)
     }
 
-    pub(crate) fn _key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
+    pub(crate) fn _key_value_iter(&self) -> MerkleKeyValueStream<'_, T, M> {
         MerkleKeyValueStream::_new(self)
     }
 
-    pub(crate) fn _key_value_iter_from_key(&self, key: Key) -> MerkleKeyValueStream<'_, T> {
+    pub(crate) fn _key_value_iter_from_key(&self, key: Key) -> MerkleKeyValueStream<'_, T, M> {
         // TODO danlaine: change key to &[u8]
         MerkleKeyValueStream::_from_key(self, key)
     }
@@ -422,7 +464,7 @@ impl<T: WriteLinearStore> MutableMerkle<T> {
         hash: Option<&TrieHash>,
         seen: &mut HashSet<LinearAddress>,
         writer: &mut dyn Write,
-    ) -> Result<(), std::io::Error> {
+    ) -> Result<(), MerkleError> {
         write!(writer, "  {addr}[label=\"addr:{addr:?} hash:{hash:?}")?;
 
         match &self.read_node(addr)? {
@@ -458,7 +500,7 @@ impl<T: WriteLinearStore> MutableMerkle<T> {
         Ok(())
     }
 
-    pub fn dump(&self) -> Result<String, std::io::Error> {
+    pub fn dump(&self) -> Result<String, MerkleError> {
         let mut result = vec![];
         writeln!(result, "digraph Merkle {{")?;
         match self.root() {
@@ -477,7 +519,7 @@ impl<T: WriteLinearStore> MutableMerkle<T> {
     }
 }
 
-impl<T: WriteLinearStore> MutableMerkle<T> {
+impl<T: NodeReader> Merkle<T, Mutable> {
     /// Map `key` to `value` in the trie.
     pub fn insert(&mut self, key: &[u8], value: Box<[u8]>) -> Result<(), MerkleError> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
@@ -848,12 +890,6 @@ impl<T: WriteLinearStore> MutableMerkle<T> {
     }
 }
 
-// TODO make T:ReadLinearStore
-pub struct ImmutableMerkle<T: ReadLinearStore> {
-    nodestore: NodeStore<T>,
-    root: Root,
-}
-
 /// Returns an iterator where each element is the result of combining
 /// 2 nibbles of `nibbles`. If `nibbles` is odd length, panics in
 /// debug mode and drops the final nibble in release mode.
@@ -930,8 +966,9 @@ mod tests {
         merkle.insert(b"abc", Box::new([])).unwrap()
     }
 
-    fn create_in_memory_merkle() -> MutableMerkle<MemStore> {
-        MutableMerkle::new(MemStore::new(vec![])).unwrap()
+    fn create_in_memory_merkle() -> Merkle<NodeStore<MemStore>, Mutable> {
+        let nodestore = NodeStore::initialize(MemStore::new(vec![])).unwrap();
+        Merkle::<storage::NodeStore<MemStore>, Mutable>::new(nodestore).unwrap()
     }
 
     // use super::*;
@@ -1508,8 +1545,9 @@ mod tests {
 
     fn merkle_build_test<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         items: Vec<(K, V)>,
-    ) -> Result<MutableMerkle<MemStore>, MerkleError> {
-        let mut merkle = MutableMerkle::new(MemStore::new(vec![])).unwrap();
+    ) -> Result<Merkle<NodeStore<MemStore>, Mutable>, MerkleError> {
+        let nodestore = NodeStore::initialize(MemStore::new(vec![]))?;
+        let mut merkle = Merkle::<storage::NodeStore<MemStore>, Mutable>::new(nodestore).unwrap();
         for (k, v) in items.iter() {
             merkle.insert(k.as_ref(), Box::from(v.as_ref()))?;
             println!("{}", merkle.dump()?);
@@ -1550,7 +1588,7 @@ mod tests {
         //     return;
         // };
 
-        let got_hash = match merkle.root() {
+        let got_hash = match merkle.root {
             Root::None => {
                 assert!(expected_hash.is_none());
                 return;
@@ -1564,7 +1602,7 @@ mod tests {
         // This hash is from merkledb
         let expected_hash: [u8; 32] = hex::decode(expected_hash).unwrap().try_into().unwrap();
 
-        assert_eq!(*got_hash, TrieHash::from(expected_hash));
+        assert_eq!(got_hash, TrieHash::from(expected_hash));
     }
 
     #[test]

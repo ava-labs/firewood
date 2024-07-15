@@ -2,14 +2,11 @@
 // See the file LICENSE.md for licensing terms.
 
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
-use std::io::Error;
-use std::iter::{self, once};
+use std::iter::{self};
 
-use storage::ReadLinearStore;
+use storage::LinearAddress;
 use storage::{Child, TrieHash};
-use storage::{LinearAddress, NodeStore};
-use storage::{Node, Path, ProposedImmutable};
+use storage::{Node, Path};
 
 use integer_encoding::VarInt;
 
@@ -395,27 +392,4 @@ fn add_varint_to_buf<H: HasUpdate>(buf: &mut H, value: u64) {
             .get(..len)
             .expect("length is always less than MAX_VARINT_SIZE"),
     );
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod test {
-    use storage::{MemStore, Path};
-
-    use super::*;
-
-    #[test]
-    fn freeze_test() {
-        let memstore = MemStore::new(vec![]);
-        let mut hns = HashedNodeStore::new(memstore).unwrap();
-        let node = Node::Leaf(storage::LeafNode {
-            partial_path: Path(Default::default()),
-            value: Box::new(*b"abc"),
-        });
-        // let addr = hns.create_node(node).unwrap();
-        hns.set_root(Root::Node(node)).unwrap();
-
-        let frozen = hns.freeze().unwrap();
-        assert!(!matches!(frozen.root(), Root::None));
-    }
 }
