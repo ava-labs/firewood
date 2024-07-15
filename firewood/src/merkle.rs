@@ -46,11 +46,17 @@ pub enum MerkleError {
 
 pub trait NodeReader {
     fn read_node(&self, addr: LinearAddress) -> Result<Node, MerkleError>;
+    /// Returns the root address of the trie stored on disk
+    fn root_address(&self) -> Option<LinearAddress>;
 }
 
 impl<T: ReadLinearStore> NodeReader for NodeStore<T> {
     fn read_node(&self, addr: LinearAddress) -> Result<Node, MerkleError> {
         self.read_node(addr).map_err(Into::into)
+    }
+
+    fn root_address(&self) -> Option<LinearAddress> {
+        self.root_address()
     }
 }
 
@@ -197,11 +203,15 @@ impl<T: NodeWriter> Merkle<T, Mutable> {
 
 impl<T: NodeReader, M> Merkle<T, M> {
     pub fn new(nodestore: T) -> Result<Merkle<T, Mutable>, MerkleError> {
-        // TODO handle getting root on initialization
+        let root = match nodestore.root_address() {
+            Some(addr) => nodestore.read_node(addr)?.into(),
+            None => Root::None,
+        };
+
         Ok(Merkle {
             nodestore,
             deleted: HashSet::new(),
-            root: Root::None,
+            root,
             mutable: PhantomData::<Mutable>,
         })
     }
