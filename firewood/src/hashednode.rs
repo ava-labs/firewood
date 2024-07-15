@@ -30,6 +30,15 @@ impl From<Node> for Root {
     }
 }
 
+impl From<Option<Node>> for Root {
+    fn from(node: Option<Node>) -> Self {
+        match node {
+            Some(node) => Root::Node(node),
+            None => Root::None,
+        }
+    }
+}
+
 /// A [HashedNodeStore] keeps track of nodes as they change when they are backed by a LinearStore.
 /// This defers the writes of those nodes until all the changes are made to the trie as part of a
 /// batch. It also supports a `freeze` method which consumes a [WriteLinearStore] backed [HashedNodeStore],

@@ -511,7 +511,7 @@ impl<T: WriteLinearStore> Merkle<T> {
         let (root, removed_value) = self.remove_helper(root, &key)?;
 
         if let Some(root) = root {
-            self.set_root(Root::Node(root))?;
+            self.set_root(root.into())?;
         } else {
             self.set_root(Root::None)?;
         }
@@ -521,44 +521,154 @@ impl<T: WriteLinearStore> Merkle<T> {
 
     // Removes the value associated with the given `key` from the subtrie rooted at `node`.
     // Returns the new root of the subtrie and the value that was removed, if any.
+    #[allow(clippy::type_complexity)]
     fn remove_helper(
         &mut self,
         mut node: Node,
         key: &[u8],
     ) -> Result<(Option<Node>, Option<Box<[u8]>>), MerkleError> {
-        let path_overlap = PrefixOverlap::from(node.partial_path().as_ref(), key);
+        // 4 possibilities for the position of the `key` relative to `node`:
+        // 1. The node is at `key`
+        // 2. The key is above the node (i.e. its ancestor)
+        // 3. The key is below the node (i.e. its descendant)
+        // 4. Neither is an ancestor of the other
+        let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
 
-        // 4 possibilities:
-        // 1. They are equal
-        // 2. The key is a prefix of the node.
-        // 3. The node is a prefix of the key.
-        // 4. Neither is a prefix of the other
+        let unique_key = path_overlap.unique_a;
+        let unique_node = path_overlap.unique_b;
 
-        // 1. They are equal
-        if path_overlap.unique_a.is_empty() && path_overlap.unique_b.is_empty() {
-            match &mut node {
-                Node::Branch(branch) => {
-                    let Some(removed_value) = branch.value.take() else {
-                        return Ok((Some(node), None));
-                    };
+        match (
+            unique_key
+                .split_first()
+                .map(|(index, path)| (*index, Path::from(path))),
+            unique_node
+                .split_first()
+                .map(|(index, path)| (*index, Path::from(path))),
+        ) {
+            (_, Some(_)) => {
+                // Case (2) or (4)
+                Ok((Some(node), None))
+            }
+            (None, None) => {
+                // 1. The node is at `key`
+                match &mut node {
+                    Node::Branch(branch) => {
+                        let Some(removed_value) = branch.value.take() else {
+                            return Ok((Some(node), None));
+                        };
 
-                    let mut children_iter = branch
-                        .children
-                        .iter_mut()
-                        .enumerate()
-                        .filter(|(_, child)| !matches!(child, Child::None));
+                        let mut children_iter = branch
+                            .children
+                            .iter_mut()
+                            .enumerate()
+                            .filter(|(_, child)| !matches!(child, Child::None));
 
-                    let (child_index, child) = children_iter
-                        .next()
-                        .expect("branch node must have children");
+                        let (child_index, child) = children_iter
+                            .next()
+                            .expect("branch node must have children");
 
-                    if children_iter.next().is_some() {
-                        // The branch has more than 1 child. Remove the value but keep the branch.
-                        branch.value = None;
-                        return Ok((Some(node), Some(removed_value)));
-                    } else {
-                        // The branch has only 1 child. Remove the branch
-                        // and return the child.
+                        if children_iter.next().is_some() {
+                            // The branch has more than 1 child. Remove the value but keep the branch.
+                            branch.value = None;
+                            Ok((Some(node), Some(removed_value)))
+                        } else {
+                            // The branch has only 1 child. Remove the branch
+                            // and return the child.
+                            let mut child = match child {
+                                Child::None => unreachable!(),
+                                Child::Node(child_node) => std::mem::replace(
+                                    child_node,
+                                    Node::Leaf(LeafNode {
+                                        value: Box::from([]),
+                                        partial_path: Path::new(),
+                                    }),
+                                ),
+                                Child::AddressWithHash(addr, _) => self.read_node(*addr)?,
+                            };
+
+                            // The child's partial path is the concatenation of its (now removed) parent,
+                            // its (former) child index, and its partial path.
+                            match child {
+                                Node::Branch(ref mut child_branch) => {
+                                    let partial_path = Path::from_nibbles_iterator(
+                                        branch
+                                            .partial_path
+                                            .iter()
+                                            .copied()
+                                            .chain(once(child_index as u8))
+                                            .chain(child_branch.partial_path.iter().copied()),
+                                    );
+                                    child_branch.partial_path = partial_path;
+                                }
+                                Node::Leaf(ref mut leaf) => {
+                                    let partial_path = Path::from_nibbles_iterator(
+                                        branch
+                                            .partial_path
+                                            .iter()
+                                            .copied()
+                                            .chain(once(child_index as u8))
+                                            .chain(leaf.partial_path.iter().copied()),
+                                    );
+                                    leaf.partial_path = partial_path;
+                                }
+                            }
+
+                            Ok((Some(child), Some(removed_value)))
+                        }
+                    }
+                    Node::Leaf(leaf) => {
+                        let removed_value = std::mem::take(&mut leaf.value);
+                        Ok((None, Some(removed_value)))
+                    }
+                }
+            }
+            (Some((child_index, child_partial_path)), None) => {
+                // 3. The key is below the node (i.e. its descendant)
+                match node {
+                    Node::Leaf(ref mut leaf) => Ok((None, Some(std::mem::take(&mut leaf.value)))),
+                    Node::Branch(ref mut branch) => {
+                        #[allow(clippy::indexing_slicing)]
+                        let child = match std::mem::take(&mut branch.children[child_index as usize])
+                        {
+                            Child::None => {
+                                return Ok((Some(node), None));
+                            }
+                            Child::Node(node) => node,
+                            Child::AddressWithHash(addr, _) => self.read_node(addr)?,
+                        };
+
+                        let (child, removed_value) =
+                            self.remove_helper(child, child_partial_path.as_ref())?;
+
+                        if let Some(child) = child {
+                            branch.update_child(child_index, Child::Node(child));
+                        } else {
+                            branch.update_child(child_index, Child::None);
+                        }
+
+                        let mut children_iter = branch
+                            .children
+                            .iter_mut()
+                            .enumerate()
+                            .filter(|(_, child)| !matches!(child, Child::None));
+
+                        let Some((child_index, child)) = children_iter.next() else {
+                            // The branch has no children. Turn it into a leaf.
+                            let leaf = Node::Leaf(LeafNode {
+                                    value: branch.value.take().expect(
+                                        "branch node must have a value if it previously had only 1 child",
+                                    ),
+                                    partial_path: branch.partial_path.clone(), // TODO remove clone
+                                });
+                            return Ok((Some(leaf), removed_value));
+                        };
+
+                        if children_iter.next().is_some() {
+                            // The branch has more than 1 child. Return the branch.
+                            return Ok((Some(node), removed_value));
+                        }
+
+                        // The branch has only 1 child. Remove the branch and return the child.
                         let mut child = match child {
                             Child::None => unreachable!(),
                             Child::Node(child_node) => std::mem::replace(
@@ -597,119 +707,11 @@ impl<T: WriteLinearStore> Merkle<T> {
                                 leaf.partial_path = partial_path;
                             }
                         }
-
-                        return Ok((Some(child), Some(removed_value)));
+                        Ok((Some(child), removed_value))
                     }
-                }
-                Node::Leaf(leaf) => {
-                    let removed_value = std::mem::take(&mut leaf.value);
-                    return Ok((None, Some(removed_value)));
                 }
             }
         }
-
-        // 2. The key is a prefix of the node.
-        if path_overlap.unique_b.is_empty() {
-            return Ok((Some(node), None));
-        }
-
-        // 3. The node is a prefix of the key.
-        if path_overlap.unique_a.is_empty() {
-            let (child_index, child_partial_path) = path_overlap.unique_b.split_first().unwrap();
-            let child_index = *child_index;
-            let child_partial_path: Path = child_partial_path.into();
-
-            match node {
-                Node::Branch(ref mut branch) => {
-                    let child = match std::mem::take(&mut branch.children[child_index as usize]) {
-                        Child::None => {
-                            return Ok((Some(node), None));
-                        }
-                        Child::Node(node) => node,
-                        Child::AddressWithHash(addr, _) => self.read_node(addr)?,
-                    };
-
-                    let (child, removed_value) =
-                        self.remove_helper(child, child_partial_path.as_ref())?;
-
-                    if let Some(child) = child {
-                        branch.update_child(child_index, Child::Node(child));
-                    } else {
-                        branch.update_child(child_index, Child::None);
-                    }
-
-                    let mut children_iter = branch
-                        .children
-                        .iter_mut()
-                        .enumerate()
-                        .filter(|(_, child)| !matches!(child, Child::None));
-
-                    let Some((child_index, child)) = children_iter.next() else {
-                        // The branch has no children. Turn it into a leaf.
-                        let leaf = Node::Leaf(LeafNode {
-                            value: branch.value.take().expect(
-                                "branch node must have a value if it previously had only 1 child",
-                            ),
-                            partial_path: branch.partial_path.clone(), // TODO remove clone
-                        });
-                        return Ok((Some(leaf), removed_value));
-                    };
-
-                    if children_iter.next().is_some() {
-                        // The branch has more than 1 child. Return the branch.
-                        return Ok((Some(node), removed_value));
-                    }
-
-                    // The branch has only 1 child. Remove the branch and return the child.
-                    let mut child = match child {
-                        Child::None => unreachable!(),
-                        Child::Node(child_node) => std::mem::replace(
-                            child_node,
-                            Node::Leaf(LeafNode {
-                                value: Box::from([]),
-                                partial_path: Path::new(),
-                            }),
-                        ),
-                        Child::AddressWithHash(addr, _) => self.read_node(*addr)?,
-                    };
-
-                    // The child's partial path is the concatenation of its (now removed) parent,
-                    // its (former) child index, and its partial path.
-                    match child {
-                        Node::Branch(ref mut child_branch) => {
-                            let partial_path = Path::from_nibbles_iterator(
-                                branch
-                                    .partial_path
-                                    .iter()
-                                    .copied()
-                                    .chain(once(child_index as u8))
-                                    .chain(child_branch.partial_path.iter().copied()),
-                            );
-                            child_branch.partial_path = partial_path;
-                        }
-                        Node::Leaf(ref mut leaf) => {
-                            let partial_path = Path::from_nibbles_iterator(
-                                branch
-                                    .partial_path
-                                    .iter()
-                                    .copied()
-                                    .chain(once(child_index as u8))
-                                    .chain(leaf.partial_path.iter().copied()),
-                            );
-                            leaf.partial_path = partial_path;
-                        }
-                    }
-
-                    return Ok((Some(child), removed_value));
-                }
-                Node::Leaf(ref mut leaf) => {
-                    return Ok((None, Some(std::mem::take(&mut leaf.value))));
-                }
-            }
-        }
-
-        // 4. Neither is a prefix of the other.
-        return Ok((Some(node), None));
     }
 
     pub fn freeze(self) -> Result<Merkle<ProposedImmutable>, MerkleError> {
