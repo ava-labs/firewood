@@ -497,7 +497,7 @@ impl<'a, 'b, T: NodeReader, M> Iterator for PathIterator<'a, 'b, T, M> {
                                     Child::AddressWithHash(child_addr, _) => {
                                         let child = match merkle.read_node(*child_addr) {
                                             Ok(child) => child,
-                                            Err(e) => return Some(Err(e.into())),
+                                            Err(e) => return Some(Err(e)),
                                         };
 
                                         let node_key = matched_key.clone().into_boxed_slice();
