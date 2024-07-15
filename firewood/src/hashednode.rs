@@ -23,6 +23,13 @@ pub enum Root {
     AddrWithHash(LinearAddress, TrieHash),
     Node(Node),
 }
+
+impl From<Node> for Root {
+    fn from(node: Node) -> Self {
+        Root::Node(node)
+    }
+}
+
 /// A [HashedNodeStore] keeps track of nodes as they change when they are backed by a LinearStore.
 /// This defers the writes of those nodes until all the changes are made to the trie as part of a
 /// batch. It also supports a `freeze` method which consumes a [WriteLinearStore] backed [HashedNodeStore],
