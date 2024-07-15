@@ -16,8 +16,9 @@ use integer_encoding::VarInt;
 const MAX_VARINT_SIZE: usize = 10;
 const BITS_PER_NIBBLE: u64 = 4;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub enum Root {
+    #[default]
     None,
     AddrWithHash(LinearAddress, TrieHash),
     Node(Node),

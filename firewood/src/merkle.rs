@@ -519,9 +519,7 @@ impl<T: WriteLinearStore> Merkle<T> {
     pub fn remove(&mut self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
-        let root = std::mem::replace(&mut self.0.root, Root::None);
-
-        let root = match root {
+        let root = match std::mem::take(&mut self.0.root) {
             Root::None => {
                 // The trie is empty. There is nothing to remove.
                 return Ok(None);
@@ -530,7 +528,7 @@ impl<T: WriteLinearStore> Merkle<T> {
             Root::Node(node) => node,
         };
 
-        let (root, removed_value) = self.remove2(root, &key)?;
+        let (root, removed_value) = self.remove_helper(root, &key)?;
 
         if let Some(root) = root {
             self.set_root(Root::Node(root))?;
@@ -539,168 +537,11 @@ impl<T: WriteLinearStore> Merkle<T> {
         }
 
         Ok(removed_value)
-
-        // let ancestors =
-        //     PathIterator::new(self, key)?.collect::<Result<Vec<PathIterItem>, MerkleError>>()?;
-
-        // // If the last element of ancestors doesn't contain the key/value pair we are looking for,
-        // // then we can return early without making any changes
-
-        // // The path from the root down to and including the node with the greatest prefix of `path`
-        // let mut ancestors = ancestors.iter();
-
-        // let Some(greatest_prefix_node) = ancestors.next_back() else {
-        //     // There is no node which is a prefix of `path`.
-        //     // Therefore `path` is not in the trie.
-        //     return Ok(None);
-        // };
-
-        // if &*greatest_prefix_node.key_nibbles != path.0.as_ref() {
-        //     // `greatest_prefix_node` is a prefix of `path` but not equal to `path`.
-        //     // Therefore `path` is not in the trie.
-        //     return Ok(None);
-        // }
-
-        // let removed = greatest_prefix_node;
-
-        // match &*removed.node {
-        //     Node::Branch(branch) => {
-        //         let Some(removed_value) = &branch.value else {
-        //             // The node at `path` has no value so there's nothing to remove.
-        //             return Ok(None);
-        //         };
-
-        //         // We know the key exists, so see if the branch has more than 1 child.
-        //         let mut branch_children =
-        //             branch
-        //                 .children
-        //                 .iter()
-        //                 .enumerate()
-        //                 .filter_map(|(index, child)| match child {
-        //                     Child::None => None,
-        //                     _ => Some((index as u8, child)),
-        //                 });
-
-        //         let (child_index, child) =
-        //             branch_children.next().expect("branch must have children");
-
-        //         if branch_children.next().is_some() {
-        //             // The branch has more than 1 child. Remove the value but keep the branch.
-        //             //    ...                ...
-        //             //     |      -->         |
-        //             //  branch             branch (no value now)
-        //             //  /    \            /      \
-        //             // ...  child       ...     child
-        //             //
-        //             // Note in the after diagram `child` may be the only child of `branch`.
-        //             let branch = Node::Branch(Box::new(BranchNode {
-        //                 children: branch.children.clone(),
-        //                 partial_path: branch.partial_path.clone(),
-        //                 value: None,
-        //             }));
-
-        //             self.fix_ancestors(ancestors, branch)?;
-
-        //             return Ok(Some(removed_value.clone()));
-        //         }
-
-        //         // The branch has only 1 child.
-        //         // The branch must be combined with its child since it now has no value.
-        //         //      ...                ...
-        //         //       |      -->         |
-        //         //     branch            combined
-        //         //       |
-        //         //     child
-        //         //
-        //         // where combined has `child`'s value.
-        //         // Note that child/combined may be a leaf or a branch.
-
-        //         let combined = {
-        //             let (child, child_addr) = match child {
-        //                 Child::None => unreachable!(),
-        //                 Child::Node(node) => (node, None),
-        //                 Child::AddressWithHash(addr, _) => (&self.read_node(*addr)?, Some(*addr)),
-        //             };
-        //             if let Some(child_addr) = child_addr {
-        //                 self.delete_node(child_addr)?;
-        //             }
-
-        //             // `combined`'s partial path is the concatenation of `branch`'s partial path,
-        //             // `child_index` and `child`'s partial path.
-        //             let partial_path = Path::from_nibbles_iterator(
-        //                 branch
-        //                     .partial_path
-        //                     .iter()
-        //                     .chain(once(&child_index))
-        //                     .chain(child.partial_path().iter())
-        //                     .copied(),
-        //             );
-
-        //             child.new_with_partial_path(partial_path)
-        //         };
-
-        //         self.fix_ancestors(ancestors, combined)?;
-
-        //         Ok(Some(removed_value.clone()))
-        //     }
-        //     Node::Leaf(leaf) => {
-        //         while let Some(ancestor) = ancestors.next_back() {
-        //             // Remove all ancestors until we find one that has a value
-        //             // or multiple children.
-        //             let child_index = ancestor.next_nibble.expect("parent has a child");
-        //             let ancestor = ancestor.node.as_branch().expect("parent must be a branch");
-
-        //             let num_children = ancestor
-        //                 .children
-        //                 .iter()
-        //                 .filter(|child| !matches!(child, Child::None))
-        //                 .count();
-
-        //             if num_children > 1 {
-        //                 #[rustfmt::skip]
-        //                 // Update `ancestor` to remove its child.
-        //                 //    ...                 ...
-        //                 //     |          -->      |
-        //                 //  ancestor            ancestor
-        //                 //  /      \               |
-        //                 // ...    child           ...
-        //                 let mut ancestor = BranchNode {
-        //                     children: ancestor.children.clone(),
-        //                     partial_path: ancestor.partial_path.clone(),
-        //                     value: ancestor.value.clone(),
-        //                 };
-        //                 ancestor.update_child(child_index, Child::None);
-
-        //                 let ancestor = Node::Branch(Box::new(ancestor));
-        //                 self.fix_ancestors(ancestors, ancestor)?;
-
-        //                 return Ok(Some(leaf.value.clone()));
-        //             }
-
-        //             // The ancestor has only 1 child, which is now deleted.
-        //             if let Some(ancestor_value) = &ancestor.value {
-        //                 // Turn the ancestor into a leaf.
-        //                 let ancestor = Node::Leaf(LeafNode {
-        //                     value: ancestor_value.clone(),
-        //                     partial_path: ancestor.partial_path.clone(),
-        //                 });
-        //                 self.fix_ancestors(ancestors, ancestor)?;
-
-        //                 return Ok(Some(leaf.value.clone()));
-        //             }
-
-        //             // The ancestor had 1 child and no value so it should be removed.
-        //             //self.delete_node(ancestor_addr)?;
-        //         }
-
-        //         // The trie is now empty.
-        //         self.set_root(Root::None)?;
-        //         Ok(Some(leaf.value.clone()))
-        //     }
-        // }
     }
 
-    fn remove2(
+    // Removes the value associated with the given `key` from the subtrie rooted at `node`.
+    // Returns the new root of the subtrie and the value that was removed, if any.
+    fn remove_helper(
         &mut self,
         mut node: Node,
         key: &[u8],
@@ -809,7 +650,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     };
 
                     let (child, removed_value) =
-                        self.remove2(child, child_partial_path.as_ref())?;
+                        self.remove_helper(child, child_partial_path.as_ref())?;
 
                     if let Some(child) = child {
                         branch.update_child(child_index, Child::Node(child));
