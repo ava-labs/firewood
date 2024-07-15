@@ -406,6 +406,11 @@ impl<T: WriteLinearStore> Merkle<T> {
             (None, Some((child_index, child_path))) => {
                 // 2. The key is above the node (i.e. its ancestor)
                 // Make a new branch node and insert the current node as a child.
+                //    ...                ...
+                //     |     -->          |
+                //    node               branch
+                //                        |
+                //                       node
                 let child_index = *child_index;
                 let partial_path: Path = child_path.into();
 
@@ -430,6 +435,11 @@ impl<T: WriteLinearStore> Merkle<T> {
             }
             (Some((child_index, child_path)), None) => {
                 // 3. The key is below the node (i.e. its descendant)
+                //    ...                         ...
+                //     |                           |
+                //    node         -->            node
+                //     |                           |
+                //    ... (key may be below)       ... (key is below)
                 let child_index = *child_index;
                 let partial_path: Path = child_path.into();
                 match node {
@@ -437,6 +447,8 @@ impl<T: WriteLinearStore> Merkle<T> {
                         let child = match std::mem::take(&mut branch.children[child_index as usize])
                         {
                             Child::None => {
+                                // There is no child at this index.
+                                // Create a new leaf and put it here.
                                 let new_leaf = Node::Leaf(LeafNode {
                                     value,
                                     partial_path,
@@ -453,7 +465,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                         return Ok(node);
                     }
                     Node::Leaf(ref mut leaf) => {
-                        // Turn this node into a branch node.
+                        // Turn this node into a branch node and put a new leaf as a child.
                         let mut branch = BranchNode {
                             partial_path: std::mem::replace(&mut leaf.partial_path, Path::new()),
                             value: Some(std::mem::take(&mut leaf.value)),
@@ -473,6 +485,11 @@ impl<T: WriteLinearStore> Merkle<T> {
             }
             (Some((key_index, key_partial_path)), Some((node_index, node_partial_path))) => {
                 // 4. Neither is an ancestor of the other
+                //    ...                         ...
+                //     |                           |
+                //    node         -->            branch
+                //     |                           |    \
+                //                               node   key
                 let node_index = *node_index;
                 let node_partial_path: Path = node_partial_path.into();
                 let key_index = *key_index;
