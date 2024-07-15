@@ -142,13 +142,6 @@ impl<T: ReadLinearStore> Merkle<T> {
 
         let last_node = last_node?;
 
-        // println!("last_node key: {:?}", last_node.key_nibbles);
-        // println!("searching key: {:?}", key);
-        // println!(
-        //     "searching key nibbles: {:?}",
-        //     NibblesIterator::new(key).into_iter().collect::<Vec<u8>>()
-        // );
-
         if last_node
             .key_nibbles
             .iter()
