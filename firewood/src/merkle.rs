@@ -554,9 +554,13 @@ impl<T: WriteLinearStore> Merkle<T> {
                 match &mut node {
                     Node::Branch(branch) => {
                         let Some(removed_value) = branch.value.take() else {
+                            // The branch has no value. Return the node as is.
                             return Ok((Some(node), None));
                         };
 
+                        // This branch node has a value.
+                        // If it has multiple children, return the node as is.
+                        // Otherwise, its only child becomes the root of this subtrie.
                         let mut children_iter = branch
                             .children
                             .iter_mut()
@@ -568,12 +572,10 @@ impl<T: WriteLinearStore> Merkle<T> {
                             .expect("branch node must have children");
 
                         if children_iter.next().is_some() {
-                            // The branch has more than 1 child. Remove the value but keep the branch.
-                            branch.value = None;
+                            // The branch has more than 1 child so it can't be removed.
                             Ok((Some(node), Some(removed_value)))
                         } else {
-                            // The branch has only 1 child. Remove the branch
-                            // and return the child.
+                            // The branch's only child becomes the root of this subtrie.
                             let mut child = match child {
                                 Child::None => unreachable!(),
                                 Child::Node(child_node) => std::mem::replace(
@@ -612,6 +614,20 @@ impl<T: WriteLinearStore> Merkle<T> {
                                     leaf.partial_path = partial_path;
                                 }
                             }
+
+                            let node_partial_path =
+                                std::mem::replace(&mut branch.partial_path, Path::new());
+
+                            let partial_path = Path::from_nibbles_iterator(
+                                branch
+                                    .partial_path
+                                    .iter()
+                                    .chain(once(&(child_index as u8)))
+                                    .chain(node_partial_path.iter())
+                                    .copied(),
+                            );
+
+                            node.update_partial_path(partial_path);
 
                             Ok((Some(child), Some(removed_value)))
                         }
