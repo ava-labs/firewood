@@ -202,6 +202,9 @@ impl<T: NodeWriter> Merkle<T, Mutable> {
 }
 
 impl<T: NodeReader, M> Merkle<T, M> {
+    /// Returns a new merkle using the given [NodeStore].
+    /// If the nodestore has a root address, the root node is read and used as the root.
+    /// Otherwise, the root is set to [Root::None] (i.e. this trie is empty).
     pub fn new(nodestore: T) -> Result<Merkle<T, Mutable>, MerkleError> {
         let root = match nodestore.root_address() {
             Some(addr) => nodestore.read_node(addr)?.into(),
@@ -210,9 +213,9 @@ impl<T: NodeReader, M> Merkle<T, M> {
 
         Ok(Merkle {
             nodestore,
-            deleted: HashSet::new(),
+            deleted: Default::default(),
             root,
-            mutable: PhantomData::<Mutable>,
+            mutable: Default::default(),
         })
     }
 
