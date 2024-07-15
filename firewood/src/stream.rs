@@ -3,9 +3,11 @@
 
 use crate::{
     hashednode::Root,
-    merkle::{Key, Merkle, MerkleError, Value},
+    merkle::{Key, MerkleError, MutableMerkle, Value},
     v2::api,
 };
+
+use std::io::Error;
 
 use futures::{stream::FusedStream, Stream, StreamExt};
 use std::{cmp::Ordering, iter::once};
@@ -70,7 +72,7 @@ impl NodeStreamState {
 #[derive(Debug)]
 pub struct MerkleNodeStream<'a, T: ReadLinearStore> {
     state: NodeStreamState,
-    merkle: &'a Merkle<T>,
+    merkle: &'a MutableMerkle<T>,
 }
 
 impl<'a, T: ReadLinearStore> FusedStream for MerkleNodeStream<'a, T> {
@@ -84,7 +86,7 @@ impl<'a, T: ReadLinearStore> FusedStream for MerkleNodeStream<'a, T> {
 impl<'a, T: ReadLinearStore> MerkleNodeStream<'a, T> {
     /// Returns a new iterator that will iterate over all the nodes in `merkle`
     /// with keys greater than or equal to `key`.
-    pub(super) fn new(merkle: &'a Merkle<T>, key: Key) -> Self {
+    pub(super) fn new(merkle: &'a MutableMerkle<T>, key: Key) -> Self {
         Self {
             state: NodeStreamState::new(key),
             merkle,
@@ -179,7 +181,7 @@ impl<'a, T: ReadLinearStore> Stream for MerkleNodeStream<'a, T> {
 
 /// Returns the initial state for an iterator over the given `merkle` which starts at `key`.
 fn get_iterator_intial_state<T: ReadLinearStore>(
-    merkle: &Merkle<T>,
+    merkle: &MutableMerkle<T>,
     key: &[u8],
 ) -> Result<NodeStreamState, api::Error> {
     let mut node = match merkle.root() {
@@ -300,7 +302,7 @@ impl<'a, T: ReadLinearStore> MerkleKeyValueStreamState<'a, T> {
 #[derive(Debug)]
 pub struct MerkleKeyValueStream<'a, T: ReadLinearStore> {
     state: MerkleKeyValueStreamState<'a, T>,
-    merkle: &'a Merkle<T>,
+    merkle: &'a MutableMerkle<T>,
 }
 
 impl<'a, T: ReadLinearStore> FusedStream for MerkleKeyValueStream<'a, T> {
@@ -310,14 +312,14 @@ impl<'a, T: ReadLinearStore> FusedStream for MerkleKeyValueStream<'a, T> {
 }
 
 impl<'a, T: ReadLinearStore> MerkleKeyValueStream<'a, T> {
-    pub(super) fn _new(merkle: &'a Merkle<T>) -> Self {
+    pub(super) fn _new(merkle: &'a MutableMerkle<T>) -> Self {
         Self {
             state: MerkleKeyValueStreamState::_new(),
             merkle,
         }
     }
 
-    pub(super) fn _from_key(merkle: &'a Merkle<T>, key: Key) -> Self {
+    pub(super) fn _from_key(merkle: &'a MutableMerkle<T>, key: Key) -> Self {
         Self {
             state: MerkleKeyValueStreamState::_with_key(key),
             merkle,
@@ -394,11 +396,11 @@ enum PathIteratorState<'a> {
 #[derive(Debug)]
 pub struct PathIterator<'a, 'b, T: ReadLinearStore> {
     state: PathIteratorState<'b>,
-    merkle: &'a Merkle<T>,
+    merkle: &'a MutableMerkle<T>,
 }
 
 impl<'a, 'b, T: ReadLinearStore> PathIterator<'a, 'b, T> {
-    pub(super) fn new(merkle: &'a Merkle<T>, key: &'b [u8]) -> Result<Self, MerkleError> {
+    pub(super) fn new(merkle: &'a MutableMerkle<T>, key: &'b [u8]) -> Result<Self, MerkleError> {
         let root = match merkle.root() {
             Root::None => {
                 return Ok(Self {
@@ -599,7 +601,7 @@ mod tests {
     use super::*;
     use test_case::test_case;
 
-    impl<T: ReadLinearStore> Merkle<T> {
+    impl<T: ReadLinearStore> MutableMerkle<T> {
         pub(crate) fn node_iter(&self) -> MerkleNodeStream<T> {
             MerkleNodeStream::new(self, Box::new([]))
         }
@@ -609,8 +611,8 @@ mod tests {
         }
     }
 
-    pub(super) fn create_test_merkle() -> Merkle<MemStore> {
-        Merkle::new(HashedNodeStore::new(MemStore::new(vec![])).unwrap())
+    pub(super) fn create_test_merkle() -> MutableMerkle<MemStore> {
+        MutableMerkle::new(HashedNodeStore::new(MemStore::new(vec![])).unwrap())
     }
 
     #[test_case(&[]; "empty key")]
@@ -785,7 +787,7 @@ mod tests {
     ///  1   F
     ///
     /// The number next to each branch is the position of the child in the branch's children array.
-    fn created_populated_merkle() -> Merkle<MemStore> {
+    fn created_populated_merkle() -> MutableMerkle<MemStore> {
         let mut merkle = create_test_merkle();
 
         merkle

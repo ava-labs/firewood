@@ -7,7 +7,7 @@ use criterion::{criterion_group, criterion_main, profiler::Profiler, BatchSize, 
 use firewood::{
     db::{BatchOp, DbConfig},
     hashednode::HashedNodeStore,
-    merkle::Merkle,
+    merkle::MutableMerkle,
     v2::api::{Db, Proposal},
 };
 use pprof::ProfilerGuard;
@@ -87,7 +87,7 @@ fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criter
                 || {
                     let store = MemStore::new(vec![]);
                     let hns = HashedNodeStore::new(store).unwrap();
-                    let merkle = Merkle::new(hns);
+                    let merkle = MutableMerkle::new(hns);
 
                     let keys: Vec<Vec<u8>> = repeat_with(|| {
                         (&mut rng)

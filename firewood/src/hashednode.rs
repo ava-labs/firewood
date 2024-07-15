@@ -6,10 +6,10 @@ use std::collections::HashSet;
 use std::io::Error;
 use std::iter::{self, once};
 
+use storage::ReadLinearStore;
 use storage::{Child, TrieHash};
 use storage::{LinearAddress, NodeStore};
 use storage::{Node, Path, ProposedImmutable};
-use storage::{ReadLinearStore, WriteLinearStore};
 
 use integer_encoding::VarInt;
 
@@ -39,131 +39,130 @@ impl From<Option<Node>> for Root {
     }
 }
 
-/// A [HashedNodeStore] keeps track of nodes as they change when they are backed by a LinearStore.
-/// This defers the writes of those nodes until all the changes are made to the trie as part of a
-/// batch. It also supports a `freeze` method which consumes a [WriteLinearStore] backed [HashedNodeStore],
-/// makes sure the hashes are filled in, and flushes the nodes out before returning a [ReadLinearStore]
-/// backed HashedNodeStore for future operations. `freeze` is called when the batch is completed and is
-/// used to obtain the merkle trie for the proposal.
-#[derive(Debug)]
-pub struct HashedNodeStore<T: ReadLinearStore> {
-    nodestore: NodeStore<T>,
-    deleted: HashSet<LinearAddress>,
-    pub(super) root: Root,
-}
+// /// A [HashedNodeStore] keeps track of nodes as they change when they are backed by a LinearStore.
+// /// This defers the writes of those nodes until all the changes are made to the trie as part of a
+// /// batch. It also supports a `freeze` method which consumes a [WriteLinearStore] backed [HashedNodeStore],
+// /// makes sure the hashes are filled in, and flushes the nodes out before returning a [ReadLinearStore]
+// /// backed HashedNodeStore for future operations. `freeze` is called when the batch is completed and is
+// /// used to obtain the merkle trie for the proposal.
+// #[derive(Debug)]
+// pub struct HashedNodeStore<T: ReadLinearStore> {
+//     nodestore: NodeStore<T>,
+//     deleted: HashSet<LinearAddress>,
+//     pub(super) root: Root,
+// }
 
-impl<T: WriteLinearStore> HashedNodeStore<T> {
-    /// Returns a new empty HashedNodeStore that uses `linearstore` as the backing store.
-    pub fn new(linearstore: T) -> Result<Self, Error> {
-        let nodestore = NodeStore::initialize(linearstore)?;
-        Ok(HashedNodeStore {
-            nodestore,
-            deleted: HashSet::new(),
-            root: Root::None,
-        })
-    }
-}
+// impl<T: ReadLinearStore> HashedNodeStore<T> {
+//     /// Returns a new empty HashedNodeStore that uses `linearstore` as the backing store.
+//     pub fn new(nodestore: NodeStore<T>) -> Result<Self, Error> {
+//         Ok(HashedNodeStore {
+//             nodestore,
+//             deleted: HashSet::new(),
+//             root: Root::None,
+//         })
+//     }
+// }
 
-impl<T: ReadLinearStore> HashedNodeStore<T> {
-    pub fn read_node(&self, addr: LinearAddress) -> Result<Node, Error> {
-        if self.deleted.contains(&addr) {
-            return Err(Error::new(std::io::ErrorKind::NotFound, "Node not found"));
-        }
-        self.nodestore.read_node(addr)
-    }
+// impl<T: ReadLinearStore> HashedNodeStore<T> {
+//     pub fn read_node(&self, addr: LinearAddress) -> Result<Node, Error> {
+//         if self.deleted.contains(&addr) {
+//             return Err(Error::new(std::io::ErrorKind::NotFound, "Node not found"));
+//         }
+//         self.nodestore.read_node(addr)
+//     }
 
-    pub const fn root(&self) -> &Root {
-        &self.root
-    }
-}
+//     pub const fn root(&self) -> &Root {
+//         &self.root
+//     }
+// }
 
-impl<T: WriteLinearStore> HashedNodeStore<T> {
-    // Hashes `node`, which is at the given `path_prefix`, and its children recursively,
-    // then writes the `node` to `self.nodestore`. Returns its hash and address.
-    fn hash(
-        &mut self,
-        mut node: Node,
-        path_prefix: &mut Path,
-    ) -> Result<(TrieHash, LinearAddress), Error> {
-        match node {
-            Node::Branch(ref mut b) => {
-                for (nibble, child) in b.children.iter_mut().enumerate() {
-                    // Take child from b.children:
-                    let Child::Node(child_node) = std::mem::replace(child, Child::None) else {
-                        // There is no child or we already know its hash.
-                        continue;
-                    };
+// impl<T: ReadLinearStore> HashedNodeStore<T> {
+//     // Hashes `node`, which is at the given `path_prefix`, and its children recursively,
+//     // then writes the `node` to `self.nodestore`. Returns its hash and address.
+//     fn hash(
+//         &mut self,
+//         mut node: Node,
+//         path_prefix: &mut Path,
+//     ) -> Result<(TrieHash, LinearAddress), Error> {
+//         match node {
+//             Node::Branch(ref mut b) => {
+//                 for (nibble, child) in b.children.iter_mut().enumerate() {
+//                     // Take child from b.children:
+//                     let Child::Node(child_node) = std::mem::replace(child, Child::None) else {
+//                         // There is no child or we already know its hash.
+//                         continue;
+//                     };
 
-                    // Hash this child and update
-                    let original_length = path_prefix.len();
-                    path_prefix
-                        .0
-                        .extend(b.partial_path.0.iter().copied().chain(once(nibble as u8)));
+//                     // Hash this child and update
+//                     let original_length = path_prefix.len();
+//                     path_prefix
+//                         .0
+//                         .extend(b.partial_path.0.iter().copied().chain(once(nibble as u8)));
 
-                    let (child_hash, child_addr) = self.hash(child_node, path_prefix)?;
+//                     let (child_hash, child_addr) = self.hash(child_node, path_prefix)?;
 
-                    *child = Child::AddressWithHash(child_addr, child_hash);
-                    path_prefix.0.truncate(original_length);
-                }
-            }
-            Node::Leaf(_) => {}
-        }
+//                     *child = Child::AddressWithHash(child_addr, child_hash);
+//                     path_prefix.0.truncate(original_length);
+//                 }
+//             }
+//             Node::Leaf(_) => {}
+//         }
 
-        let hash = hash_node(&node, path_prefix);
-        match self.nodestore.create_node(node) {
-            Ok(addr) => Ok((hash, addr)),
-            Err(e) => Err(e),
-        }
-    }
+//         let hash = hash_node(&node, path_prefix);
+//         match self.nodestore.create_node(node) {
+//             Ok(addr) => Ok((hash, addr)),
+//             Err(e) => Err(e),
+//         }
+//     }
 
-    pub fn freeze(mut self) -> Result<HashedNodeStore<ProposedImmutable>, Error> {
-        for addr in self.deleted.iter() {
-            self.nodestore.delete_node(*addr)?;
-        }
-        match self.root() {
-            Root::None => {
-                self.nodestore.set_root(None)?;
-                Ok(HashedNodeStore {
-                    nodestore: self.nodestore.freeze(),
-                    deleted: self.deleted,
-                    root: Root::None, // TODO do this better. We have `root` above.
-                })
-            }
-            Root::AddrWithHash(addr, hash) => {
-                let hash = hash.clone(); // Todo can we avoid this clone?
-                let addr = *addr;
-                self.nodestore.set_root(Some(addr))?;
-                Ok(HashedNodeStore {
-                    nodestore: self.nodestore.freeze(),
-                    deleted: self.deleted,
-                    root: Root::AddrWithHash(addr, hash),
-                })
-            }
-            Root::Node(node) => {
-                // TODO avoid clone
+//     pub fn freeze(mut self) -> Result<HashedNodeStore<ProposedImmutable>, Error> {
+//         for addr in self.deleted.iter() {
+//             self.nodestore.delete_node(*addr)?;
+//         }
+//         match self.root() {
+//             Root::None => {
+//                 self.nodestore.set_root(None)?;
+//                 Ok(HashedNodeStore {
+//                     nodestore: self.nodestore.freeze(),
+//                     deleted: self.deleted,
+//                     root: Root::None, // TODO do this better. We have `root` above.
+//                 })
+//             }
+//             Root::AddrWithHash(addr, hash) => {
+//                 let hash = hash.clone(); // Todo can we avoid this clone?
+//                 let addr = *addr;
+//                 self.nodestore.set_root(Some(addr))?;
+//                 Ok(HashedNodeStore {
+//                     nodestore: self.nodestore.freeze(),
+//                     deleted: self.deleted,
+//                     root: Root::AddrWithHash(addr, hash),
+//                 })
+//             }
+//             Root::Node(node) => {
+//                 // TODO avoid clone
 
-                let (hash, addr) = self.hash(node.clone(), &mut Path(Default::default()))?;
-                self.nodestore.set_root(Some(addr))?;
-                Ok(HashedNodeStore {
-                    nodestore: self.nodestore.freeze(),
-                    deleted: self.deleted,
-                    root: Root::AddrWithHash(addr, hash),
-                })
-            }
-        }
-    }
+//                 let (hash, addr) = self.hash(node.clone(), &mut Path(Default::default()))?;
+//                 self.nodestore.set_root(Some(addr))?;
+//                 Ok(HashedNodeStore {
+//                     nodestore: self.nodestore.freeze(),
+//                     deleted: self.deleted,
+//                     root: Root::AddrWithHash(addr, hash),
+//                 })
+//             }
+//         }
+//     }
 
-    pub fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error> {
-        self.deleted.insert(addr);
-        Ok(())
-        // self.nodestore.delete_node(addr)
-    }
+//     pub fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error> {
+//         self.deleted.insert(addr);
+//         Ok(())
+//         // self.nodestore.delete_node(addr)
+//     }
 
-    pub fn set_root(&mut self, root: Root) -> Result<(), Error> {
-        self.root = root;
-        Ok(())
-    }
-}
+//     pub fn set_root(&mut self, root: Root) -> Result<(), Error> {
+//         self.root = root;
+//         Ok(())
+//     }
+// }
 
 pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
     match node {
