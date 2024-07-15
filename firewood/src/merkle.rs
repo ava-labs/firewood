@@ -133,6 +133,7 @@ impl<T: ReadLinearStore> Merkle<T> {
         // Ok(Proof(proofs))
     }
 
+    /// Returns the value mapped to by `key`.
     pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
         let root = match self.root() {
             Root::None => return Ok(None),
@@ -144,6 +145,7 @@ impl<T: ReadLinearStore> Merkle<T> {
         self.get_helper(root, &key)
     }
 
+    /// Returns the value mapped to by `key` in the subtrie rooted at `node`.
     fn get_helper(&self, node: &Node, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`
