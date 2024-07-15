@@ -81,22 +81,6 @@ pub struct Merkle<T: NodeReader, M> {
     mutable: PhantomData<M>,
 }
 
-// todo remove
-// impl<T: ReadLinearStore> Deref for MutableMerkle<T> {
-//     type Target = HashedNodeStore<T>;
-
-//     fn deref(&self) -> &Self::Target {
-//         &self.0
-//     }
-// }
-
-// TODO remove
-// impl<T: ReadLinearStore> DerefMut for MutableMerkle<T> {
-//     fn deref_mut(&mut self) -> &mut Self::Target {
-//         &mut self.0
-//     }
-// }
-
 // convert a set of nibbles into a printable string
 // panics if there is a non-nibble byte in the set
 fn nibbles_formatter<X: IntoIterator<Item = u8>>(nib: X) -> String {
