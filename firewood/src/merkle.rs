@@ -345,9 +345,7 @@ impl<T: WriteLinearStore> Merkle<T> {
     pub fn insert(&mut self, key: &[u8], value: Box<[u8]>) -> Result<(), MerkleError> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
-        let root = std::mem::replace(&mut self.0.root, Root::None);
-
-        let root = match root {
+        let root = match std::mem::take(&mut self.0.root) {
             Root::None => {
                 // The trie is empty. Create a new leaf node with `value` and set
                 // it as the root.
@@ -440,7 +438,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                                 branch.update_child(child_index, Child::Node(new_leaf));
                                 return Ok(node);
                             }
-                            Child::Node(node) => node,
+                            Child::Node(child) => child,
                             Child::AddressWithHash(addr, _) => self.read_node(addr)?,
                         };
 
