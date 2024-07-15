@@ -348,6 +348,7 @@ impl<T: ReadLinearStore> Merkle<T> {
 }
 
 impl<T: WriteLinearStore> Merkle<T> {
+    /// Map `key` to `value` in the trie.
     pub fn insert(&mut self, key: &[u8], value: Box<[u8]>) -> Result<(), MerkleError> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
@@ -374,6 +375,7 @@ impl<T: WriteLinearStore> Merkle<T> {
     }
 
     /// Map `key` to `value` into the subtrie rooted at `node`.
+    /// Returns the new root of the subtrie.
     pub fn insert_helper(
         &self,
         mut node: Node,
@@ -400,14 +402,7 @@ impl<T: WriteLinearStore> Merkle<T> {
         ) {
             (None, None) => {
                 // 1. The node is at `key`
-                match &mut node {
-                    Node::Branch(branch) => {
-                        branch.value = Some(value);
-                    }
-                    Node::Leaf(leaf) => {
-                        leaf.value = value;
-                    }
-                }
+                node.update_value(value);
                 Ok(node)
             }
             (None, Some((child_index, partial_path))) => {
@@ -415,7 +410,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 // Make a new branch node and insert the current node as a child.
                 //    ...                ...
                 //     |     -->          |
-                //    node               branch
+                //    node               key
                 //                        |
                 //                       node
                 let mut branch = BranchNode {
@@ -425,14 +420,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 };
 
                 // Shorten the node's partial path since it has a new parent.
-                match node {
-                    Node::Branch(ref mut branch) => {
-                        branch.partial_path = partial_path;
-                    }
-                    Node::Leaf(ref mut leaf) => {
-                        leaf.partial_path = partial_path;
-                    }
-                }
+                node.update_partial_path(partial_path);
                 branch.update_child(child_index, Child::Node(node));
 
                 Ok(Node::Branch(Box::new(branch)))
@@ -500,14 +488,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                     children: Default::default(),
                 };
 
-                match node {
-                    Node::Branch(ref mut branch) => {
-                        branch.partial_path = node_partial_path;
-                    }
-                    Node::Leaf(ref mut leaf) => {
-                        leaf.partial_path = node_partial_path;
-                    }
-                }
+                node.update_partial_path(node_partial_path);
                 branch.update_child(node_index, Child::Node(node));
 
                 let new_leaf = Node::Leaf(LeafNode {

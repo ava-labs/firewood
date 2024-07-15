@@ -35,6 +35,22 @@ impl Node {
         }
     }
 
+    /// Updates the partial path of the node to `partial_path`.
+    pub fn update_partial_path(&mut self, partial_path: Path) {
+        match self {
+            Node::Branch(b) => b.partial_path = partial_path,
+            Node::Leaf(l) => l.partial_path = partial_path,
+        }
+    }
+
+    /// Updates the value of the node to `value`.
+    pub fn update_value(&mut self, value: Box<[u8]>) {
+        match self {
+            Node::Branch(b) => b.value = Some(value),
+            Node::Leaf(l) => l.value = value,
+        }
+    }
+
     /// Returns a new `Arc<Node>` which is the same as `self` but with the given `partial_path`.
     pub fn new_with_partial_path(self: &Node, partial_path: Path) -> Node {
         match self {
