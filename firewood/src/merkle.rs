@@ -134,26 +134,51 @@ impl<T: ReadLinearStore> Merkle<T> {
     }
 
     pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
-        let path_iter = self.path_iter(key)?;
-
-        let Some(last_node) = path_iter.last() else {
-            return Ok(None);
+        let root = match self.root() {
+            Root::None => return Ok(None),
+            Root::AddrWithHash(addr, _) => &self.read_node(*addr)?,
+            Root::Node(node) => node,
         };
 
-        let last_node = last_node?;
+        let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
+        self.get_helper(root, &key)
+    }
 
-        if last_node
-            .key_nibbles
-            .iter()
-            .copied()
-            .eq(NibblesIterator::new(key))
-        {
-            match &*last_node.node {
-                Node::Branch(branch) => Ok(branch.value.clone()),
-                Node::Leaf(leaf) => Ok(Some(leaf.value.clone())),
+    fn get_helper(&self, node: &Node, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
+        // 4 possibilities for the position of the `key` relative to `node`:
+        // 1. The node is at `key`
+        // 2. The key is above the node (i.e. its ancestor)
+        // 3. The key is below the node (i.e. its descendant)
+        // 4. Neither is an ancestor of the other
+        let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
+        let unique_key = path_overlap.unique_a;
+        let unique_node = path_overlap.unique_b;
+
+        match (
+            unique_key.split_first().map(|(index, path)| (*index, path)),
+            unique_node.split_first(),
+        ) {
+            (_, Some(_)) => {
+                // Case (2) or (4)
+                Ok(None)
             }
-        } else {
-            Ok(None)
+            (None, None) => return Ok(node.value().map(|v| v.to_vec().into_boxed_slice())),
+            (Some((child_index, key)), None) => {
+                // 3. The key is below the node (i.e. its descendant)
+                match node {
+                    Node::Leaf(leaf) => Ok(Some(leaf.value.clone())),
+                    Node::Branch(branch) => {
+                        #[allow(clippy::indexing_slicing)]
+                        let child = match &branch.children[child_index as usize] {
+                            Child::None => return Ok(None),
+                            Child::Node(node) => node,
+                            Child::AddressWithHash(addr, _) => &self.read_node(*addr)?,
+                        };
+
+                        self.get_helper(child, key)
+                    }
+                }
+            }
         }
     }
 
