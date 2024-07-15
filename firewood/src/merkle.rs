@@ -369,13 +369,13 @@ impl<T: WriteLinearStore> Merkle<T> {
         };
 
         let root = self.insert_helper(root, key.as_ref(), value)?;
-        self.set_root(Root::Node(root))?;
+        self.set_root(root.into())?;
         Ok(())
     }
 
     /// Map `key` to `value` into the subtrie rooted at `node`.
     pub fn insert_helper(
-        &mut self,
+        &self,
         mut node: Node,
         key: &[u8],
         value: Box<[u8]>,
@@ -387,16 +387,16 @@ impl<T: WriteLinearStore> Merkle<T> {
         // 4. Neither is an ancestor of the other
         let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
 
-        let clean_args = |index_and_path: Option<(&u8, &[u8])>| -> Option<(u8, Path)> {
-            match index_and_path {
-                Some((index, path)) => Some((*index, path.into())),
-                None => None,
-            }
-        };
+        let unique_key = path_overlap.unique_a;
+        let unique_node = path_overlap.unique_b;
 
         match (
-            clean_args(path_overlap.unique_a.split_first()),
-            clean_args(path_overlap.unique_b.split_first()),
+            unique_key
+                .split_first()
+                .map(|(index, path)| (*index, path.into())),
+            unique_node
+                .split_first()
+                .map(|(index, path)| (*index, path.into())),
         ) {
             (None, None) => {
                 // 1. The node is at `key`
@@ -408,7 +408,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                         leaf.value = value;
                     }
                 }
-                return Ok(node);
+                Ok(node)
             }
             (None, Some((child_index, partial_path))) => {
                 // 2. The key is above the node (i.e. its ancestor)
@@ -435,7 +435,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 }
                 branch.update_child(child_index, Child::Node(node));
 
-                return Ok(Node::Branch(Box::new(branch)));
+                Ok(Node::Branch(Box::new(branch)))
             }
             (Some((child_index, partial_path)), None) => {
                 // 3. The key is below the node (i.e. its descendant)
@@ -446,6 +446,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 //    ... (key may be below)       ... (key is below)
                 match node {
                     Node::Branch(ref mut branch) => {
+                        #[allow(clippy::indexing_slicing)]
                         let child = match std::mem::take(&mut branch.children[child_index as usize])
                         {
                             Child::None => {
@@ -464,7 +465,7 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                         let child = self.insert_helper(child, partial_path.as_ref(), value)?;
                         branch.update_child(child_index, Child::Node(child));
-                        return Ok(node);
+                        Ok(node)
                     }
                     Node::Leaf(ref mut leaf) => {
                         // Turn this node into a branch node and put a new leaf as a child.
@@ -481,7 +482,7 @@ impl<T: WriteLinearStore> Merkle<T> {
 
                         branch.update_child(child_index, Child::Node(new_leaf));
 
-                        return Ok(Node::Branch(Box::new(branch)));
+                        Ok(Node::Branch(Box::new(branch)))
                     }
                 }
             }
@@ -515,7 +516,7 @@ impl<T: WriteLinearStore> Merkle<T> {
                 });
                 branch.update_child(key_index, Child::Node(new_leaf));
 
-                return Ok(Node::Branch(Box::new(branch)));
+                Ok(Node::Branch(Box::new(branch)))
             }
         }
     }
