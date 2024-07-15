@@ -76,6 +76,7 @@ pub type Immutable = ();
 #[derive(Debug)]
 pub struct Merkle<T: NodeReader, M> {
     nodestore: T,
+    deleted: HashSet<LinearAddress>,
     pub(super) root: Root,
     mutable: PhantomData<M>,
 }
@@ -155,12 +156,18 @@ impl<T: NodeReader + NodeWriter> Merkle<T, Mutable> {
     pub fn freeze(self) -> Result<Merkle<impl NodeReader, Immutable>, MerkleError> {
         let Self {
             mut nodestore,
+            deleted,
             root,
             mutable: _,
         } = self;
 
+        for addr in deleted.iter() {
+            nodestore.delete_node(*addr)?;
+        }
+
         match root {
             Root::None => Ok(Merkle {
+                deleted,
                 nodestore,
                 root,
                 mutable: PhantomData,
@@ -168,6 +175,7 @@ impl<T: NodeReader + NodeWriter> Merkle<T, Mutable> {
             Root::AddrWithHash(addr, hash) => Ok(Merkle {
                 nodestore,
                 root: Root::AddrWithHash(addr, hash),
+                deleted,
                 mutable: PhantomData,
             }),
             Root::Node(node) => {
@@ -175,6 +183,7 @@ impl<T: NodeReader + NodeWriter> Merkle<T, Mutable> {
                 Ok(Merkle {
                     nodestore,
                     root: Root::AddrWithHash(addr, hash),
+                    deleted,
                     mutable: PhantomData,
                 })
             }
@@ -187,12 +196,16 @@ impl<T: NodeReader, M> Merkle<T, M> {
         // TODO handle getting root on initialization
         Ok(Merkle {
             nodestore,
+            deleted: HashSet::new(),
             root: Root::None,
             mutable: PhantomData::<Mutable>,
         })
     }
 
     pub fn read_node(&self, addr: LinearAddress) -> Result<Node, MerkleError> {
+        if self.deleted.contains(&addr) {
+            return Err(MerkleError::NodeNotFound);
+        }
         self.nodestore.read_node(addr)
     }
 
@@ -481,7 +494,10 @@ impl<T: NodeReader> Merkle<T, Mutable> {
                 self.root = root.into();
                 return Ok(());
             }
-            Root::AddrWithHash(addr, _) => self.read_node(addr)?,
+            Root::AddrWithHash(addr, _) => {
+                self.deleted.insert(addr);
+                self.read_node(addr)?
+            }
             Root::Node(node) => node,
         };
 
@@ -493,7 +509,7 @@ impl<T: NodeReader> Merkle<T, Mutable> {
     /// Map `key` to `value` into the subtrie rooted at `node`.
     /// Returns the new root of the subtrie.
     pub fn insert_helper(
-        &self,
+        &mut self,
         mut node: Node,
         key: &[u8],
         value: Box<[u8]>,
@@ -564,7 +580,10 @@ impl<T: NodeReader> Merkle<T, Mutable> {
                                 return Ok(node);
                             }
                             Child::Node(child) => child,
-                            Child::AddressWithHash(addr, _) => self.read_node(addr)?,
+                            Child::AddressWithHash(addr, _) => {
+                                self.deleted.insert(addr);
+                                self.read_node(addr)?
+                            }
                         };
 
                         let child = self.insert_helper(child, partial_path.as_ref(), value)?;
@@ -629,7 +648,10 @@ impl<T: NodeReader> Merkle<T, Mutable> {
                 // The trie is empty. There is nothing to remove.
                 return Ok(None);
             }
-            Root::AddrWithHash(addr, _) => self.read_node(addr)?,
+            Root::AddrWithHash(addr, _) => {
+                self.deleted.insert(addr);
+                self.read_node(addr)?
+            }
             Root::Node(node) => node,
         };
 
@@ -638,8 +660,8 @@ impl<T: NodeReader> Merkle<T, Mutable> {
         Ok(removed_value)
     }
 
-    // Removes the value associated with the given `key` from the subtrie rooted at `node`.
-    // Returns the new root of the subtrie and the value that was removed, if any.
+    /// Removes the value associated with the given `key` from the subtrie rooted at `node`.
+    /// Returns the new root of the subtrie and the value that was removed, if any.
     #[allow(clippy::type_complexity)]
     fn remove_helper(
         &mut self,
@@ -702,7 +724,10 @@ impl<T: NodeReader> Merkle<T, Mutable> {
                                         partial_path: Path::new(),
                                     }),
                                 ),
-                                Child::AddressWithHash(addr, _) => self.read_node(*addr)?,
+                                Child::AddressWithHash(addr, _) => {
+                                    self.deleted.insert(*addr);
+                                    self.read_node(*addr)?
+                                }
                             };
 
                             // The child's partial path is the concatenation of its (now removed) parent,
@@ -767,7 +792,10 @@ impl<T: NodeReader> Merkle<T, Mutable> {
                                 return Ok((Some(node), None));
                             }
                             Child::Node(node) => node,
-                            Child::AddressWithHash(addr, _) => self.read_node(addr)?,
+                            Child::AddressWithHash(addr, _) => {
+                                self.deleted.insert(addr);
+                                self.read_node(addr)?
+                            }
                         };
 
                         let (child, removed_value) =
@@ -811,7 +839,10 @@ impl<T: NodeReader> Merkle<T, Mutable> {
                                     partial_path: Path::new(),
                                 }),
                             ),
-                            Child::AddressWithHash(addr, _) => self.read_node(*addr)?,
+                            Child::AddressWithHash(addr, _) => {
+                                self.deleted.insert(*addr);
+                                self.read_node(*addr)?
+                            }
                         };
 
                         // The child's partial path is the concatenation of its (now removed) parent,
