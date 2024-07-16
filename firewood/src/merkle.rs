@@ -130,6 +130,159 @@ impl<T: NodeReader> Merkle<T, Immutable> {
             Root::Node(_) => unreachable!("root node should be hashed"),
         }
     }
+
+    /// Constructs a merkle proof for key. The result contains all encoded nodes
+    /// on the path to the value at key. The value itself is also included in the
+    /// last node and can be retrieved by verifying the proof.
+    ///
+    /// If the trie does not contain a value for key, the returned proof contains
+    /// all nodes of the longest existing prefix of the key, ending with the node
+    /// that proves the absence of the key (at least the root node).
+    pub fn prove(&self, _key: &[u8]) -> Result<Proof<Vec<u8>>, MerkleError> {
+        todo!()
+        // let mut proofs = HashMap::new();
+        // if root_addr.is_null() {
+        //     return Ok(Proof(proofs));
+        // }
+
+        // let sentinel_node = self.get_node(root_addr)?;
+
+        // let path_iter = self.path_iter(sentinel_node, key.as_ref());
+
+        // let nodes = path_iter
+        //     .map(|result| result.map(|(_, node)| node))
+        //     .collect::<Result<Vec<NodeObjRef>, MerkleError>>()?;
+
+        // // Get the hashes of the nodes.
+        // for node in nodes.into_iter() {
+        //     let encoded = node.get_encoded(&self.store);
+        //     let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(encoded).into();
+        //     proofs.insert(hash, encoded.to_vec());
+        // }
+        // Ok(Proof(proofs))
+    }
+
+    pub fn verify_proof<N: AsRef<[u8]> + Send>(
+        &self,
+        _key: &[u8],
+        _proof: &Proof<N>,
+    ) -> Result<Option<Vec<u8>>, MerkleError> {
+        todo!()
+    }
+
+    pub fn verify_range_proof<N: AsRef<[u8]> + Send, V: AsRef<[u8]>>(
+        &self,
+        _proof: &Proof<N>,
+        _first_key: &[u8],
+        _last_key: &[u8],
+        _keys: Vec<&[u8]>,
+        _vals: Vec<V>,
+    ) -> Result<bool, ProofError> {
+        todo!()
+    }
+
+    // TODO danlaine: can we use the LinearAddress of the `root` instead?
+    pub fn path_iter<'a>(&self, key: &'a [u8]) -> Result<PathIterator<'_, 'a, T>, MerkleError> {
+        PathIterator::new(self, key)
+    }
+
+    pub(crate) fn _key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
+        MerkleKeyValueStream::_new(self)
+    }
+
+    pub(crate) fn _key_value_iter_from_key(&self, key: Key) -> MerkleKeyValueStream<'_, T> {
+        // TODO danlaine: change key to &[u8]
+        MerkleKeyValueStream::_from_key(self, key)
+    }
+
+    pub(super) async fn _range_proof(
+        &self,
+        first_key: Option<&[u8]>,
+        last_key: Option<&[u8]>,
+        limit: Option<usize>,
+    ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>>>, api::Error> {
+        if let (Some(k1), Some(k2)) = (&first_key, &last_key) {
+            if k1 > k2 {
+                return Err(api::Error::InvalidRange {
+                    first_key: k1.to_vec(),
+                    last_key: k2.to_vec(),
+                });
+            }
+        }
+
+        // limit of 0 is always an empty RangeProof
+        if limit == Some(0) {
+            return Ok(None);
+        }
+
+        let mut stream = match first_key {
+            // TODO: fix the call-site to force the caller to do the allocation
+            Some(key) => self._key_value_iter_from_key(key.to_vec().into_boxed_slice()),
+            None => self._key_value_iter(),
+        };
+
+        // fetch the first key from the stream
+        let first_result = stream.next().await;
+
+        // transpose the Option<Result<T, E>> to Result<Option<T>, E>
+        // If this is an error, the ? operator will return it
+        let Some((first_key, first_value)) = first_result.transpose()? else {
+            // nothing returned, either the trie is empty or the key wasn't found
+            return Ok(None);
+        };
+
+        let first_key_proof = self
+            .prove(&first_key)
+            .map_err(|e| api::Error::InternalError(Box::new(e)))?;
+        let limit = limit.map(|old_limit| old_limit - 1);
+
+        let mut middle = vec![(first_key.into_vec(), first_value)];
+
+        // we stop streaming if either we hit the limit or the key returned was larger
+        // than the largest key requested
+        #[allow(clippy::unwrap_used)]
+        middle.extend(
+            stream
+                .take(limit.unwrap_or(usize::MAX))
+                .take_while(|kv_result| {
+                    // no last key asked for, so keep going
+                    let Some(last_key) = last_key else {
+                        return ready(true);
+                    };
+
+                    // return the error if there was one
+                    let Ok(kv) = kv_result else {
+                        return ready(true);
+                    };
+
+                    // keep going if the key returned is less than the last key requested
+                    ready(&*kv.0 <= last_key)
+                })
+                .map(|kv_result| kv_result.map(|(k, v)| (k.into_vec(), v)))
+                .try_collect::<Vec<(Vec<u8>, Vec<u8>)>>()
+                .await?,
+        );
+
+        // remove the last key from middle and do a proof on it
+        let last_key_proof = match middle.last() {
+            None => {
+                return Ok(Some(api::RangeProof {
+                    first_key_proof: first_key_proof.clone(),
+                    middle: vec![],
+                    last_key_proof: first_key_proof,
+                }))
+            }
+            Some((last_key, _)) => self
+                .prove(last_key)
+                .map_err(|e| api::Error::InternalError(Box::new(e)))?,
+        };
+
+        Ok(Some(api::RangeProof {
+            first_key_proof,
+            middle,
+            last_key_proof,
+        }))
+    }
 }
 
 impl<T: NodeWriter> Merkle<T, Mutable> {
@@ -230,37 +383,6 @@ impl<T: NodeReader, M> Merkle<T, M> {
         &self.root
     }
 
-    /// Constructs a merkle proof for key. The result contains all encoded nodes
-    /// on the path to the value at key. The value itself is also included in the
-    /// last node and can be retrieved by verifying the proof.
-    ///
-    /// If the trie does not contain a value for key, the returned proof contains
-    /// all nodes of the longest existing prefix of the key, ending with the node
-    /// that proves the absence of the key (at least the root node).
-    pub fn prove(&self, _key: &[u8]) -> Result<Proof<Vec<u8>>, MerkleError> {
-        todo!()
-        // let mut proofs = HashMap::new();
-        // if root_addr.is_null() {
-        //     return Ok(Proof(proofs));
-        // }
-
-        // let sentinel_node = self.get_node(root_addr)?;
-
-        // let path_iter = self.path_iter(sentinel_node, key.as_ref());
-
-        // let nodes = path_iter
-        //     .map(|result| result.map(|(_, node)| node))
-        //     .collect::<Result<Vec<NodeObjRef>, MerkleError>>()?;
-
-        // // Get the hashes of the nodes.
-        // for node in nodes.into_iter() {
-        //     let encoded = node.get_encoded(&self.store);
-        //     let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(encoded).into();
-        //     proofs.insert(hash, encoded.to_vec());
-        // }
-        // Ok(Proof(proofs))
-    }
-
     /// Returns the value mapped to by `key`.
     pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
         let root = match self.root() {
@@ -310,128 +432,6 @@ impl<T: NodeReader, M> Merkle<T, M> {
                 }
             }
         }
-    }
-
-    pub fn verify_proof<N: AsRef<[u8]> + Send>(
-        &self,
-        _key: &[u8],
-        _proof: &Proof<N>,
-    ) -> Result<Option<Vec<u8>>, MerkleError> {
-        todo!()
-    }
-
-    pub fn verify_range_proof<N: AsRef<[u8]> + Send, V: AsRef<[u8]>>(
-        &self,
-        _proof: &Proof<N>,
-        _first_key: &[u8],
-        _last_key: &[u8],
-        _keys: Vec<&[u8]>,
-        _vals: Vec<V>,
-    ) -> Result<bool, ProofError> {
-        todo!()
-    }
-
-    // TODO danlaine: can we use the LinearAddress of the `root` instead?
-    pub fn path_iter<'a>(&self, key: &'a [u8]) -> Result<PathIterator<'_, 'a, T, M>, MerkleError> {
-        PathIterator::new(self, key)
-    }
-
-    pub(crate) fn _key_value_iter(&self) -> MerkleKeyValueStream<'_, T, M> {
-        MerkleKeyValueStream::_new(self)
-    }
-
-    pub(crate) fn _key_value_iter_from_key(&self, key: Key) -> MerkleKeyValueStream<'_, T, M> {
-        // TODO danlaine: change key to &[u8]
-        MerkleKeyValueStream::_from_key(self, key)
-    }
-
-    pub(super) async fn _range_proof(
-        &self,
-        first_key: Option<&[u8]>,
-        last_key: Option<&[u8]>,
-        limit: Option<usize>,
-    ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>>>, api::Error> {
-        if let (Some(k1), Some(k2)) = (&first_key, &last_key) {
-            if k1 > k2 {
-                return Err(api::Error::InvalidRange {
-                    first_key: k1.to_vec(),
-                    last_key: k2.to_vec(),
-                });
-            }
-        }
-
-        // limit of 0 is always an empty RangeProof
-        if limit == Some(0) {
-            return Ok(None);
-        }
-
-        let mut stream = match first_key {
-            // TODO: fix the call-site to force the caller to do the allocation
-            Some(key) => self._key_value_iter_from_key(key.to_vec().into_boxed_slice()),
-            None => self._key_value_iter(),
-        };
-
-        // fetch the first key from the stream
-        let first_result = stream.next().await;
-
-        // transpose the Option<Result<T, E>> to Result<Option<T>, E>
-        // If this is an error, the ? operator will return it
-        let Some((first_key, first_value)) = first_result.transpose()? else {
-            // nothing returned, either the trie is empty or the key wasn't found
-            return Ok(None);
-        };
-
-        let first_key_proof = self
-            .prove(&first_key)
-            .map_err(|e| api::Error::InternalError(Box::new(e)))?;
-        let limit = limit.map(|old_limit| old_limit - 1);
-
-        let mut middle = vec![(first_key.into_vec(), first_value)];
-
-        // we stop streaming if either we hit the limit or the key returned was larger
-        // than the largest key requested
-        #[allow(clippy::unwrap_used)]
-        middle.extend(
-            stream
-                .take(limit.unwrap_or(usize::MAX))
-                .take_while(|kv_result| {
-                    // no last key asked for, so keep going
-                    let Some(last_key) = last_key else {
-                        return ready(true);
-                    };
-
-                    // return the error if there was one
-                    let Ok(kv) = kv_result else {
-                        return ready(true);
-                    };
-
-                    // keep going if the key returned is less than the last key requested
-                    ready(&*kv.0 <= last_key)
-                })
-                .map(|kv_result| kv_result.map(|(k, v)| (k.into_vec(), v)))
-                .try_collect::<Vec<(Vec<u8>, Vec<u8>)>>()
-                .await?,
-        );
-
-        // remove the last key from middle and do a proof on it
-        let last_key_proof = match middle.last() {
-            None => {
-                return Ok(Some(api::RangeProof {
-                    first_key_proof: first_key_proof.clone(),
-                    middle: vec![],
-                    last_key_proof: first_key_proof,
-                }))
-            }
-            Some((last_key, _)) => self
-                .prove(last_key)
-                .map_err(|e| api::Error::InternalError(Box::new(e)))?,
-        };
-
-        Ok(Some(api::RangeProof {
-            first_key_proof,
-            middle,
-            last_key_proof,
-        }))
     }
 
     pub fn dump_node(
