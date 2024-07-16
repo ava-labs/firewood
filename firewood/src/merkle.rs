@@ -117,7 +117,7 @@ impl<T: ReadLinearStore> NodeReader for NodeStore<T> {
 #[derive(Debug)]
 pub struct ImmutableMerkle<T: NodeReader> {
     deleted: HashSet<LinearAddress>,
-    nodestore: T,
+    parent_state: T,
     root: Root,
 }
 
@@ -130,7 +130,7 @@ impl<T: NodeReader> ImmutableMerkle<T> {
         if self.deleted.contains(&addr) {
             return Err(MerkleError::NodeNotFound);
         }
-        self.nodestore.read_node(addr)
+        self.parent_state.read_node(addr)
     }
 
     /// Constructs a merkle proof for key. The result contains all encoded nodes
@@ -502,7 +502,7 @@ impl<T: NodeReader> MutableMerkle<T> {
         let (root, hash) = hash_helper(root, &mut Path(Default::default()));
         Ok(ImmutableMerkle {
             deleted: self.inner.deleted,
-            nodestore: self.inner.nodestore,
+            parent_state: self.inner.parent_state,
             root: Root::HashedNode(root, hash),
         })
     }
@@ -519,7 +519,7 @@ pub fn new<T: NodeReader>(nodestore: T) -> Result<MutableMerkle<T>, MerkleError>
 
     Ok(MutableMerkle {
         inner: ImmutableMerkle {
-            nodestore,
+            parent_state: nodestore,
             root,
             deleted: Default::default(),
         },
