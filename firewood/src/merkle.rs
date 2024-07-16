@@ -44,9 +44,9 @@ pub enum MerkleError {
 }
 
 #[derive(Debug)]
-pub struct Merkle<T: Debug + Send + Sync, S: Debug + Send + Sync>(HashedNodeStore<T, S>);
+pub struct Merkle<T: ReadChangedNode, S: Debug + Send + Sync>(HashedNodeStore<T, S>);
 
-impl<T: Debug + Send + Sync, S: Debug + Send + Sync> Deref for Merkle<T, S> {
+impl<T: ReadChangedNode, S: Debug + Send + Sync> Deref for Merkle<T, S> {
     type Target = HashedNodeStore<T, S>;
 
     fn deref(&self) -> &Self::Target {
@@ -54,7 +54,7 @@ impl<T: Debug + Send + Sync, S: Debug + Send + Sync> Deref for Merkle<T, S> {
     }
 }
 
-impl<T: Debug + Send + Sync, S: Debug + Send + Sync> DerefMut for Merkle<T, S> {
+impl<T: ReadChangedNode, S: Debug + Send + Sync> DerefMut for Merkle<T, S> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }

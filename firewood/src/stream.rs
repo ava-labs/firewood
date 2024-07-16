@@ -71,7 +71,7 @@ impl NodeStreamState {
 }
 
 #[derive(Debug)]
-pub struct MerkleNodeStream<'a, T: Debug + Send + Sync, S: Debug + Send + Sync> {
+pub struct MerkleNodeStream<'a, T: ReadChangedNode, S: Debug + Send + Sync> {
     state: NodeStreamState,
     merkle: &'a Merkle<T, S>,
 }
@@ -265,7 +265,7 @@ fn get_iterator_intial_state<T: ReadChangedNode, S: ReadableStorage>(
 }
 
 #[derive(Debug)]
-enum MerkleKeyValueStreamState<'a, T: Debug + Send + Sync, S: ReadableStorage> {
+enum MerkleKeyValueStreamState<'a, T: ReadChangedNode, S: ReadableStorage> {
     /// The iterator state is lazily initialized when poll_next is called
     /// for the first time. The iteration start key is stored here.
     _Uninitialized(Key),
@@ -290,7 +290,7 @@ impl<'a, T: ReadChangedNode, S: ReadableStorage> MerkleKeyValueStreamState<'a, T
 }
 
 #[derive(Debug)]
-pub struct MerkleKeyValueStream<'a, T: Debug + Send + Sync, S: ReadableStorage> {
+pub struct MerkleKeyValueStream<'a, T: ReadChangedNode, S: ReadableStorage> {
     state: MerkleKeyValueStreamState<'a, T, S>,
     merkle: &'a Merkle<T, S>,
 }

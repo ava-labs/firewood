@@ -7,6 +7,7 @@ use std::fmt::Debug;
 use crate::{merkle::Merkle, v2::api::HashKey};
 use nix::errno::Errno;
 use sha2::Digest;
+use storage::ReadChangedNode;
 use thiserror::Error;
 
 use crate::{db::DbError, merkle::MerkleError};
@@ -131,7 +132,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
     /// necessary nodes will be resolved and leave the remaining as hashnode.
     ///
     /// The given edge proof is allowed to be an existent or non-existent proof.
-    fn _proof_to_path<K, T: Debug + Send + Sync, S: Debug + Send + Sync>(
+    fn _proof_to_path<K, T: ReadChangedNode, S: Debug + Send + Sync>(
         &self,
         _key: K,
         _root_hash: HashKey,

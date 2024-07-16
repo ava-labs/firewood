@@ -110,10 +110,11 @@ struct StoredArea<T> {
 /// The first type parameter is the revision type, which can be either [Committed] or [Proposed].
 /// The second type parameter indicates the backing store, either a [FileStore] or a [MemStore].
 #[derive(Debug)]
-pub struct NodeStore<T: Sync + Send, S: Send + Sync> {
+pub struct NodeStore<T: ReadChangedNode, S: Send + Sync> {
     // The header from the underlying storage system
     header: NodeStoreHeader,
     deleted_nodes: Vec<(LinearAddress, AreaIndex)>,
+    /// The type of revision for the NodeStore.
     pub revision_type: T,
     storage: Arc<S>,
 }
@@ -181,6 +182,15 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 }
 
 impl<T: ReadChangedNode, S: ReadableStorage> NodeStore<T, S> {
+    /// Reads a node from the specified address.
+    ///
+    /// # Arguments
+    ///
+    /// * `addr` - The linear address of the node.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result` containing an `Arc<Node>` if the node is found, or an `Error` if there was an issue reading the node.
     pub fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
         let proposal_nodes = &self.revision_type;
         if let Some(node) = proposal_nodes.read_changed_node(addr) {
@@ -190,7 +200,7 @@ impl<T: ReadChangedNode, S: ReadableStorage> NodeStore<T, S> {
     }
 }
 
-impl<T: Sync + Send, S: ReadableStorage> NodeStore<T, S> {
+impl<T: ReadChangedNode, S: ReadableStorage> NodeStore<T, S> {
     /// Returns (index, area_size) for the [StoredArea] at `addr`.
     /// `index` is the index of `area_size` in [AREA_SIZES].
     fn area_index_and_size(&self, addr: LinearAddress) -> Result<(AreaIndex, u64), Error> {
@@ -240,7 +250,7 @@ impl<S: WritableStorage> NodeStore<ProposedMutable, S> {
     ///
     /// * `parent` - The parent node store.
     /// * `storage` - The storage implementation.
-    pub fn new<T: Into<NodeStoreParent> + Send + Sync>(parent: NodeStore<T, S>) -> Self {
+    pub fn new<T: Into<NodeStoreParent> + ReadChangedNode>(parent: NodeStore<T, S>) -> Self {
         let mut store = NodeStore {
             header: parent.header.clone(),
             deleted_nodes: Default::default(),
@@ -435,26 +445,16 @@ impl<S: WritableStorage> NodeStore<ProposedMutable, S> {
     pub fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error> {
         debug_assert!(addr.get() % 8 == 0);
 
-        let (area_size_index, _) = self.area_index_and_size(addr)?;
-
-        // The area that contained the node is now free.
-        let area: Area<Node, FreeArea> = Area::Free(FreeArea {
-            next_free_block: self.header.free_lists[area_size_index as usize],
-        });
-
-        let stored_area = StoredArea {
-            area_size_index,
-            area,
-        };
-
-        let stored_area_bytes =
-            bincode::serialize(&stored_area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-
-        self.storage.write(addr.into(), &stored_area_bytes)?;
-
-        // The newly freed block is now the head of the free list.
-        self.header.free_lists[area_size_index as usize] = Some(addr);
-
+        if let Some((_, area_size_index)) = self.revision_type.new_nodes.remove(&addr) {
+            // we created this node before, so we can return it to the free list for possible reuse
+            // in this revision
+            let _next_free_block = self.header.free_lists[area_size_index as usize];
+            self.header.free_lists[area_size_index as usize] = Some(addr);
+            // TODO: what do we do with next_free_block here?
+        } else {
+            // we didn't create this node, so mark it as a deleted node for this revision
+            self.deleted_nodes.push((addr, self.area_index_and_size(addr)?.0));
+        }
         Ok(())
     }
 

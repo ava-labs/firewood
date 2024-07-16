@@ -63,7 +63,16 @@ pub trait WritableStorage: ReadableStorage {
 /// Trait for reading changed nodes. If a proposal, this recursively reads proposals until it finds a changed node
 /// otherwise it returns None, indicating that the node has not changed in any parent proposal and can be read from disk
 ///
-/// Both [Committed] and [ProposedImmutable] implement this trait; the former always returns None.
+/// Both [Committed] and Proposed<T> implement this trait; the former always returns None.
 pub trait ReadChangedNode: Debug + Send + Sync {
+    /// Reads a changed node from the specified address.
+    ///
+    /// # Arguments
+    ///
+    /// * `_addr` - The linear address of the node to read.
+    ///
+    /// # Returns
+    ///
+    /// An `Option` containing an `Arc` of the read node, or `None` if the node has not changed in any parent proposal and can be read from disk.
     fn read_changed_node(&self, _addr: LinearAddress) -> Option<Arc<Node>>;
 }

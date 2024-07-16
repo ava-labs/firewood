@@ -19,14 +19,14 @@ pub type ProposedImmutable = Proposed<Immutable>;
 
 #[derive(Debug)]
 pub struct Proposed<T> {
-    pub(crate) new_nodes: HashMap<LinearAddress, Arc<Node>>,
+    pub new_nodes: HashMap<LinearAddress, (Arc<Node>, u8)>,
     pub(crate) parent: Arc<NodeStoreParent>,
     mutability: PhantomData<T>,
 }
 
 impl<T: Debug + Send + Sync> ReadChangedNode for Proposed<T> {
     fn read_changed_node(&self, addr: LinearAddress) -> Option<Arc<Node>> {
-        if let Some(node) = self.new_nodes.get(&addr) {
+        if let Some((node, _)) = self.new_nodes.get(&addr) {
             Some(node.clone())
         } else {
             match self.parent.as_ref() {

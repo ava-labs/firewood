@@ -2,18 +2,16 @@
 // See the file LICENSE.md for licensing terms.
 
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::io::Error;
 use std::iter::once;
 use std::sync::{Arc, OnceLock};
 
 use storage::{
-    BranchNode, Child, Committed, FileStore, MemStore, ProposedMutable, ReadChangedNode,
-    ReadableStorage, TrieHash, WritableStorage,
+    BranchNode, Child, Committed, FileStore, LinearAddress, MemStore, Node, NodeStore, Path,
+    ProposedImmutable, ProposedMutable, ReadChangedNode, ReadableStorage, TrieHash,
+    WritableStorage,
 };
-use storage::{LinearAddress, NodeStore};
-use storage::{Node, Path, ProposedImmutable};
 
 use integer_encoding::VarInt;
 
@@ -30,19 +28,17 @@ use storage::PathIterItem;
 /// backed HashedNodeStore for future operations. `freeze` is called when the batch is completed and is
 /// used to obtain the merkle trie for the proposal.
 #[derive(Debug)]
-pub struct HashedNodeStore<T: Debug + Send + Sync, S: Debug + Send + Sync> {
+pub struct HashedNodeStore<T: ReadChangedNode, S: Debug + Send + Sync> {
     nodestore: NodeStore<T, S>,
-    modified: HashMap<LinearAddress, (Arc<Node>, u8)>,
     root_hash: OnceLock<TrieHash>,
 }
-impl<T: Debug + Send + Sync> HashedNodeStore<T, FileStore> {
+impl<T: ReadChangedNode> HashedNodeStore<T, FileStore> {
     pub fn initialize(
         linearstore: Arc<FileStore>,
     ) -> Result<HashedNodeStore<Committed, FileStore>, Error> {
         let nodestore = NodeStore::initialize(linearstore.clone())?;
         Ok(HashedNodeStore {
             nodestore,
-            modified: Default::default(),
             root_hash: Default::default(),
         })
     }
@@ -53,19 +49,17 @@ impl HashedNodeStore<ProposedMutable, MemStore> {
         let empty_parent = NodeStore::initialize(storage).expect("memory should always work");
         HashedNodeStore {
             nodestore: NodeStore::<ProposedMutable, MemStore>::new(empty_parent),
-            modified: Default::default(),
             root_hash: Default::default(),
         }
     }
 }
 
-impl<T: Debug + Send + Sync, S: Debug + Send + Sync> From<NodeStore<T, S>>
+impl<T: ReadChangedNode, S: Debug + Send + Sync> From<NodeStore<T, S>>
     for HashedNodeStore<T, S>
 {
     fn from(nodestore: NodeStore<T, S>) -> Self {
         HashedNodeStore {
             nodestore,
-            modified: Default::default(),
             root_hash: Default::default(),
         }
     }
@@ -79,7 +73,9 @@ impl<T: ReadChangedNode, S: ReadableStorage> HashedNodeStore<T, S> {
             self.nodestore.read_node_from_disk(addr)
         }
     }
+}
 
+impl<S: WritableStorage> HashedNodeStore<ProposedMutable, S> {
     // Returns a actual node instead of just an arc to it. This node is then
     // owned by the caller.
     // If the node was previously modified, then it will consume the modified Arc
@@ -87,7 +83,8 @@ impl<T: ReadChangedNode, S: ReadableStorage> HashedNodeStore<T, S> {
     // exist at this time (that is, no iterators are active on the HashedNodeStore)
     // If the node was not modified, a clone of the node is returned
     fn take_node(&mut self, addr: LinearAddress) -> Result<Node, Error> {
-        if let Some((modified_node, _)) = self.modified.remove(&addr) {
+
+            if let Some((modified_node, _)) = self.nodestore.revision_type.new_nodes.remove(&addr) {
             Ok(Arc::into_inner(modified_node).expect("no other references to this node can exist"))
         } else {
             let node = self.read_node(addr)?;
@@ -98,7 +95,6 @@ impl<T: ReadChangedNode, S: ReadableStorage> HashedNodeStore<T, S> {
 
 impl<T: ReadChangedNode, S: ReadableStorage> HashedNodeStore<T, S> {
     pub fn root_hash(&self) -> Result<TrieHash, Error> {
-        debug_assert!(self.modified.is_empty());
         if let Some(addr) = self.nodestore.root_address() {
             #[cfg(nightly)]
             let result = self
@@ -165,7 +161,6 @@ impl<S: WritableStorage> HashedNodeStore<ProposedMutable, S> {
                 }
                 if modified {
                     self.nodestore.update_in_place(node_addr, node)?;
-                    self.modified.remove(&node_addr);
                 }
                 Ok(hash_node(node, path_prefix))
             }
@@ -181,18 +176,16 @@ impl<S: WritableStorage> HashedNodeStore<ProposedMutable, S> {
             let _ = self.root_hash.set(hash);
             self.nodestore.update_in_place(root_address, &root_node)?;
         }
-        assert!(self.modified.is_empty());
         let frozen_nodestore = self.nodestore.freeze();
         Ok(HashedNodeStore {
             nodestore: frozen_nodestore,
-            modified: Default::default(),
             root_hash: Default::default(),
         })
     }
 
     pub fn create_node(&mut self, node: Node) -> Result<LinearAddress, Error> {
         let (addr, size) = self.nodestore.allocate_node(&node)?;
-        self.modified.insert(addr, (Arc::new(node), size));
+        self.nodestore.revision_type.new_nodes.insert(addr, (Arc::new(node), size));
         Ok(addr)
     }
 
@@ -268,7 +261,7 @@ impl<S: WritableStorage> HashedNodeStore<ProposedMutable, S> {
         node: Node,
     ) -> Result<LinearAddress, MerkleError> {
         let old_node_size_index =
-            if let Some((_, old_node_size_index)) = self.modified.get(&old_address) {
+            if let Some((_, old_node_size_index)) = self.nodestore.revision_type.new_nodes.get(&old_address) {
                 *old_node_size_index
             } else {
                 self.nodestore.node_size(old_address)?
@@ -276,14 +269,14 @@ impl<S: WritableStorage> HashedNodeStore<ProposedMutable, S> {
 
         // If the node was already modified, see if it still fits
         let new_address = if !self.nodestore.still_fits(old_node_size_index, &node)? {
-            self.modified.remove(&old_address);
+            self.nodestore.revision_type.new_nodes.remove(&old_address);
             self.nodestore.delete_node(old_address)?;
             let (new_address, new_node_size_index) = self.nodestore.allocate_node(&node)?;
-            self.modified
+            self.nodestore.revision_type.new_nodes
                 .insert(new_address, (Arc::new(node), new_node_size_index));
             new_address
         } else {
-            self.modified
+            self.nodestore.revision_type.new_nodes
                 .insert(old_address, (Arc::new(node), old_node_size_index));
             old_address
         };
