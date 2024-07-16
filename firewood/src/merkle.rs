@@ -116,7 +116,7 @@ pub struct ImmutableMerkle<T: NodeReader> {
 }
 
 impl<T: NodeReader> ImmutableMerkle<T> {
-    pub fn root(&self) -> &Root {
+    pub const fn root(&self) -> &Root {
         &self.root
     }
 
@@ -308,7 +308,7 @@ impl<T: NodeReader> ImmutableMerkle<T> {
                 // Case (2) or (4)
                 Ok(None)
             }
-            (None, None) => return Ok(node.value().map(|v| v.to_vec().into_boxed_slice())),
+            (None, None) => return Ok(node.value().map(|v| v.to_vec().into_boxed_slice())), // 1. The node is at `key`
             (Some((child_index, key)), None) => {
                 // 3. The key is below the node (i.e. its descendant)
                 match node {
@@ -317,8 +317,7 @@ impl<T: NodeReader> ImmutableMerkle<T> {
                         #[allow(clippy::indexing_slicing)]
                         let child = match &branch.children[child_index as usize] {
                             Child::None => return Ok(None),
-                            Child::Node(node) => node,
-                            Child::HashedNode(node, _) => node,
+                            Child::Node(node) | Child::HashedNode(node, _) => node,
                             Child::AddressWithHash(addr, _) => &self.read_node(*addr)?,
                         };
 
@@ -397,6 +396,35 @@ pub struct MutableMerkle<T: NodeReader> {
     deleted: HashSet<LinearAddress>,
 }
 
+// Hashes `node`, which is at the given `path_prefix`, and its children recursively,
+fn hash_helper(node: &mut Node, path_prefix: &mut Path) -> TrieHash {
+    match node {
+        Node::Branch(ref mut b) => {
+            for (nibble, child) in b.children.iter_mut().enumerate() {
+                // Take child from b.children
+                let Child::Node(mut child_node) = std::mem::take(child) else {
+                    // There is no child or we already know its hash.
+                    continue;
+                };
+
+                // Hash this child and update
+                let original_length = path_prefix.len();
+                path_prefix
+                    .0
+                    .extend(b.partial_path.0.iter().copied().chain(once(nibble as u8)));
+
+                let child_hash = hash_helper(&mut child_node, path_prefix);
+
+                *child = Child::HashedNode(child_node, child_hash);
+                path_prefix.0.truncate(original_length);
+            }
+        }
+        Node::Leaf(_) => {}
+    }
+
+    hash_node(node, path_prefix)
+}
+
 impl<T: NodeWriter> MutableMerkle<T> {
     /// Hashes the trie and returns the merkle as its immutable variant.
     pub fn hash(mut self) -> Result<ImmutableMerkle<impl NodeReader>, MerkleError> {
@@ -404,68 +432,18 @@ impl<T: NodeWriter> MutableMerkle<T> {
             self.inner.nodestore.delete_node(*addr)?;
         }
 
-        match std::mem::take(&mut self.inner.root) {
-            Root::None => Ok(ImmutableMerkle {
+        let Root::Node(mut node) = self.inner.root else {
+            return Ok(ImmutableMerkle {
                 nodestore: self.inner.nodestore,
                 root: self.inner.root,
-            }),
-            Root::HashedNode(node, hash) => Ok(ImmutableMerkle {
-                nodestore: self.inner.nodestore,
-                root: Root::HashedNode(node, hash),
-            }),
-            Root::AddrWithHash(addr, hash) => Ok(ImmutableMerkle {
-                nodestore: self.inner.nodestore,
-                root: Root::AddrWithHash(addr, hash),
-            }),
-            Root::Node(mut node) => {
-                let start_time = std::time::Instant::now();
-                let hash = self.hash_helper(&mut node, &mut Path(Default::default()))?;
-                let elapsed = start_time.elapsed();
-                println!("hash_helper in hash took {:?}", elapsed);
-                Ok(ImmutableMerkle {
-                    nodestore: self.inner.nodestore,
-                    root: Root::HashedNode(node, hash),
-                })
-            }
-        }
-    }
+            });
+        };
 
-    // Hashes `node`, which is at the given `path_prefix`, and its children recursively,
-    // then writes the `node` to `self.nodestore`. Returns its hash and address.
-    fn hash_helper(
-        &self,
-        node: &mut Node,
-        path_prefix: &mut Path,
-    ) -> Result<TrieHash, MerkleError> {
-        match node {
-            Node::Branch(ref mut b) => {
-                for (nibble, child) in b.children.iter_mut().enumerate() {
-                    // Take child from b.children
-                    let Child::Node(mut child_node) = std::mem::take(child) else {
-                        // There is no child or we already know its hash.
-                        continue;
-                    };
-
-                    // Hash this child and update
-                    let original_length = path_prefix.len();
-                    path_prefix
-                        .0
-                        .extend(b.partial_path.0.iter().copied().chain(once(nibble as u8)));
-
-                    // let start_time = std::time::Instant::now();
-                    let child_hash = self.hash_helper(&mut child_node, path_prefix)?;
-                    // let elapsed = start_time.elapsed();
-                    // println!("hash_helper took {:?}", elapsed);
-
-                    *child = Child::HashedNode(child_node, child_hash);
-                    path_prefix.0.truncate(original_length);
-                }
-            }
-            Node::Leaf(_) => {}
-        }
-
-        let hash = hash_node(&node, path_prefix);
-        Ok(hash)
+        let hash = hash_helper(&mut node, &mut Path(Default::default()));
+        Ok(ImmutableMerkle {
+            nodestore: self.inner.nodestore,
+            root: Root::HashedNode(node, hash),
+        })
     }
 }
 
