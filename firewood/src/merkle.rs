@@ -354,24 +354,24 @@ impl<T: NodeWriter> Merkle<T, Mutable> {
     }
 }
 
+/// Returns a new merkle using the given [NodeStore].
+/// If the nodestore has a root address, the root node is read and used as the root.
+/// Otherwise, the root is set to [Root::None] (i.e. this trie is empty).
+pub fn new<T: NodeReader>(nodestore: T) -> Result<Merkle<T, Mutable>, MerkleError> {
+    let root = match nodestore.root_address() {
+        Some(addr) => nodestore.read_node(addr)?.into(),
+        None => Root::None,
+    };
+
+    Ok(Merkle {
+        nodestore,
+        deleted: Default::default(),
+        root,
+        mutable: Default::default(),
+    })
+}
+
 impl<T: NodeReader, M> Merkle<T, M> {
-    /// Returns a new merkle using the given [NodeStore].
-    /// If the nodestore has a root address, the root node is read and used as the root.
-    /// Otherwise, the root is set to [Root::None] (i.e. this trie is empty).
-    pub fn new(nodestore: T) -> Result<Merkle<T, Mutable>, MerkleError> {
-        let root = match nodestore.root_address() {
-            Some(addr) => nodestore.read_node(addr)?.into(),
-            None => Root::None,
-        };
-
-        Ok(Merkle {
-            nodestore,
-            deleted: Default::default(),
-            root,
-            mutable: Default::default(),
-        })
-    }
-
     pub fn read_node(&self, addr: LinearAddress) -> Result<Node, MerkleError> {
         if self.deleted.contains(&addr) {
             return Err(MerkleError::NodeNotFound);
@@ -962,7 +962,7 @@ mod tests {
 
     fn create_in_memory_merkle() -> Merkle<NodeStore<MemStore>, Mutable> {
         let nodestore = NodeStore::initialize(MemStore::new(vec![])).unwrap();
-        Merkle::<storage::NodeStore<MemStore>, Mutable>::new(nodestore).unwrap()
+        new(nodestore).unwrap()
     }
 
     // use super::*;
@@ -1541,7 +1541,7 @@ mod tests {
         items: Vec<(K, V)>,
     ) -> Result<Merkle<NodeStore<MemStore>, Mutable>, MerkleError> {
         let nodestore = NodeStore::initialize(MemStore::new(vec![]))?;
-        let mut merkle = Merkle::<storage::NodeStore<MemStore>, Mutable>::new(nodestore).unwrap();
+        let mut merkle = new(nodestore).unwrap();
         for (k, v) in items.iter() {
             merkle.insert(k.as_ref(), Box::from(v.as_ref()))?;
             println!("{}", merkle.dump()?);

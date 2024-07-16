@@ -597,7 +597,7 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
 mod tests {
     use storage::{MemStore, NodeStore};
 
-    use crate::merkle::Mutable;
+    use crate::merkle::{self, Mutable};
 
     use super::*;
     use test_case::test_case;
@@ -614,7 +614,7 @@ mod tests {
 
     pub(super) fn create_test_merkle() -> Merkle<NodeStore<MemStore>, Mutable> {
         let nodestore = NodeStore::initialize(MemStore::new(vec![])).unwrap();
-        Merkle::<NodeStore<MemStore>, Mutable>::new(nodestore).unwrap()
+        merkle::new(nodestore).unwrap()
     }
 
     #[test_case(&[]; "empty key")]
