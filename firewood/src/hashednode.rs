@@ -19,6 +19,7 @@ pub enum Root {
     None,
     AddrWithHash(LinearAddress, TrieHash),
     Node(Node),
+    HashedNode(Node, TrieHash),
 }
 
 impl From<Node> for Root {

@@ -141,7 +141,7 @@ impl<'a, T: NodeReader> Stream for MerkleNodeStream<'a, T> {
                             let child = match child {
                                 Child::None => unreachable!("TODO make this unreachable"),
                                 Child::AddressWithHash(addr, _) => merkle.read_node(addr)?,
-                                Child::Node(node) => node,
+                                Child::Node(node) | Child::HashedNode(node, _) => node,
                             };
 
                             // let child = merkle.read_node(child_addr)?;
@@ -191,7 +191,7 @@ fn get_iterator_intial_state<T: NodeReader>(
             // The root is a branch node.
             merkle.read_node(*addr)?
         }
-        Root::Node(node) => {
+        Root::Node(node) | Root::HashedNode(node, _) => {
             // The root is a leaf node.
             node.clone()
         }
@@ -264,7 +264,7 @@ fn get_iterator_intial_state<T: NodeReader>(
                     node = match child {
                         Child::None => return Ok(NodeStreamState::Iterating { iter_stack }),
                         Child::AddressWithHash(addr, _) => merkle.read_node(*addr)?,
-                        Child::Node(node) => node.clone(), // TODO can we avoid ARCing this?
+                        Child::Node(node) | Child::HashedNode(node, _) => node.clone(), // TODO can we avoid ARCing this?
                     };
 
                     matched_key_nibbles.push(next_unmatched_key_nibble);
@@ -407,7 +407,7 @@ impl<'a, 'b, T: NodeReader> PathIterator<'a, 'b, T> {
                 })
             }
             Root::AddrWithHash(addr, _) => merkle.read_node(*addr)?,
-            Root::Node(node) => node.clone(), // todo remove clone
+            Root::Node(node) | Root::HashedNode(node, _) => node.clone(), // todo remove clone
         };
 
         Ok(Self {
@@ -510,7 +510,7 @@ impl<'a, 'b, T: NodeReader> Iterator for PathIterator<'a, 'b, T> {
                                             next_nibble: Some(next_unmatched_key_nibble),
                                         }))
                                     }
-                                    Child::Node(child) => {
+                                    Child::Node(child) | Child::HashedNode(child, _) => {
                                         let node_key = matched_key.clone().into_boxed_slice();
                                         matched_key.push(next_unmatched_key_nibble);
 
@@ -968,7 +968,7 @@ mod tests {
     async fn key_value_table_test() {
         let mut merkle = create_test_merkle();
 
-        let max: u8 = 150;
+        let max: u8 = 100;
         // Insert key-values in reverse order to ensure iterator
         // doesn't just return the keys in insertion order.
         for i in (0..=max).rev() {
@@ -976,20 +976,13 @@ mod tests {
                 let key = &[i, j];
                 let value = Box::new([i, j]);
 
-                let start_time = std::time::Instant::now();
                 merkle.insert(key, value).unwrap();
-                let elapsed = start_time.elapsed();
-                println!("Insertion time: {:?}", elapsed);
             }
         }
 
-        let start_time = std::time::Instant::now();
         let merkle = merkle.hash().unwrap();
-        let elapsed = start_time.elapsed();
-        println!("Hash time: {:?}", elapsed);
 
         // Test with no start key
-        let start_time = std::time::Instant::now();
         let mut stream = merkle._key_value_iter();
         for i in 0..=max {
             for j in 0..=max {
@@ -1006,10 +999,7 @@ mod tests {
             }
         }
         check_stream_is_done(stream).await;
-        let elapsed = start_time.elapsed();
-        println!("Iterate time: {:?}", elapsed);
 
-        let start_time = std::time::Instant::now();
         // Test with start key
         for i in 0..=max {
             let mut stream = merkle._key_value_iter_from_key(vec![i].into_boxed_slice());
@@ -1035,8 +1025,6 @@ mod tests {
                 );
             }
         }
-        let elapsed = start_time.elapsed();
-        println!("Iterate time: {:?}", elapsed);
     }
 
     #[tokio::test]

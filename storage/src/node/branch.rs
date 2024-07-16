@@ -15,6 +15,9 @@ pub enum Child {
     /// There is a child at this index, but we haven't hashed it
     /// or written it to storage yet.
     Node(Node),
+    /// There is a child at this index, and we know its hash
+    /// but haven't written it to storage yet.
+    HashedNode(Node, TrieHash),
     /// We know the child's address and hash.
     AddressWithHash(LinearAddress, TrieHash),
 }
@@ -43,7 +46,7 @@ impl Debug for BranchNode {
         for (i, c) in self.children.iter().enumerate() {
             match c {
                 Child::None => {}
-                Child::Node(_) => {} //TODO
+                Child::Node(_) | Child::HashedNode(_, _) => {} //TODO
                 Child::AddressWithHash(addr, hash) => write!(
                     f,
                     "(index: {i:?}), address={addr:?}, hash={:?})",
@@ -94,7 +97,7 @@ impl BranchNode {
             |(i, child)| match child {
                 Child::None => None,
                 Child::Node(_) => unreachable!("TODO make unreachable"),
-                Child::AddressWithHash(_, hash) => Some((i, hash)),
+                Child::AddressWithHash(_, hash) | Child::HashedNode(_, hash) => Some((i, hash)),
             },
         )
     }
