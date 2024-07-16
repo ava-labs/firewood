@@ -140,7 +140,10 @@ impl<'a, T: NodeReader> Stream for MerkleNodeStream<'a, T> {
 
                             let child = match child {
                                 Child::None => unreachable!("TODO make this unreachable"),
-                                Child::AddressWithHash(addr, _) => merkle.read_node(addr)?,
+                                Child::AddressWithHash(addr, _) => {
+                                    let node = merkle.read_node(addr)?;
+                                    (*node).clone()
+                                }
                                 Child::Node(node) | Child::HashedNode(node, _) => node,
                             };
 
@@ -189,7 +192,8 @@ fn get_iterator_intial_state<T: NodeReader>(
         }
         Root::AddrWithHash(addr, _) => {
             // The root is a branch node.
-            merkle.read_node(*addr)?
+            let node = merkle.read_node(*addr)?;
+            (*node).clone()
         }
         Root::Node(node) | Root::HashedNode(node, _) => {
             // The root is a leaf node.
@@ -263,7 +267,10 @@ fn get_iterator_intial_state<T: NodeReader>(
                     let child = &branch.children[next_unmatched_key_nibble as usize];
                     node = match child {
                         Child::None => return Ok(NodeStreamState::Iterating { iter_stack }),
-                        Child::AddressWithHash(addr, _) => merkle.read_node(*addr)?,
+                        Child::AddressWithHash(addr, _) => {
+                            let node = merkle.read_node(*addr)?;
+                            (*node).clone()
+                        }
                         Child::Node(node) | Child::HashedNode(node, _) => node.clone(), // TODO can we avoid ARCing this?
                     };
 
@@ -406,7 +413,10 @@ impl<'a, 'b, T: NodeReader> PathIterator<'a, 'b, T> {
                     merkle,
                 })
             }
-            Root::AddrWithHash(addr, _) => merkle.read_node(*addr)?,
+            Root::AddrWithHash(addr, _) => {
+                let node = merkle.read_node(*addr)?;
+                (*node).clone()
+            }
             Root::Node(node) | Root::HashedNode(node, _) => node.clone(), // todo remove clone
         };
 

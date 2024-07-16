@@ -11,6 +11,7 @@ use std::fmt::Debug;
 use std::future::ready;
 use std::io::Write;
 use std::iter::once;
+use std::sync::Arc;
 use storage::{
     BranchNode, Child, LeafNode, LinearAddress, NibblesIterator, Node, NodeStore, Path,
     ReadLinearStore, TrieHash,
@@ -79,14 +80,15 @@ macro_rules! write_attributes {
 }
 
 pub trait NodeReader {
-    fn read_node(&self, addr: LinearAddress) -> Result<Node, MerkleError>;
+    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, MerkleError>;
     /// Returns the root address of the trie stored on disk
     fn root_address(&self) -> Option<LinearAddress>;
 }
 
 impl<T: ReadLinearStore> NodeReader for NodeStore<T> {
-    fn read_node(&self, addr: LinearAddress) -> Result<Node, MerkleError> {
-        self.read_node(addr).map_err(Into::into)
+    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, MerkleError> {
+        let node = self.read_node(addr).map_err(|e| MerkleError::IO(e))?;
+        Ok(Arc::new(node))
     }
 
     fn root_address(&self) -> Option<LinearAddress> {
@@ -126,7 +128,7 @@ impl<T: NodeReader> ImmutableMerkle<T> {
         &self.root
     }
 
-    pub(crate) fn read_node(&self, addr: LinearAddress) -> Result<Node, MerkleError> {
+    pub(crate) fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, MerkleError> {
         if self.deleted.contains(&addr) {
             return Err(MerkleError::NodeNotFound);
         }
@@ -346,7 +348,7 @@ impl<T: NodeReader> ImmutableMerkle<T> {
     ) -> Result<(), MerkleError> {
         write!(writer, "  {addr}[label=\"addr:{addr:?} hash:{hash:?}")?;
 
-        match &self.read_node(addr)? {
+        match &*self.read_node(addr)? {
             Node::Branch(b) => {
                 write_attributes!(writer, b, &b.value.clone().unwrap_or(Box::from([])));
                 writeln!(writer, "\"]")?;
@@ -513,7 +515,10 @@ impl<T: NodeReader> MutableMerkle<T> {
 /// Otherwise, the root is set to [Root::None] (i.e. this trie is empty).
 pub fn new<T: NodeReader>(nodestore: T) -> Result<MutableMerkle<T>, MerkleError> {
     let root = match nodestore.root_address() {
-        Some(addr) => nodestore.read_node(addr)?.into(),
+        Some(addr) => {
+            let node = nodestore.read_node(addr)?;
+            (*node).clone().into()
+        }
         None => Root::None,
     };
 
@@ -554,7 +559,8 @@ impl<T: NodeReader> MutableMerkle<T> {
             }
             Root::AddrWithHash(addr, _) => {
                 self.inner.deleted.insert(addr);
-                self.inner.read_node(addr)?
+                let node = self.inner.read_node(addr)?;
+                (*node).clone()
             }
             Root::Node(node) | Root::HashedNode(node, _) => node,
         };
@@ -640,7 +646,8 @@ impl<T: NodeReader> MutableMerkle<T> {
                             Child::Node(child) | Child::HashedNode(child, _) => child,
                             Child::AddressWithHash(addr, _) => {
                                 self.inner.deleted.insert(addr);
-                                self.inner.read_node(addr)?
+                                let node = self.inner.read_node(addr)?;
+                                (*node).clone()
                             }
                         };
 
@@ -708,7 +715,8 @@ impl<T: NodeReader> MutableMerkle<T> {
             }
             Root::AddrWithHash(addr, _) => {
                 self.inner.deleted.insert(addr);
-                self.inner.read_node(addr)?
+                let node = self.inner.read_node(addr)?;
+                (*node).clone()
             }
             Root::Node(node) | Root::HashedNode(node, _) => node,
         };
@@ -786,7 +794,8 @@ impl<T: NodeReader> MutableMerkle<T> {
                                 }
                                 Child::AddressWithHash(addr, _) => {
                                     self.inner.deleted.insert(*addr);
-                                    self.inner.read_node(*addr)?
+                                    let node = self.inner.read_node(*addr)?;
+                                    (*node).clone()
                                 }
                             };
 
@@ -854,7 +863,8 @@ impl<T: NodeReader> MutableMerkle<T> {
                             Child::Node(node) | Child::HashedNode(node, _) => node,
                             Child::AddressWithHash(addr, _) => {
                                 self.inner.deleted.insert(addr);
-                                self.inner.read_node(addr)?
+                                let node = self.inner.read_node(addr)?;
+                                (*node).clone()
                             }
                         };
 
@@ -903,7 +913,8 @@ impl<T: NodeReader> MutableMerkle<T> {
                             }
                             Child::AddressWithHash(addr, _) => {
                                 self.inner.deleted.insert(*addr);
-                                self.inner.read_node(*addr)?
+                                let node = self.inner.read_node(*addr)?;
+                                (*node).clone()
                             }
                         };
 
