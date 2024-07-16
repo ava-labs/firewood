@@ -397,12 +397,12 @@ pub struct MutableMerkle<T: NodeReader> {
 }
 
 // Hashes `node`, which is at the given `path_prefix`, and its children recursively,
-fn hash_helper(node: &mut Node, path_prefix: &mut Path) -> TrieHash {
+fn hash_helper(mut node: Node, path_prefix: &mut Path) -> (Node, TrieHash) {
     match node {
         Node::Branch(ref mut b) => {
             for (nibble, child) in b.children.iter_mut().enumerate() {
                 // Take child from b.children
-                let Child::Node(mut child_node) = std::mem::take(child) else {
+                let Child::Node(child_node) = std::mem::take(child) else {
                     // There is no child or we already know its hash.
                     continue;
                 };
@@ -413,16 +413,16 @@ fn hash_helper(node: &mut Node, path_prefix: &mut Path) -> TrieHash {
                     .0
                     .extend(b.partial_path.0.iter().copied().chain(once(nibble as u8)));
 
-                let child_hash = hash_helper(&mut child_node, path_prefix);
-
-                *child = Child::HashedNode(child_node, child_hash);
+                let hashed_child = hash_helper(child_node, path_prefix);
+                *child = Child::HashedNode(hashed_child.0, hashed_child.1);
                 path_prefix.0.truncate(original_length);
             }
         }
         Node::Leaf(_) => {}
     }
 
-    hash_node(node, path_prefix)
+    let hash = hash_node(&node, path_prefix);
+    (node, hash)
 }
 
 impl<T: NodeWriter> MutableMerkle<T> {
@@ -432,17 +432,17 @@ impl<T: NodeWriter> MutableMerkle<T> {
             self.inner.nodestore.delete_node(*addr)?;
         }
 
-        let Root::Node(mut node) = self.inner.root else {
+        let Root::Node(root) = self.inner.root else {
             return Ok(ImmutableMerkle {
                 nodestore: self.inner.nodestore,
                 root: self.inner.root,
             });
         };
 
-        let hash = hash_helper(&mut node, &mut Path(Default::default()));
+        let (root, hash) = hash_helper(root, &mut Path(Default::default()));
         Ok(ImmutableMerkle {
             nodestore: self.inner.nodestore,
-            root: Root::HashedNode(node, hash),
+            root: Root::HashedNode(root, hash),
         })
     }
 }
