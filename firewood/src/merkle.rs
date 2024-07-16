@@ -111,6 +111,7 @@ impl<T: WriteLinearStore> NodeWriter for NodeStore<T> {
 
 #[derive(Debug)]
 pub struct ImmutableMerkle<T: NodeReader> {
+    deleted: HashSet<LinearAddress>,
     nodestore: T,
     root: Root,
 }
@@ -121,6 +122,9 @@ impl<T: NodeReader> ImmutableMerkle<T> {
     }
 
     pub(crate) fn read_node(&self, addr: LinearAddress) -> Result<Node, MerkleError> {
+        if self.deleted.contains(&addr) {
+            return Err(MerkleError::NodeNotFound);
+        }
         self.nodestore.read_node(addr)
     }
 
@@ -393,10 +397,10 @@ impl<T: NodeReader> ImmutableMerkle<T> {
 #[derive(Debug)]
 pub struct MutableMerkle<T: NodeReader> {
     inner: ImmutableMerkle<T>,
-    deleted: HashSet<LinearAddress>,
 }
 
-// Hashes `node`, which is at the given `path_prefix`, and its children recursively,
+/// Hashes `node`, which is at the given `path_prefix`, and its children recursively.
+/// Returns the hashed node and its hash.
 fn hash_helper(mut node: Node, path_prefix: &mut Path) -> (Node, TrieHash) {
     match node {
         Node::Branch(ref mut b) => {
@@ -425,22 +429,16 @@ fn hash_helper(mut node: Node, path_prefix: &mut Path) -> (Node, TrieHash) {
     (node, hash)
 }
 
-impl<T: NodeWriter> MutableMerkle<T> {
-    /// Hashes the trie and returns the merkle as its immutable variant.
-    pub fn hash(mut self) -> Result<ImmutableMerkle<impl NodeReader>, MerkleError> {
-        for addr in self.deleted.iter() {
-            self.inner.nodestore.delete_node(*addr)?;
-        }
-
+impl<T: NodeReader> MutableMerkle<T> {
+    /// Hashes the trie and returns it as its immutable variant.
+    pub fn hash(self) -> Result<ImmutableMerkle<impl NodeReader>, MerkleError> {
         let Root::Node(root) = self.inner.root else {
-            return Ok(ImmutableMerkle {
-                nodestore: self.inner.nodestore,
-                root: self.inner.root,
-            });
+            return Ok(self.inner);
         };
 
         let (root, hash) = hash_helper(root, &mut Path(Default::default()));
         Ok(ImmutableMerkle {
+            deleted: self.inner.deleted,
             nodestore: self.inner.nodestore,
             root: Root::HashedNode(root, hash),
         })
@@ -457,19 +455,15 @@ pub fn new<T: NodeReader>(nodestore: T) -> Result<MutableMerkle<T>, MerkleError>
     };
 
     Ok(MutableMerkle {
-        inner: ImmutableMerkle { nodestore, root },
-        deleted: Default::default(),
+        inner: ImmutableMerkle {
+            nodestore,
+            root,
+            deleted: Default::default(),
+        },
     })
 }
 
 impl<T: NodeReader> MutableMerkle<T> {
-    pub fn read_node(&self, addr: LinearAddress) -> Result<Node, MerkleError> {
-        if self.deleted.contains(&addr) {
-            return Err(MerkleError::NodeNotFound);
-        }
-        self.inner.nodestore.read_node(addr)
-    }
-
     pub const fn root(&self) -> &Root {
         &self.inner.root
     }
@@ -496,8 +490,8 @@ impl<T: NodeReader> MutableMerkle<T> {
                 return Ok(());
             }
             Root::AddrWithHash(addr, _) => {
-                self.deleted.insert(addr);
-                self.read_node(addr)?
+                self.inner.deleted.insert(addr);
+                self.inner.read_node(addr)?
             }
             Root::Node(node) | Root::HashedNode(node, _) => node,
         };
@@ -582,8 +576,8 @@ impl<T: NodeReader> MutableMerkle<T> {
                             }
                             Child::Node(child) | Child::HashedNode(child, _) => child,
                             Child::AddressWithHash(addr, _) => {
-                                self.deleted.insert(addr);
-                                self.read_node(addr)?
+                                self.inner.deleted.insert(addr);
+                                self.inner.read_node(addr)?
                             }
                         };
 
@@ -650,8 +644,8 @@ impl<T: NodeReader> MutableMerkle<T> {
                 return Ok(None);
             }
             Root::AddrWithHash(addr, _) => {
-                self.deleted.insert(addr);
-                self.read_node(addr)?
+                self.inner.deleted.insert(addr);
+                self.inner.read_node(addr)?
             }
             Root::Node(node) | Root::HashedNode(node, _) => node,
         };
@@ -728,8 +722,8 @@ impl<T: NodeReader> MutableMerkle<T> {
                                     )
                                 }
                                 Child::AddressWithHash(addr, _) => {
-                                    self.deleted.insert(*addr);
-                                    self.read_node(*addr)?
+                                    self.inner.deleted.insert(*addr);
+                                    self.inner.read_node(*addr)?
                                 }
                             };
 
@@ -796,8 +790,8 @@ impl<T: NodeReader> MutableMerkle<T> {
                             }
                             Child::Node(node) | Child::HashedNode(node, _) => node,
                             Child::AddressWithHash(addr, _) => {
-                                self.deleted.insert(addr);
-                                self.read_node(addr)?
+                                self.inner.deleted.insert(addr);
+                                self.inner.read_node(addr)?
                             }
                         };
 
@@ -845,8 +839,8 @@ impl<T: NodeReader> MutableMerkle<T> {
                                 )
                             }
                             Child::AddressWithHash(addr, _) => {
-                                self.deleted.insert(*addr);
-                                self.read_node(*addr)?
+                                self.inner.deleted.insert(*addr);
+                                self.inner.read_node(*addr)?
                             }
                         };
 
