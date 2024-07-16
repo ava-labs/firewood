@@ -95,11 +95,16 @@ impl<T: ReadLinearStore> NodeReader for NodeStore<T> {
 }
 
 pub trait NodeWriter: NodeReader {
+    fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), MerkleError>;
     fn create_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError>;
     fn delete_node(&mut self, addr: LinearAddress) -> Result<(), MerkleError>;
 }
 
 impl<T: WriteLinearStore> NodeWriter for NodeStore<T> {
+    fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), MerkleError> {
+        self.set_root(addr).map_err(Into::into)
+    }
+
     fn create_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError> {
         self.create_node(node).map_err(Into::into)
     }
@@ -391,6 +396,64 @@ impl<T: NodeReader> ImmutableMerkle<T> {
         write!(result, "}}")?;
 
         Ok(String::from_utf8_lossy(&result).to_string())
+    }
+}
+
+impl<T: NodeWriter> ImmutableMerkle<T> {
+    pub fn write(&mut self) -> Result<(), MerkleError> {
+        for addr in self.deleted.iter() {
+            self.nodestore.delete_node(*addr)?;
+        }
+
+        match std::mem::take(&mut self.root) {
+            Root::Node(_) => {
+                unreachable!("node should have been hashed. TODO make this impossible.")
+            }
+            Root::None => {
+                self.nodestore.set_root(None)?;
+            }
+            Root::AddrWithHash(addr, hash) => {
+                // Already written
+                // Replace take above
+                self.root = Root::AddrWithHash(addr, hash);
+            }
+            Root::HashedNode(node, hash) => {
+                // Write the node and update the root
+                let addr = self.write_helper(node)?;
+                self.root = Root::AddrWithHash(addr, hash);
+            }
+        }
+        Ok(())
+    }
+
+    /// Writes `node` and its children recursively to `self.nodestore`.
+    /// This method replaces all of the in memory represetations of the nodes with
+    /// `Child::AddressWithHash` variants.
+    /// TODO we should have a NodeWithAddressAndHash variant to avoid this.
+    /// We should be able to write a node but keep ownership of it.
+    fn write_helper(&mut self, mut node: Node) -> Result<LinearAddress, MerkleError> {
+        match node {
+            Node::Leaf(_) => {}
+            Node::Branch(ref mut branch) => {
+                for child in branch.children.iter_mut() {
+                    match std::mem::take(child) {
+                        Child::None => {}
+                        Child::AddressWithHash(_, _) => {} // already written
+                        Child::Node(_) => {
+                            unreachable!("node should have been hashed. TODO make this impossible.")
+                        }
+                        Child::HashedNode(child_node, child_hash) => {
+                            let child_addr = self.write_helper(child_node)?;
+                            let _ = std::mem::replace(
+                                child,
+                                Child::AddressWithHash(child_addr, child_hash),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        self.nodestore.create_node(node)
     }
 }
 

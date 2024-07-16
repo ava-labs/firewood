@@ -26,6 +26,15 @@ pub enum Node {
     Leaf(LeafNode),
 }
 
+impl Default for Node {
+    fn default() -> Self {
+        Node::Leaf(LeafNode {
+            partial_path: Path::new(),
+            value: Box::default(),
+        })
+    }
+}
+
 impl Node {
     /// Returns the partial path of the node.
     pub fn partial_path(&self) -> &Path {
