@@ -512,7 +512,7 @@ impl<'a, 'b, T: NodeReader> Iterator for PathIterator<'a, 'b, T> {
                                         matched_key.push(next_unmatched_key_nibble);
 
                                         let ret = node.clone();
-                                        *node = Arc::new(child.clone());
+                                        *node = child;
 
                                         Some(Ok(PathIterItem {
                                             key_nibbles: node_key,
