@@ -13,7 +13,7 @@ use std::io::Write;
 use std::iter::once;
 use storage::{
     BranchNode, Child, LeafNode, LinearAddress, NibblesIterator, Node, NodeStore, Path,
-    ReadLinearStore, TrieHash, WriteLinearStore,
+    ReadLinearStore, TrieHash,
 };
 
 use thiserror::Error;
@@ -94,25 +94,25 @@ impl<T: ReadLinearStore> NodeReader for NodeStore<T> {
     }
 }
 
-pub trait NodeWriter: NodeReader {
-    fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), MerkleError>;
-    fn create_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError>;
-    fn delete_node(&mut self, addr: LinearAddress) -> Result<(), MerkleError>;
-}
+// pub trait NodeWriter: NodeReader {
+//     fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), MerkleError>;
+//     fn create_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError>;
+//     fn delete_node(&mut self, addr: LinearAddress) -> Result<(), MerkleError>;
+// }
 
-impl<T: WriteLinearStore> NodeWriter for NodeStore<T> {
-    fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), MerkleError> {
-        self.set_root(addr).map_err(Into::into)
-    }
+// impl<T: WriteLinearStore> NodeWriter for NodeStore<T> {
+//     fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), MerkleError> {
+//         self.set_root(addr).map_err(Into::into)
+//     }
 
-    fn create_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError> {
-        self.create_node(node).map_err(Into::into)
-    }
+//     fn create_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError> {
+//         self.create_node(node).map_err(Into::into)
+//     }
 
-    fn delete_node(&mut self, addr: LinearAddress) -> Result<(), MerkleError> {
-        self.delete_node(addr).map_err(Into::into)
-    }
-}
+//     fn delete_node(&mut self, addr: LinearAddress) -> Result<(), MerkleError> {
+//         self.delete_node(addr).map_err(Into::into)
+//     }
+// }
 
 #[derive(Debug)]
 pub struct ImmutableMerkle<T: NodeReader> {
