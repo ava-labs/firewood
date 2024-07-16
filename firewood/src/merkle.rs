@@ -402,7 +402,7 @@ impl<T: NodeReader> ImmutableMerkle<T> {
 // impl<T: NodeWriter> ImmutableMerkle<T> {
 //     pub fn write(&mut self) -> Result<(), MerkleError> {
 //         for addr in self.deleted.iter() {
-//             self.nodestore.delete_node(*addr)?;
+//             self.parent_state.delete_node(*addr)?;
 //         }
 
 //         match std::mem::take(&mut self.root) {
@@ -410,7 +410,7 @@ impl<T: NodeReader> ImmutableMerkle<T> {
 //                 unreachable!("node should have been hashed. TODO make this impossible.")
 //             }
 //             Root::None => {
-//                 self.nodestore.set_root(None)?;
+//                 self.parent_state.set_root(None)?;
 //             }
 //             Root::AddrWithHash(addr, hash) => {
 //                 // Already written
@@ -426,7 +426,7 @@ impl<T: NodeReader> ImmutableMerkle<T> {
 //         Ok(())
 //     }
 
-//     /// Writes `node` and its children recursively to `self.nodestore`.
+//     /// Writes `node` and its children recursively to `self.parent_state`.
 //     /// This method replaces all of the in memory represetations of the nodes with
 //     /// `Child::AddressWithHash` variants.
 //     /// TODO we should have a NodeWithAddressAndHash variant to avoid this.
@@ -453,7 +453,7 @@ impl<T: NodeReader> ImmutableMerkle<T> {
 //                 }
 //             }
 //         }
-//         self.nodestore.create_node(node)
+//         self.parent_state.create_node(node)
 //     }
 // }
 
