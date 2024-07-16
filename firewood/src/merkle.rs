@@ -43,49 +43,6 @@ pub enum MerkleError {
     NodeNotFound,
 }
 
-pub trait NodeReader {
-    fn read_node(&self, addr: LinearAddress) -> Result<Node, MerkleError>;
-    /// Returns the root address of the trie stored on disk
-    fn root_address(&self) -> Option<LinearAddress>;
-}
-
-impl<T: ReadLinearStore> NodeReader for NodeStore<T> {
-    fn read_node(&self, addr: LinearAddress) -> Result<Node, MerkleError> {
-        self.read_node(addr).map_err(Into::into)
-    }
-
-    fn root_address(&self) -> Option<LinearAddress> {
-        self.root_address()
-    }
-}
-
-pub trait NodeWriter: NodeReader {
-    fn create_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError>;
-    fn delete_node(&mut self, addr: LinearAddress) -> Result<(), MerkleError>;
-}
-
-impl<T: WriteLinearStore> NodeWriter for NodeStore<T> {
-    fn create_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError> {
-        self.create_node(node).map_err(Into::into)
-    }
-
-    fn delete_node(&mut self, addr: LinearAddress) -> Result<(), MerkleError> {
-        self.delete_node(addr).map_err(Into::into)
-    }
-}
-
-#[derive(Debug)]
-pub struct MutableMerkle<T: NodeReader> {
-    inner: ImmutableMerkle<T>,
-    deleted: HashSet<LinearAddress>,
-}
-
-#[derive(Debug)]
-pub struct ImmutableMerkle<T: NodeReader> {
-    nodestore: T,
-    root: Root,
-}
-
 // convert a set of nibbles into a printable string
 // panics if there is a non-nibble byte in the set
 fn nibbles_formatter<X: IntoIterator<Item = u8>>(nib: X) -> String {
@@ -119,6 +76,43 @@ macro_rules! write_attributes {
             }
         }
     };
+}
+
+pub trait NodeReader {
+    fn read_node(&self, addr: LinearAddress) -> Result<Node, MerkleError>;
+    /// Returns the root address of the trie stored on disk
+    fn root_address(&self) -> Option<LinearAddress>;
+}
+
+impl<T: ReadLinearStore> NodeReader for NodeStore<T> {
+    fn read_node(&self, addr: LinearAddress) -> Result<Node, MerkleError> {
+        self.read_node(addr).map_err(Into::into)
+    }
+
+    fn root_address(&self) -> Option<LinearAddress> {
+        self.root_address()
+    }
+}
+
+pub trait NodeWriter: NodeReader {
+    fn create_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError>;
+    fn delete_node(&mut self, addr: LinearAddress) -> Result<(), MerkleError>;
+}
+
+impl<T: WriteLinearStore> NodeWriter for NodeStore<T> {
+    fn create_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError> {
+        self.create_node(node).map_err(Into::into)
+    }
+
+    fn delete_node(&mut self, addr: LinearAddress) -> Result<(), MerkleError> {
+        self.delete_node(addr).map_err(Into::into)
+    }
+}
+
+#[derive(Debug)]
+pub struct ImmutableMerkle<T: NodeReader> {
+    nodestore: T,
+    root: Root,
 }
 
 impl<T: NodeReader> ImmutableMerkle<T> {
@@ -395,6 +389,12 @@ impl<T: NodeReader> ImmutableMerkle<T> {
     }
 }
 
+#[derive(Debug)]
+pub struct MutableMerkle<T: NodeReader> {
+    inner: ImmutableMerkle<T>,
+    deleted: HashSet<LinearAddress>,
+}
+
 impl<T: NodeWriter> MutableMerkle<T> {
     /// Hashes the trie and returns the merkle as its immutable variant.
     pub fn hash(mut self) -> Result<ImmutableMerkle<impl NodeReader>, MerkleError> {
@@ -412,7 +412,10 @@ impl<T: NodeWriter> MutableMerkle<T> {
                 root: Root::AddrWithHash(addr, hash),
             }),
             Root::Node(node) => {
+                let start_time = std::time::Instant::now();
                 let (hash, addr) = self.hash_helper(node, &mut Path(Default::default()))?;
+                let elapsed = start_time.elapsed();
+                println!("hash_helper in hash took {:?}", elapsed);
                 Ok(ImmutableMerkle {
                     nodestore: self.inner.nodestore,
                     root: Root::AddrWithHash(addr, hash),
@@ -443,7 +446,10 @@ impl<T: NodeWriter> MutableMerkle<T> {
                         .0
                         .extend(b.partial_path.0.iter().copied().chain(once(nibble as u8)));
 
+                    // let start_time = std::time::Instant::now();
                     let (child_hash, child_addr) = self.hash_helper(child_node, path_prefix)?;
+                    // let elapsed = start_time.elapsed();
+                    // println!("hash_helper took {:?}", elapsed);
 
                     *child = Child::AddressWithHash(child_addr, child_hash);
                     path_prefix.0.truncate(original_length);
@@ -453,7 +459,11 @@ impl<T: NodeWriter> MutableMerkle<T> {
         }
 
         let hash = hash_node(&node, path_prefix);
+
+        let start_time = std::time::Instant::now();
         let addr = self.inner.nodestore.create_node(node)?;
+        let elapsed = start_time.elapsed();
+        println!("create_node in hash_helper took {:?}", elapsed);
         Ok((hash, addr))
     }
 }

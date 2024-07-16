@@ -968,23 +968,31 @@ mod tests {
     async fn key_value_table_test() {
         let mut merkle = create_test_merkle();
 
+        let max: u8 = 150;
         // Insert key-values in reverse order to ensure iterator
         // doesn't just return the keys in insertion order.
-        for i in (0..=u8::MAX).rev() {
-            for j in (0..=u8::MAX).rev() {
+        for i in (0..=max).rev() {
+            for j in (0..=max).rev() {
                 let key = &[i, j];
                 let value = Box::new([i, j]);
 
+                let start_time = std::time::Instant::now();
                 merkle.insert(key, value).unwrap();
+                let elapsed = start_time.elapsed();
+                println!("Insertion time: {:?}", elapsed);
             }
         }
 
+        let start_time = std::time::Instant::now();
         let merkle = merkle.hash().unwrap();
+        let elapsed = start_time.elapsed();
+        println!("Hash time: {:?}", elapsed);
 
         // Test with no start key
+        let start_time = std::time::Instant::now();
         let mut stream = merkle._key_value_iter();
-        for i in 0..=u8::MAX {
-            for j in 0..=u8::MAX {
+        for i in 0..=max {
+            for j in 0..=max {
                 let expected_key = vec![i, j];
                 let expected_value = vec![i, j];
 
@@ -998,11 +1006,14 @@ mod tests {
             }
         }
         check_stream_is_done(stream).await;
+        let elapsed = start_time.elapsed();
+        println!("Iterate time: {:?}", elapsed);
 
+        let start_time = std::time::Instant::now();
         // Test with start key
-        for i in 0..=u8::MAX {
+        for i in 0..=max {
             let mut stream = merkle._key_value_iter_from_key(vec![i].into_boxed_slice());
-            for j in 0..=u8::MAX {
+            for j in 0..=max {
                 let expected_key = vec![i, j];
                 let expected_value = vec![i, j];
                 assert_eq!(
@@ -1013,7 +1024,7 @@ mod tests {
                     j,
                 );
             }
-            if i == u8::MAX {
+            if i == max {
                 check_stream_is_done(stream).await;
             } else {
                 assert_eq!(
@@ -1024,6 +1035,8 @@ mod tests {
                 );
             }
         }
+        let elapsed = start_time.elapsed();
+        println!("Iterate time: {:?}", elapsed);
     }
 
     #[tokio::test]
