@@ -293,7 +293,8 @@ impl<T: NodeReader> ImmutableMerkle<T> {
         let root = match &self.root {
             Root::None => return Ok(None),
             Root::AddrWithHash(addr, _) => &self.read_node(*addr)?,
-            Root::Node(node) | Root::HashedNode(node, _) => node,
+            Root::Node(node) => node,
+            Root::HashedNode(node, _) => node,
         };
 
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
@@ -328,7 +329,8 @@ impl<T: NodeReader> ImmutableMerkle<T> {
                         #[allow(clippy::indexing_slicing)]
                         let child = match &branch.children[child_index as usize] {
                             Child::None => return Ok(None),
-                            Child::Node(node) | Child::HashedNode(node, _) => node,
+                            Child::Node(node) => node,
+                            Child::HashedNode(node, _) => node,
                             Child::AddressWithHash(addr, _) => &self.read_node(*addr)?,
                         };
 
@@ -466,7 +468,7 @@ pub struct MutableMerkle<T: NodeReader> {
 
 /// Hashes `node`, which is at the given `path_prefix`, and its children recursively.
 /// Returns the hashed node and its hash.
-fn hash_helper(mut node: Node, path_prefix: &mut Path) -> (Node, TrieHash) {
+fn hash_helper(mut node: Node, path_prefix: &mut Path) -> (Arc<Node>, TrieHash) {
     match node {
         Node::Branch(ref mut b) => {
             for (nibble, child) in b.children.iter_mut().enumerate() {
@@ -491,7 +493,7 @@ fn hash_helper(mut node: Node, path_prefix: &mut Path) -> (Node, TrieHash) {
     }
 
     let hash = hash_node(&node, path_prefix);
-    (node, hash)
+    (Arc::new(node), hash)
 }
 
 impl<T: NodeReader> MutableMerkle<T> {
@@ -562,7 +564,8 @@ impl<T: NodeReader> MutableMerkle<T> {
                 let node = self.inner.read_node(addr)?;
                 (*node).clone()
             }
-            Root::Node(node) | Root::HashedNode(node, _) => node,
+            Root::HashedNode(node, _) => (*node).clone(),
+            Root::Node(node) => node,
         };
 
         let root = self.insert_helper(root, key.as_ref(), value)?;
@@ -643,7 +646,8 @@ impl<T: NodeReader> MutableMerkle<T> {
                                 branch.update_child(child_index, Child::Node(new_leaf));
                                 return Ok(node);
                             }
-                            Child::Node(child) | Child::HashedNode(child, _) => child,
+                            Child::Node(child) => child,
+                            Child::HashedNode(child, _) => (*child).clone(),
                             Child::AddressWithHash(addr, _) => {
                                 self.inner.deleted.insert(addr);
                                 let node = self.inner.read_node(addr)?;
@@ -718,7 +722,8 @@ impl<T: NodeReader> MutableMerkle<T> {
                 let node = self.inner.read_node(addr)?;
                 (*node).clone()
             }
-            Root::Node(node) | Root::HashedNode(node, _) => node,
+            Root::Node(node) => node,
+            Root::HashedNode(node, _) => (*node).clone(),
         };
 
         let (root, removed_value) = self.remove_helper(root, &key)?;
@@ -783,15 +788,14 @@ impl<T: NodeReader> MutableMerkle<T> {
                             // The branch's only child becomes the root of this subtrie.
                             let mut child = match child {
                                 Child::None => unreachable!(),
-                                Child::Node(child_node) | Child::HashedNode(child_node, _) => {
-                                    std::mem::replace(
-                                        child_node,
-                                        Node::Leaf(LeafNode {
-                                            value: Box::from([]),
-                                            partial_path: Path::new(),
-                                        }),
-                                    )
-                                }
+                                Child::Node(child_node) => std::mem::replace(
+                                    child_node,
+                                    Node::Leaf(LeafNode {
+                                        value: Box::from([]),
+                                        partial_path: Path::new(),
+                                    }),
+                                ),
+                                Child::HashedNode(child_node, _) => (**child_node).clone(),
                                 Child::AddressWithHash(addr, _) => {
                                     self.inner.deleted.insert(*addr);
                                     let node = self.inner.read_node(*addr)?;
@@ -860,7 +864,8 @@ impl<T: NodeReader> MutableMerkle<T> {
                             Child::None => {
                                 return Ok((Some(node), None));
                             }
-                            Child::Node(node) | Child::HashedNode(node, _) => node,
+                            Child::HashedNode(node, _) => (*node).clone(),
+                            Child::Node(node) => node,
                             Child::AddressWithHash(addr, _) => {
                                 self.inner.deleted.insert(addr);
                                 let node = self.inner.read_node(addr)?;
@@ -902,15 +907,14 @@ impl<T: NodeReader> MutableMerkle<T> {
                         // The branch has only 1 child. Remove the branch and return the child.
                         let mut child = match child {
                             Child::None => unreachable!(),
-                            Child::Node(child_node) | Child::HashedNode(child_node, _) => {
-                                std::mem::replace(
-                                    child_node,
-                                    Node::Leaf(LeafNode {
-                                        value: Box::from([]),
-                                        partial_path: Path::new(),
-                                    }),
-                                )
-                            }
+                            Child::HashedNode(child_node, _) => (**child_node).clone(),
+                            Child::Node(child_node) => std::mem::replace(
+                                child_node,
+                                Node::Leaf(LeafNode {
+                                    value: Box::from([]),
+                                    partial_path: Path::new(),
+                                }),
+                            ),
                             Child::AddressWithHash(addr, _) => {
                                 self.inner.deleted.insert(*addr);
                                 let node = self.inner.read_node(*addr)?;

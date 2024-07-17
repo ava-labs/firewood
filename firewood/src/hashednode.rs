@@ -3,6 +3,7 @@
 
 use sha2::{Digest, Sha256};
 use std::iter::{self};
+use std::sync::Arc;
 
 use storage::LinearAddress;
 use storage::{Child, TrieHash};
@@ -19,7 +20,7 @@ pub enum Root {
     None,
     AddrWithHash(LinearAddress, TrieHash),
     Node(Node),
-    HashedNode(Node, TrieHash),
+    HashedNode(Arc<Node>, TrieHash),
 }
 
 impl From<Node> for Root {

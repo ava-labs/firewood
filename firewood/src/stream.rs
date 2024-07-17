@@ -144,7 +144,8 @@ impl<'a, T: NodeReader> Stream for MerkleNodeStream<'a, T> {
                                     let node = merkle.read_node(addr)?;
                                     (*node).clone()
                                 }
-                                Child::Node(node) | Child::HashedNode(node, _) => node,
+                                Child::Node(node) => node,
+                                Child::HashedNode(node, _) => (*node).clone(),
                             };
 
                             // let child = merkle.read_node(child_addr)?;
@@ -195,7 +196,8 @@ fn get_iterator_intial_state<T: NodeReader>(
             let node = merkle.read_node(*addr)?;
             (*node).clone()
         }
-        Root::Node(node) | Root::HashedNode(node, _) => {
+        Root::HashedNode(node, _) => (**node).clone(),
+        Root::Node(node) => {
             // The root is a leaf node.
             node.clone()
         }
@@ -271,7 +273,8 @@ fn get_iterator_intial_state<T: NodeReader>(
                             let node = merkle.read_node(*addr)?;
                             (*node).clone()
                         }
-                        Child::Node(node) | Child::HashedNode(node, _) => node.clone(), // TODO can we avoid ARCing this?
+                        Child::HashedNode(node, _) => (**node).clone(),
+                        Child::Node(node) => node.clone(), // TODO can we avoid cloning this?
                     };
 
                     matched_key_nibbles.push(next_unmatched_key_nibble);
@@ -417,7 +420,8 @@ impl<'a, 'b, T: NodeReader> PathIterator<'a, 'b, T> {
                 let node = merkle.read_node(*addr)?;
                 (*node).clone()
             }
-            Root::Node(node) | Root::HashedNode(node, _) => node.clone(), // todo remove clone
+            Root::HashedNode(node, _) => (**node).clone(),
+            Root::Node(node) => node.clone(),
         };
 
         Ok(Self {
@@ -520,7 +524,20 @@ impl<'a, 'b, T: NodeReader> Iterator for PathIterator<'a, 'b, T> {
                                             next_nibble: Some(next_unmatched_key_nibble),
                                         }))
                                     }
-                                    Child::Node(child) | Child::HashedNode(child, _) => {
+                                    Child::HashedNode(child, _) => {
+                                        let node_key = matched_key.clone().into_boxed_slice();
+                                        matched_key.push(next_unmatched_key_nibble);
+
+                                        let ret = node.clone();
+                                        *node = child.clone();
+
+                                        Some(Ok(PathIterItem {
+                                            key_nibbles: node_key,
+                                            node: ret,
+                                            next_nibble: Some(next_unmatched_key_nibble),
+                                        }))
+                                    }
+                                    Child::Node(child) => {
                                         let node_key = matched_key.clone().into_boxed_slice();
                                         matched_key.push(next_unmatched_key_nibble);
 
