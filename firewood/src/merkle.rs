@@ -87,7 +87,7 @@ pub trait NodeReader {
 
 impl<T: ReadLinearStore> NodeReader for NodeStore<T> {
     fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, MerkleError> {
-        let node = self.read_node(addr).map_err(|e| MerkleError::IO(e))?;
+        let node = self.read_node(addr).map_err(MerkleError::IO)?;
         Ok(Arc::new(node))
     }
 
