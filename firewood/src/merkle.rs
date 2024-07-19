@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::hashednode::{hash_node, Root};
+use crate::hashednode::hash_node;
 use crate::proof::{Proof, ProofError};
 use crate::stream::{MerkleKeyValueStream, PathIterator};
 use crate::v2::api;
@@ -462,9 +462,7 @@ impl<T: NodeReader> Merkle<T> {
 #[derive(Debug)]
 pub struct MutableProposal<T: NodeWriter> {
     deleted: Vec<LinearAddress>,
-    // TODO: Should we restrict the type of root
-    // to be None or a Node?
-    root: Root,
+    root: Option<Node>,
     nodestore: T,
 }
 
@@ -475,7 +473,8 @@ impl<T: NodeWriter> MutableProposal<T> {
             self.nodestore.delete_node(*addr)?;
         }
 
-        let Root::Node(root) = std::mem::take(&mut self.root) else {
+        let Some(root) = std::mem::take(&mut self.root) else {
+            self.nodestore.set_root(None)?;
             return Ok(Merkle {
                 nodestore: self.nodestore,
             });
@@ -526,32 +525,32 @@ impl<T: NodeWriter> MutableProposal<T> {
 /// If the nodestore has a root address, the root node is read and used as the root.
 /// Otherwise, the root is set to [Root::None] (i.e. this trie is empty).
 pub fn new<T: NodeWriter>(nodestore: T) -> Result<MutableProposal<T>, MerkleError> {
-    let root = match nodestore.root_address() {
-        Some(addr) => {
-            let node = nodestore.read_node(addr)?;
-            (*node).clone().into()
-        }
-        None => Root::None,
+    let Some(root_addr) = nodestore.root_address() else {
+        return Ok(MutableProposal {
+            deleted: Default::default(),
+            root: None,
+            nodestore,
+        });
     };
 
+    let root = nodestore.read_node(root_addr)?;
+    let root = (*root).clone();
+
     Ok(MutableProposal {
-        deleted: Default::default(),
-        root,
+        deleted: vec![root_addr],
+        root: Some(root),
         nodestore,
     })
 }
 
 impl<T: NodeWriter> MutableProposal<T> {
-    pub const fn root(&self) -> &Root {
+    pub const fn root(&self) -> &Option<Node> {
         &self.root
     }
 
     pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
-        let root = match &self.root {
-            Root::None => return Ok(None),
-            Root::Node(node) => node,
-            Root::AddrWithHash(_, _) => unreachable!(),
-            Root::HashedNode(_, _) => unreachable!(),
+        let Some(root) = &self.root else {
+            return Ok(None);
         };
 
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
@@ -562,24 +561,15 @@ impl<T: NodeWriter> MutableProposal<T> {
     pub fn insert(&mut self, key: &[u8], value: Box<[u8]>) -> Result<(), MerkleError> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
-        let root = match std::mem::take(&mut self.root) {
-            Root::None => {
-                // The trie is empty. Create a new leaf node with `value` and set
-                // it as the root.
-                let root = Node::Leaf(LeafNode {
-                    partial_path: key,
-                    value,
-                });
-                self.root = root.into();
-                return Ok(());
-            }
-            Root::AddrWithHash(addr, _) => {
-                self.deleted.push(addr);
-                let node = self.nodestore.read_node(addr)?;
-                (*node).clone()
-            }
-            Root::HashedNode(node, _) => (*node).clone(),
-            Root::Node(node) => node,
+        let Some(root) = std::mem::take(&mut self.root) else {
+            // The trie is empty. Create a new leaf node with `value` and set
+            // it as the root.
+            let root = Node::Leaf(LeafNode {
+                partial_path: key,
+                value,
+            });
+            self.root = root.into();
+            return Ok(());
         };
 
         let root = self.insert_helper(root, key.as_ref(), value)?;
@@ -726,18 +716,9 @@ impl<T: NodeWriter> MutableProposal<T> {
     pub fn remove(&mut self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
-        let root = match std::mem::take(&mut self.root) {
-            Root::None => {
-                // The trie is empty. There is nothing to remove.
-                return Ok(None);
-            }
-            Root::AddrWithHash(addr, _) => {
-                self.deleted.push(addr);
-                let node = self.nodestore.read_node(addr)?;
-                (*node).clone()
-            }
-            Root::Node(node) => node,
-            Root::HashedNode(node, _) => (*node).clone(),
+        let Some(root) = std::mem::take(&mut self.root) else {
+            // The trie is empty. There is nothing to remove.
+            return Ok(None);
         };
 
         let (root, removed_value) = self.remove_helper(root, &key)?;
@@ -1217,7 +1198,7 @@ mod tests {
         assert!(merkle.get(&key3).unwrap().is_none());
         assert!(merkle.remove(&key3).unwrap().is_none());
 
-        assert!(matches!(merkle.root(), Root::None));
+        assert!(matches!(merkle.root(), None));
     }
 
     #[test]
@@ -1248,7 +1229,7 @@ mod tests {
             let got = merkle.get(&key).unwrap();
             assert!(got.is_none());
         }
-        assert!(matches!(merkle.root(), Root::None));
+        assert!(matches!(merkle.root(), None));
     }
 
     //     #[test]
