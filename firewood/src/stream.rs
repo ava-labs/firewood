@@ -2,8 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::{
-    hashednode::Root,
-    merkle::{ImmutableMerkle, Key, MerkleError, NodeReader, Value},
+    merkle::{Key, Merkle, MerkleError, NodeReader, Value},
     v2::api,
 };
 
@@ -70,7 +69,7 @@ impl NodeStreamState {
 #[derive(Debug)]
 pub struct MerkleNodeStream<'a, T: NodeReader> {
     state: NodeStreamState,
-    merkle: &'a ImmutableMerkle<T>,
+    merkle: &'a Merkle<T>,
 }
 
 impl<'a, T: NodeReader> FusedStream for MerkleNodeStream<'a, T> {
@@ -84,7 +83,7 @@ impl<'a, T: NodeReader> FusedStream for MerkleNodeStream<'a, T> {
 impl<'a, T: NodeReader> MerkleNodeStream<'a, T> {
     /// Returns a new iterator that will iterate over all the nodes in `merkle`
     /// with keys greater than or equal to `key`.
-    pub(super) fn new(merkle: &'a ImmutableMerkle<T>, key: Key) -> Self {
+    pub(super) fn new(merkle: &'a Merkle<T>, key: Key) -> Self {
         Self {
             state: NodeStreamState::new(key),
             merkle,
@@ -183,25 +182,15 @@ impl<'a, T: NodeReader> Stream for MerkleNodeStream<'a, T> {
 
 /// Returns the initial state for an iterator over the given `merkle` which starts at `key`.
 fn get_iterator_intial_state<T: NodeReader>(
-    merkle: &ImmutableMerkle<T>,
+    merkle: &Merkle<T>,
     key: &[u8],
 ) -> Result<NodeStreamState, api::Error> {
-    let mut node = match merkle.root() {
-        Root::None => {
-            // This merkle is empty.
-            return Ok(NodeStreamState::Iterating { iter_stack: vec![] });
-        }
-        Root::AddrWithHash(addr, _) => {
-            // The root is a branch node.
-            let node = merkle.read_node(*addr)?;
-            (*node).clone()
-        }
-        Root::HashedNode(node, _) => (**node).clone(),
-        Root::Node(node) => {
-            // The root is a leaf node.
-            node.clone()
-        }
+    let Some((root_addr, _)) = merkle.root() else {
+        // This merkle is empty.
+        return Ok(NodeStreamState::Iterating { iter_stack: vec![] });
     };
+    let node = merkle.read_node(root_addr)?;
+    let mut node = (*node).clone();
 
     // Invariant: `matched_key_nibbles` is the path before `node`'s
     // partial path at the start of each loop iteration.
@@ -310,7 +299,7 @@ impl<'a, T: NodeReader> MerkleKeyValueStreamState<'a, T> {
 #[derive(Debug)]
 pub struct MerkleKeyValueStream<'a, T: NodeReader> {
     state: MerkleKeyValueStreamState<'a, T>,
-    merkle: &'a ImmutableMerkle<T>,
+    merkle: &'a Merkle<T>,
 }
 
 impl<'a, T: NodeReader> FusedStream for MerkleKeyValueStream<'a, T> {
@@ -320,14 +309,14 @@ impl<'a, T: NodeReader> FusedStream for MerkleKeyValueStream<'a, T> {
 }
 
 impl<'a, T: NodeReader> MerkleKeyValueStream<'a, T> {
-    pub(super) fn _new(merkle: &'a ImmutableMerkle<T>) -> Self {
+    pub(super) fn _new(merkle: &'a Merkle<T>) -> Self {
         Self {
             state: MerkleKeyValueStreamState::_new(),
             merkle,
         }
     }
 
-    pub(super) fn _from_key(merkle: &'a ImmutableMerkle<T>, key: Key) -> Self {
+    pub(super) fn _from_key(merkle: &'a Merkle<T>, key: Key) -> Self {
         Self {
             state: MerkleKeyValueStreamState::_with_key(key),
             merkle,
@@ -404,24 +393,16 @@ enum PathIteratorState<'a> {
 #[derive(Debug)]
 pub struct PathIterator<'a, 'b, T: NodeReader> {
     state: PathIteratorState<'b>,
-    merkle: &'a ImmutableMerkle<T>,
+    merkle: &'a Merkle<T>,
 }
 
 impl<'a, 'b, T: NodeReader> PathIterator<'a, 'b, T> {
-    pub(super) fn new(merkle: &'a ImmutableMerkle<T>, key: &'b [u8]) -> Result<Self, MerkleError> {
-        let root = match merkle.root() {
-            Root::None => {
-                return Ok(Self {
-                    state: PathIteratorState::Exhausted,
-                    merkle,
-                })
-            }
-            Root::AddrWithHash(addr, _) => {
-                let node = merkle.read_node(*addr)?;
-                (*node).clone()
-            }
-            Root::HashedNode(node, _) => (**node).clone(),
-            Root::Node(node) => node.clone(),
+    pub(super) fn new(merkle: &'a Merkle<T>, key: &'b [u8]) -> Result<Self, MerkleError> {
+        let Some((root_addr, _)) = merkle.root() else {
+            return Ok(Self {
+                state: PathIteratorState::Exhausted,
+                merkle,
+            });
         };
 
         Ok(Self {
@@ -429,7 +410,7 @@ impl<'a, 'b, T: NodeReader> PathIterator<'a, 'b, T> {
             state: PathIteratorState::Iterating {
                 matched_key: vec![],
                 unmatched_key: NibblesIterator::new(key),
-                node: Arc::new(root),
+                node: merkle.read_node(root_addr)?,
             },
         })
     }
@@ -626,7 +607,7 @@ mod tests {
     use super::*;
     use test_case::test_case;
 
-    impl<T: NodeReader> ImmutableMerkle<T> {
+    impl<T: NodeReader> Merkle<T> {
         pub(crate) fn node_iter(&self) -> MerkleNodeStream<T> {
             MerkleNodeStream::new(self, Box::new([]))
         }

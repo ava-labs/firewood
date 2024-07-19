@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    merkle::{ImmutableMerkle, NodeReader},
+    merkle::{Merkle, NodeReader},
     v2::api::HashKey,
 };
 use nix::errno::Errno;
@@ -137,7 +137,7 @@ impl<N: AsRef<[u8]> + Send> Proof<N> {
         &self,
         _key: K,
         _root_hash: HashKey,
-        _in_mem_merkle: &mut ImmutableMerkle<T>,
+        _in_mem_merkle: &mut Merkle<T>,
         _allow_non_existent_node: bool,
     ) -> Result<Option<Vec<u8>>, ProofError>
     where
