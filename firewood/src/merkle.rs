@@ -85,6 +85,8 @@ pub trait NodeReader {
     fn root_address(&self) -> Option<LinearAddress>;
 }
 
+// TODO: write an actual implementation for NodeReader in the storage crate.
+// This "implementation" exists solely to allow the tests to compile.
 impl<T: ReadLinearStore> NodeReader for NodeStore<T> {
     fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, MerkleError> {
         let node = self.read_node(addr).map_err(MerkleError::IO)?;
@@ -102,6 +104,8 @@ pub trait NodeWriter: NodeReader {
     fn delete_node(&mut self, addr: LinearAddress) -> Result<(), MerkleError>;
 }
 
+// TODO: write an actual implementation for NodeWriter in the storage crate.
+// This "implementation" exists solely to allow the tests to compile.
 impl<T: WriteLinearStore> NodeWriter for NodeStore<T> {
     fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), MerkleError> {
         self.set_root(addr).map_err(Into::into)
