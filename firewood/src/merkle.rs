@@ -462,7 +462,7 @@ impl<T: NodeReader> ImmutableMerkle<T> {
 // }
 
 #[derive(Debug)]
-pub struct MutableMerkle<T: NodeReader> {
+pub struct MutableProposal<T: NodeReader> {
     inner: ImmutableMerkle<T>,
 }
 
@@ -496,7 +496,7 @@ fn hash_helper(mut node: Node, path_prefix: &mut Path) -> (Arc<Node>, TrieHash) 
     (Arc::new(node), hash)
 }
 
-impl<T: NodeReader> MutableMerkle<T> {
+impl<T: NodeReader> MutableProposal<T> {
     /// Hashes the trie and returns it as its immutable variant.
     pub fn hash(self) -> Result<ImmutableMerkle<impl NodeReader>, MerkleError> {
         let Root::Node(root) = self.inner.root else {
@@ -515,7 +515,7 @@ impl<T: NodeReader> MutableMerkle<T> {
 /// Returns a new merkle using the given [NodeStore].
 /// If the nodestore has a root address, the root node is read and used as the root.
 /// Otherwise, the root is set to [Root::None] (i.e. this trie is empty).
-pub fn new<T: NodeReader>(nodestore: T) -> Result<MutableMerkle<T>, MerkleError> {
+pub fn new<T: NodeReader>(nodestore: T) -> Result<MutableProposal<T>, MerkleError> {
     let root = match nodestore.root_address() {
         Some(addr) => {
             let node = nodestore.read_node(addr)?;
@@ -524,7 +524,7 @@ pub fn new<T: NodeReader>(nodestore: T) -> Result<MutableMerkle<T>, MerkleError>
         None => Root::None,
     };
 
-    Ok(MutableMerkle {
+    Ok(MutableProposal {
         inner: ImmutableMerkle {
             parent_state: nodestore,
             root,
@@ -533,13 +533,13 @@ pub fn new<T: NodeReader>(nodestore: T) -> Result<MutableMerkle<T>, MerkleError>
     })
 }
 
-impl<T: NodeReader> MutableMerkle<T> {
+impl<T: NodeReader> MutableProposal<T> {
     pub const fn root(&self) -> &Root {
         &self.inner.root
     }
 }
 
-impl<T: NodeReader> MutableMerkle<T> {
+impl<T: NodeReader> MutableProposal<T> {
     pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
         self.inner.get(key)
     }
@@ -1020,7 +1020,7 @@ mod tests {
         merkle.insert(b"abc", Box::new([])).unwrap()
     }
 
-    fn create_in_memory_merkle() -> MutableMerkle<NodeStore<MemStore>> {
+    fn create_in_memory_merkle() -> MutableProposal<NodeStore<MemStore>> {
         let nodestore = NodeStore::initialize(MemStore::new(vec![])).unwrap();
         new(nodestore).unwrap()
     }
@@ -1599,7 +1599,7 @@ mod tests {
 
     fn merkle_build_test<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         items: Vec<(K, V)>,
-    ) -> Result<MutableMerkle<NodeStore<MemStore>>, MerkleError> {
+    ) -> Result<MutableProposal<NodeStore<MemStore>>, MerkleError> {
         let nodestore = NodeStore::initialize(MemStore::new(vec![]))?;
         let mut merkle = new(nodestore).unwrap();
         for (k, v) in items.iter() {
