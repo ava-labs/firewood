@@ -168,9 +168,7 @@ pub struct Merkle<T: NodeReader> {
 impl<T: NodeReader> Merkle<T> {
     pub fn root(&self) -> Option<(LinearAddress, TrieHash)> {
         // TODO the nodestore should have the hash already
-        let Some(root_addr) = self.nodestore.root_address() else {
-            return None;
-        };
+        let root_addr = self.nodestore.root_address()?;
         let root = self
             .read_node(root_addr)
             .expect("TODO don't use expect here");
@@ -463,7 +461,7 @@ impl<T: NodeReader> Merkle<T> {
 
 #[derive(Debug)]
 pub struct MutableProposal<T: NodeWriter> {
-    deleted: HashSet<LinearAddress>,
+    deleted: Vec<LinearAddress>,
     // TODO: Should we restrict the type of root
     // to be None or a Node?
     root: Root,
@@ -576,7 +574,7 @@ impl<T: NodeWriter> MutableProposal<T> {
                 return Ok(());
             }
             Root::AddrWithHash(addr, _) => {
-                self.deleted.insert(addr);
+                self.deleted.push(addr);
                 let node = self.nodestore.read_node(addr)?;
                 (*node).clone()
             }
@@ -665,7 +663,7 @@ impl<T: NodeWriter> MutableProposal<T> {
                             Child::Node(child) => child,
                             Child::HashedNode(child, _) => (*child).clone(),
                             Child::AddressWithHash(addr, _) => {
-                                self.deleted.insert(addr);
+                                self.deleted.push(addr);
                                 let node = self.nodestore.read_node(addr)?;
                                 (*node).clone()
                             }
@@ -734,7 +732,7 @@ impl<T: NodeWriter> MutableProposal<T> {
                 return Ok(None);
             }
             Root::AddrWithHash(addr, _) => {
-                self.deleted.insert(addr);
+                self.deleted.push(addr);
                 let node = self.nodestore.read_node(addr)?;
                 (*node).clone()
             }
@@ -813,7 +811,7 @@ impl<T: NodeWriter> MutableProposal<T> {
                                 ),
                                 Child::HashedNode(child_node, _) => (**child_node).clone(),
                                 Child::AddressWithHash(addr, _) => {
-                                    self.deleted.insert(*addr);
+                                    self.deleted.push(*addr);
                                     let node = self.nodestore.read_node(*addr)?;
                                     (*node).clone()
                                 }
@@ -883,7 +881,7 @@ impl<T: NodeWriter> MutableProposal<T> {
                             Child::HashedNode(node, _) => (*node).clone(),
                             Child::Node(node) => node,
                             Child::AddressWithHash(addr, _) => {
-                                self.deleted.insert(addr);
+                                self.deleted.push(addr);
                                 let node = self.nodestore.read_node(addr)?;
                                 (*node).clone()
                             }
@@ -932,7 +930,7 @@ impl<T: NodeWriter> MutableProposal<T> {
                                 }),
                             ),
                             Child::AddressWithHash(addr, _) => {
-                                self.deleted.insert(*addr);
+                                self.deleted.push(*addr);
                                 let node = self.nodestore.read_node(*addr)?;
                                 (*node).clone()
                             }
