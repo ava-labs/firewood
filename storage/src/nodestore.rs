@@ -549,7 +549,7 @@ impl<T: ReadModifiedNode, S: ReadableStorage> NodeReader for NodeStore<T, S> {
     }
 }
 
-impl<S: WritableStorage> NodeWriter for NodeStore<Proposal, S> {
+impl<S: ReadableStorage> NodeWriter for NodeStore<Proposal, S> {
     fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), Error> {
         self.header.root_address = addr;
         Ok(())
