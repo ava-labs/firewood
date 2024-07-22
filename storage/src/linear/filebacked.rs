@@ -15,10 +15,10 @@ use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use super::ReadLinearStore;
+use super::ReadableStorage;
 
 #[derive(Debug)]
-/// A [ReadLinearStore] backed by a file
+/// A [ReadableStorage] backed by a file
 pub struct FileBacked {
     fd: Mutex<File>,
 }
@@ -37,7 +37,7 @@ impl FileBacked {
     }
 }
 
-impl ReadLinearStore for FileBacked {
+impl ReadableStorage for FileBacked {
     fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, Error> {
         let mut fd = self.fd.lock().expect("p");
         fd.seek(std::io::SeekFrom::Start(addr))?;

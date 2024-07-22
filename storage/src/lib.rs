@@ -19,15 +19,12 @@ mod nodestore;
 mod trie_hash;
 
 // re-export these so callers don't need to know where they are
-pub use linear::{LinearStoreParent, ReadLinearStore, WriteLinearStore};
+pub use linear::{LinearStoreParent, ReadableStorage, WritableStorage};
 pub use node::{
     path::NibblesIterator, path::Path, BranchNode, Child, LeafNode, Node, PathIterItem,
 };
 pub use nodestore::{LinearAddress, NodeReader, NodeStore, NodeWriter, UpdateError};
 
-pub use linear::proposed::{ProposedImmutable, ProposedMutable};
-pub use linear::{
-    filebacked::FileBacked, historical::Historical, memory::MemStore, proposed::Proposed,
-};
+pub use linear::{filebacked::FileBacked, memory::MemStore};
 
 pub use trie_hash::TrieHash;

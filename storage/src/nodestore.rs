@@ -10,14 +10,14 @@ use std::fmt::Debug;
 /// free space management of nodes in the page store. It lays out the format
 /// of the [PageStore]. More specifically, it places a [FileIdentifyingMagic]
 /// and a [FreeSpaceHeader] at the beginning
-use std::io::{Error, ErrorKind, Write};
+use std::io::{Error, ErrorKind, Read, Write};
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use crate::node::Node;
-use crate::ProposedImmutable;
+use crate::ReadableStorage;
 
-use super::linear::{ReadLinearStore, WriteLinearStore};
+use super::linear::WritableStorage;
 
 /// [NodeStore] divides the linear store into blocks of different sizes.
 /// [AREA_SIZES] is every valid block size.
@@ -117,7 +117,7 @@ pub struct NodeStore<T> {
     linear_store: T,
 }
 
-impl<T: ReadLinearStore> NodeStore<T> {
+impl<T: ReadableStorage> NodeStore<T> {
     /// Returns (index, area_size) for the [StoredArea] at `addr`.
     /// `index` is the index of `area_size` in [AREA_SIZES].
     fn area_index_and_size(&self, addr: LinearAddress) -> Result<(AreaIndex, u64), Error> {
@@ -159,7 +159,7 @@ impl<T: ReadLinearStore> NodeStore<T> {
         self.header.root_address
     }
 
-    /// Open an existing [NodeStore] from a [ReadLinearStore]
+    /// Open an existing [NodeStore] from a [ReadableStorage]
     ///
     /// This method reads the header previously created from a call to
     /// [NodeStore::initialize]
@@ -177,16 +177,16 @@ impl<T: ReadLinearStore> NodeStore<T> {
         })
     }
 
-    /// Get reference to the underlying [ReadLinearStore] from this [NodeStore]
+    /// Get reference to the underlying [ReadableStorage] from this [NodeStore]
     pub const fn linear_store(&self) -> &T {
         &self.linear_store
     }
 }
 
-impl<T: WriteLinearStore> NodeStore<T> {
+impl<T: WritableStorage> NodeStore<T> {
     /// Create a new [NodeStore] backed by a [WriteLinearStore], and clobber
     /// the underlying store with an empty freelist and no root node
-    pub fn initialize(mut linear_store: T) -> Result<Self, Error> {
+    pub fn initialize(linear_store: T) -> Result<Self, Error> {
         let header = NodeStoreHeader {
             version: Version::new(),
             free_lists: Default::default(),
@@ -427,16 +427,6 @@ impl<T: WriteLinearStore> NodeStore<T> {
     }
 }
 
-impl<W: WriteLinearStore> NodeStore<W> {
-    /// Freeze a writable NodeStore into a ProposedImmutable
-    pub fn freeze(self) -> NodeStore<ProposedImmutable> {
-        NodeStore {
-            header: self.header,
-            linear_store: self.linear_store.freeze(),
-        }
-    }
-}
-
 /// An error from doing an update. One special error is [UpdateError::NodeMoved]
 /// There are no implementations of [Into::into] here because we want to be sure
 /// the caller thinks about how to handle the node moving to a new address when
@@ -541,7 +531,7 @@ pub trait NodeReader {
 
 // TODO: write an actual implementation for NodeReader in the storage crate.
 // This "implementation" exists solely to allow the tests to compile.
-impl<T: ReadLinearStore> NodeReader for NodeStore<T> {
+impl<T: ReadableStorage> NodeReader for NodeStore<T> {
     fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
         let node = self.read_node(addr)?;
         Ok(Arc::new(node))
@@ -564,7 +554,7 @@ pub trait NodeWriter: NodeReader {
 
 // TODO: write an actual implementation for NodeWriter in the storage crate.
 // This "implementation" exists solely to allow the tests to compile.
-impl<T: WriteLinearStore> NodeWriter for NodeStore<T> {
+impl<T: WritableStorage> NodeWriter for NodeStore<T> {
     fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), Error> {
         self.set_root(addr)
     }

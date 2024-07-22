@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::io::Cursor;
 
-use super::{LinearStoreParent, ReadLinearStore};
+use super::{LinearStoreParent, ReadableStorage};
 
 #[derive(Debug)]
 pub(super) struct Layer<'a> {
