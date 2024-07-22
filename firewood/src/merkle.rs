@@ -685,7 +685,7 @@ impl<T: NodeWriter> MutableProposal<T> {
         };
 
         let (root, removed_value) = self.remove_helper(root, &key)?;
-        self.root = root.into();
+        self.root = root;
         Ok(removed_value)
     }
 
@@ -1161,7 +1161,7 @@ mod tests {
         assert!(merkle.get(&key3).unwrap().is_none());
         assert!(merkle.remove(&key3).unwrap().is_none());
 
-        assert!(matches!(merkle.root(), None));
+        assert!(merkle.root().is_none());
     }
 
     #[test]
@@ -1192,7 +1192,7 @@ mod tests {
             let got = merkle.get(&key).unwrap();
             assert!(got.is_none());
         }
-        assert!(matches!(merkle.root(), None));
+        assert!(merkle.root().is_none());
     }
 
     //     #[test]

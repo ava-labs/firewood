@@ -551,9 +551,13 @@ impl<T: ReadLinearStore> NodeReader for NodeStore<T> {
     }
 }
 
+/// TODO document
 pub trait NodeWriter: NodeReader {
+    /// Sets the root address to `addr`.
     fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), Error>;
+    /// Creates the given `node` and returns its address.
     fn create_node(&mut self, node: Node) -> Result<LinearAddress, Error>;
+    /// Deletes the node at `addr`.
     fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error>;
 }
 
@@ -592,7 +596,7 @@ pub struct NodeStore2<T> {
 }
 
 impl<T> NodeReader for NodeStore2<T> {
-    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
+    fn read_node(&self, _addr: LinearAddress) -> Result<Arc<Node>, Error> {
         todo!()
     }
 
