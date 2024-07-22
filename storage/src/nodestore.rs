@@ -314,13 +314,6 @@ impl<T: WritableStorage> NodeStore<T> {
         Ok((addr, index))
     }
 
-    /// Checks to see if a new Node will fit into an existing allocated node space
-    pub fn still_fits(&mut self, old_size: AreaIndex, node: &Node) -> Result<bool, Error> {
-        let stored_area_size = Self::stored_len(node);
-        let required_index = area_size_to_index(stored_area_size)?;
-        Ok(required_index <= old_size)
-    }
-
     /// Get the size of the space allocated to a node a specific address
     pub fn node_size(&self, addr: LinearAddress) -> Result<AreaIndex, Error> {
         let size = 0;
@@ -346,35 +339,6 @@ impl<T: WritableStorage> NodeStore<T> {
             .write(addr.get(), stored_area_bytes.as_slice())?;
 
         Ok(addr)
-    }
-
-    /// Update a [Node] that was previously at the provided address.
-    /// This is complicated by the fact that a node might grow and not be able to fit a the given
-    /// address, in which case we return [UpdateError::NodeMoved].
-    /// `addr` is the address of a StoredArea in the LinearStore.
-    pub fn update_node(&mut self, addr: LinearAddress, node: Node) -> Result<(), UpdateError> {
-        debug_assert!(addr.get() % 8 == 0);
-
-        let (_, old_stored_area_size) = self.area_index_and_size(addr)?;
-
-        let new_area: Area<&Node, FreeArea> = Area::Node(&node);
-
-        let new_area_bytes =
-            bincode::serialize(&new_area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-
-        let new_stored_area_size = new_area_bytes.len() as u64 + 1; // +1 for the size index byte
-
-        if new_stored_area_size <= old_stored_area_size {
-            // the new node fits in the old node's area
-            let addr = addr.get() + 1; // Skip the index byte
-            self.linear_store.write(addr, new_area_bytes.as_slice())?;
-            return Ok(());
-        }
-
-        // the new node is larger than the old node, so we need to allocate a new area
-        let new_node_addr = self.create_node_inner(node)?;
-        self.delete_node(addr)?;
-        Err(UpdateError::NodeMoved(new_node_addr))
     }
 
     /// Update a node in-place. This should only be used when the node was allocated using
@@ -732,88 +696,6 @@ mod tests {
             let read_leaf2 = node_store.read_node(branch_addr).unwrap();
             assert_eq!(read_leaf2, branch);
         }
-    }
-
-    #[test]
-    fn test_update_resize() {
-        let linear_store = MemStore::new(vec![]);
-        let mut node_store = NodeStore::initialize(linear_store).unwrap();
-
-        // Create a leaf
-        let leaf = Node::Leaf(LeafNode {
-            partial_path: Path::new(),
-            value: Box::new([1]),
-        });
-        let leaf_addr = node_store.create_node(leaf).unwrap();
-        let (leaf_index, leaf_area_size) = node_store.area_index_and_size(leaf_addr).unwrap();
-
-        // Update the node
-        let branch = Node::Branch(Box::new(BranchNode {
-            partial_path: Path::from([6, 7, 8]),
-            value: Some(vec![9, 10, 11].into_boxed_slice()),
-            children: Default::default(),
-        }));
-
-        // The new node is larger than the old node, so we need to allocate a new area
-        let (branch_addr, _) = match node_store.update_node(leaf_addr, branch.clone()) {
-            Ok(_) => panic!("Expected NodeMoved"),
-            Err(UpdateError::NodeMoved(new_addr)) => {
-                let (_, branch_area_size) = node_store.area_index_and_size(new_addr).unwrap();
-                (new_addr, branch_area_size)
-            }
-            Err(e) => panic!("Unexpected error: {:?}", e),
-        };
-
-        // The new area should be at the end of the store
-        assert_eq!(branch_addr.get(), NodeStoreHeader::SIZE + leaf_area_size);
-
-        // The free list should be updated
-        let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
-        let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
-        assert_eq!(header.free_lists[leaf_index as usize], Some(leaf_addr));
-
-        // The new node should be readable
-        let read_branch = node_store.read_node(branch_addr).unwrap();
-        assert_eq!(read_branch, branch);
-
-        // The old node should be deleted
-        assert!(node_store.read_node(leaf_addr).is_err());
-    }
-
-    #[test]
-    fn test_update_dont_resize() {
-        let linear_store = MemStore::new(vec![]);
-        let mut node_store = NodeStore::initialize(linear_store).unwrap();
-
-        // Create a leaf
-        let leaf1 = Node::Leaf(LeafNode {
-            partial_path: Path::new(),
-            value: Box::new([1]),
-        });
-        let leaf1_addr = node_store.create_node(leaf1).unwrap();
-
-        // Update the node
-        let leaf2 = Node::Leaf(LeafNode {
-            partial_path: Path::new(),
-            value: Box::new([2]),
-        });
-
-        // The new node should fit in the old area
-        let old_size = node_store.header.size;
-        node_store.update_node(leaf1_addr, leaf2.clone()).unwrap();
-
-        // The header should be unchanged
-        let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
-        let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
-        assert_eq!(header.version, Version::new());
-        let empty_free_lists: FreeLists = Default::default();
-        assert_eq!(header.free_lists, empty_free_lists);
-        assert_eq!(header.root_address, None);
-        assert_eq!(header.size, old_size);
-
-        // The new node should be readable
-        let read_leaf2 = node_store.read_node(leaf1_addr).unwrap();
-        assert_eq!(read_leaf2, leaf2);
     }
 
     #[test]
