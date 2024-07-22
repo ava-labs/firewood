@@ -572,59 +572,36 @@ pub(super) trait UnderlyingStorage: Debug {
     fn get_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error>;
 }
 
-struct Proposal<T: NodeReader> {
-    root: Option<LinearAddress>,
-    deleted: Vec<LinearAddress>, // todo: box
-    free_lists: FreeLists,
+struct Proposal<S: NodeReader> {
     new: HashMap<LinearAddress, Arc<Node>>,
-    parent: T,
+    parent: Box<NodeStore2<S>>,
 }
 
-impl<T: NodeReader> NodeReader for Proposal<T> {
-    fn read_node(&self, _addr: LinearAddress) -> Result<Arc<Node>, Error> {
-        if let Some(node) = self.new.get(&_addr) {
-            Ok(node.clone())
-        } else {
-            self.parent.read_node(_addr)
-        }
-    }
-
-    fn root_address(&self) -> Option<LinearAddress> {
-        self.root
-    }
+enum NodeStoreType<S: NodeReader> {
+    Committed,
+    Proposal(Proposal<S>),
 }
-
-impl<T: NodeReader> NodeWriter for Proposal<T> {
-    fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), Error> {
-        self.root = addr;
-        Ok(())
-    }
-
-    fn create_node(&mut self, _node: Node) -> Result<LinearAddress, Error> {
-        todo!()
-    }
-
-    fn delete_node(&mut self, _addr: LinearAddress) -> Result<(), Error> {
-        self.deleted.push(_addr);
-        Ok(())
-    }
-}
-
-// R1 = empty base
-// P1a = ImmutableProposal based on R1 (with changes)
-// P2 = Proposal on P1a (with changes)
-// propose(R1) -> P1b ... in hash() getting freelist
-// commit(P1a)
 
 struct NodeStore2<S: NodeReader> {
     root: Option<LinearAddress>,
-    deleted: Vec<LinearAddress>, // todo box
+    deleted: Box<[LinearAddress]>,
+    free_lists: FreeLists,
+    inner: NodeStoreType<S>,
     storage: S,
 }
 
 impl<T: NodeReader> NodeReader for NodeStore2<T> {
     fn read_node(&self, _addr: LinearAddress) -> Result<Arc<Node>, Error> {
-        self.storage.read_node(_addr)
+        match &self.inner {
+            NodeStoreType::Committed => self.storage.read_node(_addr),
+            NodeStoreType::Proposal(proposal) => {
+                if let Some(node) = proposal.new.get(&_addr) {
+                    Ok(node.clone())
+                } else {
+                    self.storage.read_node(_addr)
+                }
+            }
+        }
     }
 
     fn root_address(&self) -> Option<LinearAddress> {
