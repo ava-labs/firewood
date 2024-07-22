@@ -105,23 +105,11 @@ struct StoredArea<T> {
     area: T,
 }
 
-/// [NodeStore] creates, reads, updates, and deletes [Node]s.
-/// It stores the nodes in a LinearStore that it manages.
-/// The first thing written in the LinearStore is a NodeStoreHeader,
-/// which contains the version and the free area list heads.
-/// Every subsequent write is a StoredArea containing a [Node] or a FreeArea.
-/// The size of each allocation [NodeStore] makes from LinearStore is one of AREA_SIZES.
-#[derive(Debug)]
-pub struct NodeStore<T> {
-    header: NodeStoreHeader,
-    linear_store: T,
-}
-
 impl<T: ReadableStorage> NodeStore<T> {
     /// Returns (index, area_size) for the [StoredArea] at `addr`.
     /// `index` is the index of `area_size` in [AREA_SIZES].
     fn area_index_and_size(&self, addr: LinearAddress) -> Result<(AreaIndex, u64), Error> {
-        let mut area_stream = self.linear_store.stream_from(addr.get())?;
+        let mut area_stream = self.storage.stream_from(addr.get())?;
 
         let index: AreaIndex = bincode::deserialize_from(&mut area_stream)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
@@ -136,12 +124,13 @@ impl<T: ReadableStorage> NodeStore<T> {
 
     /// Read a [Node] from the provided [LinearAddress].
     /// `addr` is the address of a StoredArea in the LinearStore.
-    pub fn read_node(&self, addr: LinearAddress) -> Result<Node, Error> {
+    /// TODO should this return an Arc?
+    pub fn read_node_from_disk(&self, addr: LinearAddress) -> Result<Node, Error> {
         debug_assert!(addr.get() % 8 == 0);
 
         let addr = addr.get() + 1; // Skip the index byte
 
-        let area_stream = self.linear_store.stream_from(addr)?;
+        let area_stream = self.storage.stream_from(addr)?;
         let area: Area<Node, FreeArea> = bincode::deserialize_from(area_stream)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
@@ -158,13 +147,14 @@ impl<T: ReadableStorage> NodeStore<T> {
     pub const fn root_address(&self) -> Option<LinearAddress> {
         self.header.root_address
     }
+}
 
-    /// Open an existing [NodeStore] from a [ReadableStorage]
+impl<S: WritableStorage> NodeStore<S> {
+    /// Open an existing [NodeStore]
     ///
-    /// This method reads the header previously created from a call to
-    /// [NodeStore::initialize]
-    pub fn open(linear_store: T) -> Result<Self, Error> {
-        let mut stream = linear_store.stream_from(0)?;
+    /// This method reads the header previously created from a call to [NodeStore::initialize]
+    pub fn open(storage: S) -> Result<Self, Error> {
+        let mut stream = storage.stream_from(0)?;
 
         let header: NodeStoreHeader = bincode::deserialize_from(&mut stream)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
@@ -173,20 +163,15 @@ impl<T: ReadableStorage> NodeStore<T> {
 
         Ok(Self {
             header,
-            linear_store,
+            deleted: vec![],
+            inner: NodeStoreType::Committed,
+            storage,
         })
     }
 
-    /// Get reference to the underlying [ReadableStorage] from this [NodeStore]
-    pub const fn linear_store(&self) -> &T {
-        &self.linear_store
-    }
-}
-
-impl<T: WritableStorage> NodeStore<T> {
-    /// Create a new [NodeStore] backed by a [WriteLinearStore], and clobber
+    /// Create a new, empty, [Committed] [NodeStore] and clobber
     /// the underlying store with an empty freelist and no root node
-    pub fn initialize(linear_store: T) -> Result<Self, Error> {
+    pub fn initialize(storage: S) -> Result<Self, Error> {
         let header = NodeStoreHeader {
             version: Version::new(),
             free_lists: Default::default(),
@@ -201,11 +186,13 @@ impl<T: WritableStorage> NodeStore<T> {
             )
         })?;
 
-        linear_store.write(0, header_bytes.as_slice())?;
+        storage.write(0, header_bytes.as_slice())?;
 
         Ok(Self {
             header,
-            linear_store,
+            storage,
+            deleted: vec![],
+            inner: NodeStoreType::Committed,
         })
     }
 
@@ -218,7 +205,7 @@ impl<T: WritableStorage> NodeStore<T> {
             )
         })?;
 
-        self.linear_store.write(0, header_bytes.as_slice())?;
+        self.storage.write(0, header_bytes.as_slice())?;
 
         Ok(())
     }
@@ -240,7 +227,7 @@ impl<T: WritableStorage> NodeStore<T> {
                 // Update the free list head.
                 // Skip the index byte and Area discriminant byte
                 let free_area_addr = free_stored_area_addr.get() + 2;
-                let free_head_stream = self.linear_store.stream_from(free_area_addr)?;
+                let free_head_stream = self.storage.stream_from(free_area_addr)?;
                 let free_head: FreeArea = bincode::deserialize_from(free_head_stream)
                     .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
@@ -263,14 +250,6 @@ impl<T: WritableStorage> NodeStore<T> {
         self.header.size += area_size;
         debug_assert!(addr.get() % 8 == 0);
         Ok((addr, index))
-    }
-
-    /// Allocates an area in the LinearStore large enough for the provided Area.
-    /// Returns the address of the allocated area.
-    pub fn create_node(&mut self, node: Node) -> Result<LinearAddress, Error> {
-        let addr = self.create_node_inner(node)?;
-        self.write_header()?;
-        Ok(addr)
     }
 
     fn stored_len(node: &Node) -> u64 {
@@ -306,7 +285,7 @@ impl<T: WritableStorage> NodeStore<T> {
                 // size of this freelist item into the linear store
                 // TODO: This works, but think about if we can do better than this somehow.
                 let (addr, index) = self.allocate_from_end(stored_area_size)?;
-                self.linear_store.write(addr.into(), &[index])?;
+                self.storage.write(addr.into(), &[index])?;
                 (addr, index)
             }
         };
@@ -317,7 +296,7 @@ impl<T: WritableStorage> NodeStore<T> {
     /// Get the size of the space allocated to a node a specific address
     pub fn node_size(&self, addr: LinearAddress) -> Result<AreaIndex, Error> {
         let size = 0;
-        self.linear_store
+        self.storage
             .stream_from(addr.into())?
             .read_exact(&mut [size])?;
         Ok(size)
@@ -335,7 +314,7 @@ impl<T: WritableStorage> NodeStore<T> {
         let stored_area_bytes =
             bincode::serialize(&stored_area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
-        self.linear_store
+        self.storage
             .write(addr.get(), stored_area_bytes.as_slice())?;
 
         Ok(addr)
@@ -351,7 +330,7 @@ impl<T: WritableStorage> NodeStore<T> {
             bincode::serialize(&new_area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
         let addr = addr.get() + 1; // Skip the index byte
-        self.linear_store.write(addr, new_area_bytes.as_slice())?;
+        self.storage.write(addr, new_area_bytes.as_slice())?;
         Ok(())
     }
 
@@ -374,7 +353,7 @@ impl<T: WritableStorage> NodeStore<T> {
         let stored_area_bytes =
             bincode::serialize(&stored_area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
-        self.linear_store.write(addr.into(), &stored_area_bytes)?;
+        self.storage.write(addr.into(), &stored_area_bytes)?;
 
         // The newly freed block is now the head of the free list.
         self.header.free_lists[area_size_index as usize] = Some(addr);
@@ -493,19 +472,6 @@ pub trait NodeReader {
     fn root_address(&self) -> Option<LinearAddress>;
 }
 
-// TODO: write an actual implementation for NodeReader in the storage crate.
-// This "implementation" exists solely to allow the tests to compile.
-impl<T: ReadableStorage> NodeReader for NodeStore<T> {
-    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
-        let node = self.read_node(addr)?;
-        Ok(Arc::new(node))
-    }
-
-    fn root_address(&self) -> Option<LinearAddress> {
-        self.root_address()
-    }
-}
-
 /// TODO document
 pub trait NodeWriter: NodeReader {
     /// Sets the root address to `addr`.
@@ -516,71 +482,66 @@ pub trait NodeWriter: NodeReader {
     fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error>;
 }
 
-// TODO: write an actual implementation for NodeWriter in the storage crate.
-// This "implementation" exists solely to allow the tests to compile.
-impl<T: WritableStorage> NodeWriter for NodeStore<T> {
-    fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), Error> {
-        self.set_root(addr)
-    }
-
-    fn create_node(&mut self, node: Node) -> Result<LinearAddress, Error> {
-        self.create_node(node)
-    }
-
-    fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error> {
-        self.delete_node(addr)
-    }
-}
-
 pub(super) trait UnderlyingStorage: Debug {
     fn get_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error>;
 }
 
-struct Proposal<S: NodeReader> {
+#[derive(Debug)]
+struct Proposal<S: ReadableStorage> {
     new: HashMap<LinearAddress, Arc<Node>>,
-    parent: Box<NodeStore2<S>>,
+    parent: Box<NodeStore<S>>,
 }
 
-enum NodeStoreType<S: NodeReader> {
+#[derive(Debug)]
+enum NodeStoreType<S: ReadableStorage> {
     Committed,
     Proposal(Proposal<S>),
 }
 
-struct NodeStore2<S: NodeReader> {
-    root: Option<LinearAddress>,
+/// TODO document
+#[derive(Debug)]
+pub struct NodeStore<S: ReadableStorage> {
+    header: NodeStoreHeader,
     deleted: Vec<LinearAddress>,
-    free_lists: FreeLists,
     inner: NodeStoreType<S>,
-    storage: S,
+    storage: S, // TODO make this an arc
 }
 
-impl<T: NodeReader> NodeReader for NodeStore2<T> {
-    fn read_node(&self, _addr: LinearAddress) -> Result<Arc<Node>, Error> {
+impl<S: WritableStorage> NodeReader for NodeStore<S> {
+    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
         match &self.inner {
-            NodeStoreType::Committed => self.storage.read_node(_addr),
+            NodeStoreType::Committed => {
+                let node = self.read_node_from_disk(addr)?;
+                Ok(Arc::new(node))
+            }
             NodeStoreType::Proposal(proposal) => {
-                if let Some(node) = proposal.new.get(&_addr) {
+                if let Some(node) = proposal.new.get(&addr) {
                     Ok(node.clone())
                 } else {
-                    self.storage.read_node(_addr)
+                    let node = proposal.parent.read_node_from_disk(addr)?;
+                    Ok(Arc::new(node))
                 }
             }
         }
     }
 
     fn root_address(&self) -> Option<LinearAddress> {
-        self.root
+        self.header.root_address
     }
 }
 
-impl<T: NodeReader> NodeWriter for NodeStore2<T> {
+impl<S: WritableStorage> NodeWriter for NodeStore<S> {
     fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), Error> {
-        self.root = addr;
+        self.header.root_address = addr;
         Ok(())
     }
 
-    fn create_node(&mut self, _node: Node) -> Result<LinearAddress, Error> {
-        todo!()
+    /// Allocates an area in the LinearStore large enough for the provided Area.
+    /// Returns the address of the allocated area.
+    fn create_node(&mut self, node: Node) -> Result<LinearAddress, Error> {
+        let addr = self.create_node_inner(node)?;
+        self.write_header()?; // todo don't write the header every time
+        Ok(addr)
     }
 
     fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error> {
@@ -641,7 +602,7 @@ mod tests {
 
         {
             // The header should be unchanged
-            let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
+            let mut header_bytes = node_store.storage.stream_from(0).unwrap();
             let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
             assert_eq!(header.version, Version::new());
             let empty_free_lists: FreeLists = Default::default();
@@ -658,7 +619,7 @@ mod tests {
             );
 
             // Should be able to read the leaf back
-            let read_leaf = node_store.read_node(leaf_addr).unwrap();
+            let read_leaf = node_store.read_node_from_disk(leaf_addr).unwrap();
             assert_eq!(read_leaf, leaf);
         }
 
@@ -674,7 +635,7 @@ mod tests {
 
         {
             // The header  should be unchanged
-            let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
+            let mut header_bytes = node_store.storage.stream_from(0).unwrap();
             let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
             assert_eq!(header.version, Version::new());
             let empty_free_lists: FreeLists = Default::default();
@@ -693,7 +654,7 @@ mod tests {
             );
 
             // Should be able to read the branch back
-            let read_leaf2 = node_store.read_node(branch_addr).unwrap();
+            let read_leaf2 = node_store.read_node_from_disk(branch_addr).unwrap();
             assert_eq!(read_leaf2, branch);
         }
     }
@@ -716,13 +677,13 @@ mod tests {
 
         {
             // The header should have the freed node in the free list
-            let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
+            let mut header_bytes = node_store.storage.stream_from(0).unwrap();
             let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
             assert_eq!(header.free_lists[leaf_index as usize], Some(leaf_addr));
         }
 
         // The node shouldn't be readable
-        assert!(node_store.read_node(leaf_addr).is_err());
+        assert!(node_store.read_node_from_disk(leaf_addr).is_err());
 
         // Create a new node with the same size
         let new_leaf_addr = node_store.create_node(leaf).unwrap();
@@ -731,7 +692,7 @@ mod tests {
         assert_eq!(new_leaf_addr, leaf_addr);
 
         // The header should be updated
-        let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
+        let mut header_bytes = node_store.storage.stream_from(0).unwrap();
         let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
         assert_eq!(header.free_lists[leaf_index as usize], None);
     }
@@ -742,7 +703,7 @@ mod tests {
         let node_store = NodeStore::initialize(linear_store).unwrap();
 
         // Check the empty header is written at the start of the LinearStore.
-        let mut header_bytes = node_store.linear_store.stream_from(0).unwrap();
+        let mut header_bytes = node_store.storage.stream_from(0).unwrap();
         let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
         assert_eq!(header.version, Version::new());
         let empty_free_list: FreeLists = Default::default();
