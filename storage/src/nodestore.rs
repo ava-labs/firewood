@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt::Debug;
 /// The [NodeStore] handles the serialization of nodes and
 /// free space management of nodes in the page store. It lays out the format
@@ -577,30 +578,57 @@ impl<T: WriteLinearStore> NodeWriter for NodeStore<T> {
     }
 }
 
-struct Committed {
-    deleted: Vec<LinearAddress>,
+struct Proposal {
+    free_lists: FreeLists,
+    new: HashMap<LinearAddress, Arc<Node>>,
 }
 
-enum NodeStructParent {
-    Committed,
-    Proposal,
+enum InnerNodeStore {
+    Committed(),
+    Proposal(Proposal),
 }
 
 pub(super) trait UnderlyingStorage: Debug {
     fn get_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error>;
 }
 
-pub struct NodeStore2<T> {
-    parent: NodeStructParent,
+pub struct NodeStore2<T: UnderlyingStorage> {
+    root: Option<LinearAddress>,
+    deleted: Vec<LinearAddress>,
+    inner: InnerNodeStore,
     base_store: T,
 }
 
-impl<T> NodeReader for NodeStore2<T> {
+impl<T: UnderlyingStorage> NodeReader for NodeStore2<T> {
     fn read_node(&self, _addr: LinearAddress) -> Result<Arc<Node>, Error> {
-        todo!()
+        match &self.inner {
+            InnerNodeStore::Committed() => self.base_store.get_node(_addr),
+            InnerNodeStore::Proposal(proposal) => {
+                if let Some(node) = proposal.new.get(&_addr) {
+                    Ok(node.clone())
+                } else {
+                    self.base_store.get_node(_addr)
+                }
+            }
+        }
     }
 
     fn root_address(&self) -> Option<LinearAddress> {
+        self.root
+    }
+}
+
+impl<T: UnderlyingStorage> NodeWriter for NodeStore2<T> {
+    fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), Error> {
+        self.root = addr;
+        Ok(())
+    }
+
+    fn create_node(&mut self, _node: Node) -> Result<LinearAddress, Error> {
+        todo!()
+    }
+
+    fn delete_node(&mut self, _addr: LinearAddress) -> Result<(), Error> {
         todo!()
     }
 }
