@@ -480,10 +480,6 @@ pub trait NodeWriter: NodeReader {
     fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error>;
 }
 
-pub(super) trait UnderlyingStorage: Debug {
-    fn get_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error>;
-}
-
 #[derive(Debug)]
 struct Proposal<S: ReadableStorage> {
     new: HashMap<LinearAddress, Arc<Node>>,
