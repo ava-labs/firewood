@@ -13,8 +13,8 @@ use std::io::Write;
 use std::iter::once;
 use std::sync::Arc;
 use storage::{
-    BranchNode, Child, LeafNode, LinearAddress, NibblesIterator, Node, NodeStore, Path,
-    ReadLinearStore, TrieHash, WriteLinearStore,
+    BranchNode, Child, LeafNode, LinearAddress, NibblesIterator, Node, NodeReader, NodeWriter,
+    Path, TrieHash,
 };
 
 use thiserror::Error;
@@ -79,47 +79,6 @@ macro_rules! write_attributes {
     };
 }
 
-pub trait NodeReader {
-    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, MerkleError>;
-    /// Returns the root address of the trie stored on disk
-    fn root_address(&self) -> Option<LinearAddress>;
-}
-
-// TODO: write an actual implementation for NodeReader in the storage crate.
-// This "implementation" exists solely to allow the tests to compile.
-impl<T: ReadLinearStore> NodeReader for NodeStore<T> {
-    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, MerkleError> {
-        let node = self.read_node(addr).map_err(MerkleError::IO)?;
-        Ok(Arc::new(node))
-    }
-
-    fn root_address(&self) -> Option<LinearAddress> {
-        self.root_address()
-    }
-}
-
-pub trait NodeWriter: NodeReader {
-    fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), MerkleError>;
-    fn create_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError>;
-    fn delete_node(&mut self, addr: LinearAddress) -> Result<(), MerkleError>;
-}
-
-// TODO: write an actual implementation for NodeWriter in the storage crate.
-// This "implementation" exists solely to allow the tests to compile.
-impl<T: WriteLinearStore> NodeWriter for NodeStore<T> {
-    fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), MerkleError> {
-        self.set_root(addr).map_err(Into::into)
-    }
-
-    fn create_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError> {
-        self.create_node(node).map_err(Into::into)
-    }
-
-    fn delete_node(&mut self, addr: LinearAddress) -> Result<(), MerkleError> {
-        self.delete_node(addr).map_err(Into::into)
-    }
-}
-
 /// Returns the value mapped to by `key` in the subtrie rooted at `node`.
 fn get_helper<T: NodeReader>(
     nodestore: &T,
@@ -181,7 +140,7 @@ impl<T: NodeReader> Merkle<T> {
     }
 
     pub(crate) fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, MerkleError> {
-        self.nodestore.read_node(addr)
+        self.nodestore.read_node(addr).map_err(Into::into)
     }
 
     /// Constructs a merkle proof for key. The result contains all encoded nodes
@@ -986,7 +945,7 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use storage::MemStore;
+    use storage::{MemStore, NodeStore};
     use test_case::test_case;
 
     #[test]

@@ -2,14 +2,14 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::{
-    merkle::{Key, Merkle, MerkleError, NodeReader, Value},
+    merkle::{Key, Merkle, MerkleError, Value},
     v2::api,
 };
 
 use futures::{stream::FusedStream, Stream, StreamExt};
 use std::{cmp::Ordering, iter::once};
 use std::{sync::Arc, task::Poll};
-use storage::{BranchNode, Child, NibblesIterator, Node, PathIterItem};
+use storage::{BranchNode, Child, NibblesIterator, Node, NodeReader, PathIterItem};
 
 /// Represents an ongoing iteration over a node and its children.
 enum IterationNode {

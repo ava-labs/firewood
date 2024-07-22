@@ -3,12 +3,10 @@
 
 use std::collections::HashMap;
 
-use crate::{
-    merkle::{Merkle, NodeReader},
-    v2::api::HashKey,
-};
+use crate::{merkle::Merkle, v2::api::HashKey};
 use nix::errno::Errno;
 use sha2::Digest;
+use storage::NodeReader;
 use thiserror::Error;
 
 use crate::{db::DbError, merkle::MerkleError};

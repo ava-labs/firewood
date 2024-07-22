@@ -3,14 +3,15 @@
 
 #![allow(dead_code)]
 
+use serde::{Deserialize, Serialize};
+use std::fmt::Debug;
 /// The [NodeStore] handles the serialization of nodes and
 /// free space management of nodes in the page store. It lays out the format
 /// of the [PageStore]. More specifically, it places a [FileIdentifyingMagic]
 /// and a [FreeSpaceHeader] at the beginning
 use std::io::{Error, ErrorKind, Write};
 use std::num::NonZeroU64;
-
-use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::node::Node;
 use crate::ProposedImmutable;
@@ -527,6 +528,77 @@ impl NodeStoreHeader {
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 struct FreeArea {
     next_free_block: Option<LinearAddress>,
+}
+
+/// TODO document
+pub trait NodeReader {
+    /// TODO document
+    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error>;
+    /// Returns the root address of the trie stored on disk
+    fn root_address(&self) -> Option<LinearAddress>;
+}
+
+// TODO: write an actual implementation for NodeReader in the storage crate.
+// This "implementation" exists solely to allow the tests to compile.
+impl<T: ReadLinearStore> NodeReader for NodeStore<T> {
+    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
+        let node = self.read_node(addr)?;
+        Ok(Arc::new(node))
+    }
+
+    fn root_address(&self) -> Option<LinearAddress> {
+        self.root_address()
+    }
+}
+
+pub trait NodeWriter: NodeReader {
+    fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), Error>;
+    fn create_node(&mut self, node: Node) -> Result<LinearAddress, Error>;
+    fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error>;
+}
+
+// TODO: write an actual implementation for NodeWriter in the storage crate.
+// This "implementation" exists solely to allow the tests to compile.
+impl<T: WriteLinearStore> NodeWriter for NodeStore<T> {
+    fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), Error> {
+        self.set_root(addr)
+    }
+
+    fn create_node(&mut self, node: Node) -> Result<LinearAddress, Error> {
+        self.create_node(node)
+    }
+
+    fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error> {
+        self.delete_node(addr)
+    }
+}
+
+struct Committed {
+    deleted: Vec<LinearAddress>,
+}
+
+enum NodeStructParent {
+    Committed,
+    Proposal,
+}
+
+pub(super) trait UnderlyingStorage: Debug {
+    fn get_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error>;
+}
+
+pub struct NodeStore2<T> {
+    parent: NodeStructParent,
+    base_store: T,
+}
+
+impl<T> NodeReader for NodeStore2<T> {
+    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
+        todo!()
+    }
+
+    fn root_address(&self) -> Option<LinearAddress> {
+        todo!()
+    }
 }
 
 #[cfg(test)]
