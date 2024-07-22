@@ -578,36 +578,36 @@ impl<T: WriteLinearStore> NodeWriter for NodeStore<T> {
     }
 }
 
-struct Proposal {
+struct Proposal<T: NodeReader> {
     free_lists: FreeLists,
     new: HashMap<LinearAddress, Arc<Node>>,
+    parent: T,
 }
 
-enum InnerNodeStore {
-    Committed(),
-    Proposal(Proposal),
+enum InnerNodeStore<T: NodeReader> {
+    Committed(T),
+    Proposal(Proposal<T>),
 }
 
 pub(super) trait UnderlyingStorage: Debug {
     fn get_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error>;
 }
 
-pub struct NodeStore2<T: UnderlyingStorage> {
+pub struct NodeStore2<T: NodeReader> {
     root: Option<LinearAddress>,
     deleted: Vec<LinearAddress>,
-    inner: InnerNodeStore,
-    base_store: T,
+    inner: InnerNodeStore<T>,
 }
 
-impl<T: UnderlyingStorage> NodeReader for NodeStore2<T> {
+impl<T: NodeReader> NodeReader for NodeStore2<T> {
     fn read_node(&self, _addr: LinearAddress) -> Result<Arc<Node>, Error> {
         match &self.inner {
-            InnerNodeStore::Committed() => self.base_store.get_node(_addr),
+            InnerNodeStore::Committed(state) => state.read_node(_addr),
             InnerNodeStore::Proposal(proposal) => {
                 if let Some(node) = proposal.new.get(&_addr) {
                     Ok(node.clone())
                 } else {
-                    self.base_store.get_node(_addr)
+                    proposal.parent.read_node(_addr)
                 }
             }
         }
@@ -618,7 +618,7 @@ impl<T: UnderlyingStorage> NodeReader for NodeStore2<T> {
     }
 }
 
-impl<T: UnderlyingStorage> NodeWriter for NodeStore2<T> {
+impl<T: NodeReader> NodeWriter for NodeStore2<T> {
     fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), Error> {
         self.root = addr;
         Ok(())
@@ -629,7 +629,8 @@ impl<T: UnderlyingStorage> NodeWriter for NodeStore2<T> {
     }
 
     fn delete_node(&mut self, _addr: LinearAddress) -> Result<(), Error> {
-        todo!()
+        self.deleted.push(_addr);
+        Ok(())
     }
 }
 
