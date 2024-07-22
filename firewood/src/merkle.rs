@@ -128,6 +128,12 @@ pub struct Merkle<T: NodeReader> {
     nodestore: T,
 }
 
+impl<T: NodeReader> From<T> for Merkle<T> {
+    fn from(nodestore: T) -> Self {
+        Merkle { nodestore }
+    }
+}
+
 impl<T: NodeReader> Merkle<T> {
     pub fn root(&self) -> Option<(LinearAddress, TrieHash)> {
         // TODO the nodestore should have the hash already
@@ -429,23 +435,19 @@ pub struct MutableProposal<T: NodeWriter> {
 }
 
 impl<T: NodeWriter> MutableProposal<T> {
-    /// TODO: Return NodeWriter T
+    /// TODO: Return impl NodeReader
     /// Hashes the trie and returns it as its immutable variant.
-    pub fn hash(mut self) -> Result<Merkle<impl NodeReader>, MerkleError> {
+    pub fn hash(mut self) -> Result<impl NodeReader, MerkleError> {
         let Some(root) = std::mem::take(&mut self.root) else {
             self.nodestore.set_root(None)?;
-            return Ok(Merkle {
-                nodestore: self.nodestore,
-            });
+            return Ok(self.nodestore);
         };
 
         // TODO use hash
         let (root_addr, _root_hash) = self.hash_helper(root, &mut Path(Default::default()));
 
         self.nodestore.set_root(Some(root_addr))?;
-        Ok(Merkle {
-            nodestore: self.nodestore,
-        })
+        Ok(self.nodestore)
     }
 
     /// Hashes `node`, which is at the given `path_prefix`, and its children recursively.
@@ -966,7 +968,9 @@ mod tests {
         merkle.insert(&[2], Box::new([2])).unwrap();
         assert_eq!(merkle.get(&[2]).unwrap(), Some(Box::from([2])));
 
-        let merkle = merkle.hash().unwrap();
+        let merkle = Merkle {
+            nodestore: merkle.hash().unwrap(),
+        };
 
         assert_eq!(merkle.get(&[0]).unwrap(), Some(Box::from([0])));
         assert_eq!(merkle.get(&[1]).unwrap(), Some(Box::from([1])));
@@ -1582,7 +1586,8 @@ mod tests {
             ("horse", "stallion"),
             ("ddd", "ok"),
         ];
-        let merkle = merkle_build_test(items).unwrap().hash().unwrap();
+        let nodestore = merkle_build_test(items).unwrap().hash().unwrap();
+        let merkle = Merkle { nodestore };
 
         merkle.dump().unwrap();
         Ok(())
@@ -1597,8 +1602,8 @@ mod tests {
     #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1]),(&[0,1,2],&[0,1,2])], Some("229011c50ad4d5c2f4efe02b8db54f361ad295c4eee2bf76ea4ad1bb92676f97"); "root with branch child")]
     #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1]),(&[0,8],&[0,8]),(&[0,1,2],&[0,1,2])], Some("a683b4881cb540b969f885f538ba5904699d480152f350659475a962d6240ef9"); "root with branch child and leaf child")]
     fn test_root_hash_merkledb_compatible(kvs: Vec<(&[u8], &[u8])>, expected_hash: Option<&str>) {
-        let merkle = merkle_build_test(kvs).unwrap().hash().unwrap();
-
+        let nodestore = merkle_build_test(kvs).unwrap().hash().unwrap();
+        let merkle = Merkle { nodestore };
         let Some((_, got_hash)) = merkle.root() else {
             assert!(expected_hash.is_none());
             return;
