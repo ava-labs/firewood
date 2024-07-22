@@ -429,6 +429,7 @@ pub struct MutableProposal<T: NodeWriter> {
 }
 
 impl<T: NodeWriter> MutableProposal<T> {
+    /// TODO: Return NodeWriter T
     /// Hashes the trie and returns it as its immutable variant.
     pub fn hash(mut self) -> Result<Merkle<impl NodeReader>, MerkleError> {
         let Some(root) = std::mem::take(&mut self.root) else {
@@ -450,16 +451,25 @@ impl<T: NodeWriter> MutableProposal<T> {
     /// Hashes `node`, which is at the given `path_prefix`, and its children recursively.
     /// Returns the hashed node and its hash.
     fn hash_helper(&mut self, mut node: Node, path_prefix: &mut Path) -> (LinearAddress, TrieHash) {
+        // Allocate addresses and calculate hashes for all new nodes
         match node {
             Node::Branch(ref mut b) => {
-                for (nibble, child) in b.children.iter_mut().enumerate() {
-                    // Take child from b.children
-                    let Child::Node(child_node) = std::mem::take(child) else {
-                        // There is no child or we already know its hash.
-                        continue;
-                    };
-
+                for (nibble, child, child_node) in
+                    b.children
+                        .iter_mut()
+                        .enumerate()
+                        .filter_map(|(index, child)| match child {
+                            Child::None => None,
+                            Child::Node(node) => {
+                                let node = std::mem::take(node);
+                                Some((index as u8, child, node))
+                            }
+                            Child::HashedNode(_, _) => unreachable!("TODO"),
+                            Child::AddressWithHash(_, _) => None,
+                        })
+                {
                     // Hash this child and update
+                    // we extend and truncate path_prefix to reduce memory allocations
                     let original_length = path_prefix.len();
                     path_prefix
                         .0

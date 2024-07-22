@@ -610,13 +610,19 @@ impl<T: NodeReader> NodeWriter for Proposal<T> {
     }
 }
 
-struct Committed<S: NodeReader> {
+// R1 = empty base
+// P1a = ImmutableProposal based on R1 (with changes)
+// P2 = Proposal on P1a (with changes)
+// propose(R1) -> P1b ... in hash() getting freelist
+// commit(P1a)
+
+struct NodeStore2<S: NodeReader> {
     root: Option<LinearAddress>,
-    deleted: Vec<LinearAddress>,
+    deleted: Vec<LinearAddress>, // todo box
     storage: S,
 }
 
-impl<T: NodeReader> NodeReader for Committed<T> {
+impl<T: NodeReader> NodeReader for NodeStore2<T> {
     fn read_node(&self, _addr: LinearAddress) -> Result<Arc<Node>, Error> {
         self.storage.read_node(_addr)
     }

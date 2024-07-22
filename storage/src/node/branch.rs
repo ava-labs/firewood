@@ -20,6 +20,7 @@ pub enum Child {
     Node(Node),
     /// There is a child at this index, and we know its hash
     /// but haven't written it to storage yet.
+    /// TODO remove this
     HashedNode(Arc<Node>, TrieHash),
     /// We know the child's address and hash.
     AddressWithHash(LinearAddress, TrieHash),
