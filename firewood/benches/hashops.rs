@@ -7,6 +7,7 @@ use criterion::{criterion_group, criterion_main, profiler::Profiler, BatchSize, 
 use firewood::merkle;
 use pprof::ProfilerGuard;
 use rand::{distributions::Alphanumeric, rngs::StdRng, Rng, SeedableRng};
+use std::sync::Arc;
 use std::{fs::File, iter::repeat_with, os::raw::c_int, path::Path};
 use storage::{MemStore, NodeStore};
 
@@ -80,8 +81,8 @@ fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criter
         .bench_function("insert", |b| {
             b.iter_batched(
                 || {
-                    let store = MemStore::new(vec![]);
-                    let nodestore = NodeStore::initialize(store).unwrap();
+                    let store = Arc::new(MemStore::new(vec![]));
+                    let nodestore = NodeStore::new_empty(store).unwrap();
                     let merkle = merkle::new(nodestore).unwrap();
 
                     let keys: Vec<Vec<u8>> = repeat_with(|| {

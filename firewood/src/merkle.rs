@@ -952,7 +952,7 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use storage::{MemStore, NodeStore};
+    use storage::{MemStore, NodeStore, Proposal};
     use test_case::test_case;
 
     #[test]
@@ -987,8 +987,10 @@ mod tests {
         merkle.insert(b"abc", Box::new([])).unwrap()
     }
 
-    fn create_in_memory_merkle() -> MutableProposal<NodeStore<MemStore>> {
-        let nodestore = NodeStore::initialize(MemStore::new(vec![])).unwrap();
+    fn create_in_memory_merkle() -> MutableProposal<NodeStore<Proposal, MemStore>> {
+        let memstore = MemStore::new(vec![]);
+        let memstore = Arc::new(memstore);
+        let nodestore = NodeStore::new_empty(memstore).unwrap();
         new(nodestore).unwrap()
     }
 
@@ -1567,7 +1569,7 @@ mod tests {
     fn merkle_build_test<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         items: Vec<(K, V)>,
     ) -> Result<MutableProposal<NodeStore<MemStore>>, MerkleError> {
-        let nodestore = NodeStore::initialize(MemStore::new(vec![]))?;
+        let nodestore = NodeStore::new_empty(MemStore::new(vec![]))?;
         let mut merkle = new(nodestore).unwrap();
         for (k, v) in items.iter() {
             merkle.insert(k.as_ref(), Box::from(v.as_ref()))?;

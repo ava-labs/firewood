@@ -600,7 +600,7 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
-    use storage::{MemStore, NodeStore};
+    use storage::{MemStore, NodeStore, Proposal};
 
     use crate::merkle::{self, MutableProposal};
 
@@ -617,8 +617,10 @@ mod tests {
         }
     }
 
-    pub(super) fn create_test_merkle() -> MutableProposal<NodeStore<MemStore>> {
-        let nodestore = NodeStore::initialize(MemStore::new(vec![])).unwrap();
+    pub(super) fn create_test_merkle() -> MutableProposal<NodeStore<Proposal, MemStore>> {
+        let memstore = MemStore::new(vec![]);
+        let memstore = Arc::new(memstore);
+        let nodestore = NodeStore::new_empty(memstore).unwrap();
         merkle::new(nodestore).unwrap()
     }
 
@@ -798,7 +800,7 @@ mod tests {
     ///  1   F
     ///
     /// The number next to each branch is the position of the child in the branch's children array.
-    fn created_populated_merkle() -> MutableProposal<NodeStore<MemStore>> {
+    fn created_populated_merkle() -> MutableProposal<NodeStore<Proposal, MemStore>> {
         let mut merkle = create_test_merkle();
 
         merkle
