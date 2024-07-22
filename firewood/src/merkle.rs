@@ -475,7 +475,7 @@ impl<T: NodeWriter> MutableProposal<T> {
                     let original_length = path_prefix.len();
                     path_prefix
                         .0
-                        .extend(b.partial_path.0.iter().copied().chain(once(nibble as u8)));
+                        .extend(b.partial_path.0.iter().copied().chain(once(nibble)));
 
                     let (child_addr, child_hash) = self.hash_helper(child_node, path_prefix);
                     *child = Child::AddressWithHash(child_addr, child_hash);

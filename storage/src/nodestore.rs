@@ -358,15 +358,13 @@ impl<S: WritableStorage> NodeStore<S> {
         // The newly freed block is now the head of the free list.
         self.header.free_lists[area_size_index as usize] = Some(addr);
 
-        self.write_header()?;
-
         Ok(())
     }
 
     /// Write the root [LinearAddress] of the [NodeStore]
     pub fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), Error> {
         self.header.root_address = addr;
-        self.write_header()
+        Ok(())
     }
 }
 
