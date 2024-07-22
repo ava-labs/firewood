@@ -574,7 +574,7 @@ pub(super) trait UnderlyingStorage: Debug {
 
 struct Proposal<T: NodeReader> {
     root: Option<LinearAddress>,
-    deleted: Vec<LinearAddress>,
+    deleted: Vec<LinearAddress>, // todo: box
     free_lists: FreeLists,
     new: HashMap<LinearAddress, Arc<Node>>,
     parent: T,
@@ -610,15 +610,15 @@ impl<T: NodeReader> NodeWriter for Proposal<T> {
     }
 }
 
-struct Committed<T: NodeReader> {
+struct Committed<S: NodeReader> {
     root: Option<LinearAddress>,
     deleted: Vec<LinearAddress>,
-    base: T,
+    storage: S,
 }
 
 impl<T: NodeReader> NodeReader for Committed<T> {
     fn read_node(&self, _addr: LinearAddress) -> Result<Arc<Node>, Error> {
-        self.base.read_node(_addr)
+        self.storage.read_node(_addr)
     }
 
     fn root_address(&self) -> Option<LinearAddress> {
