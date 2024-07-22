@@ -584,7 +584,7 @@ enum NodeStoreType<S: NodeReader> {
 
 struct NodeStore2<S: NodeReader> {
     root: Option<LinearAddress>,
-    deleted: Box<[LinearAddress]>,
+    deleted: Vec<LinearAddress>,
     free_lists: FreeLists,
     inner: NodeStoreType<S>,
     storage: S,
@@ -606,6 +606,22 @@ impl<T: NodeReader> NodeReader for NodeStore2<T> {
 
     fn root_address(&self) -> Option<LinearAddress> {
         self.root
+    }
+}
+
+impl<T: NodeReader> NodeWriter for NodeStore2<T> {
+    fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), Error> {
+        self.root = addr;
+        Ok(())
+    }
+
+    fn create_node(&mut self, _node: Node) -> Result<LinearAddress, Error> {
+        todo!()
+    }
+
+    fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error> {
+        self.deleted.push(addr);
+        Ok(())
     }
 }
 
