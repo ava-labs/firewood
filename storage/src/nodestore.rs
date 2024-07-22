@@ -519,7 +519,14 @@ pub struct Proposal {
 
 impl ReadModifiedNode for Proposal {
     fn read_modified_node(&self, addr: LinearAddress) -> Option<Arc<Node>> {
-        self.new.get(&addr).cloned()
+        if let Some(node) = self.new.get(&addr) {
+            return Some(node.clone());
+        }
+
+        match &*self.parent {
+            NodeStoreParent::Proposed(parent) => parent.read_modified_node(addr),
+            NodeStoreParent::Committed => None,
+        }
     }
 }
 
