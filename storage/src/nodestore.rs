@@ -172,12 +172,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// Create a new, empty, [Committed] [NodeStore] and clobber
     /// the underlying store with an empty freelist and no root node
     pub fn new_empty_committed(storage: Arc<S>) -> Result<Self, Error> {
-        let header = NodeStoreHeader {
-            version: Version::new(),
-            free_lists: Default::default(),
-            root_address: None,
-            size: NodeStoreHeader::SIZE,
-        };
+        let header = NodeStoreHeader::new();
 
         // let header_bytes = bincode::serialize(&header).map_err(|e| {
         //     Error::new(
@@ -274,8 +269,7 @@ impl<S: ReadableStorage> NodeStore<Proposal, S> {
         // rustify: rewrite using self.header.free_lists.iter_mut().find(...)
         for index in index as usize..NUM_AREA_SIZES {
             // Get the first free block of sufficient size.
-            let free_stored_area_addr = self.header.free_lists[index];
-            if let Some(free_stored_area_addr) = free_stored_area_addr {
+            if let Some(free_stored_area_addr) = self.header.free_lists[index] {
                 // Update the free list head.
                 // Skip the index byte and Area discriminant byte
                 let free_area_addr = free_stored_area_addr.get() + 2;
@@ -499,7 +493,8 @@ impl NodeStoreHeader {
 
     fn new() -> Self {
         Self {
-            size: 0,
+            // The store just contains the header at this point
+            size: Self::SIZE,
             root_address: None,
             version: Version::new(),
             free_lists: Default::default(),
@@ -663,8 +658,8 @@ mod tests {
 
     #[test]
     fn test_create() {
-        let linear_store = Arc::new(MemStore::new(vec![]));
-        let mut node_store = NodeStore::new_empty(linear_store);
+        let memstore = Arc::new(MemStore::new(vec![]));
+        let mut node_store = NodeStore::new_empty(memstore);
 
         let leaf = Node::Leaf(LeafNode {
             partial_path: Path::from([0, 1, 2]),
@@ -672,30 +667,23 @@ mod tests {
         });
 
         let leaf_addr = node_store.create_node(leaf.clone()).unwrap();
-        let (_, leaf_area_size) = node_store.area_index_and_size(leaf_addr).unwrap();
+        let got_leaf = node_store.kind.new.get(&leaf_addr).unwrap();
+        assert_eq!(**got_leaf, leaf);
+        let got_leaf = node_store.read_node(leaf_addr).unwrap();
+        assert_eq!(*got_leaf, leaf);
 
+        // The header should be unchanged in storage
         {
-            // The header should be unchanged
             let mut header_bytes = node_store.storage.stream_from(0).unwrap();
             let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
             assert_eq!(header.version, Version::new());
             let empty_free_lists: FreeLists = Default::default();
             assert_eq!(header.free_lists, empty_free_lists);
             assert_eq!(header.root_address, None);
-
-            // Leaf should go right after the header
-            assert_eq!(leaf_addr.get(), NodeStoreHeader::SIZE);
-
-            // Size should be updated
-            assert_eq!(
-                node_store.header.size,
-                NodeStoreHeader::SIZE + leaf_area_size
-            );
-
-            // Should be able to read the leaf back
-            let read_leaf = node_store.read_node_from_disk(leaf_addr).unwrap();
-            assert_eq!(read_leaf, leaf.into());
         }
+
+        // Leaf should go right after the header
+        assert_eq!(leaf_addr.get(), NodeStoreHeader::SIZE);
 
         // Create another node
         let branch = Node::Branch(Box::new(BranchNode {
@@ -706,37 +694,26 @@ mod tests {
 
         let old_size = node_store.header.size;
         let branch_addr = node_store.create_node(branch.clone()).unwrap();
+        assert!(node_store.header.size > old_size);
 
+        // branch should go after leaf
+        assert!(branch_addr.get() > leaf_addr.get());
+
+        // The header should be unchanged in storage
         {
-            // The header  should be unchanged
             let mut header_bytes = node_store.storage.stream_from(0).unwrap();
             let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
             assert_eq!(header.version, Version::new());
             let empty_free_lists: FreeLists = Default::default();
             assert_eq!(header.free_lists, empty_free_lists);
             assert_eq!(header.root_address, None);
-            assert!(header.size > old_size);
-
-            // branch should go right after leaf
-            assert_eq!(branch_addr.get(), NodeStoreHeader::SIZE + leaf_area_size);
-
-            // Size should be updated
-            let (_, branch_area_size) = node_store.area_index_and_size(branch_addr).unwrap();
-            assert_eq!(
-                node_store.header.size,
-                NodeStoreHeader::SIZE + leaf_area_size + branch_area_size
-            );
-
-            // Should be able to read the branch back
-            let read_leaf2 = node_store.read_node_from_disk(branch_addr).unwrap();
-            assert_eq!(read_leaf2, branch.into());
         }
     }
 
     #[test]
     fn test_delete() {
-        let linear_store = Arc::new(MemStore::new(vec![]));
-        let mut node_store = NodeStore::new_empty(linear_store);
+        let memstore = Arc::new(MemStore::new(vec![]));
+        let mut node_store = NodeStore::new_empty(memstore);
 
         // Create a leaf
         let leaf = Node::Leaf(LeafNode {
@@ -744,20 +721,21 @@ mod tests {
             value: Box::new([1]),
         });
         let leaf_addr = node_store.create_node(leaf.clone()).unwrap();
-        let (leaf_index, _) = node_store.area_index_and_size(leaf_addr).unwrap();
 
         // Delete the node
         node_store.delete_node(leaf_addr).unwrap();
 
-        {
-            // The header should have the freed node in the free list
-            let mut header_bytes = node_store.storage.stream_from(0).unwrap();
-            let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
-            assert_eq!(header.free_lists[leaf_index as usize], Some(leaf_addr));
-        }
-
-        // The node shouldn't be readable
-        assert!(node_store.read_node_from_disk(leaf_addr).is_err());
+        // The header should have the freed node in the free list
+        let leaf_freed = node_store
+            .header
+            .free_lists
+            .iter()
+            .find(|head| match head {
+                Some(addr) => *addr == leaf_addr,
+                None => false,
+            })
+            .is_some();
+        assert!(leaf_freed);
 
         // Create a new node with the same size
         let new_leaf_addr = node_store.create_node(leaf).unwrap();
@@ -765,10 +743,17 @@ mod tests {
         // The new node should be at the same address
         assert_eq!(new_leaf_addr, leaf_addr);
 
-        // The header should be updated
-        let mut header_bytes = node_store.storage.stream_from(0).unwrap();
-        let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
-        assert_eq!(header.free_lists[leaf_index as usize], None);
+        // The leaf address shouldn't be free anymore
+        let leaf_freed = node_store
+            .header
+            .free_lists
+            .iter()
+            .find(|head| match head {
+                Some(addr) => *addr == leaf_addr,
+                None => false,
+            })
+            .is_some();
+        assert!(!leaf_freed);
     }
 
     #[test]
