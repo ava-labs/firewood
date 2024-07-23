@@ -142,7 +142,8 @@ impl Proof {
         let mut expected_hash = root_hash;
 
         // TODO danlaine: Is there a better way to do this loop?
-        for (i, node) in self.0.iter().enumerate() {
+        let mut iter = self.0.iter().peekable();
+        while let Some(node) = iter.next() {
             if node.to_hash() != *expected_hash {
                 return Err(ProofError::UnexpectedHash);
             }
@@ -153,7 +154,7 @@ impl Proof {
                 return Err(ProofError::ValueAtOddNibbleLength);
             }
 
-            if i != self.0.len() - 1 {
+            if let Some(next_node) = iter.peek() {
                 // Assert that every node's key is a prefix of the proven key,
                 // with the exception of the last node, which is a suffix of the
                 // proven key in exclusion proofs.
@@ -171,9 +172,7 @@ impl Proof {
                     .ok_or(ProofError::NodeNotInTrie)?;
 
                 // Assert that each node's key is a prefix of the next node's key.
-                #[allow(clippy::indexing_slicing)]
-                let next_node_key = &self.0[i + 1].key;
-                if !is_prefix(&mut node.key.iter(), &mut next_node_key.iter()) {
+                if !is_prefix(&mut node.key.iter(), &mut next_node.key.iter()) {
                     return Err(ProofError::ShouldBePrefixOfNextKey);
                 }
             }
