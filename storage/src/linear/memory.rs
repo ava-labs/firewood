@@ -8,7 +8,7 @@ use std::{
 };
 
 #[derive(Debug, Default)]
-/// An in-memory impelementation of [WriteLinearStore]
+/// An in-memory impelementation of [WritableStorage] and [ReadableStorage]
 pub struct MemStore {
     bytes: Mutex<Vec<u8>>,
 }

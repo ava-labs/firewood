@@ -487,9 +487,9 @@ impl<T: NodeWriter> MutableProposal<T> {
     }
 }
 
-/// Returns a new merkle using the given [NodeStore].
+/// Returns a new merkle using the given `nodestore`.
 /// If the nodestore has a root address, the root node is read and used as the root.
-/// Otherwise, the root is set to [Root::None] (i.e. this trie is empty).
+/// Otherwise, the root is set to None (i.e. this trie is empty).
 pub fn new<T: NodeWriter>(mut nodestore: T) -> Result<MutableProposal<T>, MerkleError> {
     let Some(root_addr) = nodestore.root_address() else {
         return Ok(MutableProposal {

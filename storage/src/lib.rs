@@ -5,13 +5,11 @@
 
 //! # storage implements the storage of a [Node] on top of a LinearStore
 //!
-//! Nodes are stored at a [LinearAddress] within a [NodeStore]
+//! Nodes are stored at a [LinearAddress] within a [ReadableStorage].
 //!
 //! The [NodeStore] maintains a free list and the [LinearAddress] of a root node.
 //!
-//! A [NodeStore] is typically backed by a [ReadLinearStore] which is immutable.
-//! However, [NodeStore] can also be backed by a [WriteLinearStore]. These
-//! support writes.
+//! A [NodeStore] is backed by a [ReadableStorage] which is persisted storage.
 
 mod linear;
 mod node;

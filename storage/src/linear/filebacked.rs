@@ -53,7 +53,7 @@ impl ReadableStorage for FileBacked {
 }
 
 impl FileBacked {
-    /// Write to the backend filestore. This does not implement [crate::WriteLinearStore]
+    /// Write to the backend filestore. This does not implement [crate::WritableStorage]
     /// because we don't want someone accidentally writing nodes directly to disk
     pub fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
         self.fd

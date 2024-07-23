@@ -168,7 +168,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         })
     }
 
-    /// Create a new, empty, [Committed] [NodeStore] and clobber
+    /// Create a new, empty, Committed [NodeStore] and clobber
     /// the underlying store with an empty freelist and no root node
     pub fn new_empty_committed(storage: Arc<S>) -> Result<Self, Error> {
         let header = NodeStoreHeader::new();
