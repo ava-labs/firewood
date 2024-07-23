@@ -654,8 +654,8 @@ impl<T: NodeWriter> MutableProposal<T> {
                             }
                             Child::Node(child) => child,
                             Child::AddressWithHash(addr, _) => {
-                                self.deleted.push(addr);
                                 let node = self.nodestore.read_node(addr)?;
+                                self.deleted.push(addr);
                                 (*node).clone()
                             }
                         };
@@ -792,8 +792,8 @@ impl<T: NodeWriter> MutableProposal<T> {
                                     }),
                                 ),
                                 Child::AddressWithHash(addr, _) => {
-                                    self.deleted.push(*addr);
                                     let node = self.nodestore.read_node(*addr)?;
+                                    self.deleted.push(*addr);
                                     (*node).clone()
                                 }
                             };
@@ -861,8 +861,8 @@ impl<T: NodeWriter> MutableProposal<T> {
                             }
                             Child::Node(node) => node,
                             Child::AddressWithHash(addr, _) => {
-                                self.deleted.push(addr);
                                 let node = self.nodestore.read_node(addr)?;
+                                self.deleted.push(addr);
                                 (*node).clone()
                             }
                         };
@@ -909,8 +909,8 @@ impl<T: NodeWriter> MutableProposal<T> {
                                 }),
                             ),
                             Child::AddressWithHash(addr, _) => {
-                                self.deleted.push(*addr);
                                 let node = self.nodestore.read_node(*addr)?;
+                                self.deleted.push(*addr);
                                 (*node).clone()
                             }
                         };
