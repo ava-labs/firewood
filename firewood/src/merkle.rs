@@ -179,6 +179,10 @@ impl<T: NodeReader> Merkle<T> {
         Some((root_addr, root_hash))
     }
 
+    pub fn nodestore(&self) -> &T {
+        &self.nodestore
+    }
+
     pub(crate) fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, MerkleError> {
         self.nodestore.read_node(addr)
     }
@@ -239,12 +243,12 @@ impl<T: NodeReader> Merkle<T> {
     }
 
     pub(crate) fn _key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
-        MerkleKeyValueStream::_new(self)
+        MerkleKeyValueStream::_new(&self.nodestore)
     }
 
     pub(crate) fn _key_value_iter_from_key(&self, key: Key) -> MerkleKeyValueStream<'_, T> {
         // TODO danlaine: change key to &[u8]
-        MerkleKeyValueStream::_from_key(self, key)
+        MerkleKeyValueStream::_from_key(&self.nodestore, key)
     }
 
     pub(super) async fn _range_proof(
