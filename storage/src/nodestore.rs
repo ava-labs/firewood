@@ -10,7 +10,7 @@ use std::fmt::Debug;
 /// free space management of nodes in the page store. It lays out the format
 /// of the [PageStore]. More specifically, it places a [FileIdentifyingMagic]
 /// and a [FreeSpaceHeader] at the beginning
-use std::io::{Error, ErrorKind, Read, Write};
+use std::io::{Error, ErrorKind, Write};
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
@@ -96,7 +96,7 @@ enum Area<T, U> {
     Free(U),
 }
 
-/// Every item stored in the [NodeStore]'s LinearStore  after the
+/// Every item stored in the [NodeStore]'s ReadableStorage  after the
 /// [NodeStoreHeader] is a [StoredArea].
 #[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
 struct StoredArea<T> {
@@ -123,8 +123,7 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
     }
 
     /// Read a [Node] from the provided [LinearAddress].
-    /// `addr` is the address of a StoredArea in the LinearStore.
-    /// TODO should this return an Arc?
+    /// `addr` is the address of a StoredArea in the ReadableStorage.
     pub fn read_node_from_disk(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
         debug_assert!(addr.get() % 8 == 0);
 
@@ -192,26 +191,8 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     }
 }
 
-// impl<S: WritableStorage> NodeStore<ProposedMutable, S> {
-//     /// Creates a new proposed instance of `NodeStore`.
-//     ///
-//     /// # Arguments
-//     ///
-//     /// * `parent` - The parent node store.
-//     /// * `storage` - The storage implementation.
-//     pub fn new<T: Into<NodeStoreParent> + ReadChangedNode>(parent: NodeStore<T, S>) -> Self {
-//         let mut store = NodeStore {
-//             header: parent.header.clone(),
-//             deleted_nodes: Default::default(),
-//             revision_type: Proposed::new(parent.revision_type.into().into()),
-//             storage: parent.storage.clone(),
-//         };
-//         store.write_header().expect("failed to write header");
-//         store
-//     }
-
 impl<S: WritableStorage> NodeStore<ImmutableProposal, S> {
-    /// Create a new, empty, [NodeStore] and clobber the underlying store with an empty freelist and no root node
+    /// Creates a new, empty, [NodeStore] and clobbers the underlying `storage` with an empty header.
     pub fn new_empty_proposal(storage: Arc<S>) -> Self {
         let header = NodeStoreHeader::new();
         let header_bytes = bincode::serialize(&header).expect("failed to serialize header");
@@ -228,7 +209,8 @@ impl<S: WritableStorage> NodeStore<ImmutableProposal, S> {
             storage,
         }
     }
-    /// Create a new NodeStore proposal from a given parent
+
+    /// Creatse a new NodeStore proposal from a given `parent`.
     pub fn new<T: Into<NodeStoreParent> + ReadInMemoryNode>(parent: NodeStore<T, S>) -> Self {
         NodeStore {
             header: parent.header.clone(),
@@ -241,6 +223,7 @@ impl<S: WritableStorage> NodeStore<ImmutableProposal, S> {
         }
     }
 
+    // TODO danlaine: Use this code in the revision management code.
     // TODO danlaine: Write only the parts of the header that have changed instead of the whole thing
     // fn write_header(&mut self) -> Result<(), Error> {
     //     let header_bytes = bincode::serialize(&self.header).map_err(|e| {
@@ -298,6 +281,7 @@ impl<S: ReadableStorage> NodeStore<ImmutableProposal, S> {
         Ok((addr, index))
     }
 
+    /// Returns the length of the serialized area for a node.
     fn stored_len(node: &Node) -> u64 {
         // TODO: calculate length without serializing!
         let area: Area<&Node, FreeArea> = Area::Node(node);
@@ -312,42 +296,24 @@ impl<S: ReadableStorage> NodeStore<ImmutableProposal, S> {
         area_bytes.len() as u64 + 1
     }
 
-    /// Allocates an area in the LinearStore but does not write it; returns
-    /// where the node will go and the freelist size of the node
-    ///
-    /// Note: The node is removed from the freelist but it still contains a freed status
-    /// in the linearstore. The caller must eventually call [NodeStore::update_node] or
-    /// [NodeStore::delete_node] on this node
+    /// Returns an address that can be used to store the given `node` and updates
+    /// `self.header` to reflect the allocation. Doesn't actually write the node to storage.
+    /// Also returns the index of the free list the node was allocated from.
     pub fn allocate_node(&mut self, node: &Node) -> Result<(LinearAddress, AreaIndex), Error> {
         let stored_area_size = Self::stored_len(node);
 
         // Attempt to allocate from a free list.
         // If we can't allocate from a free list, allocate past the existing
-        // of the LinearStore.
+        // of the ReadableStorage.
         let (addr, index) = match self.allocate_from_freed(stored_area_size)? {
             Some((addr, index)) => (addr, index),
-            None => {
-                // if we just allocated new space, we might free it, so we need to write the
-                // size of this freelist item into the linear store
-                // TODO: This works, but think about if we can do better than this somehow.
-                let (addr, index) = self.allocate_from_end(stored_area_size)?;
-                // self.storage.write(addr.into(), &[index])?; // TODO does commenting this line break something?
-                (addr, index)
-            }
+            None => self.allocate_from_end(stored_area_size)?,
         };
 
         Ok((addr, index))
     }
 
-    /// Get the size of the space allocated to a node a specific address
-    pub fn node_size(&self, addr: LinearAddress) -> Result<AreaIndex, Error> {
-        let size = 0;
-        self.storage
-            .stream_from(addr.into())?
-            .read_exact(&mut [size])?;
-        Ok(size)
-    }
-
+    // TODO danlaine: Use this code inside the revision management code or delete it.
     /// The inner implementation of `create_node` that doesn't update the free lists.
     // fn create_node_inner(&mut self, node: Node) -> Result<LinearAddress, Error> {
     //     let (addr, index) = self.allocate_node(&node)?;
@@ -366,6 +332,7 @@ impl<S: ReadableStorage> NodeStore<ImmutableProposal, S> {
     //     Ok(addr)
     // }
 
+    // TODO danlaine: use this code in the revision management code or delete it.
     /// Update a node in-place. This should only be used when the node was allocated using
     /// allocate_node.
     /// TODO: We should enforce this by having a new type for allocated nodes, which could
@@ -380,6 +347,7 @@ impl<S: ReadableStorage> NodeStore<ImmutableProposal, S> {
     //     Ok(())
     // }
 
+    // TODO danlaine: use this code in the revision management code.
     /// Deletes the [Node] at the given address.
     // pub fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error> {
     //     debug_assert!(addr.get() % 8 == 0);
@@ -414,22 +382,11 @@ impl<S: ReadableStorage> NodeStore<ImmutableProposal, S> {
     }
 }
 
-/// An error from doing an update. One special error is [UpdateError::NodeMoved]
-/// There are no implementations of [Into::into] here because we want to be sure
-/// the caller thinks about how to handle the node moving to a new address when
-/// it changes size.
-///
-/// TODO: Callers shouldn't care whether or not the node changed size and should
-/// handle the moving of a node in all cases. This may allow the storage layer to
-/// be smarter about moving related nodes closer together on disk (i.e., dynamic
-/// defragmentation)
+/// An error from doing an update
 #[derive(Debug)]
 pub enum UpdateError {
     /// An IO error occurred during the update
     Io(Error),
-    /// The update succeeded, but the node moved to a new address. Any parent pointers
-    /// should be updated as a result.
-    NodeMoved(LinearAddress),
 }
 
 impl From<Error> for UpdateError {
@@ -464,7 +421,7 @@ impl Version {
 pub type FreeLists = [Option<LinearAddress>; NUM_AREA_SIZES];
 
 /// Persisted metadata for a [NodeStore].
-/// The [NodeStoreHeader] is at the start of the LinearStore.
+/// The [NodeStoreHeader] is at the start of the ReadableStorage.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 struct NodeStoreHeader {
     /// Identifies the version of firewood used to create this [NodeStore].
@@ -476,11 +433,12 @@ struct NodeStoreHeader {
 }
 
 impl NodeStoreHeader {
-    /// The first SIZE bytes of the LinearStore are the [NodeStoreHeader].
+    /// The first SIZE bytes of the ReadableStorage are the [NodeStoreHeader].
     /// The serialized NodeStoreHeader may be less than SIZE bytes but we
     /// reserve this much space for it since it can grow and it must always be
-    /// at the start of the LinearStore so it can't be moved in a resize.
+    /// at the start of the ReadableStorage so it can't be moved in a resize.
     const SIZE: u64 = {
+        // 8 and 9 for `size` and `root_address` respectively
         let max_size = Version::SIZE + 8 + 9 + FREE_LIST_MAX_SIZE;
         // Round up to the nearest multiple of MIN_AREA_SIZE
         let remainder = max_size % MIN_AREA_SIZE;
@@ -509,15 +467,15 @@ struct FreeArea {
     next_free_block: Option<LinearAddress>,
 }
 
-/// TODO document
+/// Reads nodes and the root address from a merkle trie.
 pub trait NodeReader {
-    /// TODO document
+    /// Returns the node at `addr`.
     fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error>;
     /// Returns the root address of the trie stored on disk
     fn root_address(&self) -> Option<LinearAddress>;
 }
 
-/// TODO document
+/// Updates a merkle trie.
 pub trait NodeWriter: NodeReader {
     /// Sets the root address to `addr`.
     fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), Error>;
@@ -530,6 +488,7 @@ pub trait NodeWriter: NodeReader {
 struct Committed {}
 
 impl ReadInMemoryNode for Committed {
+    // A committed revision has no in-memory changes. All its nodes are in storage.
     fn read_in_memory_node(&self, _addr: LinearAddress) -> Option<Arc<Node>> {
         None
     }
@@ -554,18 +513,23 @@ impl<S: ReadableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStorePare
 }
 
 #[derive(Debug)]
-/// TODO document
+/// Contains state for a proposed revision of the trie.
 pub struct ImmutableProposal {
+    /// Address --> Node for nodes created in this proposal.
     new: HashMap<LinearAddress, Arc<Node>>,
+    /// The parent of this proposal.
     parent: NodeStoreParent,
 }
 
 impl ReadInMemoryNode for ImmutableProposal {
     fn read_in_memory_node(&self, addr: LinearAddress) -> Option<Arc<Node>> {
+        // Check if the node being requested was created in this proposal.
         if let Some(node) = self.new.get(&addr) {
             return Some(node.clone());
         }
 
+        // It wasn't. Try our parent, and its parent, and so on until we find it or find
+        // a committed revision.
         match self.parent {
             NodeStoreParent::Proposed(ref parent) => parent.read_in_memory_node(addr),
             NodeStoreParent::Committed => None,
@@ -574,15 +538,21 @@ impl ReadInMemoryNode for ImmutableProposal {
 }
 
 pub trait ReadInMemoryNode {
+    /// Returns the node at `addr` if it is in memory.
+    /// Returns None if it isn't.
     fn read_in_memory_node(&self, addr: LinearAddress) -> Option<Arc<Node>>;
 }
 
-/// TODO document
+/// Contains the state of a revision of a merkle trie.
 #[derive(Debug)]
 pub struct NodeStore<T: ReadInMemoryNode, S: ReadableStorage> {
+    // Metadata for this revision.
     header: NodeStoreHeader,
+    // Addresses of nodes that have been deleted in this revision.
     deleted: Vec<LinearAddress>,
+    // This is either a committed revision or a proposed revision.
     kind: T,
+    // Persisted storage to read nodes from.
     storage: Arc<S>,
 }
 
@@ -605,7 +575,7 @@ impl<S: ReadableStorage> NodeWriter for NodeStore<ImmutableProposal, S> {
         Ok(())
     }
 
-    /// Allocates an area in the LinearStore large enough for the provided Area.
+    /// Allocates an area in the ReadableStorage large enough for the provided Area.
     /// Returns the address of the allocated area.
     fn create_node(&mut self, node: Node) -> Result<LinearAddress, Error> {
         let (addr, _) = self.allocate_node(&node)?;
@@ -735,10 +705,10 @@ mod tests {
 
     #[test]
     fn test_node_store_new() {
-        let linear_store = MemStore::new(vec![]);
-        let node_store = NodeStore::new_empty_proposal(linear_store.into());
+        let memstore = MemStore::new(vec![]);
+        let node_store = NodeStore::new_empty_proposal(memstore.into());
 
-        // Check the empty header is written at the start of the LinearStore.
+        // Check the empty header is written at the start of the ReadableStorage.
         let mut header_bytes = node_store.storage.stream_from(0).unwrap();
         let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
         assert_eq!(header.version, Version::new());
