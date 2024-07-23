@@ -381,31 +381,31 @@ impl<S: ReadableStorage> NodeStore<ImmutableProposal, S> {
     // }
 
     /// Deletes the [Node] at the given address.
-    pub fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error> {
-        debug_assert!(addr.get() % 8 == 0);
+    // pub fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error> {
+    //     debug_assert!(addr.get() % 8 == 0);
 
-        let (area_size_index, _) = self.area_index_and_size(addr)?;
+    //     let (area_size_index, _) = self.area_index_and_size(addr)?;
 
-        // // The area that contained the node is now free.
-        // let area: Area<Node, FreeArea> = Area::Free(FreeArea {
-        //     next_free_block: self.header.free_lists[area_size_index as usize],
-        // });
+    //     // The area that contained the node is now free.
+    //     let area: Area<Node, FreeArea> = Area::Free(FreeArea {
+    //         next_free_block: self.header.free_lists[area_size_index as usize],
+    //     });
 
-        // let stored_area = StoredArea {
-        //     area_size_index,
-        //     area,
-        // };
+    //     let stored_area = StoredArea {
+    //         area_size_index,
+    //         area,
+    //     };
 
-        // let stored_area_bytes =
-        //     bincode::serialize(&stored_area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+    //     let stored_area_bytes =
+    //         bincode::serialize(&stored_area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
-        // self.storage.write(addr.into(), &stored_area_bytes)?;
+    //     self.storage.write(addr.into(), &stored_area_bytes)?;
 
-        // The newly freed block is now the head of the free list.
-        self.header.free_lists[area_size_index as usize] = Some(addr);
+    //     // The newly freed block is now the head of the free list.
+    //     self.header.free_lists[area_size_index as usize] = Some(addr);
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
     /// Write the root [LinearAddress] of the [NodeStore]
     pub fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), Error> {
@@ -724,26 +724,13 @@ mod tests {
 
         // Delete the node
         node_store.delete_node(leaf_addr).unwrap();
-
-        // The header should have the freed node in the free list
-        let leaf_freed = node_store.header.free_lists.iter().any(|head| match head {
-            Some(addr) => *addr == leaf_addr,
-            None => false,
-        });
-        assert!(leaf_freed);
+        assert!(node_store.deleted.contains(&leaf_addr));
 
         // Create a new node with the same size
         let new_leaf_addr = node_store.create_node(leaf).unwrap();
 
-        // The new node should be at the same address
-        assert_eq!(new_leaf_addr, leaf_addr);
-
-        // The leaf address shouldn't be free anymore
-        let leaf_freed = node_store.header.free_lists.iter().any(|head| match head {
-            Some(addr) => *addr == leaf_addr,
-            None => false,
-        });
-        assert!(!leaf_freed);
+        // The new node shouldn't be at the same address
+        assert_ne!(new_leaf_addr, leaf_addr);
     }
 
     #[test]
