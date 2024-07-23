@@ -68,7 +68,6 @@ pub(super) mod filebacked;
 use crate::MemStore;
 
 use self::filebacked::FileBacked;
-mod layered;
 
 /// Trait for readable storage.
 pub trait ReadableStorage: Debug + Sync + Send {
