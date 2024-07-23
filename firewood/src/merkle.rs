@@ -460,11 +460,11 @@ impl<T: NodeWriter> MutableProposal<T> {
                         .enumerate()
                         .filter_map(|(index, child)| match child {
                             Child::None => None,
+                            Child::AddressWithHash(_, _) => None,
                             Child::Node(node) => {
                                 let node = std::mem::take(node);
                                 Some((index as u8, child, node))
                             }
-                            Child::AddressWithHash(_, _) => None,
                         })
                 {
                     // Hash this child and update
