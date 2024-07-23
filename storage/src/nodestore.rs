@@ -726,15 +726,10 @@ mod tests {
         node_store.delete_node(leaf_addr).unwrap();
 
         // The header should have the freed node in the free list
-        let leaf_freed = node_store
-            .header
-            .free_lists
-            .iter()
-            .find(|head| match head {
-                Some(addr) => *addr == leaf_addr,
-                None => false,
-            })
-            .is_some();
+        let leaf_freed = node_store.header.free_lists.iter().any(|head| match head {
+            Some(addr) => *addr == leaf_addr,
+            None => false,
+        });
         assert!(leaf_freed);
 
         // Create a new node with the same size
@@ -744,15 +739,10 @@ mod tests {
         assert_eq!(new_leaf_addr, leaf_addr);
 
         // The leaf address shouldn't be free anymore
-        let leaf_freed = node_store
-            .header
-            .free_lists
-            .iter()
-            .find(|head| match head {
-                Some(addr) => *addr == leaf_addr,
-                None => false,
-            })
-            .is_some();
+        let leaf_freed = node_store.header.free_lists.iter().any(|head| match head {
+            Some(addr) => *addr == leaf_addr,
+            None => false,
+        });
         assert!(!leaf_freed);
     }
 
