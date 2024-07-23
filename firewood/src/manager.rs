@@ -59,6 +59,7 @@ pub(crate) enum RevisionManagerError {
 }
 
 impl RevisionManager {
+    // TODO fix this or remove it. It should take in a proposal.
     fn commit(&mut self, _proposal: ()) -> Result<(), RevisionManagerError> {
         todo!()
         // // detach FileBacked from all revisions to make writes safe
@@ -84,6 +85,7 @@ impl RevisionManager {
         // self.writes_completed(proposal)
     }
 
+    // TODO fix or remove this. It should take in a proposal.
     fn prepare_for_writes(&mut self, _proposal: ()) -> Result<(), RevisionManagerError> {
         todo!()
         // // check to see if we can commit this proposal
@@ -132,6 +134,7 @@ impl RevisionManager {
         // Ok(new_historical)
     }
 
+    // TODO fix or remove this. It should take in a proposal.
     fn writes_completed(&mut self, _proposal: ()) -> Result<(), RevisionManagerError> {
         todo!()
         // // now that the committed proposal is on disk, reparent anything that pointed to our proposal,
@@ -167,6 +170,7 @@ impl RevisionManager {
 pub type NewProposalError = (); // TODO implement
 
 impl RevisionManager {
+    // TODO fix this or remove it. It should take in a proposal.
     pub fn add_proposal(&mut self, _proposal: ()) {
         todo!()
         // self.proposals.push(proposal);
