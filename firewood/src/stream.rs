@@ -391,24 +391,24 @@ enum PathIteratorState<'a> {
 #[derive(Debug)]
 pub struct PathIterator<'a, 'b, T: NodeReader> {
     state: PathIteratorState<'b>,
-    merkle: &'a Merkle<T>,
+    node_reader: &'a T,
 }
 
 impl<'a, 'b, T: NodeReader> PathIterator<'a, 'b, T> {
-    pub(super) fn new(merkle: &'a Merkle<T>, key: &'b [u8]) -> Result<Self, MerkleError> {
-        let Some((root_addr, _)) = merkle.root() else {
+    pub(super) fn new(node_reader: &'a T, key: &'b [u8]) -> Result<Self, MerkleError> {
+        let Some(root_addr) = node_reader.root_address() else {
             return Ok(Self {
                 state: PathIteratorState::Exhausted,
-                merkle,
+                node_reader,
             });
         };
 
         Ok(Self {
-            merkle,
+            node_reader,
             state: PathIteratorState::Iterating {
                 matched_key: vec![],
                 unmatched_key: NibblesIterator::new(key),
-                node: merkle.read_node(root_addr)?,
+                node: node_reader.read_node(root_addr)?,
             },
         })
     }
@@ -419,8 +419,8 @@ impl<'a, 'b, T: NodeReader> Iterator for PathIterator<'a, 'b, T> {
 
     fn next(&mut self) -> Option<Self::Item> {
         // destructuring is necessary here because we need mutable access to `state`
-        // at the same time as immutable access to `merkle`.
-        let Self { state, merkle } = &mut *self;
+        // at the same time as immutable access to `node_reader`.
+        let Self { state, node_reader } = &mut *self;
 
         match state {
             PathIteratorState::Exhausted => None,
@@ -486,7 +486,7 @@ impl<'a, 'b, T: NodeReader> Iterator for PathIterator<'a, 'b, T> {
                                         }))
                                     }
                                     Child::AddressWithHash(child_addr, _) => {
-                                        let child = match merkle.read_node(*child_addr) {
+                                        let child = match node_reader.read_node(*child_addr) {
                                             Ok(child) => child,
                                             Err(e) => return Some(Err(e)),
                                         };
