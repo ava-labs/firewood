@@ -153,7 +153,6 @@ fn get_helper<T: NodeReader>(
                     let child = match &branch.children[child_index as usize] {
                         Child::None => return Ok(None),
                         Child::Node(node) => node,
-                        Child::HashedNode(node, _) => node,
                         Child::AddressWithHash(addr, _) => &nodestore.read_node(*addr)?,
                     };
 
@@ -364,8 +363,7 @@ impl<T: NodeReader> Merkle<T> {
                 for (childidx, child) in b.children.iter().enumerate() {
                     let (child_addr, child_hash) = match child {
                         Child::None => continue,
-                        Child::Node(_) => continue,          // TODO
-                        Child::HashedNode(_, _) => continue, // TODO
+                        Child::Node(_) => continue, // TODO
                         Child::AddressWithHash(addr, hash) => (*addr, Some(hash)),
                     };
 
@@ -655,7 +653,6 @@ impl<T: NodeWriter> MutableProposal<T> {
                                 return Ok(node);
                             }
                             Child::Node(child) => child,
-                            Child::HashedNode(child, _) => (*child).clone(),
                             Child::AddressWithHash(addr, _) => {
                                 self.deleted.push(addr);
                                 let node = self.nodestore.read_node(addr)?;
@@ -726,7 +723,7 @@ impl<T: NodeWriter> MutableProposal<T> {
         };
 
         let (root, removed_value) = self.remove_helper(root, &key)?;
-        self.root = root.into();
+        self.root = root;
         Ok(removed_value)
     }
 
@@ -794,7 +791,6 @@ impl<T: NodeWriter> MutableProposal<T> {
                                         partial_path: Path::new(),
                                     }),
                                 ),
-                                Child::HashedNode(child_node, _) => (**child_node).clone(),
                                 Child::AddressWithHash(addr, _) => {
                                     self.deleted.push(*addr);
                                     let node = self.nodestore.read_node(*addr)?;
@@ -863,7 +859,6 @@ impl<T: NodeWriter> MutableProposal<T> {
                             Child::None => {
                                 return Ok((Some(node), None));
                             }
-                            Child::HashedNode(node, _) => (*node).clone(),
                             Child::Node(node) => node,
                             Child::AddressWithHash(addr, _) => {
                                 self.deleted.push(addr);
@@ -906,7 +901,6 @@ impl<T: NodeWriter> MutableProposal<T> {
                         // The branch has only 1 child. Remove the branch and return the child.
                         let mut child = match child {
                             Child::None => unreachable!(),
-                            Child::HashedNode(child_node, _) => (**child_node).clone(),
                             Child::Node(child_node) => std::mem::replace(
                                 child_node,
                                 Node::Leaf(LeafNode {
@@ -1202,7 +1196,7 @@ mod tests {
         assert!(merkle.get(&key3).unwrap().is_none());
         assert!(merkle.remove(&key3).unwrap().is_none());
 
-        assert!(matches!(merkle.root(), None));
+        assert!(merkle.root().is_none());
     }
 
     #[test]
@@ -1233,7 +1227,7 @@ mod tests {
             let got = merkle.get(&key).unwrap();
             assert!(got.is_none());
         }
-        assert!(matches!(merkle.root(), None));
+        assert!(merkle.root().is_none());
     }
 
     //     #[test]

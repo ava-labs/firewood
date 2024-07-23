@@ -4,10 +4,7 @@
 use serde::{ser::SerializeStruct as _, Deserialize, Serialize};
 
 use crate::{LeafNode, LinearAddress, Node, Path, TrieHash};
-use std::{
-    fmt::{Debug, Error as FmtError, Formatter},
-    sync::Arc,
-};
+use std::fmt::{Debug, Error as FmtError, Formatter};
 
 #[derive(PartialEq, Eq, Clone, Default, Debug)]
 /// A child of a branch node.
@@ -18,9 +15,6 @@ pub enum Child {
     /// There is a child at this index, but we haven't hashed it
     /// or written it to storage yet.
     Node(Node),
-    /// There is a child at this index, and we know its hash
-    /// but haven't written it to storage yet.
-    HashedNode(Arc<Node>, TrieHash),
     /// We know the child's address and hash.
     AddressWithHash(LinearAddress, TrieHash),
 }
@@ -56,7 +50,7 @@ impl Serialize for BranchNode {
         for (i, c) in self.children.iter().enumerate() {
             match c {
                 Child::None => {}
-                Child::Node(_) | Child::HashedNode(_, _) => {
+                Child::Node(_) => {
                     return Err(serde::ser::Error::custom(
                         "node has children in memory. TODO make this impossible.",
                     ))
@@ -113,7 +107,7 @@ impl Debug for BranchNode {
         for (i, c) in self.children.iter().enumerate() {
             match c {
                 Child::None => {}
-                Child::Node(_) | Child::HashedNode(_, _) => {} //TODO
+                Child::Node(_) => {} //TODO
                 Child::AddressWithHash(addr, hash) => write!(
                     f,
                     "(index: {i:?}), address={addr:?}, hash={:?})",
@@ -164,7 +158,7 @@ impl BranchNode {
             |(i, child)| match child {
                 Child::None => None,
                 Child::Node(_) => unreachable!("TODO make unreachable"),
-                Child::AddressWithHash(_, hash) | Child::HashedNode(_, hash) => Some((i, hash)),
+                Child::AddressWithHash(_, hash) => Some((i, hash)),
             },
         )
     }
