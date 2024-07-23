@@ -125,7 +125,7 @@ impl<T: ReadModifiedNode, S: ReadableStorage> NodeStore<T, S> {
     /// Read a [Node] from the provided [LinearAddress].
     /// `addr` is the address of a StoredArea in the LinearStore.
     /// TODO should this return an Arc?
-    pub fn read_node_from_disk(&self, addr: LinearAddress) -> Result<Node, Error> {
+    pub fn read_node_from_disk(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
         debug_assert!(addr.get() % 8 == 0);
 
         let addr = addr.get() + 1; // Skip the index byte
@@ -135,7 +135,7 @@ impl<T: ReadModifiedNode, S: ReadableStorage> NodeStore<T, S> {
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
         match area {
-            Area::Node(node) => Ok(node),
+            Area::Node(node) => Ok(node.into()),
             Area::Free(_) => Err(Error::new(
                 ErrorKind::InvalidData,
                 "Attempted to read a freed area",
@@ -171,7 +171,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 
     /// Create a new, empty, [Committed] [NodeStore] and clobber
     /// the underlying store with an empty freelist and no root node
-    pub fn new_empty(storage: Arc<S>) -> Result<Self, Error> {
+    pub fn new_empty_committed(storage: Arc<S>) -> Result<Self, Error> {
         let header = NodeStoreHeader {
             version: Version::new(),
             free_lists: Default::default(),
@@ -197,18 +197,54 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     }
 }
 
+// impl<S: WritableStorage> NodeStore<ProposedMutable, S> {
+//     /// Creates a new proposed instance of `NodeStore`.
+//     ///
+//     /// # Arguments
+//     ///
+//     /// * `parent` - The parent node store.
+//     /// * `storage` - The storage implementation.
+//     pub fn new<T: Into<NodeStoreParent> + ReadChangedNode>(parent: NodeStore<T, S>) -> Self {
+//         let mut store = NodeStore {
+//             header: parent.header.clone(),
+//             deleted_nodes: Default::default(),
+//             revision_type: Proposed::new(parent.revision_type.into().into()),
+//             storage: parent.storage.clone(),
+//         };
+//         store.write_header().expect("failed to write header");
+//         store
+//     }
+
 impl<S: WritableStorage> NodeStore<Proposal, S> {
-    // fn new_child(&self) -> NodeStore<Proposal, S> {
-    //     NodeStore {
-    //         header: self.header.clone(),
-    //         storage: self.storage.clone(),
-    //         kind: Proposal {
-    //             new: HashMap::new(),
-    //             parent: Box::new(NodeStoreParent::Proposed(self.kind)),
-    //         },
-    //         deleted: vec![],
-    //     }
-    // }
+    /// Create a new, empty, [NodeStore] and clobber the underlying store with an empty freelist and no root node
+    pub fn new_empty(storage: Arc<S>) -> Self {
+        let header = NodeStoreHeader::new();
+        let header_bytes = bincode::serialize(&header).expect("failed to serialize header");
+        storage
+            .write(0, header_bytes.as_slice())
+            .expect("failed to write header");
+        NodeStore {
+            header,
+            deleted: vec![],
+            kind: Proposal {
+                new: HashMap::new(),
+                parent: NodeStoreParent::Committed,
+            },
+            storage,
+        }
+    }
+    /// Create a new NodeStore proposal from a given parent
+    pub fn new<T: Into<NodeStoreParent> + ReadModifiedNode>(parent: NodeStore<T, S>) -> Self {
+        NodeStore {
+            header: parent.header.clone(),
+            deleted: Default::default(),
+            kind: Proposal {
+                new: HashMap::new(),
+                parent: parent.kind.into(),
+            },
+            storage: parent.storage.clone(),
+        }
+    }
 
     // TODO danlaine: Write only the parts of the header that have changed instead of the whole thing
     // fn write_header(&mut self) -> Result<(), Error> {
@@ -505,16 +541,28 @@ impl ReadModifiedNode for Committed {
 }
 
 #[derive(Debug)]
-enum NodeStoreParent {
-    Proposed(Proposal),
+pub enum NodeStoreParent {
+    Proposed(Arc<Proposal>),
     Committed,
+}
+
+impl<S: ReadableStorage> From<NodeStore<Committed, S>> for NodeStoreParent {
+    fn from(_: NodeStore<Committed, S>) -> Self {
+        NodeStoreParent::Committed
+    }
+}
+
+impl<S: ReadableStorage> From<NodeStore<Proposal, S>> for NodeStoreParent {
+    fn from(val: NodeStore<Proposal, S>) -> Self {
+        NodeStoreParent::Proposed(Arc::new(val.kind))
+    }
 }
 
 #[derive(Debug)]
 /// TODO document
 pub struct Proposal {
     new: HashMap<LinearAddress, Arc<Node>>,
-    parent: Box<NodeStoreParent>,
+    parent: NodeStoreParent,
 }
 
 impl ReadModifiedNode for Proposal {
@@ -523,8 +571,8 @@ impl ReadModifiedNode for Proposal {
             return Some(node.clone());
         }
 
-        match &*self.parent {
-            NodeStoreParent::Proposed(parent) => parent.read_modified_node(addr),
+        match self.parent {
+            NodeStoreParent::Proposed(ref parent) => parent.read_modified_node(addr),
             NodeStoreParent::Committed => None,
         }
     }
@@ -548,7 +596,7 @@ impl<T: ReadModifiedNode, S: ReadableStorage> NodeReader for NodeStore<T, S> {
         if let Some(node) = self.kind.read_modified_node(addr) {
             return Ok(node);
         }
-        self.read_node_from_disk(addr).map(|node| Arc::new(node))
+        self.read_node_from_disk(addr)
     }
 
     fn root_address(&self) -> Option<LinearAddress> {
@@ -616,7 +664,7 @@ mod tests {
     #[test]
     fn test_create() {
         let linear_store = Arc::new(MemStore::new(vec![]));
-        let mut node_store = NodeStore::new_empty(linear_store).unwrap();
+        let mut node_store = NodeStore::new_empty(linear_store);
 
         let leaf = Node::Leaf(LeafNode {
             partial_path: Path::from([0, 1, 2]),
@@ -646,7 +694,7 @@ mod tests {
 
             // Should be able to read the leaf back
             let read_leaf = node_store.read_node_from_disk(leaf_addr).unwrap();
-            assert_eq!(read_leaf, leaf);
+            assert_eq!(read_leaf, leaf.into());
         }
 
         // Create another node
@@ -681,14 +729,14 @@ mod tests {
 
             // Should be able to read the branch back
             let read_leaf2 = node_store.read_node_from_disk(branch_addr).unwrap();
-            assert_eq!(read_leaf2, branch);
+            assert_eq!(read_leaf2, branch.into());
         }
     }
 
     #[test]
     fn test_delete() {
         let linear_store = Arc::new(MemStore::new(vec![]));
-        let mut node_store = NodeStore::new_empty(linear_store).unwrap();
+        let mut node_store = NodeStore::new_empty(linear_store);
 
         // Create a leaf
         let leaf = Node::Leaf(LeafNode {
@@ -726,7 +774,7 @@ mod tests {
     #[test]
     fn test_node_store_new() {
         let linear_store = MemStore::new(vec![]);
-        let node_store = NodeStore::new_empty(linear_store).unwrap();
+        let node_store = NodeStore::new_empty(linear_store.into());
 
         // Check the empty header is written at the start of the LinearStore.
         let mut header_bytes = node_store.storage.stream_from(0).unwrap();

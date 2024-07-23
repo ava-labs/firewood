@@ -989,9 +989,10 @@ mod tests {
 
     fn create_in_memory_merkle() -> MutableProposal<NodeStore<Proposal, MemStore>> {
         let memstore = MemStore::new(vec![]);
-        let memstore = Arc::new(memstore);
-        let nodestore = NodeStore::new_empty(memstore).unwrap();
-        new(nodestore).unwrap()
+        MutableProposal {
+            nodestore: NodeStore::new_empty(memstore.into()),
+            root: None,
+        }
     }
 
     // use super::*;
@@ -1568,8 +1569,8 @@ mod tests {
 
     fn merkle_build_test<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         items: Vec<(K, V)>,
-    ) -> Result<MutableProposal<NodeStore<MemStore>>, MerkleError> {
-        let nodestore = NodeStore::new_empty(MemStore::new(vec![]))?;
+    ) -> Result<MutableProposal<NodeStore<Proposal, MemStore>>, MerkleError> {
+        let nodestore = NodeStore::new_empty(MemStore::new(vec![]).into());
         let mut merkle = new(nodestore).unwrap();
         for (k, v) in items.iter() {
             merkle.insert(k.as_ref(), Box::from(v.as_ref()))?;

@@ -620,7 +620,7 @@ mod tests {
     pub(super) fn create_test_merkle() -> MutableProposal<NodeStore<Proposal, MemStore>> {
         let memstore = MemStore::new(vec![]);
         let memstore = Arc::new(memstore);
-        let nodestore = NodeStore::new_empty(memstore).unwrap();
+        let nodestore = NodeStore::new_empty(memstore);
         merkle::new(nodestore).unwrap()
     }
 
