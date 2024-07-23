@@ -82,7 +82,7 @@ fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criter
             b.iter_batched(
                 || {
                     let store = Arc::new(MemStore::new(vec![]));
-                    let nodestore = NodeStore::new_empty(store);
+                    let nodestore = NodeStore::new_empty_proposal(store);
                     let merkle = merkle::new(nodestore).unwrap();
 
                     let keys: Vec<Vec<u8>> = repeat_with(|| {

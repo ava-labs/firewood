@@ -210,9 +210,9 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 //         store
 //     }
 
-impl<S: WritableStorage> NodeStore<Proposal, S> {
+impl<S: WritableStorage> NodeStore<ImmutableProposal, S> {
     /// Create a new, empty, [NodeStore] and clobber the underlying store with an empty freelist and no root node
-    pub fn new_empty(storage: Arc<S>) -> Self {
+    pub fn new_empty_proposal(storage: Arc<S>) -> Self {
         let header = NodeStoreHeader::new();
         let header_bytes = bincode::serialize(&header).expect("failed to serialize header");
         storage
@@ -221,7 +221,7 @@ impl<S: WritableStorage> NodeStore<Proposal, S> {
         NodeStore {
             header,
             deleted: vec![],
-            kind: Proposal {
+            kind: ImmutableProposal {
                 new: HashMap::new(),
                 parent: NodeStoreParent::Committed,
             },
@@ -233,7 +233,7 @@ impl<S: WritableStorage> NodeStore<Proposal, S> {
         NodeStore {
             header: parent.header.clone(),
             deleted: Default::default(),
-            kind: Proposal {
+            kind: ImmutableProposal {
                 new: HashMap::new(),
                 parent: parent.kind.into(),
             },
@@ -256,7 +256,7 @@ impl<S: WritableStorage> NodeStore<Proposal, S> {
     // }
 }
 
-impl<S: ReadableStorage> NodeStore<Proposal, S> {
+impl<S: ReadableStorage> NodeStore<ImmutableProposal, S> {
     /// Attempts to allocate `n` bytes from the free lists.
     /// If successful returns the address of the newly allocated area
     /// and the index of the free list that was used.
@@ -537,7 +537,7 @@ impl ReadModifiedNode for Committed {
 
 #[derive(Debug)]
 pub enum NodeStoreParent {
-    Proposed(Arc<Proposal>),
+    Proposed(Arc<ImmutableProposal>),
     Committed,
 }
 
@@ -547,20 +547,20 @@ impl<S: ReadableStorage> From<NodeStore<Committed, S>> for NodeStoreParent {
     }
 }
 
-impl<S: ReadableStorage> From<NodeStore<Proposal, S>> for NodeStoreParent {
-    fn from(val: NodeStore<Proposal, S>) -> Self {
+impl<S: ReadableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStoreParent {
+    fn from(val: NodeStore<ImmutableProposal, S>) -> Self {
         NodeStoreParent::Proposed(Arc::new(val.kind))
     }
 }
 
 #[derive(Debug)]
 /// TODO document
-pub struct Proposal {
+pub struct ImmutableProposal {
     new: HashMap<LinearAddress, Arc<Node>>,
     parent: NodeStoreParent,
 }
 
-impl ReadModifiedNode for Proposal {
+impl ReadModifiedNode for ImmutableProposal {
     fn read_modified_node(&self, addr: LinearAddress) -> Option<Arc<Node>> {
         if let Some(node) = self.new.get(&addr) {
             return Some(node.clone());
@@ -599,7 +599,7 @@ impl<T: ReadModifiedNode, S: ReadableStorage> NodeReader for NodeStore<T, S> {
     }
 }
 
-impl<S: ReadableStorage> NodeWriter for NodeStore<Proposal, S> {
+impl<S: ReadableStorage> NodeWriter for NodeStore<ImmutableProposal, S> {
     fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), Error> {
         self.header.root_address = addr;
         Ok(())
@@ -659,7 +659,7 @@ mod tests {
     #[test]
     fn test_create() {
         let memstore = Arc::new(MemStore::new(vec![]));
-        let mut node_store = NodeStore::new_empty(memstore);
+        let mut node_store = NodeStore::new_empty_proposal(memstore);
 
         let leaf = Node::Leaf(LeafNode {
             partial_path: Path::from([0, 1, 2]),
@@ -713,7 +713,7 @@ mod tests {
     #[test]
     fn test_delete() {
         let memstore = Arc::new(MemStore::new(vec![]));
-        let mut node_store = NodeStore::new_empty(memstore);
+        let mut node_store = NodeStore::new_empty_proposal(memstore);
 
         // Create a leaf
         let leaf = Node::Leaf(LeafNode {
@@ -749,7 +749,7 @@ mod tests {
     #[test]
     fn test_node_store_new() {
         let linear_store = MemStore::new(vec![]);
-        let node_store = NodeStore::new_empty(linear_store.into());
+        let node_store = NodeStore::new_empty_proposal(linear_store.into());
 
         // Check the empty header is written at the start of the LinearStore.
         let mut header_bytes = node_store.storage.stream_from(0).unwrap();

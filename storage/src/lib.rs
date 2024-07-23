@@ -23,7 +23,7 @@ pub use linear::{LinearStoreParent, ReadableStorage, WritableStorage};
 pub use node::{
     path::NibblesIterator, path::Path, BranchNode, Child, LeafNode, Node, PathIterItem,
 };
-pub use nodestore::{LinearAddress, NodeReader, NodeStore, NodeWriter, Proposal, UpdateError};
+pub use nodestore::{LinearAddress, NodeReader, NodeStore, NodeWriter, ImmutableProposal, UpdateError};
 
 pub use linear::{filebacked::FileBacked, memory::MemStore};
 
