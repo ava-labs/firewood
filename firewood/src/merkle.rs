@@ -807,16 +807,14 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
     use super::*;
-    use rand::{rngs::StdRng, Rng, SeedableRng};
+    use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
     use storage::MemStore;
     use test_case::test_case;
 
     // Returns n random key-value pairs.
     fn generate_random_kvs(seed: u64, n: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
-        println!("Used seed: {}", seed);
+        eprintln!("Used seed: {}", seed);
 
         let mut rng = StdRng::seed_from_u64(seed);
 
@@ -1093,10 +1091,13 @@ mod tests {
     fn single_key_proof() {
         let mut merkle = create_in_memory_merkle();
 
-        let seed = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let seed = std::env::var("FIREWOOD_TEST_SEED")
+            .ok()
+            .map_or_else(
+                || None,
+                |s| Some(str::parse(&s).expect("couldn't parse FIREWOOD_TEST_SEED; must be a u64")),
+            )
+            .unwrap_or_else(|| thread_rng().gen());
 
         const TEST_SIZE: usize = 1;
 

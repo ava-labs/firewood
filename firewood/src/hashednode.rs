@@ -320,12 +320,12 @@ pub enum ValueDigest<T> {
 }
 
 pub(crate) trait Hashable {
-    type T: AsRef<[u8]>;
+    type ValueDigestType: AsRef<[u8]>;
 
     /// The key of the node where each byte is a nibble.
     fn key(&self) -> impl Iterator<Item = u8> + Clone;
     /// The node's value or hash.
-    fn value_digest(&self) -> Option<ValueDigest<Self::T>>;
+    fn value_digest(&self) -> Option<ValueDigest<Self::ValueDigestType>>;
     /// Each element is a child's index and hash.
     /// Yields 0 elements if the node is a leaf.
     fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone;
@@ -339,10 +339,7 @@ pub(super) trait Preimage {
 }
 
 // Implement Preimage for all types that implement Hashable
-impl<T: Hashable> Preimage for T
-where
-    T::T: AsRef<[u8]>,
-{
+impl<T: Hashable> Preimage for T {
     fn to_hash(&self) -> TrieHash {
         let mut hasher = Sha256::new();
         self.write(&mut hasher);
@@ -424,7 +421,7 @@ impl<'a, N: HashableNode> From<NodeAndPrefix<'a, N>> for TrieHash {
 }
 
 impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
-    type T = &'a [u8];
+    type ValueDigestType = &'a [u8];
 
     fn key(&self) -> impl Iterator<Item = u8> + Clone {
         self.prefix
@@ -444,7 +441,7 @@ impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
 }
 
 impl<'a> Hashable for &'a ProofNode {
-    type T = &'a [u8];
+    type ValueDigestType = &'a [u8];
 
     fn key(&self) -> impl Iterator<Item = u8> + Clone {
         self.key.as_ref().iter().copied()

@@ -142,10 +142,7 @@ impl Proof {
         let mut expected_hash = root_hash;
 
         // TODO danlaine: Is there a better way to do this loop?
-        for i in 0..self.0.len() {
-            #[allow(clippy::indexing_slicing)]
-            let node = &self.0[i];
-
+        for (i, node) in self.0.iter().enumerate() {
             if node.to_hash() != *expected_hash {
                 return Err(ProofError::UnexpectedHash);
             }
