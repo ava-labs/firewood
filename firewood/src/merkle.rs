@@ -433,7 +433,6 @@ pub struct MutableProposal<T: NodeWriter> {
 }
 
 impl<T: NodeWriter> MutableProposal<T> {
-    /// TODO: Return impl NodeReader
     /// Hashes the trie and returns it as its immutable variant.
     pub fn hash(mut self) -> Result<impl NodeReader, MerkleError> {
         let Some(root) = std::mem::take(&mut self.root) else {
