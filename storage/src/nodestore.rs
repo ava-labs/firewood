@@ -105,7 +105,7 @@ struct StoredArea<T> {
     area: T,
 }
 
-impl<T: ReadModifiedNode, S: ReadableStorage> NodeStore<T, S> {
+impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
     /// Returns (index, area_size) for the [StoredArea] at `addr`.
     /// `index` is the index of `area_size` in [AREA_SIZES].
     fn area_index_and_size(&self, addr: LinearAddress) -> Result<(AreaIndex, u64), Error> {
@@ -229,7 +229,7 @@ impl<S: WritableStorage> NodeStore<ImmutableProposal, S> {
         }
     }
     /// Create a new NodeStore proposal from a given parent
-    pub fn new<T: Into<NodeStoreParent> + ReadModifiedNode>(parent: NodeStore<T, S>) -> Self {
+    pub fn new<T: Into<NodeStoreParent> + ReadInMemoryNode>(parent: NodeStore<T, S>) -> Self {
         NodeStore {
             header: parent.header.clone(),
             deleted: Default::default(),
@@ -529,8 +529,8 @@ pub trait NodeWriter: NodeReader {
 
 struct Committed {}
 
-impl ReadModifiedNode for Committed {
-    fn read_modified_node(&self, _addr: LinearAddress) -> Option<Arc<Node>> {
+impl ReadInMemoryNode for Committed {
+    fn read_in_memory_node(&self, _addr: LinearAddress) -> Option<Arc<Node>> {
         None
     }
 }
@@ -560,35 +560,35 @@ pub struct ImmutableProposal {
     parent: NodeStoreParent,
 }
 
-impl ReadModifiedNode for ImmutableProposal {
-    fn read_modified_node(&self, addr: LinearAddress) -> Option<Arc<Node>> {
+impl ReadInMemoryNode for ImmutableProposal {
+    fn read_in_memory_node(&self, addr: LinearAddress) -> Option<Arc<Node>> {
         if let Some(node) = self.new.get(&addr) {
             return Some(node.clone());
         }
 
         match self.parent {
-            NodeStoreParent::Proposed(ref parent) => parent.read_modified_node(addr),
+            NodeStoreParent::Proposed(ref parent) => parent.read_in_memory_node(addr),
             NodeStoreParent::Committed => None,
         }
     }
 }
 
-pub trait ReadModifiedNode {
-    fn read_modified_node(&self, addr: LinearAddress) -> Option<Arc<Node>>;
+pub trait ReadInMemoryNode {
+    fn read_in_memory_node(&self, addr: LinearAddress) -> Option<Arc<Node>>;
 }
 
 /// TODO document
 #[derive(Debug)]
-pub struct NodeStore<T: ReadModifiedNode, S: ReadableStorage> {
+pub struct NodeStore<T: ReadInMemoryNode, S: ReadableStorage> {
     header: NodeStoreHeader,
     deleted: Vec<LinearAddress>,
     kind: T,
     storage: Arc<S>,
 }
 
-impl<T: ReadModifiedNode, S: ReadableStorage> NodeReader for NodeStore<T, S> {
+impl<T: ReadInMemoryNode, S: ReadableStorage> NodeReader for NodeStore<T, S> {
     fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
-        if let Some(node) = self.kind.read_modified_node(addr) {
+        if let Some(node) = self.kind.read_in_memory_node(addr) {
             return Ok(node);
         }
         self.read_node_from_disk(addr)
