@@ -619,8 +619,8 @@ impl<T: NodeWriter> MutableProposal<T> {
                             }
                             Child::Node(child) => child,
                             Child::AddressWithHash(addr, _) => {
-                                self.nodestore.delete_node(addr)?;
                                 let node = self.nodestore.read_node(addr)?;
+                                self.nodestore.delete_node(addr)?;
                                 (*node).clone()
                             }
                         };
@@ -757,8 +757,8 @@ impl<T: NodeWriter> MutableProposal<T> {
                                     }),
                                 ),
                                 Child::AddressWithHash(addr, _) => {
-                                    self.nodestore.delete_node(*addr)?;
                                     let node = self.nodestore.read_node(*addr)?;
+                                    self.nodestore.delete_node(*addr)?;
                                     (*node).clone()
                                 }
                             };
@@ -826,8 +826,8 @@ impl<T: NodeWriter> MutableProposal<T> {
                             }
                             Child::Node(node) => node,
                             Child::AddressWithHash(addr, _) => {
-                                self.nodestore.delete_node(addr)?;
                                 let node = self.nodestore.read_node(addr)?;
+                                self.nodestore.delete_node(addr)?;
                                 (*node).clone()
                             }
                         };
@@ -874,8 +874,8 @@ impl<T: NodeWriter> MutableProposal<T> {
                                 }),
                             ),
                             Child::AddressWithHash(addr, _) => {
-                                self.nodestore.delete_node(*addr)?;
                                 let node = self.nodestore.read_node(*addr)?;
+                                self.nodestore.delete_node(*addr)?;
                                 (*node).clone()
                             }
                         };
