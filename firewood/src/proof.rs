@@ -132,8 +132,8 @@ impl<T: Hashable> Proof<T> {
         &self,
         key: K,
         root_hash: &TrieHash,
-    ) -> Result<Option<ValueDigest<T::T>>, ProofError> {
-        let key: Vec<u8> = NibblesIterator::new(key.as_ref()).collect();
+    ) -> Result<Option<ValueDigest<T::ValueDigestType>>, ProofError> {
+        let key: Box<[u8]> = NibblesIterator::new(key.as_ref()).collect();
 
         let Some(last_node) = self.0.last() else {
             return Err(ProofError::Empty);
@@ -141,11 +141,8 @@ impl<T: Hashable> Proof<T> {
 
         let mut expected_hash = root_hash;
 
-        // TODO danlaine: Is there a better way to do this loop?
-        for i in 0..self.0.len() {
-            #[allow(clippy::indexing_slicing)]
-            let node = &self.0[i];
-
+        let mut iter = self.0.iter().peekable();
+        while let Some(node) = iter.next() {
             if node.to_hash() != *expected_hash {
                 return Err(ProofError::UnexpectedHash);
             }
@@ -156,11 +153,11 @@ impl<T: Hashable> Proof<T> {
                 return Err(ProofError::ValueAtOddNibbleLength);
             }
 
-            if i != self.0.len() - 1 {
+            if let Some(next_node) = iter.peek() {
                 // Assert that every node's key is a prefix of the proven key,
                 // with the exception of the last node, which is a suffix of the
                 // proven key in exclusion proofs.
-                let next_nibble = next_nibble(node.key(), key.iter().copied())?;
+                let next_nibble = next_nibble(node.key(), &key)?;
 
                 let Some(next_nibble) = next_nibble else {
                     return Err(ProofError::ShouldBePrefixOfProvenKey);
@@ -173,9 +170,7 @@ impl<T: Hashable> Proof<T> {
                     .ok_or(ProofError::ChildIndexOutOfBounds)?;
 
                 // Assert that each node's key is a prefix of the next node's key.
-                #[allow(clippy::indexing_slicing)]
-                let next_node_key = self.0[i + 1].key();
-                if !is_prefix(node.key(), next_node_key) {
+                if !is_prefix(node.key(), next_node.key()) {
                     return Err(ProofError::ShouldBePrefixOfNextKey);
                 }
             }
@@ -195,23 +190,24 @@ impl<T: Hashable> Proof<T> {
 fn next_nibble<I, J>(b: I, c: J) -> Result<Option<u8>, ProofError>
 where
     I: IntoIterator<Item = u8>,
-    J: IntoIterator<Item = u8>,
+    J: AsRef<[u8]>,
 {
     let b = b.into_iter();
-    let mut c = c.into_iter();
+    let mut c = c.as_ref().iter();
 
     // Check if b is a prefix of c
     for b_item in b {
         match c.next() {
-            Some(c_item) if b_item == c_item => continue,
+            Some(c_item) if b_item == *c_item => continue,
             _ => return Err(ProofError::ShouldBePrefixOfNextKey),
         }
     }
 
     // If a is a prefix, return the first element in c after b
-    Ok(c.next())
+    Ok(c.next().copied())
 }
 
+/// Returns true iff `b` is a prefix of `c`.
 fn is_prefix<I, J>(b: I, c: J) -> bool
 where
     I: IntoIterator<Item = u8>,

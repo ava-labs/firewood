@@ -4,16 +4,11 @@
 // hash benchmarks; run with 'cargo bench'
 
 use criterion::{criterion_group, criterion_main, profiler::Profiler, BatchSize, Criterion};
-use firewood::{
-    db::{BatchOp, DbConfig},
-    hashednode::HashedNodeStore,
-    merkle::Merkle,
-    v2::api::{Db, Proposal},
-};
+use firewood::merkle;
 use pprof::ProfilerGuard;
 use rand::{distributions::Alphanumeric, rngs::StdRng, Rng, SeedableRng};
 use std::{fs::File, iter::repeat_with, os::raw::c_int, path::Path};
-use storage::MemStore;
+use storage::{MemStore, NodeStore};
 
 // To enable flamegraph output
 // cargo bench --bench shale-bench -- --profile-time=N
@@ -86,8 +81,8 @@ fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criter
             b.iter_batched(
                 || {
                     let store = MemStore::new(vec![]);
-                    let hns = HashedNodeStore::new(store).unwrap();
-                    let merkle = Merkle::new(hns);
+                    let nodestore = NodeStore::initialize(store).unwrap();
+                    let merkle = merkle::new(nodestore).unwrap();
 
                     let keys: Vec<Vec<u8>> = repeat_with(|| {
                         (&mut rng)
@@ -104,7 +99,7 @@ fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criter
                 |(mut merkle, keys)| {
                     keys.into_iter()
                         .for_each(|key| merkle.insert(&key, Box::new(*b"v")).unwrap());
-                    let _frozen = merkle.freeze();
+                    let _frozen = merkle.hash();
                 },
                 BatchSize::SmallInput,
             );
@@ -113,49 +108,49 @@ fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criter
 
 // This bechmark does the same thing as bench_merkle except it uses the revision manager
 // TODO: Enable again once the revision manager is stable
-fn _bench_db<const N: usize>(criterion: &mut Criterion) {
-    const KEY_LEN: usize = 4;
-    let mut rng = StdRng::seed_from_u64(1234);
+// fn _bench_db<const N: usize>(criterion: &mut Criterion) {
+//     const KEY_LEN: usize = 4;
+//     let mut rng = StdRng::seed_from_u64(1234);
 
-    #[allow(clippy::unwrap_used)]
-    criterion
-        .benchmark_group("Db")
-        .sample_size(30)
-        .bench_function("commit", |b| {
-            b.to_async(tokio::runtime::Runtime::new().unwrap())
-                .iter_batched(
-                    || {
-                        let batch_ops: Vec<_> = repeat_with(|| {
-                            (&mut rng)
-                                .sample_iter(&Alphanumeric)
-                                .take(KEY_LEN)
-                                .collect()
-                        })
-                        .map(|key: Vec<_>| BatchOp::Put {
-                            key,
-                            value: vec![b'v'],
-                        })
-                        .take(N)
-                        .collect();
-                        batch_ops
-                    },
-                    |batch_ops| async {
-                        let db_path = std::env::temp_dir();
-                        let db_path = db_path.join("benchmark_db");
-                        let cfg = DbConfig::builder();
+//     #[allow(clippy::unwrap_used)]
+//     criterion
+//         .benchmark_group("Db")
+//         .sample_size(30)
+//         .bench_function("commit", |b| {
+//             b.to_async(tokio::runtime::Runtime::new().unwrap())
+//                 .iter_batched(
+//                     || {
+//                         let batch_ops: Vec<_> = repeat_with(|| {
+//                             (&mut rng)
+//                                 .sample_iter(&Alphanumeric)
+//                                 .take(KEY_LEN)
+//                                 .collect()
+//                         })
+//                         .map(|key: Vec<_>| BatchOp::Put {
+//                             key,
+//                             value: vec![b'v'],
+//                         })
+//                         .take(N)
+//                         .collect();
+//                         batch_ops
+//                     },
+//                     |batch_ops| async {
+//                         let db_path = std::env::temp_dir();
+//                         let db_path = db_path.join("benchmark_db");
+//                         let cfg = DbConfig::builder();
 
-                        #[allow(clippy::unwrap_used)]
-                        let db = firewood::db::Db::new(db_path, cfg.clone().truncate(true).build())
-                            .await
-                            .unwrap();
+//                         #[allow(clippy::unwrap_used)]
+//                         let db = firewood::db::Db::new(db_path, cfg.clone().truncate(true).build())
+//                             .await
+//                             .unwrap();
 
-                        #[allow(clippy::unwrap_used)]
-                        db.propose(batch_ops).await.unwrap().commit().await.unwrap()
-                    },
-                    BatchSize::SmallInput,
-                );
-        });
-}
+//                         #[allow(clippy::unwrap_used)]
+//                         db.propose(batch_ops).await.unwrap().commit().await.unwrap()
+//                     },
+//                     BatchSize::SmallInput,
+//                 );
+//         });
+// }
 
 criterion_group! {
     name = benches;
