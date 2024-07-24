@@ -112,6 +112,7 @@ impl<'a, T: NodeReader> Stream for MerkleNodeStream<'a, T> {
                     match iter_node {
                         IterationNode::Unvisited { key, node } => {
                             match &*node {
+                                Node::Leaf(_) => {}
                                 Node::Branch(branch) => {
                                     // `node` is a branch node. Visit its children next.
                                     iter_stack.push(IterationNode::Visited {
@@ -121,7 +122,6 @@ impl<'a, T: NodeReader> Stream for MerkleNodeStream<'a, T> {
                                         )),
                                     });
                                 }
-                                Node::Leaf(_) => {}
                             }
 
                             let key = key_from_nibble_iter(key.iter().copied());
@@ -139,19 +139,11 @@ impl<'a, T: NodeReader> Stream for MerkleNodeStream<'a, T> {
 
                             let child = match child {
                                 Child::None => unreachable!("TODO make this unreachable"),
-                                Child::AddressWithHash(addr, _) => {
-                                    let node = merkle.read_node(addr)?;
-                                    (*node).clone()
-                                }
-                                Child::Node(node) => node,
+                                Child::AddressWithHash(addr, _) => merkle.read_node(addr)?,
+                                Child::Node(node) => Arc::new(node.clone()),
                             };
 
-                            // let child = merkle.read_node(child_addr)?;
-
-                            let partial_path = match &child {
-                                Node::Branch(branch) => branch.partial_path.iter().copied(),
-                                Node::Leaf(leaf) => leaf.partial_path.iter().copied(),
-                            };
+                            let child_partial_path = child.partial_path().iter().copied();
 
                             // The child's key is its parent's key, followed by the child's index,
                             // followed by the child's partial path (if any).
@@ -159,15 +151,16 @@ impl<'a, T: NodeReader> Stream for MerkleNodeStream<'a, T> {
                                 .iter()
                                 .copied()
                                 .chain(once(pos))
-                                .chain(partial_path)
+                                .chain(child_partial_path)
                                 .collect();
 
                             // There may be more children of this node to visit.
+                            // Visit it again after visiting its `child`.
                             iter_stack.push(iter_node);
 
                             iter_stack.push(IterationNode::Unvisited {
                                 key: child_key,
-                                node: Arc::new(child),
+                                node: child,
                             });
                             return self.poll_next(_cx);
                         }
@@ -188,8 +181,7 @@ fn get_iterator_intial_state<T: NodeReader>(
         // This merkle is empty.
         return Ok(NodeStreamState::Iterating { iter_stack: vec![] });
     };
-    let node = merkle.read_node(root_addr)?;
-    let mut node = (*node).clone();
+    let mut node = merkle.read_node(root_addr)?;
 
     // Invariant: `matched_key_nibbles` is the path before `node`'s
     // partial path at the start of each loop iteration.
@@ -219,15 +211,15 @@ fn get_iterator_intial_state<T: NodeReader>(
                 // `node` is after `key`. Visit it first.
                 iter_stack.push(IterationNode::Unvisited {
                     key: Box::from(matched_key_nibbles),
-                    node: Arc::new(node),
+                    node,
                 });
                 return Ok(NodeStreamState::Iterating { iter_stack });
             }
-            Ordering::Equal => match &node {
+            Ordering::Equal => match &*node {
                 Node::Leaf(_) => {
                     iter_stack.push(IterationNode::Unvisited {
                         key: matched_key_nibbles.clone().into_boxed_slice(),
-                        node: Arc::new(node),
+                        node,
                     });
                     return Ok(NodeStreamState::Iterating { iter_stack });
                 }
@@ -236,7 +228,7 @@ fn get_iterator_intial_state<T: NodeReader>(
                         // There is no more key to traverse.
                         iter_stack.push(IterationNode::Unvisited {
                             key: matched_key_nibbles.clone().into_boxed_slice(),
-                            node: Arc::new(node),
+                            node,
                         });
 
                         return Ok(NodeStreamState::Iterating { iter_stack });
@@ -257,11 +249,8 @@ fn get_iterator_intial_state<T: NodeReader>(
                     let child = &branch.children[next_unmatched_key_nibble as usize];
                     node = match child {
                         Child::None => return Ok(NodeStreamState::Iterating { iter_stack }),
-                        Child::AddressWithHash(addr, _) => {
-                            let node = merkle.read_node(*addr)?;
-                            (*node).clone()
-                        }
-                        Child::Node(node) => node.clone(), // TODO can we avoid cloning this?
+                        Child::AddressWithHash(addr, _) => merkle.read_node(*addr)?,
+                        Child::Node(node) => Arc::new((*node).clone()),
                     };
 
                     matched_key_nibbles.push(next_unmatched_key_nibble);
