@@ -13,7 +13,7 @@ pub use branch::BranchNode;
 pub use branch::Child;
 pub use leaf::LeafNode;
 
-use crate::{LinearAddress, Path};
+use crate::Path;
 
 /// A node, either a Branch or Leaf
 
@@ -26,6 +26,15 @@ pub enum Node {
     Leaf(LeafNode),
 }
 
+impl Default for Node {
+    fn default() -> Self {
+        Node::Leaf(LeafNode {
+            partial_path: Path::new(),
+            value: Box::default(),
+        })
+    }
+}
+
 impl Node {
     /// Returns the partial path of the node.
     pub fn partial_path(&self) -> &Path {
@@ -35,9 +44,25 @@ impl Node {
         }
     }
 
+    /// Updates the partial path of the node to `partial_path`.
+    pub fn update_partial_path(&mut self, partial_path: Path) {
+        match self {
+            Node::Branch(b) => b.partial_path = partial_path,
+            Node::Leaf(l) => l.partial_path = partial_path,
+        }
+    }
+
+    /// Updates the value of the node to `value`.
+    pub fn update_value(&mut self, value: Box<[u8]>) {
+        match self {
+            Node::Branch(b) => b.value = Some(value),
+            Node::Leaf(l) => l.value = value,
+        }
+    }
+
     /// Returns a new `Arc<Node>` which is the same as `self` but with the given `partial_path`.
-    pub fn new_with_partial_path(self: Arc<Node>, partial_path: Path) -> Node {
-        match self.as_ref() {
+    pub fn new_with_partial_path(self: &Node, partial_path: Path) -> Node {
+        match self {
             Node::Branch(b) => Node::Branch(Box::new(BranchNode {
                 partial_path,
                 value: b.value.clone(),
@@ -69,8 +94,6 @@ pub struct PathIterItem {
     pub key_nibbles: Box<[u8]>,
     /// A reference to the node
     pub node: Arc<Node>,
-    /// The address of `node` in the linear store.
-    pub addr: LinearAddress,
     /// The next item returned by the iterator is a child of `node`.
     /// Specifically, it's the child at index `next_nibble` in `node`'s
     /// children array.

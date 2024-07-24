@@ -2,11 +2,6 @@
 // See the file LICENSE.md for licensing terms.
 
 use clap::Args;
-use firewood::v2::api::Db as _;
-use firewood::{
-    db::{Db, DbConfig},
-    v2::api,
-};
 use std::str;
 
 #[derive(Debug, Args)]
@@ -22,13 +17,13 @@ pub struct Options {
     pub db: String,
 }
 
-pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
-    log::debug!("root hash {:?}", opts);
-    let cfg = DbConfig::builder().truncate(false);
+// pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
+//     log::debug!("root hash {:?}", opts);
+//     let cfg = DbConfig::builder().truncate(false);
 
-    let db = Db::new(opts.db.clone(), cfg.build()).await?;
+//     let db = Db::new(opts.db.clone(), cfg.build()).await?;
 
-    let root = db.root_hash().await?;
-    println!("{root:X?}");
-    Ok(())
-}
+//     let root = db.root_hash().await?;
+//     println!("{root:X?}");
+//     Ok(())
+// }
