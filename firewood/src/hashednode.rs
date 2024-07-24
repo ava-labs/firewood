@@ -204,28 +204,6 @@ impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
     }
 }
 
-impl<'a> Hashable for &'a ProofNode {
-    type ValueDigestType = &'a [u8];
-
-    fn key(&self) -> impl Iterator<Item = u8> + Clone {
-        self.key.as_ref().iter().copied()
-    }
-
-    fn value_digest(&self) -> Option<ValueDigest<&'a [u8]>> {
-        self.value_digest.as_ref().map(|vd| match vd {
-            ValueDigest::Value(v) => ValueDigest::Value(v.as_ref()),
-            ValueDigest::_Hash(h) => ValueDigest::_Hash(h.as_ref()),
-        })
-    }
-
-    fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
-        self.child_hashes
-            .iter()
-            .enumerate()
-            .filter_map(|(i, hash)| hash.as_ref().map(|h| (i, h)))
-    }
-}
-
 impl Hashable for ProofNode {
     type ValueDigestType = Box<[u8]>;
 
