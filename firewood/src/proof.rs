@@ -141,7 +141,6 @@ impl Proof {
 
         let mut expected_hash = root_hash;
 
-        // TODO danlaine: Is there a better way to do this loop?
         let mut iter = self.0.iter().peekable();
         while let Some(node) = iter.next() {
             if node.to_hash() != *expected_hash {
@@ -158,7 +157,7 @@ impl Proof {
                 // Assert that every node's key is a prefix of the proven key,
                 // with the exception of the last node, which is a suffix of the
                 // proven key in exclusion proofs.
-                let next_nibble = next_nibble(&mut node.key.iter(), &mut key.iter())?;
+                let next_nibble = next_nibble(&node.key, &key)?;
 
                 let Some(next_nibble) = next_nibble else {
                     return Err(ProofError::ShouldBePrefixOfProvenKey);
@@ -189,10 +188,10 @@ impl Proof {
 
 /// Returns the next nibble in `c` after `b`.
 /// Returns an error if `b` is not a prefix of `c`.
-fn next_nibble<'a, I>(b: &mut I, c: &mut I) -> Result<Option<u8>, ProofError>
-where
-    I: Iterator<Item = &'a u8>,
-{
+fn next_nibble(b: impl AsRef<[u8]>, c: impl AsRef<[u8]>) -> Result<Option<u8>, ProofError> {
+    let b = b.as_ref();
+    let mut c = c.as_ref().iter();
+
     // Check if b is a prefix of c
     for b_item in b {
         match c.next() {
