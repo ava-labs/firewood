@@ -171,7 +171,7 @@ impl Proof {
                     .ok_or(ProofError::NodeNotInTrie)?;
 
                 // Assert that each node's key is a prefix of the next node's key.
-                if !is_prefix(&mut node.key.iter(), &mut next_node.key.iter()) {
+                if !is_prefix(&node.key, &next_node.key) {
                     return Err(ProofError::ShouldBePrefixOfNextKey);
                 }
             }
@@ -204,11 +204,10 @@ fn next_nibble(b: impl AsRef<[u8]>, c: impl AsRef<[u8]>) -> Result<Option<u8>, P
     Ok(c.next().copied())
 }
 
-fn is_prefix<'a, I>(b: &mut I, c: &mut I) -> bool
-where
-    I: Iterator<Item = &'a u8>,
-{
-    for b_item in b {
+/// Returns true iff `b` is a prefix of `c`.
+fn is_prefix(b: impl AsRef<[u8]>, c: impl AsRef<[u8]>) -> bool {
+    let mut c = c.as_ref().iter();
+    for b_item in b.as_ref() {
         let Some(c_item) = c.next() else {
             return false;
         };
