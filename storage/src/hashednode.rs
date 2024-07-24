@@ -4,8 +4,8 @@
 use sha2::{Digest, Sha256};
 use std::iter::{self};
 
-use storage::{Child, TrieHash};
-use storage::{Node, Path};
+use crate::{BranchNode, Child, LeafNode, TrieHash};
+use crate::{Node, Path};
 
 use integer_encoding::VarInt;
 
@@ -144,7 +144,7 @@ trait HashableNode {
     fn children_iter(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone;
 }
 
-impl HashableNode for storage::BranchNode {
+impl HashableNode for BranchNode {
     fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
         self.partial_path.0.iter().copied()
     }
@@ -158,7 +158,7 @@ impl HashableNode for storage::BranchNode {
     }
 }
 
-impl HashableNode for storage::LeafNode {
+impl HashableNode for LeafNode {
     fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
         self.partial_path.0.iter().copied()
     }

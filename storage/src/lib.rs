@@ -11,6 +11,7 @@
 //!
 //! A [NodeStore] is backed by a [ReadableStorage] which is persisted storage.
 
+mod hashednode;
 mod linear;
 mod node;
 mod nodestore;
@@ -22,7 +23,8 @@ pub use node::{
     path::NibblesIterator, path::Path, BranchNode, Child, LeafNode, Node, PathIterItem,
 };
 pub use nodestore::{
-    ImmutableProposal, LinearAddress, NodeReader, NodeStore, NodeWriter, UpdateError,
+    ImmutableProposal, LinearAddress, NodeReader, NodeStore, NodeWriter, ProposedMutable2,
+    UpdateError,
 };
 
 pub use linear::{filebacked::FileBacked, memory::MemStore};

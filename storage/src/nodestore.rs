@@ -11,11 +11,13 @@ use std::fmt::Debug;
 /// of the [PageStore]. More specifically, it places a [FileIdentifyingMagic]
 /// and a [FreeSpaceHeader] at the beginning
 use std::io::{Error, ErrorKind, Write};
+use std::iter::once;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
-use crate::node::Node;
-use crate::ReadableStorage;
+use crate::hashednode::hash_node;
+use crate::node::{self, Node};
+use crate::{Child, Path, ReadableStorage, TrieHash};
 
 use super::linear::WritableStorage;
 
@@ -162,8 +164,9 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 
         Ok(Self {
             header,
-            deleted: vec![],
-            kind: Committed {},
+            kind: Committed {
+                deleted: Default::default(),
+            },
             storage,
         })
     }
@@ -185,38 +188,21 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         Ok(Self {
             header,
             storage,
-            deleted: vec![],
-            kind: Committed {},
+            kind: Committed {
+                deleted: Default::default(),
+            },
         })
     }
 }
 
 impl<S: WritableStorage> NodeStore<ImmutableProposal, S> {
-    /// Creates a new, empty, [NodeStore] and clobbers the underlying `storage` with an empty header.
-    pub fn new_empty_proposal(storage: Arc<S>) -> Self {
-        let header = NodeStoreHeader::new();
-        let header_bytes = bincode::serialize(&header).expect("failed to serialize header");
-        storage
-            .write(0, header_bytes.as_slice())
-            .expect("failed to write header");
-        NodeStore {
-            header,
-            deleted: vec![],
-            kind: ImmutableProposal {
-                new: HashMap::new(),
-                parent: NodeStoreParent::Committed,
-            },
-            storage,
-        }
-    }
-
     /// Creatse a new NodeStore proposal from a given `parent`.
     pub fn new<T: Into<NodeStoreParent> + ReadInMemoryNode>(parent: NodeStore<T, S>) -> Self {
         NodeStore {
             header: parent.header.clone(),
-            deleted: Default::default(),
             kind: ImmutableProposal {
                 new: HashMap::new(),
+                deleted: Default::default(),
                 parent: parent.kind.into(),
             },
             storage: parent.storage.clone(),
@@ -237,6 +223,26 @@ impl<S: WritableStorage> NodeStore<ImmutableProposal, S> {
 
     //     Ok(())
     // }
+}
+
+impl<S: WritableStorage> NodeStore<ProposedMutable2, S> {
+    /// Creates a new, empty, [NodeStore] and clobbers the underlying `storage` with an empty header.
+    pub fn new_empty_proposal(storage: Arc<S>) -> Self {
+        let header = NodeStoreHeader::new();
+        let header_bytes = bincode::serialize(&header).expect("failed to serialize header");
+        storage
+            .write(0, header_bytes.as_slice())
+            .expect("failed to write header");
+        NodeStore {
+            header,
+            kind: ProposedMutable2 {
+                root: None,
+                deleted: Default::default(),
+                parent: NodeStoreParent::Committed,
+            },
+            storage,
+        }
+    }
 }
 
 impl<S: ReadableStorage> NodeStore<ImmutableProposal, S> {
@@ -477,15 +483,13 @@ pub trait NodeReader {
 
 /// Updates a merkle trie.
 pub trait NodeWriter: NodeReader {
-    /// Sets the root address to `addr`.
-    fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), Error>;
-    /// Creates the given `node` and returns its address.
-    fn create_node(&mut self, node: Node) -> Result<LinearAddress, Error>;
     /// Deletes the node at `addr`.
     fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error>;
 }
 
-struct Committed {}
+struct Committed {
+    deleted: Box<[LinearAddress]>,
+}
 
 impl ReadInMemoryNode for Committed {
     // A committed revision has no in-memory changes. All its nodes are in storage.
@@ -517,6 +521,7 @@ impl<S: ReadableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStorePare
 pub struct ImmutableProposal {
     /// Address --> Node for nodes created in this proposal.
     new: HashMap<LinearAddress, Arc<Node>>,
+    deleted: Box<[LinearAddress]>,
     /// The parent of this proposal.
     parent: NodeStoreParent,
 }
@@ -548,12 +553,128 @@ pub trait ReadInMemoryNode {
 pub struct NodeStore<T: ReadInMemoryNode, S: ReadableStorage> {
     // Metadata for this revision.
     header: NodeStoreHeader,
-    // Addresses of nodes that have been deleted in this revision.
-    deleted: Vec<LinearAddress>,
-    // This is either a committed revision or a proposed revision.
-    kind: T,
+    // This is either a [Committed] or a [ProposedImmutable]
+    // --> [Committed] [ProposedImmutable] [ProposedMutable2]
+    pub kind: T, // TODO add mut getter and make not pub
     // Persisted storage to read nodes from.
     storage: Arc<S>,
+}
+
+#[derive(Debug)]
+pub struct ProposedMutable2 {
+    pub root: Option<Node>,
+    deleted: Vec<LinearAddress>,
+    parent: NodeStoreParent,
+}
+
+impl ReadInMemoryNode for NodeStoreParent {
+    fn read_in_memory_node(&self, addr: LinearAddress) -> Option<Arc<Node>> {
+        match self {
+            NodeStoreParent::Proposed(proposed) => proposed.read_in_memory_node(addr),
+            NodeStoreParent::Committed => None,
+        }
+    }
+}
+
+impl ReadInMemoryNode for ProposedMutable2 {
+    fn read_in_memory_node(&self, addr: LinearAddress) -> Option<Arc<Node>> {
+        self.parent.read_in_memory_node(addr)
+    }
+}
+
+/*
+    /// Hashes the trie and returns it as its immutable variant.
+    pub fn hash(mut self) -> Result<impl NodeReader, MerkleError> {
+        let Some(root) = std::mem::take(&mut self.root) else {
+            self.nodestore.set_root(None)?;
+            return Ok(self.nodestore);
+        };
+
+        // TODO use hash
+        let (root_addr, _root_hash) = self.hash_helper(root, &mut Path(Default::default()));
+
+        self.nodestore.set_root(Some(root_addr))?;
+        Ok(self.nodestore)
+    }
+
+
+*/
+
+impl<S: ReadableStorage> NodeStore<ImmutableProposal, S> {
+    /// Hashes `node`, which is at the given `path_prefix`, and its children recursively.
+    /// Returns the hashed node and its hash.
+    fn hash_helper(&mut self, mut node: Node, path_prefix: &mut Path) -> (LinearAddress, TrieHash) {
+        // Allocate addresses and calculate hashes for all new nodes
+        match node {
+            Node::Branch(ref mut b) => {
+                for (nibble, child, child_node) in
+                    b.children
+                        .iter_mut()
+                        .enumerate()
+                        .filter_map(|(index, child)| match child {
+                            Child::None => None,
+                            Child::AddressWithHash(_, _) => None,
+                            Child::Node(node) => {
+                                let node = std::mem::take(node);
+                                Some((index as u8, child, node))
+                            }
+                        })
+                {
+                    // Hash this child and update
+                    // we extend and truncate path_prefix to reduce memory allocations
+                    let original_length = path_prefix.len();
+                    path_prefix
+                        .0
+                        .extend(b.partial_path.0.iter().copied().chain(once(nibble)));
+
+                    let (child_addr, child_hash) = self.hash_helper(child_node, path_prefix);
+                    *child = Child::AddressWithHash(child_addr, child_hash);
+                    path_prefix.0.truncate(original_length);
+                }
+            }
+            Node::Leaf(_) => {}
+        }
+
+        let hash = hash_node(&node, path_prefix);
+        let (addr, _) = self.allocate_node(&node).expect("TODO handle error");
+
+        self.kind.new.insert(addr, Arc::new(node));
+
+        (addr, hash)
+    }
+}
+
+impl<S: ReadableStorage> Into<NodeStore<ImmutableProposal, S>> for NodeStore<ProposedMutable2, S> {
+    fn into(self) -> NodeStore<ImmutableProposal, S> {
+        let Self {
+            header,
+            kind,
+            storage,
+        } = self;
+
+        let mut nodestore = NodeStore {
+            header,
+            kind: ImmutableProposal {
+                new: HashMap::new(),
+                deleted: kind.deleted.into(),
+                parent: kind.parent.into(),
+            },
+            storage,
+        };
+
+        let Some(root) = kind.root else {
+            // This trie is now empty.
+            nodestore.header.root_address = None;
+            return nodestore;
+        };
+
+        // Hashes the trie and returns the address of the new root.
+        let (root_addr, _) = nodestore.hash_helper(root, &mut Path::new());
+
+        nodestore.header.root_address = Some(root_addr);
+
+        nodestore
+    }
 }
 
 impl<T: ReadInMemoryNode, S: ReadableStorage> NodeReader for NodeStore<T, S> {
@@ -569,25 +690,14 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeReader for NodeStore<T, S> {
     }
 }
 
-impl<S: ReadableStorage> NodeWriter for NodeStore<ImmutableProposal, S> {
-    fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), Error> {
-        self.header.root_address = addr;
-        Ok(())
-    }
-
-    /// Allocates an area in the ReadableStorage large enough for the provided Area.
-    /// Returns the address of the allocated area.
-    fn create_node(&mut self, node: Node) -> Result<LinearAddress, Error> {
-        let (addr, _) = self.allocate_node(&node)?;
-        self.kind.new.insert(addr, Arc::new(node));
-        Ok(addr)
-    }
-
-    fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error> {
-        self.deleted.push(addr);
-        Ok(())
-    }
-}
+// TODO replace the logic for finding and marking as deleted all removed nodes
+// at hash time
+// impl<S: ReadableStorage> NodeWriter for NodeStore<ProposedMutable2, S> {
+//     fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error> {
+//         self.deleted.push(addr);
+//         Ok(())
+//     }
+// }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
@@ -626,82 +736,83 @@ mod tests {
         assert!(area_size_to_index(MAX_AREA_SIZE + 1).is_err());
     }
 
-    #[test]
-    fn test_create() {
-        let memstore = Arc::new(MemStore::new(vec![]));
-        let mut node_store = NodeStore::new_empty_proposal(memstore);
+    // TODO add new tests
+    // #[test]
+    // fn test_create() {
+    //     let memstore = Arc::new(MemStore::new(vec![]));
+    //     let mut node_store = NodeStore::new_empty_proposal(memstore);
 
-        let leaf = Node::Leaf(LeafNode {
-            partial_path: Path::from([0, 1, 2]),
-            value: Box::new([3, 4, 5]),
-        });
+    //     let leaf = Node::Leaf(LeafNode {
+    //         partial_path: Path::from([0, 1, 2]),
+    //         value: Box::new([3, 4, 5]),
+    //     });
 
-        let leaf_addr = node_store.create_node(leaf.clone()).unwrap();
-        let got_leaf = node_store.kind.new.get(&leaf_addr).unwrap();
-        assert_eq!(**got_leaf, leaf);
-        let got_leaf = node_store.read_node(leaf_addr).unwrap();
-        assert_eq!(*got_leaf, leaf);
+    //     let leaf_addr = node_store.create_node(leaf.clone()).unwrap();
+    //     let got_leaf = node_store.kind.new.get(&leaf_addr).unwrap();
+    //     assert_eq!(**got_leaf, leaf);
+    //     let got_leaf = node_store.read_node(leaf_addr).unwrap();
+    //     assert_eq!(*got_leaf, leaf);
 
-        // The header should be unchanged in storage
-        {
-            let mut header_bytes = node_store.storage.stream_from(0).unwrap();
-            let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
-            assert_eq!(header.version, Version::new());
-            let empty_free_lists: FreeLists = Default::default();
-            assert_eq!(header.free_lists, empty_free_lists);
-            assert_eq!(header.root_address, None);
-        }
+    //     // The header should be unchanged in storage
+    //     {
+    //         let mut header_bytes = node_store.storage.stream_from(0).unwrap();
+    //         let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
+    //         assert_eq!(header.version, Version::new());
+    //         let empty_free_lists: FreeLists = Default::default();
+    //         assert_eq!(header.free_lists, empty_free_lists);
+    //         assert_eq!(header.root_address, None);
+    //     }
 
-        // Leaf should go right after the header
-        assert_eq!(leaf_addr.get(), NodeStoreHeader::SIZE);
+    //     // Leaf should go right after the header
+    //     assert_eq!(leaf_addr.get(), NodeStoreHeader::SIZE);
 
-        // Create another node
-        let branch = Node::Branch(Box::new(BranchNode {
-            partial_path: Path::from([6, 7, 8]),
-            value: Some(vec![9, 10, 11].into_boxed_slice()),
-            children: Default::default(),
-        }));
+    //     // Create another node
+    //     let branch = Node::Branch(Box::new(BranchNode {
+    //         partial_path: Path::from([6, 7, 8]),
+    //         value: Some(vec![9, 10, 11].into_boxed_slice()),
+    //         children: Default::default(),
+    //     }));
 
-        let old_size = node_store.header.size;
-        let branch_addr = node_store.create_node(branch.clone()).unwrap();
-        assert!(node_store.header.size > old_size);
+    //     let old_size = node_store.header.size;
+    //     let branch_addr = node_store.create_node(branch.clone()).unwrap();
+    //     assert!(node_store.header.size > old_size);
 
-        // branch should go after leaf
-        assert!(branch_addr.get() > leaf_addr.get());
+    //     // branch should go after leaf
+    //     assert!(branch_addr.get() > leaf_addr.get());
 
-        // The header should be unchanged in storage
-        {
-            let mut header_bytes = node_store.storage.stream_from(0).unwrap();
-            let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
-            assert_eq!(header.version, Version::new());
-            let empty_free_lists: FreeLists = Default::default();
-            assert_eq!(header.free_lists, empty_free_lists);
-            assert_eq!(header.root_address, None);
-        }
-    }
+    //     // The header should be unchanged in storage
+    //     {
+    //         let mut header_bytes = node_store.storage.stream_from(0).unwrap();
+    //         let header: NodeStoreHeader = bincode::deserialize_from(&mut header_bytes).unwrap();
+    //         assert_eq!(header.version, Version::new());
+    //         let empty_free_lists: FreeLists = Default::default();
+    //         assert_eq!(header.free_lists, empty_free_lists);
+    //         assert_eq!(header.root_address, None);
+    //     }
+    // }
 
-    #[test]
-    fn test_delete() {
-        let memstore = Arc::new(MemStore::new(vec![]));
-        let mut node_store = NodeStore::new_empty_proposal(memstore);
+    // #[test]
+    // fn test_delete() {
+    //     let memstore = Arc::new(MemStore::new(vec![]));
+    //     let mut node_store = NodeStore::new_empty_proposal(memstore);
 
-        // Create a leaf
-        let leaf = Node::Leaf(LeafNode {
-            partial_path: Path::new(),
-            value: Box::new([1]),
-        });
-        let leaf_addr = node_store.create_node(leaf.clone()).unwrap();
+    //     // Create a leaf
+    //     let leaf = Node::Leaf(LeafNode {
+    //         partial_path: Path::new(),
+    //         value: Box::new([1]),
+    //     });
+    //     let leaf_addr = node_store.create_node(leaf.clone()).unwrap();
 
-        // Delete the node
-        node_store.delete_node(leaf_addr).unwrap();
-        assert!(node_store.deleted.contains(&leaf_addr));
+    //     // Delete the node
+    //     node_store.delete_node(leaf_addr).unwrap();
+    //     assert!(node_store.kind.deleted.contains(&leaf_addr));
 
-        // Create a new node with the same size
-        let new_leaf_addr = node_store.create_node(leaf).unwrap();
+    //     // Create a new node with the same size
+    //     let new_leaf_addr = node_store.create_node(leaf).unwrap();
 
-        // The new node shouldn't be at the same address
-        assert_ne!(new_leaf_addr, leaf_addr);
-    }
+    //     // The new node shouldn't be at the same address
+    //     assert_ne!(new_leaf_addr, leaf_addr);
+    // }
 
     #[test]
     fn test_node_store_new() {

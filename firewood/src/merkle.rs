@@ -1,7 +1,6 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::hashednode::hash_node;
 use crate::proof::{Proof, ProofError};
 use crate::stream::{MerkleKeyValueStream, PathIterator};
 use crate::v2::api;
@@ -13,8 +12,8 @@ use std::io::Write;
 use std::iter::once;
 use std::sync::Arc;
 use storage::{
-    BranchNode, Child, LeafNode, LinearAddress, NibblesIterator, Node, NodeReader, NodeWriter,
-    Path, TrieHash,
+    BranchNode, Child, LeafNode, LinearAddress, NibblesIterator, Node, NodeReader, NodeStore,
+    NodeWriter, Path, ProposedMutable2, ReadableStorage, TrieHash,
 };
 
 use thiserror::Error;
@@ -426,66 +425,66 @@ impl<T: NodeReader> Merkle<T> {
 //     }
 // }
 
-#[derive(Debug)]
-pub struct MutableProposal<T: NodeWriter> {
-    root: Option<Node>,
-    nodestore: T,
-}
+// #[derive(Debug)]
+// pub struct MutableProposal<T: NodeWriter> {
+//     root: Option<Node>,
+//     nodestore: T,
+// }
 
-impl<T: NodeWriter> MutableProposal<T> {
-    /// Hashes the trie and returns it as its immutable variant.
-    pub fn hash(mut self) -> Result<impl NodeReader, MerkleError> {
-        let Some(root) = std::mem::take(&mut self.root) else {
-            self.nodestore.set_root(None)?;
-            return Ok(self.nodestore);
-        };
+// impl<T: NodeWriter> MutableProposal<T> {
+//     /// Hashes the trie and returns it as its immutable variant.
+//     pub fn hash(mut self) -> Result<impl NodeReader, MerkleError> {
+//         let Some(root) = std::mem::take(&mut self.root) else {
+//             self.nodestore.set_root(None)?;
+//             return Ok(self.nodestore);
+//         };
 
-        // TODO use hash
-        let (root_addr, _root_hash) = self.hash_helper(root, &mut Path(Default::default()));
+//         // TODO use hash
+//         let (root_addr, _root_hash) = self.hash_helper(root, &mut Path(Default::default()));
 
-        self.nodestore.set_root(Some(root_addr))?;
-        Ok(self.nodestore)
-    }
+//         self.nodestore.set_root(Some(root_addr))?;
+//         Ok(self.nodestore)
+//     }
 
-    /// Hashes `node`, which is at the given `path_prefix`, and its children recursively.
-    /// Returns the hashed node and its hash.
-    fn hash_helper(&mut self, mut node: Node, path_prefix: &mut Path) -> (LinearAddress, TrieHash) {
-        // Allocate addresses and calculate hashes for all new nodes
-        match node {
-            Node::Branch(ref mut b) => {
-                for (nibble, child, child_node) in
-                    b.children
-                        .iter_mut()
-                        .enumerate()
-                        .filter_map(|(index, child)| match child {
-                            Child::None => None,
-                            Child::AddressWithHash(_, _) => None,
-                            Child::Node(node) => {
-                                let node = std::mem::take(node);
-                                Some((index as u8, child, node))
-                            }
-                        })
-                {
-                    // Hash this child and update
-                    // we extend and truncate path_prefix to reduce memory allocations
-                    let original_length = path_prefix.len();
-                    path_prefix
-                        .0
-                        .extend(b.partial_path.0.iter().copied().chain(once(nibble)));
+//     /// Hashes `node`, which is at the given `path_prefix`, and its children recursively.
+//     /// Returns the hashed node and its hash.
+//     fn hash_helper(&mut self, mut node: Node, path_prefix: &mut Path) -> (LinearAddress, TrieHash) {
+//         // Allocate addresses and calculate hashes for all new nodes
+//         match node {
+//             Node::Branch(ref mut b) => {
+//                 for (nibble, child, child_node) in
+//                     b.children
+//                         .iter_mut()
+//                         .enumerate()
+//                         .filter_map(|(index, child)| match child {
+//                             Child::None => None,
+//                             Child::AddressWithHash(_, _) => None,
+//                             Child::Node(node) => {
+//                                 let node = std::mem::take(node);
+//                                 Some((index as u8, child, node))
+//                             }
+//                         })
+//                 {
+//                     // Hash this child and update
+//                     // we extend and truncate path_prefix to reduce memory allocations
+//                     let original_length = path_prefix.len();
+//                     path_prefix
+//                         .0
+//                         .extend(b.partial_path.0.iter().copied().chain(once(nibble)));
 
-                    let (child_addr, child_hash) = self.hash_helper(child_node, path_prefix);
-                    *child = Child::AddressWithHash(child_addr, child_hash);
-                    path_prefix.0.truncate(original_length);
-                }
-            }
-            Node::Leaf(_) => {}
-        }
+//                     let (child_addr, child_hash) = self.hash_helper(child_node, path_prefix);
+//                     *child = Child::AddressWithHash(child_addr, child_hash);
+//                     path_prefix.0.truncate(original_length);
+//                 }
+//             }
+//             Node::Leaf(_) => {}
+//         }
 
-        let hash = hash_node(&node, path_prefix);
-        let addr = self.nodestore.create_node(node).expect("TODO handle error");
-        (addr, hash)
-    }
-}
+//         let hash = hash_node(&node, path_prefix);
+//         let addr = self.nodestore.create_node(node).expect("TODO handle error");
+//         (addr, hash)
+//     }
+// }
 
 /// Returns a new merkle using the given `nodestore`.
 /// If the nodestore has a root address, the root node is read and used as the root.
@@ -509,13 +508,9 @@ pub fn new<T: NodeWriter>(mut nodestore: T) -> Result<MutableProposal<T>, Merkle
     })
 }
 
-impl<T: NodeWriter> MutableProposal<T> {
-    pub const fn root(&self) -> &Option<Node> {
-        &self.root
-    }
-
+impl<S: ReadableStorage> Merkle<NodeStore<ProposedMutable2, S>> {
     pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
-        let Some(root) = &self.root else {
+        let Some(root) = &self.nodestore.kind.root else {
             return Ok(None);
         };
 
@@ -527,14 +522,14 @@ impl<T: NodeWriter> MutableProposal<T> {
     pub fn insert(&mut self, key: &[u8], value: Box<[u8]>) -> Result<(), MerkleError> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
-        let Some(root) = std::mem::take(&mut self.root) else {
+        let Some(root) = std::mem::take(&mut self.nodestore.root_address()) else {
             // The trie is empty. Create a new leaf node with `value` and set
             // it as the root.
             let root = Node::Leaf(LeafNode {
                 partial_path: key,
                 value,
             });
-            self.root = root.into();
+            self.nodestore.kind.root = root.into();
             return Ok(());
         };
 
@@ -944,7 +939,7 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use storage::{ImmutableProposal, MemStore, NodeStore};
+    use storage::{ImmutableProposal, MemStore, NodeStore, ProposedMutable2};
     use test_case::test_case;
 
     #[test]
@@ -979,12 +974,15 @@ mod tests {
         merkle.insert(b"abc", Box::new([])).unwrap()
     }
 
-    fn create_in_memory_merkle() -> MutableProposal<NodeStore<ImmutableProposal, MemStore>> {
+    fn create_in_memory_merkle() -> NodeStore<ProposedMutable2, MemStore> {
         let memstore = MemStore::new(vec![]);
-        MutableProposal {
-            nodestore: NodeStore::new_empty_proposal(memstore.into()),
-            root: None,
-        }
+
+        NodeStore::new_empty_proposal(memstore.into())
+
+        // MutableProposal {
+        //     nodestore: NodeStore::new_empty_proposal(memstore.into()),
+        //     root: None,
+        // }
     }
 
     // use super::*;
@@ -1561,7 +1559,7 @@ mod tests {
 
     fn merkle_build_test<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         items: Vec<(K, V)>,
-    ) -> Result<MutableProposal<NodeStore<ImmutableProposal, MemStore>>, MerkleError> {
+    ) -> Result<NodeStore<ProposedMutable2, MemStore>, MerkleError> {
         let nodestore = NodeStore::new_empty_proposal(MemStore::new(vec![]).into());
         let mut merkle = new(nodestore).unwrap();
         for (k, v) in items.iter() {
