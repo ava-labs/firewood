@@ -165,9 +165,14 @@ impl<T: Hashable> Proof<T> {
 
                 expected_hash = node
                     .children()
-                    .find(|(i, _)| *i == next_nibble as usize)
-                    .map(|(_, hash)| hash)
-                    .ok_or(ProofError::ChildIndexOutOfBounds)?;
+                    .find_map(|(i, hash)| {
+                        if i == next_nibble as usize {
+                            Some(hash)
+                        } else {
+                            None
+                        }
+                    })
+                    .ok_or(ProofError::NodeNotInTrie)?;
 
                 // Assert that each node's key is a prefix of the next node's key.
                 if !is_prefix(node.key(), next_node.key()) {
