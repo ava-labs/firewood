@@ -179,7 +179,7 @@ impl<T: NodeReader> Merkle<T> {
         Some((root_addr, root_hash))
     }
 
-    pub fn nodestore(&self) -> &T {
+    pub const fn nodestore(&self) -> &T {
         &self.nodestore
     }
 
