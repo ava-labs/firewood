@@ -4,7 +4,6 @@
 use sha2::{Digest, Sha256};
 use std::iter::{self};
 
-use storage::LinearAddress;
 use storage::{Child, TrieHash};
 use storage::{Node, Path};
 
@@ -12,29 +11,6 @@ use integer_encoding::VarInt;
 
 const MAX_VARINT_SIZE: usize = 10;
 const BITS_PER_NIBBLE: u64 = 4;
-
-#[derive(Debug, Default)]
-pub enum Root {
-    #[default]
-    None,
-    AddrWithHash(LinearAddress, TrieHash),
-    Node(Node),
-}
-
-impl From<Node> for Root {
-    fn from(node: Node) -> Self {
-        Root::Node(node)
-    }
-}
-
-impl From<Option<Node>> for Root {
-    fn from(node: Option<Node>) -> Self {
-        match node {
-            Some(node) => Root::Node(node),
-            None => Root::None,
-        }
-    }
-}
 
 pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
     match node {
