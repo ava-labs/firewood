@@ -573,7 +573,7 @@ pub trait ReadInMemoryNode {
     /// Returns the node at `addr` if it is in memory.
     /// Returns None if it isn't.
     fn read_in_memory_node(&self, addr: LinearAddress) -> Option<Arc<Node>>;
-    /// Returns None if the root is in memory.
+    /// Returns None if the root is not in memory.
     /// Returns Some(None) if the root is in memory but is empty.
     /// Returns Some(Some(node)) if the root is in memory and is not empty.
     fn read_in_memory_root(&self) -> Option<Option<Arc<Node>>>;
