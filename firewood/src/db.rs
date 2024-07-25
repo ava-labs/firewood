@@ -49,11 +49,11 @@ impl From<std::io::Error> for DbError {
 
 impl Error for DbError {}
 
-#[derive(Debug)]
-pub struct HistoricalRev<T> {
-    // TODO: add Merkle wrapping here
-    _historical: Arc<T>,
-}
+// #[derive(Debug)]
+// pub struct HistoricalRev<T> {
+//     // TODO: add Merkle wrapping here
+//     _historical: Arc<T>,
+// }
 
 // #[async_trait]
 // impl<T: NodeReader + Send + Sync> api::DbView for HistoricalRev<T> {
