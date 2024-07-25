@@ -143,7 +143,7 @@ impl<T: NodeReader> Merkle<T> {
     }
 
     pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
-        let Some(root) = self.nodestore.root_node() else {
+        let Some(root) = self.root() else {
             return Ok(None);
         };
 
@@ -154,7 +154,7 @@ impl<T: NodeReader> Merkle<T> {
     /// Returns a proof that the given key has a certain value,
     /// or that the key isn't in the trie.
     pub fn prove(&self, key: &[u8]) -> Result<Proof, MerkleError> {
-        let Some(root) = self.nodestore.root_node() else {
+        let Some(root) = self.root() else {
             return Err(MerkleError::Empty);
         };
 
@@ -370,17 +370,6 @@ impl<T: HashedNodeReader> Merkle<T> {
         Ok(String::from_utf8_lossy(&result).to_string())
     }
 }
-
-// impl<S: ReadableStorage> Merkle<NodeStore<ImmutableProposal, S>> {
-//     pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
-//         let Some(root) = &self.nodestore.root_node() else {
-//             return Ok(None);
-//         };
-
-//         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
-//         get_helper(&self.nodestore, root, &key)
-//     }
-// }
 
 impl<S: ReadableStorage> From<Merkle<NodeStore<MutableProposal, S>>>
     for Merkle<NodeStore<ImmutableProposal, S>>
