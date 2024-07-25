@@ -373,178 +373,19 @@ impl<S: ReadableStorage> Merkle<NodeStore<ImmutableProposal, S>> {
     }
 }
 
-// impl<S: ReadableStorage> Merkle<NodeStore<Committed, S>> {
-//     pub fn root(&self) -> Option<(LinearAddress, TrieHash)> {
-//         // TODO the nodestore should have the hash already
-//         let root_addr = self.nodestore.root_address()?;
-//         let root = self
-//             .read_node(root_addr)
-//             .expect("TODO don't use expect here");
-//         let root_hash = hash_node(&root, &Path::new());
-//         Some((root_addr, root_hash))
-//     }
-// }
-
-// impl<S: ReadableStorage> Merkle<NodeStore<ImmutableProposal, S>> {
-//     pub fn root(&self) -> Option<(LinearAddress, TrieHash)> {
-//         // TODO the nodestore should have the hash already
-//         let root_addr = self.nodestore.root_address()?;
-//         let root = self
-//             .read_node(root_addr)
-//             .expect("TODO don't use expect here");
-//         let root_hash = hash_node(&root, &Path::new());
-//         Some((root_addr, root_hash))
-//     }
-// }
-
-// impl<T: NodeWriter> ImmutableMerkle<T> {
-//     pub fn write(&mut self) -> Result<(), MerkleError> {
-//         for addr in self.deleted.iter() {
-//             self.parent_state.delete_node(*addr)?;
-//         }
-
-//         match std::mem::take(&mut self.root) {
-//             Root::Node(_) => {
-//                 unreachable!("node should have been hashed. TODO make this impossible.")
-//             }
-//             Root::None => {
-//                 self.parent_state.set_root(None)?;
-//             }
-//             Root::AddrWithHash(addr, hash) => {
-//                 // Already written
-//                 // Replace take above
-//                 self.root = Root::AddrWithHash(addr, hash);
-//             }
-//             Root::HashedNode(node, hash) => {
-//                 // Write the node and update the root
-//                 let addr = self.write_helper(node)?;
-//                 self.root = Root::AddrWithHash(addr, hash);
-//             }
-//         }
-//         Ok(())
-//     }
-
-//     /// Writes `node` and its children recursively to `self.parent_state`.
-//     /// This method replaces all of the in memory represetations of the nodes with
-//     /// `Child::AddressWithHash` variants.
-//     /// TODO we should have a NodeWithAddressAndHash variant to avoid this.
-//     /// We should be able to write a node but keep ownership of it.
-//     fn write_helper(&mut self, mut node: Node) -> Result<LinearAddress, MerkleError> {
-//         match node {
-//             Node::Leaf(_) => {}
-//             Node::Branch(ref mut branch) => {
-//                 for child in branch.children.iter_mut() {
-//                     match std::mem::take(child) {
-//                         Child::None => {}
-//                         Child::AddressWithHash(_, _) => {} // already written
-//                         Child::Node(_) => {
-//                             unreachable!("node should have been hashed. TODO make this impossible.")
-//                         }
-//                         Child::HashedNode(child_node, child_hash) => {
-//                             let child_addr = self.write_helper(child_node)?;
-//                             let _ = std::mem::replace(
-//                                 child,
-//                                 Child::AddressWithHash(child_addr, child_hash),
-//                             );
-//                         }
-//                     }
-//                 }
-//             }
-//         }
-//         self.parent_state.create_node(node)
-//     }
-// }
-
-// #[derive(Debug)]
-// pub struct MutableProposal<T: NodeWriter> {
-//     root: Option<Node>,
-//     nodestore: T,
-// }
-
-// impl<T: NodeWriter> MutableProposal<T> {
-//     /// Hashes the trie and returns it as its immutable variant.
-//     pub fn hash(mut self) -> Result<impl NodeReader, MerkleError> {
-//         let Some(root) = std::mem::take(&mut self.root) else {
-//             self.nodestore.set_root(None)?;
-//             return Ok(self.nodestore);
-//         };
-
-//         // TODO use hash
-//         let (root_addr, _root_hash) = self.hash_helper(root, &mut Path(Default::default()));
-
-//         self.nodestore.set_root(Some(root_addr))?;
-//         Ok(self.nodestore)
-//     }
-
-//     /// Hashes `node`, which is at the given `path_prefix`, and its children recursively.
-//     /// Returns the hashed node and its hash.
-//     fn hash_helper(&mut self, mut node: Node, path_prefix: &mut Path) -> (LinearAddress, TrieHash) {
-//         // Allocate addresses and calculate hashes for all new nodes
-//         match node {
-//             Node::Branch(ref mut b) => {
-//                 for (nibble, child, child_node) in
-//                     b.children
-//                         .iter_mut()
-//                         .enumerate()
-//                         .filter_map(|(index, child)| match child {
-//                             Child::None => None,
-//                             Child::AddressWithHash(_, _) => None,
-//                             Child::Node(node) => {
-//                                 let node = std::mem::take(node);
-//                                 Some((index as u8, child, node))
-//                             }
-//                         })
-//                 {
-//                     // Hash this child and update
-//                     // we extend and truncate path_prefix to reduce memory allocations
-//                     let original_length = path_prefix.len();
-//                     path_prefix
-//                         .0
-//                         .extend(b.partial_path.0.iter().copied().chain(once(nibble)));
-
-//                     let (child_addr, child_hash) = self.hash_helper(child_node, path_prefix);
-//                     *child = Child::AddressWithHash(child_addr, child_hash);
-//                     path_prefix.0.truncate(original_length);
-//                 }
-//             }
-//             Node::Leaf(_) => {}
-//         }
-
-//         let hash = hash_node(&node, path_prefix);
-//         let addr = self.nodestore.create_node(node).expect("TODO handle error");
-//         (addr, hash)
-//     }
-// }
-
-/// Returns a new merkle using the given `nodestore`.
-/// If the nodestore has a root address, the root node is read and used as the root.
-/// Otherwise, the root is set to None (i.e. this trie is empty).
-// pub fn new<T: ReadInMemoryNode, S: ReadableStorage>(
-//     mut nodestore: NodeStore<T, S>,
-// ) -> Result<Merkle<NodeStore<T, S>>, MerkleError> {
-// let Some(root_addr) = nodestore.root_address() else {
-//     return Ok(MutableProposal {
-//         root: None,
-//         nodestore,
-//     });
-// };
-
-// let root = nodestore.read_node(root_addr)?;
-// let root = (*root).clone();
-
-// nodestore.delete_node(root_addr)?;
-
-// Ok(MutableProposal {
-//     root: Some(root),
-//     nodestore,
-// })
-// }
+impl<S: ReadableStorage> From<Merkle<NodeStore<ProposedMutable2, S>>>
+    for Merkle<NodeStore<ImmutableProposal, S>>
+{
+    fn from(m: Merkle<NodeStore<ProposedMutable2, S>>) -> Self {
+        Merkle {
+            nodestore: m.nodestore.into(),
+        }
+    }
+}
 
 impl<S: ReadableStorage> Merkle<NodeStore<ProposedMutable2, S>> {
     pub fn hash(self) -> Merkle<NodeStore<ImmutableProposal, S>> {
-        Merkle {
-            nodestore: self.nodestore.into(),
-        }
+        self.into()
     }
 
     pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
