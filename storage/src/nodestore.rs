@@ -602,22 +602,6 @@ impl<T: ReadInMemoryNode + Into<NodeStoreParent>, S: ReadableStorage> From<NodeS
     }
 }
 
-/*
-    /// Hashes the trie and returns it as its immutable variant.
-    pub fn hash(mut self) -> Result<impl NodeReader, MerkleError> {
-        let Some(root) = std::mem::take(&mut self.root) else {
-            self.nodestore.set_root(None)?;
-            return Ok(self.nodestore);
-        };
-
-        // TODO use hash
-        let (root_addr, _root_hash) = self.hash_helper(root, &mut Path(Default::default()));
-
-        self.nodestore.set_root(Some(root_addr))?;
-        Ok(self.nodestore)
-    }
-*/
-
 impl<S: ReadableStorage> NodeStore<ImmutableProposal, S> {
     /// Hashes `node`, which is at the given `path_prefix`, and its children recursively.
     /// Returns the hashed node and its hash.
