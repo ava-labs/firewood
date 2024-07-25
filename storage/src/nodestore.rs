@@ -510,6 +510,10 @@ impl ReadInMemoryNode for Committed {
     fn read_in_memory_node(&self, _addr: LinearAddress) -> Option<Arc<Node>> {
         None
     }
+
+    fn read_in_memory_root(&self) -> Option<Option<Arc<Node>>> {
+        None
+    }
 }
 
 #[derive(Debug)]
@@ -554,6 +558,10 @@ impl ReadInMemoryNode for ImmutableProposal {
             NodeStoreParent::Committed => None,
         }
     }
+
+    fn read_in_memory_root(&self) -> Option<Option<Arc<Node>>> {
+        None
+    }
 }
 
 /// Proposed [NodeStore] types keep some nodes in memory. These nodes are new nodes that were allocated from
@@ -565,6 +573,10 @@ pub trait ReadInMemoryNode {
     /// Returns the node at `addr` if it is in memory.
     /// Returns None if it isn't.
     fn read_in_memory_node(&self, addr: LinearAddress) -> Option<Arc<Node>>;
+    /// Returns None if the root is in memory.
+    /// Returns Some(None) if the root is in memory but is empty.
+    /// Returns Some(Some(node)) if the root is in memory and is not empty.
+    fn read_in_memory_root(&self) -> Option<Option<Arc<Node>>>;
 }
 
 /// Contains the state of a revision of a merkle trie.
@@ -620,6 +632,10 @@ impl ReadInMemoryNode for NodeStoreParent {
             NodeStoreParent::Committed => None,
         }
     }
+
+    fn read_in_memory_root(&self) -> Option<Option<Arc<Node>>> {
+        None
+    }
 }
 
 impl ReadInMemoryNode for MutableProposal {
@@ -627,6 +643,15 @@ impl ReadInMemoryNode for MutableProposal {
     /// This might be recursive: a grandparent might also have that node in memory.
     fn read_in_memory_node(&self, addr: LinearAddress) -> Option<Arc<Node>> {
         self.parent.read_in_memory_node(addr)
+    }
+
+    fn read_in_memory_root(&self) -> Option<Option<Arc<Node>>> {
+        let Some(root) = &self.root else {
+            return Some(None);
+        };
+
+        let root = Arc::new(root.clone());
+        Some(Some(root))
     }
 }
 
@@ -723,38 +748,7 @@ impl<S: ReadableStorage> From<NodeStore<MutableProposal, S>> for NodeStore<Immut
     }
 }
 
-impl<S: ReadableStorage> NodeReader for NodeStore<Committed, S> {
-    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
-        self.read_node_from_disk(addr)
-    }
-
-    fn root_node(&self) -> Option<Arc<Node>> {
-        let root_addr = self.header.root_address?;
-
-        Some(self.read_node(root_addr).expect("TODO handle error"))
-    }
-}
-
-impl<S: ReadableStorage> HashedNodeReader for NodeStore<Committed, S> {
-    fn root_address_and_hash(&self) -> Option<(LinearAddress, TrieHash)> {
-        let root_addr = self.header.root_address?;
-
-        let root_node = self.read_node(root_addr).expect("TODO handle error");
-        let root_hash = hash_node(&root_node, &Path::new());
-        Some((root_addr, root_hash))
-    }
-}
-
-impl<S: ReadableStorage> HashedNodeReader for NodeStore<ImmutableProposal, S> {
-    fn root_address_and_hash(&self) -> Option<(LinearAddress, TrieHash)> {
-        let root_addr = self.header.root_address?;
-
-        let root_node = self.read_node(root_addr).expect("TODO handle error");
-        let root_hash = hash_node(&root_node, &Path::new());
-        Some((root_addr, root_hash))
-    }
-}
-impl<S: ReadableStorage> NodeReader for NodeStore<ImmutableProposal, S> {
+impl<T: ReadInMemoryNode, S: ReadableStorage> NodeReader for NodeStore<T, S> {
     fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
         if let Some(node) = self.kind.read_in_memory_node(addr) {
             return Ok(node);
@@ -764,26 +758,29 @@ impl<S: ReadableStorage> NodeReader for NodeStore<ImmutableProposal, S> {
     }
 
     fn root_node(&self) -> Option<Arc<Node>> {
-        let root_addr = self.header.root_address?;
-
-        Some(self.read_node(root_addr).expect("TODO handle error"))
+        match self.kind.read_in_memory_root() {
+            Some(Some(root)) => Some(root), // The root is in memory and is non-empty
+            Some(None) => None,             // The root is in memory but is empty
+            None => {
+                // The root is not in memory
+                let root_addr = self.header.root_address?;
+                Some(self.read_node(root_addr).expect("TODO handle error"))
+            }
+        }
     }
 }
 
-impl<S: ReadableStorage> NodeReader for NodeStore<MutableProposal, S> {
-    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
-        if let Some(node) = self.kind.read_in_memory_node(addr) {
-            return Ok(node);
-        }
+trait Hashed {}
+impl Hashed for Committed {}
+impl Hashed for ImmutableProposal {}
 
-        self.read_node_from_disk(addr)
-    }
+impl<T: ReadInMemoryNode + Hashed, S: ReadableStorage> HashedNodeReader for NodeStore<T, S> {
+    fn root_address_and_hash(&self) -> Option<(LinearAddress, TrieHash)> {
+        let root_addr = self.header.root_address?;
 
-    fn root_node(&self) -> Option<Arc<Node>> {
-        let Some(root) = &self.kind.root else {
-            return None;
-        };
-        Some(Arc::new((*root).clone()))
+        let root_node = self.read_node(root_addr).expect("TODO handle error");
+        let root_hash = hash_node(&root_node, &Path::new());
+        Some((root_addr, root_hash))
     }
 }
 
