@@ -23,7 +23,6 @@ pub enum DbError {
     InvalidParams,
     Merkle(MerkleError),
     System(nix::Error),
-    KeyNotFound,
     CreateError,
     IO(std::io::Error),
     InvalidProposal,
@@ -35,7 +34,6 @@ impl fmt::Display for DbError {
             DbError::InvalidParams => write!(f, "invalid parameters provided"),
             DbError::Merkle(e) => write!(f, "merkle error: {e:?}"),
             DbError::System(e) => write!(f, "system error: {e:?}"),
-            DbError::KeyNotFound => write!(f, "not found"),
             DbError::CreateError => write!(f, "database create error"),
             DbError::IO(e) => write!(f, "I/O error: {e:?}"),
             DbError::InvalidProposal => write!(f, "invalid proposal"),
@@ -72,7 +70,7 @@ pub struct HistoricalRev<T> {
 //     async fn single_key_proof<K: api::KeyType>(
 //         &self,
 //         _key: K,
-//     ) -> Result<Option<Proof<Vec<u8>>>, api::Error> {
+//     ) -> Result<Option<Proof>, api::Error> {
 //         todo!()
 //     }
 
@@ -117,14 +115,14 @@ pub struct HistoricalRev<T> {
 //         todo!()
 //     }
 
-//     pub fn prove(&self, _key: &[u8]) -> Result<Proof<Vec<u8>>, MerkleError> {
+//     pub fn prove(&self, _key: &[u8]) -> Result<Proof, MerkleError> {
 //         todo!()
 //     }
 
 //     /// Verifies a range proof is valid for a set of keys.
-//     pub fn verify_range_proof<N: AsRef<[u8]> + Send, V: AsRef<[u8]>>(
+//     pub fn verify_range_proof<V: AsRef<[u8]>>(
 //         &self,
-//         _proof: Proof<N>,
+//         _proof: Proof,
 //         _first_key: &[u8],
 //         _last_key: &[u8],
 //         _keys: Vec<&[u8]>,
@@ -170,12 +168,12 @@ pub struct HistoricalRev<T> {
 //         todo!()
 //     }
 
-//     async fn single_key_proof<K>(&self, _key: K) -> Result<Option<Proof<Vec<u8>>>, api::Error>
-//     where
-//         K: api::KeyType,
-//     {
-//         todo!()
-//     }
+// async fn single_key_proof<K>(&self, _key: K) -> Result<Option<Proof>, api::Error>
+// where
+//     K: api::KeyType,
+// {
+//     todo!()
+// }
 
 //     async fn range_proof<K, V>(
 //         &self,
