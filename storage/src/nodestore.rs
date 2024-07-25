@@ -586,28 +586,16 @@ impl ReadInMemoryNode for MutableProposal {
     }
 }
 
-impl<S: ReadableStorage> From<NodeStore<Committed, S>> for NodeStore<MutableProposal, S> {
-    fn from(val: NodeStore<Committed, S>) -> Self {
+impl<T: ReadInMemoryNode + Into<NodeStoreParent>, S: ReadableStorage> From<NodeStore<T, S>>
+    for NodeStore<MutableProposal, S>
+{
+    fn from(val: NodeStore<T, S>) -> Self {
         NodeStore {
             header: val.header,
             kind: MutableProposal {
                 root: None,
                 deleted: Default::default(),
-                parent: NodeStoreParent::Committed,
-            },
-            storage: val.storage,
-        }
-    }
-}
-
-impl<S: ReadableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStore<MutableProposal, S> {
-    fn from(val: NodeStore<ImmutableProposal, S>) -> Self {
-        NodeStore {
-            header: val.header,
-            kind: MutableProposal {
-                root: None,
-                deleted: Default::default(),
-                parent: NodeStoreParent::Proposed(Arc::new(val.kind)),
+                parent: val.kind.into(),
             },
             storage: val.storage,
         }
