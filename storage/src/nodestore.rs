@@ -143,11 +143,6 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
             )),
         }
     }
-
-    /// Get the root address of the [NodeStore]
-    pub const fn root_address(&self) -> Option<LinearAddress> {
-        self.header.root_address
-    }
 }
 
 impl<S: ReadableStorage> NodeStore<Committed, S> {
@@ -473,12 +468,18 @@ struct FreeArea {
     next_free_block: Option<LinearAddress>,
 }
 
+/// Reads from an immutable (i.e. already hashed) merkle trie.
+pub trait HashedNodeReader {
+    /// Gets the address and hash of the root node of an immutable merkle trie.
+    fn root_address_and_hash(&self) -> Option<(LinearAddress, TrieHash)>;
+}
+
 /// Reads nodes and the root address from a merkle trie.
 pub trait NodeReader {
     /// Returns the node at `addr`.
     fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error>;
     /// Returns the root of the trie.
-    fn root(&self) -> Option<Arc<Node>>;
+    fn root_node(&self) -> Option<Arc<Node>>;
 }
 
 /// Updates a merkle trie.
@@ -713,15 +714,32 @@ impl<S: ReadableStorage> NodeReader for NodeStore<Committed, S> {
         self.read_node_from_disk(addr)
     }
 
-    fn root(&self) -> Option<Arc<Node>> {
-        let Some(root_addr) = self.header.root_address else {
-            return None;
-        };
+    fn root_node(&self) -> Option<Arc<Node>> {
+        let root_addr = self.header.root_address?;
 
         Some(self.read_node(root_addr).expect("TODO handle error"))
     }
 }
 
+impl<S: ReadableStorage> HashedNodeReader for NodeStore<Committed, S> {
+    fn root_address_and_hash(&self) -> Option<(LinearAddress, TrieHash)> {
+        let root_addr = self.header.root_address?;
+
+        let root_node = self.read_node(root_addr).expect("TODO handle error");
+        let root_hash = hash_node(&root_node, &Path::new());
+        Some((root_addr, root_hash))
+    }
+}
+
+impl<S: ReadableStorage> HashedNodeReader for NodeStore<ImmutableProposal, S> {
+    fn root_address_and_hash(&self) -> Option<(LinearAddress, TrieHash)> {
+        let root_addr = self.header.root_address?;
+
+        let root_node = self.read_node(root_addr).expect("TODO handle error");
+        let root_hash = hash_node(&root_node, &Path::new());
+        Some((root_addr, root_hash))
+    }
+}
 impl<S: ReadableStorage> NodeReader for NodeStore<ImmutableProposal, S> {
     fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
         if let Some(node) = self.kind.read_in_memory_node(addr) {
@@ -731,10 +749,8 @@ impl<S: ReadableStorage> NodeReader for NodeStore<ImmutableProposal, S> {
         self.read_node_from_disk(addr)
     }
 
-    fn root(&self) -> Option<Arc<Node>> {
-        let Some(root_addr) = self.header.root_address else {
-            return None;
-        };
+    fn root_node(&self) -> Option<Arc<Node>> {
+        let root_addr = self.header.root_address?;
 
         Some(self.read_node(root_addr).expect("TODO handle error"))
     }
@@ -749,7 +765,7 @@ impl<S: ReadableStorage> NodeReader for NodeStore<ProposedMutable2, S> {
         self.read_node_from_disk(addr)
     }
 
-    fn root(&self) -> Option<Arc<Node>> {
+    fn root_node(&self) -> Option<Arc<Node>> {
         let Some(root) = &self.kind.root else {
             return None;
         };

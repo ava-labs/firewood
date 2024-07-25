@@ -184,12 +184,11 @@ fn get_iterator_intial_state<T: NodeReader>(
     merkle: &Merkle<T>,
     key: &[u8],
 ) -> Result<NodeStreamState, api::Error> {
-    let Some((root_addr, _)) = merkle.root() else {
+    let Some(root) = merkle.root() else {
         // This merkle is empty.
         return Ok(NodeStreamState::Iterating { iter_stack: vec![] });
     };
-    let node = merkle.read_node(root_addr)?;
-    let mut node = (*node).clone();
+    let mut node = (*root).clone();
 
     // Invariant: `matched_key_nibbles` is the path before `node`'s
     // partial path at the start of each loop iteration.
@@ -396,7 +395,7 @@ pub struct PathIterator<'a, 'b, T: NodeReader> {
 
 impl<'a, 'b, T: NodeReader> PathIterator<'a, 'b, T> {
     pub(super) fn new(merkle: &'a Merkle<T>, key: &'b [u8]) -> Result<Self, MerkleError> {
-        let Some((root_addr, _)) = merkle.root() else {
+        let Some(root) = merkle.root() else {
             return Ok(Self {
                 state: PathIteratorState::Exhausted,
                 merkle,
@@ -408,7 +407,7 @@ impl<'a, 'b, T: NodeReader> PathIterator<'a, 'b, T> {
             state: PathIteratorState::Iterating {
                 matched_key: vec![],
                 unmatched_key: NibblesIterator::new(key),
-                node: merkle.read_node(root_addr)?,
+                node: root,
             },
         })
     }

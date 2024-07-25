@@ -12,7 +12,7 @@ use std::io::Write;
 use std::iter::once;
 use std::sync::Arc;
 use storage::{
-    hash_node, BranchNode, Child, Committed, ImmutableProposal, LeafNode, LinearAddress,
+    BranchNode, Child, HashedNodeReader, ImmutableProposal, LeafNode, LinearAddress,
     NibblesIterator, Node, NodeReader, NodeStore, Path, ProposedMutable2, ReadableStorage,
     TrieHash, ValueDigest,
 };
@@ -134,6 +134,10 @@ impl<T: NodeReader> From<T> for Merkle<T> {
 }
 
 impl<T: NodeReader> Merkle<T> {
+    pub fn root(&self) -> Option<Arc<Node>> {
+        self.nodestore.root_node()
+    }
+
     pub(crate) fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, MerkleError> {
         self.nodestore.read_node(addr).map_err(Into::into)
     }
@@ -141,7 +145,7 @@ impl<T: NodeReader> Merkle<T> {
     /// Returns a proof that the given key has a certain value,
     /// or that the key isn't in the trie.
     pub fn prove(&self, key: &[u8]) -> Result<Proof, MerkleError> {
-        let Some(root) = self.nodestore.root() else {
+        let Some(root) = self.nodestore.root_node() else {
             return Err(MerkleError::Empty);
         };
 
@@ -299,7 +303,9 @@ impl<T: NodeReader> Merkle<T> {
             last_key_proof,
         }))
     }
+}
 
+impl<T: HashedNodeReader + NodeReader> Merkle<T> {
     pub fn dump_node(
         &self,
         addr: LinearAddress,
@@ -345,7 +351,7 @@ impl<T: NodeReader> Merkle<T> {
     pub fn dump(&self) -> Result<String, MerkleError> {
         let mut result = vec![];
         writeln!(result, "digraph Merkle {{")?;
-        if let Some((root_addr, root_hash)) = self.nodestore.root() {
+        if let Some((root_addr, root_hash)) = self.nodestore.root_address_and_hash() {
             writeln!(result, " root -> {root_addr}")?;
             let mut seen = HashSet::new();
             self.dump_node(root_addr, Some(&root_hash), &mut seen, &mut result)?;
@@ -358,39 +364,38 @@ impl<T: NodeReader> Merkle<T> {
 
 impl<S: ReadableStorage> Merkle<NodeStore<ImmutableProposal, S>> {
     pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
-        let Some(root) = &self.nodestore.root_address() else {
+        let Some(root) = &self.nodestore.root_node() else {
             return Ok(None);
         };
-        let root = self.nodestore.read_node(*root)?;
 
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
-        get_helper(&self.nodestore, &root, &key)
+        get_helper(&self.nodestore, root, &key)
     }
 }
 
-impl<S: ReadableStorage> Merkle<NodeStore<Committed, S>> {
-    pub fn root(&self) -> Option<(LinearAddress, TrieHash)> {
-        // TODO the nodestore should have the hash already
-        let root_addr = self.nodestore.root_address()?;
-        let root = self
-            .read_node(root_addr)
-            .expect("TODO don't use expect here");
-        let root_hash = hash_node(&root, &Path::new());
-        Some((root_addr, root_hash))
-    }
-}
+// impl<S: ReadableStorage> Merkle<NodeStore<Committed, S>> {
+//     pub fn root(&self) -> Option<(LinearAddress, TrieHash)> {
+//         // TODO the nodestore should have the hash already
+//         let root_addr = self.nodestore.root_address()?;
+//         let root = self
+//             .read_node(root_addr)
+//             .expect("TODO don't use expect here");
+//         let root_hash = hash_node(&root, &Path::new());
+//         Some((root_addr, root_hash))
+//     }
+// }
 
-impl<S: ReadableStorage> Merkle<NodeStore<ImmutableProposal, S>> {
-    pub fn root(&self) -> Option<(LinearAddress, TrieHash)> {
-        // TODO the nodestore should have the hash already
-        let root_addr = self.nodestore.root_address()?;
-        let root = self
-            .read_node(root_addr)
-            .expect("TODO don't use expect here");
-        let root_hash = hash_node(&root, &Path::new());
-        Some((root_addr, root_hash))
-    }
-}
+// impl<S: ReadableStorage> Merkle<NodeStore<ImmutableProposal, S>> {
+//     pub fn root(&self) -> Option<(LinearAddress, TrieHash)> {
+//         // TODO the nodestore should have the hash already
+//         let root_addr = self.nodestore.root_address()?;
+//         let root = self
+//             .read_node(root_addr)
+//             .expect("TODO don't use expect here");
+//         let root_hash = hash_node(&root, &Path::new());
+//         Some((root_addr, root_hash))
+//     }
+// }
 
 // impl<T: NodeWriter> ImmutableMerkle<T> {
 //     pub fn write(&mut self) -> Result<(), MerkleError> {
@@ -1212,7 +1217,7 @@ mod tests {
         assert!(merkle.get(&key3).unwrap().is_none());
         assert!(merkle.remove(&key3).unwrap().is_none());
 
-        assert!(merkle.root().is_none());
+        assert!(merkle.nodestore.root_node().is_none());
     }
 
     #[test]
@@ -1243,7 +1248,7 @@ mod tests {
             let got = merkle.get(&key).unwrap();
             assert!(got.is_none());
         }
-        assert!(merkle.root().is_none());
+        assert!(merkle.nodestore.root_node().is_none());
     }
 
     #[test]
@@ -1275,7 +1280,7 @@ mod tests {
 
         let merkle = merkle.hash();
 
-        let (_, root_hash) = merkle.root().unwrap();
+        let (_, root_hash) = merkle.nodestore.root_address_and_hash().unwrap();
 
         for (key, value) in kvs {
             let proof = merkle.prove(&key).unwrap();
@@ -1688,7 +1693,7 @@ mod tests {
     #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1]),(&[0,8],&[0,8]),(&[0,1,2],&[0,1,2])], Some("a683b4881cb540b969f885f538ba5904699d480152f350659475a962d6240ef9"); "root with branch child and leaf child")]
     fn test_root_hash_merkledb_compatible(kvs: Vec<(&[u8], &[u8])>, expected_hash: Option<&str>) {
         let merkle = merkle_build_test(kvs).unwrap().hash();
-        let Some((_, got_hash)) = merkle.root() else {
+        let Some((_, got_hash)) = merkle.nodestore.root_address_and_hash() else {
             assert!(expected_hash.is_none());
             return;
         };
