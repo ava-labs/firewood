@@ -191,19 +191,6 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 }
 
 impl<S: WritableStorage> NodeStore<ImmutableProposal, S> {
-    /// Creatse a new NodeStore proposal from a given `parent`.
-    pub fn new<T: Into<NodeStoreParent> + ReadInMemoryNode>(parent: NodeStore<T, S>) -> Self {
-        NodeStore {
-            header: parent.header.clone(),
-            kind: ImmutableProposal {
-                new: HashMap::new(),
-                deleted: Default::default(),
-                parent: parent.kind.into(),
-            },
-            storage: parent.storage.clone(),
-        }
-    }
-
     // TODO danlaine: Use this code in the revision management code.
     // TODO danlaine: Write only the parts of the header that have changed instead of the whole thing
     // fn write_header(&mut self) -> Result<(), Error> {
