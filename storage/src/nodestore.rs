@@ -553,10 +553,22 @@ pub struct NodeStore<T: ReadInMemoryNode, S: ReadableStorage> {
 #[derive(Debug)]
 pub struct MutableProposal {
     /// The root of the trie in this proposal.
-    pub root: Option<Node>,
+    root: Option<Node>,
     /// Nodes that have been deleted in this proposal.
-    pub deleted: Vec<LinearAddress>,
+    deleted: Vec<LinearAddress>,
     parent: NodeStoreParent,
+}
+
+impl MutableProposal {
+    /// Returns a mutable reference to the root of the trie in this proposal.
+    pub fn mut_root(&mut self) -> &mut Option<Node> {
+        &mut self.root
+    }
+
+    /// Marks the node at `addr` as deleted in this proposal.
+    pub fn delete(&mut self, addr: LinearAddress) {
+        self.deleted.push(addr);
+    }
 }
 
 impl ReadInMemoryNode for NodeStoreParent {
