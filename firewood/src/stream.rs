@@ -584,7 +584,7 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
-    use storage::{MemStore, NodeStore, MutableProposal};
+    use storage::{MemStore, MutableProposal, NodeStore};
 
     use super::*;
     use test_case::test_case;
