@@ -486,15 +486,22 @@ struct FreeArea {
 }
 
 /// Reads from an immutable (i.e. already hashed) merkle trie.
-pub trait HashedNodeReader: NodeReader {
+pub trait HashedNodeReader: TrieReader {
     /// Gets the address and hash of the root node of an immutable merkle trie.
     fn root_address_and_hash(&self) -> Option<(LinearAddress, TrieHash)>;
 }
 
 /// Reads nodes and the root address from a merkle trie.
+pub trait TrieReader: NodeReader + RootReader {}
+
+/// Reads nodes from a merkle trie.
 pub trait NodeReader {
     /// Returns the node at `addr`.
     fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error>;
+}
+
+/// Reads the root of a merkle trie.
+pub trait RootReader {
     /// Returns the root of the trie.
     fn root_node(&self) -> Option<Arc<Node>>;
 }
@@ -508,10 +515,6 @@ pub struct Committed {
 impl ReadInMemoryNode for Committed {
     // A committed revision has no in-memory changes. All its nodes are in storage.
     fn read_in_memory_node(&self, _addr: LinearAddress) -> Option<Arc<Node>> {
-        None
-    }
-
-    fn read_in_memory_root(&self) -> Option<Option<Arc<Node>>> {
         None
     }
 }
@@ -558,10 +561,6 @@ impl ReadInMemoryNode for ImmutableProposal {
             NodeStoreParent::Committed => None,
         }
     }
-
-    fn read_in_memory_root(&self) -> Option<Option<Arc<Node>>> {
-        None
-    }
 }
 
 /// Proposed [NodeStore] types keep some nodes in memory. These nodes are new nodes that were allocated from
@@ -573,10 +572,6 @@ pub trait ReadInMemoryNode {
     /// Returns the node at `addr` if it is in memory.
     /// Returns None if it isn't.
     fn read_in_memory_node(&self, addr: LinearAddress) -> Option<Arc<Node>>;
-    /// Returns None if the root is not in memory.
-    /// Returns Some(None) if the root is in memory but is empty.
-    /// Returns Some(Some(node)) if the root is in memory and is not empty.
-    fn read_in_memory_root(&self) -> Option<Option<Arc<Node>>>;
 }
 
 /// Contains the state of a revision of a merkle trie.
@@ -632,10 +627,6 @@ impl ReadInMemoryNode for NodeStoreParent {
             NodeStoreParent::Committed => None,
         }
     }
-
-    fn read_in_memory_root(&self) -> Option<Option<Arc<Node>>> {
-        None
-    }
 }
 
 impl ReadInMemoryNode for MutableProposal {
@@ -645,14 +636,14 @@ impl ReadInMemoryNode for MutableProposal {
         self.parent.read_in_memory_node(addr)
     }
 
-    fn read_in_memory_root(&self) -> Option<Option<Arc<Node>>> {
-        let Some(root) = &self.root else {
-            return Some(None);
-        };
+    // fn read_in_memory_root(&self) -> Option<Option<Arc<Node>>> {
+    //     let Some(root) = &self.root else {
+    //         return Some(None);
+    //     };
 
-        let root = Arc::new(root.clone());
-        Some(Some(root))
-    }
+    //     let root = Arc::new(root.clone());
+    //     Some(Some(root))
+    // }
 }
 
 impl<T: ReadInMemoryNode + Into<NodeStoreParent>, S: ReadableStorage> From<NodeStore<T, S>>
@@ -756,17 +747,11 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeReader for NodeStore<T, S> {
 
         self.read_node_from_disk(addr)
     }
+}
 
+impl<S: ReadableStorage> RootReader for NodeStore<MutableProposal, S> {
     fn root_node(&self) -> Option<Arc<Node>> {
-        match self.kind.read_in_memory_root() {
-            Some(Some(root)) => Some(root), // The root is in memory and is non-empty
-            Some(None) => None,             // The root is in memory but is empty
-            None => {
-                // The root is not in memory
-                let root_addr = self.header.root_address?;
-                Some(self.read_node(root_addr).expect("TODO handle error"))
-            }
-        }
+        self.kind.root.as_ref().map(|node| Arc::new(node.clone()))
     }
 }
 
@@ -774,7 +759,23 @@ trait Hashed {}
 impl Hashed for Committed {}
 impl Hashed for ImmutableProposal {}
 
-impl<T: ReadInMemoryNode + Hashed, S: ReadableStorage> HashedNodeReader for NodeStore<T, S> {
+impl<T: ReadInMemoryNode + Hashed, S: ReadableStorage> RootReader for NodeStore<T, S> {
+    fn root_node(&self) -> Option<Arc<Node>> {
+        self.header
+            .root_address
+            .and_then(|addr| self.kind.read_in_memory_node(addr))
+    }
+}
+
+impl<T: ReadInMemoryNode, S: ReadableStorage> TrieReader for NodeStore<T, S> where
+    NodeStore<T, S>: RootReader
+{
+}
+
+impl<T: ReadInMemoryNode + Hashed, S: ReadableStorage> HashedNodeReader for NodeStore<T, S>
+where
+    NodeStore<T, S>: TrieReader,
+{
     fn root_address_and_hash(&self) -> Option<(LinearAddress, TrieHash)> {
         let root_addr = self.header.root_address?;
 

@@ -14,7 +14,7 @@ use std::sync::Arc;
 use storage::{
     BranchNode, Child, HashedNodeReader, ImmutableProposal, LeafNode, LinearAddress,
     MutableProposal, NibblesIterator, Node, NodeReader, NodeStore, Path, ReadableStorage, TrieHash,
-    ValueDigest,
+    TrieReader, ValueDigest,
 };
 
 use thiserror::Error;
@@ -80,7 +80,7 @@ macro_rules! write_attributes {
 }
 
 /// Returns the value mapped to by `key` in the subtrie rooted at `node`.
-fn get_helper<T: NodeReader>(
+fn get_helper<T: TrieReader>(
     nodestore: &T,
     node: &Node,
     key: &[u8],
@@ -123,17 +123,17 @@ fn get_helper<T: NodeReader>(
 }
 
 #[derive(Debug)]
-pub struct Merkle<T: NodeReader> {
+pub struct Merkle<T: TrieReader> {
     nodestore: T,
 }
 
-impl<T: NodeReader> From<T> for Merkle<T> {
+impl<T: TrieReader> From<T> for Merkle<T> {
     fn from(nodestore: T) -> Self {
         Merkle { nodestore }
     }
 }
 
-impl<T: NodeReader> Merkle<T> {
+impl<T: TrieReader> Merkle<T> {
     pub fn root(&self) -> Option<Arc<Node>> {
         self.nodestore.root_node()
     }
@@ -811,7 +811,7 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
 mod tests {
     use super::*;
     use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
-    use storage::{MemStore, MutableProposal, NodeStore};
+    use storage::{MemStore, MutableProposal, NodeStore, RootReader};
     use test_case::test_case;
 
     // Returns n random key-value pairs.
