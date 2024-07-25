@@ -25,7 +25,7 @@ pub use node::{
 };
 pub use nodestore::{
     Committed, HashedNodeReader, ImmutableProposal, LinearAddress, MutableProposal, NodeReader,
-    NodeStore, NodeWriter, ReadInMemoryNode, UpdateError,
+    NodeStore, ReadInMemoryNode, UpdateError,
 };
 
 pub use linear::{filebacked::FileBacked, memory::MemStore};

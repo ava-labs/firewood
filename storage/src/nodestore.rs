@@ -499,12 +499,6 @@ pub trait NodeReader {
     fn root_node(&self) -> Option<Arc<Node>>;
 }
 
-/// Updates a merkle trie.
-pub trait NodeWriter: NodeReader {
-    /// Deletes the node at `addr`.
-    fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error>;
-}
-
 /// A committed revision of a merkle trie.
 #[derive(Debug)]
 pub struct Committed {
@@ -792,14 +786,6 @@ impl<S: ReadableStorage> NodeReader for NodeStore<MutableProposal, S> {
         Some(Arc::new((*root).clone()))
     }
 }
-// TODO replace the logic for finding and marking as deleted all removed nodes
-// at hash time
-// impl<S: ReadableStorage> NodeWriter for NodeStore<ProposedMutable2, S> {
-//     fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error> {
-//         self.deleted.push(addr);
-//         Ok(())
-//     }
-// }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
