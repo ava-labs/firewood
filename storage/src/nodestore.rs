@@ -190,6 +190,37 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     }
 }
 
+impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
+    /// Create a new MutableProposal [NodeStore] from a parent [NodeStore]
+    pub fn new<F: Into<NodeStoreParent> + ReadInMemoryNode>(
+        parent: NodeStore<F, S>,
+        storage: Arc<S>,
+    ) -> Result<Self, Error> {
+        let header = parent.header.clone();
+        let mut deleted: Vec<_> = Default::default();
+        let root = if let Some(root_addr) = parent.header.root_address {
+            deleted.push(root_addr);
+            if let Some(root_node) = parent.kind.read_in_memory_node(root_addr) {
+                Some((*root_node).clone())
+            } else {
+                Some((*parent.read_node_from_disk(root_addr)?).clone())
+            }
+        } else {
+            None
+        };
+        let kind = MutableProposal {
+            root,
+            deleted,
+            parent: parent.kind.into(),
+        };
+        Ok(NodeStore {
+            header,
+            kind,
+            storage,
+        })
+    }
+}
+
 impl<S: WritableStorage> NodeStore<ImmutableProposal, S> {
     /// Creatse a new NodeStore proposal from a given `parent`.
     pub fn new<T: Into<NodeStoreParent> + ReadInMemoryNode>(parent: NodeStore<T, S>) -> Self {
@@ -545,7 +576,11 @@ impl ReadInMemoryNode for ImmutableProposal {
     }
 }
 
-/// Reads a node which hasn't yet been committed to storage.
+/// Proposed [NodeStore] types keep some nodes in memory. These nodes are new nodes that were allocated from
+/// the free list, but are not yet on disk. This trait checks to see if a node is in memory and returns it if
+/// it's there. If it's not there, it will be read from disk.
+///
+/// This trait does not know anything about the underlying storage, so it just returns None if the node isn't in memory.
 pub trait ReadInMemoryNode {
     /// Returns the node at `addr` if it is in memory.
     /// Returns None if it isn't.
@@ -553,11 +588,22 @@ pub trait ReadInMemoryNode {
 }
 
 /// Contains the state of a revision of a merkle trie.
+/// The first generic parameter is the type of the revision, which supports reading nodes from parent proposals.
+/// The second generic parameter is the type of the storage used, either
+/// in-memory or on-disk.
+///
+/// The lifecycle of a [NodeStore] is as follows:
+/// 1. Create a new, empty, [Committed] [NodeStore] using [NodeStore::new_empty_committed].
+/// 2. Create a [NodeStore] from disk using [NodeStore::open].
+/// 3. Create a new mutable proposal from either a [Committed] or [ImmutableProposal] [NodeStore] using [NodeStore::new].
+/// 4. Convert a mutable proposal to an immutable proposal using [std::convert::TryInto], which hashes the nodes and assigns addresses
+/// 5. Convert an immutable proposal to a committed revision using [std::convert::TryInto], which writes the nodes to disk.
+
 #[derive(Debug)]
 pub struct NodeStore<T: ReadInMemoryNode, S: ReadableStorage> {
     // Metadata for this revision.
     header: NodeStoreHeader,
-    /// This is one of [Committed], [ImmutableProposal], [ProposedMutable2].
+    /// This is one of [Committed], [ImmutableProposal], or [MutableProposal].
     pub kind: T, // TODO add mut getter and make not pub
     // Persisted storage to read nodes from.
     storage: Arc<S>,
@@ -574,6 +620,8 @@ pub struct MutableProposal {
 }
 
 impl ReadInMemoryNode for NodeStoreParent {
+    /// Returns the node at `addr` if it is in memory from a parent proposal.
+    /// If the base revision is committed, there are no in-memory nodes, so we return None
     fn read_in_memory_node(&self, addr: LinearAddress) -> Option<Arc<Node>> {
         match self {
             NodeStoreParent::Proposed(proposed) => proposed.read_in_memory_node(addr),
@@ -583,36 +631,10 @@ impl ReadInMemoryNode for NodeStoreParent {
 }
 
 impl ReadInMemoryNode for MutableProposal {
+    /// [MutableProposal] types do not have any nodes in memory, but their parent proposal might, so we check there.
+    /// This might be recursive: a grandparent might also have that node in memory.
     fn read_in_memory_node(&self, addr: LinearAddress) -> Option<Arc<Node>> {
         self.parent.read_in_memory_node(addr)
-    }
-}
-
-impl<S: ReadableStorage> From<NodeStore<Committed, S>> for NodeStore<MutableProposal, S> {
-    fn from(val: NodeStore<Committed, S>) -> Self {
-        NodeStore {
-            header: val.header,
-            kind: MutableProposal {
-                root: None,
-                deleted: Default::default(),
-                parent: NodeStoreParent::Committed,
-            },
-            storage: val.storage,
-        }
-    }
-}
-
-impl<S: ReadableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStore<MutableProposal, S> {
-    fn from(val: NodeStore<ImmutableProposal, S>) -> Self {
-        NodeStore {
-            header: val.header,
-            kind: MutableProposal {
-                root: None,
-                deleted: Default::default(),
-                parent: NodeStoreParent::Proposed(Arc::new(val.kind)),
-            },
-            storage: val.storage,
-        }
     }
 }
 
