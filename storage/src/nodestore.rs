@@ -147,8 +147,7 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
 
 impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// Open an existing [NodeStore]
-    ///
-    /// This method reads the header previously created from a call to [NodeStore::new]
+    /// Assumes the header is written in the [ReadableStorage].
     pub fn open(storage: Arc<S>) -> Result<Self, Error> {
         let mut stream = storage.stream_from(0)?;
 
@@ -544,7 +543,7 @@ pub trait ReadInMemoryNode {
 pub struct NodeStore<T: ReadInMemoryNode, S: ReadableStorage> {
     // Metadata for this revision.
     header: NodeStoreHeader,
-    /// This is one of [Committed], [ImmutableProposal], [ProposedMutable2].
+    /// This is one of [Committed], [ImmutableProposal], [MutableProposal].
     pub kind: T, // TODO add mut getter and make not pub
     // Persisted storage to read nodes from.
     storage: Arc<S>,
