@@ -220,7 +220,7 @@ impl<S: WritableStorage> NodeStore<ImmutableProposal, S> {
     // }
 }
 
-impl<S: WritableStorage> NodeStore<ProposedMutable2, S> {
+impl<S: WritableStorage> NodeStore<MutableProposal, S> {
     /// Creates a new, empty, [NodeStore] and clobbers the underlying `storage` with an empty header.
     pub fn new_empty_proposal(storage: Arc<S>) -> Self {
         let header = NodeStoreHeader::new();
@@ -230,7 +230,7 @@ impl<S: WritableStorage> NodeStore<ProposedMutable2, S> {
             .expect("failed to write header");
         NodeStore {
             header,
-            kind: ProposedMutable2 {
+            kind: MutableProposal {
                 root: None,
                 deleted: Default::default(),
                 parent: NodeStoreParent::Committed,
@@ -565,7 +565,7 @@ pub struct NodeStore<T: ReadInMemoryNode, S: ReadableStorage> {
 
 /// Contains the state of a proposal that is still being modified.
 #[derive(Debug)]
-pub struct ProposedMutable2 {
+pub struct MutableProposal {
     /// The root of the trie in this proposal.
     pub root: Option<Node>,
     /// Nodes that have been deleted in this proposal.
@@ -582,17 +582,17 @@ impl ReadInMemoryNode for NodeStoreParent {
     }
 }
 
-impl ReadInMemoryNode for ProposedMutable2 {
+impl ReadInMemoryNode for MutableProposal {
     fn read_in_memory_node(&self, addr: LinearAddress) -> Option<Arc<Node>> {
         self.parent.read_in_memory_node(addr)
     }
 }
 
-impl<S: ReadableStorage> From<NodeStore<Committed, S>> for NodeStore<ProposedMutable2, S> {
+impl<S: ReadableStorage> From<NodeStore<Committed, S>> for NodeStore<MutableProposal, S> {
     fn from(val: NodeStore<Committed, S>) -> Self {
         NodeStore {
             header: val.header,
-            kind: ProposedMutable2 {
+            kind: MutableProposal {
                 root: None,
                 deleted: Default::default(),
                 parent: NodeStoreParent::Committed,
@@ -602,11 +602,11 @@ impl<S: ReadableStorage> From<NodeStore<Committed, S>> for NodeStore<ProposedMut
     }
 }
 
-impl<S: ReadableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStore<ProposedMutable2, S> {
+impl<S: ReadableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStore<MutableProposal, S> {
     fn from(val: NodeStore<ImmutableProposal, S>) -> Self {
         NodeStore {
             header: val.header,
-            kind: ProposedMutable2 {
+            kind: MutableProposal {
                 root: None,
                 deleted: Default::default(),
                 parent: NodeStoreParent::Proposed(Arc::new(val.kind)),
@@ -676,8 +676,8 @@ impl<S: ReadableStorage> NodeStore<ImmutableProposal, S> {
     }
 }
 
-impl<S: ReadableStorage> From<NodeStore<ProposedMutable2, S>> for NodeStore<ImmutableProposal, S> {
-    fn from(val: NodeStore<ProposedMutable2, S>) -> Self {
+impl<S: ReadableStorage> From<NodeStore<MutableProposal, S>> for NodeStore<ImmutableProposal, S> {
+    fn from(val: NodeStore<MutableProposal, S>) -> Self {
         let NodeStore {
             header,
             kind,
@@ -756,7 +756,7 @@ impl<S: ReadableStorage> NodeReader for NodeStore<ImmutableProposal, S> {
     }
 }
 
-impl<S: ReadableStorage> NodeReader for NodeStore<ProposedMutable2, S> {
+impl<S: ReadableStorage> NodeReader for NodeStore<MutableProposal, S> {
     fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
         if let Some(node) = self.kind.read_in_memory_node(addr) {
             return Ok(node);

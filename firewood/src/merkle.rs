@@ -13,8 +13,8 @@ use std::iter::once;
 use std::sync::Arc;
 use storage::{
     BranchNode, Child, HashedNodeReader, ImmutableProposal, LeafNode, LinearAddress,
-    NibblesIterator, Node, NodeReader, NodeStore, Path, ProposedMutable2, ReadableStorage,
-    TrieHash, ValueDigest,
+    MutableProposal, NibblesIterator, Node, NodeReader, NodeStore, Path, ReadableStorage, TrieHash,
+    ValueDigest,
 };
 
 use thiserror::Error;
@@ -373,17 +373,17 @@ impl<S: ReadableStorage> Merkle<NodeStore<ImmutableProposal, S>> {
     }
 }
 
-impl<S: ReadableStorage> From<Merkle<NodeStore<ProposedMutable2, S>>>
+impl<S: ReadableStorage> From<Merkle<NodeStore<MutableProposal, S>>>
     for Merkle<NodeStore<ImmutableProposal, S>>
 {
-    fn from(m: Merkle<NodeStore<ProposedMutable2, S>>) -> Self {
+    fn from(m: Merkle<NodeStore<MutableProposal, S>>) -> Self {
         Merkle {
             nodestore: m.nodestore.into(),
         }
     }
 }
 
-impl<S: ReadableStorage> Merkle<NodeStore<ProposedMutable2, S>> {
+impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     pub fn hash(self) -> Merkle<NodeStore<ImmutableProposal, S>> {
         self.into()
     }
@@ -819,7 +819,7 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
 mod tests {
     use super::*;
     use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
-    use storage::{MemStore, NodeStore, ProposedMutable2};
+    use storage::{MemStore, MutableProposal, NodeStore};
     use test_case::test_case;
 
     // Returns n random key-value pairs.
@@ -872,7 +872,7 @@ mod tests {
         merkle.insert(b"abc", Box::new([])).unwrap()
     }
 
-    fn create_in_memory_merkle() -> Merkle<NodeStore<ProposedMutable2, MemStore>> {
+    fn create_in_memory_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
         let memstore = MemStore::new(vec![]);
 
         let nodestore = NodeStore::new_empty_proposal(memstore.into());
@@ -1498,7 +1498,7 @@ mod tests {
 
     fn merkle_build_test<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         items: Vec<(K, V)>,
-    ) -> Result<Merkle<NodeStore<ProposedMutable2, MemStore>>, MerkleError> {
+    ) -> Result<Merkle<NodeStore<MutableProposal, MemStore>>, MerkleError> {
         let nodestore = NodeStore::new_empty_proposal(MemStore::new(vec![]).into());
         let mut merkle = Merkle::from(nodestore);
         for (k, v) in items.iter() {

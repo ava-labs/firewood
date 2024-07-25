@@ -24,8 +24,8 @@ pub use node::{
     path::NibblesIterator, path::Path, BranchNode, Child, LeafNode, Node, PathIterItem,
 };
 pub use nodestore::{
-    Committed, HashedNodeReader, ImmutableProposal, LinearAddress, NodeReader, NodeStore,
-    NodeWriter, ProposedMutable2, ReadInMemoryNode, UpdateError,
+    Committed, HashedNodeReader, ImmutableProposal, LinearAddress, MutableProposal, NodeReader,
+    NodeStore, NodeWriter, ReadInMemoryNode, UpdateError,
 };
 
 pub use linear::{filebacked::FileBacked, memory::MemStore};
