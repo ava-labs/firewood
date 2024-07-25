@@ -147,8 +147,7 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
 
 impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// Open an existing [NodeStore]
-    ///
-    /// This method reads the header previously created from a call to [NodeStore::new]
+    /// Assumes the header is written in the [ReadableStorage].
     pub fn open(storage: Arc<S>) -> Result<Self, Error> {
         let mut stream = storage.stream_from(0)?;
 
@@ -222,19 +221,6 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
 }
 
 impl<S: WritableStorage> NodeStore<ImmutableProposal, S> {
-    /// Creatse a new NodeStore proposal from a given `parent`.
-    pub fn new<T: Into<NodeStoreParent> + ReadInMemoryNode>(parent: NodeStore<T, S>) -> Self {
-        NodeStore {
-            header: parent.header.clone(),
-            kind: ImmutableProposal {
-                new: HashMap::new(),
-                deleted: Default::default(),
-                parent: parent.kind.into(),
-            },
-            storage: parent.storage.clone(),
-        }
-    }
-
     // TODO danlaine: Use this code in the revision management code.
     // TODO danlaine: Write only the parts of the header that have changed instead of the whole thing
     // fn write_header(&mut self) -> Result<(), Error> {
@@ -613,10 +599,22 @@ pub struct NodeStore<T: ReadInMemoryNode, S: ReadableStorage> {
 #[derive(Debug)]
 pub struct MutableProposal {
     /// The root of the trie in this proposal.
-    pub root: Option<Node>,
+    root: Option<Node>,
     /// Nodes that have been deleted in this proposal.
-    pub deleted: Vec<LinearAddress>,
+    deleted: Vec<LinearAddress>,
     parent: NodeStoreParent,
+}
+
+impl MutableProposal {
+    /// Returns a mutable reference to the root of the trie in this proposal.
+    pub fn mut_root(&mut self) -> &mut Option<Node> {
+        &mut self.root
+    }
+
+    /// Marks the node at `addr` as deleted in this proposal.
+    pub fn delete(&mut self, addr: LinearAddress) {
+        self.deleted.push(addr);
+    }
 }
 
 impl ReadInMemoryNode for NodeStoreParent {
@@ -638,21 +636,21 @@ impl ReadInMemoryNode for MutableProposal {
     }
 }
 
-/*
-    /// Hashes the trie and returns it as its immutable variant.
-    pub fn hash(mut self) -> Result<impl NodeReader, MerkleError> {
-        let Some(root) = std::mem::take(&mut self.root) else {
-            self.nodestore.set_root(None)?;
-            return Ok(self.nodestore);
-        };
-
-        // TODO use hash
-        let (root_addr, _root_hash) = self.hash_helper(root, &mut Path(Default::default()));
-
-        self.nodestore.set_root(Some(root_addr))?;
-        Ok(self.nodestore)
+impl<T: ReadInMemoryNode + Into<NodeStoreParent>, S: ReadableStorage> From<NodeStore<T, S>>
+    for NodeStore<MutableProposal, S>
+{
+    fn from(val: NodeStore<T, S>) -> Self {
+        NodeStore {
+            header: val.header,
+            kind: MutableProposal {
+                root: None,
+                deleted: Default::default(),
+                parent: val.kind.into(),
+            },
+            storage: val.storage,
+        }
     }
-*/
+}
 
 impl<S: ReadableStorage> NodeStore<ImmutableProposal, S> {
     /// Hashes `node`, which is at the given `path_prefix`, and its children recursively.
