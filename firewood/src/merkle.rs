@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::proof::{Proof, ProofError};
+use crate::proof::{Proof, ProofError, ProofNode};
 use crate::stream::{MerkleKeyValueStream, PathIterator};
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
@@ -12,8 +12,9 @@ use std::io::Write;
 use std::iter::once;
 use std::sync::Arc;
 use storage::{
-    hash_node, BranchNode, Child, ImmutableProposal, LeafNode, LinearAddress, NibblesIterator,
-    Node, NodeReader, NodeStore, Path, ProposedMutable2, ReadableStorage, TrieHash,
+    hash_node, BranchNode, Child, Committed, ImmutableProposal, LeafNode, LinearAddress,
+    NibblesIterator, Node, NodeReader, NodeStore, Path, ProposedMutable2, ReadableStorage,
+    TrieHash, ValueDigest,
 };
 
 use thiserror::Error;
@@ -23,8 +24,8 @@ pub type Value = Vec<u8>;
 
 #[derive(Debug, Error)]
 pub enum MerkleError {
-    #[error("uninitialized")]
-    Uninitialized,
+    #[error("can't generate proof for empty node")]
+    Empty,
     #[error("read only")]
     ReadOnly,
     #[error("node not a branch node")]
@@ -133,62 +134,61 @@ impl<T: NodeReader> From<T> for Merkle<T> {
 }
 
 impl<T: NodeReader> Merkle<T> {
-    pub fn root(&self) -> Option<(LinearAddress, TrieHash)> {
-        // TODO the nodestore should have the hash already
-        let root_addr = self.nodestore.root_address()?;
-        let root = self
-            .read_node(root_addr)
-            .expect("TODO don't use expect here");
-        let root_hash = hash_node(&root, &Path::new());
-        Some((root_addr, root_hash))
-    }
-
     pub(crate) fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, MerkleError> {
         self.nodestore.read_node(addr).map_err(Into::into)
     }
 
-    /// Constructs a merkle proof for key. The result contains all encoded nodes
-    /// on the path to the value at key. The value itself is also included in the
-    /// last node and can be retrieved by verifying the proof.
-    ///
-    /// If the trie does not contain a value for key, the returned proof contains
-    /// all nodes of the longest existing prefix of the key, ending with the node
-    /// that proves the absence of the key (at least the root node).
-    pub fn prove(&self, _key: &[u8]) -> Result<Proof<Vec<u8>>, MerkleError> {
-        todo!()
-        // let mut proofs = HashMap::new();
-        // if root_addr.is_null() {
-        //     return Ok(Proof(proofs));
-        // }
+    /// Returns a proof that the given key has a certain value,
+    /// or that the key isn't in the trie.
+    pub fn prove(&self, key: &[u8]) -> Result<Proof, MerkleError> {
+        let Some(root) = self.nodestore.root() else {
+            return Err(MerkleError::Empty);
+        };
 
-        // let sentinel_node = self.get_node(root_addr)?;
+        // Get the path to the key
+        let path_iter = self.path_iter(key)?;
+        let mut proof = Vec::new();
+        for node in path_iter {
+            let node = node?;
+            proof.push(ProofNode::from(node));
+        }
 
-        // let path_iter = self.path_iter(sentinel_node, key.as_ref());
+        if proof.is_empty() {
+            // No nodes, even the root, are before `key`.
+            // The root alone proves the non-existence of `key`.
+            // TODO reduce duplicate code with ProofNode::from<PathIterItem>
+            let mut child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] = Default::default();
+            if let Some(branch) = root.as_branch() {
+                // TODO danlaine: can we avoid indexing?
+                #[allow(clippy::indexing_slicing)]
+                for (i, hash) in branch.children_iter() {
+                    child_hashes[i] = Some(hash.clone());
+                }
+            }
 
-        // let nodes = path_iter
-        //     .map(|result| result.map(|(_, node)| node))
-        //     .collect::<Result<Vec<NodeObjRef>, MerkleError>>()?;
+            proof.push(ProofNode {
+                key: root.partial_path().bytes(),
+                value_digest: root
+                    .value()
+                    .map(|value| ValueDigest::Value(value.to_vec().into_boxed_slice())),
+                child_hashes,
+            })
+        }
 
-        // // Get the hashes of the nodes.
-        // for node in nodes.into_iter() {
-        //     let encoded = node.get_encoded(&self.store);
-        //     let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(encoded).into();
-        //     proofs.insert(hash, encoded.to_vec());
-        // }
-        // Ok(Proof(proofs))
+        Ok(Proof(proof.into_boxed_slice()))
     }
 
-    pub fn verify_proof<N: AsRef<[u8]> + Send>(
+    pub fn verify_proof(
         &self,
         _key: &[u8],
-        _proof: &Proof<N>,
+        _proof: &Proof,
     ) -> Result<Option<Vec<u8>>, MerkleError> {
         todo!()
     }
 
-    pub fn verify_range_proof<N: AsRef<[u8]> + Send, V: AsRef<[u8]>>(
+    pub fn verify_range_proof<V: AsRef<[u8]>>(
         &self,
-        _proof: &Proof<N>,
+        _proof: &Proof,
         _first_key: &[u8],
         _last_key: &[u8],
         _keys: Vec<&[u8]>,
@@ -345,7 +345,7 @@ impl<T: NodeReader> Merkle<T> {
     pub fn dump(&self) -> Result<String, MerkleError> {
         let mut result = vec![];
         writeln!(result, "digraph Merkle {{")?;
-        if let Some((root_addr, root_hash)) = self.root() {
+        if let Some((root_addr, root_hash)) = self.nodestore.root() {
             writeln!(result, " root -> {root_addr}")?;
             let mut seen = HashSet::new();
             self.dump_node(root_addr, Some(&root_hash), &mut seen, &mut result)?;
@@ -365,6 +365,30 @@ impl<S: ReadableStorage> Merkle<NodeStore<ImmutableProposal, S>> {
 
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
         get_helper(&self.nodestore, &root, &key)
+    }
+}
+
+impl<S: ReadableStorage> Merkle<NodeStore<Committed, S>> {
+    pub fn root(&self) -> Option<(LinearAddress, TrieHash)> {
+        // TODO the nodestore should have the hash already
+        let root_addr = self.nodestore.root_address()?;
+        let root = self
+            .read_node(root_addr)
+            .expect("TODO don't use expect here");
+        let root_hash = hash_node(&root, &Path::new());
+        Some((root_addr, root_hash))
+    }
+}
+
+impl<S: ReadableStorage> Merkle<NodeStore<ImmutableProposal, S>> {
+    pub fn root(&self) -> Option<(LinearAddress, TrieHash)> {
+        // TODO the nodestore should have the hash already
+        let root_addr = self.nodestore.root_address()?;
+        let root = self
+            .read_node(root_addr)
+            .expect("TODO don't use expect here");
+        let root_hash = hash_node(&root, &Path::new());
+        Some((root_addr, root_hash))
     }
 }
 
@@ -948,8 +972,29 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
     use storage::{MemStore, NodeStore, ProposedMutable2};
     use test_case::test_case;
+
+    // Returns n random key-value pairs.
+    fn generate_random_kvs(seed: u64, n: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
+        eprintln!("Used seed: {}", seed);
+
+        let mut rng = StdRng::seed_from_u64(seed);
+
+        let mut kvs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+        for _ in 0..n {
+            let key_len = rng.gen_range(1..=4096);
+            let key: Vec<u8> = (0..key_len).map(|_| rng.gen()).collect();
+
+            let val_len = rng.gen_range(1..=4096);
+            let val: Vec<u8> = (0..val_len).map(|_| rng.gen()).collect();
+
+            kvs.push((key, val));
+        }
+
+        kvs
+    }
 
     #[test]
     fn test_get_regression() {
@@ -1201,15 +1246,59 @@ mod tests {
         assert!(merkle.root().is_none());
     }
 
-    //     #[test]
-    //     fn get_empty_proof() {
-    //         let merkle = create_in_memory_merkle();
-    //         let root_addr = merkle.init_sentinel().unwrap();
+    #[test]
+    fn get_empty_proof() {
+        let merkle = create_in_memory_merkle().hash();
+        let proof = merkle.prove(b"any-key");
+        assert!(matches!(proof.unwrap_err(), MerkleError::Empty));
+    }
 
-    //         let proof = merkle.prove(b"any-key", root_addr).unwrap();
+    #[test]
+    fn single_key_proof() {
+        let mut merkle = create_in_memory_merkle();
 
-    //         assert!(proof.0.is_empty());
-    //     }
+        let seed = std::env::var("FIREWOOD_TEST_SEED")
+            .ok()
+            .map_or_else(
+                || None,
+                |s| Some(str::parse(&s).expect("couldn't parse FIREWOOD_TEST_SEED; must be a u64")),
+            )
+            .unwrap_or_else(|| thread_rng().gen());
+
+        const TEST_SIZE: usize = 1;
+
+        let kvs = generate_random_kvs(seed, TEST_SIZE);
+
+        for (key, val) in &kvs {
+            merkle.insert(key, val.clone().into_boxed_slice()).unwrap();
+        }
+
+        let merkle = merkle.hash();
+
+        let (_, root_hash) = merkle.root().unwrap();
+
+        for (key, value) in kvs {
+            let proof = merkle.prove(&key).unwrap();
+
+            proof
+                .verify(key.clone(), Some(value.clone()), &root_hash)
+                .unwrap();
+
+            {
+                // Test that the proof is invalid when the value is different
+                let mut value = value.clone();
+                value[0] = value[0].wrapping_add(1);
+                assert!(proof.verify(key.clone(), Some(value), &root_hash).is_err());
+            }
+
+            {
+                // Test that the proof is invalid when the hash is different
+                assert!(proof
+                    .verify(key, Some(value), &TrieHash::default())
+                    .is_err());
+            }
+        }
+    }
 
     //     #[tokio::test]
     //     async fn empty_range_proof() {

@@ -1051,6 +1051,8 @@ mod tests {
 
         merkle.insert(&key, value.into()).unwrap();
 
+        // let merkle = merkle.hash();
+
         let mut stream = merkle._key_value_iter();
 
         assert_eq!(stream.next().await.unwrap().unwrap(), (key, value.into()));

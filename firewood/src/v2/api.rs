@@ -104,8 +104,8 @@ impl From<RevisionManagerError> for Error {
 /// and a vector of all key/value pairs
 #[derive(Debug)]
 pub struct RangeProof<K, V> {
-    pub first_key_proof: Proof<Vec<u8>>,
-    pub last_key_proof: Proof<Vec<u8>>,
+    pub first_key_proof: Proof,
+    pub last_key_proof: Proof,
     pub middle: Vec<(K, V)>,
 }
 
@@ -166,7 +166,7 @@ pub trait DbView {
     async fn val<K: KeyType>(&self, key: K) -> Result<Option<Vec<u8>>, Error>;
 
     /// Obtain a proof for a single key
-    async fn single_key_proof<K: KeyType>(&self, key: K) -> Result<Option<Proof<Vec<u8>>>, Error>;
+    async fn single_key_proof<K: KeyType>(&self, key: K) -> Result<Option<Proof>, Error>;
 
     /// Obtain a range proof over a set of keys
     ///

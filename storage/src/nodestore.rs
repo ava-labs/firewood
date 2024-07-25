@@ -477,8 +477,8 @@ struct FreeArea {
 pub trait NodeReader {
     /// Returns the node at `addr`.
     fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error>;
-    /// Returns the root address of the trie stored on disk
-    fn root_address(&self) -> Option<LinearAddress>;
+    /// Returns the root of the trie.
+    fn root(&self) -> Option<Arc<Node>>;
 }
 
 /// Updates a merkle trie.
@@ -487,7 +487,9 @@ pub trait NodeWriter: NodeReader {
     fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error>;
 }
 
-struct Committed {
+/// A committed revision of a merkle trie.
+#[derive(Debug)]
+pub struct Committed {
     deleted: Box<[LinearAddress]>,
 }
 
@@ -706,19 +708,54 @@ impl<S: ReadableStorage> From<NodeStore<ProposedMutable2, S>> for NodeStore<Immu
     }
 }
 
-impl<T: ReadInMemoryNode, S: ReadableStorage> NodeReader for NodeStore<T, S> {
+impl<S: ReadableStorage> NodeReader for NodeStore<Committed, S> {
+    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
+        self.read_node_from_disk(addr)
+    }
+
+    fn root(&self) -> Option<Arc<Node>> {
+        let Some(root_addr) = self.header.root_address else {
+            return None;
+        };
+
+        Some(self.read_node(root_addr).expect("TODO handle error"))
+    }
+}
+
+impl<S: ReadableStorage> NodeReader for NodeStore<ImmutableProposal, S> {
     fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
         if let Some(node) = self.kind.read_in_memory_node(addr) {
             return Ok(node);
         }
+
         self.read_node_from_disk(addr)
     }
 
-    fn root_address(&self) -> Option<LinearAddress> {
-        self.header.root_address
+    fn root(&self) -> Option<Arc<Node>> {
+        let Some(root_addr) = self.header.root_address else {
+            return None;
+        };
+
+        Some(self.read_node(root_addr).expect("TODO handle error"))
     }
 }
 
+impl<S: ReadableStorage> NodeReader for NodeStore<ProposedMutable2, S> {
+    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
+        if let Some(node) = self.kind.read_in_memory_node(addr) {
+            return Ok(node);
+        }
+
+        self.read_node_from_disk(addr)
+    }
+
+    fn root(&self) -> Option<Arc<Node>> {
+        let Some(root) = &self.kind.root else {
+            return None;
+        };
+        Some(Arc::new((*root).clone()))
+    }
+}
 // TODO replace the logic for finding and marking as deleted all removed nodes
 // at hash time
 // impl<S: ReadableStorage> NodeWriter for NodeStore<ProposedMutable2, S> {
