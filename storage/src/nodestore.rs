@@ -469,7 +469,7 @@ struct FreeArea {
 }
 
 /// Reads from an immutable (i.e. already hashed) merkle trie.
-pub trait HashedNodeReader {
+pub trait HashedNodeReader: NodeReader {
     /// Gets the address and hash of the root node of an immutable merkle trie.
     fn root_address_and_hash(&self) -> Option<(LinearAddress, TrieHash)>;
 }

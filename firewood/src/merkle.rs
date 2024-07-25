@@ -142,6 +142,15 @@ impl<T: NodeReader> Merkle<T> {
         self.nodestore.read_node(addr).map_err(Into::into)
     }
 
+    pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
+        let Some(root) = self.nodestore.root_node() else {
+            return Ok(None);
+        };
+
+        let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
+        get_helper(&self.nodestore, &root, &key)
+    }
+
     /// Returns a proof that the given key has a certain value,
     /// or that the key isn't in the trie.
     pub fn prove(&self, key: &[u8]) -> Result<Proof, MerkleError> {
@@ -305,7 +314,7 @@ impl<T: NodeReader> Merkle<T> {
     }
 }
 
-impl<T: HashedNodeReader + NodeReader> Merkle<T> {
+impl<T: HashedNodeReader> Merkle<T> {
     pub fn dump_node(
         &self,
         addr: LinearAddress,
@@ -362,16 +371,16 @@ impl<T: HashedNodeReader + NodeReader> Merkle<T> {
     }
 }
 
-impl<S: ReadableStorage> Merkle<NodeStore<ImmutableProposal, S>> {
-    pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
-        let Some(root) = &self.nodestore.root_node() else {
-            return Ok(None);
-        };
+// impl<S: ReadableStorage> Merkle<NodeStore<ImmutableProposal, S>> {
+//     pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
+//         let Some(root) = &self.nodestore.root_node() else {
+//             return Ok(None);
+//         };
 
-        let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
-        get_helper(&self.nodestore, root, &key)
-    }
-}
+//         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
+//         get_helper(&self.nodestore, root, &key)
+//     }
+// }
 
 impl<S: ReadableStorage> From<Merkle<NodeStore<MutableProposal, S>>>
     for Merkle<NodeStore<ImmutableProposal, S>>
@@ -386,15 +395,6 @@ impl<S: ReadableStorage> From<Merkle<NodeStore<MutableProposal, S>>>
 impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     pub fn hash(self) -> Merkle<NodeStore<ImmutableProposal, S>> {
         self.into()
-    }
-
-    pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
-        let Some(root) = &self.nodestore.kind.root else {
-            return Ok(None);
-        };
-
-        let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
-        get_helper(&self.nodestore, root, &key)
     }
 
     /// Map `key` to `value` in the trie.
