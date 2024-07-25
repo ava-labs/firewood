@@ -585,9 +585,7 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
-    use storage::{ImmutableProposal, MemStore, NodeStore};
-
-    use crate::merkle::{self, MutableProposal};
+    use storage::{MemStore, NodeStore, ProposedMutable2};
 
     use super::*;
     use test_case::test_case;
@@ -602,18 +600,18 @@ mod tests {
         }
     }
 
-    pub(super) fn create_test_merkle() -> MutableProposal<NodeStore<ImmutableProposal, MemStore>> {
+    pub(super) fn create_test_merkle() -> Merkle<NodeStore<ProposedMutable2, MemStore>> {
         let memstore = MemStore::new(vec![]);
         let memstore = Arc::new(memstore);
         let nodestore = NodeStore::new_empty_proposal(memstore);
-        merkle::new(nodestore).unwrap()
+        Merkle::from(nodestore)
     }
 
     #[test_case(&[]; "empty key")]
     #[test_case(&[1]; "non-empty key")]
     #[tokio::test]
     async fn path_iterate_empty_merkle_empty_key(key: &[u8]) {
-        let merkle = Merkle::from(create_test_merkle().hash().unwrap());
+        let merkle = create_test_merkle();
         let mut stream = merkle.path_iter(key).unwrap();
         assert!(stream.next().is_none());
     }
@@ -628,8 +626,6 @@ mod tests {
         let mut merkle = create_test_merkle();
 
         merkle.insert(&[0xBE, 0xEF], Box::new([0x42])).unwrap();
-
-        let merkle = Merkle::from(merkle.hash().unwrap());
 
         let mut stream = merkle.path_iter(key).unwrap();
         let node = match stream.next() {
@@ -656,7 +652,7 @@ mod tests {
     #[test_case(&[0x00, 0x00, 0x00, 0xFF, 0x01]; "leaf key suffix")]
     #[tokio::test]
     async fn path_iterate_non_singleton_merkle_seek_leaf(key: &[u8]) {
-        let merkle = Merkle::from(created_populated_merkle().hash().unwrap());
+        let merkle = created_populated_merkle();
 
         let mut stream = merkle.path_iter(key).unwrap();
 
@@ -706,7 +702,7 @@ mod tests {
     #[test_case(&[0x00, 0x00, 0x00, 0x10]; "branch key suffix (but not a leaf key)")]
     #[tokio::test]
     async fn path_iterate_non_singleton_merkle_seek_branch(key: &[u8]) {
-        let merkle = Merkle::from(created_populated_merkle().hash().unwrap());
+        let merkle = created_populated_merkle();
 
         let mut stream = merkle.path_iter(key).unwrap();
 
@@ -739,14 +735,14 @@ mod tests {
 
     #[tokio::test]
     async fn key_value_iterate_empty() {
-        let merkle = Merkle::from(create_test_merkle().hash().unwrap());
+        let merkle = create_test_merkle();
         let stream = merkle._key_value_iter_from_key(b"x".to_vec().into_boxed_slice());
         check_stream_is_done(stream).await;
     }
 
     #[tokio::test]
     async fn node_iterate_empty() {
-        let merkle = Merkle::from(create_test_merkle().hash().unwrap());
+        let merkle = create_test_merkle();
         let stream = merkle.node_iter();
         check_stream_is_done(stream).await;
     }
@@ -756,8 +752,6 @@ mod tests {
         let mut merkle = create_test_merkle();
 
         merkle.insert(&[0x00], Box::new([0x00])).unwrap();
-
-        let merkle = Merkle::from(merkle.hash().unwrap());
 
         let mut stream = merkle.node_iter();
 
@@ -785,7 +779,7 @@ mod tests {
     ///  1   F
     ///
     /// The number next to each branch is the position of the child in the branch's children array.
-    fn created_populated_merkle() -> MutableProposal<NodeStore<ImmutableProposal, MemStore>> {
+    fn created_populated_merkle() -> Merkle<NodeStore<ProposedMutable2, MemStore>> {
         let mut merkle = create_test_merkle();
 
         merkle
@@ -814,7 +808,7 @@ mod tests {
 
     #[tokio::test]
     async fn node_iterator_no_start_key() {
-        let merkle = Merkle::from(created_populated_merkle().hash().unwrap());
+        let merkle = created_populated_merkle();
 
         let mut stream = merkle.node_iter();
 
@@ -863,7 +857,7 @@ mod tests {
 
     #[tokio::test]
     async fn node_iterator_start_key_between_nodes() {
-        let merkle = Merkle::from(created_populated_merkle().hash().unwrap());
+        let merkle = created_populated_merkle();
 
         let mut stream = merkle.node_iter_from(vec![0x00, 0x00, 0x01].into_boxed_slice());
 
@@ -887,7 +881,7 @@ mod tests {
 
     #[tokio::test]
     async fn node_iterator_start_key_on_node() {
-        let merkle = Merkle::from(created_populated_merkle().hash().unwrap());
+        let merkle = created_populated_merkle();
 
         let mut stream = merkle.node_iter_from(vec![0x00, 0xD0, 0xD0].into_boxed_slice());
 
@@ -911,7 +905,7 @@ mod tests {
 
     #[tokio::test]
     async fn node_iterator_start_key_after_last_key() {
-        let merkle = Merkle::from(created_populated_merkle().hash().unwrap());
+        let merkle = created_populated_merkle();
 
         let stream = merkle.node_iter_from(vec![0xFF].into_boxed_slice());
 
@@ -930,8 +924,6 @@ mod tests {
         for k in u8::MIN..=u8::MAX {
             merkle.insert(&[k], Box::new([k])).unwrap();
         }
-
-        let merkle = Merkle::from(merkle.hash().unwrap());
 
         let mut stream = match start {
             Some(start) => merkle._key_value_iter_from_key(start.to_vec().into_boxed_slice()),
@@ -955,7 +947,7 @@ mod tests {
 
     #[tokio::test]
     async fn key_value_fused_empty() {
-        let merkle = Merkle::from(create_test_merkle().hash().unwrap());
+        let merkle = create_test_merkle();
         check_stream_is_done(merkle._key_value_iter()).await;
     }
 
@@ -974,8 +966,6 @@ mod tests {
                 merkle.insert(key, value).unwrap();
             }
         }
-
-        let merkle = Merkle::from(merkle.hash().unwrap());
 
         // Test with no start key
         let mut stream = merkle._key_value_iter();
@@ -1041,8 +1031,6 @@ mod tests {
             merkle.insert(kv, kv.clone().into_boxed_slice()).unwrap();
         }
 
-        let merkle = Merkle::from(merkle.hash().unwrap());
-
         let mut stream = merkle._key_value_iter();
 
         for kv in key_values.iter() {
@@ -1063,8 +1051,6 @@ mod tests {
 
         merkle.insert(&key, value.into()).unwrap();
 
-        let merkle = Merkle::from(merkle.hash().unwrap());
-
         let mut stream = merkle._key_value_iter();
 
         assert_eq!(stream.next().await.unwrap().unwrap(), (key, value.into()));
@@ -1082,8 +1068,6 @@ mod tests {
         merkle.insert(&second_leaf, second_leaf.into()).unwrap();
 
         merkle.insert(&branch, branch.into()).unwrap();
-
-        let merkle = Merkle::from(merkle.hash().unwrap());
 
         let mut stream = merkle._key_value_iter();
 
@@ -1127,8 +1111,6 @@ mod tests {
             merkle.insert(key, key.clone().into_boxed_slice()).unwrap();
         }
 
-        let merkle = Merkle::from(merkle.hash().unwrap());
-
         let mut stream = merkle._key_value_iter_from_key(vec![intermediate].into_boxed_slice());
 
         let first_expected = key_values[1].as_slice();
@@ -1169,8 +1151,6 @@ mod tests {
                 key
             })
             .collect();
-
-        let merkle = Merkle::from(merkle.hash().unwrap());
 
         keys.sort();
 
@@ -1220,8 +1200,6 @@ mod tests {
             .chain(Some(branch_key.clone()))
             .collect();
 
-        let merkle = Merkle::from(merkle.hash().unwrap());
-
         keys.sort();
 
         let start = keys.iter().position(|key| key == &branch_key).unwrap();
@@ -1255,8 +1233,6 @@ mod tests {
             })
             .collect();
 
-        let merkle = Merkle::from(merkle.hash().unwrap());
-
         let keys = &keys[(missing as usize)..];
 
         let mut stream = merkle._key_value_iter_from_key(vec![missing].into_boxed_slice());
@@ -1285,8 +1261,6 @@ mod tests {
             merkle.insert(&key, key.clone().into()).unwrap();
         });
 
-        let merkle = Merkle::from(merkle.hash().unwrap());
-
         let stream = merkle._key_value_iter_from_key(vec![start_key].into_boxed_slice());
 
         check_stream_is_done(stream).await;
@@ -1308,8 +1282,6 @@ mod tests {
                 key
             })
             .collect();
-
-        let merkle = Merkle::from(merkle.hash().unwrap());
 
         let mut stream = merkle._key_value_iter_from_key(vec![start_key].into_boxed_slice());
 
@@ -1341,8 +1313,6 @@ mod tests {
             })
             .collect();
 
-        let merkle = Merkle::from(merkle.hash().unwrap());
-
         let keys = &keys[((missing >> 4) as usize)..];
 
         let mut stream = merkle._key_value_iter_from_key(vec![missing].into_boxed_slice());
@@ -1364,7 +1334,6 @@ mod tests {
         let mut merkle = create_test_merkle();
         merkle.insert(&key, key.into()).unwrap();
 
-        let merkle = Merkle::from(merkle.hash().unwrap());
         let stream = merkle._key_value_iter_from_key(greater_key.into());
 
         check_stream_is_done(stream).await;
@@ -1388,7 +1357,6 @@ mod tests {
             })
             .collect();
 
-        let merkle = Merkle::from(merkle.hash().unwrap());
         let keys = &keys[((greatest >> 4) as usize)..];
 
         let mut stream = merkle._key_value_iter_from_key(vec![greatest].into_boxed_slice());

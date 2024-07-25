@@ -12,6 +12,7 @@ use integer_encoding::VarInt;
 const MAX_VARINT_SIZE: usize = 10;
 const BITS_PER_NIBBLE: u64 = 4;
 
+/// Returns the hash of `node`, which is at the given `path_prefix`.
 pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
     match node {
         Node::Branch(node) => {
@@ -85,7 +86,7 @@ trait Hashable {
     /// The key of the node where each byte is a nibble.
     fn key(&self) -> impl Iterator<Item = u8> + Clone;
     /// The node's value or hash.
-    fn value_digest(&self) -> Option<ValueDigest>;
+    fn value_digest(&self) -> Option<ValueDigest<'_>>;
     /// Each element is a child's index and hash.
     /// Yields 0 elements if the node is a leaf.
     fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone;
@@ -192,7 +193,7 @@ impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
             .chain(self.node.partial_path())
     }
 
-    fn value_digest(&self) -> Option<ValueDigest> {
+    fn value_digest(&self) -> Option<ValueDigest<'a>> {
         self.node.value().map(ValueDigest::Value)
     }
 
@@ -201,7 +202,7 @@ impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
     }
 }
 
-fn add_value_digest_to_buf<H: HasUpdate>(buf: &mut H, value_digest: Option<ValueDigest>) {
+fn add_value_digest_to_buf<H: HasUpdate>(buf: &mut H, value_digest: Option<ValueDigest<'_>>) {
     let Some(value_digest) = value_digest else {
         let value_exists: u8 = 0;
         buf.update([value_exists]);

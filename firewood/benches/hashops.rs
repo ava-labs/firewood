@@ -4,7 +4,7 @@
 // hash benchmarks; run with 'cargo bench'
 
 use criterion::{criterion_group, criterion_main, profiler::Profiler, BatchSize, Criterion};
-use firewood::merkle;
+use firewood::merkle::Merkle;
 use pprof::ProfilerGuard;
 use rand::{distributions::Alphanumeric, rngs::StdRng, Rng, SeedableRng};
 use std::sync::Arc;
@@ -83,7 +83,7 @@ fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criter
                 || {
                     let store = Arc::new(MemStore::new(vec![]));
                     let nodestore = NodeStore::new_empty_proposal(store);
-                    let merkle = merkle::new(nodestore).unwrap();
+                    let merkle = Merkle::from(nodestore);
 
                     let keys: Vec<Vec<u8>> = repeat_with(|| {
                         (&mut rng)

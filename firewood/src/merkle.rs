@@ -12,8 +12,8 @@ use std::io::Write;
 use std::iter::once;
 use std::sync::Arc;
 use storage::{
-    BranchNode, Child, LeafNode, LinearAddress, NibblesIterator, Node, NodeReader, NodeStore,
-    NodeWriter, Path, ProposedMutable2, ReadableStorage, TrieHash,
+    hash_node, BranchNode, Child, ImmutableProposal, LeafNode, LinearAddress, NibblesIterator,
+    Node, NodeReader, NodeStore, Path, ProposedMutable2, ReadableStorage, TrieHash,
 };
 
 use thiserror::Error;
@@ -300,17 +300,6 @@ impl<T: NodeReader> Merkle<T> {
         }))
     }
 
-    /// Returns the value mapped to by `key`.
-    pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
-        let Some((root_addr, _)) = self.root() else {
-            return Ok(None);
-        };
-        let root = self.read_node(root_addr)?;
-
-        let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
-        get_helper(&self.nodestore, &root, &key)
-    }
-
     pub fn dump_node(
         &self,
         addr: LinearAddress,
@@ -364,6 +353,18 @@ impl<T: NodeReader> Merkle<T> {
         write!(result, "}}")?;
 
         Ok(String::from_utf8_lossy(&result).to_string())
+    }
+}
+
+impl<S: ReadableStorage> Merkle<NodeStore<ImmutableProposal, S>> {
+    pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
+        let Some(root) = &self.nodestore.root_address() else {
+            return Ok(None);
+        };
+        let root = self.nodestore.read_node(*root)?;
+
+        let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
+        get_helper(&self.nodestore, &root, &key)
     }
 }
 
@@ -489,26 +490,34 @@ impl<T: NodeReader> Merkle<T> {
 /// Returns a new merkle using the given `nodestore`.
 /// If the nodestore has a root address, the root node is read and used as the root.
 /// Otherwise, the root is set to None (i.e. this trie is empty).
-pub fn new<T: NodeWriter>(mut nodestore: T) -> Result<MutableProposal<T>, MerkleError> {
-    let Some(root_addr) = nodestore.root_address() else {
-        return Ok(MutableProposal {
-            root: None,
-            nodestore,
-        });
-    };
+// pub fn new<T: ReadInMemoryNode, S: ReadableStorage>(
+//     mut nodestore: NodeStore<T, S>,
+// ) -> Result<Merkle<NodeStore<T, S>>, MerkleError> {
+// let Some(root_addr) = nodestore.root_address() else {
+//     return Ok(MutableProposal {
+//         root: None,
+//         nodestore,
+//     });
+// };
 
-    let root = nodestore.read_node(root_addr)?;
-    let root = (*root).clone();
+// let root = nodestore.read_node(root_addr)?;
+// let root = (*root).clone();
 
-    nodestore.delete_node(root_addr)?;
+// nodestore.delete_node(root_addr)?;
 
-    Ok(MutableProposal {
-        root: Some(root),
-        nodestore,
-    })
-}
+// Ok(MutableProposal {
+//     root: Some(root),
+//     nodestore,
+// })
+// }
 
 impl<S: ReadableStorage> Merkle<NodeStore<ProposedMutable2, S>> {
+    pub fn hash(self) -> Merkle<NodeStore<ImmutableProposal, S>> {
+        Merkle {
+            nodestore: self.nodestore.into(),
+        }
+    }
+
     pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
         let Some(root) = &self.nodestore.kind.root else {
             return Ok(None);
@@ -522,7 +531,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<ProposedMutable2, S>> {
     pub fn insert(&mut self, key: &[u8], value: Box<[u8]>) -> Result<(), MerkleError> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
-        let Some(root) = std::mem::take(&mut self.nodestore.root_address()) else {
+        let Some(root) = std::mem::take(&mut self.nodestore.kind.root) else {
             // The trie is empty. Create a new leaf node with `value` and set
             // it as the root.
             let root = Node::Leaf(LeafNode {
@@ -534,7 +543,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<ProposedMutable2, S>> {
         };
 
         let root = self.insert_helper(root, key.as_ref(), value)?;
-        self.root = root.into();
+        self.nodestore.kind.root = root.into();
         Ok(())
     }
 
@@ -614,7 +623,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<ProposedMutable2, S>> {
                             Child::Node(child) => child,
                             Child::AddressWithHash(addr, _) => {
                                 let node = self.nodestore.read_node(addr)?;
-                                self.nodestore.delete_node(addr)?;
+                                self.nodestore.kind.deleted.push(addr);
                                 (*node).clone()
                             }
                         };
@@ -676,13 +685,13 @@ impl<S: ReadableStorage> Merkle<NodeStore<ProposedMutable2, S>> {
     pub fn remove(&mut self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
-        let Some(root) = std::mem::take(&mut self.root) else {
+        let Some(root) = std::mem::take(&mut self.nodestore.kind.root) else {
             // The trie is empty. There is nothing to remove.
             return Ok(None);
         };
 
         let (root, removed_value) = self.remove_helper(root, &key)?;
-        self.root = root;
+        self.nodestore.kind.root = root;
         Ok(removed_value)
     }
 
@@ -752,7 +761,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<ProposedMutable2, S>> {
                                 ),
                                 Child::AddressWithHash(addr, _) => {
                                     let node = self.nodestore.read_node(*addr)?;
-                                    self.nodestore.delete_node(*addr)?;
+                                    self.nodestore.kind.deleted.push(*addr);
                                     (*node).clone()
                                 }
                             };
@@ -821,7 +830,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<ProposedMutable2, S>> {
                             Child::Node(node) => node,
                             Child::AddressWithHash(addr, _) => {
                                 let node = self.nodestore.read_node(addr)?;
-                                self.nodestore.delete_node(addr)?;
+                                self.nodestore.kind.deleted.push(addr);
                                 (*node).clone()
                             }
                         };
@@ -869,7 +878,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<ProposedMutable2, S>> {
                             ),
                             Child::AddressWithHash(addr, _) => {
                                 let node = self.nodestore.read_node(*addr)?;
-                                self.nodestore.delete_node(*addr)?;
+                                self.nodestore.kind.deleted.push(*addr);
                                 (*node).clone()
                             }
                         };
@@ -939,7 +948,7 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use storage::{ImmutableProposal, MemStore, NodeStore, ProposedMutable2};
+    use storage::{MemStore, NodeStore, ProposedMutable2};
     use test_case::test_case;
 
     #[test]
@@ -955,9 +964,7 @@ mod tests {
         merkle.insert(&[2], Box::new([2])).unwrap();
         assert_eq!(merkle.get(&[2]).unwrap(), Some(Box::from([2])));
 
-        let merkle = Merkle {
-            nodestore: merkle.hash().unwrap(),
-        };
+        let merkle = merkle.hash();
 
         assert_eq!(merkle.get(&[0]).unwrap(), Some(Box::from([0])));
         assert_eq!(merkle.get(&[1]).unwrap(), Some(Box::from([1])));
@@ -974,15 +981,12 @@ mod tests {
         merkle.insert(b"abc", Box::new([])).unwrap()
     }
 
-    fn create_in_memory_merkle() -> NodeStore<ProposedMutable2, MemStore> {
+    fn create_in_memory_merkle() -> Merkle<NodeStore<ProposedMutable2, MemStore>> {
         let memstore = MemStore::new(vec![]);
 
-        NodeStore::new_empty_proposal(memstore.into())
+        let nodestore = NodeStore::new_empty_proposal(memstore.into());
 
-        // MutableProposal {
-        //     nodestore: NodeStore::new_empty_proposal(memstore.into()),
-        //     root: None,
-        // }
+        Merkle { nodestore }
     }
 
     // use super::*;
@@ -1559,9 +1563,9 @@ mod tests {
 
     fn merkle_build_test<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         items: Vec<(K, V)>,
-    ) -> Result<NodeStore<ProposedMutable2, MemStore>, MerkleError> {
+    ) -> Result<Merkle<NodeStore<ProposedMutable2, MemStore>>, MerkleError> {
         let nodestore = NodeStore::new_empty_proposal(MemStore::new(vec![]).into());
-        let mut merkle = new(nodestore).unwrap();
+        let mut merkle = Merkle::from(nodestore);
         for (k, v) in items.iter() {
             merkle.insert(k.as_ref(), Box::from(v.as_ref()))?;
         }
@@ -1579,8 +1583,7 @@ mod tests {
             ("horse", "stallion"),
             ("ddd", "ok"),
         ];
-        let nodestore = merkle_build_test(items).unwrap().hash().unwrap();
-        let merkle = Merkle { nodestore };
+        let merkle = merkle_build_test(items).unwrap().hash();
 
         merkle.dump().unwrap();
         Ok(())
@@ -1595,8 +1598,7 @@ mod tests {
     #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1]),(&[0,1,2],&[0,1,2])], Some("229011c50ad4d5c2f4efe02b8db54f361ad295c4eee2bf76ea4ad1bb92676f97"); "root with branch child")]
     #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1]),(&[0,8],&[0,8]),(&[0,1,2],&[0,1,2])], Some("a683b4881cb540b969f885f538ba5904699d480152f350659475a962d6240ef9"); "root with branch child and leaf child")]
     fn test_root_hash_merkledb_compatible(kvs: Vec<(&[u8], &[u8])>, expected_hash: Option<&str>) {
-        let nodestore = merkle_build_test(kvs).unwrap().hash().unwrap();
-        let merkle = Merkle { nodestore };
+        let merkle = merkle_build_test(kvs).unwrap().hash();
         let Some((_, got_hash)) = merkle.root() else {
             assert!(expected_hash.is_none());
             return;

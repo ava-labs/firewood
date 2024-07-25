@@ -18,13 +18,14 @@ mod nodestore;
 mod trie_hash;
 
 // re-export these so callers don't need to know where they are
+pub use hashednode::{hash_node, hash_preimage};
 pub use linear::{ReadableStorage, WritableStorage};
 pub use node::{
     path::NibblesIterator, path::Path, BranchNode, Child, LeafNode, Node, PathIterItem,
 };
 pub use nodestore::{
     ImmutableProposal, LinearAddress, NodeReader, NodeStore, NodeWriter, ProposedMutable2,
-    UpdateError,
+    ReadInMemoryNode, UpdateError,
 };
 
 pub use linear::{filebacked::FileBacked, memory::MemStore};

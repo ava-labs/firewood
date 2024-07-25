@@ -16,7 +16,7 @@ use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use crate::hashednode::hash_node;
-use crate::node::{self, Node};
+use crate::node::Node;
 use crate::{Child, Path, ReadableStorage, TrieHash};
 
 use super::linear::WritableStorage;
@@ -542,6 +542,7 @@ impl ReadInMemoryNode for ImmutableProposal {
     }
 }
 
+/// Reads a node which hasn't yet been committed to storage.
 pub trait ReadInMemoryNode {
     /// Returns the node at `addr` if it is in memory.
     /// Returns None if it isn't.
@@ -553,17 +554,19 @@ pub trait ReadInMemoryNode {
 pub struct NodeStore<T: ReadInMemoryNode, S: ReadableStorage> {
     // Metadata for this revision.
     header: NodeStoreHeader,
-    // This is either a [Committed] or a [ProposedImmutable]
-    // --> [Committed] [ProposedImmutable] [ProposedMutable2]
+    /// This is one of [Committed], [ImmutableProposal], [ProposedMutable2].
     pub kind: T, // TODO add mut getter and make not pub
     // Persisted storage to read nodes from.
     storage: Arc<S>,
 }
 
+/// Contains the state of a proposal that is still being modified.
 #[derive(Debug)]
 pub struct ProposedMutable2 {
+    /// The root of the trie in this proposal.
     pub root: Option<Node>,
-    deleted: Vec<LinearAddress>,
+    /// Nodes that have been deleted in this proposal.
+    pub deleted: Vec<LinearAddress>,
     parent: NodeStoreParent,
 }
 
@@ -582,6 +585,34 @@ impl ReadInMemoryNode for ProposedMutable2 {
     }
 }
 
+impl<S: ReadableStorage> From<NodeStore<Committed, S>> for NodeStore<ProposedMutable2, S> {
+    fn from(val: NodeStore<Committed, S>) -> Self {
+        NodeStore {
+            header: val.header,
+            kind: ProposedMutable2 {
+                root: None,
+                deleted: Default::default(),
+                parent: NodeStoreParent::Committed,
+            },
+            storage: val.storage,
+        }
+    }
+}
+
+impl<S: ReadableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStore<ProposedMutable2, S> {
+    fn from(val: NodeStore<ImmutableProposal, S>) -> Self {
+        NodeStore {
+            header: val.header,
+            kind: ProposedMutable2 {
+                root: None,
+                deleted: Default::default(),
+                parent: NodeStoreParent::Proposed(Arc::new(val.kind)),
+            },
+            storage: val.storage,
+        }
+    }
+}
+
 /*
     /// Hashes the trie and returns it as its immutable variant.
     pub fn hash(mut self) -> Result<impl NodeReader, MerkleError> {
@@ -596,8 +627,6 @@ impl ReadInMemoryNode for ProposedMutable2 {
         self.nodestore.set_root(Some(root_addr))?;
         Ok(self.nodestore)
     }
-
-
 */
 
 impl<S: ReadableStorage> NodeStore<ImmutableProposal, S> {
@@ -644,20 +673,20 @@ impl<S: ReadableStorage> NodeStore<ImmutableProposal, S> {
     }
 }
 
-impl<S: ReadableStorage> Into<NodeStore<ImmutableProposal, S>> for NodeStore<ProposedMutable2, S> {
-    fn into(self) -> NodeStore<ImmutableProposal, S> {
-        let Self {
+impl<S: ReadableStorage> From<NodeStore<ProposedMutable2, S>> for NodeStore<ImmutableProposal, S> {
+    fn from(val: NodeStore<ProposedMutable2, S>) -> Self {
+        let NodeStore {
             header,
             kind,
             storage,
-        } = self;
+        } = val;
 
         let mut nodestore = NodeStore {
             header,
             kind: ImmutableProposal {
                 new: HashMap::new(),
                 deleted: kind.deleted.into(),
-                parent: kind.parent.into(),
+                parent: kind.parent,
             },
             storage,
         };
@@ -703,8 +732,6 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeReader for NodeStore<T, S> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use crate::linear::memory::MemStore;
-    use crate::Path;
-    use crate::{BranchNode, LeafNode};
 
     use super::*;
 
