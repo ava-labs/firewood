@@ -283,6 +283,15 @@ impl<'a, T: NodeReader> MerkleKeyValueStreamState<'a, T> {
     }
 }
 
+impl<'a, T: NodeReader> From<&'a T> for MerkleKeyValueStream<'a, T> {
+    fn from(merkle: &'a T) -> Self {
+        Self {
+            state: MerkleKeyValueStreamState::_new(),
+            merkle,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct MerkleKeyValueStream<'a, T: NodeReader> {
     state: MerkleKeyValueStreamState<'a, T>,
@@ -296,13 +305,6 @@ impl<'a, T: NodeReader> FusedStream for MerkleKeyValueStream<'a, T> {
 }
 
 impl<'a, T: NodeReader> MerkleKeyValueStream<'a, T> {
-    pub(super) fn _new(merkle: &'a T) -> Self {
-        Self {
-            state: MerkleKeyValueStreamState::_new(),
-            merkle,
-        }
-    }
-
     pub(super) fn _from_key(merkle: &'a T, key: Key) -> Self {
         Self {
             state: MerkleKeyValueStreamState::_with_key(key),

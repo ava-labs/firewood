@@ -248,13 +248,12 @@ impl<T: NodeReader> Merkle<T> {
         todo!()
     }
 
-    // TODO danlaine: can we use the LinearAddress of the `root` instead?
     pub fn path_iter<'a>(&self, key: &'a [u8]) -> Result<PathIterator<'_, 'a, T>, MerkleError> {
         PathIterator::new(&self.nodestore, key)
     }
 
-    pub(crate) fn _key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
-        MerkleKeyValueStream::_new(&self.nodestore)
+    pub(crate) fn _key_value_iter<'a>(&'a self) -> MerkleKeyValueStream<'a, T> {
+        MerkleKeyValueStream::from(&self.nodestore)
     }
 
     pub(crate) fn _key_value_iter_from_key(&self, key: Key) -> MerkleKeyValueStream<'_, T> {
