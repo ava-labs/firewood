@@ -214,6 +214,8 @@ impl Hashable for ProofNode {
         self.key.as_ref().iter().copied()
     }
 
+    // TODO danlaine: How can we change the signature to return a reference
+    // to the value instead of cloning it?
     fn value_digest(&self) -> Option<ValueDigest<Box<[u8]>>> {
         self.value_digest.as_ref().map(|vd| match vd {
             ValueDigest::Value(v) => ValueDigest::Value(v.clone()),
