@@ -252,7 +252,7 @@ impl<T: NodeReader> Merkle<T> {
         PathIterator::new(&self.nodestore, key)
     }
 
-    pub(crate) fn _key_value_iter<'a>(&'a self) -> MerkleKeyValueStream<'a, T> {
+    pub(crate) fn _key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
         MerkleKeyValueStream::from(&self.nodestore)
     }
 
