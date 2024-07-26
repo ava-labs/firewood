@@ -195,15 +195,11 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
         parent: NodeStore<F, S>,
         storage: Arc<S>,
     ) -> Result<Self, Error> {
-        let header = parent.header.clone();
         let mut deleted: Vec<_> = Default::default();
         let root = if let Some(root_addr) = parent.header.root_address {
             deleted.push(root_addr);
-            if let Some(root_node) = parent.kind.read_in_memory_node(root_addr) {
-                Some((*root_node).clone())
-            } else {
-                Some((*parent.read_node_from_disk(root_addr)?).clone())
-            }
+            let root = parent.read_node(root_addr)?;
+            Some((*root).clone())
         } else {
             None
         };
@@ -213,7 +209,7 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
             parent: parent.kind.into(),
         };
         Ok(NodeStore {
-            header,
+            header: parent.header.clone(),
             kind,
             storage,
         })
@@ -342,7 +338,7 @@ impl<S: ReadableStorage> NodeStore<ImmutableProposal, S> {
     }
 
     // TODO danlaine: Use this code inside the revision management code or delete it.
-    /// The inner implementation of `create_node` that doesn't update the free lists.
+    // The inner implementation of `create_node` that doesn't update the free lists.
     // fn create_node_inner(&mut self, node: Node) -> Result<LinearAddress, Error> {
     //     let (addr, index) = self.allocate_node(&node)?;
 
@@ -361,10 +357,10 @@ impl<S: ReadableStorage> NodeStore<ImmutableProposal, S> {
     // }
 
     // TODO danlaine: use this code in the revision management code or delete it.
-    /// Update a node in-place. This should only be used when the node was allocated using
-    /// allocate_node.
-    /// TODO: We should enforce this by having a new type for allocated nodes, which could
-    /// carry the size information too
+    // Update a node in-place. This should only be used when the node was allocated using
+    // allocate_node.
+    // TODO: We should enforce this by having a new type for allocated nodes, which could
+    // carry the size information too
     // pub fn update_in_place(&mut self, addr: LinearAddress, node: &Node) -> Result<(), Error> {
     //     let new_area: Area<&Node, FreeArea> = Area::Node(node);
     //     let new_area_bytes =
@@ -376,7 +372,7 @@ impl<S: ReadableStorage> NodeStore<ImmutableProposal, S> {
     // }
 
     // TODO danlaine: use this code in the revision management code.
-    /// Deletes the [Node] at the given address.
+    // Deletes the [Node] at the given address.
     // pub fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error> {
     //     debug_assert!(addr.get() % 8 == 0);
 
@@ -402,12 +398,6 @@ impl<S: ReadableStorage> NodeStore<ImmutableProposal, S> {
 
     //     Ok(())
     // }
-
-    /// Write the root [LinearAddress] of the [NodeStore]
-    pub fn set_root(&mut self, addr: Option<LinearAddress>) -> Result<(), Error> {
-        self.header.root_address = addr;
-        Ok(())
-    }
 }
 
 /// An error from doing an update
@@ -552,6 +542,7 @@ impl<S: ReadableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStorePare
 pub struct ImmutableProposal {
     /// Address --> Node for nodes created in this proposal.
     new: HashMap<LinearAddress, Arc<Node>>,
+    /// Nodes that have been deleted in this proposal.
     deleted: Box<[LinearAddress]>,
     /// The parent of this proposal.
     parent: NodeStoreParent,
