@@ -151,9 +151,9 @@ fn get_helper<T: NodeReader>(
                 Node::Branch(branch) => {
                     #[allow(clippy::indexing_slicing)]
                     let child = match &branch.children[child_index as usize] {
-                        Child::None => return Ok(None),
-                        Child::Node(node) => node,
-                        Child::AddressWithHash(addr, _) => &nodestore.read_node(*addr)?,
+                        None => return Ok(None),
+                        Some(Child::Node(node)) => node,
+                        Some(Child::AddressWithHash(addr, _)) => &nodestore.read_node(*addr)?,
                     };
 
                     get_helper(nodestore, child, key)
@@ -373,9 +373,9 @@ impl<T: NodeReader> Merkle<T> {
                 writeln!(writer, "\"]")?;
                 for (childidx, child) in b.children.iter().enumerate() {
                     let (child_addr, child_hash) = match child {
-                        Child::None => continue,
-                        Child::Node(_) => continue, // TODO
-                        Child::AddressWithHash(addr, hash) => (*addr, Some(hash)),
+                        None => continue,
+                        Some(Child::Node(_)) => continue, // TODO
+                        Some(Child::AddressWithHash(addr, hash)) => (*addr, Some(hash)),
                     };
 
                     let inserted = seen.insert(child_addr);
@@ -509,7 +509,7 @@ impl<T: NodeWriter> MutableProposal<T> {
             Node::Branch(ref mut b) => {
                 for (nibble, child) in b.children.iter_mut().enumerate() {
                     // Take child from b.children
-                    let Child::Node(child_node) = std::mem::take(child) else {
+                    let Some(Child::Node(child_node)) = std::mem::take(child) else {
                         // There is no child or we already know its hash.
                         continue;
                     };
@@ -521,7 +521,7 @@ impl<T: NodeWriter> MutableProposal<T> {
                         .extend(b.partial_path.0.iter().copied().chain(once(nibble as u8)));
 
                     let (child_addr, child_hash) = self.hash_helper(child_node, path_prefix);
-                    *child = Child::AddressWithHash(child_addr, child_hash);
+                    *child = Some(Child::AddressWithHash(child_addr, child_hash));
                     path_prefix.0.truncate(original_length);
                 }
             }
@@ -637,7 +637,7 @@ impl<T: NodeWriter> MutableProposal<T> {
 
                 // Shorten the node's partial path since it has a new parent.
                 node.update_partial_path(partial_path);
-                branch.update_child(child_index, Child::Node(node));
+                branch.update_child(child_index, Some(Child::Node(node)));
 
                 Ok(Node::Branch(Box::new(branch)))
             }
@@ -653,18 +653,18 @@ impl<T: NodeWriter> MutableProposal<T> {
                         #[allow(clippy::indexing_slicing)]
                         let child = match std::mem::take(&mut branch.children[child_index as usize])
                         {
-                            Child::None => {
+                            None => {
                                 // There is no child at this index.
                                 // Create a new leaf and put it here.
                                 let new_leaf = Node::Leaf(LeafNode {
                                     value,
                                     partial_path,
                                 });
-                                branch.update_child(child_index, Child::Node(new_leaf));
+                                branch.update_child(child_index, Some(Child::Node(new_leaf)));
                                 return Ok(node);
                             }
-                            Child::Node(child) => child,
-                            Child::AddressWithHash(addr, _) => {
+                            Some(Child::Node(child)) => child,
+                            Some(Child::AddressWithHash(addr, _)) => {
                                 let node = self.nodestore.read_node(addr)?;
                                 self.deleted.push(addr);
                                 (*node).clone()
@@ -672,7 +672,7 @@ impl<T: NodeWriter> MutableProposal<T> {
                         };
 
                         let child = self.insert_helper(child, partial_path.as_ref(), value)?;
-                        branch.update_child(child_index, Child::Node(child));
+                        branch.update_child(child_index, Some(Child::Node(child)));
                         Ok(node)
                     }
                     Node::Leaf(ref mut leaf) => {
@@ -688,7 +688,7 @@ impl<T: NodeWriter> MutableProposal<T> {
                             partial_path,
                         });
 
-                        branch.update_child(child_index, Child::Node(new_leaf));
+                        branch.update_child(child_index, Some(Child::Node(new_leaf)));
 
                         Ok(Node::Branch(Box::new(branch)))
                     }
@@ -709,13 +709,13 @@ impl<T: NodeWriter> MutableProposal<T> {
                 };
 
                 node.update_partial_path(node_partial_path);
-                branch.update_child(node_index, Child::Node(node));
+                branch.update_child(node_index, Some(Child::Node(node)));
 
                 let new_leaf = Node::Leaf(LeafNode {
                     value,
                     partial_path: key_partial_path,
                 });
-                branch.update_child(key_index, Child::Node(new_leaf));
+                branch.update_child(key_index, Some(Child::Node(new_leaf)));
 
                 Ok(Node::Branch(Box::new(branch)))
             }
@@ -769,7 +769,7 @@ impl<T: NodeWriter> MutableProposal<T> {
             (None, None) => {
                 // 1. The node is at `key`
                 match &mut node {
-                    Node::Branch(branch) => {
+                    Node::Branch(ref mut branch) => {
                         let Some(removed_value) = branch.value.take() else {
                             // The branch has no value. Return the node as is.
                             return Ok((Some(node), None));
@@ -778,11 +778,14 @@ impl<T: NodeWriter> MutableProposal<T> {
                         // This branch node has a value.
                         // If it has multiple children, return the node as is.
                         // Otherwise, its only child becomes the root of this subtrie.
-                        let mut children_iter = branch
-                            .children
-                            .iter_mut()
-                            .enumerate()
-                            .filter(|(_, child)| !matches!(child, Child::None));
+                        let mut children_iter =
+                            branch
+                                .children
+                                .iter_mut()
+                                .enumerate()
+                                .filter_map(|(index, child)| {
+                                    child.as_mut().map(|child| (index, child))
+                                });
 
                         let (child_index, child) = children_iter
                             .next()
@@ -794,14 +797,7 @@ impl<T: NodeWriter> MutableProposal<T> {
                         } else {
                             // The branch's only child becomes the root of this subtrie.
                             let mut child = match child {
-                                Child::None => unreachable!(),
-                                Child::Node(child_node) => std::mem::replace(
-                                    child_node,
-                                    Node::Leaf(LeafNode {
-                                        value: Box::from([]),
-                                        partial_path: Path::new(),
-                                    }),
-                                ),
+                                Child::Node(ref mut child_node) => std::mem::take(child_node),
                                 Child::AddressWithHash(addr, _) => {
                                     let node = self.nodestore.read_node(*addr)?;
                                     self.deleted.push(*addr);
@@ -867,11 +863,11 @@ impl<T: NodeWriter> MutableProposal<T> {
                         #[allow(clippy::indexing_slicing)]
                         let child = match std::mem::take(&mut branch.children[child_index as usize])
                         {
-                            Child::None => {
+                            None => {
                                 return Ok((Some(node), None));
                             }
-                            Child::Node(node) => node,
-                            Child::AddressWithHash(addr, _) => {
+                            Some(Child::Node(node)) => node,
+                            Some(Child::AddressWithHash(addr, _)) => {
                                 let node = self.nodestore.read_node(addr)?;
                                 self.deleted.push(addr);
                                 (*node).clone()
@@ -882,16 +878,19 @@ impl<T: NodeWriter> MutableProposal<T> {
                             self.remove_helper(child, child_partial_path.as_ref())?;
 
                         if let Some(child) = child {
-                            branch.update_child(child_index, Child::Node(child));
+                            branch.update_child(child_index, Some(Child::Node(child)));
                         } else {
-                            branch.update_child(child_index, Child::None);
+                            branch.update_child(child_index, None);
                         }
 
-                        let mut children_iter = branch
-                            .children
-                            .iter_mut()
-                            .enumerate()
-                            .filter(|(_, child)| !matches!(child, Child::None));
+                        let mut children_iter =
+                            branch
+                                .children
+                                .iter_mut()
+                                .enumerate()
+                                .filter_map(|(index, child)| {
+                                    child.as_mut().map(|child| (index, child))
+                                });
 
                         let Some((child_index, child)) = children_iter.next() else {
                             // The branch has no children. Turn it into a leaf.
@@ -911,7 +910,6 @@ impl<T: NodeWriter> MutableProposal<T> {
 
                         // The branch has only 1 child. Remove the branch and return the child.
                         let mut child = match child {
-                            Child::None => unreachable!(),
                             Child::Node(child_node) => std::mem::replace(
                                 child_node,
                                 Node::Leaf(LeafNode {
