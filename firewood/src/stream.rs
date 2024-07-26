@@ -60,16 +60,16 @@ enum NodeStreamState {
     },
 }
 
-impl From<Key> for NodeStreamState {
-    fn from(key: Key) -> Self {
-        Self::StartFromKey(key)
-    }
-}
-
 #[derive(Debug)]
 pub struct MerkleNodeStream<'a, T: NodeReader> {
     state: NodeStreamState,
     merkle: &'a T,
+}
+
+impl From<Key> for NodeStreamState {
+    fn from(key: Key) -> Self {
+        Self::StartFromKey(key)
+    }
 }
 
 impl<'a, T: NodeReader> FusedStream for MerkleNodeStream<'a, T> {
@@ -282,6 +282,12 @@ impl<'a, T: NodeReader> MerkleKeyValueStreamState<'a, T> {
     }
 }
 
+#[derive(Debug)]
+pub struct MerkleKeyValueStream<'a, T: NodeReader> {
+    state: MerkleKeyValueStreamState<'a, T>,
+    merkle: &'a T,
+}
+
 impl<'a, T: NodeReader> From<&'a T> for MerkleKeyValueStream<'a, T> {
     fn from(merkle: &'a T) -> Self {
         Self {
@@ -289,12 +295,6 @@ impl<'a, T: NodeReader> From<&'a T> for MerkleKeyValueStream<'a, T> {
             merkle,
         }
     }
-}
-
-#[derive(Debug)]
-pub struct MerkleKeyValueStream<'a, T: NodeReader> {
-    state: MerkleKeyValueStreamState<'a, T>,
-    merkle: &'a T,
 }
 
 impl<'a, T: NodeReader> FusedStream for MerkleKeyValueStream<'a, T> {
@@ -381,24 +381,24 @@ enum PathIteratorState<'a> {
 #[derive(Debug)]
 pub struct PathIterator<'a, 'b, T: NodeReader> {
     state: PathIteratorState<'b>,
-    node_reader: &'a T,
+    merkle: &'a T,
 }
 
 impl<'a, 'b, T: NodeReader> PathIterator<'a, 'b, T> {
-    pub(super) fn new(node_reader: &'a T, key: &'b [u8]) -> Result<Self, MerkleError> {
-        let Some(root_addr) = node_reader.root_address() else {
+    pub(super) fn new(merkle: &'a T, key: &'b [u8]) -> Result<Self, MerkleError> {
+        let Some(root_addr) = merkle.root_address() else {
             return Ok(Self {
                 state: PathIteratorState::Exhausted,
-                node_reader,
+                merkle,
             });
         };
 
         Ok(Self {
-            node_reader,
+            merkle,
             state: PathIteratorState::Iterating {
                 matched_key: vec![],
                 unmatched_key: NibblesIterator::new(key),
-                node: node_reader.read_node(root_addr)?,
+                node: merkle.read_node(root_addr)?,
             },
         })
     }
@@ -409,8 +409,8 @@ impl<'a, 'b, T: NodeReader> Iterator for PathIterator<'a, 'b, T> {
 
     fn next(&mut self) -> Option<Self::Item> {
         // destructuring is necessary here because we need mutable access to `state`
-        // at the same time as immutable access to `node_reader`.
-        let Self { state, node_reader } = &mut *self;
+        // at the same time as immutable access to `merkle`.
+        let Self { state, merkle } = &mut *self;
 
         match state {
             PathIteratorState::Exhausted => None,
@@ -476,7 +476,7 @@ impl<'a, 'b, T: NodeReader> Iterator for PathIterator<'a, 'b, T> {
                                         }))
                                     }
                                     Some(Child::AddressWithHash(child_addr, _)) => {
-                                        let child = match node_reader.read_node(*child_addr) {
+                                        let child = match merkle.read_node(*child_addr) {
                                             Ok(child) => child,
                                             Err(e) => return Some(Err(e)),
                                         };
