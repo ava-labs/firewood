@@ -87,12 +87,10 @@ pub enum ValueDigest<T> {
 }
 
 pub trait Hashable {
-    type ValueDigestType: AsRef<[u8]>;
-
     /// The key of the node where each byte is a nibble.
     fn key(&self) -> impl Iterator<Item = u8> + Clone;
     /// The node's value or hash.
-    fn value_digest(&self) -> Option<ValueDigest<Self::ValueDigestType>>;
+    fn value_digest(&self) -> Option<ValueDigest<&[u8]>>;
     /// Each element is a child's index and hash.
     /// Yields 0 elements if the node is a leaf.
     fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone;
@@ -188,8 +186,6 @@ impl<'a, N: HashableNode> From<NodeAndPrefix<'a, N>> for TrieHash {
 }
 
 impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
-    type ValueDigestType = &'a [u8];
-
     fn key(&self) -> impl Iterator<Item = u8> + Clone {
         self.prefix
             .0
@@ -208,18 +204,14 @@ impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
 }
 
 impl Hashable for ProofNode {
-    type ValueDigestType = Box<[u8]>;
-
     fn key(&self) -> impl Iterator<Item = u8> + Clone {
         self.key.as_ref().iter().copied()
     }
 
-    // TODO danlaine: How can we change the signature to return a reference
-    // to the value instead of cloning it?
-    fn value_digest(&self) -> Option<ValueDigest<Box<[u8]>>> {
+    fn value_digest(&self) -> Option<ValueDigest<&[u8]>> {
         self.value_digest.as_ref().map(|vd| match vd {
-            ValueDigest::Value(v) => ValueDigest::Value(v.clone()),
-            ValueDigest::_Hash(h) => ValueDigest::_Hash(h.clone()),
+            ValueDigest::Value(v) => ValueDigest::Value(v.as_ref()),
+            ValueDigest::_Hash(h) => ValueDigest::_Hash(h.as_ref()),
         })
     }
 

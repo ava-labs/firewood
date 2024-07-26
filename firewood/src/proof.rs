@@ -106,7 +106,7 @@ impl<T: Hashable> Proof<T> {
         match value_digest {
             ValueDigest::Value(got_value) => {
                 // This proof proves that `key` maps to `got_value`.
-                if got_value.as_ref() != expected_value.as_ref() {
+                if got_value != expected_value.as_ref() {
                     // `key` maps to an unexpected value.
                     return Err(ProofError::ValueMismatch);
                 }
@@ -115,7 +115,7 @@ impl<T: Hashable> Proof<T> {
                 // This proof proves that `key` maps to a value
                 // whose hash is `got_hash`.
                 let value_hash = Sha256::digest(expected_value.as_ref());
-                if got_hash.as_ref() != value_hash.as_slice() {
+                if got_hash != value_hash.as_slice() {
                     // `key` maps to an unexpected value.
                     return Err(ProofError::ValueMismatch);
                 }
@@ -132,7 +132,7 @@ impl<T: Hashable> Proof<T> {
         &self,
         key: K,
         root_hash: &TrieHash,
-    ) -> Result<Option<ValueDigest<T::ValueDigestType>>, ProofError> {
+    ) -> Result<Option<ValueDigest<&[u8]>>, ProofError> {
         let key: Box<[u8]> = NibblesIterator::new(key.as_ref()).collect();
 
         let Some(last_node) = self.0.last() else {
