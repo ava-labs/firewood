@@ -194,10 +194,9 @@ impl<T: Hashable> Proof<T> {
 /// Returns an error if `b` is not a prefix of `c`.
 fn next_nibble<I, J>(b: I, c: J) -> Result<Option<u8>, ProofError>
 where
-    I: IntoIterator<Item = u8>,
+    I: Iterator<Item = u8>,
     J: AsRef<[u8]>,
 {
-    let b = b.into_iter();
     let mut c = c.as_ref().iter();
 
     // Check if b is a prefix of c
@@ -215,10 +214,9 @@ where
 /// Returns true iff `b` is a prefix of `c`.
 fn is_prefix<I, J>(b: I, c: J) -> bool
 where
-    I: IntoIterator<Item = u8>,
-    J: IntoIterator<Item = u8>,
+    I: Iterator<Item = u8>,
+    J: Iterator<Item = u8>,
 {
-    let b = b.into_iter();
     let mut c = c.into_iter();
     for b_item in b {
         let Some(c_item) = c.next() else {
