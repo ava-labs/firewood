@@ -142,15 +142,6 @@ impl<T: TrieReader> Merkle<T> {
         self.nodestore.read_node(addr).map_err(Into::into)
     }
 
-    pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
-        let Some(root) = self.root() else {
-            return Ok(None);
-        };
-
-        let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
-        get_helper(&self.nodestore, &root, &key)
-    }
-
     /// Returns a proof that the given key has a certain value,
     /// or that the key isn't in the trie.
     pub fn prove(&self, key: &[u8]) -> Result<Proof, MerkleError> {
@@ -311,6 +302,15 @@ impl<T: TrieReader> Merkle<T> {
             middle,
             last_key_proof,
         }))
+    }
+
+    pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
+        let Some(root) = self.root() else {
+            return Ok(None);
+        };
+
+        let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
+        get_helper(&self.nodestore, &root, &key)
     }
 }
 
