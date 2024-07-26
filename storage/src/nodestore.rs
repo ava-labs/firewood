@@ -658,28 +658,22 @@ impl<S: ReadableStorage> NodeStore<ImmutableProposal, S> {
         // Allocate addresses and calculate hashes for all new nodes
         match node {
             Node::Branch(ref mut b) => {
-                for (nibble, child, child_node) in
-                    b.children
-                        .iter_mut()
-                        .enumerate()
-                        .filter_map(|(index, child)| match child {
-                            Child::None => None,
-                            Child::AddressWithHash(_, _) => None,
-                            Child::Node(node) => {
-                                let node = std::mem::take(node);
-                                Some((index as u8, child, node))
-                            }
-                        })
-                {
+                for (nibble, child) in b.children.iter_mut().enumerate() {
+                    // Take child from b.children
+                    let Some(Child::Node(child_node)) = std::mem::take(child) else {
+                        // There is no child or we already know its hash.
+                        continue;
+                    };
+
                     // Hash this child and update
                     // we extend and truncate path_prefix to reduce memory allocations
                     let original_length = path_prefix.len();
                     path_prefix
                         .0
-                        .extend(b.partial_path.0.iter().copied().chain(once(nibble)));
+                        .extend(b.partial_path.0.iter().copied().chain(once(nibble as u8)));
 
                     let (child_addr, child_hash) = self.hash_helper(child_node, path_prefix);
-                    *child = Child::AddressWithHash(child_addr, child_hash);
+                    *child = Some(Child::AddressWithHash(child_addr, child_hash));
                     path_prefix.0.truncate(original_length);
                 }
             }
