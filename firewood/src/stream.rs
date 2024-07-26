@@ -60,8 +60,8 @@ enum NodeStreamState {
     },
 }
 
-impl NodeStreamState {
-    fn new(key: Key) -> Self {
+impl From<Key> for NodeStreamState {
+    fn from(key: Key) -> Self {
         Self::StartFromKey(key)
     }
 }
@@ -85,7 +85,7 @@ impl<'a, T: NodeReader> MerkleNodeStream<'a, T> {
     /// with keys greater than or equal to `key`.
     pub(super) fn new(merkle: &'a T, key: Key) -> Self {
         Self {
-            state: NodeStreamState::new(key),
+            state: NodeStreamState::from(key),
             merkle,
         }
     }
