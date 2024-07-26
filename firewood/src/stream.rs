@@ -138,7 +138,6 @@ impl<'a, T: NodeReader> Stream for MerkleNodeStream<'a, T> {
                             };
 
                             let child = match child {
-                                Child::None => unreachable!("TODO make this unreachable"),
                                 Child::AddressWithHash(addr, _) => {
                                     let node = merkle.read_node(addr)?;
                                     (*node).clone()
@@ -256,12 +255,12 @@ fn get_iterator_intial_state<T: NodeReader>(
                     #[allow(clippy::indexing_slicing)]
                     let child = &branch.children[next_unmatched_key_nibble as usize];
                     node = match child {
-                        Child::None => return Ok(NodeStreamState::Iterating { iter_stack }),
-                        Child::AddressWithHash(addr, _) => {
+                        None => return Ok(NodeStreamState::Iterating { iter_stack }),
+                        Some(Child::AddressWithHash(addr, _)) => {
                             let node = merkle.read_node(*addr)?;
                             (*node).clone()
                         }
-                        Child::Node(node) => node.clone(), // TODO can we avoid cloning this?
+                        Some(Child::Node(node)) => node.clone(), // TODO can we avoid cloning this?
                     };
 
                     matched_key_nibbles.push(next_unmatched_key_nibble);
@@ -474,7 +473,7 @@ impl<'a, 'b, T: NodeReader> Iterator for PathIterator<'a, 'b, T> {
                                 #[allow(clippy::indexing_slicing)]
                                 let child = &branch.children[next_unmatched_key_nibble as usize];
                                 match child {
-                                    Child::None => {
+                                    None => {
                                         // There's no child at the index of the next nibble in the key.
                                         // There's no node at `key` in this trie so we're done.
                                         let node = node.clone();
@@ -485,7 +484,7 @@ impl<'a, 'b, T: NodeReader> Iterator for PathIterator<'a, 'b, T> {
                                             next_nibble: None,
                                         }))
                                     }
-                                    Child::AddressWithHash(child_addr, _) => {
+                                    Some(Child::AddressWithHash(child_addr, _)) => {
                                         let child = match merkle.read_node(*child_addr) {
                                             Ok(child) => child,
                                             Err(e) => return Some(Err(e)),
@@ -503,7 +502,7 @@ impl<'a, 'b, T: NodeReader> Iterator for PathIterator<'a, 'b, T> {
                                             next_nibble: Some(next_unmatched_key_nibble),
                                         }))
                                     }
-                                    Child::Node(child) => {
+                                    Some(Child::Node(child)) => {
                                         let node_key = matched_key.clone().into_boxed_slice();
                                         matched_key.push(next_unmatched_key_nibble);
 
@@ -566,10 +565,7 @@ fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (u8,
         .clone()
         .into_iter()
         .enumerate()
-        .filter_map(|(pos, child)| match child {
-            storage::Child::None => None,
-            _ => Some((pos as u8, child)),
-        })
+        .filter_map(|(pos, child)| child.map(|child| (pos as u8, child)))
 }
 
 fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
