@@ -797,13 +797,7 @@ impl<T: NodeWriter> MutableProposal<T> {
                         } else {
                             // The branch's only child becomes the root of this subtrie.
                             let mut child = match child {
-                                Child::Node(ref mut child_node) => std::mem::replace(
-                                    child_node,
-                                    Node::Leaf(LeafNode {
-                                        value: Box::from([]),
-                                        partial_path: Path::new(),
-                                    }),
-                                ),
+                                Child::Node(ref mut child_node) => std::mem::take(child_node),
                                 Child::AddressWithHash(addr, _) => {
                                     let node = self.nodestore.read_node(*addr)?;
                                     self.deleted.push(*addr);
