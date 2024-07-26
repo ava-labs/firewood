@@ -270,16 +270,16 @@ enum MerkleKeyValueStreamState<'a, T: NodeReader> {
     Initialized { node_iter: MerkleNodeStream<'a, T> },
 }
 
+impl<'a, T: NodeReader> From<Key> for MerkleKeyValueStreamState<'a, T> {
+    fn from(key: Key) -> Self {
+        Self::_Uninitialized(key)
+    }
+}
+
 impl<'a, T: NodeReader> MerkleKeyValueStreamState<'a, T> {
     /// Returns a new iterator that will iterate over all the key-value pairs in `merkle`.
     fn _new() -> Self {
         Self::_Uninitialized(Box::new([]))
-    }
-
-    /// Returns a new iterator that will iterate over all the key-value pairs in `merkle`
-    /// with keys greater than or equal to `key`.
-    fn _with_key(key: Key) -> Self {
-        Self::_Uninitialized(key)
     }
 }
 
@@ -307,7 +307,7 @@ impl<'a, T: NodeReader> FusedStream for MerkleKeyValueStream<'a, T> {
 impl<'a, T: NodeReader> MerkleKeyValueStream<'a, T> {
     pub(super) fn _from_key(merkle: &'a T, key: Key) -> Self {
         Self {
-            state: MerkleKeyValueStreamState::_with_key(key),
+            state: MerkleKeyValueStreamState::from(key),
             merkle,
         }
     }
