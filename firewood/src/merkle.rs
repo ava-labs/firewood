@@ -390,7 +390,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     pub fn insert(&mut self, key: &[u8], value: Box<[u8]>) -> Result<(), MerkleError> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
-        let root = self.nodestore.kind.mut_root();
+        let root = self.nodestore.mut_root();
 
         let Some(root_node) = std::mem::take(root) else {
             // The trie is empty. Create a new leaf node with `value` and set
@@ -404,7 +404,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         };
 
         let root_node = self.insert_helper(root_node, key.as_ref(), value)?;
-        *self.nodestore.kind.mut_root() = root_node.into();
+        *self.nodestore.mut_root() = root_node.into();
         Ok(())
     }
 
@@ -484,7 +484,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                             Child::Node(child) => child,
                             Child::AddressWithHash(addr, _) => {
                                 let node = self.nodestore.read_node(addr)?;
-                                self.nodestore.kind.delete(addr);
+                                self.nodestore.delete_node(addr);
                                 (*node).clone()
                             }
                         };
@@ -546,14 +546,14 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     pub fn remove(&mut self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
-        let root = self.nodestore.kind.mut_root();
+        let root = self.nodestore.mut_root();
         let Some(root_node) = std::mem::take(root) else {
             // The trie is empty. There is nothing to remove.
             return Ok(None);
         };
 
         let (root_node, removed_value) = self.remove_helper(root_node, &key)?;
-        *self.nodestore.kind.mut_root() = root_node;
+        *self.nodestore.mut_root() = root_node;
         Ok(removed_value)
     }
 
@@ -623,7 +623,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                 ),
                                 Child::AddressWithHash(addr, _) => {
                                     let node = self.nodestore.read_node(*addr)?;
-                                    self.nodestore.kind.delete(*addr);
+                                    self.nodestore.delete_node(*addr);
                                     (*node).clone()
                                 }
                             };
@@ -692,7 +692,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                             Child::Node(node) => node,
                             Child::AddressWithHash(addr, _) => {
                                 let node = self.nodestore.read_node(addr)?;
-                                self.nodestore.kind.delete(addr);
+                                self.nodestore.delete_node(addr);
                                 (*node).clone()
                             }
                         };
@@ -740,7 +740,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                             ),
                             Child::AddressWithHash(addr, _) => {
                                 let node = self.nodestore.read_node(*addr)?;
-                                self.nodestore.kind.delete(*addr);
+                                self.nodestore.delete_node(*addr);
                                 (*node).clone()
                             }
                         };

@@ -218,6 +218,16 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
             storage,
         })
     }
+
+    /// Marks the node at `addr` as deleted in this proposal.
+    pub fn delete_node(&mut self, addr: LinearAddress) {
+        self.kind.deleted.push(addr);
+    }
+
+    /// Returns the root of this proposal.
+    pub fn mut_root(&mut self) -> &mut Option<Node> {
+        &mut self.kind.root
+    }
 }
 
 impl<S: WritableStorage> NodeStore<ImmutableProposal, S> {
@@ -591,7 +601,7 @@ pub struct NodeStore<T: ReadInMemoryNode, S: ReadableStorage> {
     // Metadata for this revision.
     header: NodeStoreHeader,
     /// This is one of [Committed], [ImmutableProposal], or [MutableProposal].
-    pub kind: T, // TODO add mut getter and make not pub
+    kind: T,
     // Persisted storage to read nodes from.
     storage: Arc<S>,
 }
@@ -604,18 +614,6 @@ pub struct MutableProposal {
     /// Nodes that have been deleted in this proposal.
     deleted: Vec<LinearAddress>,
     parent: NodeStoreParent,
-}
-
-impl MutableProposal {
-    /// Returns a mutable reference to the root of the trie in this proposal.
-    pub fn mut_root(&mut self) -> &mut Option<Node> {
-        &mut self.root
-    }
-
-    /// Marks the node at `addr` as deleted in this proposal.
-    pub fn delete(&mut self, addr: LinearAddress) {
-        self.deleted.push(addr);
-    }
 }
 
 impl ReadInMemoryNode for NodeStoreParent {
