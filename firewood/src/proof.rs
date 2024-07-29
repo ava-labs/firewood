@@ -154,13 +154,18 @@ impl Proof {
             }
 
             if let Some(next_node) = iter.peek() {
-                // Assert that every node's key is a prefix of the proven key,
-                // with the exception of the last node, which is a suffix of the
-                // proven key in exclusion proofs.
-                let next_nibble = next_nibble(&node.key, &key)?;
-
-                let Some(next_nibble) = next_nibble else {
+                // Assert that every node's key is a prefix of `key`, except for the last node,
+                // whose key can be equal to or a suffix of `key` in an exclusion proof.
+                if next_nibble(node.key.iter().copied(), key.iter().copied()).is_none() {
                     return Err(ProofError::ShouldBePrefixOfProvenKey);
+                }
+
+                // Assert that every node's key is a prefix of the next node's key.
+                let next_node_index =
+                    next_nibble(node.key.iter().copied(), next_node.key.iter().copied());
+
+                let Some(next_nibble) = next_node_index else {
+                    return Err(ProofError::ShouldBePrefixOfNextKey);
                 };
 
                 expected_hash = node
@@ -169,11 +174,6 @@ impl Proof {
                     .ok_or(ProofError::ChildIndexOutOfBounds)?
                     .as_ref()
                     .ok_or(ProofError::NodeNotInTrie)?;
-
-                // Assert that each node's key is a prefix of the next node's key.
-                if !is_prefix(&node.key, &next_node.key) {
-                    return Err(ProofError::ShouldBePrefixOfNextKey);
-                }
             }
         }
 
@@ -187,33 +187,22 @@ impl Proof {
 }
 
 /// Returns the next nibble in `c` after `b`.
-/// Returns an error if `b` is not a prefix of `c`.
-fn next_nibble(b: impl AsRef<[u8]>, c: impl AsRef<[u8]>) -> Result<Option<u8>, ProofError> {
-    let b = b.as_ref();
-    let mut c = c.as_ref().iter();
+/// Returns None if `b` is not a strict prefix of `c`.
+fn next_nibble<B, C>(b: B, c: C) -> Option<u8>
+where
+    B: IntoIterator<Item = u8>,
+    C: IntoIterator<Item = u8>,
+{
+    let b = b.into_iter();
+    let mut c = c.into_iter();
 
     // Check if b is a prefix of c
     for b_item in b {
         match c.next() {
             Some(c_item) if b_item == c_item => continue,
-            _ => return Err(ProofError::ShouldBePrefixOfNextKey),
+            _ => return None,
         }
     }
 
-    // If a is a prefix, return the first element in c after b
-    Ok(c.next().copied())
-}
-
-/// Returns true iff `b` is a prefix of `c`.
-fn is_prefix(b: impl AsRef<[u8]>, c: impl AsRef<[u8]>) -> bool {
-    let mut c = c.as_ref().iter();
-    for b_item in b.as_ref() {
-        let Some(c_item) = c.next() else {
-            return false;
-        };
-        if b_item != c_item {
-            return false;
-        }
-    }
-    true
+    c.next()
 }
