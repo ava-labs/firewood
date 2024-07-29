@@ -1,10 +1,11 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::hashednode::{Hashable, Preimage, ValueDigest};
 use crate::merkle::MerkleError;
 use sha2::{Digest, Sha256};
-use storage::{BranchNode, NibblesIterator, PathIterItem, TrieHash};
+use storage::{
+    BranchNode, Hashable, NibblesIterator, PathIterItem, Preimage, TrieHash, ValueDigest,
+};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -46,6 +47,26 @@ pub struct ProofNode {
     pub value_digest: Option<ValueDigest<Box<[u8]>>>,
     /// The hash of each child, or None if the child does not exist.
     pub child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN],
+}
+
+impl Hashable for ProofNode {
+    fn key(&self) -> impl Iterator<Item = u8> + Clone {
+        self.key.as_ref().iter().copied()
+    }
+
+    fn value_digest(&self) -> Option<ValueDigest<&[u8]>> {
+        self.value_digest.as_ref().map(|vd| match vd {
+            ValueDigest::Value(v) => ValueDigest::Value(v.as_ref()),
+            ValueDigest::_Hash(h) => ValueDigest::_Hash(h.as_ref()),
+        })
+    }
+
+    fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
+        self.child_hashes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, hash)| hash.as_ref().map(|h| (i, h)))
+    }
 }
 
 impl From<PathIterItem> for ProofNode {

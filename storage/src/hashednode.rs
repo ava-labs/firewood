@@ -4,16 +4,15 @@
 use sha2::{Digest, Sha256};
 use std::iter::{self};
 
-use storage::{Child, TrieHash};
-use storage::{Node, Path};
+use crate::{BranchNode, Child, LeafNode, TrieHash};
+use crate::{Node, Path};
 
 use integer_encoding::VarInt;
-
-use crate::proof::ProofNode;
 
 const MAX_VARINT_SIZE: usize = 10;
 const BITS_PER_NIBBLE: u64 = 4;
 
+/// Returns the hash of `node`, which is at the given `path_prefix`.
 pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
     match node {
         Node::Branch(node) => {
@@ -60,7 +59,7 @@ pub fn hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
     buf.into_boxed_slice()
 }
 
-pub(super) trait HasUpdate {
+pub trait HasUpdate {
     fn update<T: AsRef<[u8]>>(&mut self, data: T);
 }
 
@@ -79,6 +78,7 @@ impl HasUpdate for Vec<u8> {
 #[derive(Clone, Debug)]
 /// A ValueDigest is either a node's value or the hash of its value.
 pub enum ValueDigest<T> {
+    /// The node's value.
     Value(T),
     /// TODO this variant will be used when we deserialize a proof node
     /// from a remote Firewood instance. The serialized proof node they
@@ -86,6 +86,7 @@ pub enum ValueDigest<T> {
     _Hash(T),
 }
 
+/// A node in the trie that can be hashed.
 pub trait Hashable {
     /// The key of the node where each byte is a nibble.
     fn key(&self) -> impl Iterator<Item = u8> + Clone;
@@ -96,7 +97,8 @@ pub trait Hashable {
     fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone;
 }
 
-pub(super) trait Preimage {
+/// A preimage of a hash.
+pub trait Preimage {
     /// Returns the hash of this preimage.
     fn to_hash(&self) -> TrieHash;
     /// Write this hash preimage to `buf`.
@@ -146,7 +148,7 @@ trait HashableNode {
     fn children_iter(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone;
 }
 
-impl HashableNode for storage::BranchNode {
+impl HashableNode for BranchNode {
     fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
         self.partial_path.0.iter().copied()
     }
@@ -160,7 +162,7 @@ impl HashableNode for storage::BranchNode {
     }
 }
 
-impl HashableNode for storage::LeafNode {
+impl HashableNode for LeafNode {
     fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
         self.partial_path.0.iter().copied()
     }
@@ -200,26 +202,6 @@ impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
 
     fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
         self.node.children_iter()
-    }
-}
-
-impl Hashable for ProofNode {
-    fn key(&self) -> impl Iterator<Item = u8> + Clone {
-        self.key.as_ref().iter().copied()
-    }
-
-    fn value_digest(&self) -> Option<ValueDigest<&[u8]>> {
-        self.value_digest.as_ref().map(|vd| match vd {
-            ValueDigest::Value(v) => ValueDigest::Value(v.as_ref()),
-            ValueDigest::_Hash(h) => ValueDigest::_Hash(h.as_ref()),
-        })
-    }
-
-    fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
-        self.child_hashes
-            .iter()
-            .enumerate()
-            .filter_map(|(i, hash)| hash.as_ref().map(|h| (i, h)))
     }
 }
 
