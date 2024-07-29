@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::proof::Proof;
+use crate::proof::{Proof, ProofNode};
 
 use super::{
     api::{Batch, Db, DbView, Error, HashKey, KeyType, RangeProof, ValueType},
@@ -67,7 +67,10 @@ impl DbView for HistoricalImpl {
         Ok(None)
     }
 
-    async fn single_key_proof<K: KeyType>(&self, _key: K) -> Result<Option<Proof>, Error> {
+    async fn single_key_proof<K: KeyType>(
+        &self,
+        _key: K,
+    ) -> Result<Option<Proof<ProofNode>>, Error> {
         Ok(None)
     }
 
@@ -76,7 +79,7 @@ impl DbView for HistoricalImpl {
         _first_key: Option<K>,
         _last_key: Option<K>,
         _limit: Option<usize>,
-    ) -> Result<Option<RangeProof<Vec<u8>, Vec<u8>>>, Error> {
+    ) -> Result<Option<RangeProof<Vec<u8>, Vec<u8>, ProofNode>>, Error> {
         Ok(None)
     }
 

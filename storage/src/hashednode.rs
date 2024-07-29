@@ -86,15 +86,12 @@ pub enum ValueDigest<T> {
     _Hash(T),
 }
 
-/// Can be hashed to produce a [TrieHash].
+/// A node in the trie that can be hashed.
 pub trait Hashable {
-    /// The type of the value digest.
-    type ValueDigestType: AsRef<[u8]>;
-
     /// The key of the node where each byte is a nibble.
     fn key(&self) -> impl Iterator<Item = u8> + Clone;
     /// The node's value or hash.
-    fn value_digest(&self) -> Option<ValueDigest<Self::ValueDigestType>>;
+    fn value_digest(&self) -> Option<ValueDigest<&[u8]>>;
     /// Each element is a child's index and hash.
     /// Yields 0 elements if the node is a leaf.
     fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone;
@@ -191,8 +188,6 @@ impl<'a, N: HashableNode> From<NodeAndPrefix<'a, N>> for TrieHash {
 }
 
 impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
-    type ValueDigestType = &'a [u8];
-
     fn key(&self) -> impl Iterator<Item = u8> + Clone {
         self.prefix
             .0

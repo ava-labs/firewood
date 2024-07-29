@@ -67,21 +67,21 @@ impl Error for DbError {}
 //         todo!()
 //     }
 
-//     async fn single_key_proof<K: api::KeyType>(
-//         &self,
-//         _key: K,
-//     ) -> Result<Option<Proof>, api::Error> {
-//         todo!()
-//     }
+// async fn single_key_proof<K: api::KeyType>(
+//     &self,
+//     _key: K,
+// ) -> Result<Option<Proof<ProofNode>>, api::Error> {
+//     todo!()
+// }
 
-//     async fn range_proof<K: api::KeyType, V>(
-//         &self,
-//         _first_key: Option<K>,
-//         _last_key: Option<K>,
-//         _limit: Option<usize>,
-//     ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>>>, api::Error> {
-//         todo!()
-//     }
+// async fn range_proof<K: api::KeyType, V>(
+//     &self,
+//     _first_key: Option<K>,
+//     _last_key: Option<K>,
+//     _limit: Option<usize>,
+// ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>, ProofNode>>, api::Error> {
+//     todo!()
+// }
 
 //     fn iter_option<K: KeyType>(
 //         &self,
@@ -115,14 +115,14 @@ impl Error for DbError {}
 //         todo!()
 //     }
 
-//     pub fn prove(&self, _key: &[u8]) -> Result<Proof, MerkleError> {
+//     pub fn prove(&self, _key: &[u8]) -> Result<Proof<ProofNode>, MerkleError> {
 //         todo!()
 //     }
 
 //     /// Verifies a range proof is valid for a set of keys.
 //     pub fn verify_range_proof<V: AsRef<[u8]>>(
 //         &self,
-//         _proof: Proof,
+//         _proof: &Proof<impl Hashable>,
 //         _first_key: &[u8],
 //         _last_key: &[u8],
 //         _keys: Vec<&[u8]>,
@@ -168,24 +168,24 @@ impl Error for DbError {}
 //         todo!()
 //     }
 
-// async fn single_key_proof<K>(&self, _key: K) -> Result<Option<Proof>, api::Error>
+// async fn single_key_proof<K>(&self, _key: K) -> Result<Option<Proof<ProofNode>>, api::Error>
 // where
 //     K: api::KeyType,
 // {
 //     todo!()
 // }
 
-//     async fn range_proof<K, V>(
-//         &self,
-//         _first_key: Option<K>,
-//         _last_key: Option<K>,
-//         _limit: Option<usize>,
-//     ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>>>, api::Error>
-//     where
-//         K: api::KeyType,
-//     {
-//         todo!();
-//     }
+// async fn range_proof<K, V>(
+//     &self,
+//     _first_key: Option<K>,
+//     _last_key: Option<K>,
+//     _limit: Option<usize>,
+// ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>, ProofNode>>, api::Error>
+// where
+//     K: api::KeyType,
+// {
+//     todo!();
+// }
 
 //     fn iter_option<K: KeyType>(
 //         &self,

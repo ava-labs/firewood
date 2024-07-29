@@ -12,7 +12,7 @@ use std::io::Write;
 use std::iter::once;
 use std::sync::Arc;
 use storage::{
-    BranchNode, Child, HashedNodeReader, ImmutableProposal, LeafNode, LinearAddress,
+    BranchNode, Child, Hashable, HashedNodeReader, ImmutableProposal, LeafNode, LinearAddress,
     MutableProposal, NibblesIterator, Node, NodeReader, NodeStore, Path, ReadableStorage, TrieHash,
     TrieReader, ValueDigest,
 };
@@ -138,13 +138,17 @@ impl<T: TrieReader> Merkle<T> {
         self.nodestore.root_node()
     }
 
+    pub const fn nodestore(&self) -> &T {
+        &self.nodestore
+    }
+
     pub(crate) fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, MerkleError> {
         self.nodestore.read_node(addr).map_err(Into::into)
     }
 
     /// Returns a proof that the given key has a certain value,
     /// or that the key isn't in the trie.
-    pub fn prove(&self, key: &[u8]) -> Result<Proof, MerkleError> {
+    pub fn prove(&self, key: &[u8]) -> Result<Proof<ProofNode>, MerkleError> {
         let Some(root) = self.root() else {
             return Err(MerkleError::Empty);
         };
@@ -184,7 +188,7 @@ impl<T: TrieReader> Merkle<T> {
 
     pub fn verify_range_proof<V: AsRef<[u8]>>(
         &self,
-        _proof: &Proof,
+        _proof: &Proof<impl Hashable>,
         _first_key: &[u8],
         _last_key: &[u8],
         _keys: Vec<&[u8]>,
@@ -193,18 +197,17 @@ impl<T: TrieReader> Merkle<T> {
         todo!()
     }
 
-    // TODO danlaine: can we use the LinearAddress of the `root` instead?
     pub fn path_iter<'a>(&self, key: &'a [u8]) -> Result<PathIterator<'_, 'a, T>, MerkleError> {
-        PathIterator::new(self, key)
+        PathIterator::new(&self.nodestore, key)
     }
 
     pub(crate) fn _key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
-        MerkleKeyValueStream::_new(self)
+        MerkleKeyValueStream::from(&self.nodestore)
     }
 
     pub(crate) fn _key_value_iter_from_key(&self, key: Key) -> MerkleKeyValueStream<'_, T> {
         // TODO danlaine: change key to &[u8]
-        MerkleKeyValueStream::_from_key(self, key)
+        MerkleKeyValueStream::_from_key(&self.nodestore, key)
     }
 
     pub(super) async fn _range_proof(
@@ -212,7 +215,7 @@ impl<T: TrieReader> Merkle<T> {
         first_key: Option<&[u8]>,
         last_key: Option<&[u8]>,
         limit: Option<usize>,
-    ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>>>, api::Error> {
+    ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>, ProofNode>>, api::Error> {
         if let (Some(k1), Some(k2)) = (&first_key, &last_key) {
             if k1 > k2 {
                 return Err(api::Error::InvalidRange {
