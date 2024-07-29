@@ -182,14 +182,6 @@ impl<T: TrieReader> Merkle<T> {
         Ok(Proof(proof.into_boxed_slice()))
     }
 
-    pub fn verify_proof(
-        &self,
-        _key: &[u8],
-        _proof: &Proof,
-    ) -> Result<Option<Vec<u8>>, MerkleError> {
-        todo!()
-    }
-
     pub fn verify_range_proof<V: AsRef<[u8]>>(
         &self,
         _proof: &Proof,
