@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::hashednode::{Preimage, ValueDigest};
+use crate::hashednode::{Hashable, Preimage, ValueDigest};
 use crate::merkle::MerkleError;
 use sha2::{Digest, Sha256};
 use storage::{BranchNode, NibblesIterator, PathIterItem, TrieHash};
@@ -79,9 +79,9 @@ impl From<&ProofNode> for TrieHash {
 
 /// A proof that a given key-value pair either exists or does not exist in a trie.
 #[derive(Clone, Debug)]
-pub struct Proof(pub Box<[ProofNode]>);
+pub struct Proof<T: Hashable>(pub Box<[T]>);
 
-impl Proof {
+impl<T: Hashable> Proof<T> {
     pub fn verify<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         &self,
         key: K,
@@ -106,7 +106,7 @@ impl Proof {
         match value_digest {
             ValueDigest::Value(got_value) => {
                 // This proof proves that `key` maps to `got_value`.
-                if got_value.as_ref() != expected_value.as_ref() {
+                if got_value != expected_value.as_ref() {
                     // `key` maps to an unexpected value.
                     return Err(ProofError::ValueMismatch);
                 }
@@ -115,7 +115,7 @@ impl Proof {
                 // This proof proves that `key` maps to a value
                 // whose hash is `got_hash`.
                 let value_hash = Sha256::digest(expected_value.as_ref());
-                if got_hash.as_ref() != value_hash.as_slice() {
+                if got_hash != value_hash.as_slice() {
                     // `key` maps to an unexpected value.
                     return Err(ProofError::ValueMismatch);
                 }
@@ -132,8 +132,8 @@ impl Proof {
         &self,
         key: K,
         root_hash: &TrieHash,
-    ) -> Result<Option<&ValueDigest<Box<[u8]>>>, ProofError> {
-        let key: Vec<u8> = NibblesIterator::new(key.as_ref()).collect();
+    ) -> Result<Option<ValueDigest<&[u8]>>, ProofError> {
+        let key: Box<[u8]> = NibblesIterator::new(key.as_ref()).collect();
 
         let Some(last_node) = self.0.last() else {
             return Err(ProofError::Empty);
@@ -149,36 +149,39 @@ impl Proof {
 
             // Assert that only nodes whose keys are an even number of nibbles
             // have a `value_digest`.
-            if node.key.len() % 2 != 0 && node.value_digest.is_some() {
+            if node.key().count() % 2 != 0 && node.value_digest().is_some() {
                 return Err(ProofError::ValueAtOddNibbleLength);
             }
 
             if let Some(next_node) = iter.peek() {
                 // Assert that every node's key is a prefix of `key`, except for the last node,
                 // whose key can be equal to or a suffix of `key` in an exclusion proof.
-                if next_nibble(node.key.iter().copied(), key.iter().copied()).is_none() {
+                if next_nibble(node.key(), key.iter().copied()).is_none() {
                     return Err(ProofError::ShouldBePrefixOfProvenKey);
                 }
 
                 // Assert that every node's key is a prefix of the next node's key.
-                let next_node_index =
-                    next_nibble(node.key.iter().copied(), next_node.key.iter().copied());
+                let next_node_index = next_nibble(node.key(), next_node.key());
 
                 let Some(next_nibble) = next_node_index else {
                     return Err(ProofError::ShouldBePrefixOfNextKey);
                 };
 
                 expected_hash = node
-                    .child_hashes
-                    .get(next_nibble as usize)
-                    .ok_or(ProofError::ChildIndexOutOfBounds)?
-                    .as_ref()
+                    .children()
+                    .find_map(|(i, hash)| {
+                        if i == next_nibble as usize {
+                            Some(hash)
+                        } else {
+                            None
+                        }
+                    })
                     .ok_or(ProofError::NodeNotInTrie)?;
             }
         }
 
-        if last_node.key.len() == key.len() {
-            return Ok(last_node.value_digest.as_ref());
+        if last_node.key().count() == key.len() {
+            return Ok(last_node.value_digest());
         }
 
         // This is an exclusion proof.

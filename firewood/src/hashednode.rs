@@ -86,13 +86,11 @@ pub enum ValueDigest<T> {
     _Hash(T),
 }
 
-pub(crate) trait Hashable {
-    type ValueDigestType: AsRef<[u8]>;
-
+pub trait Hashable {
     /// The key of the node where each byte is a nibble.
     fn key(&self) -> impl Iterator<Item = u8> + Clone;
     /// The node's value or hash.
-    fn value_digest(&self) -> Option<ValueDigest<Self::ValueDigestType>>;
+    fn value_digest(&self) -> Option<ValueDigest<&[u8]>>;
     /// Each element is a child's index and hash.
     /// Yields 0 elements if the node is a leaf.
     fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone;
@@ -188,8 +186,6 @@ impl<'a, N: HashableNode> From<NodeAndPrefix<'a, N>> for TrieHash {
 }
 
 impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
-    type ValueDigestType = &'a [u8];
-
     fn key(&self) -> impl Iterator<Item = u8> + Clone {
         self.prefix
             .0
@@ -207,14 +203,12 @@ impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
     }
 }
 
-impl<'a> Hashable for &'a ProofNode {
-    type ValueDigestType = &'a [u8];
-
+impl Hashable for ProofNode {
     fn key(&self) -> impl Iterator<Item = u8> + Clone {
         self.key.as_ref().iter().copied()
     }
 
-    fn value_digest(&self) -> Option<ValueDigest<&'a [u8]>> {
+    fn value_digest(&self) -> Option<ValueDigest<&[u8]>> {
         self.value_digest.as_ref().map(|vd| match vd {
             ValueDigest::Value(v) => ValueDigest::Value(v.as_ref()),
             ValueDigest::_Hash(h) => ValueDigest::_Hash(h.as_ref()),

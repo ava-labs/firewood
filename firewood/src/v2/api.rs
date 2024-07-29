@@ -1,7 +1,9 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use crate::hashednode::Hashable;
 use crate::manager::RevisionManagerError;
+use crate::proof::ProofNode;
 use crate::{merkle::MerkleError, proof::Proof};
 use async_trait::async_trait;
 use futures::Stream;
@@ -103,9 +105,9 @@ impl From<RevisionManagerError> for Error {
 /// A range proof, consisting of a proof of the first key and the last key,
 /// and a vector of all key/value pairs
 #[derive(Debug)]
-pub struct RangeProof<K, V> {
-    pub first_key_proof: Proof,
-    pub last_key_proof: Proof,
+pub struct RangeProof<K, V, H: Hashable> {
+    pub first_key_proof: Proof<H>,
+    pub last_key_proof: Proof<H>,
     pub middle: Vec<(K, V)>,
 }
 
@@ -166,7 +168,8 @@ pub trait DbView {
     async fn val<K: KeyType>(&self, key: K) -> Result<Option<Vec<u8>>, Error>;
 
     /// Obtain a proof for a single key
-    async fn single_key_proof<K: KeyType>(&self, key: K) -> Result<Option<Proof>, Error>;
+    async fn single_key_proof<K: KeyType>(&self, key: K)
+        -> Result<Option<Proof<ProofNode>>, Error>;
 
     /// Obtain a range proof over a set of keys
     ///
@@ -181,7 +184,7 @@ pub trait DbView {
         first_key: Option<K>,
         last_key: Option<K>,
         limit: Option<usize>,
-    ) -> Result<Option<RangeProof<Vec<u8>, Vec<u8>>>, Error>;
+    ) -> Result<Option<RangeProof<Vec<u8>, Vec<u8>, ProofNode>>, Error>;
 
     /// Obtain a stream over the keys/values of this view, using an optional starting point
     ///
