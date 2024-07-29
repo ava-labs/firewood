@@ -15,10 +15,10 @@ use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use super::ReadLinearStore;
+use super::ReadableStorage;
 
 #[derive(Debug)]
-/// A [ReadLinearStore] backed by a file
+/// A [ReadableStorage] backed by a file
 pub struct FileBacked {
     fd: Mutex<File>,
 }
@@ -37,7 +37,7 @@ impl FileBacked {
     }
 }
 
-impl ReadLinearStore for FileBacked {
+impl ReadableStorage for FileBacked {
     fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, Error> {
         let mut fd = self.fd.lock().expect("p");
         fd.seek(std::io::SeekFrom::Start(addr))?;
@@ -53,7 +53,7 @@ impl ReadLinearStore for FileBacked {
 }
 
 impl FileBacked {
-    /// Write to the backend filestore. This does not implement [crate::WriteLinearStore]
+    /// Write to the backend filestore. This does not implement [crate::WritableStorage]
     /// because we don't want someone accidentally writing nodes directly to disk
     pub fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
         self.fd

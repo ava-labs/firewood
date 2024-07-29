@@ -1,21 +1,22 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::hashednode::HashedNodeStore;
-use crate::proof::{Proof, ProofError};
+use crate::proof::{Proof, ProofError, ProofNode};
 use crate::stream::{MerkleKeyValueStream, PathIterator};
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
 use std::collections::HashSet;
+use std::fmt::Debug;
 use std::future::ready;
 use std::io::Write;
-use std::iter::{empty, once};
+use std::iter::once;
+use std::sync::Arc;
 use storage::{
-    BranchNode, Child, LeafNode, LinearAddress, NibblesIterator, Node, Path, PathIterItem,
-    ProposedImmutable, ReadLinearStore, TrieHash, WriteLinearStore,
+    BranchNode, Child, Hashable, HashedNodeReader, ImmutableProposal, LeafNode, LinearAddress,
+    MutableProposal, NibblesIterator, Node, NodeReader, NodeStore, Path, ReadableStorage, TrieHash,
+    TrieReader, ValueDigest,
 };
 
-use std::ops::{Deref, DerefMut};
 use thiserror::Error;
 
 pub type Key = Box<[u8]>;
@@ -23,14 +24,14 @@ pub type Value = Vec<u8>;
 
 #[derive(Debug, Error)]
 pub enum MerkleError {
-    #[error("uninitialized")]
-    Uninitialized,
+    #[error("can't generate proof for empty node")]
+    Empty,
     #[error("read only")]
     ReadOnly,
     #[error("node not a branch node")]
     NotBranchNode,
-    #[error("format error: {0:?}")]
-    Format(#[from] std::io::Error),
+    #[error("IO error: {0:?}")]
+    IO(#[from] std::io::Error),
     #[error("parent should not be a leaf branch")]
     ParentLeafBranch,
     #[error("removing internal node references failed")]
@@ -39,23 +40,8 @@ pub enum MerkleError {
     BinarySerdeError(String),
     #[error("invalid utf8")]
     UTF8Error,
-}
-
-#[derive(Debug)]
-pub struct Merkle<T: ReadLinearStore>(HashedNodeStore<T>);
-
-impl<T: ReadLinearStore> Deref for Merkle<T> {
-    type Target = HashedNodeStore<T>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<T: ReadLinearStore> DerefMut for Merkle<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
+    #[error("node not found")]
+    NodeNotFound,
 }
 
 // convert a set of nibbles into a printable string
@@ -93,85 +79,116 @@ macro_rules! write_attributes {
     };
 }
 
-impl<T: ReadLinearStore> Merkle<T> {
-    pub const fn new(store: HashedNodeStore<T>) -> Merkle<T> {
-        Merkle(store)
-    }
+/// Returns the value mapped to by `key` in the subtrie rooted at `node`.
+fn get_helper<T: TrieReader>(
+    nodestore: &T,
+    node: &Node,
+    key: &[u8],
+) -> Result<Option<Box<[u8]>>, MerkleError> {
+    // 4 possibilities for the position of the `key` relative to `node`:
+    // 1. The node is at `key`
+    // 2. The key is above the node (i.e. its ancestor)
+    // 3. The key is below the node (i.e. its descendant)
+    // 4. Neither is an ancestor of the other
+    let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
+    let unique_key = path_overlap.unique_a;
+    let unique_node = path_overlap.unique_b;
 
-    pub const fn root_address(&self) -> Option<LinearAddress> {
-        self.0.root_address()
-    }
-
-    pub fn root_hash(&self) -> Option<&TrieHash> {
-        self.0.root_hash()
-    }
-
-    /// Constructs a merkle proof for key. The result contains all encoded nodes
-    /// on the path to the value at key. The value itself is also included in the
-    /// last node and can be retrieved by verifying the proof.
-    ///
-    /// If the trie does not contain a value for key, the returned proof contains
-    /// all nodes of the longest existing prefix of the key, ending with the node
-    /// that proves the absence of the key (at least the root node).
-    pub fn prove(&self, _key: &[u8]) -> Result<Proof<Vec<u8>>, MerkleError> {
-        todo!()
-        // let mut proofs = HashMap::new();
-        // if root_addr.is_null() {
-        //     return Ok(Proof(proofs));
-        // }
-
-        // let sentinel_node = self.get_node(root_addr)?;
-
-        // let path_iter = self.path_iter(sentinel_node, key.as_ref());
-
-        // let nodes = path_iter
-        //     .map(|result| result.map(|(_, node)| node))
-        //     .collect::<Result<Vec<NodeObjRef>, MerkleError>>()?;
-
-        // // Get the hashes of the nodes.
-        // for node in nodes.into_iter() {
-        //     let encoded = node.get_encoded(&self.store);
-        //     let hash: [u8; TRIE_HASH_LEN] = sha3::Keccak256::digest(encoded).into();
-        //     proofs.insert(hash, encoded.to_vec());
-        // }
-        // Ok(Proof(proofs))
-    }
-
-    pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
-        let path_iter = self.path_iter(key)?;
-
-        let Some(last_node) = path_iter.last() else {
-            return Ok(None);
-        };
-
-        let last_node = last_node?;
-
-        if last_node
-            .key_nibbles
-            .iter()
-            .copied()
-            .eq(NibblesIterator::new(key))
-        {
-            match &*last_node.node {
-                Node::Branch(branch) => Ok(branch.value.clone()),
-                Node::Leaf(leaf) => Ok(Some(leaf.value.clone())),
-            }
-        } else {
+    match (
+        unique_key.split_first().map(|(index, path)| (*index, path)),
+        unique_node.split_first(),
+    ) {
+        (_, Some(_)) => {
+            // Case (2) or (4)
             Ok(None)
         }
+        (None, None) => return Ok(node.value().map(|v| v.to_vec().into_boxed_slice())), // 1. The node is at `key`
+        (Some((child_index, key)), None) => {
+            // 3. The key is below the node (i.e. its descendant)
+            match node {
+                Node::Leaf(leaf) => Ok(Some(leaf.value.clone())),
+                Node::Branch(branch) => {
+                    #[allow(clippy::indexing_slicing)]
+                    let child = match &branch.children[child_index as usize] {
+                        None => return Ok(None),
+                        Some(Child::Node(node)) => node,
+                        Some(Child::AddressWithHash(addr, _)) => &nodestore.read_node(*addr)?,
+                    };
+
+                    get_helper(nodestore, child, key)
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Merkle<T: TrieReader> {
+    nodestore: T,
+}
+
+impl<T: TrieReader> From<T> for Merkle<T> {
+    fn from(nodestore: T) -> Self {
+        Merkle { nodestore }
+    }
+}
+
+impl<T: TrieReader> Merkle<T> {
+    pub fn root(&self) -> Option<Arc<Node>> {
+        self.nodestore.root_node()
     }
 
-    pub fn verify_proof<N: AsRef<[u8]> + Send>(
-        &self,
-        _key: &[u8],
-        _proof: &Proof<N>,
-    ) -> Result<Option<Vec<u8>>, MerkleError> {
-        todo!()
+    pub const fn nodestore(&self) -> &T {
+        &self.nodestore
     }
 
-    pub fn verify_range_proof<N: AsRef<[u8]> + Send, V: AsRef<[u8]>>(
+    pub(crate) fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, MerkleError> {
+        self.nodestore.read_node(addr).map_err(Into::into)
+    }
+
+    /// Returns a proof that the given key has a certain value,
+    /// or that the key isn't in the trie.
+    pub fn prove(&self, key: &[u8]) -> Result<Proof<ProofNode>, MerkleError> {
+        let Some(root) = self.root() else {
+            return Err(MerkleError::Empty);
+        };
+
+        // Get the path to the key
+        let path_iter = self.path_iter(key)?;
+        let mut proof = Vec::new();
+        for node in path_iter {
+            let node = node?;
+            proof.push(ProofNode::from(node));
+        }
+
+        if proof.is_empty() {
+            // No nodes, even the root, are before `key`.
+            // The root alone proves the non-existence of `key`.
+            // TODO reduce duplicate code with ProofNode::from<PathIterItem>
+            let mut child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] = Default::default();
+            if let Some(branch) = root.as_branch() {
+                // TODO danlaine: can we avoid indexing?
+                #[allow(clippy::indexing_slicing)]
+                for (i, hash) in branch.children_iter() {
+                    child_hashes[i] = Some(hash.clone());
+                }
+            }
+
+            proof.push(ProofNode {
+                key: root.partial_path().bytes(),
+                value_digest: root
+                    .value()
+                    .map(|value| ValueDigest::Value(value.to_vec().into_boxed_slice())),
+                child_hashes,
+            })
+        }
+
+        Ok(Proof(proof.into_boxed_slice()))
+    }
+
+    pub fn verify_range_proof<V: AsRef<[u8]>>(
         &self,
-        _proof: &Proof<N>,
+        _proof: &Proof<impl Hashable>,
         _first_key: &[u8],
         _last_key: &[u8],
         _keys: Vec<&[u8]>,
@@ -180,18 +197,17 @@ impl<T: ReadLinearStore> Merkle<T> {
         todo!()
     }
 
-    // TODO danlaine: can we use the LinearAddress of the `root` instead?
     pub fn path_iter<'a>(&self, key: &'a [u8]) -> Result<PathIterator<'_, 'a, T>, MerkleError> {
-        PathIterator::new(self, key)
+        PathIterator::new(&self.nodestore, key)
     }
 
     pub(crate) fn _key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
-        MerkleKeyValueStream::_new(self)
+        MerkleKeyValueStream::from(&self.nodestore)
     }
 
     pub(crate) fn _key_value_iter_from_key(&self, key: Key) -> MerkleKeyValueStream<'_, T> {
         // TODO danlaine: change key to &[u8]
-        MerkleKeyValueStream::_from_key(self, key)
+        MerkleKeyValueStream::_from_key(&self.nodestore, key)
     }
 
     pub(super) async fn _range_proof(
@@ -199,7 +215,7 @@ impl<T: ReadLinearStore> Merkle<T> {
         first_key: Option<&[u8]>,
         last_key: Option<&[u8]>,
         limit: Option<usize>,
-    ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>>>, api::Error> {
+    ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>, ProofNode>>, api::Error> {
         if let (Some(k1), Some(k2)) = (&first_key, &last_key) {
             if k1 > k2 {
                 return Err(api::Error::InvalidRange {
@@ -283,13 +299,24 @@ impl<T: ReadLinearStore> Merkle<T> {
         }))
     }
 
+    pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
+        let Some(root) = self.root() else {
+            return Ok(None);
+        };
+
+        let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
+        get_helper(&self.nodestore, &root, &key)
+    }
+}
+
+impl<T: HashedNodeReader> Merkle<T> {
     pub fn dump_node(
         &self,
         addr: LinearAddress,
         hash: Option<&TrieHash>,
         seen: &mut HashSet<LinearAddress>,
         writer: &mut dyn Write,
-    ) -> Result<(), std::io::Error> {
+    ) -> Result<(), MerkleError> {
         write!(writer, "  {addr}[label=\"addr:{addr:?} hash:{hash:?}")?;
 
         match &*self.read_node(addr)? {
@@ -298,9 +325,9 @@ impl<T: ReadLinearStore> Merkle<T> {
                 writeln!(writer, "\"]")?;
                 for (childidx, child) in b.children.iter().enumerate() {
                     let (child_addr, child_hash) = match child {
-                        Child::None => continue,
-                        Child::Address(addr) => (*addr, None),
-                        Child::AddressWithHash(addr, hash) => (*addr, Some(hash)),
+                        None => continue,
+                        Some(Child::Node(_)) => continue, // TODO
+                        Some(Child::AddressWithHash(addr, hash)) => (*addr, Some(hash)),
                     };
 
                     let inserted = seen.insert(child_addr);
@@ -325,13 +352,13 @@ impl<T: ReadLinearStore> Merkle<T> {
         Ok(())
     }
 
-    pub fn dump(&self) -> Result<String, std::io::Error> {
+    pub fn dump(&self) -> Result<String, MerkleError> {
         let mut result = vec![];
         writeln!(result, "digraph Merkle {{")?;
-        if let Some(addr) = self.root_address() {
-            writeln!(result, " root -> {addr}")?;
+        if let Some((root_addr, root_hash)) = self.nodestore.root_address_and_hash() {
+            writeln!(result, " root -> {root_addr}")?;
             let mut seen = HashSet::new();
-            self.dump_node(addr, None, &mut seen, &mut result)?;
+            self.dump_node(root_addr, Some(&root_hash), &mut seen, &mut result)?;
         }
         write!(result, "}}")?;
 
@@ -339,245 +366,171 @@ impl<T: ReadLinearStore> Merkle<T> {
     }
 }
 
-impl<T: WriteLinearStore> Merkle<T> {
+impl<S: ReadableStorage> From<Merkle<NodeStore<MutableProposal, S>>>
+    for Merkle<NodeStore<ImmutableProposal, S>>
+{
+    fn from(m: Merkle<NodeStore<MutableProposal, S>>) -> Self {
+        Merkle {
+            nodestore: m.nodestore.into(),
+        }
+    }
+}
+
+impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
+    pub fn hash(self) -> Merkle<NodeStore<ImmutableProposal, S>> {
+        self.into()
+    }
+
+    /// Map `key` to `value` in the trie.
     pub fn insert(&mut self, key: &[u8], value: Box<[u8]>) -> Result<(), MerkleError> {
-        let path = Path::from_nibbles_iterator(NibblesIterator::new(key));
+        let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
-        // The path from the root down to and including the node with the greatest prefix of `path`.
-        let ancestors =
-            PathIterator::new(self, key)?.collect::<Result<Vec<PathIterItem>, MerkleError>>()?;
+        let root = self.nodestore.mut_root();
 
-        let mut ancestors = ancestors.iter();
+        let Some(root_node) = std::mem::take(root) else {
+            // The trie is empty. Create a new leaf node with `value` and set
+            // it as the root.
+            let root_node = Node::Leaf(LeafNode {
+                partial_path: key,
+                value,
+            });
+            *root = root_node.into();
+            return Ok(());
+        };
 
-        let Some(greatest_prefix_node) = ancestors.next_back() else {
-            // There is no node (not even the root) which is a prefix of `path`.
-            // See if there is a root.
-            let Some(old_root_addr) = self.root_address() else {
-                // The trie is empty. Create a new leaf node with `value` and set
-                // it as the root.
-                let root = Node::Leaf(LeafNode {
-                    partial_path: path,
-                    value,
-                });
-                let root_addr = self.create_node(root)?;
-                self.set_root(Some(root_addr))?;
-                return Ok(());
-            };
-            // There is a root but it's not a prefix of `path`.
-            // Insert a new branch node above the existing root and make the
-            // old root a child of the new branch node.
-            //
-            //  old_root  -->  new_root
-            //                 /       \
-            //              old_root   *new_leaf
-            //
-            // *Note that new_leaf is only created if `path` isn't a prefix of old root.
-            let old_root = self.read_node(old_root_addr)?;
+        let root_node = self.insert_helper(root_node, key.as_ref(), value)?;
+        *self.nodestore.mut_root() = root_node.into();
+        Ok(())
+    }
 
-            let path_overlap = PrefixOverlap::from(old_root.partial_path().as_ref(), path.as_ref());
+    /// Map `key` to `value` into the subtrie rooted at `node`.
+    /// Returns the new root of the subtrie.
+    pub fn insert_helper(
+        &mut self,
+        mut node: Node,
+        key: &[u8],
+        value: Box<[u8]>,
+    ) -> Result<Node, MerkleError> {
+        // 4 possibilities for the position of the `key` relative to `node`:
+        // 1. The node is at `key`
+        // 2. The key is above the node (i.e. its ancestor)
+        // 3. The key is below the node (i.e. its descendant)
+        // 4. Neither is an ancestor of the other
+        let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
 
-            let (&old_root_child_index, old_root_partial_path) = path_overlap
-                .unique_a
+        let unique_key = path_overlap.unique_a;
+        let unique_node = path_overlap.unique_b;
+
+        match (
+            unique_key
                 .split_first()
-                .expect("old_root shouldn't be prefix of path");
-
-            // Shorten the partial path of `old_root` since it has a parent now.
-            let old_root = match &*old_root {
-                Node::Leaf(old_root) => Node::Leaf(LeafNode {
-                    value: old_root.value.clone(),
-                    partial_path: Path::from(old_root_partial_path),
-                }),
-                Node::Branch(old_root) => Node::Branch(Box::new(BranchNode {
-                    children: old_root.children.clone(),
-                    partial_path: Path::from(old_root_partial_path),
-                    value: old_root.value.clone(),
-                })),
-            };
-            let old_root_addr = self.update_node(empty(), old_root_addr, old_root)?;
-
-            let mut new_root = BranchNode {
-                partial_path: Path::from(path_overlap.shared),
-                value: None,
-                children: Default::default(),
-            };
-            new_root.update_child(old_root_child_index, Some(old_root_addr));
-
-            if let Some((&new_leaf_child_index, remaining_path)) =
-                path_overlap.unique_b.split_first()
-            {
-                let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
-                    value,
-                    partial_path: Path::from(remaining_path),
-                }))?;
-                new_root.update_child(new_leaf_child_index, Some(new_leaf_addr));
-            } else {
-                new_root.value = Some(value);
+                .map(|(index, path)| (*index, path.into())),
+            unique_node
+                .split_first()
+                .map(|(index, path)| (*index, path.into())),
+        ) {
+            (None, None) => {
+                // 1. The node is at `key`
+                node.update_value(value);
+                Ok(node)
             }
-
-            let new_root_addr = self.create_node(Node::Branch(Box::new(new_root)))?;
-            self.set_root(Some(new_root_addr))?;
-            return Ok(());
-        };
-        // `greatest_prefix_node` is a prefix of `path`
-
-        // `remaining_path` is `path` with prefix `greatest_prefix_node` removed.
-        let remaining_path = {
-            let overlap = PrefixOverlap::from(&greatest_prefix_node.key_nibbles, &path);
-            assert!(overlap.unique_a.is_empty());
-            overlap.unique_b
-        };
-
-        let Some((&child_index, remaining_path)) = remaining_path.split_first() else {
-            // `greatest_prefix_node` is at `path`. Update its value.
-            //     ...                        ...
-            //      |                 -->      |
-            //  greatest_prefix_node       greatest_prefix_node
-            let node = match &*greatest_prefix_node.node {
-                Node::Leaf(node) => Node::Leaf(LeafNode {
-                    value,
-                    partial_path: node.partial_path.clone(),
-                }),
-                Node::Branch(node) => Node::Branch(Box::new(BranchNode {
-                    children: node.children.clone(),
-                    partial_path: node.partial_path.clone(),
-                    value: Some(value),
-                })),
-            };
-
-            self.update_node(ancestors, greatest_prefix_node.addr, node)?;
-
-            return Ok(());
-        };
-
-        match &*greatest_prefix_node.node {
-            Node::Leaf(leaf) => {
-                // `leaf` is at a strict prefix of `path`. Replace it with a branch.
-                //
-                //     ...                ...
-                //      |      -->         |
-                //     leaf            new_branch
-                //                         |
-                //                        leaf
-                let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
-                    value,
-                    partial_path: Path::from(remaining_path),
-                }))?;
-
-                let mut new_branch: BranchNode = leaf.into();
-                new_branch.update_child(child_index, Some(new_leaf_addr));
-                self.update_node(
-                    ancestors,
-                    greatest_prefix_node.addr,
-                    Node::Branch(Box::new(new_branch)),
-                )?;
-
-                Ok(())
-            }
-            Node::Branch(branch) => {
-                // See if `branch` has a child at `child_index` already.
-                let Some(child_addr) = branch.child(child_index).address() else {
-                    // Create a new leaf at empty `child_index`.
-                    //     ...                ...
-                    //      |      -->         |
-                    //    branch             branch
-                    //    /   \           /    |        \
-                    //  ...   ...       ...  new_leaf   ...
-                    let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
-                        value,
-                        partial_path: Path::from(remaining_path),
-                    }))?;
-
-                    let mut branch = BranchNode {
-                        children: branch.children.clone(),
-                        partial_path: branch.partial_path.clone(),
-                        value: branch.value.clone(),
-                    };
-                    // We don't need to call update_child because we know there is no
-                    // child at `child_index` whose hash we need to invalidate.
-                    branch.update_child(child_index, Some(new_leaf_addr));
-
-                    self.update_node(
-                        ancestors,
-                        greatest_prefix_node.addr,
-                        Node::Branch(Box::new(branch)),
-                    )?;
-                    return Ok(());
-                };
-
-                // There is a child at `child_index` already.
-                // Note that `child` can't be a prefix of the key we're inserting
-                // because it's deeper than `branch`, which is guaranteed to be the
-                // node with the largest prefix of the key we're inserting.
+            (None, Some((child_index, partial_path))) => {
+                // 2. The key is above the node (i.e. its ancestor)
+                // Make a new branch node and insert the current node as a child.
                 //    ...                ...
-                //     |      -->         |
-                //  branch             branch
-                //  /    \            /      \
-                // ...  child       ...     new_branch
-                //                            |       \
-                //                         new_leaf*   child
-                //
-                // *Note that new_leaf is only created if the remaining path is non-empty.
-                // Note that child may be a leaf or a branch node.
-                let child = self.read_node(child_addr)?;
-
-                let path_overlap = PrefixOverlap::from(child.partial_path(), remaining_path);
-
-                let (&new_branch_to_child_index, child_partial_path) = path_overlap
-                    .unique_a
-                    .split_first()
-                    .expect("child can't be prefix of key");
-
-                // Update `child` to shorten its partial path.
-                let child = match &*child {
-                    Node::Branch(child) => Node::Branch(Box::new(BranchNode {
-                        children: child.children.clone(),
-                        partial_path: Path::from(child_partial_path),
-                        value: child.value.clone(),
-                    })),
-                    Node::Leaf(child) => Node::Leaf(LeafNode {
-                        value: child.value.clone(),
-                        partial_path: Path::from(child_partial_path),
-                    }),
-                };
-                let child_addr = self.update_node(
-                    ancestors.clone().chain(once(greatest_prefix_node)),
-                    child_addr,
-                    child,
-                )?;
-
-                let mut new_branch = BranchNode {
-                    children: Default::default(),
-                    partial_path: Path::from(path_overlap.shared),
-                    value: None,
-                };
-                new_branch.update_child(new_branch_to_child_index, Some(child_addr));
-
-                if let Some((&new_leaf_child_index, remaining_path)) =
-                    path_overlap.unique_b.split_first()
-                {
-                    let new_leaf_addr = self.create_node(Node::Leaf(LeafNode {
-                        value,
-                        partial_path: Path::from(remaining_path),
-                    }))?;
-                    new_branch.update_child(new_leaf_child_index, Some(new_leaf_addr));
-                } else {
-                    new_branch.value = Some(value);
-                }
-                let new_branch_addr = self.create_node(Node::Branch(Box::new(new_branch)))?;
-
+                //     |     -->          |
+                //    node               key
+                //                        |
+                //                       node
                 let mut branch = BranchNode {
-                    children: branch.children.clone(),
-                    partial_path: branch.partial_path.clone(),
-                    value: branch.value.clone(),
+                    partial_path: path_overlap.shared.into(),
+                    value: Some(value),
+                    children: Default::default(),
                 };
-                branch.update_child(child_index, Some(new_branch_addr));
-                self.update_node(
-                    ancestors,
-                    greatest_prefix_node.addr,
-                    Node::Branch(Box::new(branch)),
-                )?;
 
-                Ok(())
+                // Shorten the node's partial path since it has a new parent.
+                node.update_partial_path(partial_path);
+                branch.update_child(child_index, Some(Child::Node(node)));
+
+                Ok(Node::Branch(Box::new(branch)))
+            }
+            (Some((child_index, partial_path)), None) => {
+                // 3. The key is below the node (i.e. its descendant)
+                //    ...                         ...
+                //     |                           |
+                //    node         -->            node
+                //     |                           |
+                //    ... (key may be below)       ... (key is below)
+                match node {
+                    Node::Branch(ref mut branch) => {
+                        #[allow(clippy::indexing_slicing)]
+                        let child = match std::mem::take(&mut branch.children[child_index as usize])
+                        {
+                            None => {
+                                // There is no child at this index.
+                                // Create a new leaf and put it here.
+                                let new_leaf = Node::Leaf(LeafNode {
+                                    value,
+                                    partial_path,
+                                });
+                                branch.update_child(child_index, Some(Child::Node(new_leaf)));
+                                return Ok(node);
+                            }
+                            Some(Child::Node(child)) => child,
+                            Some(Child::AddressWithHash(addr, _)) => {
+                                let node = self.nodestore.read_node(addr)?;
+                                self.nodestore.delete_node(addr);
+                                (*node).clone()
+                            }
+                        };
+
+                        let child = self.insert_helper(child, partial_path.as_ref(), value)?;
+                        branch.update_child(child_index, Some(Child::Node(child)));
+                        Ok(node)
+                    }
+                    Node::Leaf(ref mut leaf) => {
+                        // Turn this node into a branch node and put a new leaf as a child.
+                        let mut branch = BranchNode {
+                            partial_path: std::mem::replace(&mut leaf.partial_path, Path::new()),
+                            value: Some(std::mem::take(&mut leaf.value)),
+                            children: Default::default(),
+                        };
+
+                        let new_leaf = Node::Leaf(LeafNode {
+                            value,
+                            partial_path,
+                        });
+
+                        branch.update_child(child_index, Some(Child::Node(new_leaf)));
+
+                        Ok(Node::Branch(Box::new(branch)))
+                    }
+                }
+            }
+            (Some((key_index, key_partial_path)), Some((node_index, node_partial_path))) => {
+                // 4. Neither is an ancestor of the other
+                //    ...                         ...
+                //     |                           |
+                //    node         -->            branch
+                //     |                           |    \
+                //                               node   key
+                // Make a branch node that has both the current node and a new leaf node as children.
+                let mut branch = BranchNode {
+                    partial_path: path_overlap.shared.into(),
+                    value: None,
+                    children: Default::default(),
+                };
+
+                node.update_partial_path(node_partial_path);
+                branch.update_child(node_index, Some(Child::Node(node)));
+
+                let new_leaf = Node::Leaf(LeafNode {
+                    value,
+                    partial_path: key_partial_path,
+                });
+                branch.update_child(key_index, Some(Child::Node(new_leaf)));
+
+                Ok(Node::Branch(Box::new(branch)))
             }
         }
     }
@@ -586,171 +539,224 @@ impl<T: WriteLinearStore> Merkle<T> {
     /// Returns the value that was removed, if any.
     /// Otherwise returns `None`.
     pub fn remove(&mut self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
-        let path = Path::from_nibbles_iterator(NibblesIterator::new(key));
+        let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
-        let ancestors =
-            PathIterator::new(self, key)?.collect::<Result<Vec<PathIterItem>, MerkleError>>()?;
-
-        // If the last element of ancestors doesn't contain the key/value pair we are looking for,
-        // then we can return early without making any changes
-
-        // The path from the root down to and including the node with the greatest prefix of `path`
-        let mut ancestors = ancestors.iter();
-
-        let Some(greatest_prefix_node) = ancestors.next_back() else {
-            // There is no node which is a prefix of `path`.
-            // Therefore `path` is not in the trie.
+        let root = self.nodestore.mut_root();
+        let Some(root_node) = std::mem::take(root) else {
+            // The trie is empty. There is nothing to remove.
             return Ok(None);
         };
 
-        if &*greatest_prefix_node.key_nibbles != path.0.as_ref() {
-            // `greatest_prefix_node` is a prefix of `path` but not equal to `path`.
-            // Therefore `path` is not in the trie.
-            return Ok(None);
-        }
+        let (root_node, removed_value) = self.remove_helper(root_node, &key)?;
+        *self.nodestore.mut_root() = root_node;
+        Ok(removed_value)
+    }
 
-        let removed = greatest_prefix_node;
+    /// Removes the value associated with the given `key` from the subtrie rooted at `node`.
+    /// Returns the new root of the subtrie and the value that was removed, if any.
+    #[allow(clippy::type_complexity)]
+    fn remove_helper(
+        &mut self,
+        mut node: Node,
+        key: &[u8],
+    ) -> Result<(Option<Node>, Option<Box<[u8]>>), MerkleError> {
+        // 4 possibilities for the position of the `key` relative to `node`:
+        // 1. The node is at `key`
+        // 2. The key is above the node (i.e. its ancestor)
+        // 3. The key is below the node (i.e. its descendant)
+        // 4. Neither is an ancestor of the other
+        let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
 
-        match &*removed.node {
-            Node::Branch(branch) => {
-                let Some(removed_value) = &branch.value else {
-                    // The node at `path` has no value so there's nothing to remove.
-                    return Ok(None);
-                };
+        let unique_key = path_overlap.unique_a;
+        let unique_node = path_overlap.unique_b;
 
-                // We know the key exists, so see if the branch has more than 1 child.
-                let mut branch_children =
-                    branch
-                        .children
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(index, child)| {
-                            child.address().map(|child_addr| (index as u8, child_addr))
-                        });
-
-                let (child_index, child_addr) =
-                    branch_children.next().expect("branch must have children");
-
-                if branch_children.next().is_some() {
-                    // The branch has more than 1 child. Remove the value but keep the branch.
-                    //    ...                ...
-                    //     |      -->         |
-                    //  branch             branch (no value now)
-                    //  /    \            /      \
-                    // ...  child       ...     child
-                    //
-                    // Note in the after diagram `child` may be the only child of `branch`.
-                    let branch = BranchNode {
-                        children: branch.children.clone(),
-                        partial_path: branch.partial_path.clone(),
-                        value: None,
-                    };
-                    self.update_node(ancestors, removed.addr, Node::Branch(Box::new(branch)))?;
-                    return Ok(Some(removed_value.clone()));
-                }
-
-                // The branch has only 1 child.
-                // The branch must be combined with its child since it now has no value.
-                //      ...                ...
-                //       |      -->         |
-                //     branch            combined
-                //       |
-                //     child
-                //
-                // where combined has `child`'s value.
-                // Note that child/combined may be a leaf or a branch.
-
-                let combined = {
-                    let child = self.read_node(child_addr)?;
-
-                    // `combined`'s partial path is the concatenation of `branch`'s partial path,
-                    // `child_index` and `child`'s partial path.
-                    let partial_path = Path::from_nibbles_iterator(
-                        branch
-                            .partial_path
-                            .iter()
-                            .chain(once(&child_index))
-                            .chain(child.partial_path().iter())
-                            .copied(),
-                    );
-
-                    child.new_with_partial_path(partial_path)
-                };
-
-                self.delete_node(child_addr)?;
-
-                self.update_node(ancestors, removed.addr, combined)?;
-
-                Ok(Some(removed_value.clone()))
+        match (
+            unique_key
+                .split_first()
+                .map(|(index, path)| (*index, Path::from(path))),
+            unique_node.split_first(),
+        ) {
+            (_, Some(_)) => {
+                // Case (2) or (4)
+                Ok((Some(node), None))
             }
-            Node::Leaf(leaf) => {
-                self.delete_node(removed.addr)?;
-
-                while let Some(ancestor) = ancestors.next_back() {
-                    // Remove all ancestors until we find one that has a value
-                    // or multiple children.
-                    let ancestor_addr = ancestor.addr;
-                    let child_index = ancestor.next_nibble.expect("parent has a child");
-                    let ancestor = ancestor.node.as_branch().expect("parent must be a branch");
-
-                    let num_children = ancestor
-                        .children
-                        .iter()
-                        .filter(|child| !matches!(child, Child::None))
-                        .count();
-
-                    if num_children > 1 {
-                        #[rustfmt::skip]
-                        // Update `ancestor` to remove its child.
-                        //    ...                 ...
-                        //     |          -->      |
-                        //  ancestor            ancestor
-                        //  /      \               |
-                        // ...    child           ...
-                        let mut ancestor = BranchNode {
-                            children: ancestor.children.clone(),
-                            partial_path: ancestor.partial_path.clone(),
-                            value: ancestor.value.clone(),
+            (None, None) => {
+                // 1. The node is at `key`
+                match &mut node {
+                    Node::Branch(ref mut branch) => {
+                        let Some(removed_value) = branch.value.take() else {
+                            // The branch has no value. Return the node as is.
+                            return Ok((Some(node), None));
                         };
-                        ancestor.update_child(child_index, None);
-                        self.update_node(
-                            ancestors,
-                            ancestor_addr,
-                            Node::Branch(Box::new(ancestor)),
-                        )?;
-                        return Ok(Some(leaf.value.clone()));
-                    }
 
-                    // The ancestor has only 1 child, which is now deleted.
-                    if let Some(ancestor_value) = &ancestor.value {
-                        // Turn the ancestor into a leaf.
-                        let ancestor = Node::Leaf(LeafNode {
-                            value: ancestor_value.clone(),
-                            partial_path: ancestor.partial_path.clone(),
-                        });
-                        self.update_node(ancestors, ancestor_addr, ancestor)?;
-                        return Ok(Some(leaf.value.clone()));
-                    }
+                        // This branch node has a value.
+                        // If it has multiple children, return the node as is.
+                        // Otherwise, its only child becomes the root of this subtrie.
+                        let mut children_iter =
+                            branch
+                                .children
+                                .iter_mut()
+                                .enumerate()
+                                .filter_map(|(index, child)| {
+                                    child.as_mut().map(|child| (index, child))
+                                });
 
-                    // The ancestor had 1 child and no value so it should be removed.
-                    self.delete_node(ancestor_addr)?;
+                        let (child_index, child) = children_iter
+                            .next()
+                            .expect("branch node must have children");
+
+                        if children_iter.next().is_some() {
+                            // The branch has more than 1 child so it can't be removed.
+                            Ok((Some(node), Some(removed_value)))
+                        } else {
+                            // The branch's only child becomes the root of this subtrie.
+                            let mut child = match child {
+                                Child::Node(ref mut child_node) => std::mem::take(child_node),
+                                Child::AddressWithHash(addr, _) => {
+                                    let node = self.nodestore.read_node(*addr)?;
+                                    self.nodestore.delete_node(*addr);
+                                    (*node).clone()
+                                }
+                            };
+
+                            // The child's partial path is the concatenation of its (now removed) parent,
+                            // its (former) child index, and its partial path.
+                            match child {
+                                Node::Branch(ref mut child_branch) => {
+                                    let partial_path = Path::from_nibbles_iterator(
+                                        branch
+                                            .partial_path
+                                            .iter()
+                                            .copied()
+                                            .chain(once(child_index as u8))
+                                            .chain(child_branch.partial_path.iter().copied()),
+                                    );
+                                    child_branch.partial_path = partial_path;
+                                }
+                                Node::Leaf(ref mut leaf) => {
+                                    let partial_path = Path::from_nibbles_iterator(
+                                        branch
+                                            .partial_path
+                                            .iter()
+                                            .copied()
+                                            .chain(once(child_index as u8))
+                                            .chain(leaf.partial_path.iter().copied()),
+                                    );
+                                    leaf.partial_path = partial_path;
+                                }
+                            }
+
+                            let node_partial_path =
+                                std::mem::replace(&mut branch.partial_path, Path::new());
+
+                            let partial_path = Path::from_nibbles_iterator(
+                                branch
+                                    .partial_path
+                                    .iter()
+                                    .chain(once(&(child_index as u8)))
+                                    .chain(node_partial_path.iter())
+                                    .copied(),
+                            );
+
+                            node.update_partial_path(partial_path);
+
+                            Ok((Some(child), Some(removed_value)))
+                        }
+                    }
+                    Node::Leaf(leaf) => {
+                        let removed_value = std::mem::take(&mut leaf.value);
+                        Ok((None, Some(removed_value)))
+                    }
                 }
+            }
+            (Some((child_index, child_partial_path)), None) => {
+                // 3. The key is below the node (i.e. its descendant)
+                match node {
+                    Node::Leaf(ref mut leaf) => Ok((None, Some(std::mem::take(&mut leaf.value)))),
+                    Node::Branch(ref mut branch) => {
+                        #[allow(clippy::indexing_slicing)]
+                        let child = match std::mem::take(&mut branch.children[child_index as usize])
+                        {
+                            None => {
+                                return Ok((Some(node), None));
+                            }
+                            Some(Child::Node(node)) => node,
+                            Some(Child::AddressWithHash(addr, _)) => {
+                                let node = self.nodestore.read_node(addr)?;
+                                self.nodestore.delete_node(addr);
+                                (*node).clone()
+                            }
+                        };
 
-                // The trie is now empty.
-                self.set_root(None)?;
-                Ok(Some(leaf.value.clone()))
+                        let (child, removed_value) =
+                            self.remove_helper(child, child_partial_path.as_ref())?;
+
+                        if let Some(child) = child {
+                            branch.update_child(child_index, Some(Child::Node(child)));
+                        } else {
+                            branch.update_child(child_index, None);
+                        }
+
+                        let mut children_iter =
+                            branch
+                                .children
+                                .iter_mut()
+                                .enumerate()
+                                .filter_map(|(index, child)| {
+                                    child.as_mut().map(|child| (index, child))
+                                });
+
+                        let Some((child_index, child)) = children_iter.next() else {
+                            // The branch has no children. Turn it into a leaf.
+                            let leaf = Node::Leaf(LeafNode {
+                                    value: branch.value.take().expect(
+                                        "branch node must have a value if it previously had only 1 child",
+                                    ),
+                                    partial_path: branch.partial_path.clone(), // TODO remove clone
+                                });
+                            return Ok((Some(leaf), removed_value));
+                        };
+
+                        if children_iter.next().is_some() {
+                            // The branch has more than 1 child. Return the branch.
+                            return Ok((Some(node), removed_value));
+                        }
+
+                        // The branch has only 1 child. Remove the branch and return the child.
+                        let mut child = match child {
+                            Child::Node(child_node) => std::mem::replace(
+                                child_node,
+                                Node::Leaf(LeafNode {
+                                    value: Box::from([]),
+                                    partial_path: Path::new(),
+                                }),
+                            ),
+                            Child::AddressWithHash(addr, _) => {
+                                let node = self.nodestore.read_node(*addr)?;
+                                self.nodestore.delete_node(*addr);
+                                (*node).clone()
+                            }
+                        };
+
+                        // The child's partial path is the concatenation of its (now removed) parent,
+                        // its (former) child index, and its partial path.
+                        let branch_partial_path =
+                            std::mem::replace(&mut branch.partial_path, Path::new());
+
+                        let child_partial_path = Path::from_nibbles_iterator(
+                            branch_partial_path
+                                .iter()
+                                .chain(once(&(child_index as u8)))
+                                .chain(child.partial_path().iter())
+                                .copied(),
+                        );
+                        child.update_partial_path(child_partial_path);
+
+                        Ok((Some(child), removed_value))
+                    }
+                }
             }
         }
-    }
-
-    pub fn freeze(self) -> Result<Merkle<ProposedImmutable>, MerkleError> {
-        Ok(Merkle(self.0.freeze()?))
-    }
-}
-
-impl<T: WriteLinearStore> Merkle<T> {
-    pub fn put_node(&mut self, node: Node) -> Result<LinearAddress, MerkleError> {
-        self.create_node(node).map_err(MerkleError::Format)
     }
 }
 
@@ -797,8 +803,29 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use storage::MemStore;
+    use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
+    use storage::{MemStore, MutableProposal, NodeStore, RootReader};
     use test_case::test_case;
+
+    // Returns n random key-value pairs.
+    fn generate_random_kvs(seed: u64, n: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
+        eprintln!("Used seed: {}", seed);
+
+        let mut rng = StdRng::seed_from_u64(seed);
+
+        let mut kvs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+        for _ in 0..n {
+            let key_len = rng.gen_range(1..=4096);
+            let key: Vec<u8> = (0..key_len).map(|_| rng.gen()).collect();
+
+            let val_len = rng.gen_range(1..=4096);
+            let val: Vec<u8> = (0..val_len).map(|_| rng.gen()).collect();
+
+            kvs.push((key, val));
+        }
+
+        kvs
+    }
 
     #[test]
     fn test_get_regression() {
@@ -813,7 +840,7 @@ mod tests {
         merkle.insert(&[2], Box::new([2])).unwrap();
         assert_eq!(merkle.get(&[2]).unwrap(), Some(Box::from([2])));
 
-        let merkle = merkle.freeze().unwrap();
+        let merkle = merkle.hash();
 
         assert_eq!(merkle.get(&[0]).unwrap(), Some(Box::from([0])));
         assert_eq!(merkle.get(&[1]).unwrap(), Some(Box::from([1])));
@@ -830,8 +857,12 @@ mod tests {
         merkle.insert(b"abc", Box::new([])).unwrap()
     }
 
-    fn create_in_memory_merkle() -> Merkle<MemStore> {
-        Merkle::new(HashedNodeStore::new(MemStore::new(vec![])).unwrap())
+    fn create_in_memory_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
+        let memstore = MemStore::new(vec![]);
+
+        let nodestore = NodeStore::new_empty_proposal(memstore.into());
+
+        Merkle { nodestore }
     }
 
     // use super::*;
@@ -1006,15 +1037,13 @@ mod tests {
         assert!(merkle.remove(&key2).unwrap().is_none());
 
         // Trie is:
-        // key1 (now has no value)
-        //  |
         // key3
         let removed_val = merkle.remove(&key3).unwrap();
         assert_eq!(removed_val, Some(Box::from(val3)));
         assert!(merkle.get(&key3).unwrap().is_none());
         assert!(merkle.remove(&key3).unwrap().is_none());
 
-        assert!(merkle.root_address().is_none());
+        assert!(merkle.nodestore.root_node().is_none());
     }
 
     #[test]
@@ -1045,18 +1074,62 @@ mod tests {
             let got = merkle.get(&key).unwrap();
             assert!(got.is_none());
         }
-        assert!(merkle.root_address().is_none());
+        assert!(merkle.nodestore.root_node().is_none());
     }
 
-    //     #[test]
-    //     fn get_empty_proof() {
-    //         let merkle = create_in_memory_merkle();
-    //         let root_addr = merkle.init_sentinel().unwrap();
+    #[test]
+    fn get_empty_proof() {
+        let merkle = create_in_memory_merkle().hash();
+        let proof = merkle.prove(b"any-key");
+        assert!(matches!(proof.unwrap_err(), MerkleError::Empty));
+    }
 
-    //         let proof = merkle.prove(b"any-key", root_addr).unwrap();
+    #[test]
+    fn single_key_proof() {
+        let mut merkle = create_in_memory_merkle();
 
-    //         assert!(proof.0.is_empty());
-    //     }
+        let seed = std::env::var("FIREWOOD_TEST_SEED")
+            .ok()
+            .map_or_else(
+                || None,
+                |s| Some(str::parse(&s).expect("couldn't parse FIREWOOD_TEST_SEED; must be a u64")),
+            )
+            .unwrap_or_else(|| thread_rng().gen());
+
+        const TEST_SIZE: usize = 1;
+
+        let kvs = generate_random_kvs(seed, TEST_SIZE);
+
+        for (key, val) in &kvs {
+            merkle.insert(key, val.clone().into_boxed_slice()).unwrap();
+        }
+
+        let merkle = merkle.hash();
+
+        let (_, root_hash) = merkle.nodestore.root_address_and_hash().unwrap();
+
+        for (key, value) in kvs {
+            let proof = merkle.prove(&key).unwrap();
+
+            proof
+                .verify(key.clone(), Some(value.clone()), &root_hash)
+                .unwrap();
+
+            {
+                // Test that the proof is invalid when the value is different
+                let mut value = value.clone();
+                value[0] = value[0].wrapping_add(1);
+                assert!(proof.verify(key.clone(), Some(value), &root_hash).is_err());
+            }
+
+            {
+                // Test that the proof is invalid when the hash is different
+                assert!(proof
+                    .verify(key, Some(value), &TrieHash::default())
+                    .is_err());
+            }
+        }
+    }
 
     //     #[tokio::test]
     //     async fn empty_range_proof() {
@@ -1410,11 +1483,11 @@ mod tests {
 
     fn merkle_build_test<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         items: Vec<(K, V)>,
-    ) -> Result<Merkle<MemStore>, MerkleError> {
-        let mut merkle = Merkle::new(HashedNodeStore::new(MemStore::new(vec![])).unwrap());
+    ) -> Result<Merkle<NodeStore<MutableProposal, MemStore>>, MerkleError> {
+        let nodestore = NodeStore::new_empty_proposal(MemStore::new(vec![]).into());
+        let mut merkle = Merkle::from(nodestore);
         for (k, v) in items.iter() {
             merkle.insert(k.as_ref(), Box::from(v.as_ref()))?;
-            println!("{}", merkle.dump()?);
         }
 
         Ok(merkle)
@@ -1430,7 +1503,7 @@ mod tests {
             ("horse", "stallion"),
             ("ddd", "ok"),
         ];
-        let merkle = merkle_build_test(items)?;
+        let merkle = merkle_build_test(items).unwrap().hash();
 
         merkle.dump().unwrap();
         Ok(())
@@ -1445,9 +1518,8 @@ mod tests {
     #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1]),(&[0,1,2],&[0,1,2])], Some("229011c50ad4d5c2f4efe02b8db54f361ad295c4eee2bf76ea4ad1bb92676f97"); "root with branch child")]
     #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1]),(&[0,8],&[0,8]),(&[0,1,2],&[0,1,2])], Some("a683b4881cb540b969f885f538ba5904699d480152f350659475a962d6240ef9"); "root with branch child and leaf child")]
     fn test_root_hash_merkledb_compatible(kvs: Vec<(&[u8], &[u8])>, expected_hash: Option<&str>) {
-        let merkle = merkle_build_test(kvs).unwrap().freeze().unwrap();
-
-        let Some(got_hash) = merkle.root_hash() else {
+        let merkle = merkle_build_test(kvs).unwrap().hash();
+        let Some((_, got_hash)) = merkle.nodestore.root_address_and_hash() else {
             assert!(expected_hash.is_none());
             return;
         };
@@ -1457,7 +1529,7 @@ mod tests {
         // This hash is from merkledb
         let expected_hash: [u8; 32] = hex::decode(expected_hash).unwrap().try_into().unwrap();
 
-        assert_eq!(*got_hash, TrieHash::from(expected_hash));
+        assert_eq!(got_hash, TrieHash::from(expected_hash));
     }
 
     #[test]

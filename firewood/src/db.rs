@@ -2,15 +2,8 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::merkle::MerkleError;
-use crate::proof::{Proof, ProofError};
-use crate::stream::MerkleKeyValueStream;
-use crate::v2::api::{self, HashKey, KeyType, ValueType};
+use crate::v2::api::{self};
 pub use crate::v2::api::{Batch, BatchOp};
-use async_trait::async_trait;
-use storage::ProposedMutable;
-use storage::ReadLinearStore;
-use storage::TrieHash;
-use storage::{Historical as HistoricalStore, WriteLinearStore};
 
 use crate::manager::{RevisionManager, RevisionManagerConfig};
 use metered::metered;
@@ -30,7 +23,6 @@ pub enum DbError {
     InvalidParams,
     Merkle(MerkleError),
     System(nix::Error),
-    KeyNotFound,
     CreateError,
     IO(std::io::Error),
     InvalidProposal,
@@ -42,7 +34,6 @@ impl fmt::Display for DbError {
             DbError::InvalidParams => write!(f, "invalid parameters provided"),
             DbError::Merkle(e) => write!(f, "merkle error: {e:?}"),
             DbError::System(e) => write!(f, "system error: {e:?}"),
-            DbError::KeyNotFound => write!(f, "not found"),
             DbError::CreateError => write!(f, "database create error"),
             DbError::IO(e) => write!(f, "I/O error: {e:?}"),
             DbError::InvalidProposal => write!(f, "invalid proposal"),
@@ -58,151 +49,151 @@ impl From<std::io::Error> for DbError {
 
 impl Error for DbError {}
 
-#[derive(Debug)]
-pub struct HistoricalRev<T> {
-    // TODO: add Merkle wrapping here
-    _historical: Arc<T>,
-}
+// #[derive(Debug)]
+// pub struct HistoricalRev<T> {
+//     // TODO: add Merkle wrapping here
+//     _historical: Arc<T>,
+// }
 
-#[async_trait]
-impl<T: ReadLinearStore> api::DbView for HistoricalRev<T> {
-    type Stream<'a> = MerkleKeyValueStream<'a, T> where Self: 'a;
+// #[async_trait]
+// impl<T: NodeReader + Send + Sync> api::DbView for HistoricalRev<T> {
+//     type Stream<'a> = MerkleKeyValueStream<'a, T> where Self: 'a;
 
-    async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
-        todo!()
-    }
+//     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
+//         todo!()
+//     }
 
-    async fn val<K: api::KeyType>(&self, _key: K) -> Result<Option<Vec<u8>>, api::Error> {
-        todo!()
-    }
+//     async fn val<K: api::KeyType>(&self, _key: K) -> Result<Option<Vec<u8>>, api::Error> {
+//         todo!()
+//     }
 
-    async fn single_key_proof<K: api::KeyType>(
-        &self,
-        _key: K,
-    ) -> Result<Option<Proof<Vec<u8>>>, api::Error> {
-        todo!()
-    }
+// async fn single_key_proof<K: api::KeyType>(
+//     &self,
+//     _key: K,
+// ) -> Result<Option<Proof<ProofNode>>, api::Error> {
+//     todo!()
+// }
 
-    async fn range_proof<K: api::KeyType, V>(
-        &self,
-        _first_key: Option<K>,
-        _last_key: Option<K>,
-        _limit: Option<usize>,
-    ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>>>, api::Error> {
-        todo!()
-    }
+// async fn range_proof<K: api::KeyType, V>(
+//     &self,
+//     _first_key: Option<K>,
+//     _last_key: Option<K>,
+//     _limit: Option<usize>,
+// ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>, ProofNode>>, api::Error> {
+//     todo!()
+// }
 
-    fn iter_option<K: KeyType>(
-        &self,
-        _first_key: Option<K>,
-    ) -> Result<Self::Stream<'_>, api::Error> {
-        todo!()
-    }
-}
+//     fn iter_option<K: KeyType>(
+//         &self,
+//         _first_key: Option<K>,
+//     ) -> Result<Self::Stream<'_>, api::Error> {
+//         todo!()
+//     }
+// }
 
-impl<T: ReadLinearStore> HistoricalRev<T> {
-    pub fn stream(&self) -> MerkleKeyValueStream<'_, T> {
-        todo!()
-    }
+// impl<T: NodeReader> HistoricalRev<T> {
+//     pub fn stream(&self) -> MerkleKeyValueStream<'_, T> {
+//         todo!()
+//     }
 
-    pub fn stream_from(&self, _start_key: &[u8]) -> MerkleKeyValueStream<'_, T> {
-        todo!()
-    }
+//     pub fn stream_from(&self, _start_key: &[u8]) -> MerkleKeyValueStream<'_, T> {
+//         todo!()
+//     }
 
-    /// Get root hash of the generic key-value storage.
-    pub fn kv_root_hash(&self) -> Result<TrieHash, DbError> {
-        todo!()
-    }
+//     /// Get root hash of the generic key-value storage.
+//     pub fn kv_root_hash(&self) -> Result<TrieHash, DbError> {
+//         todo!()
+//     }
 
-    /// Get a value associated with a key.
-    pub fn get(&self, _key: &[u8]) -> Option<Vec<u8>> {
-        todo!()
-    }
+//     /// Get a value associated with a key.
+//     pub fn get(&self, _key: &[u8]) -> Option<Vec<u8>> {
+//         todo!()
+//     }
 
-    /// Dump the Trie of the generic key-value storage.
-    pub fn dump(&self, _w: &mut dyn Write) -> Result<(), DbError> {
-        todo!()
-    }
+//     /// Dump the Trie of the generic key-value storage.
+//     pub fn dump(&self, _w: &mut dyn Write) -> Result<(), DbError> {
+//         todo!()
+//     }
 
-    pub fn prove(&self, _key: &[u8]) -> Result<Proof<Vec<u8>>, MerkleError> {
-        todo!()
-    }
+//     pub fn prove(&self, _key: &[u8]) -> Result<Proof<ProofNode>, MerkleError> {
+//         todo!()
+//     }
 
-    /// Verifies a range proof is valid for a set of keys.
-    pub fn verify_range_proof<N: AsRef<[u8]> + Send, V: AsRef<[u8]>>(
-        &self,
-        _proof: Proof<N>,
-        _first_key: &[u8],
-        _last_key: &[u8],
-        _keys: Vec<&[u8]>,
-        _values: Vec<V>,
-    ) -> Result<bool, ProofError> {
-        todo!()
-    }
-}
+//     /// Verifies a range proof is valid for a set of keys.
+//     pub fn verify_range_proof<V: AsRef<[u8]>>(
+//         &self,
+//         _proof: &Proof<impl Hashable>,
+//         _first_key: &[u8],
+//         _last_key: &[u8],
+//         _keys: Vec<&[u8]>,
+//         _values: Vec<V>,
+//     ) -> Result<bool, ProofError> {
+//         todo!()
+//     }
+// }
 
 /// TODO danlaine: implement
-pub struct Proposal<T> {
-    _proposal: T,
-}
+// pub struct Proposal<T> {
+//     _proposal: T,
+// }
 
-#[async_trait]
-impl<T: WriteLinearStore> api::Proposal for Proposal<T> {
-    type Proposal = Proposal<T>;
+// #[async_trait]
+// impl<T: NodeWriter> api::Proposal for Proposal<T> {
+//     type Proposal = Proposal<T>;
 
-    async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
-        todo!()
-    }
+//     async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
+//         todo!()
+//     }
 
-    async fn propose<K: api::KeyType, V: api::ValueType>(
-        self: Arc<Self>,
-        _data: api::Batch<K, V>,
-    ) -> Result<Arc<Self::Proposal>, api::Error> {
-        todo!()
-    }
-}
+//     async fn propose<K: api::KeyType, V: api::ValueType>(
+//         self: Arc<Self>,
+//         _data: api::Batch<K, V>,
+//     ) -> Result<Arc<Self::Proposal>, api::Error> {
+//         todo!()
+//     }
+// }
 
-#[async_trait]
-impl<T: WriteLinearStore> api::DbView for Proposal<T> {
-    type Stream<'a> = MerkleKeyValueStream<'a, T> where T: 'a;
+// #[async_trait]
+// impl<T: NodeReader> api::DbView for Proposal<T> {
+//     type Stream<'a> = MerkleKeyValueStream<'a, T> where T: 'a;
 
-    async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
-        todo!()
-    }
+//     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
+//         todo!()
+//     }
 
-    async fn val<K>(&self, _key: K) -> Result<Option<Vec<u8>>, api::Error>
-    where
-        K: api::KeyType,
-    {
-        todo!()
-    }
+//     async fn val<K>(&self, _key: K) -> Result<Option<Vec<u8>>, api::Error>
+//     where
+//         K: api::KeyType,
+//     {
+//         todo!()
+//     }
 
-    async fn single_key_proof<K>(&self, _key: K) -> Result<Option<Proof<Vec<u8>>>, api::Error>
-    where
-        K: api::KeyType,
-    {
-        todo!()
-    }
+// async fn single_key_proof<K>(&self, _key: K) -> Result<Option<Proof<ProofNode>>, api::Error>
+// where
+//     K: api::KeyType,
+// {
+//     todo!()
+// }
 
-    async fn range_proof<K, V>(
-        &self,
-        _first_key: Option<K>,
-        _last_key: Option<K>,
-        _limit: Option<usize>,
-    ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>>>, api::Error>
-    where
-        K: api::KeyType,
-    {
-        todo!();
-    }
+// async fn range_proof<K, V>(
+//     &self,
+//     _first_key: Option<K>,
+//     _last_key: Option<K>,
+//     _limit: Option<usize>,
+// ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>, ProofNode>>, api::Error>
+// where
+//     K: api::KeyType,
+// {
+//     todo!();
+// }
 
-    fn iter_option<K: KeyType>(
-        &self,
-        _first_key: Option<K>,
-    ) -> Result<Self::Stream<'_>, api::Error> {
-        todo!()
-    }
-}
+//     fn iter_option<K: KeyType>(
+//         &self,
+//         _first_key: Option<K>,
+//     ) -> Result<Self::Stream<'_>, api::Error> {
+//         todo!()
+//     }
+// }
 
 /// Database configuration.
 #[derive(Clone, TypedBuilder, Debug)]
@@ -219,36 +210,36 @@ pub struct DbConfig {
 #[derive(Debug)]
 pub struct Db {
     metrics: Arc<DbMetrics>,
-    manager: RevisionManager,
+    _manager: RevisionManager,
 }
 
-#[async_trait]
-impl api::Db for Db {
-    type Historical = HistoricalRev<HistoricalStore>;
+// #[async_trait]
+// impl api::Db for Db {
+//     type Historical = HistoricalRev<HistoricalStore>;
 
-    type Proposal = Proposal<ProposedMutable>;
+//     type Proposal = Proposal<ProposedMutable>;
 
-    async fn revision(
-        &self,
-        _root_hash: HashKey,
-    ) -> Result<Arc<HistoricalRev<HistoricalStore>>, api::Error> {
-        let store = self.manager.revision(_root_hash)?;
-        Ok(Arc::new(HistoricalRev::<HistoricalStore> {
-            _historical: store,
-        }))
-    }
+//     async fn revision(
+//         &self,
+//         _root_hash: HashKey,
+//     ) -> Result<Arc<HistoricalRev<HistoricalStore>>, api::Error> {
+//         let store = self.manager.revision(_root_hash)?;
+//         Ok(Arc::new(HistoricalRev::<HistoricalStore> {
+//             _historical: store,
+//         }))
+//     }
 
-    async fn root_hash(&self) -> Result<HashKey, api::Error> {
-        Ok(self.manager.root_hash()?)
-    }
+//     async fn root_hash(&self) -> Result<HashKey, api::Error> {
+//         Ok(self.manager.root_hash()?)
+//     }
 
-    async fn propose<K: KeyType, V: ValueType>(
-        &self,
-        _batch: api::Batch<K, V>,
-    ) -> Result<Arc<Self::Proposal>, api::Error> {
-        todo!()
-    }
-}
+//     async fn propose<K: KeyType, V: ValueType>(
+//         &self,
+//         _batch: api::Batch<K, V>,
+//     ) -> Result<Arc<Self::Proposal>, api::Error> {
+//         todo!()
+//     }
+// }
 
 #[metered(registry = DbMetrics, visibility = pub)]
 impl Db {
@@ -259,17 +250,20 @@ impl Db {
             cfg.truncate,
             cfg.manager.clone(),
         )?;
-        let db = Self { metrics, manager };
+        let db = Self {
+            metrics,
+            _manager: manager,
+        };
         Ok(db)
     }
 
     /// Create a proposal.
-    pub fn new_proposal<K: KeyType, V: ValueType>(
-        &self,
-        _data: Batch<K, V>,
-    ) -> Result<Proposal<ProposedMutable>, DbError> {
-        todo!()
-    }
+    // pub fn new_proposal<K: KeyType, V: ValueType>(
+    //     &self,
+    //     _data: Batch<K, V>,
+    // ) -> Result<Proposal<ProposedMutable>, DbError> {
+    //     todo!()
+    // }
 
     /// Dump the Trie of the latest revision.
     pub fn dump(&self, _w: &mut dyn Write) -> Result<(), DbError> {
