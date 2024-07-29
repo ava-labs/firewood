@@ -61,7 +61,7 @@ enum NodeStreamState {
 }
 
 #[derive(Debug)]
-pub struct MerkleNodeStream<'a, T: TrieReader> {
+pub struct MerkleNodeStream<'a, T> {
     state: NodeStreamState,
     merkle: &'a T,
 }
@@ -260,7 +260,7 @@ fn get_iterator_intial_state<T: TrieReader>(
 }
 
 #[derive(Debug)]
-enum MerkleKeyValueStreamState<'a, T: TrieReader> {
+enum MerkleKeyValueStreamState<'a, T> {
     /// The iterator state is lazily initialized when poll_next is called
     /// for the first time. The iteration start key is stored here.
     _Uninitialized(Key),
@@ -269,7 +269,7 @@ enum MerkleKeyValueStreamState<'a, T: TrieReader> {
     Initialized { node_iter: MerkleNodeStream<'a, T> },
 }
 
-impl<'a, T: TrieReader> From<Key> for MerkleKeyValueStreamState<'a, T> {
+impl<'a, T> From<Key> for MerkleKeyValueStreamState<'a, T> {
     fn from(key: Key) -> Self {
         Self::_Uninitialized(key)
     }
@@ -283,7 +283,7 @@ impl<'a, T: TrieReader> MerkleKeyValueStreamState<'a, T> {
 }
 
 #[derive(Debug)]
-pub struct MerkleKeyValueStream<'a, T: TrieReader> {
+pub struct MerkleKeyValueStream<'a, T> {
     state: MerkleKeyValueStreamState<'a, T>,
     merkle: &'a T,
 }
@@ -379,7 +379,7 @@ enum PathIteratorState<'a> {
 /// All returned nodes have keys which are a prefix of the given key.
 /// If the given key is in the trie, the last node is at that key.
 #[derive(Debug)]
-pub struct PathIterator<'a, 'b, T: TrieReader> {
+pub struct PathIterator<'a, 'b, T> {
     state: PathIteratorState<'b>,
     merkle: &'a T,
 }
