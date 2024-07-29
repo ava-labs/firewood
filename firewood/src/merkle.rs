@@ -179,6 +179,10 @@ impl<T: NodeReader> Merkle<T> {
         Some((root_addr, root_hash))
     }
 
+    pub const fn nodestore(&self) -> &T {
+        &self.nodestore
+    }
+
     pub(crate) fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, MerkleError> {
         self.nodestore.read_node(addr)
     }
@@ -225,14 +229,6 @@ impl<T: NodeReader> Merkle<T> {
         Ok(Proof(proof.into_boxed_slice()))
     }
 
-    pub fn verify_proof(
-        &self,
-        _key: &[u8],
-        _proof: &Proof<impl Hashable>,
-    ) -> Result<Option<Vec<u8>>, MerkleError> {
-        todo!()
-    }
-
     pub fn verify_range_proof<V: AsRef<[u8]>>(
         &self,
         _proof: &Proof<impl Hashable>,
@@ -244,18 +240,17 @@ impl<T: NodeReader> Merkle<T> {
         todo!()
     }
 
-    // TODO danlaine: can we use the LinearAddress of the `root` instead?
     pub fn path_iter<'a>(&self, key: &'a [u8]) -> Result<PathIterator<'_, 'a, T>, MerkleError> {
-        PathIterator::new(self, key)
+        PathIterator::new(&self.nodestore, key)
     }
 
     pub(crate) fn _key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
-        MerkleKeyValueStream::_new(self)
+        MerkleKeyValueStream::from(&self.nodestore)
     }
 
     pub(crate) fn _key_value_iter_from_key(&self, key: Key) -> MerkleKeyValueStream<'_, T> {
         // TODO danlaine: change key to &[u8]
-        MerkleKeyValueStream::_from_key(self, key)
+        MerkleKeyValueStream::_from_key(&self.nodestore, key)
     }
 
     pub(super) async fn _range_proof(
