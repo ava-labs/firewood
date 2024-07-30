@@ -22,9 +22,6 @@ pub struct EmptyDb;
 #[derive(Debug)]
 pub struct HistoricalImpl;
 
-/// This is the hash of the [EmptyDb] root
-const ROOT_HASH: [u8; 32] = [0; 32];
-
 #[async_trait]
 impl Db for EmptyDb {
     type Historical = HistoricalImpl;
@@ -32,15 +29,11 @@ impl Db for EmptyDb {
     type Proposal = Proposal<HistoricalImpl>;
 
     async fn revision(&self, hash_key: HashKey) -> Result<Arc<Self::Historical>, Error> {
-        if hash_key == ROOT_HASH {
-            Ok(HistoricalImpl.into())
-        } else {
-            Err(Error::HashNotFound { provided: hash_key })
-        }
+        Err(Error::HashNotFound { provided: hash_key })
     }
 
-    async fn root_hash(&self) -> Result<HashKey, Error> {
-        Ok(ROOT_HASH)
+    async fn root_hash(&self) -> Result<Option<HashKey>, Error> {
+        Ok(None)
     }
 
     async fn propose<K, V>(&self, data: Batch<K, V>) -> Result<Arc<Self::Proposal>, Error>
@@ -59,8 +52,8 @@ impl Db for EmptyDb {
 impl DbView for HistoricalImpl {
     type Stream<'a> = EmptyStreamer;
 
-    async fn root_hash(&self) -> Result<HashKey, Error> {
-        Ok(ROOT_HASH)
+    async fn root_hash(&self) -> Result<Option<HashKey>, Error> {
+        Ok(None)
     }
 
     async fn val<K: KeyType>(&self, _key: K) -> Result<Option<Vec<u8>>, Error> {
@@ -104,8 +97,6 @@ impl Stream for EmptyStreamer {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use futures::StreamExt;
-
     use super::*;
     use crate::v2::api::{BatchOp, Proposal};
 
@@ -173,21 +164,4 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn empty_streamer() -> Result<(), Error> {
-        let emptydb = EmptyDb {};
-        let rev = emptydb.revision(ROOT_HASH).await?;
-        let mut iter = rev.iter()?;
-        assert!(iter.next().await.is_none());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn empty_streamer_start_at() -> Result<(), Error> {
-        let emptydb = EmptyDb {};
-        let rev = emptydb.revision(ROOT_HASH).await?;
-        let mut iter = rev.iter_from(b"ignored")?;
-        assert!(iter.next().await.is_none());
-        Ok(())
-    }
 }

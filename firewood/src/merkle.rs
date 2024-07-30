@@ -355,7 +355,7 @@ impl<T: HashedNodeReader> Merkle<T> {
     pub fn dump(&self) -> Result<String, MerkleError> {
         let mut result = vec![];
         writeln!(result, "digraph Merkle {{")?;
-        if let Some((root_addr, root_hash)) = self.nodestore.root_address_and_hash() {
+        if let Some((root_addr, root_hash)) = self.nodestore.root_address_and_hash()? {
             writeln!(result, " root -> {root_addr}")?;
             let mut seen = HashSet::new();
             self.dump_node(root_addr, Some(&root_hash), &mut seen, &mut result)?;
@@ -1106,7 +1106,7 @@ mod tests {
 
         let merkle = merkle.hash();
 
-        let (_, root_hash) = merkle.nodestore.root_address_and_hash().unwrap();
+        let root_hash = merkle.nodestore.root_hash().unwrap().unwrap();
 
         for (key, value) in kvs {
             let proof = merkle.prove(&key).unwrap();
@@ -1519,7 +1519,7 @@ mod tests {
     #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1]),(&[0,8],&[0,8]),(&[0,1,2],&[0,1,2])], Some("a683b4881cb540b969f885f538ba5904699d480152f350659475a962d6240ef9"); "root with branch child and leaf child")]
     fn test_root_hash_merkledb_compatible(kvs: Vec<(&[u8], &[u8])>, expected_hash: Option<&str>) {
         let merkle = merkle_build_test(kvs).unwrap().hash();
-        let Some((_, got_hash)) = merkle.nodestore.root_address_and_hash() else {
+        let Some(got_hash) = merkle.nodestore.root_hash().unwrap() else {
             assert!(expected_hash.is_none());
             return;
         };

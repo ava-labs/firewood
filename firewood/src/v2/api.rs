@@ -32,7 +32,7 @@ impl<T> ValueType for T where T: AsRef<[u8]> + Send + Sync + Debug + 'static {}
 ///    in time
 ///  - They are used to provide integrity at different points in a
 ///    proof
-pub type HashKey = [u8; 32];
+pub type HashKey = storage::TrieHash;
 
 /// A key/value pair operation. Only put (upsert) and delete are
 /// supported
@@ -128,7 +128,7 @@ pub trait Db {
     async fn revision(&self, hash: HashKey) -> Result<Arc<Self::Historical>, Error>;
 
     /// Get the hash of the most recently committed version
-    async fn root_hash(&self) -> Result<HashKey, Error>;
+    async fn root_hash(&self) -> Result<Option<HashKey>, Error>;
 
     /// Propose a change to the database via a batch
     ///
@@ -162,7 +162,7 @@ pub trait DbView {
         Self: 'a;
 
     /// Get the root hash for the current DbView
-    async fn root_hash(&self) -> Result<HashKey, Error>;
+    async fn root_hash(&self) -> Result<Option<HashKey>, Error>;
 
     /// Get the value of a specific key
     async fn val<K: KeyType>(&self, key: K) -> Result<Option<Vec<u8>>, Error>;

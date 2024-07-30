@@ -488,7 +488,12 @@ struct FreeArea {
 /// Reads from an immutable (i.e. already hashed) merkle trie.
 pub trait HashedNodeReader: TrieReader {
     /// Gets the address and hash of the root node of an immutable merkle trie.
-    fn root_address_and_hash(&self) -> Option<(LinearAddress, TrieHash)>;
+    fn root_address_and_hash(&self) -> Result<Option<(LinearAddress, TrieHash)>, Error>;
+
+    /// Gets the hash of the root node of an immutable merkle trie.
+    fn root_hash(&self) -> Result<Option<TrieHash>, Error> {
+        Ok(self.root_address_and_hash()?.map(|(_, hash)| hash))
+    }
 }
 
 /// Reads nodes and the root address from a merkle trie.
@@ -759,12 +764,14 @@ impl<T: ReadInMemoryNode + Hashed, S: ReadableStorage> HashedNodeReader for Node
 where
     NodeStore<T, S>: TrieReader,
 {
-    fn root_address_and_hash(&self) -> Option<(LinearAddress, TrieHash)> {
-        let root_addr = self.header.root_address?;
-
-        let root_node = self.read_node(root_addr).expect("TODO handle error");
-        let root_hash = hash_node(&root_node, &Path::new());
-        Some((root_addr, root_hash))
+    fn root_address_and_hash(&self) -> Result<Option<(LinearAddress, TrieHash)>, Error> {
+        if let Some(root_addr) = self.header.root_address {
+            let root_node = self.read_node(root_addr)?;
+            let root_hash = hash_node(&root_node, &Path::new());
+            Ok(Some((root_addr, root_hash)))
+        } else {
+            Ok(None)
+        }
     }
 }
 
