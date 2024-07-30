@@ -2,16 +2,20 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::merkle::MerkleError;
-use crate::v2::api::{self};
+use crate::proof::{Proof, ProofNode};
+use crate::stream::MerkleKeyValueStream;
+use crate::v2::api::{self, KeyType};
 pub use crate::v2::api::{Batch, BatchOp};
 
 use crate::manager::{RevisionManager, RevisionManagerConfig};
+use async_trait::async_trait;
 use metered::metered;
 use std::error::Error;
 use std::fmt;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
+use storage::{Committed, FileBacked, HashedNodeReader, NodeStore};
 use typed_builder::TypedBuilder;
 
 // TODO use or remove
@@ -49,47 +53,43 @@ impl From<std::io::Error> for DbError {
 
 impl Error for DbError {}
 
-// #[derive(Debug)]
-// pub struct HistoricalRev<T> {
-//     // TODO: add Merkle wrapping here
-//     _historical: Arc<T>,
-// }
+type HistoricalRev = NodeStore<Committed, FileBacked>;
 
-// #[async_trait]
-// impl<T: NodeReader + Send + Sync> api::DbView for HistoricalRev<T> {
-//     type Stream<'a> = MerkleKeyValueStream<'a, T> where Self: 'a;
+#[async_trait]
+impl api::DbView for HistoricalRev {
+    type Stream<'a> = MerkleKeyValueStream<'a, Self> where Self: 'a;
 
-//     async fn root_hash(&self) -> Result<api::HashKey, api::Error> {
-//         todo!()
-//     }
+    async fn root_hash(&self) -> Result<Option<api::HashKey>, api::Error> {
+        HashedNodeReader::root_hash(self).map_err(api::Error::IO)
+    }
 
-//     async fn val<K: api::KeyType>(&self, _key: K) -> Result<Option<Vec<u8>>, api::Error> {
-//         todo!()
-//     }
+    async fn val<K: api::KeyType>(&self, _key: K) -> Result<Option<Vec<u8>>, api::Error> {
+        todo!()
+    }
 
-// async fn single_key_proof<K: api::KeyType>(
-//     &self,
-//     _key: K,
-// ) -> Result<Option<Proof<ProofNode>>, api::Error> {
-//     todo!()
-// }
+    async fn single_key_proof<K: api::KeyType>(
+        &self,
+        _key: K,
+    ) -> Result<Option<Proof<ProofNode>>, api::Error> {
+        todo!()
+    }
 
-// async fn range_proof<K: api::KeyType, V>(
-//     &self,
-//     _first_key: Option<K>,
-//     _last_key: Option<K>,
-//     _limit: Option<usize>,
-// ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>, ProofNode>>, api::Error> {
-//     todo!()
-// }
+    async fn range_proof<K: api::KeyType, V>(
+        &self,
+        _first_key: Option<K>,
+        _last_key: Option<K>,
+        _limit: Option<usize>,
+    ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>, ProofNode>>, api::Error> {
+        todo!()
+    }
 
-//     fn iter_option<K: KeyType>(
-//         &self,
-//         _first_key: Option<K>,
-//     ) -> Result<Self::Stream<'_>, api::Error> {
-//         todo!()
-//     }
-// }
+    fn iter_option<K: KeyType>(
+        &self,
+        _first_key: Option<K>,
+    ) -> Result<Self::Stream<'_>, api::Error> {
+        todo!()
+    }
+}
 
 // impl<T: NodeReader> HistoricalRev<T> {
 //     pub fn stream(&self) -> MerkleKeyValueStream<'_, T> {

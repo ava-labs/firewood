@@ -122,7 +122,7 @@ async fn _verify_keys(
     verify: HashMap<Vec<u8>, Vec<u8>>,
 ) -> Result<(), firewood::v2::api::Error> {
     if !verify.is_empty() {
-        let hash = db.root_hash().await?;
+        let hash = db.root_hash().await?.expect("root hash should exist");
         let revision = db.revision(hash).await?;
         for (key, value) in verify {
             assert_eq!(Some(value), revision.val(key).await?);
