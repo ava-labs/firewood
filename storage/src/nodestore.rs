@@ -1,8 +1,6 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -10,6 +8,24 @@ use std::fmt::Debug;
 /// free space management of nodes in the page store. It lays out the format
 /// of the [PageStore]. More specifically, it places a [FileIdentifyingMagic]
 /// and a [FreeSpaceHeader] at the beginning
+/// 
+/// Nodestores represent a revision of the trie. There are three types of nodestores:
+/// - Committed: A committed revision of the trie. It has no in-memory changes.
+/// - MutableProposal: A proposal that is still being modified. It has some nodes in memory.
+/// - ImmutableProposal: A proposal that has been hashed and assigned addresses. It has no in-memory changes.
+/// 
+/// The general lifecycle of nodestores is as follows:
+/// ```mermaid
+/// flowchart TD
+/// subgraph subgraph["Committed Revisions"]
+/// L("Latest Nodestore&lt;Committed, S&gt;") --- |...|O("Oldest NodeStore&lt;Committed, S&gt;")
+/// end
+/// O --> E("Expire")
+/// L --> |start propose|M("NodeStore&lt;ProposedMutable, S&gt;")
+/// M --> |finish propose + hash|I("NodeStore&lt;ProposedImmutable, S&gt;")
+/// I --> |commit|N("New commit NodeStore&lt;Committed, S&gt;")
+/// style E color:#FFFFFF, fill:#AA00FF, stroke:#AA00FF
+/// ```
 use std::io::{Error, ErrorKind, Write};
 use std::iter::once;
 use std::num::NonZeroU64;
@@ -61,9 +77,6 @@ const MAX_AREA_SIZE: u64 = AREA_SIZES[NUM_AREA_SIZES - 1];
 const SOME_FREE_LIST_ELT_SIZE: u64 = 1 + std::mem::size_of::<LinearAddress>() as u64;
 const FREE_LIST_MAX_SIZE: u64 = NUM_AREA_SIZES as u64 * SOME_FREE_LIST_ELT_SIZE;
 
-/// Number of children in a branch
-const BRANCH_CHILDREN: usize = 16;
-
 /// Returns the index in `BLOCK_SIZES` of the smallest block size >= `n`.
 fn area_size_to_index(n: u64) -> Result<AreaIndex, Error> {
     if n > MAX_AREA_SIZE {
@@ -110,6 +123,7 @@ struct StoredArea<T> {
 impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
     /// Returns (index, area_size) for the [StoredArea] at `addr`.
     /// `index` is the index of `area_size` in [AREA_SIZES].
+    #[allow(dead_code)]
     fn area_index_and_size(&self, addr: LinearAddress) -> Result<(AreaIndex, u64), Error> {
         let mut area_stream = self.storage.stream_from(addr.get())?;
 
@@ -514,6 +528,7 @@ pub trait RootReader {
 /// A committed revision of a merkle trie.
 #[derive(Debug)]
 pub struct Committed {
+    #[allow(dead_code)]
     deleted: Box<[LinearAddress]>,
 }
 
@@ -593,7 +608,7 @@ pub trait ReadInMemoryNode {
 /// 5. Convert an immutable proposal to a committed revision using [std::convert::TryInto], which writes the nodes to disk.
 
 #[derive(Debug)]
-pub struct NodeStore<T: ReadInMemoryNode, S: ReadableStorage> {
+pub struct NodeStore<T, S> {
     // Metadata for this revision.
     header: NodeStoreHeader,
     /// This is one of [Committed], [ImmutableProposal], or [MutableProposal].
@@ -650,6 +665,19 @@ impl<T: ReadInMemoryNode + Into<NodeStoreParent>, S: ReadableStorage> From<NodeS
                 root: None,
                 deleted: Default::default(),
                 parent: val.kind.into(),
+            },
+            storage: val.storage,
+        }
+    }
+}
+
+/// Commit a proposal to a new revision of the trie
+impl<S: WritableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStore<Committed, S> {
+    fn from(val: NodeStore<ImmutableProposal, S>) -> Self {
+        NodeStore {
+            header: val.header,
+            kind: Committed {
+                deleted: val.kind.deleted,
             },
             storage: val.storage,
         }
