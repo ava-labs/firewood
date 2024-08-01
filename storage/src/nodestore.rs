@@ -8,12 +8,12 @@ use std::fmt::Debug;
 /// free space management of nodes in the page store. It lays out the format
 /// of the [PageStore]. More specifically, it places a [FileIdentifyingMagic]
 /// and a [FreeSpaceHeader] at the beginning
-/// 
+///
 /// Nodestores represent a revision of the trie. There are three types of nodestores:
 /// - Committed: A committed revision of the trie. It has no in-memory changes.
 /// - MutableProposal: A proposal that is still being modified. It has some nodes in memory.
 /// - ImmutableProposal: A proposal that has been hashed and assigned addresses. It has no in-memory changes.
-/// 
+///
 /// The general lifecycle of nodestores is as follows:
 /// ```mermaid
 /// flowchart TD
@@ -203,11 +203,26 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     }
 }
 
+pub trait Parentable {
+    fn as_nodestore_parent(&self) -> NodeStoreParent;
+}
+
+impl Parentable for ImmutableProposal {
+    fn as_nodestore_parent(&self) -> NodeStoreParent {
+        NodeStoreParent::Proposed(Arc::new(self.clone()))
+    }
+}
+
+impl Parentable for Committed {
+    fn as_nodestore_parent(&self) -> NodeStoreParent {
+        NodeStoreParent::Committed
+    }
+}
+
 impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     /// Create a new MutableProposal [NodeStore] from a parent [NodeStore]
-    pub fn new<F: Into<NodeStoreParent> + ReadInMemoryNode>(
-        parent: NodeStore<F, S>,
-        storage: Arc<S>,
+    pub fn new<F: Parentable + ReadInMemoryNode>(
+        parent: Arc<NodeStore<F, S>>,
     ) -> Result<Self, Error> {
         let mut deleted: Vec<_> = Default::default();
         let root = if let Some(root_addr) = parent.header.root_address {
@@ -220,12 +235,12 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
         let kind = MutableProposal {
             root,
             deleted,
-            parent: parent.kind.into(),
+            parent: parent.kind.as_nodestore_parent(),
         };
         Ok(NodeStore {
             header: parent.header.clone(),
             kind,
-            storage,
+            storage: parent.storage.clone(),
         })
     }
 
@@ -526,7 +541,7 @@ pub trait RootReader {
 }
 
 /// A committed revision of a merkle trie.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Committed {
     #[allow(dead_code)]
     deleted: Box<[LinearAddress]>,
@@ -539,25 +554,13 @@ impl ReadInMemoryNode for Committed {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum NodeStoreParent {
     Proposed(Arc<ImmutableProposal>),
     Committed,
 }
 
-impl<S: ReadableStorage> From<NodeStore<Committed, S>> for NodeStoreParent {
-    fn from(_: NodeStore<Committed, S>) -> Self {
-        NodeStoreParent::Committed
-    }
-}
-
-impl<S: ReadableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStoreParent {
-    fn from(val: NodeStore<ImmutableProposal, S>) -> Self {
-        NodeStoreParent::Proposed(Arc::new(val.kind))
-    }
-}
-
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 /// Contains state for a proposed revision of the trie.
 pub struct ImmutableProposal {
     /// Address --> Node for nodes created in this proposal.
@@ -612,9 +615,9 @@ pub struct NodeStore<T, S> {
     // Metadata for this revision.
     header: NodeStoreHeader,
     /// This is one of [Committed], [ImmutableProposal], or [MutableProposal].
-    kind: T,
-    // Persisted storage to read nodes from.
-    storage: Arc<S>,
+    pub kind: T,
+    /// Persisted storage to read nodes from.
+    pub storage: Arc<S>,
 }
 
 /// Contains the state of a proposal that is still being modified.
