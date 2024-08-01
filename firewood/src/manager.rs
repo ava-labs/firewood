@@ -3,14 +3,16 @@
 
 #![allow(dead_code)]
 
-use std::io::Error;
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::{collections::VecDeque, io::Error};
 
 use typed_builder::TypedBuilder;
 
 use crate::v2::api::HashKey;
 
-use storage::FileBacked;
+use storage::{Committed, FileBacked, ImmutableProposal, NodeStore, TrieHash};
 
 #[derive(Clone, Debug, TypedBuilder)]
 pub struct RevisionManagerConfig {
@@ -23,10 +25,10 @@ pub struct RevisionManagerConfig {
 pub(crate) struct RevisionManager {
     max_revisions: usize,
     filebacked: FileBacked,
-    // historical: VecDeque<Arc<Historical>>,
-    // proposals: Vec<Arc<ProposedImmutable>>, // TODO: Should be Vec<Weak<ProposedImmutable>>
+    historical: VecDeque<Arc<NodeStore<Committed, FileBacked>>>,
+    proposals: Vec<Arc<NodeStore<ImmutableProposal, FileBacked>>>,
     // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
-    // TODO: by_hash: HashMap<TrieHash, LinearStore>
+    by_hash: HashMap<TrieHash, Arc<NodeStore<Committed, FileBacked>>>,
     // TODO: maintain root hash of the most recent commit
 }
 
@@ -39,10 +41,15 @@ impl RevisionManager {
         Ok(Self {
             max_revisions: config.max_revisions,
             filebacked: FileBacked::new(filename, truncate)?,
-            // historical: Default::default(),
-            // proposals: Default::default(),
+            historical: Default::default(),
+            by_hash: Default::default(),
+            proposals: Default::default(),
             // committing_proposals: Default::default(),
         })
+    }
+
+    pub fn latest_revision(&self) -> Option<Arc<NodeStore<Committed, FileBacked>>> {
+        self.historical.back().cloned()
     }
 }
 
@@ -171,16 +178,18 @@ pub type NewProposalError = (); // TODO implement
 
 impl RevisionManager {
     // TODO fix this or remove it. It should take in a proposal.
-    pub fn add_proposal(&mut self, _proposal: ()) {
-        todo!()
-        // self.proposals.push(proposal);
+    pub fn add_proposal(&mut self, proposal: Arc<NodeStore<ImmutableProposal, FileBacked>>) {
+        self.proposals.push(proposal);
     }
 
-    pub fn revision(&self, _root_hash: HashKey) -> Result<(), RevisionManagerError> {
+    pub fn revision(
+        &self,
+        _root_hash: HashKey,
+    ) -> Result<Arc<NodeStore<Committed, FileBacked>>, RevisionManagerError> {
         todo!()
     }
 
-    pub fn root_hash(&self) -> Result<HashKey, RevisionManagerError> {
+    pub fn root_hash(&self) -> Result<Option<HashKey>, RevisionManagerError> {
         todo!()
     }
 }

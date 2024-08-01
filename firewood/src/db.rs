@@ -1,10 +1,10 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::merkle::MerkleError;
+use crate::merkle::{Merkle, MerkleError};
 use crate::proof::{Proof, ProofNode};
 use crate::stream::MerkleKeyValueStream;
-use crate::v2::api::{self, KeyType};
+use crate::v2::api::{self, KeyType, ValueType};
 pub use crate::v2::api::{Batch, BatchOp};
 
 use crate::manager::{RevisionManager, RevisionManagerConfig};
@@ -15,7 +15,7 @@ use std::fmt;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
-use storage::{Committed, FileBacked, HashedNodeReader, NodeStore};
+use storage::{Committed, FileBacked, HashedNodeReader, ImmutableProposal, NodeStore, TrieHash};
 use typed_builder::TypedBuilder;
 
 // TODO use or remove
@@ -210,36 +210,48 @@ pub struct DbConfig {
 #[derive(Debug)]
 pub struct Db {
     metrics: Arc<DbMetrics>,
-    _manager: RevisionManager,
+    manager: RevisionManager,
 }
 
-// #[async_trait]
-// impl api::Db for Db {
-//     type Historical = HistoricalRev<HistoricalStore>;
+#[async_trait]
+impl api::Db for Db {
+    type Historical = NodeStore<Committed, FileBacked>;
 
-//     type Proposal = Proposal<ProposedMutable>;
+    type Proposal = NodeStore<ImmutableProposal, FileBacked>;
 
-//     async fn revision(
-//         &self,
-//         _root_hash: HashKey,
-//     ) -> Result<Arc<HistoricalRev<HistoricalStore>>, api::Error> {
-//         let store = self.manager.revision(_root_hash)?;
-//         Ok(Arc::new(HistoricalRev::<HistoricalStore> {
-//             _historical: store,
-//         }))
-//     }
+    async fn revision(&self, _root_hash: TrieHash) -> Result<Arc<Self::Historical>, api::Error> {
+        let nodestore = self.manager.revision(_root_hash)?;
+        Ok(nodestore)
+    }
 
-//     async fn root_hash(&self) -> Result<HashKey, api::Error> {
-//         Ok(self.manager.root_hash()?)
-//     }
+    async fn root_hash(&self) -> Result<Option<TrieHash>, api::Error> {
+        Ok(self.manager.root_hash()?)
+    }
 
-//     async fn propose<K: KeyType, V: ValueType>(
-//         &self,
-//         _batch: api::Batch<K, V>,
-//     ) -> Result<Arc<Self::Proposal>, api::Error> {
-//         todo!()
-//     }
-// }
+    async fn propose<K: KeyType, V: ValueType>(
+        &mut self,
+        batch: api::Batch<K, V>,
+    ) -> Result<Arc<Self::Proposal>, api::Error> {
+        let parent = self.manager.latest_revision().expect("no latest revision");
+        let proposal = NodeStore::new(parent)?;
+        let mut merkle = Merkle::from(proposal);
+        for op in batch {
+            match op {
+                BatchOp::Put { key, value } => {
+                    merkle.insert(key.as_ref(), value.as_ref().into())?;
+                }
+                BatchOp::Delete { key } => {
+                    merkle.remove(key.as_ref())?;
+                }
+            }
+        }
+        let nodestore = merkle.into_inner();
+        let immutable: Arc<NodeStore<ImmutableProposal, FileBacked>> = Arc::new(nodestore.into());
+        self.manager.add_proposal(immutable.clone());
+
+        Ok(immutable)
+    }
+}
 
 #[metered(registry = DbMetrics, visibility = pub)]
 impl Db {
@@ -250,10 +262,7 @@ impl Db {
             cfg.truncate,
             cfg.manager.clone(),
         )?;
-        let db = Self {
-            metrics,
-            _manager: manager,
-        };
+        let db = Self { metrics, manager };
         Ok(db)
     }
 
@@ -272,5 +281,57 @@ impl Db {
 
     pub fn metrics(&self) -> Arc<DbMetrics> {
         self.metrics.clone()
+    }
+}
+
+#[async_trait]
+impl api::DbView for NodeStore<ImmutableProposal, FileBacked> {
+    type Stream<'a> = MerkleKeyValueStream<'a, Self>;
+
+    async fn root_hash(&self) -> Result<Option<api::HashKey>, api::Error> {
+        todo!()
+    }
+
+    async fn val<K: KeyType>(&self, _key: K) -> Result<Option<Vec<u8>>, api::Error> {
+        todo!()
+    }
+
+    async fn single_key_proof<K: KeyType>(
+        &self,
+        _key: K,
+    ) -> Result<Option<Proof<ProofNode>>, api::Error> {
+        todo!()
+    }
+
+    async fn range_proof<K: KeyType, V>(
+        &self,
+        _first_key: Option<K>,
+        _last_key: Option<K>,
+        _limit: Option<usize>,
+    ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>, ProofNode>>, api::Error> {
+        todo!()
+    }
+
+    fn iter_option<K: KeyType>(
+        &self,
+        _first_key: Option<K>,
+    ) -> Result<Self::Stream<'_>, api::Error> {
+        todo!()
+    }
+}
+
+#[async_trait]
+impl api::Proposal for NodeStore<ImmutableProposal, FileBacked> {
+    type Proposal = NodeStore<ImmutableProposal, FileBacked>;
+
+    async fn propose<K: KeyType, V: ValueType>(
+        self: Arc<Self>,
+        _data: api::Batch<K, V>,
+    ) -> Result<Arc<Self::Proposal>, api::Error> {
+        todo!()
+    }
+
+    async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
+        todo!()
     }
 }

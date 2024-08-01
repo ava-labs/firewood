@@ -7,7 +7,7 @@ use crate::{merkle::MerkleError, proof::Proof};
 use async_trait::async_trait;
 use futures::Stream;
 use std::{fmt::Debug, sync::Arc};
-use storage::Hashable;
+use storage::{Hashable, TrieHash};
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
 /// and can be sent and shared across threads. References with
@@ -125,10 +125,10 @@ pub trait Db {
     /// # Arguments
     ///
     /// - `hash` - Identifies the revision for the view
-    async fn revision(&self, hash: HashKey) -> Result<Arc<Self::Historical>, Error>;
+    async fn revision(&self, hash: TrieHash) -> Result<Arc<Self::Historical>, Error>;
 
     /// Get the hash of the most recently committed version
-    async fn root_hash(&self) -> Result<Option<HashKey>, Error>;
+    async fn root_hash(&self) -> Result<Option<TrieHash>, Error>;
 
     /// Propose a change to the database via a batch
     ///
@@ -141,7 +141,7 @@ pub trait Db {
     ///            [BatchOp::Delete] operations to apply
     ///
     async fn propose<K: KeyType, V: ValueType>(
-        &self,
+        &mut self,
         data: Batch<K, V>,
     ) -> Result<Arc<Self::Proposal>, Error>;
 }
