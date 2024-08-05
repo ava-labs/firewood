@@ -14,7 +14,7 @@ use std::error::Error;
 use std::fmt;
 use std::io::Write;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use storage::{Committed, FileBacked, HashedNodeReader, ImmutableProposal, NodeStore, TrieHash};
 use typed_builder::TypedBuilder;
 
@@ -210,29 +210,46 @@ pub struct DbConfig {
 #[derive(Debug)]
 pub struct Db {
     metrics: Arc<DbMetrics>,
-    manager: RevisionManager,
+    // TODO: consider using https://docs.rs/lock_api/latest/lock_api/struct.RwLock.html#method.upgradable_read
+    // TODO: This should probably use an async RwLock
+    manager: RwLock<RevisionManager>,
 }
 
 #[async_trait]
-impl api::Db for Db {
+impl api::Db for Db
+where
+    for<'p> Proposal<'p>: api::Proposal,
+{
     type Historical = NodeStore<Committed, FileBacked>;
 
-    type Proposal = NodeStore<ImmutableProposal, FileBacked>;
+    type Proposal<'p> = Proposal<'p> where Self: 'p;
 
     async fn revision(&self, _root_hash: TrieHash) -> Result<Arc<Self::Historical>, api::Error> {
-        let nodestore = self.manager.revision(_root_hash)?;
+        let nodestore = self
+            .manager
+            .read()
+            .expect("poisoned lock")
+            .revision(_root_hash)?;
         Ok(nodestore)
     }
 
     async fn root_hash(&self) -> Result<Option<TrieHash>, api::Error> {
-        Ok(self.manager.root_hash()?)
+        Ok(self.manager.read().expect("poisoned lock").root_hash()?)
     }
 
-    async fn propose<K: KeyType, V: ValueType>(
-        &mut self,
+    async fn propose<'p, K: KeyType, V: ValueType>(
+        &'p mut self,
         batch: api::Batch<K, V>,
-    ) -> Result<Arc<Self::Proposal>, api::Error> {
-        let parent = self.manager.latest_revision().expect("no latest revision");
+    ) -> Result<Arc<Self::Proposal<'p>>, api::Error>
+    where
+        Self: 'p,
+    {
+        let parent = self
+            .manager
+            .read()
+            .expect("poisoned lock")
+            .latest_revision()
+            .expect("no latest revision");
         let proposal = NodeStore::new(parent)?;
         let mut merkle = Merkle::from(proposal);
         for op in batch {
@@ -247,9 +264,16 @@ impl api::Db for Db {
         }
         let nodestore = merkle.into_inner();
         let immutable: Arc<NodeStore<ImmutableProposal, FileBacked>> = Arc::new(nodestore.into());
-        self.manager.add_proposal(immutable.clone());
+        self.manager
+            .write()
+            .expect("poisoned lock")
+            .add_proposal(immutable.clone());
 
-        Ok(immutable)
+        Ok(Self::Proposal {
+            nodestore: immutable,
+            db: self,
+        }
+        .into())
     }
 }
 
@@ -262,7 +286,10 @@ impl Db {
             cfg.truncate,
             cfg.manager.clone(),
         )?;
-        let db = Self { metrics, manager };
+        let db = Self {
+            metrics,
+            manager: manager.into(),
+        };
         Ok(db)
     }
 
@@ -284,9 +311,15 @@ impl Db {
     }
 }
 
+#[derive(Debug)]
+pub struct Proposal<'p> {
+    nodestore: Arc<NodeStore<ImmutableProposal, FileBacked>>,
+    db: &'p Db,
+}
+
 #[async_trait]
-impl api::DbView for NodeStore<ImmutableProposal, FileBacked> {
-    type Stream<'a> = MerkleKeyValueStream<'a, Self>;
+impl<'a> api::DbView for Proposal<'a> {
+    type Stream<'b> = MerkleKeyValueStream<'b, NodeStore<ImmutableProposal, FileBacked>> where Self: 'b;
 
     async fn root_hash(&self) -> Result<Option<api::HashKey>, api::Error> {
         todo!()
@@ -321,8 +354,8 @@ impl api::DbView for NodeStore<ImmutableProposal, FileBacked> {
 }
 
 #[async_trait]
-impl api::Proposal for NodeStore<ImmutableProposal, FileBacked> {
-    type Proposal = NodeStore<ImmutableProposal, FileBacked>;
+impl<'a> api::Proposal for Proposal<'a> {
+    type Proposal = Proposal<'a>;
 
     async fn propose<K: KeyType, V: ValueType>(
         self: Arc<Self>,
@@ -332,6 +365,12 @@ impl api::Proposal for NodeStore<ImmutableProposal, FileBacked> {
     }
 
     async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
-        todo!()
+        match Arc::into_inner(self) {
+            Some(proposal) => {
+                let mut manager = proposal.db.manager.write().expect("poisoned lock");
+                Ok(manager.commit(proposal.nodestore.clone())?)
+            }
+            None => Err(api::Error::InvalidProposal),
+        }
     }
 }
