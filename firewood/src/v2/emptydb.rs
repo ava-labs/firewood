@@ -29,7 +29,7 @@ pub struct HistoricalImpl;
 impl Db for EmptyDb {
     type Historical = HistoricalImpl;
 
-    type Proposal = Proposal<HistoricalImpl>;
+    type Proposal<'p> = Proposal<HistoricalImpl>;
 
     async fn revision(&self, hash_key: HashKey) -> Result<Arc<Self::Historical>, Error> {
         Err(Error::HashNotFound { provided: hash_key })
@@ -39,7 +39,10 @@ impl Db for EmptyDb {
         Ok(None)
     }
 
-    async fn propose<K, V>(&mut self, data: Batch<K, V>) -> Result<Arc<Self::Proposal>, Error>
+    async fn propose<'p, K, V>(
+        &'p mut self,
+        data: Batch<K, V>,
+    ) -> Result<Arc<Self::Proposal<'p>>, Error>
     where
         K: KeyType,
         V: ValueType,

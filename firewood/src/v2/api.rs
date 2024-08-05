@@ -113,7 +113,9 @@ impl From<RevisionManagerError> for Error {
 pub trait Db {
     type Historical: DbView;
 
-    type Proposal: DbView + Proposal;
+    type Proposal<'p>: DbView + Proposal
+    where
+        Self: 'p;
 
     /// Get a reference to a specific view based on a hash
     ///
@@ -135,10 +137,12 @@ pub trait Db {
     /// * `data` - A batch consisting of [BatchOp::Put] and
     ///            [BatchOp::Delete] operations to apply
     ///
-    async fn propose<K: KeyType, V: ValueType>(
-        &mut self,
+    async fn propose<'p, K: KeyType, V: ValueType>(
+        &'p mut self,
         data: Batch<K, V>,
-    ) -> Result<Arc<Self::Proposal>, Error>;
+    ) -> Result<Arc<Self::Proposal<'p>>, Error>
+    where
+        Self: 'p;
 }
 
 /// A view of the database at a specific time. These are wrapped with

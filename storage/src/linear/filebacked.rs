@@ -15,7 +15,7 @@ use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use super::ReadableStorage;
+use super::{ReadableStorage, WritableStorage};
 
 #[derive(Debug)]
 /// A [ReadableStorage] backed by a file
@@ -52,10 +52,10 @@ impl ReadableStorage for FileBacked {
     }
 }
 
-impl FileBacked {
+impl WritableStorage for FileBacked {
     /// Write to the backend filestore. This does not implement [crate::WritableStorage]
     /// because we don't want someone accidentally writing nodes directly to disk
-    pub fn write(&mut self, offset: u64, object: &[u8]) -> Result<usize, Error> {
+    fn write(&self, offset: u64, object: &[u8]) -> Result<usize, Error> {
         self.fd
             .lock()
             .expect("poisoned lock")
