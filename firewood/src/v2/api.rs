@@ -164,7 +164,7 @@ pub trait DbView {
     async fn root_hash(&self) -> Result<Option<HashKey>, Error>;
 
     /// Get the value of a specific key
-    async fn val<K: KeyType>(&self, key: K) -> Result<Option<Vec<u8>>, Error>;
+    async fn val<K: KeyType>(&self, key: K) -> Result<Option<Box<[u8]>>, Error>;
 
     /// Obtain a proof for a single key
     async fn single_key_proof<K: KeyType>(&self, key: K)

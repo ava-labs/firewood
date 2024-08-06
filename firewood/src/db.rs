@@ -64,8 +64,9 @@ impl api::DbView for HistoricalRev {
         HashedNodeReader::root_hash(self).map_err(api::Error::IO)
     }
 
-    async fn val<K: api::KeyType>(&self, _key: K) -> Result<Option<Vec<u8>>, api::Error> {
-        todo!()
+    async fn val<K: api::KeyType>(&self, key: K) -> Result<Option<Box<[u8]>>, api::Error> {
+        let merkle = Merkle::from(self);
+        Ok(merkle.get(key.as_ref())?)
     }
 
     async fn single_key_proof<K: api::KeyType>(
@@ -326,7 +327,7 @@ impl<'a> api::DbView for Proposal<'a> {
         todo!()
     }
 
-    async fn val<K: KeyType>(&self, _key: K) -> Result<Option<Vec<u8>>, api::Error> {
+    async fn val<K: KeyType>(&self, _key: K) -> Result<Option<Box<[u8]>>, api::Error> {
         todo!()
     }
 

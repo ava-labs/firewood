@@ -98,7 +98,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn get_keys_to_verify(batch: &Batch<Vec<u8>, Vec<u8>>, pct: u16) -> HashMap<Vec<u8>, Vec<u8>> {
+fn get_keys_to_verify(batch: &Batch<Vec<u8>, Vec<u8>>, pct: u16) -> HashMap<Vec<u8>, Box<[u8]>> {
     if pct == 0 {
         HashMap::new()
     } else {
@@ -107,7 +107,7 @@ fn get_keys_to_verify(batch: &Batch<Vec<u8>, Vec<u8>>, pct: u16) -> HashMap<Vec<
             .filter(|_last_key| rand::thread_rng().gen_range(0..=(100 - pct)) == 0)
             .map(|op| {
                 if let BatchOp::Put { key, value } = op {
-                    (key.clone(), value.clone())
+                    (key.clone(), value.clone().into_boxed_slice())
                 } else {
                     unreachable!()
                 }
@@ -118,7 +118,7 @@ fn get_keys_to_verify(batch: &Batch<Vec<u8>, Vec<u8>>, pct: u16) -> HashMap<Vec<
 
 async fn verify_keys(
     db: &impl firewood::v2::api::Db,
-    verify: HashMap<Vec<u8>, Vec<u8>>,
+    verify: HashMap<Vec<u8>, Box<[u8]>>,
 ) -> Result<(), firewood::v2::api::Error> {
     if !verify.is_empty() {
         let hash = db.root_hash().await?.expect("root hash should exist");

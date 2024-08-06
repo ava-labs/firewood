@@ -62,7 +62,7 @@ impl DbView for HistoricalImpl {
         Ok(None)
     }
 
-    async fn val<K: KeyType>(&self, _key: K) -> Result<Option<Vec<u8>>, Error> {
+    async fn val<K: KeyType>(&self, _key: K) -> Result<Option<Box<[u8]>>, Error> {
         Ok(None)
     }
 
@@ -120,7 +120,10 @@ mod tests {
 
         let proposal = db.propose(batch).await?;
 
-        assert_eq!(proposal.val(b"k").await.unwrap().unwrap(), b"v");
+        assert_eq!(
+            proposal.val(b"k").await.unwrap().unwrap(),
+            Box::from(b"v".as_slice())
+        );
 
         assert!(proposal.val(b"z").await.unwrap().is_none());
 
@@ -150,12 +153,15 @@ mod tests {
             }])
             .await?;
         // both proposals still have (k,v)
-        assert_eq!(proposal1.val(b"k").await.unwrap().unwrap(), b"v");
-        assert_eq!(proposal2.val(b"k").await.unwrap().unwrap(), b"v");
+        assert_eq!(proposal1.val(b"k").await.unwrap().unwrap().to_vec(), b"v");
+        assert_eq!(proposal2.val(b"k").await.unwrap().unwrap().to_vec(), b"v");
         // only proposal1 doesn't have z
         assert!(proposal1.val(b"z").await.unwrap().is_none());
         // proposal2 has z with value "undo"
-        assert_eq!(proposal2.val(b"z").await.unwrap().unwrap(), b"undo");
+        assert_eq!(
+            proposal2.val(b"z").await.unwrap().unwrap().to_vec(),
+            b"undo"
+        );
 
         // create a proposal3 by adding the two proposals together, keeping the originals
         // TODO: consider making this possible again
