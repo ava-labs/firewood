@@ -28,12 +28,13 @@ use std::fmt::Debug;
 /// ```
 use std::io::{Error, ErrorKind, Write};
 use std::iter::once;
+use std::mem::offset_of;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use crate::hashednode::hash_node;
 use crate::node::Node;
-use crate::{Child, Path, ReadableStorage, TrieHash};
+use crate::{Child, FileBacked, Path, ReadableStorage, TrieHash};
 
 use super::linear::WritableStorage;
 
@@ -174,6 +175,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
             header,
             kind: Committed {
                 deleted: Default::default(),
+                root_hash: None, // TODO: get the root hash
             },
             storage,
         })
@@ -198,24 +200,39 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
             storage,
             kind: Committed {
                 deleted: Default::default(),
+                root_hash: None,
             },
         })
     }
 }
 
+/// Some nodestore kinds implement Parentable.
+/// This means that the nodestore can have children.
+/// Only [ImmutableProposal] and [Committed] implement this trait.
+/// [MutableProposal] does not implement this trait because it is not a valid parent.
+/// TODO: Maybe this can be renamed to ImmutableNodestore
 pub trait Parentable {
+    /// Returns the parent of this nodestore.
     fn as_nodestore_parent(&self) -> NodeStoreParent;
+    /// Returns the root hash of this nodestore. This works because all parentable nodestores have a hash
+    fn root_hash(&self) -> Option<TrieHash>;
 }
 
 impl Parentable for ImmutableProposal {
     fn as_nodestore_parent(&self) -> NodeStoreParent {
         NodeStoreParent::Proposed(Arc::new(self.clone()))
     }
+    fn root_hash(&self) -> Option<TrieHash> {
+        self.root_hash.clone()
+    }
 }
 
 impl Parentable for Committed {
     fn as_nodestore_parent(&self) -> NodeStoreParent {
-        NodeStoreParent::Committed
+        NodeStoreParent::Committed(self.root_hash.clone())
+    }
+    fn root_hash(&self) -> Option<TrieHash> {
+        self.root_hash.clone()
     }
 }
 
@@ -285,7 +302,7 @@ impl<S: WritableStorage> NodeStore<MutableProposal, S> {
             kind: MutableProposal {
                 root: None,
                 deleted: Default::default(),
-                parent: NodeStoreParent::Committed,
+                parent: NodeStoreParent::Committed(None),
             },
             storage,
         }
@@ -528,6 +545,20 @@ pub trait HashedNodeReader: TrieReader {
 /// Reads nodes and the root address from a merkle trie.
 pub trait TrieReader: NodeReader + RootReader {}
 
+impl TrieReader for &NodeStore<Committed, FileBacked> {}
+impl NodeReader for &NodeStore<Committed, FileBacked> {
+    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
+        self.read_node_from_disk(addr)
+    }
+}
+impl RootReader for &NodeStore<Committed, FileBacked> {
+    fn root_node(&self) -> Option<Arc<Node>> {
+        self.header
+            .root_address
+            .map(|addr| self.read_node_from_disk(addr).unwrap())
+    }
+}
+
 /// Reads nodes from a merkle trie.
 pub trait NodeReader {
     /// Returns the node at `addr`.
@@ -545,6 +576,7 @@ pub trait RootReader {
 pub struct Committed {
     #[allow(dead_code)]
     deleted: Box<[LinearAddress]>,
+    root_hash: Option<TrieHash>,
 }
 
 impl ReadInMemoryNode for Committed {
@@ -557,24 +589,43 @@ impl ReadInMemoryNode for Committed {
 #[derive(Clone, Debug)]
 pub enum NodeStoreParent {
     Proposed(Arc<ImmutableProposal>),
-    Committed,
+    Committed(Option<TrieHash>),
+}
+
+impl PartialEq for NodeStoreParent {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (NodeStoreParent::Proposed(a), NodeStoreParent::Proposed(b)) => Arc::ptr_eq(a, b),
+            (NodeStoreParent::Committed(a), NodeStoreParent::Committed(b)) => a == b,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 /// Contains state for a proposed revision of the trie.
 pub struct ImmutableProposal {
     /// Address --> Node for nodes created in this proposal.
-    new: HashMap<LinearAddress, Arc<Node>>,
+    new: HashMap<LinearAddress, (u8, Arc<Node>)>,
     /// Nodes that have been deleted in this proposal.
     deleted: Box<[LinearAddress]>,
     /// The parent of this proposal.
     parent: NodeStoreParent,
+    /// The hash of the root node for this proposal
+    root_hash: Option<TrieHash>,
+}
+
+impl ImmutableProposal {
+    /// Returns true if the parent of this proposal is `parent`.
+    pub fn parent_is(&self, parent: &NodeStoreParent) -> bool {
+        &self.parent == parent
+    }
 }
 
 impl ReadInMemoryNode for ImmutableProposal {
     fn read_in_memory_node(&self, addr: LinearAddress) -> Option<Arc<Node>> {
         // Check if the node being requested was created in this proposal.
-        if let Some(node) = self.new.get(&addr) {
+        if let Some((_, node)) = self.new.get(&addr) {
             return Some(node.clone());
         }
 
@@ -582,7 +633,7 @@ impl ReadInMemoryNode for ImmutableProposal {
         // a committed revision.
         match self.parent {
             NodeStoreParent::Proposed(ref parent) => parent.read_in_memory_node(addr),
-            NodeStoreParent::Committed => None,
+            NodeStoreParent::Committed(_) => None,
         }
     }
 }
@@ -636,7 +687,7 @@ impl ReadInMemoryNode for NodeStoreParent {
     fn read_in_memory_node(&self, addr: LinearAddress) -> Option<Arc<Node>> {
         match self {
             NodeStoreParent::Proposed(proposed) => proposed.read_in_memory_node(addr),
-            NodeStoreParent::Committed => None,
+            NodeStoreParent::Committed(_) => None,
         }
     }
 }
@@ -681,6 +732,7 @@ impl<S: WritableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStore<Com
             header: val.header,
             kind: Committed {
                 deleted: val.kind.deleted,
+                root_hash: val.kind.root_hash,
             },
             storage: val.storage,
         }
@@ -717,11 +769,71 @@ impl<S: ReadableStorage> NodeStore<ImmutableProposal, S> {
         }
 
         let hash = hash_node(&node, path_prefix);
-        let (addr, _) = self.allocate_node(&node).expect("TODO handle error");
+        let (addr, size) = self.allocate_node(&node).expect("TODO handle error");
 
-        self.kind.new.insert(addr, Arc::new(node));
+        self.kind.new.insert(addr, (size, Arc::new(node)));
 
         (addr, hash)
+    }
+}
+
+impl<S: WritableStorage> NodeStore<ImmutableProposal, S> {
+    /// Persist the freelist from this proposal to storage.
+    pub fn flush_freelist(&self) -> Result<(), Error> {
+        // Write the free lists to storage
+        let free_list_bytes = bincode::serialize(&self.header.free_lists)
+            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+        let free_list_offset = offset_of!(NodeStoreHeader, free_lists) as u64;
+        self.storage
+            .write(free_list_offset, free_list_bytes.as_slice())?;
+        Ok(())
+    }
+
+    /// Persist the header from this proposal to storage.
+    pub fn flush_header(&self) -> Result<(), Error> {
+        let header_bytes = bincode::serialize(&self.header).map_err(|e| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!("Failed to serialize header: {}", e),
+            )
+        })?;
+
+        self.storage.write(0, header_bytes.as_slice())?;
+
+        Ok(())
+    }
+
+    /// Persist all the nodes of a proposal to storage.
+    pub fn flush_nodes(&self) -> Result<(), Error> {
+        for (addr, (area_size_index, node)) in self.kind.new.iter() {
+            let stored_area = StoredArea {
+                area_size_index: *area_size_index,
+                area: Area::<_, FreeArea>::Node(node.as_ref()),
+            };
+
+            let stored_area_bytes = bincode::serialize(&stored_area)
+                .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+
+            self.storage
+                .write(addr.get(), stored_area_bytes.as_slice())?;
+        }
+
+        Ok(())
+    }
+}
+
+impl NodeStore<ImmutableProposal, FileBacked> {
+    /// Return a Committed version of this proposal, which doesn't have any modified nodes.
+    /// This function is used during commit.
+    pub fn as_committed(&self) -> NodeStore<Committed, FileBacked> {
+        NodeStore {
+            header: self.header.clone(),
+            kind: Committed {
+                deleted: self.kind.deleted.clone(),
+                root_hash: self.kind.root_hash.clone(),
+            },
+            storage: self.storage.clone(),
+        }
     }
 }
 
@@ -739,6 +851,7 @@ impl<S: ReadableStorage> From<NodeStore<MutableProposal, S>> for NodeStore<Immut
                 new: HashMap::new(),
                 deleted: kind.deleted.into(),
                 parent: kind.parent,
+                root_hash: None,
             },
             storage,
         };
@@ -750,9 +863,10 @@ impl<S: ReadableStorage> From<NodeStore<MutableProposal, S>> for NodeStore<Immut
         };
 
         // Hashes the trie and returns the address of the new root.
-        let (root_addr, _) = nodestore.hash_helper(root, &mut Path::new());
+        let (root_addr, root_hash) = nodestore.hash_helper(root, &mut Path::new());
 
         nodestore.header.root_address = Some(root_addr);
+        nodestore.kind.root_hash = Some(root_hash);
 
         nodestore
     }
