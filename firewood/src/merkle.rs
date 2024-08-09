@@ -11,6 +11,7 @@ use std::fmt::Debug;
 use std::future::ready;
 use std::io::Write;
 use std::iter::once;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use storage::{
     BranchNode, Child, Hashable, HashedNodeReader, ImmutableProposal, LeafNode, LinearAddress,
@@ -215,7 +216,7 @@ impl<T: TrieReader> Merkle<T> {
         &self,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
-        limit: Option<usize>,
+        limit: Option<NonZeroUsize>,
     ) -> Result<RangeProof<Box<[u8]>, Box<[u8]>, ProofNode>, api::Error> {
         if let (Some(k1), Some(k2)) = (&start_key, &end_key) {
             if k1 > k2 {
@@ -223,12 +224,6 @@ impl<T: TrieReader> Merkle<T> {
                     start_key: k1.to_vec().into(),
                     end_key: k2.to_vec().into(),
                 });
-            }
-        }
-
-        if let Some(limit) = limit {
-            if limit <= 0 {
-                return Err(api::Error::InvalidLimit);
             }
         }
 
@@ -263,7 +258,7 @@ impl<T: TrieReader> Merkle<T> {
         };
 
         let start_proof = self.prove(&first_key)?;
-        let limit = limit.map(|old_limit| old_limit - 1);
+        let limit = limit.map(|old_limit| old_limit.get() - 1);
 
         let mut key_values = vec![(first_key, first_value.into_boxed_slice())];
 
@@ -294,7 +289,7 @@ impl<T: TrieReader> Merkle<T> {
 
         let end_proof = key_values
             .last()
-            .map(|(largest_key, _)| self.prove(&largest_key))
+            .map(|(largest_key, _)| self.prove(largest_key))
             .transpose()?;
 
         Ok(RangeProof {
