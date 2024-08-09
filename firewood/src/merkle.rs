@@ -1131,17 +1131,15 @@ mod tests {
         }
     }
 
-    //     #[tokio::test]
-    //     async fn empty_range_proof() {
-    //         let merkle = create_in_memory_merkle();
-    //         let root_addr = merkle.init_sentinel().unwrap();
+    #[tokio::test]
+    async fn empty_range_proof() {
+        let merkle = create_in_memory_merkle();
 
-    //         assert!(merkle
-    //             .range_proof::<&[u8]>(root_addr, None, None, None)
-    //             .await
-    //             .unwrap()
-    //             .is_none());
-    //     }
+        assert!(matches!(
+            merkle._range_proof(None, None, None).await.unwrap_err(),
+            api::Error::RangeProofOnEmptyTrie
+        ));
+    }
 
     //     #[tokio::test]
     //     async fn range_proof_invalid_bounds() {

@@ -7,6 +7,7 @@ use crate::proof::Proof;
 
 /// A range proof proves that a given set of key-value pairs
 /// are in the trie with a given root hash.
+#[derive(Debug)]
 pub struct RangeProof<K: AsRef<[u8]>, V: AsRef<[u8]>, H: Hashable> {
     pub(crate) _start_proof: Option<Proof<H>>,
     pub(crate) _end_proof: Option<Proof<H>>,
