@@ -69,11 +69,14 @@ pub enum Error {
     IncorrectRootHash { provided: HashKey, current: HashKey },
 
     /// Invalid range
-    #[error("Invalid range: {first_key:?} > {last_key:?}")]
+    #[error("Invalid range: {start_key:?} > {end_key:?}")]
     InvalidRange {
-        first_key: Vec<u8>,
-        last_key: Vec<u8>,
+        start_key: Box<[u8]>,
+        end_key: Box<[u8]>,
     },
+
+    #[error("limit must be positive")]
+    InvalidLimit,
 
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
@@ -86,6 +89,9 @@ pub enum Error {
 
     #[error("Range too small")]
     RangeTooSmall,
+
+    #[error("request RangeProof for empty trie")]
+    RangeProofOnEmptyTrie,
 }
 
 impl From<MerkleError> for Error {
