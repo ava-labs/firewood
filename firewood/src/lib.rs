@@ -185,6 +185,7 @@ pub mod db;
 pub mod manager;
 pub mod merkle;
 pub mod proof;
+pub mod range_proof;
 pub mod stream;
 
 pub mod logger;

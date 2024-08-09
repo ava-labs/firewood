@@ -2,6 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::proof::{Proof, ProofError, ProofNode};
+use crate::range_proof::RangeProof;
 use crate::stream::{MerkleKeyValueStream, PathIterator};
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
@@ -215,7 +216,7 @@ impl<T: TrieReader> Merkle<T> {
         first_key: Option<&[u8]>,
         last_key: Option<&[u8]>,
         limit: Option<usize>,
-    ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>, ProofNode>>, api::Error> {
+    ) -> Result<Option<RangeProof<Vec<u8>, Vec<u8>, ProofNode>>, api::Error> {
         if let (Some(k1), Some(k2)) = (&first_key, &last_key) {
             if k1 > k2 {
                 return Err(api::Error::InvalidRange {
@@ -281,10 +282,10 @@ impl<T: TrieReader> Merkle<T> {
         // remove the last key from middle and do a proof on it
         let last_key_proof = match middle.last() {
             None => {
-                return Ok(Some(api::RangeProof {
-                    first_key_proof: first_key_proof.clone(),
-                    middle: vec![],
-                    last_key_proof: first_key_proof,
+                return Ok(Some(RangeProof {
+                    _start_proof: Some(first_key_proof.clone()),
+                    _key_values: Box::new([]),
+                    _end_proof: Some(first_key_proof),
                 }))
             }
             Some((last_key, _)) => self
@@ -292,10 +293,10 @@ impl<T: TrieReader> Merkle<T> {
                 .map_err(|e| api::Error::InternalError(Box::new(e)))?,
         };
 
-        Ok(Some(api::RangeProof {
-            first_key_proof,
-            middle,
-            last_key_proof,
+        Ok(Some(RangeProof {
+            _start_proof: Some(first_key_proof),
+            _key_values: middle.into_boxed_slice(),
+            _end_proof: Some(last_key_proof),
         }))
     }
 

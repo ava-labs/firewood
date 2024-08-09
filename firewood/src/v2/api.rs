@@ -3,11 +3,11 @@
 
 use crate::manager::RevisionManagerError;
 use crate::proof::ProofNode;
+use crate::range_proof::RangeProof;
 use crate::{merkle::MerkleError, proof::Proof};
 use async_trait::async_trait;
 use futures::Stream;
 use std::{fmt::Debug, sync::Arc};
-use storage::Hashable;
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
 /// and can be sent and shared across threads. References with
@@ -100,15 +100,6 @@ impl From<RevisionManagerError> for Error {
         // TODO: do a better job
         Error::InternalError(Box::new(err))
     }
-}
-
-/// A range proof, consisting of a proof of the first key and the last key,
-/// and a vector of all key/value pairs
-#[derive(Debug)]
-pub struct RangeProof<K, V, H: Hashable> {
-    pub first_key_proof: Proof<H>,
-    pub last_key_proof: Proof<H>,
-    pub middle: Vec<(K, V)>,
 }
 
 /// The database interface, which includes a type for a static view of

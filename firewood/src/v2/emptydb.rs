@@ -1,10 +1,13 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::proof::{Proof, ProofNode};
+use crate::{
+    proof::{Proof, ProofNode},
+    range_proof::RangeProof,
+};
 
 use super::{
-    api::{Batch, Db, DbView, Error, HashKey, KeyType, RangeProof, ValueType},
+    api::{Batch, Db, DbView, Error, HashKey, KeyType, ValueType},
     propose::{Proposal, ProposalBase},
 };
 use async_trait::async_trait;
