@@ -283,7 +283,7 @@ impl<T: TrieReader> Merkle<T> {
                     // keep going if the key returned is less than the last key requested
                     ready(&*kv.0 <= last_key)
                 })
-                .map(|kv| kv.map(|(k, v)| (k, v.into_boxed_slice())))
+                .map(|kv| kv.map(|(k, v)| (k, v.into())))
                 .try_collect::<Vec<(Box<[u8]>, Box<[u8]>)>>()
                 .await?,
         );
