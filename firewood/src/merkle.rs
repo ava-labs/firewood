@@ -239,11 +239,12 @@ impl<T: TrieReader> Merkle<T> {
         // transpose the Option<Result<T, E>> to Result<Option<T>, E>
         // If this is an error, the ? operator will return it
         let Some((first_key, first_value)) = first_result.transpose()? else {
+            // The trie is empty.
             if start_key.is_none() && end_key.is_none() {
+                // The caller requested a range proof over an empty trie.
                 return Err(api::Error::RangeProofOnEmptyTrie);
             }
 
-            // The trie is empty.
             let start_proof = start_key
                 .map(|start_key| self.prove(start_key))
                 .transpose()?;
@@ -291,6 +292,8 @@ impl<T: TrieReader> Merkle<T> {
             .last()
             .map(|(largest_key, _)| self.prove(largest_key))
             .transpose()?;
+
+        debug_assert!(end_proof.is_some());
 
         Ok(RangeProof {
             _start_proof: Some(start_proof),
