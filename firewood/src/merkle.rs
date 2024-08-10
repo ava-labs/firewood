@@ -297,7 +297,7 @@ impl<T: TrieReader> Merkle<T> {
 
         Ok(RangeProof {
             _start_proof: Some(start_proof),
-            _key_values: key_values.into_boxed_slice(),
+            _key_values: key_values.into(),
             _end_proof: end_proof,
         })
     }
