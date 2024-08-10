@@ -1,6 +1,8 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use std::iter::once;
+
 use crate::merkle::MerkleError;
 use sha2::{Digest, Sha256};
 use storage::{
@@ -10,12 +12,26 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ProofError {
-    #[error("non-monotonic range increase")]
-    NonMonotonicIncreaseRange,
+    #[error("expected start proof but got None")]
+    MissingStartProof,
+    #[error("expected end proof but got None")]
+    MissingEndProof,
+    #[error("proof keys should be monotonically increasing")]
+    NonIncreasingKeys,
+    #[error("key before range start")]
+    KeyBeforeRangeStart,
+    #[error("key after range end")]
+    KeyAfterRangeEnd,
     #[error("unexpected hash")]
     UnexpectedHash,
     #[error("unexpected value")]
     UnexpectedValue,
+    #[error("proof should contain only the root")]
+    ShouldBeJustRoot,
+    #[error("expected non-empty trie")]
+    UnexpectedEmptyTrie,
+    #[error("missing key-value pair impled by proof")]
+    MissingKeyValue,
     #[error("value mismatch")]
     ValueMismatch,
     #[error("expected value but got None")]
@@ -34,8 +50,8 @@ pub enum ProofError {
     NodeNotInTrie,
     #[error("{0:?}")]
     Merkle(#[from] MerkleError),
-    #[error("empty range")]
-    EmptyRange,
+    #[error("proof is empty; should have key-values or a start/end proof")]
+    EmptyProof,
 }
 
 #[derive(Clone, Debug)]
@@ -207,6 +223,125 @@ impl<T: Hashable> Proof<T> {
 
         // This is an exclusion proof.
         Ok(None)
+    }
+
+    /// Returns an iterator that returns (key,hash) for all child hashes (or lack thereof)
+    /// implied by this proof in increasing lexicographic order by key.
+    /// If the hash is None, the trie doesn't contain any keys with the given key prefix.
+    pub(super) fn implied_hashes(&self) -> impl Iterator<Item = (Box<[u8]>, Option<&TrieHash>)> {
+        ImpliedHashIterator::FromNode {
+            node: &self.0[0], // TODO don't use indexing
+            child: None,
+            next_index: 0,
+        }
+    }
+}
+
+/// Iterates over all implied hashes of a node in lexicographic order.
+enum ImpliedHashIterator<'a, T: Hashable> {
+    /// Next iteration returns the hash, if any, of the child at the `next_index`.
+    FromNode {
+        node: &'a T,
+        child: Option<(&'a [T], u8)>,
+        next_index: u8,
+    },
+    /// Next iteration returns a (key,hash) pair from the child iterator.
+    Recursive {
+        node: &'a T,
+        child: Box<ImpliedHashIterator<'a, T>>,
+        next_index: u8,
+    },
+    Exhausted,
+}
+
+impl<'a, T: Hashable> Iterator for ImpliedHashIterator<'a, T> {
+    type Item = (Box<[u8]>, Option<&'a TrieHash>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            ImpliedHashIterator::FromNode {
+                node,
+                child,
+                next_index,
+            } => {
+                if let Some((remaining_nodes, child_index)) = child {
+                    // Check if we should traverse to the child.
+                    if next_index == child_index {
+                        // Traverse to the child.
+                        let child_key = remaining_nodes.first().expect("TODO").key();
+
+                        let child = remaining_nodes.get(1).map(|grandchild| {
+                            let grandchild_key = grandchild.key();
+                            let grandchild_index =
+                                next_nibble(child_key.clone(), grandchild_key).expect("TODO");
+                            (&remaining_nodes[1..], grandchild_index)
+                        });
+
+                        let child = Box::new(ImpliedHashIterator::FromNode {
+                            node: &remaining_nodes[0],
+                            child,
+                            next_index: 0,
+                        });
+
+                        let hash = node
+                            .children()
+                            .find_map(|(i, hash)| {
+                                if i == *next_index as usize {
+                                    Some(hash)
+                                } else {
+                                    None
+                                }
+                            })
+                            .expect("TODO");
+
+                        *self = ImpliedHashIterator::Recursive {
+                            node,
+                            child,
+                            next_index: *next_index + 1,
+                        };
+
+                        return Some((child_key.collect(), Some(hash)));
+                    }
+                }
+
+                let hash = node.children().find_map(|(i, hash)| {
+                    if i == *next_index as usize {
+                        Some(hash)
+                    } else {
+                        None
+                    }
+                });
+
+                let key: Box<[u8]> = node.key().chain(once(*next_index)).collect();
+
+                *next_index += 1;
+
+                if *next_index == BranchNode::MAX_CHILDREN as u8 {
+                    *self = ImpliedHashIterator::Exhausted;
+                }
+
+                Some((key, hash))
+            }
+            ImpliedHashIterator::Recursive {
+                node,
+                child: child_iter,
+                next_index,
+            } => {
+                if let Some(next) = child_iter.next() {
+                    return Some(next);
+                }
+
+                // The child iterator is exhausted.
+                *self = ImpliedHashIterator::FromNode {
+                    node,
+                    child: None,
+                    next_index: *next_index,
+                };
+
+                self.next()
+            }
+            ImpliedHashIterator::Exhausted => None,
+        }
     }
 }
 

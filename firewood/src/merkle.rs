@@ -15,8 +15,8 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use storage::{
     BranchNode, Child, Hashable, HashedNodeReader, ImmutableProposal, LeafNode, LinearAddress,
-    MutableProposal, NibblesIterator, Node, NodeReader, NodeStore, Path, ReadableStorage, TrieHash,
-    TrieReader, ValueDigest,
+    MemStore, MutableProposal, NibblesIterator, Node, NodeReader, NodeStore, Path, ReadableStorage,
+    TrieHash, TrieReader, ValueDigest,
 };
 
 use thiserror::Error;
@@ -122,6 +122,12 @@ fn get_helper<T: TrieReader>(
             }
         }
     }
+}
+
+pub(super) fn _new_in_memory_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
+    let memstore = MemStore::new(vec![]);
+    let nodestore = NodeStore::new_empty_proposal(memstore.into());
+    Merkle { nodestore }
 }
 
 #[derive(Debug)]
@@ -252,9 +258,9 @@ impl<T: TrieReader> Merkle<T> {
             let end_proof = end_key.map(|end_key| self.prove(end_key)).transpose()?;
 
             return Ok(RangeProof {
-                _start_proof: start_proof,
-                _key_values: Box::new([]),
-                _end_proof: end_proof,
+                start_proof,
+                key_values: Box::new([]),
+                end_proof,
             });
         };
 
@@ -296,9 +302,9 @@ impl<T: TrieReader> Merkle<T> {
         debug_assert!(end_proof.is_some());
 
         Ok(RangeProof {
-            _start_proof: Some(start_proof),
-            _key_values: key_values.into(),
-            _end_proof: end_proof,
+            start_proof: Some(start_proof),
+            key_values: key_values.into(),
+            end_proof,
         })
     }
 
@@ -313,6 +319,10 @@ impl<T: TrieReader> Merkle<T> {
 }
 
 impl<T: HashedNodeReader> Merkle<T> {
+    pub fn root_hash(&self) -> Result<Option<TrieHash>, MerkleError> {
+        self.nodestore.root_hash().map_err(Into::into)
+    }
+
     pub fn dump_node(
         &self,
         addr: LinearAddress,
@@ -832,7 +842,7 @@ mod tests {
 
     #[test]
     fn test_get_regression() {
-        let mut merkle = create_in_memory_merkle();
+        let mut merkle = _new_in_memory_merkle();
 
         merkle.insert(&[0], Box::new([0])).unwrap();
         assert_eq!(merkle.get(&[0]).unwrap(), Some(Box::from([0])));
@@ -856,16 +866,8 @@ mod tests {
 
     #[test]
     fn insert_one() {
-        let mut merkle = create_in_memory_merkle();
+        let mut merkle = _new_in_memory_merkle();
         merkle.insert(b"abc", Box::new([])).unwrap()
-    }
-
-    fn create_in_memory_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
-        let memstore = MemStore::new(vec![]);
-
-        let nodestore = NodeStore::new_empty_proposal(memstore.into());
-
-        Merkle { nodestore }
     }
 
     // use super::*;
@@ -928,7 +930,7 @@ mod tests {
     //     #[test_case(branch(&[2], b"", vec![1, 2, 3].into()); "branch with path and children")]
     //     #[test_case(branch(&[2], b"value", vec![1, 2, 3].into()); "branch with path value and children")]
     //     fn encode(node: Node) {
-    //         let merkle = create_in_memory_merkle();
+    //         let merkle = _new_in_memory_merkle();
 
     //         let node_ref = merkle.put_node(node).unwrap();
     //         let encoded = node_ref.get_encoded(&merkle.store);
@@ -964,7 +966,7 @@ mod tests {
 
     #[test]
     fn test_insert_and_get() {
-        let mut merkle = create_in_memory_merkle();
+        let mut merkle = _new_in_memory_merkle();
 
         // insert values
         for key_val in u8::MIN..=u8::MAX {
@@ -1001,7 +1003,7 @@ mod tests {
         let key3 = vec![0, 1, 15];
         let val3 = [0, 1, 15];
 
-        let mut merkle = create_in_memory_merkle();
+        let mut merkle = _new_in_memory_merkle();
 
         merkle.insert(&key0, Box::from(val0)).unwrap();
         merkle.insert(&key1, Box::from(val1)).unwrap();
@@ -1051,7 +1053,7 @@ mod tests {
 
     #[test]
     fn remove_many() {
-        let mut merkle = create_in_memory_merkle();
+        let mut merkle = _new_in_memory_merkle();
 
         // insert key-value pairs
         for key_val in u8::MIN..=u8::MAX {
@@ -1082,14 +1084,14 @@ mod tests {
 
     #[test]
     fn get_empty_proof() {
-        let merkle = create_in_memory_merkle().hash();
+        let merkle = _new_in_memory_merkle().hash();
         let proof = merkle.prove(b"any-key");
         assert!(matches!(proof.unwrap_err(), MerkleError::Empty));
     }
 
     #[test]
     fn single_key_proof() {
-        let mut merkle = create_in_memory_merkle();
+        let mut merkle = _new_in_memory_merkle();
 
         let seed = std::env::var("FIREWOOD_TEST_SEED")
             .ok()
@@ -1136,7 +1138,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_range_proof() {
-        let merkle = create_in_memory_merkle();
+        let merkle = _new_in_memory_merkle();
 
         assert!(matches!(
             merkle._range_proof(None, None, None).await.unwrap_err(),
@@ -1146,7 +1148,7 @@ mod tests {
 
     //     #[tokio::test]
     //     async fn range_proof_invalid_bounds() {
-    //         let merkle = create_in_memory_merkle();
+    //         let merkle = _new_in_memory_merkle();
     //         let root_addr = merkle.init_sentinel().unwrap();
     //         let start_key = &[0x01];
     //         let end_key = &[0x00];
@@ -1166,7 +1168,7 @@ mod tests {
 
     //     #[tokio::test]
     //     async fn full_range_proof() {
-    //         let mut merkle = create_in_memory_merkle();
+    //         let mut merkle = _new_in_memory_merkle();
     //         let root_addr = merkle.init_sentinel().unwrap();
     //         // insert values
     //         for key_val in u8::MIN..=u8::MAX {
@@ -1194,7 +1196,7 @@ mod tests {
     //     async fn single_value_range_proof() {
     //         const RANDOM_KEY: u8 = 42;
 
-    //         let mut merkle = create_in_memory_merkle();
+    //         let mut merkle = _new_in_memory_merkle();
     //         let root_addr = merkle.init_sentinel().unwrap();
     //         // insert values
     //         for key_val in u8::MIN..=u8::MAX {
@@ -1216,7 +1218,7 @@ mod tests {
 
     //     #[test]
     //     fn shared_path_proof() {
-    //         let mut merkle = create_in_memory_merkle();
+    //         let mut merkle = _new_in_memory_merkle();
     //         let root_addr = merkle.init_sentinel().unwrap();
 
     //         let key1 = b"key1";
@@ -1269,7 +1271,7 @@ mod tests {
     //             ),
     //         ];
 
-    //         let mut merkle = create_in_memory_merkle();
+    //         let mut merkle = _new_in_memory_merkle();
     //         let root_addr = merkle.init_sentinel().unwrap();
 
     //         for (key, val) in &pairs {
@@ -1296,7 +1298,7 @@ mod tests {
     //         let val = vec![1];
     //         let overwrite = vec![2];
 
-    //         let mut merkle = create_in_memory_merkle();
+    //         let mut merkle = _new_in_memory_merkle();
     //         let root_addr = merkle.init_sentinel().unwrap();
 
     //         merkle.insert(&key, val.clone(), root_addr).unwrap();
@@ -1324,7 +1326,7 @@ mod tests {
         let key_2 = vec![0xff, 0x00];
         let val_2 = [2];
 
-        let mut merkle = create_in_memory_merkle();
+        let mut merkle = _new_in_memory_merkle();
 
         merkle.insert(&key, Box::new(val)).unwrap();
         merkle.insert(&key_2, Box::new(val_2)).unwrap();
@@ -1345,7 +1347,7 @@ mod tests {
         let key_2 = vec![0xff];
         let val_2 = [2];
 
-        let mut merkle = create_in_memory_merkle();
+        let mut merkle = _new_in_memory_merkle();
 
         merkle.insert(&key, Box::new(val)).unwrap();
         merkle.insert(&key_2, Box::new(val_2)).unwrap();
@@ -1369,7 +1371,7 @@ mod tests {
         let key_3 = vec![0xff, 0x0f];
         let val_3 = [3];
 
-        let mut merkle = create_in_memory_merkle();
+        let mut merkle = _new_in_memory_merkle();
 
         merkle.insert(&key, Box::new(val)).unwrap();
         merkle.insert(&key_2, Box::new(val_2)).unwrap();
@@ -1394,7 +1396,7 @@ mod tests {
         let key_3 = vec![0xff];
         let val_3 = [3];
 
-        let mut merkle = create_in_memory_merkle();
+        let mut merkle = _new_in_memory_merkle();
 
         merkle.insert(&key, Box::new(val)).unwrap();
         // key is a leaf
@@ -1424,7 +1426,7 @@ mod tests {
         let val_2 = [2];
         let overwrite = [3];
 
-        let mut merkle = create_in_memory_merkle();
+        let mut merkle = _new_in_memory_merkle();
 
         merkle.insert(&key, Box::new(val)).unwrap();
         merkle.insert(&key_2, Box::new(val_2)).unwrap();
@@ -1446,7 +1448,7 @@ mod tests {
 
     //     #[test]
     //     fn single_key_proof_with_one_node() {
-    //         let mut merkle = create_in_memory_merkle();
+    //         let mut merkle = _new_in_memory_merkle();
     //         let root_addr = merkle.init_sentinel().unwrap();
     //         let key = b"key";
     //         let value = b"value";
@@ -1463,7 +1465,7 @@ mod tests {
 
     //     #[test]
     //     fn two_key_proof_without_shared_path() {
-    //         let mut merkle = create_in_memory_merkle();
+    //         let mut merkle = _new_in_memory_merkle();
     //         let root_addr = merkle.init_sentinel().unwrap();
 
     //         let key1 = &[0x00];
