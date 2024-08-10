@@ -181,7 +181,7 @@ pub trait DbView {
         first_key: Option<K>,
         last_key: Option<K>,
         limit: Option<usize>,
-    ) -> Result<Option<RangeProof<Vec<u8>, Vec<u8>, ProofNode>>, Error>;
+    ) -> Result<Option<RangeProof<Box<[u8]>, Box<[u8]>, ProofNode>>, Error>;
 
     /// Obtain a stream over the keys/values of this view, using an optional starting point
     ///
