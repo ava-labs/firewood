@@ -202,6 +202,9 @@ where
         };
 
         if self.start_proof.is_none() && self.end_proof.is_none() {
+            // There are no start/end proofs to augment the hashes on the
+            // left and right sides of the trie respectively.
+            // The hash should already be correct.
             if let Some(root_hash) = merkle.root_hash()? {
                 if root_hash != _expected_root_hash {
                     return Err(ProofError::UnexpectedHash);
