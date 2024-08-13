@@ -86,13 +86,13 @@ fn get_helper<T: TrieReader>(
     nodestore: &T,
     node: &Node,
     key: &[u8],
-) -> Result<Option<Box<[u8]>>, MerkleError> {
+) -> Result<Option<Arc<Node>>, MerkleError> {
     // 4 possibilities for the position of the `key` relative to `node`:
     // 1. The node is at `key`
     // 2. The key is above the node (i.e. its ancestor)
     // 3. The key is below the node (i.e. its descendant)
     // 4. Neither is an ancestor of the other
-    let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
+    let path_overlap = PrefixOverlap::from(key, node.partial_path());
     let unique_key = path_overlap.unique_a;
     let unique_node = path_overlap.unique_b;
 
@@ -104,21 +104,23 @@ fn get_helper<T: TrieReader>(
             // Case (2) or (4)
             Ok(None)
         }
-        (None, None) => return Ok(node.value().map(|v| v.to_vec().into_boxed_slice())), // 1. The node is at `key`
-        (Some((child_index, key)), None) => {
+        (None, None) => Ok(Some(Arc::new(node.clone()))), // 1. The node is at `key`
+        (Some((child_index, remaining_key)), None) => {
             // 3. The key is below the node (i.e. its descendant)
             match node {
-                Node::Leaf(leaf) => Ok(Some(leaf.value.clone())),
-                Node::Branch(branch) => {
-                    #[allow(clippy::indexing_slicing)]
-                    let child = match &branch.children[child_index as usize] {
-                        None => return Ok(None),
-                        Some(Child::Node(node)) => node,
-                        Some(Child::AddressWithHash(addr, _)) => &nodestore.read_node(*addr)?,
-                    };
-
-                    get_helper(nodestore, child, key)
-                }
+                Node::Leaf(_) => Ok(None),
+                Node::Branch(node) => match node
+                    .children
+                    .get(child_index as usize)
+                    .expect("index is in bounds")
+                {
+                    None => Ok(None),
+                    Some(Child::Node(ref child)) => get_helper(nodestore, child, remaining_key),
+                    Some(Child::AddressWithHash(addr, _)) => {
+                        let child = nodestore.read_node(*addr)?;
+                        get_helper(nodestore, &child, remaining_key)
+                    }
+                },
             }
         }
     }
@@ -302,7 +304,14 @@ impl<T: TrieReader> Merkle<T> {
         })
     }
 
-    pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
+    pub fn get_value(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
+        let Some(node) = self.get_node(key)? else {
+            return Ok(None);
+        };
+        Ok(node.value().map(|v| v.to_vec().into_boxed_slice()))
+    }
+
+    pub fn get_node(&self, key: &[u8]) -> Result<Option<Arc<Node>>, MerkleError> {
         let Some(root) = self.root() else {
             return Ok(None);
         };
@@ -835,19 +844,19 @@ mod tests {
         let mut merkle = create_in_memory_merkle();
 
         merkle.insert(&[0], Box::new([0])).unwrap();
-        assert_eq!(merkle.get(&[0]).unwrap(), Some(Box::from([0])));
+        assert_eq!(merkle.get_value(&[0]).unwrap(), Some(Box::from([0])));
 
         merkle.insert(&[1], Box::new([1])).unwrap();
-        assert_eq!(merkle.get(&[1]).unwrap(), Some(Box::from([1])));
+        assert_eq!(merkle.get_value(&[1]).unwrap(), Some(Box::from([1])));
 
         merkle.insert(&[2], Box::new([2])).unwrap();
-        assert_eq!(merkle.get(&[2]).unwrap(), Some(Box::from([2])));
+        assert_eq!(merkle.get_value(&[2]).unwrap(), Some(Box::from([2])));
 
         let merkle = merkle.hash();
 
-        assert_eq!(merkle.get(&[0]).unwrap(), Some(Box::from([0])));
-        assert_eq!(merkle.get(&[1]).unwrap(), Some(Box::from([1])));
-        assert_eq!(merkle.get(&[2]).unwrap(), Some(Box::from([2])));
+        assert_eq!(merkle.get_value(&[0]).unwrap(), Some(Box::from([0])));
+        assert_eq!(merkle.get_value(&[1]).unwrap(), Some(Box::from([1])));
+        assert_eq!(merkle.get_value(&[2]).unwrap(), Some(Box::from([2])));
 
         for result in merkle.path_iter(&[2]).unwrap() {
             result.unwrap();
@@ -973,7 +982,7 @@ mod tests {
 
             merkle.insert(&key, val.clone()).unwrap();
 
-            let fetched_val = merkle.get(&key).unwrap();
+            let fetched_val = merkle.get_value(&key).unwrap();
 
             // make sure the value was inserted
             assert_eq!(fetched_val.as_deref(), val.as_slice().into());
@@ -984,7 +993,7 @@ mod tests {
             let key = vec![key_val];
             let val = vec![key_val];
 
-            let fetched_val = merkle.get(&key).unwrap();
+            let fetched_val = merkle.get_value(&key).unwrap();
 
             assert_eq!(fetched_val.as_deref(), val.as_slice().into());
         }
@@ -1017,7 +1026,7 @@ mod tests {
         // Test removal of root when it's a branch with 1 branch child
         let removed_val = merkle.remove(&key0).unwrap();
         assert_eq!(removed_val, Some(Box::from(val0)));
-        assert!(merkle.get(&key0).unwrap().is_none());
+        assert!(merkle.get_value(&key0).unwrap().is_none());
         // Removing an already removed key is a no-op
         assert!(merkle.remove(&key0).unwrap().is_none());
 
@@ -1027,7 +1036,7 @@ mod tests {
         // key2  key3
         // Test removal of root when it's a branch with multiple children
         assert_eq!(merkle.remove(&key1).unwrap(), Some(Box::from(val1)));
-        assert!(merkle.get(&key1).unwrap().is_none());
+        assert!(merkle.get_value(&key1).unwrap().is_none());
         assert!(merkle.remove(&key1).unwrap().is_none());
 
         // Trie is:
@@ -1036,14 +1045,14 @@ mod tests {
         // key2  key3
         let removed_val = merkle.remove(&key2).unwrap();
         assert_eq!(removed_val, Some(Box::from(val2)));
-        assert!(merkle.get(&key2).unwrap().is_none());
+        assert!(merkle.get_value(&key2).unwrap().is_none());
         assert!(merkle.remove(&key2).unwrap().is_none());
 
         // Trie is:
         // key3
         let removed_val = merkle.remove(&key3).unwrap();
         assert_eq!(removed_val, Some(Box::from(val3)));
-        assert!(merkle.get(&key3).unwrap().is_none());
+        assert!(merkle.get_value(&key3).unwrap().is_none());
         assert!(merkle.remove(&key3).unwrap().is_none());
 
         assert!(merkle.nodestore.root_node().is_none());
@@ -1059,7 +1068,7 @@ mod tests {
             let val = [key_val];
 
             merkle.insert(&key, Box::new(val)).unwrap();
-            let got = merkle.get(&key).unwrap().unwrap();
+            let got = merkle.get_value(&key).unwrap().unwrap();
             assert_eq!(&*got, val);
         }
 
@@ -1074,7 +1083,7 @@ mod tests {
             // Removing an already removed key is a no-op
             assert!(merkle.remove(&key).unwrap().is_none());
 
-            let got = merkle.get(&key).unwrap();
+            let got = merkle.get_value(&key).unwrap();
             assert!(got.is_none());
         }
         assert!(merkle.nodestore.root_node().is_none());
@@ -1329,11 +1338,11 @@ mod tests {
         merkle.insert(&key, Box::new(val)).unwrap();
         merkle.insert(&key_2, Box::new(val_2)).unwrap();
 
-        let got = merkle.get(&key).unwrap().unwrap();
+        let got = merkle.get_value(&key).unwrap().unwrap();
 
         assert_eq!(*got, val);
 
-        let got = merkle.get(&key_2).unwrap().unwrap();
+        let got = merkle.get_value(&key_2).unwrap().unwrap();
         assert_eq!(*got, val_2);
     }
 
@@ -1350,10 +1359,10 @@ mod tests {
         merkle.insert(&key, Box::new(val)).unwrap();
         merkle.insert(&key_2, Box::new(val_2)).unwrap();
 
-        let got = merkle.get(&key).unwrap().unwrap();
+        let got = merkle.get_value(&key).unwrap().unwrap();
         assert_eq!(*got, val);
 
-        let got = merkle.get(&key_2).unwrap().unwrap();
+        let got = merkle.get_value(&key_2).unwrap().unwrap();
         assert_eq!(*got, val_2);
     }
 
@@ -1375,13 +1384,13 @@ mod tests {
         merkle.insert(&key_2, Box::new(val_2)).unwrap();
         merkle.insert(&key_3, Box::new(val_3)).unwrap();
 
-        let got = merkle.get(&key).unwrap().unwrap();
+        let got = merkle.get_value(&key).unwrap().unwrap();
         assert_eq!(*got, val);
 
-        let got = merkle.get(&key_2).unwrap().unwrap();
+        let got = merkle.get_value(&key_2).unwrap().unwrap();
         assert_eq!(*got, val_2);
 
-        let got = merkle.get(&key_3).unwrap().unwrap();
+        let got = merkle.get_value(&key_3).unwrap().unwrap();
         assert_eq!(*got, val_3);
     }
 
@@ -1406,13 +1415,13 @@ mod tests {
         // key_3 is a branch with child key
         // key is a branch with child key_3
 
-        let got = merkle.get(&key).unwrap().unwrap();
+        let got = merkle.get_value(&key).unwrap().unwrap();
         assert_eq!(&*got, val);
 
-        let got = merkle.get(&key_2).unwrap().unwrap();
+        let got = merkle.get_value(&key_2).unwrap().unwrap();
         assert_eq!(&*got, val_2);
 
-        let got = merkle.get(&key_3).unwrap().unwrap();
+        let got = merkle.get_value(&key_3).unwrap().unwrap();
         assert_eq!(&*got, val_3);
     }
 
@@ -1429,18 +1438,18 @@ mod tests {
         merkle.insert(&key, Box::new(val)).unwrap();
         merkle.insert(&key_2, Box::new(val_2)).unwrap();
 
-        let got = merkle.get(&key).unwrap().unwrap();
+        let got = merkle.get_value(&key).unwrap().unwrap();
         assert_eq!(*got, val);
 
-        let got = merkle.get(&key_2).unwrap().unwrap();
+        let got = merkle.get_value(&key_2).unwrap().unwrap();
         assert_eq!(*got, val_2);
 
         merkle.insert(&key, Box::new(overwrite)).unwrap();
 
-        let got = merkle.get(&key).unwrap().unwrap();
+        let got = merkle.get_value(&key).unwrap().unwrap();
         assert_eq!(*got, overwrite);
 
-        let got = merkle.get(&key_2).unwrap().unwrap();
+        let got = merkle.get_value(&key_2).unwrap().unwrap();
         assert_eq!(*got, val_2);
     }
 
