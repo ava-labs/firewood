@@ -142,6 +142,10 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
     /// Read a [Node] from the provided [LinearAddress].
     /// `addr` is the address of a StoredArea in the ReadableStorage.
     pub fn read_node_from_disk(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
+        if let Some(node) = self.storage.read_cached_node(addr) {
+            return Ok(node);
+        }
+
         debug_assert!(addr.get() % 8 == 0);
 
         let addr = addr.get() + 1; // Skip the index byte
@@ -817,6 +821,8 @@ impl<S: WritableStorage> NodeStore<ImmutableProposal, S> {
             self.storage
                 .write(addr.get(), stored_area_bytes.as_slice())?;
         }
+        self.storage
+            .write_cached_nodes(self.kind.new.iter().map(|(addr, (_, node))| (addr, node)))?;
 
         Ok(())
     }
