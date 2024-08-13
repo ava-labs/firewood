@@ -252,9 +252,9 @@ impl<T: TrieReader> Merkle<T> {
             let end_proof = end_key.map(|end_key| self.prove(end_key)).transpose()?;
 
             return Ok(RangeProof {
-                _start_proof: start_proof,
-                _key_values: Box::new([]),
-                _end_proof: end_proof,
+                start_proof,
+                key_values: Box::new([]),
+                end_proof,
             });
         };
 
@@ -296,9 +296,9 @@ impl<T: TrieReader> Merkle<T> {
         debug_assert!(end_proof.is_some());
 
         Ok(RangeProof {
-            _start_proof: Some(start_proof),
-            _key_values: key_values.into(),
-            _end_proof: end_proof,
+            start_proof: Some(start_proof),
+            key_values: key_values.into(),
+            end_proof,
         })
     }
 
