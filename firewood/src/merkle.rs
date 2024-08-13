@@ -79,73 +79,46 @@ macro_rules! write_attributes {
     };
 }
 
-enum RefOrArc<'a> {
-    Ref(&'a Node),
-    Arc(Arc<Node>),
-}
-
-impl<'a> RefOrArc<'a> {
-    fn inner(&self) -> &Node {
-        match self {
-            RefOrArc::Ref(node) => node,
-            RefOrArc::Arc(node) => &*node,
-        }
-    }
-}
-
 /// Returns the value mapped to by `key` in the subtrie rooted at `node`.
 fn get_helper<T: TrieReader>(
     nodestore: &T,
     node: &Node,
-    mut key: &[u8],
+    key: &[u8],
 ) -> Result<Option<Arc<Node>>, MerkleError> {
     // 4 possibilities for the position of the `key` relative to `node`:
     // 1. The node is at `key`
     // 2. The key is above the node (i.e. its ancestor)
     // 3. The key is below the node (i.e. its descendant)
     // 4. Neither is an ancestor of the other
-    let mut node = RefOrArc::Ref(node);
-    loop {
-        let path_overlap = PrefixOverlap::from(key, node.inner().partial_path());
-        let unique_key = path_overlap.unique_a;
-        let unique_node = path_overlap.unique_b;
+    let path_overlap = PrefixOverlap::from(key, node.partial_path());
+    let unique_key = path_overlap.unique_a;
+    let unique_node = path_overlap.unique_b;
 
-        (node, key) = match (
-            unique_key.split_first().map(|(index, path)| (*index, path)),
-            unique_node.split_first(),
-        ) {
-            (_, Some(_)) => {
-                // Case (2) or (4)
-                return Ok(None);
-            }
-            (None, None) => return Ok(Some(Arc::new(node.inner().clone()))), // 1. The node is at `key`
-            (Some((child_index, remaining_key)), None) => {
-                // 3. The key is below the node (i.e. its descendant)
-                let node = match node {
-                    RefOrArc::Ref(node) => match node {
-                        Node::Leaf(_) => return Ok(None),
-                        Node::Branch(branch) => match &branch.children[child_index as usize] {
-                            None => return Ok(None),
-                            Some(Child::Node(node)) => RefOrArc::Ref(node),
-                            Some(Child::AddressWithHash(addr, _)) => {
-                                let node = nodestore.read_node(*addr)?;
-                                RefOrArc::Arc(node)
-                            }
-                        },
-                    },
-                    RefOrArc::Arc(node) => match &*node {
-                        Node::Leaf(_) => return Ok(None),
-                        Node::Branch(branch) => match &branch.children[child_index as usize] {
-                            None => return Ok(None),
-                            Some(Child::Node(node)) => RefOrArc::Arc(Arc::new(node.clone())),
-                            Some(Child::AddressWithHash(addr, _)) => {
-                                let node = nodestore.read_node(*addr)?;
-                                RefOrArc::Arc(node)
-                            }
-                        },
-                    },
-                };
-                (node, remaining_key)
+    match (
+        unique_key.split_first().map(|(index, path)| (*index, path)),
+        unique_node.split_first(),
+    ) {
+        (_, Some(_)) => {
+            // Case (2) or (4)
+            return Ok(None);
+        }
+        (None, None) => return Ok(Some(Arc::new(node.clone()))), // 1. The node is at `key`
+        (Some((child_index, remaining_key)), None) => {
+            // 3. The key is below the node (i.e. its descendant)
+            match node {
+                Node::Leaf(_) => Ok(None),
+                Node::Branch(node) => match node
+                    .children
+                    .get(child_index as usize)
+                    .expect("index is in bounds")
+                {
+                    None => return Ok(None),
+                    Some(Child::Node(ref child)) => get_helper(nodestore, child, remaining_key),
+                    Some(Child::AddressWithHash(addr, _)) => {
+                        let child = nodestore.read_node(*addr)?;
+                        get_helper(nodestore, &child, remaining_key)
+                    }
+                },
             }
         }
     }
