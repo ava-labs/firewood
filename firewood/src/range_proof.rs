@@ -198,7 +198,7 @@ where
                 .copied()
                 .collect();
             let mut expected_hash = _expected_root_hash;
-            let mut current = root;
+            let current = root;
             let mut matched_key: Vec<u8> = vec![];
             let mut proof_iter = start_proof.0.iter();
 
