@@ -2,7 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 use crate::merkle::_new_in_memory_merkle;
 use crate::proof::{Proof, ProofError};
-use storage::{hash_node, BranchNode, Hashable, Node, Path, TrieHash};
+use storage::{BranchNode, Hashable, Node, TrieHash};
 use storage::{Preimage, ValueDigest};
 
 /// A range proof proves that a given set of key-value pairs
@@ -201,23 +201,29 @@ where
             let mut proof_iter = start_proof.0.iter();
 
             while let Some(proof_node) = proof_iter.next() {
+                matched_key.extend(current.partial_path().iter().copied());
+
                 let current_branch = match &*current {
                     Node::Branch(current_branch) => current_branch,
-                    Node::Leaf(_) => {
+                    Node::Leaf(leaf) => {
                         // This node is a leaf so it should be the last in this proof.
                         // Should have been checked by the proof verification.
                         assert!(proof_iter.next().is_none());
 
-                        // Make sure the hash matches.
-                        let current_hash = hash_node(&current, &Path::from(&matched_key));
-                        if current_hash != expected_hash {
+                        let augmented_hash = AugmentedNode {
+                            key: matched_key.clone().into_boxed_slice(), // todo remove clone
+                            value_digest: Some(ValueDigest::Value(leaf.value.clone())), // todo remove clone
+                            children: Default::default(),
+                        }
+                        .to_hash();
+
+                        if augmented_hash != expected_hash {
                             return Err(ProofError::UnexpectedHash);
                         }
+
                         break; // TODO make this break clearer (i.e. out of start proof if)
                     }
                 };
-
-                matched_key.extend(current.partial_path().iter().copied());
 
                 let mut children: [Option<TrieHash>; BranchNode::MAX_CHILDREN] = Default::default();
                 for (i, hash) in proof_node.children() {
