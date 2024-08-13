@@ -189,16 +189,14 @@ where
         }
 
         if let Some(start_proof) = &self.start_proof {
-            // If start key is defined, proven_key is that.
-            // Otherwise it's the smallest key.
-            let proven_key: Box<[u8]> = start_key
+            let start_key: Box<[u8]> = start_key
                 .expect("checked above")
                 .as_ref()
                 .iter()
                 .copied()
                 .collect();
             let mut expected_hash = _expected_root_hash;
-            let current = root;
+            let mut current = root;
             let mut matched_key: Vec<u8> = vec![];
             let mut proof_iter = start_proof.0.iter();
 
@@ -206,24 +204,31 @@ where
                 let current_branch = match &*current {
                     Node::Branch(current_branch) => current_branch,
                     Node::Leaf(_) => {
+                        // This node is a leaf so it should be the last in this proof.
+                        // Should have been checked by the proof verification.
+                        assert!(proof_iter.next().is_none());
+
                         // Make sure the hash matches.
                         let current_hash = hash_node(&current, &Path::from(&matched_key));
                         if current_hash != expected_hash {
                             return Err(ProofError::UnexpectedHash);
                         }
-                        return Ok(());
+                        break; // TODO make this break clearer (i.e. out of start proof if)
                     }
                 };
 
                 matched_key.extend(current.partial_path().iter().copied());
 
-                // Overwrite child hashes with the hashes from the trie.
                 let mut children: [Option<TrieHash>; BranchNode::MAX_CHILDREN] = Default::default();
                 for (i, hash) in proof_node.children() {
                     children[i] = Some(hash.clone());
                 }
 
-                let next_child_index = proven_key.get(matched_key.len());
+                // Overwrite hashes for children at keys greater than the start key
+                // with the hashes from the merkle we created.
+                // If `next_child_index` is None, then this is the last node in the proof.
+                // If this is an inclusion proof, we should add all the children  of `current_branch`
+                let next_child_index = start_key.get(matched_key.len());
 
                 for i in 0..BranchNode::MAX_CHILDREN {
                     if let Some(next_child_index) = next_child_index {
@@ -277,10 +282,11 @@ where
                     break;
                 };
 
-                // TODO set current to the child node
+                current = merkle
+                    .get_node_from_nibbles(&matched_key)?
+                    .ok_or(ProofError::MissingChild)?;
             }
         }
-
         todo!()
     }
 }

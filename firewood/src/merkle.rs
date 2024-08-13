@@ -325,6 +325,16 @@ impl<T: TrieReader> Merkle<T> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
         get_helper(&self.nodestore, &root, &key)
     }
+
+    // TODO have a key type so we don't need separate functions for this and get_node, etc.
+    // All key usage should be standardized (i.e. nibbles vs bytes)
+    pub fn get_node_from_nibbles(&self, key: &[u8]) -> Result<Option<Arc<Node>>, MerkleError> {
+        let Some(root) = self.root() else {
+            return Ok(None);
+        };
+
+        get_helper(&self.nodestore, &root, &key)
+    }
 }
 
 impl<T: HashedNodeReader> Merkle<T> {
