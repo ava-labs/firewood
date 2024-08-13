@@ -2,6 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::proof::{Proof, ProofError, ProofNode};
+use crate::range_proof::RangeProof;
 use crate::stream::{MerkleKeyValueStream, PathIterator};
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
@@ -10,6 +11,7 @@ use std::fmt::Debug;
 use std::future::ready;
 use std::io::Write;
 use std::iter::once;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use storage::{
     BranchNode, Child, Hashable, HashedNodeReader, ImmutableProposal, LeafNode, LinearAddress,
@@ -212,25 +214,20 @@ impl<T: TrieReader> Merkle<T> {
 
     pub(super) async fn _range_proof(
         &self,
-        first_key: Option<&[u8]>,
-        last_key: Option<&[u8]>,
-        limit: Option<usize>,
-    ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>, ProofNode>>, api::Error> {
-        if let (Some(k1), Some(k2)) = (&first_key, &last_key) {
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<RangeProof<Box<[u8]>, Box<[u8]>, ProofNode>, api::Error> {
+        if let (Some(k1), Some(k2)) = (&start_key, &end_key) {
             if k1 > k2 {
                 return Err(api::Error::InvalidRange {
-                    first_key: k1.to_vec(),
-                    last_key: k2.to_vec(),
+                    start_key: k1.to_vec().into(),
+                    end_key: k2.to_vec().into(),
                 });
             }
         }
 
-        // limit of 0 is always an empty RangeProof
-        if limit == Some(0) {
-            return Ok(None);
-        }
-
-        let mut stream = match first_key {
+        let mut stream = match start_key {
             // TODO: fix the call-site to force the caller to do the allocation
             Some(key) => self._key_value_iter_from_key(key.to_vec().into_boxed_slice()),
             None => self._key_value_iter(),
@@ -242,61 +239,67 @@ impl<T: TrieReader> Merkle<T> {
         // transpose the Option<Result<T, E>> to Result<Option<T>, E>
         // If this is an error, the ? operator will return it
         let Some((first_key, first_value)) = first_result.transpose()? else {
-            // nothing returned, either the trie is empty or the key wasn't found
-            return Ok(None);
+            // The trie is empty.
+            if start_key.is_none() && end_key.is_none() {
+                // The caller requested a range proof over an empty trie.
+                return Err(api::Error::RangeProofOnEmptyTrie);
+            }
+
+            let start_proof = start_key
+                .map(|start_key| self.prove(start_key))
+                .transpose()?;
+
+            let end_proof = end_key.map(|end_key| self.prove(end_key)).transpose()?;
+
+            return Ok(RangeProof {
+                start_proof,
+                key_values: Box::new([]),
+                end_proof,
+            });
         };
 
-        let first_key_proof = self
-            .prove(&first_key)
-            .map_err(|e| api::Error::InternalError(Box::new(e)))?;
-        let limit = limit.map(|old_limit| old_limit - 1);
+        let start_proof = self.prove(&first_key)?;
+        let limit = limit.map(|old_limit| old_limit.get() - 1);
 
-        let mut middle = vec![(first_key.into_vec(), first_value)];
+        let mut key_values = vec![(first_key, first_value.into_boxed_slice())];
 
         // we stop streaming if either we hit the limit or the key returned was larger
         // than the largest key requested
         #[allow(clippy::unwrap_used)]
-        middle.extend(
+        key_values.extend(
             stream
                 .take(limit.unwrap_or(usize::MAX))
-                .take_while(|kv_result| {
+                .take_while(|kv| {
                     // no last key asked for, so keep going
-                    let Some(last_key) = last_key else {
+                    let Some(last_key) = end_key else {
                         return ready(true);
                     };
 
                     // return the error if there was one
-                    let Ok(kv) = kv_result else {
+                    let Ok(kv) = kv else {
                         return ready(true);
                     };
 
                     // keep going if the key returned is less than the last key requested
                     ready(&*kv.0 <= last_key)
                 })
-                .map(|kv_result| kv_result.map(|(k, v)| (k.into_vec(), v)))
-                .try_collect::<Vec<(Vec<u8>, Vec<u8>)>>()
+                .map(|kv| kv.map(|(k, v)| (k, v.into())))
+                .try_collect::<Vec<(Box<[u8]>, Box<[u8]>)>>()
                 .await?,
         );
 
-        // remove the last key from middle and do a proof on it
-        let last_key_proof = match middle.last() {
-            None => {
-                return Ok(Some(api::RangeProof {
-                    first_key_proof: first_key_proof.clone(),
-                    middle: vec![],
-                    last_key_proof: first_key_proof,
-                }))
-            }
-            Some((last_key, _)) => self
-                .prove(last_key)
-                .map_err(|e| api::Error::InternalError(Box::new(e)))?,
-        };
+        let end_proof = key_values
+            .last()
+            .map(|(largest_key, _)| self.prove(largest_key))
+            .transpose()?;
 
-        Ok(Some(api::RangeProof {
-            first_key_proof,
-            middle,
-            last_key_proof,
-        }))
+        debug_assert!(end_proof.is_some());
+
+        Ok(RangeProof {
+            start_proof: Some(start_proof),
+            key_values: key_values.into(),
+            end_proof,
+        })
     }
 
     pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
@@ -1131,17 +1134,15 @@ mod tests {
         }
     }
 
-    //     #[tokio::test]
-    //     async fn empty_range_proof() {
-    //         let merkle = create_in_memory_merkle();
-    //         let root_addr = merkle.init_sentinel().unwrap();
+    #[tokio::test]
+    async fn empty_range_proof() {
+        let merkle = create_in_memory_merkle();
 
-    //         assert!(merkle
-    //             .range_proof::<&[u8]>(root_addr, None, None, None)
-    //             .await
-    //             .unwrap()
-    //             .is_none());
-    //     }
+        assert!(matches!(
+            merkle._range_proof(None, None, None).await.unwrap_err(),
+            api::Error::RangeProofOnEmptyTrie
+        ));
+    }
 
     //     #[tokio::test]
     //     async fn range_proof_invalid_bounds() {

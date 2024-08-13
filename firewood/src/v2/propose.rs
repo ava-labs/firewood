@@ -8,6 +8,7 @@ use futures::stream::Empty;
 
 use super::api::{KeyType, ValueType};
 use crate::proof::{Proof, ProofNode};
+use crate::range_proof::RangeProof;
 use crate::v2::api;
 
 #[derive(Clone, Debug)]
@@ -137,7 +138,7 @@ impl<T: api::DbView + Send + Sync> api::DbView for Proposal<T> {
         _first_key: Option<KT>,
         _last_key: Option<KT>,
         _limit: Option<usize>,
-    ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>, ProofNode>>, api::Error> {
+    ) -> Result<Option<RangeProof<Box<[u8]>, Box<[u8]>, ProofNode>>, api::Error> {
         todo!();
     }
 

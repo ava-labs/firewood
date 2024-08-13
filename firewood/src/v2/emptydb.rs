@@ -1,10 +1,13 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::proof::{Proof, ProofNode};
+use crate::{
+    proof::{Proof, ProofNode},
+    range_proof::RangeProof,
+};
 
 use super::{
-    api::{Batch, Db, DbView, Error, HashKey, KeyType, RangeProof, ValueType},
+    api::{Batch, Db, DbView, Error, HashKey, KeyType, ValueType},
     propose::{Proposal, ProposalBase},
 };
 use async_trait::async_trait;
@@ -72,7 +75,7 @@ impl DbView for HistoricalImpl {
         _first_key: Option<K>,
         _last_key: Option<K>,
         _limit: Option<usize>,
-    ) -> Result<Option<RangeProof<Vec<u8>, Vec<u8>, ProofNode>>, Error> {
+    ) -> Result<Option<RangeProof<Box<[u8]>, Box<[u8]>, ProofNode>>, Error> {
         Ok(None)
     }
 

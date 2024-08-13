@@ -3,6 +3,7 @@
 
 use crate::merkle::MerkleError;
 use crate::proof::{Proof, ProofNode};
+use crate::range_proof::RangeProof;
 use crate::stream::MerkleKeyValueStream;
 use crate::v2::api::{self, KeyType};
 pub use crate::v2::api::{Batch, BatchOp};
@@ -79,7 +80,7 @@ impl api::DbView for HistoricalRev {
         _first_key: Option<K>,
         _last_key: Option<K>,
         _limit: Option<usize>,
-    ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>, ProofNode>>, api::Error> {
+    ) -> Result<Option<RangeProof<Box<[u8]>, Box<[u8]>, ProofNode>>, api::Error> {
         todo!()
     }
 
