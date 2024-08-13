@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::num::NonZero;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::{collections::VecDeque, io::Error};
@@ -19,6 +20,9 @@ pub struct RevisionManagerConfig {
     /// The number of historical revisions to keep in memory.
     #[builder(default = 64)]
     max_revisions: usize,
+
+    #[builder(default_code = "NonZero::new(1024).expect(\"non-zero\")")]
+    node_cache_size: NonZero<usize>,
 }
 
 #[derive(Debug)]
@@ -38,7 +42,7 @@ impl RevisionManager {
         truncate: bool,
         config: RevisionManagerConfig,
     ) -> Result<Self, Error> {
-        let storage = Arc::new(FileBacked::new(filename, truncate)?);
+        let storage = Arc::new(FileBacked::new(filename, config.node_cache_size, truncate)?);
         let nodestore = Arc::new(NodeStore::new_empty_committed(storage.clone())?);
         let manager = Self {
             max_revisions: config.max_revisions,
