@@ -75,9 +75,6 @@ pub enum Error {
         end_key: Box<[u8]>,
     },
 
-    #[error("limit must be positive")]
-    InvalidLimit,
-
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
 
