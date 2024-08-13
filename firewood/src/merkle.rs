@@ -79,67 +79,73 @@ macro_rules! write_attributes {
     };
 }
 
-enum NodeOrRef<'a> {
-    Node(&'a Node),
+enum RefOrArc<'a> {
+    Ref(&'a Node),
     Arc(Arc<Node>),
 }
 
+impl<'a> RefOrArc<'a> {
+    fn inner(&self) -> &Node {
+        match self {
+            RefOrArc::Ref(node) => node,
+            RefOrArc::Arc(node) => &*node,
+        }
+    }
+}
+
 /// Returns the value mapped to by `key` in the subtrie rooted at `node`.
-fn get_helper<'a, T: TrieReader>(
+fn get_helper<T: TrieReader>(
     nodestore: &T,
-    node: NodeOrRef<'a>,
-    key: &[u8],
-) -> Result<Option<NodeOrRef<'a>>, MerkleError> {
+    node: &Node,
+    mut key: &[u8],
+) -> Result<Option<Arc<Node>>, MerkleError> {
     // 4 possibilities for the position of the `key` relative to `node`:
     // 1. The node is at `key`
     // 2. The key is above the node (i.e. its ancestor)
     // 3. The key is below the node (i.e. its descendant)
     // 4. Neither is an ancestor of the other
-    let node_partial_path = match &node {
-        NodeOrRef::Node(node) => node.partial_path().as_ref(),
-        NodeOrRef::Arc(node) => node.partial_path().as_ref(),
-    };
-    let path_overlap = PrefixOverlap::from(key, node_partial_path);
-    let unique_key = path_overlap.unique_a;
-    let unique_node = path_overlap.unique_b;
+    let mut node = RefOrArc::Ref(node);
+    loop {
+        let path_overlap = PrefixOverlap::from(key, node.inner().partial_path());
+        let unique_key = path_overlap.unique_a;
+        let unique_node = path_overlap.unique_b;
 
-    match (
-        unique_key.split_first().map(|(index, path)| (*index, path)),
-        unique_node.split_first(),
-    ) {
-        (_, Some(_)) => {
-            // Case (2) or (4)
-            Ok(None)
-        }
-        (None, None) => return Ok(Some(node)), // 1. The node is at `key`
-        (Some((child_index, key)), None) => {
-            // 3. The key is below the node (i.e. its descendant)
-            let node = match &node {
-                NodeOrRef::Node(node) => node,
-                NodeOrRef::Arc(node) => &**node,
-            };
-
-            let foo = match node {
-                Node::Leaf(_) => Ok(None),
-                Node::Branch(branch) => {
-                    #[allow(clippy::indexing_slicing)]
-                    let child = match &branch.children[child_index as usize] {
-                        None => return Ok(None),
-                        Some(Child::Node(node)) => NodeOrRef::Node(node),
-                        Some(Child::AddressWithHash(addr, _)) => {
-                            NodeOrRef::Arc(nodestore.read_node(*addr)?)
-                        }
-                    };
-
-                    get_helper(nodestore, child, key)
-                }
-            };
-            let foo = foo?;
-            if let Some(foo) = foo {
-                match foo {
-                    NodeOrRef::Node(_) => todo!(),
-                    NodeOrRef::Arc(_) => todo!(),
-                }
+        (node, key) = match (
+            unique_key.split_first().map(|(index, path)| (*index, path)),
+            unique_node.split_first(),
+        ) {
+            (_, Some(_)) => {
+                // Case (2) or (4)
+                return Ok(None);
+            }
+            (None, None) => return Ok(Some(Arc::new(node.inner().clone()))), // 1. The node is at `key`
+            (Some((child_index, remaining_key)), None) => {
+                // 3. The key is below the node (i.e. its descendant)
+                let node = match node {
+                    RefOrArc::Ref(node) => match node {
+                        Node::Leaf(_) => return Ok(None),
+                        Node::Branch(branch) => match &branch.children[child_index as usize] {
+                            None => return Ok(None),
+                            Some(Child::Node(node)) => RefOrArc::Ref(node),
+                            Some(Child::AddressWithHash(addr, _)) => {
+                                let node = nodestore.read_node(*addr)?;
+                                RefOrArc::Arc(node)
+                            }
+                        },
+                    },
+                    RefOrArc::Arc(node) => match &*node {
+                        Node::Leaf(_) => return Ok(None),
+                        Node::Branch(branch) => match &branch.children[child_index as usize] {
+                            None => return Ok(None),
+                            Some(Child::Node(node)) => RefOrArc::Arc(Arc::new(node.clone())),
+                            Some(Child::AddressWithHash(addr, _)) => {
+                                let node = nodestore.read_node(*addr)?;
+                                RefOrArc::Arc(node)
+                            }
+                        },
+                    },
+                };
+                (node, remaining_key)
             }
         }
     }
@@ -322,7 +328,14 @@ impl<T: TrieReader> Merkle<T> {
         }))
     }
 
-    pub fn get(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
+    pub fn get_value(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
+        let Some(node) = self.get_node(key)? else {
+            return Ok(None);
+        };
+        Ok(node.value().map(|v| v.to_vec().into_boxed_slice()))
+    }
+
+    pub fn get_node(&self, key: &[u8]) -> Result<Option<Arc<Node>>, MerkleError> {
         let Some(root) = self.root() else {
             return Ok(None);
         };
@@ -797,14 +810,17 @@ pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
 /// The `unique_*` properties, [`unique_a`][`PrefixOverlap::unique_a`] and [`unique_b`][`PrefixOverlap::unique_b`]
 /// are set based on the argument order passed into the [`from`][`PrefixOverlap::from`] constructor.
 #[derive(Debug)]
-struct PrefixOverlap<'a, T> {
+struct PrefixOverlap<'a, 'b, T>
+where
+    'a: 'b,
+{
     shared: &'a [T],
     unique_a: &'a [T],
-    unique_b: &'a [T],
+    unique_b: &'b [T],
 }
 
-impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
-    fn from(a: &'a [T], b: &'a [T]) -> Self {
+impl<'a, 'b, T: PartialEq> PrefixOverlap<'a, 'b, T> {
+    fn from(a: &'a [T], b: &'b [T]) -> Self {
         let split_index = a
             .iter()
             .zip(b)
@@ -855,19 +871,19 @@ mod tests {
         let mut merkle = create_in_memory_merkle();
 
         merkle.insert(&[0], Box::new([0])).unwrap();
-        assert_eq!(merkle.get(&[0]).unwrap(), Some(Box::from([0])));
+        assert_eq!(merkle.get_value(&[0]).unwrap(), Some(Box::from([0])));
 
         merkle.insert(&[1], Box::new([1])).unwrap();
-        assert_eq!(merkle.get(&[1]).unwrap(), Some(Box::from([1])));
+        assert_eq!(merkle.get_value(&[1]).unwrap(), Some(Box::from([1])));
 
         merkle.insert(&[2], Box::new([2])).unwrap();
-        assert_eq!(merkle.get(&[2]).unwrap(), Some(Box::from([2])));
+        assert_eq!(merkle.get_value(&[2]).unwrap(), Some(Box::from([2])));
 
         let merkle = merkle.hash();
 
-        assert_eq!(merkle.get(&[0]).unwrap(), Some(Box::from([0])));
-        assert_eq!(merkle.get(&[1]).unwrap(), Some(Box::from([1])));
-        assert_eq!(merkle.get(&[2]).unwrap(), Some(Box::from([2])));
+        assert_eq!(merkle.get_value(&[0]).unwrap(), Some(Box::from([0])));
+        assert_eq!(merkle.get_value(&[1]).unwrap(), Some(Box::from([1])));
+        assert_eq!(merkle.get_value(&[2]).unwrap(), Some(Box::from([2])));
 
         for result in merkle.path_iter(&[2]).unwrap() {
             result.unwrap();
@@ -993,7 +1009,7 @@ mod tests {
 
             merkle.insert(&key, val.clone()).unwrap();
 
-            let fetched_val = merkle.get(&key).unwrap();
+            let fetched_val = merkle.get_value(&key).unwrap();
 
             // make sure the value was inserted
             assert_eq!(fetched_val.as_deref(), val.as_slice().into());
@@ -1004,7 +1020,7 @@ mod tests {
             let key = vec![key_val];
             let val = vec![key_val];
 
-            let fetched_val = merkle.get(&key).unwrap();
+            let fetched_val = merkle.get_value(&key).unwrap();
 
             assert_eq!(fetched_val.as_deref(), val.as_slice().into());
         }
@@ -1037,7 +1053,7 @@ mod tests {
         // Test removal of root when it's a branch with 1 branch child
         let removed_val = merkle.remove(&key0).unwrap();
         assert_eq!(removed_val, Some(Box::from(val0)));
-        assert!(merkle.get(&key0).unwrap().is_none());
+        assert!(merkle.get_value(&key0).unwrap().is_none());
         // Removing an already removed key is a no-op
         assert!(merkle.remove(&key0).unwrap().is_none());
 
@@ -1047,7 +1063,7 @@ mod tests {
         // key2  key3
         // Test removal of root when it's a branch with multiple children
         assert_eq!(merkle.remove(&key1).unwrap(), Some(Box::from(val1)));
-        assert!(merkle.get(&key1).unwrap().is_none());
+        assert!(merkle.get_value(&key1).unwrap().is_none());
         assert!(merkle.remove(&key1).unwrap().is_none());
 
         // Trie is:
@@ -1056,14 +1072,14 @@ mod tests {
         // key2  key3
         let removed_val = merkle.remove(&key2).unwrap();
         assert_eq!(removed_val, Some(Box::from(val2)));
-        assert!(merkle.get(&key2).unwrap().is_none());
+        assert!(merkle.get_value(&key2).unwrap().is_none());
         assert!(merkle.remove(&key2).unwrap().is_none());
 
         // Trie is:
         // key3
         let removed_val = merkle.remove(&key3).unwrap();
         assert_eq!(removed_val, Some(Box::from(val3)));
-        assert!(merkle.get(&key3).unwrap().is_none());
+        assert!(merkle.get_value(&key3).unwrap().is_none());
         assert!(merkle.remove(&key3).unwrap().is_none());
 
         assert!(merkle.nodestore.root_node().is_none());
@@ -1079,7 +1095,7 @@ mod tests {
             let val = [key_val];
 
             merkle.insert(&key, Box::new(val)).unwrap();
-            let got = merkle.get(&key).unwrap().unwrap();
+            let got = merkle.get_value(&key).unwrap().unwrap();
             assert_eq!(&*got, val);
         }
 
@@ -1094,7 +1110,7 @@ mod tests {
             // Removing an already removed key is a no-op
             assert!(merkle.remove(&key).unwrap().is_none());
 
-            let got = merkle.get(&key).unwrap();
+            let got = merkle.get_value(&key).unwrap();
             assert!(got.is_none());
         }
         assert!(merkle.nodestore.root_node().is_none());
@@ -1351,11 +1367,11 @@ mod tests {
         merkle.insert(&key, Box::new(val)).unwrap();
         merkle.insert(&key_2, Box::new(val_2)).unwrap();
 
-        let got = merkle.get(&key).unwrap().unwrap();
+        let got = merkle.get_value(&key).unwrap().unwrap();
 
         assert_eq!(*got, val);
 
-        let got = merkle.get(&key_2).unwrap().unwrap();
+        let got = merkle.get_value(&key_2).unwrap().unwrap();
         assert_eq!(*got, val_2);
     }
 
@@ -1372,10 +1388,10 @@ mod tests {
         merkle.insert(&key, Box::new(val)).unwrap();
         merkle.insert(&key_2, Box::new(val_2)).unwrap();
 
-        let got = merkle.get(&key).unwrap().unwrap();
+        let got = merkle.get_value(&key).unwrap().unwrap();
         assert_eq!(*got, val);
 
-        let got = merkle.get(&key_2).unwrap().unwrap();
+        let got = merkle.get_value(&key_2).unwrap().unwrap();
         assert_eq!(*got, val_2);
     }
 
@@ -1397,13 +1413,13 @@ mod tests {
         merkle.insert(&key_2, Box::new(val_2)).unwrap();
         merkle.insert(&key_3, Box::new(val_3)).unwrap();
 
-        let got = merkle.get(&key).unwrap().unwrap();
+        let got = merkle.get_value(&key).unwrap().unwrap();
         assert_eq!(*got, val);
 
-        let got = merkle.get(&key_2).unwrap().unwrap();
+        let got = merkle.get_value(&key_2).unwrap().unwrap();
         assert_eq!(*got, val_2);
 
-        let got = merkle.get(&key_3).unwrap().unwrap();
+        let got = merkle.get_value(&key_3).unwrap().unwrap();
         assert_eq!(*got, val_3);
     }
 
@@ -1428,13 +1444,13 @@ mod tests {
         // key_3 is a branch with child key
         // key is a branch with child key_3
 
-        let got = merkle.get(&key).unwrap().unwrap();
+        let got = merkle.get_value(&key).unwrap().unwrap();
         assert_eq!(&*got, val);
 
-        let got = merkle.get(&key_2).unwrap().unwrap();
+        let got = merkle.get_value(&key_2).unwrap().unwrap();
         assert_eq!(&*got, val_2);
 
-        let got = merkle.get(&key_3).unwrap().unwrap();
+        let got = merkle.get_value(&key_3).unwrap().unwrap();
         assert_eq!(&*got, val_3);
     }
 
@@ -1451,18 +1467,18 @@ mod tests {
         merkle.insert(&key, Box::new(val)).unwrap();
         merkle.insert(&key_2, Box::new(val_2)).unwrap();
 
-        let got = merkle.get(&key).unwrap().unwrap();
+        let got = merkle.get_value(&key).unwrap().unwrap();
         assert_eq!(*got, val);
 
-        let got = merkle.get(&key_2).unwrap().unwrap();
+        let got = merkle.get_value(&key_2).unwrap().unwrap();
         assert_eq!(*got, val_2);
 
         merkle.insert(&key, Box::new(overwrite)).unwrap();
 
-        let got = merkle.get(&key).unwrap().unwrap();
+        let got = merkle.get_value(&key).unwrap().unwrap();
         assert_eq!(*got, overwrite);
 
-        let got = merkle.get(&key_2).unwrap().unwrap();
+        let got = merkle.get_value(&key_2).unwrap().unwrap();
         assert_eq!(*got, val_2);
     }
 
