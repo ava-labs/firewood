@@ -25,7 +25,7 @@ where
         &self,
         start_key: Option<K>,
         end_key: Option<K>,
-        _expected_root_hash: TrieHash,
+        expected_root_hash: TrieHash,
     ) -> Result<(), ProofError> {
         if self.key_values.is_empty() && self.start_proof.is_none() && self.end_proof.is_none() {
             return Err(ProofError::EmptyProof);
@@ -66,14 +66,14 @@ where
             match (&start_key, self.key_values.first()) {
                 (None, _) => return Err(ProofError::UnexpectedStartProof),
                 (Some(start_key), None) => {
-                    start_proof.verify(start_key, None::<&[u8]>, &_expected_root_hash)?;
+                    start_proof.verify(start_key, None::<&[u8]>, &expected_root_hash)?;
                 }
                 (Some(start_key), Some((smallest_key, expected_value))) => {
                     if start_key.as_ref() == smallest_key.as_ref() {
                         start_proof.verify(
                             start_key,
                             Some(expected_value.as_ref()),
-                            &_expected_root_hash,
+                            &expected_root_hash,
                         )?;
                     } else {
                         // Make sure there are no keys between `start_key` and `smallest_key`
@@ -85,7 +85,7 @@ where
                             return Err(ProofError::MissingKeyValue);
                         }
 
-                        start_proof.verify(start_key, None::<&[u8]>, &_expected_root_hash)?;
+                        start_proof.verify(start_key, None::<&[u8]>, &expected_root_hash)?;
                     }
                 }
             }
@@ -96,7 +96,7 @@ where
         if let Some(end_proof) = &self.end_proof {
             match (&end_key, self.key_values.first()) {
                 (Some(end_key), None) => {
-                    end_proof.verify(end_key, None::<&[u8]>, &_expected_root_hash)?;
+                    end_proof.verify(end_key, None::<&[u8]>, &expected_root_hash)?;
                 }
                 (None, None) => {
                     // No start key was specified and there are no key-value pairs in the range.
@@ -105,7 +105,7 @@ where
                         return Err(ProofError::ShouldBeJustRoot);
                     }
                     let root_hash = end_proof.0.first().expect("proof can't be empty").to_hash();
-                    if root_hash != _expected_root_hash {
+                    if root_hash != expected_root_hash {
                         return Err(ProofError::UnexpectedHash);
                     }
                     return Ok(());
@@ -114,7 +114,7 @@ where
                     end_proof.verify(
                         biggest_key.as_ref(),
                         Some(expected_value.as_ref()),
-                        &_expected_root_hash,
+                        &expected_root_hash,
                     )?;
                 }
                 (Some(end_key), Some((biggest_key, expected_value))) => {
@@ -122,7 +122,7 @@ where
                         end_proof.verify(
                             end_key,
                             Some(expected_value.as_ref()),
-                            &_expected_root_hash,
+                            &expected_root_hash,
                         )?;
                     } else {
                         // Make sure there are no keys between `biggest_key` and `end_key`
@@ -134,7 +134,7 @@ where
                             return Err(ProofError::MissingKeyValue);
                         }
 
-                        end_proof.verify(end_key, None::<&[u8]>, &_expected_root_hash)?;
+                        end_proof.verify(end_key, None::<&[u8]>, &expected_root_hash)?;
                     }
                 }
             }
@@ -179,7 +179,7 @@ where
             // left and right sides of the trie respectively.
             // The hash should already be correct.
             if let Some(root_hash) = merkle.root_hash()? {
-                if root_hash != _expected_root_hash {
+                if root_hash != expected_root_hash {
                     return Err(ProofError::UnexpectedHash);
                 }
                 return Ok(());
@@ -195,7 +195,7 @@ where
                 .iter()
                 .copied()
                 .collect();
-            let mut expected_hash = _expected_root_hash;
+            let mut expected_hash = expected_root_hash;
             let mut current = root;
             let mut matched_key: Vec<u8> = vec![];
             let mut proof_iter = start_proof.0.iter();
