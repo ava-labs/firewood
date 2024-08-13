@@ -79,18 +79,27 @@ macro_rules! write_attributes {
     };
 }
 
+enum NodeOrRef<'a> {
+    Node(&'a Node),
+    Arc(Arc<Node>),
+}
+
 /// Returns the value mapped to by `key` in the subtrie rooted at `node`.
-fn get_helper<T: TrieReader>(
+fn get_helper<'a, T: TrieReader>(
     nodestore: &T,
-    node: &Node,
+    node: NodeOrRef<'a>,
     key: &[u8],
-) -> Result<Option<Box<[u8]>>, MerkleError> {
+) -> Result<Option<NodeOrRef<'a>>, MerkleError> {
     // 4 possibilities for the position of the `key` relative to `node`:
     // 1. The node is at `key`
     // 2. The key is above the node (i.e. its ancestor)
     // 3. The key is below the node (i.e. its descendant)
     // 4. Neither is an ancestor of the other
-    let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
+    let node_partial_path = match &node {
+        NodeOrRef::Node(node) => node.partial_path().as_ref(),
+        NodeOrRef::Arc(node) => node.partial_path().as_ref(),
+    };
+    let path_overlap = PrefixOverlap::from(key, node_partial_path);
     let unique_key = path_overlap.unique_a;
     let unique_node = path_overlap.unique_b;
 
@@ -102,20 +111,34 @@ fn get_helper<T: TrieReader>(
             // Case (2) or (4)
             Ok(None)
         }
-        (None, None) => return Ok(node.value().map(|v| v.to_vec().into_boxed_slice())), // 1. The node is at `key`
+        (None, None) => return Ok(Some(node)), // 1. The node is at `key`
         (Some((child_index, key)), None) => {
             // 3. The key is below the node (i.e. its descendant)
-            match node {
-                Node::Leaf(leaf) => Ok(Some(leaf.value.clone())),
+            let node = match &node {
+                NodeOrRef::Node(node) => node,
+                NodeOrRef::Arc(node) => &**node,
+            };
+
+            let foo = match node {
+                Node::Leaf(_) => Ok(None),
                 Node::Branch(branch) => {
                     #[allow(clippy::indexing_slicing)]
                     let child = match &branch.children[child_index as usize] {
                         None => return Ok(None),
-                        Some(Child::Node(node)) => node,
-                        Some(Child::AddressWithHash(addr, _)) => &nodestore.read_node(*addr)?,
+                        Some(Child::Node(node)) => NodeOrRef::Node(node),
+                        Some(Child::AddressWithHash(addr, _)) => {
+                            NodeOrRef::Arc(nodestore.read_node(*addr)?)
+                        }
                     };
 
                     get_helper(nodestore, child, key)
+                }
+            };
+            let foo = foo?;
+            if let Some(foo) = foo {
+                match foo {
+                    NodeOrRef::Node(_) => todo!(),
+                    NodeOrRef::Arc(_) => todo!(),
                 }
             }
         }
