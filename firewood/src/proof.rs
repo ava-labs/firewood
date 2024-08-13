@@ -16,6 +16,8 @@ pub enum ProofError {
     MissingStartProof,
     #[error("expected end proof but got None")]
     MissingEndProof,
+    #[error("expected a child but got None")]
+    MissingChild,
     #[error("proof keys should be monotonically increasing")]
     NonIncreasingKeys,
     #[error("key before range start")]
@@ -24,6 +26,8 @@ pub enum ProofError {
     KeyAfterRangeEnd,
     #[error("unexpected hash")]
     UnexpectedHash,
+    #[error("unexpected key")]
+    UnexpectedKey,
     #[error("unexpected value")]
     UnexpectedValue,
     #[error("proof should contain only the root")]
@@ -32,6 +36,8 @@ pub enum ProofError {
     UnexpectedEmptyTrie,
     #[error("missing key-value pair impled by proof")]
     MissingKeyValue,
+    #[error("got start proof but didn't request one")]
+    UnexpectedStartProof,
     #[error("value mismatch")]
     ValueMismatch,
     #[error("expected value but got None")]
