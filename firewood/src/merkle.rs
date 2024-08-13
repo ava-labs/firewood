@@ -100,9 +100,9 @@ fn get_helper<T: TrieReader>(
     ) {
         (_, Some(_)) => {
             // Case (2) or (4)
-            return Ok(None);
+            Ok(None)
         }
-        (None, None) => return Ok(Some(Arc::new(node.clone()))), // 1. The node is at `key`
+        (None, None) => Ok(Some(Arc::new(node.clone()))), // 1. The node is at `key`
         (Some((child_index, remaining_key)), None) => {
             // 3. The key is below the node (i.e. its descendant)
             match node {
@@ -112,7 +112,7 @@ fn get_helper<T: TrieReader>(
                     .get(child_index as usize)
                     .expect("index is in bounds")
                 {
-                    None => return Ok(None),
+                    None => Ok(None),
                     Some(Child::Node(ref child)) => get_helper(nodestore, child, remaining_key),
                     Some(Child::AddressWithHash(addr, _)) => {
                         let child = nodestore.read_node(*addr)?;
