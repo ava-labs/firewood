@@ -3,11 +3,11 @@
 
 use crate::manager::RevisionManagerError;
 use crate::proof::ProofNode;
+use crate::range_proof::RangeProof;
 use crate::{merkle::MerkleError, proof::Proof};
 use async_trait::async_trait;
 use futures::Stream;
 use std::{fmt::Debug, sync::Arc};
-use storage::Hashable;
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
 /// and can be sent and shared across threads. References with
@@ -69,10 +69,10 @@ pub enum Error {
     IncorrectRootHash { provided: HashKey, current: HashKey },
 
     /// Invalid range
-    #[error("Invalid range: {first_key:?} > {last_key:?}")]
+    #[error("Invalid range: {start_key:?} > {end_key:?}")]
     InvalidRange {
-        first_key: Vec<u8>,
-        last_key: Vec<u8>,
+        start_key: Box<[u8]>,
+        end_key: Box<[u8]>,
     },
 
     #[error("IO error: {0}")]
@@ -86,6 +86,9 @@ pub enum Error {
 
     #[error("Range too small")]
     RangeTooSmall,
+
+    #[error("request RangeProof for empty trie")]
+    RangeProofOnEmptyTrie,
 }
 
 impl From<MerkleError> for Error {
@@ -100,15 +103,6 @@ impl From<RevisionManagerError> for Error {
         // TODO: do a better job
         Error::InternalError(Box::new(err))
     }
-}
-
-/// A range proof, consisting of a proof of the first key and the last key,
-/// and a vector of all key/value pairs
-#[derive(Debug)]
-pub struct RangeProof<K, V, H: Hashable> {
-    pub first_key_proof: Proof<H>,
-    pub last_key_proof: Proof<H>,
-    pub middle: Vec<(K, V)>,
 }
 
 /// The database interface, which includes a type for a static view of
@@ -184,7 +178,7 @@ pub trait DbView {
         first_key: Option<K>,
         last_key: Option<K>,
         limit: Option<usize>,
-    ) -> Result<Option<RangeProof<Vec<u8>, Vec<u8>, ProofNode>>, Error>;
+    ) -> Result<Option<RangeProof<Box<[u8]>, Box<[u8]>, ProofNode>>, Error>;
 
     /// Obtain a stream over the keys/values of this view, using an optional starting point
     ///
