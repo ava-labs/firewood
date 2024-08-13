@@ -783,17 +783,14 @@ pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
 /// The `unique_*` properties, [`unique_a`][`PrefixOverlap::unique_a`] and [`unique_b`][`PrefixOverlap::unique_b`]
 /// are set based on the argument order passed into the [`from`][`PrefixOverlap::from`] constructor.
 #[derive(Debug)]
-struct PrefixOverlap<'a, 'b, T>
-where
-    'a: 'b,
-{
+struct PrefixOverlap<'a, T> {
     shared: &'a [T],
     unique_a: &'a [T],
-    unique_b: &'b [T],
+    unique_b: &'a [T],
 }
 
-impl<'a, 'b, T: PartialEq> PrefixOverlap<'a, 'b, T> {
-    fn from(a: &'a [T], b: &'b [T]) -> Self {
+impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
+    fn from(a: &'a [T], b: &'a [T]) -> Self {
         let split_index = a
             .iter()
             .zip(b)
