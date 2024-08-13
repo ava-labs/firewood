@@ -3,12 +3,12 @@
 
 use crate::manager::RevisionManagerError;
 use crate::proof::ProofNode;
-use crate::range_proof::RangeProof;
+pub use crate::range_proof::RangeProof;
 use crate::{merkle::MerkleError, proof::Proof};
 use async_trait::async_trait;
 use futures::Stream;
 use std::{fmt::Debug, sync::Arc};
-use storage::{Hashable, TrieHash};
+use storage::TrieHash;
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
 /// and can be sent and shared across threads. References with

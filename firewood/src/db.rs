@@ -66,7 +66,7 @@ impl api::DbView for HistoricalRev {
 
     async fn val<K: api::KeyType>(&self, key: K) -> Result<Option<Box<[u8]>>, api::Error> {
         let merkle = Merkle::from(self);
-        Ok(merkle.get(key.as_ref())?)
+        Ok(merkle.get_value(key.as_ref())?)
     }
 
     async fn single_key_proof<K: api::KeyType>(
@@ -343,7 +343,7 @@ impl<'a> api::DbView for Proposal<'a> {
         _first_key: Option<K>,
         _last_key: Option<K>,
         _limit: Option<usize>,
-    ) -> Result<Option<api::RangeProof<Vec<u8>, Vec<u8>, ProofNode>>, api::Error> {
+    ) -> Result<Option<api::RangeProof<Box<[u8]>, Box<[u8]>, ProofNode>>, api::Error> {
         todo!()
     }
 
