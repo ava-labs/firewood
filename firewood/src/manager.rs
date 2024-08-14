@@ -134,10 +134,10 @@ impl RevisionManager {
 
         // 7. Proposal Cleanup
         self.proposals.retain(|p| {
-            // TODO: reparent proposals; this needs a lock on the parent element of immutable proposals
-            // if p
-            //     .kind
-            //     .parent_is(&proposal.kind.as_nodestore_parent())
+            // reparent proposals
+            if p.kind.parent_is(&proposal.kind.as_nodestore_parent()) {
+                p.kind.reparent_to(&committed.kind.as_nodestore_parent())
+            }
             // {
             //     p.kind.reparent_to(&committed.kind.as_nodestore_parent());
             // }

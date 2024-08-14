@@ -2,6 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Debug;
 /// The [NodeStore] handles the serialization of nodes and
@@ -614,7 +615,7 @@ pub struct ImmutableProposal {
     /// Nodes that have been deleted in this proposal.
     deleted: Box<[LinearAddress]>,
     /// The parent of this proposal.
-    parent: NodeStoreParent,
+    parent: RefCell<NodeStoreParent>,
     /// The hash of the root node for this proposal
     root_hash: Option<TrieHash>,
 }
@@ -622,7 +623,13 @@ pub struct ImmutableProposal {
 impl ImmutableProposal {
     /// Returns true if the parent of this proposal is `parent`.
     pub fn parent_is(&self, parent: &NodeStoreParent) -> bool {
-        &self.parent == parent
+        *self.parent.borrow() == *parent
+    }
+
+    /// Reparent this proposal to a new parent
+    /// This happens when committing a proposal that has active children
+    pub fn reparent_to(&self, parent: NodeStoreParent) {
+        *self.parent.borrow_mut() = parent;
     }
 }
 
@@ -635,7 +642,7 @@ impl ReadInMemoryNode for ImmutableProposal {
 
         // It wasn't. Try our parent, and its parent, and so on until we find it or find
         // a committed revision.
-        match self.parent {
+        match *self.parent.borrow() {
             NodeStoreParent::Proposed(ref parent) => parent.read_in_memory_node(addr),
             NodeStoreParent::Committed(_) => None,
         }
@@ -856,7 +863,7 @@ impl<S: ReadableStorage> From<NodeStore<MutableProposal, S>> for NodeStore<Immut
             kind: ImmutableProposal {
                 new: HashMap::new(),
                 deleted: kind.deleted.into(),
-                parent: kind.parent,
+                parent: RefCell::new(kind.parent),
                 root_hash: None,
             },
             storage,
