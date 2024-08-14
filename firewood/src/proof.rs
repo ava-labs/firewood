@@ -58,6 +58,8 @@ pub enum ProofError {
     Merkle(#[from] MerkleError),
     #[error("proof is empty; should have key-values or a start/end proof")]
     EmptyProof,
+    #[error("expected branch node but got leaf")]
+    UnexpectedLeaf,
 }
 
 #[derive(Clone, Debug)]

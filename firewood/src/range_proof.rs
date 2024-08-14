@@ -2,7 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 use crate::merkle::_new_in_memory_merkle;
 use crate::proof::{Proof, ProofError};
-use storage::{BranchNode, Hashable, Node, TrieHash};
+use storage::{BranchNode, Hashable, TrieHash};
 use storage::{Preimage, ValueDigest};
 
 /// A range proof proves that a given set of key-value pairs
@@ -189,60 +189,31 @@ where
         }
 
         if let Some(start_proof) = &self.start_proof {
-            let start_key: Box<[u8]> = start_key
-                .expect("checked above")
-                .as_ref()
-                .iter()
-                .copied()
-                .collect();
             let mut expected_hash = expected_root_hash;
             let mut current = root;
             let mut matched_key: Vec<u8> = vec![];
-            let mut proof_iter = start_proof.0.iter();
 
-            while let Some(proof_node) = proof_iter.next() {
-                matched_key.extend(current.partial_path().iter().copied());
+            for window in start_proof.0.windows(2) {
+                let proof_node = &window[0];
+                let next_proof_node = &window[1];
 
-                let current_branch = match &*current {
-                    Node::Branch(current_branch) => current_branch,
-                    Node::Leaf(leaf) => {
-                        // This node is a leaf so it should be the last in this proof.
-                        // Should have been checked by the proof verification.
-                        assert!(proof_iter.next().is_none());
+                // This node isn't the last in the proof, so it must be a branch.
+                let current_branch = current.as_branch().ok_or(ProofError::UnexpectedLeaf)?;
 
-                        let augmented_hash = AugmentedNode {
-                            key: matched_key.clone().into_boxed_slice(), // todo remove clone
-                            value_digest: Some(ValueDigest::Value(leaf.value.clone())), // todo remove clone
-                            children: Default::default(),
-                        }
-                        .to_hash();
-
-                        if augmented_hash != expected_hash {
-                            return Err(ProofError::UnexpectedHash);
-                        }
-
-                        break; // TODO make this break clearer (i.e. out of start proof if)
-                    }
-                };
+                let child_index = next_proof_node
+                    .key()
+                    .skip(proof_node.key().count())
+                    .next()
+                    .expect("proof is valid");
 
                 let mut children: [Option<TrieHash>; BranchNode::MAX_CHILDREN] = Default::default();
-                for (i, hash) in proof_node.children() {
+                for (i, hash) in proof_node
+                    .children()
+                    .filter(|(i, _)| *i < child_index as usize)
+                {
                     children[i] = Some(hash.clone());
                 }
-
-                // Overwrite hashes for children at keys greater than the start key
-                // with the hashes from the merkle we created.
-                // If `next_child_index` is None, then this is the last node in the proof.
-                // If this is an inclusion proof, we should add all the children  of `current_branch`
-                let next_child_index = start_key.get(matched_key.len());
-
-                for i in 0..BranchNode::MAX_CHILDREN {
-                    if let Some(next_child_index) = next_child_index {
-                        if i <= *next_child_index as usize {
-                            continue;
-                        }
-                    }
-
+                for i in child_index as usize..BranchNode::MAX_CHILDREN {
                     children[i] = current_branch.children[i]
                         .as_ref()
                         .map(|child| match child {
@@ -253,25 +224,19 @@ where
                         });
                 }
 
-                // None if this is the last node in the proof.
-                let child_expected_hash = next_child_index
-                    .map(|next_child_index| {
-                        children[*next_child_index as usize]
-                            .clone()
-                            .ok_or(ProofError::MissingChild)
-                    })
-                    .transpose()?;
+                let expected_child_hash = children[child_index as usize]
+                    .as_ref()
+                    .expect("proof is valid")
+                    .clone();
+
+                matched_key.extend(current.partial_path().iter().copied());
 
                 let augmented_hash = AugmentedNode {
-                    key: proof_node.key().collect(),
-                    value_digest: proof_node.value_digest().map(|v| match v {
-                        ValueDigest::Value(value) => {
-                            ValueDigest::Value(value.to_vec().into_boxed_slice())
-                        }
-                        ValueDigest::_Hash(hash) => {
-                            ValueDigest::_Hash(hash.to_vec().into_boxed_slice())
-                        }
-                    }),
+                    key: matched_key.clone().into_boxed_slice(), // todo remove clone
+                    value_digest: current_branch
+                        .value
+                        .as_ref()
+                        .map(|v| ValueDigest::Value(v.clone())), // todo remove clone
                     children,
                 }
                 .to_hash();
@@ -280,20 +245,20 @@ where
                     return Err(ProofError::UnexpectedHash);
                 }
 
-                // Update the expected hash and current node.
-                expected_hash = if let Some(child_expected_hash) = child_expected_hash {
-                    child_expected_hash
-                } else {
-                    assert!(proof_iter.next().is_none());
-                    break;
-                };
+                expected_hash = expected_child_hash;
+
+                matched_key.push(child_index);
+
+                let next_node_key: Box<[u8]> = next_proof_node.key().collect();
 
                 current = merkle
-                    .get_node_from_nibbles(&matched_key)?
+                    .get_node_from_nibbles(&next_node_key)?
                     .ok_or(ProofError::MissingChild)?;
             }
         }
-        todo!()
+
+        // TODO verify with hashes from end proof
+        Ok(())
     }
 }
 
@@ -356,5 +321,28 @@ impl Hashable for AugmentedNode {
             .iter()
             .enumerate()
             .filter_map(|(i, hash)| hash.as_ref().map(|hash| (i, hash)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroUsize;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn one_key() {
+        let mut merkle = _new_in_memory_merkle();
+        merkle.insert(&[0], [0].into()).unwrap();
+        let merkle = merkle.hash();
+
+        let range_proof = merkle
+            ._range_proof(None, None, Some(NonZeroUsize::new(1).unwrap()))
+            .await
+            .unwrap();
+
+        range_proof
+            .verify(None, None, merkle.root_hash().unwrap().unwrap())
+            .unwrap();
     }
 }
