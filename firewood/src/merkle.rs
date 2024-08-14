@@ -229,76 +229,53 @@ impl<T: TrieReader> Merkle<T> {
             }
         }
 
-        let mut stream = match start_key {
+        let stream = match start_key {
             // TODO: fix the call-site to force the caller to do the allocation
             Some(key) => self._key_value_iter_from_key(key.to_vec().into_boxed_slice()),
             None => self._key_value_iter(),
         };
 
-        // fetch the first key from the stream
-        let first_result = stream.next().await;
-
-        // transpose the Option<Result<T, E>> to Result<Option<T>, E>
-        // If this is an error, the ? operator will return it
-        let Some((first_key, first_value)) = first_result.transpose()? else {
-            // The trie is empty.
-            if start_key.is_none() && end_key.is_none() {
-                // The caller requested a range proof over an empty trie.
-                return Err(api::Error::RangeProofOnEmptyTrie);
-            }
-
-            let start_proof = start_key
-                .map(|start_key| self.prove(start_key))
-                .transpose()?;
-
-            let end_proof = end_key.map(|end_key| self.prove(end_key)).transpose()?;
-
-            return Ok(RangeProof {
-                start_proof,
-                key_values: Box::new([]),
-                end_proof,
-            });
-        };
-
-        let start_proof = self.prove(&first_key)?;
-        let limit = limit.map(|old_limit| old_limit.get() - 1);
-
-        let mut key_values = vec![(first_key, first_value.into_boxed_slice())];
-
         // we stop streaming if either we hit the limit or the key returned was larger
         // than the largest key requested
-        #[allow(clippy::unwrap_used)]
-        key_values.extend(
-            stream
-                .take(limit.unwrap_or(usize::MAX))
-                .take_while(|kv| {
-                    // no last key asked for, so keep going
-                    let Some(last_key) = end_key else {
-                        return ready(true);
-                    };
+        #[allow(clippy::unwrap_used, clippy::type_complexity)]
+        let key_values: Vec<(Box<[u8]>, Box<[u8]>)> = stream
+            .take(
+                limit
+                    .unwrap_or(NonZeroUsize::new(usize::MAX).unwrap())
+                    .into(),
+            )
+            .take_while(|kv| {
+                // no last key asked for, so keep going
+                let Some(end_key) = end_key else {
+                    return ready(true);
+                };
 
-                    // return the error if there was one
-                    let Ok(kv) = kv else {
-                        return ready(true);
-                    };
+                // return the error if there was one
+                let Ok(kv) = kv else {
+                    return ready(true);
+                };
 
-                    // keep going if the key returned is less than the last key requested
-                    ready(&*kv.0 <= last_key)
-                })
-                .map(|kv| kv.map(|(k, v)| (k, v.into())))
-                .try_collect::<Vec<(Box<[u8]>, Box<[u8]>)>>()
-                .await?,
-        );
+                // keep going if the key returned is <= `end_key`
+                ready(&*kv.0 <= end_key)
+            })
+            .map(|kv| kv.map(|(k, v)| (k, v.into())))
+            .try_collect()
+            .await?;
+
+        let start_proof = start_key
+            .map(|start_key| self.prove(start_key))
+            .transpose()?;
 
         let end_proof = key_values
             .last()
-            .map(|(largest_key, _)| self.prove(largest_key))
+            .map(|(largest_key, _)| largest_key.as_ref())
+            .or(end_key)
+            .map(|key| self.prove(key))
             .transpose()?;
-
         debug_assert!(end_proof.is_some());
 
         Ok(RangeProof {
-            start_proof: Some(start_proof),
+            start_proof,
             key_values: key_values.into(),
             end_proof,
         })
