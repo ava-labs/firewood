@@ -23,8 +23,8 @@ where
     /// Returns the key-value pairs that this proof proves are in the trie.
     pub fn verify(
         &self,
-        start_key: Option<K>,
-        end_key: Option<K>,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
         expected_root_hash: TrieHash,
     ) -> Result<(), ProofError> {
         if self.key_values.is_empty() && self.start_proof.is_none() && self.end_proof.is_none() {
@@ -69,7 +69,7 @@ where
                     start_proof.verify(start_key, None::<&[u8]>, &expected_root_hash)?;
                 }
                 (Some(start_key), Some((smallest_key, expected_value))) => {
-                    if start_key.as_ref() == smallest_key.as_ref() {
+                    if *start_key == smallest_key.as_ref() {
                         start_proof.verify(
                             start_key,
                             Some(expected_value.as_ref()),
@@ -79,8 +79,8 @@ where
                         // Make sure there are no keys between `start_key` and `smallest_key`
                         if !range_is_empty(
                             start_proof.implied_hashes(),
-                            &Some(start_key),
-                            &Some(smallest_key),
+                            Some(start_key),
+                            Some(smallest_key.as_ref()),
                         ) {
                             return Err(ProofError::MissingKeyValue);
                         }
@@ -128,8 +128,8 @@ where
                         // Make sure there are no keys between `biggest_key` and `end_key`
                         if !range_is_empty(
                             end_proof.implied_hashes(),
-                            &Some(biggest_key),
-                            &Some(end_key),
+                            Some(biggest_key.as_ref()),
+                            Some(end_key),
                         ) {
                             return Err(ProofError::MissingKeyValue);
                         }
@@ -160,13 +160,13 @@ where
             // The start and end proof, which we've verified are valid, should imply
             // there are no key-value pairs in the trie between the start and end key.
             if let Some(start_proof) = &self.start_proof {
-                if !range_is_empty(start_proof.implied_hashes(), &start_key, &end_key) {
+                if !range_is_empty(start_proof.implied_hashes(), start_key, end_key) {
                     return Err(ProofError::MissingKeyValue);
                 }
             }
 
             if let Some(end_proof) = &self.end_proof {
-                if !range_is_empty(end_proof.implied_hashes(), &start_key, &end_key) {
+                if !range_is_empty(end_proof.implied_hashes(), start_key, end_key) {
                     return Err(ProofError::MissingKeyValue);
                 }
             }
@@ -266,10 +266,13 @@ where
 // `start_key` and `end_key` (exclusive) that map to Some(hash).
 // A None `start_key` is considered to be before all keys.
 // A None `end_key` is considered to be after all keys.
-fn range_is_empty<'a, T, K>(implied_hashes: T, start_key: &Option<K>, end_key: &Option<K>) -> bool
+fn range_is_empty<'a, T>(
+    implied_hashes: T,
+    start_key: Option<&[u8]>,
+    end_key: Option<&[u8]>,
+) -> bool
 where
     T: Iterator<Item = (Box<[u8]>, Option<&'a TrieHash>)>,
-    K: AsRef<[u8]>,
 {
     for (key, hash) in implied_hashes {
         if hash.is_some() {
@@ -326,23 +329,32 @@ impl Hashable for AugmentedNode {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroUsize;
-
     use super::*;
+    use std::{num::NonZeroUsize, usize};
+    use test_case::test_case;
 
+    #[test_case(None, None, &[&[0]]; "1 kv no start key no end key")]
+    #[test_case(None, None, &[&[0],&[1]]; "2 kv no start key no end key")]
     #[tokio::test]
-    async fn one_key() {
+    async fn test_verify(start_key: Option<&[u8]>, end_key: Option<&[u8]>, keys: &[&[u8]]) {
         let mut merkle = _new_in_memory_merkle();
-        merkle.insert(&[0], [0].into()).unwrap();
+        for k in keys {
+            merkle.insert(k, Box::from(*k)).unwrap();
+        }
         let merkle = merkle.hash();
+        let root_hash = merkle.root_hash().unwrap().unwrap();
 
         let range_proof = merkle
-            ._range_proof(None, None, Some(NonZeroUsize::new(1).unwrap()))
+            ._range_proof(
+                start_key,
+                end_key,
+                Some(NonZeroUsize::new(usize::MAX).unwrap()),
+            )
             .await
             .unwrap();
 
         range_proof
-            .verify(None, None, merkle.root_hash().unwrap().unwrap())
+            .verify(start_key, end_key, root_hash.clone())
             .unwrap();
     }
 }
