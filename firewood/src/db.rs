@@ -226,12 +226,12 @@ where
 
     type Proposal<'p> = Proposal<'p> where Self: 'p;
 
-    async fn revision(&self, _root_hash: TrieHash) -> Result<Arc<Self::Historical>, api::Error> {
+    async fn revision(&self, root_hash: TrieHash) -> Result<Arc<Self::Historical>, api::Error> {
         let nodestore = self
             .manager
             .read()
             .expect("poisoned lock")
-            .revision(_root_hash)?;
+            .revision(root_hash)?;
         Ok(nodestore)
     }
 
