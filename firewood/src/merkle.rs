@@ -82,17 +82,17 @@ macro_rules! write_attributes {
 }
 
 /// Returns the value mapped to by `key` in the subtrie rooted at `node`.
-fn get_helper<T: TrieReader>(
+fn get_helper<K: AsRef<[u8]>, T: TrieReader>(
     nodestore: &T,
     node: &Node,
-    key: &[u8],
+    key: K,
 ) -> Result<Option<Arc<Node>>, MerkleError> {
     // 4 possibilities for the position of the `key` relative to `node`:
     // 1. The node is at `key`
     // 2. The key is above the node (i.e. its ancestor)
     // 3. The key is below the node (i.e. its descendant)
     // 4. Neither is an ancestor of the other
-    let path_overlap = PrefixOverlap::from(key, node.partial_path());
+    let path_overlap = PrefixOverlap::from(key.as_ref(), node.partial_path());
     let unique_key = path_overlap.unique_a;
     let unique_node = path_overlap.unique_b;
 
@@ -152,13 +152,13 @@ impl<T: TrieReader> Merkle<T> {
 
     /// Returns a proof that the given key has a certain value,
     /// or that the key isn't in the trie.
-    pub fn prove(&self, key: &[u8]) -> Result<Proof<ProofNode>, MerkleError> {
+    pub fn prove<K: AsRef<[u8]>>(&self, key: K) -> Result<Proof<ProofNode>, MerkleError> {
         let Some(root) = self.root() else {
             return Err(MerkleError::Empty);
         };
 
         // Get the path to the key
-        let path_iter = self.path_iter(key)?;
+        let path_iter = self.path_iter(key.as_ref())?;
         let mut proof = Vec::new();
         for node in path_iter {
             let node = node?;
@@ -190,12 +190,12 @@ impl<T: TrieReader> Merkle<T> {
         Ok(Proof(proof.into_boxed_slice()))
     }
 
-    pub fn verify_range_proof<V: AsRef<[u8]>>(
+    pub fn verify_range_proof<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         &self,
         _proof: &Proof<impl Hashable>,
-        _first_key: &[u8],
-        _last_key: &[u8],
-        _keys: Vec<&[u8]>,
+        _first_key: K,
+        _last_key: K,
+        _keys: Vec<K>,
         _vals: Vec<V>,
     ) -> Result<bool, ProofError> {
         todo!()
@@ -304,20 +304,20 @@ impl<T: TrieReader> Merkle<T> {
         })
     }
 
-    pub fn get_value(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
+    pub fn get_value<K: AsRef<[u8]>>(&self, key: K) -> Result<Option<Box<[u8]>>, MerkleError> {
         let Some(node) = self.get_node(key)? else {
             return Ok(None);
         };
         Ok(node.value().map(|v| v.to_vec().into_boxed_slice()))
     }
 
-    pub fn get_node(&self, key: &[u8]) -> Result<Option<Arc<Node>>, MerkleError> {
+    pub fn get_node<K: AsRef<[u8]>>(&self, key: K) -> Result<Option<Arc<Node>>, MerkleError> {
         let Some(root) = self.root() else {
             return Ok(None);
         };
 
-        let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
-        get_helper(&self.nodestore, &root, &key)
+        let key = Path::from_nibbles_iterator(NibblesIterator::new(key.as_ref()));
+        get_helper(&self.nodestore, &root, key.as_ref())
     }
 }
 
@@ -394,8 +394,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     }
 
     /// Map `key` to `value` in the trie.
-    pub fn insert(&mut self, key: &[u8], value: Box<[u8]>) -> Result<(), MerkleError> {
-        let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
+    pub fn insert<K: AsRef<[u8]>>(&mut self, key: K, value: Box<[u8]>) -> Result<(), MerkleError> {
+        let key = Path::from_nibbles_iterator(NibblesIterator::new(key.as_ref()));
 
         let root = self.nodestore.mut_root();
 
@@ -417,10 +417,10 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 
     /// Map `key` to `value` into the subtrie rooted at `node`.
     /// Returns the new root of the subtrie.
-    pub fn insert_helper(
+    pub fn insert_helper<K: AsRef<[u8]>>(
         &mut self,
         mut node: Node,
-        key: &[u8],
+        key: K,
         value: Box<[u8]>,
     ) -> Result<Node, MerkleError> {
         // 4 possibilities for the position of the `key` relative to `node`:
@@ -428,7 +428,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         // 2. The key is above the node (i.e. its ancestor)
         // 3. The key is below the node (i.e. its descendant)
         // 4. Neither is an ancestor of the other
-        let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
+        let path_overlap = PrefixOverlap::from(key.as_ref(), node.partial_path().as_ref());
 
         let unique_key = path_overlap.unique_a;
         let unique_node = path_overlap.unique_b;
@@ -550,8 +550,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Removes the value associated with the given `key`.
     /// Returns the value that was removed, if any.
     /// Otherwise returns `None`.
-    pub fn remove(&mut self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
-        let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
+    pub fn remove<K: AsRef<[u8]>>(&mut self, key: K) -> Result<Option<Box<[u8]>>, MerkleError> {
+        let key = Path::from_nibbles_iterator(NibblesIterator::new(key.as_ref()));
 
         let root = self.nodestore.mut_root();
         let Some(root_node) = std::mem::take(root) else {
@@ -559,7 +559,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
             return Ok(None);
         };
 
-        let (root_node, removed_value) = self.remove_helper(root_node, &key)?;
+        let (root_node, removed_value) = self.remove_helper(root_node, key.as_ref())?;
         *self.nodestore.mut_root() = root_node;
         Ok(removed_value)
     }
@@ -567,17 +567,17 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Removes the value associated with the given `key` from the subtrie rooted at `node`.
     /// Returns the new root of the subtrie and the value that was removed, if any.
     #[allow(clippy::type_complexity)]
-    fn remove_helper(
+    fn remove_helper<K: AsRef<[u8]>>(
         &mut self,
         mut node: Node,
-        key: &[u8],
+        key: K,
     ) -> Result<(Option<Node>, Option<Box<[u8]>>), MerkleError> {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`
         // 2. The key is above the node (i.e. its ancestor)
         // 3. The key is below the node (i.e. its descendant)
         // 4. Neither is an ancestor of the other
-        let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
+        let path_overlap = PrefixOverlap::from(key.as_ref(), node.partial_path().as_ref());
 
         let unique_key = path_overlap.unique_a;
         let unique_node = path_overlap.unique_b;
