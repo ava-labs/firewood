@@ -90,4 +90,11 @@ impl WritableStorage for FileBacked {
         }
         Ok(())
     }
+
+    fn invalidate_cache(&self, addr: impl Iterator<Item = LinearAddress>) {
+        let mut guard = self.cache.lock().expect("poisoned lock");
+        for addr in addr {
+            guard.pop(&addr);
+        }
+    }
 }

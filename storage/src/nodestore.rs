@@ -126,8 +126,7 @@ struct StoredArea<T> {
 impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
     /// Returns (index, area_size) for the [StoredArea] at `addr`.
     /// `index` is the index of `area_size` in [AREA_SIZES].
-    #[allow(dead_code)]
-    fn area_index_and_size(&self, addr: LinearAddress) -> Result<(AreaIndex, u64), Error> {
+    pub fn area_index_and_size(&self, addr: LinearAddress) -> Result<(AreaIndex, u64), Error> {
         let mut area_stream = self.storage.stream_from(addr.get())?;
 
         let index: AreaIndex = bincode::deserialize_from(&mut area_stream)
@@ -514,7 +513,7 @@ pub type FreeLists = [Option<LinearAddress>; NUM_AREA_SIZES];
 /// Persisted metadata for a [NodeStore].
 /// The [NodeStoreHeader] is at the start of the ReadableStorage.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
-struct NodeStoreHeader {
+pub struct NodeStoreHeader {
     /// Identifies the version of firewood used to create this [NodeStore].
     version: Version,
     size: u64,
@@ -548,6 +547,10 @@ impl NodeStoreHeader {
             version: Version::new(),
             free_lists: Default::default(),
         }
+    }
+
+    fn free_node<S>(&self, storage: S, addr: LinearAddress) {
+        
     }
 }
 
@@ -602,7 +605,8 @@ pub trait RootReader {
 #[derive(Clone, Debug)]
 pub struct Committed {
     #[allow(dead_code)]
-    deleted: Box<[LinearAddress]>,
+    /// The nodes that have been deleted in this revision.
+    pub deleted: Box<[LinearAddress]>,
     root_hash: Option<TrieHash>,
 }
 
@@ -697,8 +701,8 @@ pub trait ReadInMemoryNode {
 
 #[derive(Debug)]
 pub struct NodeStore<T, S> {
-    // Metadata for this revision.
-    header: NodeStoreHeader,
+    /// Metadata for this revision.
+    pub header: NodeStoreHeader,
     /// This is one of [Committed], [ImmutableProposal], or [MutableProposal].
     pub kind: T,
     /// Persisted storage to read nodes from.

@@ -70,4 +70,7 @@ pub trait WritableStorage: ReadableStorage {
     ) -> Result<(), Error> {
         Ok(())
     }
+
+    /// Invalidate the cache for a set of addresses
+    fn invalidate_cache(&self, _addr: impl Iterator<Item = LinearAddress>) {}
 }

@@ -13,7 +13,7 @@ use typed_builder::TypedBuilder;
 
 use crate::v2::api::HashKey;
 
-use storage::{Committed, FileBacked, ImmutableProposal, NodeStore, Parentable, TrieHash};
+use storage::{Committed, FileBacked, ImmutableProposal, NodeStore, Parentable, TrieHash, WritableStorage};
 
 #[derive(Clone, Debug, TypedBuilder)]
 pub struct RevisionManagerConfig {
@@ -146,6 +146,44 @@ impl RevisionManager {
         // TODO
 
         Ok(())
+    }
+
+    // To expire an old revision, 
+
+    // R1 - Block future access. Remove the root hash from the visible list of accessible revisions
+    // R2 - Check for concurrent access. Consume the reference to the oldest revision. If we don’t
+    //      hold the only reference to this revision, then stop: the revision cannot be reaped now.
+    //      It can be added to a list of revisions that need reaping.
+    // R3 - Remove cached nodes from the cache.
+    // R3.5 Delete unreferenced nodes. Delete all the nodes referred to by the child of this revision,
+    //      and clear that list. Note that it is impossible to delete the most recent revision. Do not
+    //      update the free list headers until all deletes have been performed. These writes must be
+    //      forced to disk before the next step is completed (fsync).
+    // R4 - Flush the free list headers. This makes these nodes available for reallocation.
+
+    fn expire(&mut self) -> Result<[Option<NonZero<u64>>; NUM_AREA_SIZES], Error> {
+        // TODO: if we can't expire the oldest one, try to expire the next one up
+        if self.historical.len() > self.max_revisions && self.historical.len() > 1 {
+            let oldest = self.historical.pop_front().expect("always 2 or more");
+            // R1 - Block future access
+            // we always remove the hash which prevents future callers from finding it
+            self.by_hash.remove(&oldest.kind.root_hash().expect("root hash"));
+
+            // R2 - Check for concurrent access
+            if let Some(revision) = Arc::into_inner(oldest) {
+                // R3 - cache invalidation is easy! just remove the entries
+                // These nodes are no longer reachable anyway, and if they get reallocated to this address, we don't
+                // want to return the old value.
+                self.filebacked.invalidate_cache(revision.kind.deleted.iter().cloned());
+
+                let current_revision = self.current_revision();
+                let mut freelist = current_revision.header.free_lists;
+                for address_to_free in revision.kind.deleted {
+
+                }
+                
+            }
+        }
     }
 }
 
