@@ -224,14 +224,15 @@ pub trait Parentable {
     fn root_hash(&self) -> Option<TrieHash>;
 }
 
-impl<S> Parentable for NodeStore<Arc<ImmutableProposal>, S> {
+impl Parentable for Arc<ImmutableProposal> {
     fn as_nodestore_parent(&self) -> NodeStoreParent {
-        NodeStoreParent::Proposed(self.kind.clone())
+        NodeStoreParent::Proposed(self.clone())
     }
     fn root_hash(&self) -> Option<TrieHash> {
-        self.kind.root_hash.clone()
+        self.root_hash.clone()
     }
 }
+
 
 impl<S> NodeStore<Arc<ImmutableProposal>, S> {
     /// When an immutable proposal commits, we need to reparent any proposal that
@@ -243,7 +244,7 @@ impl<S> NodeStore<Arc<ImmutableProposal>, S> {
                     other
                         .kind
                         .parent
-                        .store(NodeStoreParent::Committed(self.root_hash()).into());
+                        .store(NodeStoreParent::Committed(self.kind.root_hash()).into());
                     true
                 } else {
                     false
@@ -967,6 +968,7 @@ where
 #[allow(clippy::unwrap_used)]
 mod tests {
     use crate::linear::memory::MemStore;
+    use arc_swap::access::DynGuard;
 
     use super::*;
 
@@ -996,6 +998,37 @@ mod tests {
         }
 
         assert!(area_size_to_index(MAX_AREA_SIZE + 1).is_err());
+    }
+
+    #[test]
+    fn test_reparent() {
+        // create an empty base revision
+        let memstore = MemStore::new(vec![]);
+        let base = NodeStore::new_empty_committed(memstore.into()).unwrap().into();
+        
+        // create an empty r1, check that it's parent is the empty committed version
+        let r1 = NodeStore::new(base).unwrap();
+        let r1: Arc<NodeStore<Arc<ImmutableProposal>, _>> = Arc::new(r1.into());
+        let parent: DynGuard<Arc<NodeStoreParent>> = r1.kind.parent.load();
+        assert!(matches!(**parent, NodeStoreParent::Committed(None)));
+
+        // create an empty r2, check that it's parent is the proposed version r1
+        let r2: NodeStore<MutableProposal, _> = NodeStore::new(r1.clone()).unwrap();
+        let r2: Arc<NodeStore<Arc<ImmutableProposal>, _>> = Arc::new(r2.into());
+        let parent: DynGuard<Arc<NodeStoreParent>> = r2.kind.parent.load();
+        assert!(matches!(**parent, NodeStoreParent::Proposed(_)));
+
+        // reparent r2
+        r1.commit_reparent(&r2);
+
+        // now check r2's parent, should match the hash of r1 (which is still None)
+        let parent: DynGuard<Arc<NodeStoreParent>> = r2.kind.parent.load();
+        if let NodeStoreParent::Committed(hash) = &**parent {
+            assert_eq!(*hash, r1.root_hash().unwrap());
+            assert_eq!(*hash, None);
+        } else {
+            panic!("expected committed parent");
+        }
     }
 
     // TODO add new tests
