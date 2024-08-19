@@ -240,7 +240,10 @@ impl<S> NodeStore<Arc<ImmutableProposal>, S> {
         match *other.kind.parent.load() {
             NodeStoreParent::Proposed(ref parent) => {
                 if Arc::ptr_eq(&self.kind, parent) {
-                    other.kind.parent.store(NodeStoreParent::Committed(self.root_hash()).into());
+                    other
+                        .kind
+                        .parent
+                        .store(NodeStoreParent::Committed(self.root_hash()).into());
                     true
                 } else {
                     false
@@ -642,7 +645,11 @@ pub struct ImmutableProposal {
 impl ImmutableProposal {
     /// Returns true if the parent of this proposal is committed and has the given hash.
     pub fn parent_hash_is(&self, hash: Option<TrieHash>) -> bool {
-        match <Arc<ArcSwap<NodeStoreParent>> as arc_swap::access::DynAccess<Arc<_>>>::load(&self.parent).as_ref() {
+        match <Arc<ArcSwap<NodeStoreParent>> as arc_swap::access::DynAccess<Arc<_>>>::load(
+            &self.parent,
+        )
+        .as_ref()
+        {
             NodeStoreParent::Committed(root_hash) => *root_hash == hash,
             _ => false,
         }
@@ -760,7 +767,12 @@ impl<S: WritableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStore<Com
 impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     /// Hashes `node`, which is at the given `path_prefix`, and its children recursively.
     /// Returns the hashed node and its hash.
-    fn hash_helper(&mut self, mut node: Node, path_prefix: &mut Path, new_nodes: &mut HashMap<LinearAddress, (u8, Arc<Node>)>) -> (LinearAddress, TrieHash) {
+    fn hash_helper(
+        &mut self,
+        mut node: Node,
+        path_prefix: &mut Path,
+        new_nodes: &mut HashMap<LinearAddress, (u8, Arc<Node>)>,
+    ) -> (LinearAddress, TrieHash) {
         // Allocate addresses and calculate hashes for all new nodes
         match node {
             Node::Branch(ref mut b) => {
@@ -778,7 +790,8 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                         .0
                         .extend(b.partial_path.0.iter().copied().chain(once(nibble as u8)));
 
-                    let (child_addr, child_hash) = self.hash_helper(child_node, path_prefix, new_nodes);
+                    let (child_addr, child_hash) =
+                        self.hash_helper(child_node, path_prefix, new_nodes);
                     *child = Some(Child::AddressWithHash(child_addr, child_hash));
                     path_prefix.0.truncate(original_length);
                 }
@@ -857,7 +870,9 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
     }
 }
 
-impl<S: ReadableStorage> From<NodeStore<MutableProposal, S>> for NodeStore<Arc<ImmutableProposal>, S> {
+impl<S: ReadableStorage> From<NodeStore<MutableProposal, S>>
+    for NodeStore<Arc<ImmutableProposal>, S>
+{
     fn from(val: NodeStore<MutableProposal, S>) -> Self {
         let NodeStore {
             header,
@@ -887,7 +902,8 @@ impl<S: ReadableStorage> From<NodeStore<MutableProposal, S>> for NodeStore<Arc<I
         let (root_addr, root_hash) = nodestore.hash_helper(root, &mut Path::new(), &mut new_nodes);
 
         nodestore.header.root_address = Some(root_addr);
-        let immutable_proposal = Arc::into_inner(nodestore.kind).expect("no other references to the proposal");
+        let immutable_proposal =
+            Arc::into_inner(nodestore.kind).expect("no other references to the proposal");
         nodestore.kind = Arc::new(ImmutableProposal {
             new: new_nodes,
             deleted: immutable_proposal.deleted,

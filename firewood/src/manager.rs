@@ -106,7 +106,9 @@ impl RevisionManager {
     ) -> Result<(), RevisionManagerError> {
         // 1. Commit check
         let current_revision = self.current_revision();
-        if !proposal.kind.parent_hash_is(current_revision.kind.root_hash())
+        if !proposal
+            .kind
+            .parent_hash_is(current_revision.kind.root_hash())
         {
             return Err(RevisionManagerError::NotLatest);
         }
@@ -132,9 +134,7 @@ impl RevisionManager {
 
         // 7. Proposal Cleanup
         // first remove the committing proposal from the list of outstanding proposals
-        self.proposals.retain(|p| {
-            !Arc::ptr_eq(&proposal, p)
-        });
+        self.proposals.retain(|p| !Arc::ptr_eq(&proposal, p));
 
         // then reparent any proposals that have this proposal as a parent
         for p in self.proposals.iter() {

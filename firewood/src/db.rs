@@ -263,7 +263,8 @@ where
             }
         }
         let nodestore = merkle.into_inner();
-        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> = Arc::new(nodestore.into());
+        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
+            Arc::new(nodestore.into());
         self.manager
             .write()
             .expect("poisoned lock")
