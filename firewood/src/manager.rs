@@ -30,7 +30,7 @@ pub(crate) struct RevisionManager {
     max_revisions: usize,
     filebacked: Arc<FileBacked>,
     historical: VecDeque<Arc<NodeStore<Committed, FileBacked>>>,
-    proposals: Vec<Arc<NodeStore<ImmutableProposal, FileBacked>>>,
+    proposals: Vec<Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>>,
     // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
     by_hash: HashMap<TrieHash, Arc<NodeStore<Committed, FileBacked>>>,
     // TODO: maintain root hash of the most recent commit
@@ -102,13 +102,11 @@ impl RevisionManager {
     ///    If more than the configurable number of revisions is available, the oldest revision can be forgotten.
     pub fn commit(
         &mut self,
-        proposal: Arc<NodeStore<ImmutableProposal, FileBacked>>,
+        proposal: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>,
     ) -> Result<(), RevisionManagerError> {
         // 1. Commit check
         let current_revision = self.current_revision();
-        if !proposal
-            .kind
-            .parent_is(&current_revision.kind.as_nodestore_parent())
+        if !proposal.kind.parent_hash_is(current_revision.kind.root_hash())
         {
             return Err(RevisionManagerError::NotLatest);
         }
@@ -133,16 +131,18 @@ impl RevisionManager {
         proposal.flush_header()?;
 
         // 7. Proposal Cleanup
+        // first remove the committing proposal from the list of outstanding proposals
         self.proposals.retain(|p| {
-            // reparent proposals
-            if p.kind.parent_is(&proposal.kind.as_nodestore_parent()) {
-                p.kind.reparent_to(&committed.kind.as_nodestore_parent())
-            }
-            // {
-            //     p.kind.reparent_to(&committed.kind.as_nodestore_parent());
-            // }
             !Arc::ptr_eq(&proposal, p)
         });
+
+        // then reparent any proposals that have this proposal as a parent
+        for p in self.proposals.iter() {
+            proposal.commit_reparent(p);
+        }
+
+        // 8. Revision reaping
+        // TODO
 
         Ok(())
     }
@@ -151,7 +151,7 @@ impl RevisionManager {
 pub type NewProposalError = (); // TODO implement
 
 impl RevisionManager {
-    pub fn add_proposal(&mut self, proposal: Arc<NodeStore<ImmutableProposal, FileBacked>>) {
+    pub fn add_proposal(&mut self, proposal: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>) {
         self.proposals.push(proposal);
     }
 
