@@ -606,6 +606,8 @@ impl PartialEq for NodeStoreParent {
     }
 }
 
+impl Eq for NodeStoreParent {}
+
 #[derive(Clone, Debug)]
 /// Contains state for a proposed revision of the trie.
 pub struct ImmutableProposal {
