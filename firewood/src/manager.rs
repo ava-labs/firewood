@@ -27,25 +27,11 @@ pub struct RevisionManagerConfig {
 
 #[derive(Debug)]
 pub(crate) struct RevisionManager {
-    /// Maximum number of revisions to keep on disk
     max_revisions: usize,
-
-    /// The underlying file storage
     filebacked: Arc<FileBacked>,
-
-    /// The list of revisions that are on disk; these point to the different roots
-    /// stored in the filebacked storage.
     historical: VecDeque<Arc<NodeStore<Committed, FileBacked>>>,
-<<<<<<< Updated upstream
     proposals: Vec<Arc<NodeStore<ImmutableProposal, FileBacked>>>,
     // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
-=======
-
-    /// List of oustanding proposals
-    proposals: Vec<Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>>,
-
-    /// A map of root hashes to the corresponding revision
->>>>>>> Stashed changes
     by_hash: HashMap<TrieHash, Arc<NodeStore<Committed, FileBacked>>>,
     // TODO: maintain root hash of the most recent commit
 }
