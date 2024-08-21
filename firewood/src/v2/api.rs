@@ -82,6 +82,12 @@ pub enum Error {
     #[error("Invalid proposal")]
     InvalidProposal,
 
+    // Cloned proposals are problematic because if they are committed, then you could
+    // create another proposal from this committed proposal, so we error at commit time
+    // if there are outstanding clones
+    #[error("Cannot commit a cloned proposal")]
+    CannotCommitClonedProposal,
+
     #[error("Internal error")]
     InternalError(Box<dyn std::error::Error + Send>),
 
