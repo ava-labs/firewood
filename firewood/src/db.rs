@@ -364,13 +364,14 @@ impl<'a> api::Proposal for Proposal<'a> {
         todo!()
     }
 
+    // When committing a proposal, refuse to commit if there are any cloned proposals.
     async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
         match Arc::into_inner(self) {
             Some(proposal) => {
                 let mut manager = proposal.db.manager.write().expect("poisoned lock");
                 Ok(manager.commit(proposal.nodestore.clone())?)
             }
-            None => Err(api::Error::InvalidProposal),
+            None => Err(api::Error::CannotCommitClonedProposal),
         }
     }
 }
