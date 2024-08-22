@@ -26,7 +26,7 @@ pub struct RevisionManagerConfig {
 }
 
 type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
-type ProposedRevision = Arc<NodeStore<ImmutableProposal, FileBacked>>;
+type ProposedRevision = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>;
 
 #[derive(Debug)]
 pub(crate) struct RevisionManager {
