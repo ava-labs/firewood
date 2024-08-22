@@ -587,6 +587,32 @@ pub trait HashedNodeReader: TrieReader {
     }
 }
 
+impl<R: RootReader> RootReader for Arc<R> {
+    fn root_node(&self) -> Option<Arc<Node>> {
+        R::root_node(self)
+    }
+}
+
+impl<T> TrieReader for Arc<T> where T: TrieReader {}
+
+impl<T> NodeReader for Arc<T>
+where
+    T: NodeReader,
+{
+    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
+        T::read_node(self, addr)
+    }
+}
+
+impl<H: HashedNodeReader> HashedNodeReader for Arc<H> {
+    fn root_address_and_hash(&self) -> Result<Option<(LinearAddress, TrieHash)>, Error> {
+        H::root_address_and_hash(self)
+    }
+    fn root_hash(&self) -> Result<Option<TrieHash>, Error> {
+        H::root_hash(self)
+    }
+}
+
 /// Reads nodes and the root address from a merkle trie.
 pub trait TrieReader: NodeReader + RootReader {}
 
@@ -596,6 +622,7 @@ impl NodeReader for &NodeStore<Committed, FileBacked> {
         self.read_node_from_disk(addr)
     }
 }
+
 impl RootReader for &NodeStore<Committed, FileBacked> {
     fn root_node(&self) -> Option<Arc<Node>> {
         self.header

@@ -66,11 +66,8 @@ impl DbView for HistoricalImpl {
         Ok(None)
     }
 
-    async fn single_key_proof<K: KeyType>(
-        &self,
-        _key: K,
-    ) -> Result<Option<Proof<ProofNode>>, Error> {
-        Ok(None)
+    async fn single_key_proof<K: KeyType>(&self, _key: K) -> Result<Proof<ProofNode>, Error> {
+        Err(Error::RangeProofOnEmptyTrie)
     }
 
     async fn range_proof<K: KeyType, V>(
