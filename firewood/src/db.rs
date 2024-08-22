@@ -370,7 +370,7 @@ impl<'a> api::Proposal for Proposal<'a> {
                 let mut manager = proposal.db.manager.write().expect("poisoned lock");
                 Ok(manager.commit(proposal.nodestore.clone())?)
             }
-            None => Err(api::Error::InvalidProposal),
+            None => Err(api::Error::CannotCommitClonedProposal),
         }
     }
 }
