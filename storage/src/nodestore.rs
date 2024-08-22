@@ -251,7 +251,6 @@ impl Parentable for Arc<ImmutableProposal> {
     }
 }
 
-
 impl<S> NodeStore<Arc<ImmutableProposal>, S> {
     /// When an immutable proposal commits, we need to reparent any proposal that
     /// has the committed proposal as it's parent
@@ -1086,8 +1085,10 @@ mod tests {
     fn test_reparent() {
         // create an empty base revision
         let memstore = MemStore::new(vec![]);
-        let base = NodeStore::new_empty_committed(memstore.into()).unwrap().into();
-        
+        let base = NodeStore::new_empty_committed(memstore.into())
+            .unwrap()
+            .into();
+
         // create an empty r1, check that it's parent is the empty committed version
         let r1 = NodeStore::new(base).unwrap();
         let r1: Arc<NodeStore<Arc<ImmutableProposal>, _>> = Arc::new(r1.into());
