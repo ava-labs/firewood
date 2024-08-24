@@ -10,7 +10,7 @@ use crate::rpcdb::{
     NewIteratorWithStartAndPrefixRequest, NewIteratorWithStartAndPrefixResponse, PutRequest,
     PutResponse, WriteBatchRequest, WriteBatchResponse,
 };
-use firewood::v2::api::{BatchOp, Db as _, Proposal as _, DbView as _};
+use firewood::v2::api::{BatchOp, Db as _, DbView as _, Proposal as _};
 
 use tonic::{async_trait, Request, Response, Status};
 
