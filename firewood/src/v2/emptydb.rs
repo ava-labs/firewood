@@ -161,10 +161,9 @@ mod tests {
         );
 
         // create a proposal3 by adding the two proposals together, keeping the originals
-        // TODO: consider making this possible again
-        // let proposal3 = proposal1.as_ref() + proposal2.as_ref();
-        // assert_eq!(proposal3.val(b"k").await.unwrap().unwrap(), b"v");
-        // assert_eq!(proposal3.val(b"z").await.unwrap().unwrap(), b"undo");
+        let proposal3 = proposal1.as_ref() + proposal2.as_ref();
+        assert_eq!(proposal3.val(b"k").await.unwrap().unwrap().to_vec(), b"v");
+        assert_eq!(proposal3.val(b"z").await.unwrap().unwrap().to_vec(), b"undo");
 
         // now consume proposal1 and proposal2
         proposal2.commit().await?;
