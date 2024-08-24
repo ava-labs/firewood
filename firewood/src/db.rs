@@ -135,7 +135,7 @@ where
     }
 
     async fn propose<'p, K: KeyType, V: ValueType>(
-        &'p mut self,
+        &'p self,
         batch: api::Batch<K, V>,
     ) -> Result<Arc<Self::Proposal<'p>>, api::Error>
     where
@@ -285,7 +285,7 @@ mod test {
 
     #[tokio::test]
     async fn test_cloned_proposal_error() {
-        let mut db = testdb().await;
+        let db = testdb().await;
         let proposal = db
             .propose::<Vec<u8>, Vec<u8>>(Default::default())
             .await

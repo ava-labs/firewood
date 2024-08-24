@@ -144,7 +144,7 @@ pub trait Db {
     ///            [BatchOp::Delete] operations to apply
     ///
     async fn propose<'p, K: KeyType, V: ValueType>(
-        &'p mut self,
+        &'p self,
         data: Batch<K, V>,
     ) -> Result<Arc<Self::Proposal<'p>>, Error>
     where

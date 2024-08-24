@@ -40,7 +40,7 @@ impl Db for EmptyDb {
     }
 
     async fn propose<'p, K, V>(
-        &'p mut self,
+        &'p self,
         data: Batch<K, V>,
     ) -> Result<Arc<Self::Proposal<'p>>, Error>
     where
@@ -105,7 +105,7 @@ mod tests {
 
     #[tokio::test]
     async fn basic_proposal() -> Result<(), Error> {
-        let mut db = EmptyDb;
+        let db = EmptyDb;
 
         let batch = vec![
             BatchOp::Put {
@@ -129,7 +129,7 @@ mod tests {
 
     #[tokio::test]
     async fn nested_proposal() -> Result<(), Error> {
-        let mut db = EmptyDb;
+        let db = EmptyDb;
         // create proposal1 which adds key "k" with value "v" and deletes "z"
         let batch = vec![
             BatchOp::Put {
