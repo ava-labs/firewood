@@ -19,9 +19,6 @@ use std::sync::{Arc, RwLock};
 use storage::{Committed, FileBacked, HashedNodeReader, ImmutableProposal, NodeStore, TrieHash};
 use typed_builder::TypedBuilder;
 
-// TODO use or remove
-const _VERSION_STR: &[u8; 16] = b"firewood v0.1\0\0\0";
-
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum DbError {
