@@ -96,6 +96,9 @@ pub enum Error {
 
     #[error("request RangeProof for empty trie")]
     RangeProofOnEmptyTrie,
+
+    #[error("the latest revision is empty and has no root hash")]
+    LatestIsEmpty,
 }
 
 impl From<MerkleError> for Error {
