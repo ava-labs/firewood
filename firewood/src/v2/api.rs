@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use futures::Stream;
 use std::{fmt::Debug, sync::Arc};
 use storage::TrieHash;
+use tokio::sync::broadcast::error;
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
 /// and can be sent and shared across threads. References with
@@ -99,19 +100,24 @@ pub enum Error {
 
     #[error("the latest revision is empty and has no root hash")]
     LatestIsEmpty,
-}
 
-impl From<MerkleError> for Error {
-    fn from(err: MerkleError) -> Self {
-        // TODO: do a better job
-        Error::InternalError(Box::new(err))
-    }
+    #[error("commit the parents of this proposal first")]
+    NotLatest,
+
+    #[error("sibling already committed")]
+    SiblingCommitted,
+
+    #[error("merkle error: {0}")]
+    Merkle(#[from] MerkleError),
 }
 
 impl From<RevisionManagerError> for Error {
     fn from(err: RevisionManagerError) -> Self {
-        // TODO: do a better job
-        Error::InternalError(Box::new(err))
+        match err {
+            RevisionManagerError::IO(io_err) => Error::IO(io_err),
+            RevisionManagerError::NotLatest => Error::NotLatest,
+            RevisionManagerError::SiblingCommitted => Error::SiblingCommitted,
+        }
     }
 }
 
