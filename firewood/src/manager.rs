@@ -147,8 +147,6 @@ impl RevisionManager {
     }
 }
 
-pub type NewProposalError = (); // TODO implement
-
 impl RevisionManager {
     pub fn add_proposal(&mut self, proposal: ProposedRevision) {
         self.proposals.push(proposal);
