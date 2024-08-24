@@ -216,15 +216,17 @@ impl<'a> api::DbView for Proposal<'a> {
     type Stream<'b> = MerkleKeyValueStream<'b, NodeStore<Arc<ImmutableProposal>, FileBacked>> where Self: 'b;
 
     async fn root_hash(&self) -> Result<Option<api::HashKey>, api::Error> {
-        todo!()
+        self.nodestore.root_hash().map_err(api::Error::from)
     }
 
-    async fn val<K: KeyType>(&self, _key: K) -> Result<Option<Box<[u8]>>, api::Error> {
-        todo!()
+    async fn val<K: KeyType>(&self, key: K) -> Result<Option<Box<[u8]>>, api::Error> {
+        let merkle = Merkle::from(self.nodestore.clone());
+        merkle.get_value(key.as_ref()).map_err(api::Error::from)
     }
 
-    async fn single_key_proof<K: KeyType>(&self, _key: K) -> Result<Proof<ProofNode>, api::Error> {
-        todo!()
+    async fn single_key_proof<K: KeyType>(&self, key: K) -> Result<Proof<ProofNode>, api::Error> {
+        let merkle = Merkle::from(self.nodestore.clone());
+        merkle.prove(key.as_ref()).map_err(api::Error::from)
     }
 
     async fn range_proof<K: KeyType, V>(
@@ -250,9 +252,35 @@ impl<'a> api::Proposal for Proposal<'a> {
 
     async fn propose<K: KeyType, V: ValueType>(
         self: Arc<Self>,
-        _data: api::Batch<K, V>,
+        batch: api::Batch<K, V>,
     ) -> Result<Arc<Self::Proposal>, api::Error> {
-        todo!()
+        let parent = self.nodestore.clone();
+        let proposal = NodeStore::new(parent)?;
+        let mut merkle = Merkle::from(proposal);
+        for op in batch {
+            match op {
+                BatchOp::Put { key, value } => {
+                    merkle.insert(key.as_ref(), value.as_ref().into())?;
+                }
+                BatchOp::Delete { key } => {
+                    merkle.remove(key.as_ref())?;
+                }
+            }
+        }
+        let nodestore = merkle.into_inner();
+        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
+            Arc::new(nodestore.into());
+        self.db
+            .manager
+            .write()
+            .expect("poisoned lock")
+            .add_proposal(immutable.clone());
+
+        Ok(Self::Proposal {
+            nodestore: immutable,
+            db: self.db,
+        }
+        .into())
     }
 
     async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
