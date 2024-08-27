@@ -245,7 +245,7 @@ pub trait Parentable {
 
 impl Parentable for Arc<ImmutableProposal> {
     fn as_nodestore_parent(&self) -> NodeStoreParent {
-        NodeStoreParent::Proposed(Arc::clone(&self))
+        NodeStoreParent::Proposed(Arc::clone(self))
     }
     fn root_hash(&self) -> Option<TrieHash> {
         self.root_hash.clone()
