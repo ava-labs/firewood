@@ -1049,6 +1049,7 @@ where
 impl<S: WritableStorage> NodeStore<Committed, S> {
     /// adjust the freelist of this proposal to reflect the freed nodes in the oldest proposal
     pub fn reap_deleted(&mut self, oldest: &NodeStore<Committed, S>) -> Result<(), Error> {
+        self.storage.invalidate_cached_nodes(oldest.kind.deleted.iter());
         for addr in oldest.kind.deleted.iter() {
             self.delete_node(*addr)?;
         }
