@@ -964,7 +964,7 @@ impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
             self.storage
-                .write(addr.get(), stored_area_bytes.as_slice())?;
+                .async_write(addr.get(), stored_area_bytes.as_slice())?;
         }
         self.storage
             .write_cached_nodes(self.kind.new.iter().map(|(addr, (_, node))| (addr, node)))?;

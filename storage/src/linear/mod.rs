@@ -70,4 +70,7 @@ pub trait WritableStorage: ReadableStorage {
     ) -> Result<(), Error> {
         Ok(())
     }
-}
+
+    /// Writes the given object at the specified offset asynchronously.
+    fn async_write(&self, offset: u64, object: &[u8]) -> Result<usize, Error>;
+    }

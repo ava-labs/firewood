@@ -12,21 +12,39 @@
 use std::fs::{File, OpenOptions};
 use std::io::{Error, Read, Seek};
 use std::num::NonZero;
+use std::os::fd::AsRawFd as _;
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::fmt::{self, Debug, Formatter};
 
+use io_uring::types::Fd;
 use lru::LruCache;
+use io_uring::{IoUring, opcode::Write};
 
 use crate::{LinearAddress, Node};
 
 use super::{ReadableStorage, WritableStorage};
 
-#[derive(Debug)]
 /// A [ReadableStorage] backed by a file
 pub struct FileBacked {
     fd: Mutex<File>,
     cache: Mutex<LruCache<LinearAddress, Arc<Node>>>,
+    ring: Mutex<IoUring>,
+    raw_fd: Fd,
+}
+
+impl Debug for FileBacked {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FileBacked")
+            .field("fd", &self.fd)
+            .field("cache", &self.cache)
+            .finish()
+    }
+}
+struct WriteRequest {
+    offset: u64,
+    object: Box<[u8]>,
 }
 
 impl FileBacked {
@@ -36,6 +54,7 @@ impl FileBacked {
         node_cache_size: NonZero<usize>,
         truncate: bool,
     ) -> Result<Self, Error> {
+
         let fd = OpenOptions::new()
             .read(true)
             .write(true)
@@ -43,9 +62,14 @@ impl FileBacked {
             .truncate(truncate)
             .open(path)?;
 
+
+        let raw_fd = fd.as_raw_fd();
+
         Ok(Self {
             fd: Mutex::new(fd),
             cache: Mutex::new(LruCache::new(node_cache_size)),
+            ring: Mutex::new(IoUring::new(8)?),
+            raw_fd: Fd(raw_fd),
         })
     }
 }
@@ -78,6 +102,14 @@ impl WritableStorage for FileBacked {
             .lock()
             .expect("poisoned lock")
             .write_at(object, offset)
+    }
+
+    fn async_write(&self, offset: u64, object: &[u8]) -> Result<usize, Error> {
+        let mut ring = self.ring.lock().expect("poisoned lock");
+        let write = Write::new(self.raw_fd, object.as_ptr(), offset as u32).build();
+        unsafe { ring.submission().push(&write) }.map_err(|e| Error::new(std::io::ErrorKind::Other, e))?;
+        ring.submit()?;
+        Ok(object.len())
     }
 
     fn write_cached_nodes<'a>(

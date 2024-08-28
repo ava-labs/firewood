@@ -32,6 +32,10 @@ impl WritableStorage for MemStore {
         guard[offset..offset + object.len()].copy_from_slice(object);
         Ok(object.len())
     }
+    
+    fn async_write(&self, offset: u64, object: &[u8]) -> Result<usize, std::io::Error> {
+        self.write(offset, object)
+    }
 }
 
 impl ReadableStorage for MemStore {
