@@ -73,4 +73,4 @@ pub trait WritableStorage: ReadableStorage {
 
     /// Invalidate all nodes that are part of a specific revision, as these will never be referenced again
     fn invalidate_cached_nodes<'a>(&self, _addresses: impl Iterator<Item = &'a LinearAddress>) {}
-    }
+}

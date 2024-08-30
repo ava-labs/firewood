@@ -18,10 +18,10 @@ use storage::{Committed, FileBacked, ImmutableProposal, NodeStore, Parentable, T
 #[derive(Clone, Debug, TypedBuilder)]
 pub struct RevisionManagerConfig {
     /// The number of historical revisions to keep in memory.
-    #[builder(default = 64)]
+    #[builder(default = 128)]
     max_revisions: usize,
 
-    #[builder(default_code = "NonZero::new(1024).expect(\"non-zero\")")]
+    #[builder(default_code = "NonZero::new(20480).expect(\"non-zero\")")]
     node_cache_size: NonZero<usize>,
 }
 
@@ -136,7 +136,6 @@ impl RevisionManager {
 
             if let Some(oldest) = Arc::into_inner(oldest) {
                 committed.reap_deleted(&oldest)?;
-
             }
         }
 

@@ -71,8 +71,6 @@ impl ReadableStorage for FileBacked {
 }
 
 impl WritableStorage for FileBacked {
-    /// Write to the backend filestore. This does not implement [crate::WritableStorage]
-    /// because we don't want someone accidentally writing nodes directly to disk
     fn write(&self, offset: u64, object: &[u8]) -> Result<usize, Error> {
         self.fd
             .lock()
