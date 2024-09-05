@@ -2,9 +2,10 @@
 // See the file LICENSE.md for licensing terms.
 
 use clap::Args;
+use firewood::db::{Db, DbConfig};
 use firewood::merkle::Key;
+use firewood::v2::api::{self, Db as _};
 use std::borrow::Cow;
-use firewood::{db::{Db, DbConfig}, v2::api::{self, Db as _}};
 
 #[derive(Debug, Args)]
 pub struct Options {

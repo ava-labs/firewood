@@ -4,7 +4,8 @@
 use clap::Args;
 use std::str;
 
-use firewood::{db::{Db, DbConfig}, v2::api::{self, Db as _, DbView as _}};
+use firewood::db::{Db, DbConfig};
+use firewood::v2::api::{self, Db as _, DbView as _};
 
 #[derive(Debug, Args)]
 pub struct Options {

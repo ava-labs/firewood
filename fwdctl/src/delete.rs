@@ -2,7 +2,8 @@
 // See the file LICENSE.md for licensing terms.
 
 use clap::Args;
-use firewood::{db::{BatchOp, Db, DbConfig}, v2::api::{self, Db as _, Proposal as _}};
+use firewood::db::{BatchOp, Db, DbConfig};
+use firewood::v2::api::{self, Db as _, Proposal as _};
 
 #[derive(Debug, Args)]
 pub struct Options {
