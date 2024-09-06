@@ -90,10 +90,13 @@ impl<T> Proposal<T> {
         let delta = batch
             .into_iter()
             .map(|op| match op {
-                api::BatchOp::Put { key, value } => {
-                    (key.as_ref().to_vec().into_boxed_slice(), KeyOp::Put(value.as_ref().to_vec().into_boxed_slice()))
+                api::BatchOp::Put { key, value } => (
+                    key.as_ref().to_vec().into_boxed_slice(),
+                    KeyOp::Put(value.as_ref().to_vec().into_boxed_slice()),
+                ),
+                api::BatchOp::Delete { key } => {
+                    (key.as_ref().to_vec().into_boxed_slice(), KeyOp::Delete)
                 }
-                api::BatchOp::Delete { key } => (key.as_ref().to_vec().into_boxed_slice(), KeyOp::Delete),
             })
             .collect::<BTreeMap<_, _>>();
 
