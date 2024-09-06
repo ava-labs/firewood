@@ -1262,9 +1262,8 @@ mod tests {
         let mut merkle = create_test_merkle();
 
         let keys: Vec<_> = children
-            .map(|key| {
-                merkle.insert(&key, key.clone().into()).unwrap();
-                key
+            .inspect(|key| {
+                merkle.insert(key, key.clone().into()).unwrap();
             })
             .collect();
 
