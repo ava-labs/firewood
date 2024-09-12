@@ -98,9 +98,7 @@ impl WritableStorage for FileBacked {
     ) -> Result<(), Error> {
         let mut guard = self.cache.lock().expect("poisoned lock");
         for (addr, node) in nodes {
-            if matches!(**node, Node::Branch(_)) {
-                guard.put(*addr, node.clone());
-            }
+            guard.put(*addr, node.clone());
         }
         Ok(())
     }
