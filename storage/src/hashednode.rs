@@ -1,6 +1,9 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#[cfg(feature = "blake3")]
+use blake3::Hasher;
+#[cfg(feature = "sha256")]
 use sha2::{Digest, Sha256};
 use std::iter::{self};
 
@@ -63,9 +66,16 @@ pub trait HasUpdate {
     fn update<T: AsRef<[u8]>>(&mut self, data: T);
 }
 
+#[cfg(feature = "sha256")]
 impl HasUpdate for Sha256 {
     fn update<T: AsRef<[u8]>>(&mut self, data: T) {
         sha2::Digest::update(self, data)
+    }
+}
+#[cfg(feature = "blake3")]
+impl HasUpdate for Hasher {
+    fn update<T: AsRef<[u8]>>(&mut self, data: T) {
+        blake3::Hasher::update(self, data.as_ref());
     }
 }
 
@@ -108,7 +118,10 @@ pub trait Preimage {
 // Implement Preimage for all types that implement Hashable
 impl<T: Hashable> Preimage for T {
     fn to_hash(&self) -> TrieHash {
+        #[cfg(feature = "sha256")]
         let mut hasher = Sha256::new();
+        #[cfg(feature = "blake3")]
+        let mut hasher = Hasher::new();
         self.write(&mut hasher);
         hasher.finalize().into()
     }
@@ -220,8 +233,11 @@ fn add_value_digest_to_buf<H: HasUpdate, T: AsRef<[u8]>>(
 
     match value_digest {
         ValueDigest::Value(value) if value.as_ref().len() >= 32 => {
+            #[cfg(feature = "sha256")]
             let hash = Sha256::digest(value);
-            add_len_and_value_to_buf(buf, hash);
+            #[cfg(feature = "blake3")]
+            let hash = Hasher::new().update(value.as_ref()).finalize();
+            add_len_and_value_to_buf(buf, hash.as_bytes());
         }
         ValueDigest::Value(value) => {
             add_len_and_value_to_buf(buf, value);

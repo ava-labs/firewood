@@ -12,7 +12,9 @@ enum-as-inner = "0.6.0"
 hex = "0.4.3"
 serde = { version = "1.0.199", features = ["derive"] }
 smallvec = { version = "1.13.2", features = ["serde", "write", "union"] }
-sha2 = "0.10.8"
+sha2 = { version = "0.10.8", optional = true }
+blake3 = { version = "1.5.4", optional = true, features = ["traits-preview"] }
+digest = { version = "0.10.7", optional = true }
 integer-encoding = "4.0.0"
 arc-swap = "1.7.1"
 lru = "0.12.4"
@@ -20,3 +22,8 @@ lru = "0.12.4"
 [dev-dependencies]
 rand = "0.8.5"
 test-case = "3.3.1"
+
+[features]
+default = ["blake3"]
+sha256 = ["dep:sha2"]
+blake3 = ["dep:blake3", "dep:digest"]

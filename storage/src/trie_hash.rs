@@ -3,7 +3,10 @@
 
 use std::fmt::{self, Debug};
 
+#[cfg(feature = "blake3")]
+use digest::{generic_array::GenericArray, typenum};
 use serde::{de::Visitor, Deserialize, Serialize};
+#[cfg(feature = "sha256")]
 use sha2::digest::{generic_array::GenericArray, typenum};
 
 /// A hash value inside a merkle trie
@@ -45,6 +48,13 @@ impl From<[u8; 32]> for TrieHash {
 impl From<GenericArray<u8, typenum::U32>> for TrieHash {
     fn from(value: GenericArray<u8, typenum::U32>) -> Self {
         TrieHash(value)
+    }
+}
+
+#[cfg(feature = "blake3")]
+impl From<blake3::Hash> for TrieHash {
+    fn from(value: blake3::Hash) -> Self {
+        TrieHash((*value.as_bytes()).into())
     }
 }
 
