@@ -4,7 +4,7 @@
 use crate::merkle::MerkleError;
 use sha2::{Digest, Sha256};
 use storage::{
-    BranchNode, Hashable, NibblesIterator, PathIterItem, Preimage, TrieHash, ValueDigest,
+    BranchNode, Child, Hashable, NibblesIterator, PathIterItem, Preimage, TrieHash, ValueDigest
 };
 use thiserror::Error;
 
@@ -71,15 +71,16 @@ impl Hashable for ProofNode {
 
 impl From<PathIterItem> for ProofNode {
     fn from(item: PathIterItem) -> Self {
-        let mut child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] = Default::default();
-
-        if let Some(branch) = item.node.as_branch() {
-            // TODO danlaine: can we avoid indexing?
-            #[allow(clippy::indexing_slicing)]
-            for (i, hash) in branch.children_iter() {
-                child_hashes[i] = Some(hash.clone());
-            }
-        }
+        let child_hashes = if let Some(branch) = item.node.as_branch() {
+            let mut iter = branch.children.iter().map(|child| match child {
+                None => None,
+                Some(Child::Node(_)) => unreachable!("TODO make unreachable"),
+                Some(Child::AddressWithHash(_, hash)) => Some(hash.clone()),
+            });
+            std::array::from_fn(|_| iter.next().expect("there will always be the correct number of values"))
+        } else {
+            Default::default()
+        };
 
         Self {
             key: item.key_nibbles,
