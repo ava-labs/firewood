@@ -375,6 +375,7 @@ enum PathIteratorState<'a> {
 }
 
 /// Iterates over all nodes on the path to a given key starting from the root.
+///
 /// All nodes are branch nodes except possibly the last, which may be a leaf.
 /// All returned nodes have keys which are a prefix of the given key.
 /// If the given key is in the trie, the last node is at that key.
