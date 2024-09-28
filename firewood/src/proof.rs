@@ -4,7 +4,7 @@
 use crate::merkle::MerkleError;
 use sha2::{Digest, Sha256};
 use storage::{
-    BranchNode, Child, Hashable, NibblesIterator, PathIterItem, Preimage, TrieHash, ValueDigest
+    BranchNode, Child, Hashable, NibblesIterator, PathIterItem, Preimage, TrieHash, ValueDigest,
 };
 use thiserror::Error;
 
@@ -77,7 +77,10 @@ impl From<PathIterItem> for ProofNode {
                 Some(Child::Node(_)) => unreachable!("TODO make unreachable"),
                 Some(Child::AddressWithHash(_, hash)) => Some(hash.clone()),
             });
-            std::array::from_fn(|_| iter.next().expect("there will always be the correct number of values"))
+            std::array::from_fn(|_| {
+                iter.next()
+                    .expect("there will always be the correct number of values")
+            })
         } else {
             Default::default()
         };
