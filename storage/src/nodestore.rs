@@ -60,6 +60,8 @@ use crate::{Child, FileBacked, Path, ReadableStorage, TrieHash};
 
 use super::linear::WritableStorage;
 
+type SerializedPendingNode = (u8, Arc<Node>, Box<[u8]>);
+
 /// [NodeStore] divides the linear store into blocks of different sizes.
 /// [AREA_SIZES] is every valid block size.
 const AREA_SIZES: [u64; 21] = [
@@ -137,8 +139,9 @@ enum Area<T, U> {
 /// Every item stored in the [NodeStore]'s ReadableStorage  after the
 /// [NodeStoreHeader] is a [StoredArea].
 #[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
+#[repr(C)]
 struct StoredArea<T> {
-    /// Index in [AREA_SIZES] of this area's size
+    /// Index in [AREA_SIZES] of this area's size, must be first
     area_size_index: AreaIndex,
     area: T,
 }
@@ -435,24 +438,21 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         Ok((addr, index))
     }
 
-    /// Returns the length of the serialized area for a node.
-    fn stored_len(node: &Node) -> u64 {
-        // TODO: calculate length without serializing!
-        let area: Area<&Node, FreeArea> = Area::Node(node);
-        let area_bytes = bincode::serialize(&area).expect("fixme");
-
-        // +1 for the size index byte
-        // TODO: do a better job packing the boolean (freed) with the possible node sizes
-        // A reasonable option is use a i8 and negative values indicate it's freed whereas positive values are non-free
-        // This would still allow for 127 different sizes
-        area_bytes.len() as u64 + 1
-    }
-
     /// Returns an address that can be used to store the given `node` and updates
     /// `self.header` to reflect the allocation. Doesn't actually write the node to storage.
     /// Also returns the index of the free list the node was allocated from.
-    pub fn allocate_node(&mut self, node: &Node) -> Result<(LinearAddress, AreaIndex), Error> {
-        let stored_area_size = Self::stored_len(node);
+    pub fn allocate_node(
+        &mut self,
+        node: &Node,
+    ) -> Result<(LinearAddress, AreaIndex, Box<[u8]>), Error> {
+        let area: Area<&Node, FreeArea> = Area::Node(node);
+        let area_bytes = bincode::serialize(&area).expect("fixme");
+
+        // TODO: do a better job packing the boolean (freed) with the possible node sizes
+        // A reasonable option is use a i8 and negative values indicate it's freed whereas positive values are non-free
+        // This would still allow for 127 different sizes
+        // +1 for the size index byte
+        let stored_area_size = area_bytes.len() as u64 + 1;
 
         // Attempt to allocate from a free list.
         // If we can't allocate from a free list, allocate past the existing
@@ -462,7 +462,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
             None => self.allocate_from_end(stored_area_size)?,
         };
 
-        Ok((addr, index))
+        Ok((addr, index, area_bytes.into_boxed_slice()))
     }
 }
 
@@ -481,13 +481,11 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             next_free_block: self.header.free_lists[area_size_index as usize],
         });
 
-        let stored_area = StoredArea {
-            area_size_index,
-            area,
-        };
-
-        let stored_area_bytes =
-            bincode::serialize(&stored_area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+        let stored_area_bytes: Vec<u8> = [area_size_index]
+            .iter()
+            .copied()
+            .chain(bincode::serialize(&area).map_err(|e| Error::new(ErrorKind::InvalidData, e))?)
+            .collect();
 
         self.storage.write(addr.into(), &stored_area_bytes)?;
 
@@ -670,7 +668,7 @@ impl Eq for NodeStoreParent {}
 /// Contains state for a proposed revision of the trie.
 pub struct ImmutableProposal {
     /// Address --> Node for nodes created in this proposal.
-    new: HashMap<LinearAddress, (u8, Arc<Node>)>,
+    new: HashMap<LinearAddress, SerializedPendingNode>,
     /// Nodes that have been deleted in this proposal.
     deleted: Box<[LinearAddress]>,
     /// The parent of this proposal.
@@ -696,7 +694,7 @@ impl ImmutableProposal {
 impl ReadInMemoryNode for ImmutableProposal {
     fn read_in_memory_node(&self, addr: LinearAddress) -> Option<Arc<Node>> {
         // Check if the node being requested was created in this proposal.
-        if let Some((_, node)) = self.new.get(&addr) {
+        if let Some((_, node, _)) = self.new.get(&addr) {
             return Some(node.clone());
         }
 
@@ -819,7 +817,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         &mut self,
         mut node: Node,
         path_prefix: &mut Path,
-        new_nodes: &mut HashMap<LinearAddress, (u8, Arc<Node>)>,
+        new_nodes: &mut HashMap<LinearAddress, SerializedPendingNode>,
     ) -> (LinearAddress, TrieHash) {
         // Allocate addresses and calculate hashes for all new nodes
         match node {
@@ -853,9 +851,9 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         }
 
         let hash = hash_node(&node, path_prefix);
-        let (addr, size) = self.allocate_node(&node).expect("TODO handle error");
+        let (addr, size, bytes) = self.allocate_node(&node).expect("TODO handle error");
 
-        new_nodes.insert(addr, (size, Arc::new(node)));
+        new_nodes.insert(addr, (size, Arc::new(node), bytes));
 
         (addr, hash)
     }
@@ -891,20 +889,17 @@ impl<S: WritableStorage> NodeStore<ImmutableProposal, S> {
 
     /// Persist all the nodes of a proposal to storage.
     pub fn flush_nodes(&self) -> Result<(), Error> {
-        for (addr, (area_size_index, node)) in self.kind.new.iter() {
-            let stored_area = StoredArea {
-                area_size_index: *area_size_index,
-                area: Area::<_, FreeArea>::Node(node.as_ref()),
-            };
-
-            let stored_area_bytes = bincode::serialize(&stored_area)
-                .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-
-            self.storage
-                .write(addr.get(), stored_area_bytes.as_slice())?;
+        for (addr, (size, _, stored_area_bytes)) in self.kind.new.iter() {
+            // TODO can we do both writes at once?
+            self.storage.write(addr.get(), &[*size][..])?;
+            self.storage.write(addr.get() + 1, stored_area_bytes)?;
         }
-        self.storage
-            .write_cached_nodes(self.kind.new.iter().map(|(addr, (_, node))| (addr, node)))?;
+        self.storage.write_cached_nodes(
+            self.kind
+                .new
+                .iter()
+                .map(|(addr, (_, node, _))| (addr, node)),
+        )?;
 
         Ok(())
     }
@@ -939,20 +934,16 @@ impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
 
     /// Persist all the nodes of a proposal to storage.
     pub fn flush_nodes(&self) -> Result<(), Error> {
-        for (addr, (area_size_index, node)) in self.kind.new.iter() {
-            let stored_area = StoredArea {
-                area_size_index: *area_size_index,
-                area: Area::<_, FreeArea>::Node(node.as_ref()),
-            };
-
-            let stored_area_bytes = bincode::serialize(&stored_area)
-                .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-
-            self.storage
-                .write(addr.get(), stored_area_bytes.as_slice())?;
+        for (addr, (area_index, _, stored_area_bytes)) in self.kind.new.iter() {
+            self.storage.write(addr.get(), &[*area_index][..])?;
+            self.storage.write(addr.get() + 1, stored_area_bytes)?;
         }
-        self.storage
-            .write_cached_nodes(self.kind.new.iter().map(|(addr, (_, node))| (addr, node)))?;
+        self.storage.write_cached_nodes(
+            self.kind
+                .new
+                .iter()
+                .map(|(addr, (_, node, _))| (addr, node)),
+        )?;
 
         Ok(())
     }
