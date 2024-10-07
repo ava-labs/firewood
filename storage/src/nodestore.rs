@@ -192,8 +192,7 @@ struct StoredArea<T> {
 impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
     /// Returns (index, area_size) for the [StoredArea] at `addr`.
     /// `index` is the index of `area_size` in [AREA_SIZES].
-    #[allow(dead_code)]
-    fn area_index_and_size(&self, addr: LinearAddress) -> Result<(AreaIndex, u64), Error> {
+    pub fn area_index_and_size(&self, addr: LinearAddress) -> Result<(AreaIndex, u64), Error> {
         let mut area_stream = self.storage.stream_from(addr.get())?;
 
         let index: AreaIndex = serializer()
@@ -239,6 +238,29 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
             CacheReadStrategy::WritesOnly => {}
         }
         Ok(node)
+    }
+
+    /// Read a [Node] from the provided [LinearAddress] and size.
+    /// This is an uncached read, primarily used by check utilities
+    pub fn uncached_read_node_and_size(
+        &self,
+        addr: LinearAddress,
+    ) -> Result<(Arc<Node>, u8), Error> {
+        let mut area_stream = self.storage.stream_from(addr.get())?;
+        let mut size = [0u8];
+        area_stream.read_exact(&mut size)?;
+        let area: Area<Node, FreeArea> = DefaultOptions::new()
+            .deserialize_from(area_stream)
+            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+
+        let node = match area {
+            Area::Node(node) => Ok(node.into()),
+            Area::Free(_) => Err(Error::new(
+                ErrorKind::InvalidData,
+                "Attempted to read a freed area",
+            )),
+        }?;
+        Ok((node, size[0]))
     }
 }
 

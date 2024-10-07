@@ -4,6 +4,7 @@
 use clap::{Parser, Subcommand};
 use firewood::v2::api;
 
+pub mod check;
 pub mod create;
 pub mod delete;
 pub mod dump;
@@ -45,6 +46,8 @@ enum Commands {
     Root(root::Options),
     /// Dump contents of key/value store
     Dump(dump::Options),
+    /// Check a database
+    Check(check::Options),
     /// Produce a dot file of the database
     Graph(graph::Options),
 }
@@ -65,6 +68,7 @@ async fn main() -> Result<(), api::Error> {
         Commands::Delete(opts) => delete::run(opts).await,
         Commands::Root(opts) => root::run(opts).await,
         Commands::Dump(opts) => dump::run(opts).await,
+        Commands::Check(opts) => check::run(opts).await,
         Commands::Graph(opts) => graph::run(opts).await,
     }
 }
