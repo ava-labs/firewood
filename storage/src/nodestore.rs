@@ -92,6 +92,36 @@ const AREA_SIZES: [u64; 23] = [
     1024 << 14,
 ];
 
+// TODO: automate this, must stay in sync with above
+fn index_name(index: AreaIndex) -> &'static str {
+    match index {
+        0 => "16",
+        1 => "32",
+        2 => "64",
+        3 => "96",
+        4 => "128",
+        5 => "256",
+        6 => "512",
+        7 => "768",
+        8 => "1024",
+        9 => "2048",
+        10 => "4096",
+        11 => "8192",
+        12 => "16384",
+        13 => "32768",
+        14 => "65536",
+        15 => "131072",
+        16 => "262144",
+        17 => "524288",
+        18 => "1048576",
+        19 => "2097152",
+        20 => "4194304",
+        21 => "8388608",
+        22 => "16777216",
+        _ => "unknown",
+    }
+}
+
 /// The type of an index into the [AREA_SIZES] array
 /// This is not usize because we can store this as a single byte
 pub type AreaIndex = u8;
@@ -417,8 +447,8 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 *free_stored_area_addr = free_head.next_free_block;
             }
 
-            counter!("firewood.space.reused").increment(AREA_SIZES[index]);
-            counter!("firewood.space.wasted").increment(AREA_SIZES[index] - n);
+            counter!("firewood.space.reused", "index" => index_name(index as u8)).increment(AREA_SIZES[index]);
+            counter!("firewood.space.wasted", "index" => index_name(index as u8)).increment(AREA_SIZES[index] - n);
 
             // Return the address of the newly allocated block.
             trace!(
@@ -429,7 +459,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         }
 
         trace!("No free blocks of sufficient size {index_wanted} found");
-        counter!("firewood.space.notfree").increment(AREA_SIZES[index_wanted as usize]);
+        counter!("firewood.space.from_end", "index" => index_name(index_wanted as u8)).increment(AREA_SIZES[index_wanted as usize]);
         Ok(None)
     }
 
@@ -469,34 +499,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     }
 }
 
-fn index_name(index: AreaIndex) -> &'static str {
-    match index {
-        0 => "16",
-        1 => "32",
-        2 => "64",
-        3 => "96",
-        4 => "128",
-        5 => "256",
-        6 => "512",
-        7 => "768",
-        8 => "1024",
-        9 => "2048",
-        10 => "4096",
-        11 => "8192",
-        12 => "16384",
-        13 => "32768",
-        14 => "65536",
-        15 => "131072",
-        16 => "262144",
-        17 => "524288",
-        18 => "1048576",
-        19 => "2097152",
-        20 => "4194304",
-        21 => "8388608",
-        22 => "16777216",
-        _ => "unknown",
-    }
-}
+
 
 impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Deletes the [Node] at the given address, updating the next pointer at
@@ -507,8 +510,8 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
         let (area_size_index, _) = self.area_index_and_size(addr)?;
         trace!("Deleting node at {addr:?} of size {}", area_size_index);
-        counter!("firewood.delete_node").increment(1);
-        counter!("firewood.space.freed").increment(AREA_SIZES[area_size_index as usize]);
+        counter!("firewood.delete_node", "index" => index_name(area_size_index)).increment(1);
+        counter!("firewood.space.freed", "index" => index_name(area_size_index)).increment(AREA_SIZES[area_size_index as usize]);
 
         // The area that contained the node is now free.
         let area: Area<Node, FreeArea> = Area::Free(FreeArea {
