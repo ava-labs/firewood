@@ -447,8 +447,10 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 *free_stored_area_addr = free_head.next_free_block;
             }
 
-            counter!("firewood.space.reused", "index" => index_name(index as u8)).increment(AREA_SIZES[index]);
-            counter!("firewood.space.wasted", "index" => index_name(index as u8)).increment(AREA_SIZES[index] - n);
+            counter!("firewood.space.reused", "index" => index_name(index as u8))
+                .increment(AREA_SIZES[index]);
+            counter!("firewood.space.wasted", "index" => index_name(index as u8))
+                .increment(AREA_SIZES[index] - n);
 
             // Return the address of the newly allocated block.
             trace!(
@@ -459,7 +461,8 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         }
 
         trace!("No free blocks of sufficient size {index_wanted} found");
-        counter!("firewood.space.from_end", "index" => index_name(index_wanted as u8)).increment(AREA_SIZES[index_wanted as usize]);
+        counter!("firewood.space.from_end", "index" => index_name(index_wanted as u8))
+            .increment(AREA_SIZES[index_wanted as usize]);
         Ok(None)
     }
 
@@ -499,8 +502,6 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     }
 }
 
-
-
 impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Deletes the [Node] at the given address, updating the next pointer at
     /// the given addr, and changing the header of this committed nodestore to
@@ -511,7 +512,8 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         let (area_size_index, _) = self.area_index_and_size(addr)?;
         trace!("Deleting node at {addr:?} of size {}", area_size_index);
         counter!("firewood.delete_node", "index" => index_name(area_size_index)).increment(1);
-        counter!("firewood.space.freed", "index" => index_name(area_size_index)).increment(AREA_SIZES[area_size_index as usize]);
+        counter!("firewood.space.freed", "index" => index_name(area_size_index))
+            .increment(AREA_SIZES[area_size_index as usize]);
 
         // The area that contained the node is now free.
         let area: Area<Node, FreeArea> = Area::Free(FreeArea {
