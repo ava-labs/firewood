@@ -186,6 +186,7 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
         let mut area_stream = self.storage.stream_from(addr.get())?;
 
         let index: AreaIndex = DefaultOptions::new()
+            .with_varint_encoding()
             .deserialize_from(&mut area_stream)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
@@ -210,6 +211,7 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
 
         let area_stream = self.storage.stream_from(addr)?;
         let area: Area<Node, FreeArea> = DefaultOptions::new()
+            .with_varint_encoding()
             .deserialize_from(area_stream)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
@@ -429,6 +431,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 let free_area_addr = address.get();
                 let free_head_stream = self.storage.stream_from(free_area_addr)?;
                 let free_head: StoredArea<Area<Node, FreeArea>> = DefaultOptions::new()
+                    .with_varint_encoding()
                     .deserialize_from(free_head_stream)
                     .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
                 let StoredArea {
@@ -480,7 +483,11 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     fn stored_len(node: &Node) -> u64 {
         let area: Area<&Node, FreeArea> = Area::Node(node);
 
-        DefaultOptions::new().serialized_size(&area).expect("fixme") + 1
+        DefaultOptions::new()
+            .with_varint_encoding()
+            .serialized_size(&area)
+            .expect("fixme")
+            + 1
     }
 
     /// Returns an address that can be used to store the given `node` and updates
@@ -526,6 +533,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         };
 
         let stored_area_bytes = DefaultOptions::new()
+            .with_varint_encoding()
             .serialize(&stored_area)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
@@ -1245,7 +1253,11 @@ mod tests {
         let area_size = NodeStore::<std::sync::Arc<ImmutableProposal>, MemStore>::stored_len(&node);
 
         let area: Area<&Node, FreeArea> = Area::Node(&node);
-        let actually_serialized = DefaultOptions::new().serialize(&area).unwrap().len() as u64;
+        let actually_serialized = DefaultOptions::new()
+            .with_varint_encoding()
+            .serialize(&area)
+            .unwrap()
+            .len() as u64;
         assert_eq!(area_size, actually_serialized + 1);
     }
 }
