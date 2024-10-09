@@ -115,8 +115,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         })
         .init();
 
+    // Manually set up prometheus
     let builder = PrometheusBuilder::new();
-    let prometheus = builder
+    let (prometheus_recorder, listener_future) = builder
         .with_http_listener(SocketAddr::new(
             Ipv6Addr::UNSPECIFIED.into(),
             args.prometheus_port,
@@ -127,8 +128,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .build()
         .expect("unable in run prometheusbuilder");
-    tokio::spawn(prometheus.1);
-    let prometheus_handle = prometheus.0;
+
+    // Clone the handle so we can dump the stats at the end
+    let prometheus_handle = prometheus_recorder.handle();
+    metrics::set_global_recorder(prometheus_recorder)?;
+    tokio::spawn(listener_future);
 
     let mgrcfg = RevisionManagerConfig::builder()
         .node_cache_size(args.cache_size)
@@ -166,7 +170,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     if args.stats_dump {
-        println!("{}", prometheus_handle.handle().render());
+        println!("{}", prometheus_handle.render());
     }
 
     Ok(())
