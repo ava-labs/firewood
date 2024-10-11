@@ -9,6 +9,7 @@ pub mod create;
 pub mod delete;
 pub mod dump;
 pub mod get;
+pub mod graph;
 pub mod insert;
 pub mod root;
 
@@ -45,6 +46,8 @@ enum Commands {
     Root(root::Options),
     /// Dump contents of key/value store
     Dump(dump::Options),
+    /// Produce a dot file of the database
+    Graph(graph::Options),
     /// Check a database
     Check(check::Options),
 }
@@ -66,5 +69,6 @@ async fn main() -> Result<(), api::Error> {
         Commands::Root(opts) => root::run(opts).await,
         Commands::Dump(opts) => dump::run(opts).await,
         Commands::Check(opts) => check::run(opts).await,
+        Commands::Graph(opts) => graph::run(opts).await,
     }
 }

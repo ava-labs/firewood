@@ -3,11 +3,11 @@
 
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::io::Error;
 use std::num::NonZero;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::{collections::VecDeque, io::Error};
 
 use storage::logger::warn;
 use typed_builder::TypedBuilder;
@@ -22,10 +22,10 @@ pub struct RevisionManagerConfig {
     #[builder(default = 128)]
     max_revisions: usize,
 
-    #[builder(default_code = "NonZero::new(20480).expect(\"non-zero\")")]
+    #[builder(default_code = "NonZero::new(1500000).expect(\"non-zero\")")]
     node_cache_size: NonZero<usize>,
 
-    #[builder(default_code = "NonZero::new(10000).expect(\"non-zero\")")]
+    #[builder(default_code = "NonZero::new(20000).expect(\"non-zero\")")]
     free_list_cache_size: NonZero<usize>,
 }
 
@@ -92,7 +92,7 @@ impl RevisionManager {
         }
 
         if truncate {
-            nodestore.flush_header()?;
+            nodestore.flush_header_with_padding()?;
         }
 
         Ok(manager)
@@ -150,7 +150,7 @@ impl RevisionManager {
         // 3 Take the deleted entries from the oldest revision and mark them as free for this revision
         // If you crash after freeing some of these, then the free list will point to nodes that are not actually free.
         // TODO: Handle the case where we get something off the free list that is not free
-        while self.historical.len() > self.max_revisions {
+        while self.historical.len() >= self.max_revisions {
             let oldest = self.historical.pop_front().expect("must be present");
             if let Some(oldest_hash) = oldest.kind.root_hash() {
                 self.by_hash.remove(&oldest_hash);
@@ -162,11 +162,11 @@ impl RevisionManager {
             // This guarantee is there because we have a `&mut self` reference to the manager, so
             // the compiler guarantees we are the only one using this manager.
             match Arc::try_unwrap(oldest) {
-                Ok(oldest) => committed.reap_deleted(&oldest)?,
+                Ok(oldest) => oldest.reap_deleted(&mut committed)?,
                 Err(original) => {
-                    // TODO: try reaping the next revision
                     warn!("Oldest revision could not be reaped; still referenced");
                     self.historical.push_front(original);
+                    break;
                 }
             }
         }
