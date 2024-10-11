@@ -19,6 +19,10 @@
 
 use std::fmt::Debug;
 use std::io::{Error, Read};
+use std::num::NonZero;
+use std::sync::Arc;
+
+use crate::{LinearAddress, Node};
 pub(super) mod filebacked;
 pub mod memory;
 
@@ -38,6 +42,16 @@ pub trait ReadableStorage: Debug + Sync + Send {
 
     /// Return the size of the underlying storage, in bytes
     fn size(&self) -> Result<u64, Error>;
+
+    /// Read a node from the cache (if any)
+    fn read_cached_node(&self, _addr: LinearAddress) -> Option<Arc<Node>> {
+        None
+    }
+
+    /// Fetch the next pointer from the freelist cache
+    fn free_list_cache(&self, _addr: LinearAddress) -> Option<Option<LinearAddress>> {
+        None
+    }
 }
 
 /// Trait for writable storage.
@@ -53,4 +67,18 @@ pub trait WritableStorage: ReadableStorage {
     ///
     /// The number of bytes written, or an error if the write operation fails.
     fn write(&self, offset: u64, object: &[u8]) -> Result<usize, Error>;
+
+    /// Write all nodes to the cache (if any)
+    fn write_cached_nodes<'a>(
+        &self,
+        _nodes: impl Iterator<Item = (&'a NonZero<u64>, &'a Arc<Node>)>,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
+
+    /// Invalidate all nodes that are part of a specific revision, as these will never be referenced again
+    fn invalidate_cached_nodes<'a>(&self, _addresses: impl Iterator<Item = &'a LinearAddress>) {}
+
+    /// Add a new entry to the freelist cache
+    fn add_to_free_list_cache(&self, _addr: LinearAddress, _next: Option<LinearAddress>) {}
 }

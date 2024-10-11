@@ -3,11 +3,12 @@
 
 use crate::manager::RevisionManagerError;
 use crate::proof::ProofNode;
-use crate::range_proof::RangeProof;
+pub use crate::range_proof::RangeProof;
 use crate::{merkle::MerkleError, proof::Proof};
 use async_trait::async_trait;
 use futures::Stream;
 use std::{fmt::Debug, sync::Arc};
+use storage::TrieHash;
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
 /// and can be sent and shared across threads. References with
@@ -84,6 +85,12 @@ pub enum Error {
     #[error("Invalid proposal")]
     InvalidProposal,
 
+    // Cloned proposals are problematic because if they are committed, then you could
+    // create another proposal from this committed proposal, so we error at commit time
+    // if there are outstanding clones
+    #[error("Cannot commit a cloned proposal")]
+    CannotCommitClonedProposal,
+
     #[error("Internal error")]
     InternalError(Box<dyn std::error::Error + Send>),
 
@@ -92,19 +99,27 @@ pub enum Error {
 
     #[error("request RangeProof for empty trie")]
     RangeProofOnEmptyTrie,
-}
 
-impl From<MerkleError> for Error {
-    fn from(err: MerkleError) -> Self {
-        // TODO: do a better job
-        Error::InternalError(Box::new(err))
-    }
+    #[error("the latest revision is empty and has no root hash")]
+    LatestIsEmpty,
+
+    #[error("commit the parents of this proposal first")]
+    NotLatest,
+
+    #[error("sibling already committed")]
+    SiblingCommitted,
+
+    #[error("merkle error: {0}")]
+    Merkle(#[from] MerkleError),
 }
 
 impl From<RevisionManagerError> for Error {
     fn from(err: RevisionManagerError) -> Self {
-        // TODO: do a better job
-        Error::InternalError(Box::new(err))
+        match err {
+            RevisionManagerError::IO(io_err) => Error::IO(io_err),
+            RevisionManagerError::NotLatest => Error::NotLatest,
+            RevisionManagerError::SiblingCommitted => Error::SiblingCommitted,
+        }
     }
 }
 
@@ -115,17 +130,22 @@ impl From<RevisionManagerError> for Error {
 pub trait Db {
     type Historical: DbView;
 
-    type Proposal: DbView + Proposal;
+    type Proposal<'p>: DbView + Proposal
+    where
+        Self: 'p;
 
     /// Get a reference to a specific view based on a hash
     ///
     /// # Arguments
     ///
     /// - `hash` - Identifies the revision for the view
-    async fn revision(&self, hash: HashKey) -> Result<Arc<Self::Historical>, Error>;
+    async fn revision(&self, hash: TrieHash) -> Result<Arc<Self::Historical>, Error>;
 
     /// Get the hash of the most recently committed version
-    async fn root_hash(&self) -> Result<Option<HashKey>, Error>;
+    async fn root_hash(&self) -> Result<Option<TrieHash>, Error>;
+
+    /// Get all the hashes available
+    async fn all_hashes(&self) -> Result<Vec<TrieHash>, Error>;
 
     /// Propose a change to the database via a batch
     ///
@@ -137,10 +157,12 @@ pub trait Db {
     /// * `data` - A batch consisting of [BatchOp::Put] and
     ///            [BatchOp::Delete] operations to apply
     ///
-    async fn propose<K: KeyType, V: ValueType>(
-        &self,
+    async fn propose<'p, K: KeyType, V: ValueType>(
+        &'p self,
         data: Batch<K, V>,
-    ) -> Result<Arc<Self::Proposal>, Error>;
+    ) -> Result<Arc<Self::Proposal<'p>>, Error>
+    where
+        Self: 'p;
 }
 
 /// A view of the database at a specific time. These are wrapped with
@@ -162,11 +184,10 @@ pub trait DbView {
     async fn root_hash(&self) -> Result<Option<HashKey>, Error>;
 
     /// Get the value of a specific key
-    async fn val<K: KeyType>(&self, key: K) -> Result<Option<Vec<u8>>, Error>;
+    async fn val<K: KeyType>(&self, key: K) -> Result<Option<Box<[u8]>>, Error>;
 
     /// Obtain a proof for a single key
-    async fn single_key_proof<K: KeyType>(&self, key: K)
-        -> Result<Option<Proof<ProofNode>>, Error>;
+    async fn single_key_proof<K: KeyType>(&self, key: K) -> Result<Proof<ProofNode>, Error>;
 
     /// Obtain a range proof over a set of keys
     ///

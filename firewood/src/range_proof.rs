@@ -118,7 +118,7 @@ where
                     )?;
                 }
                 (Some(end_key), Some((biggest_key, expected_value))) => {
-                    if end_key.as_ref() == biggest_key.as_ref() {
+                    if *end_key == biggest_key.as_ref() {
                         end_proof.verify(
                             end_key,
                             Some(expected_value.as_ref()),
@@ -281,17 +281,17 @@ where
                     return false;
                 }
                 (None, Some(end_key)) => {
-                    if key.as_ref() < end_key.as_ref() {
+                    if *key < **end_key {
                         return false;
                     }
                 }
                 (Some(start_key), None) => {
-                    if key.as_ref() > start_key.as_ref() {
+                    if *key > **start_key {
                         return false;
                     }
                 }
                 (Some(start_key), Some(end_key)) => {
-                    if key.as_ref() > start_key.as_ref() && key.as_ref() < end_key.as_ref() {
+                    if *key > **start_key && *key < **end_key {
                         return false;
                     }
                 }
@@ -328,9 +328,10 @@ impl Hashable for AugmentedNode {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use std::{num::NonZeroUsize, usize};
+    use std::num::NonZeroUsize;
     use test_case::test_case;
 
     #[test_case(None, None, &[&[0]]; "1 kv no start key no end key")]
@@ -345,7 +346,7 @@ mod tests {
         let root_hash = merkle.root_hash().unwrap().unwrap();
 
         let range_proof = merkle
-            ._range_proof(
+            .range_proof(
                 start_key,
                 end_key,
                 Some(NonZeroUsize::new(usize::MAX).unwrap()),

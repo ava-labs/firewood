@@ -29,7 +29,7 @@ pub struct HistoricalImpl;
 impl Db for EmptyDb {
     type Historical = HistoricalImpl;
 
-    type Proposal = Proposal<HistoricalImpl>;
+    type Proposal<'p> = Proposal<HistoricalImpl>;
 
     async fn revision(&self, hash_key: HashKey) -> Result<Arc<Self::Historical>, Error> {
         Err(Error::HashNotFound { provided: hash_key })
@@ -39,7 +39,10 @@ impl Db for EmptyDb {
         Ok(None)
     }
 
-    async fn propose<K, V>(&self, data: Batch<K, V>) -> Result<Arc<Self::Proposal>, Error>
+    async fn propose<'p, K, V>(
+        &'p self,
+        data: Batch<K, V>,
+    ) -> Result<Arc<Self::Proposal<'p>>, Error>
     where
         K: KeyType,
         V: ValueType,
@@ -48,6 +51,10 @@ impl Db for EmptyDb {
             ProposalBase::View(HistoricalImpl.into()),
             data,
         ))
+    }
+
+    async fn all_hashes(&self) -> Result<Vec<HashKey>, Error> {
+        Ok(vec![])
     }
 }
 
@@ -59,15 +66,12 @@ impl DbView for HistoricalImpl {
         Ok(None)
     }
 
-    async fn val<K: KeyType>(&self, _key: K) -> Result<Option<Vec<u8>>, Error> {
+    async fn val<K: KeyType>(&self, _key: K) -> Result<Option<Box<[u8]>>, Error> {
         Ok(None)
     }
 
-    async fn single_key_proof<K: KeyType>(
-        &self,
-        _key: K,
-    ) -> Result<Option<Proof<ProofNode>>, Error> {
-        Ok(None)
+    async fn single_key_proof<K: KeyType>(&self, _key: K) -> Result<Proof<ProofNode>, Error> {
+        Err(Error::RangeProofOnEmptyTrie)
     }
 
     async fn range_proof<K: KeyType, V>(
@@ -105,7 +109,7 @@ mod tests {
 
     #[tokio::test]
     async fn basic_proposal() -> Result<(), Error> {
-        let db = Arc::new(EmptyDb);
+        let db = EmptyDb;
 
         let batch = vec![
             BatchOp::Put {
@@ -117,7 +121,10 @@ mod tests {
 
         let proposal = db.propose(batch).await?;
 
-        assert_eq!(proposal.val(b"k").await.unwrap().unwrap(), b"v");
+        assert_eq!(
+            proposal.val(b"k").await.unwrap().unwrap(),
+            Box::from(b"v".as_slice())
+        );
 
         assert!(proposal.val(b"z").await.unwrap().is_none());
 
@@ -126,8 +133,7 @@ mod tests {
 
     #[tokio::test]
     async fn nested_proposal() -> Result<(), Error> {
-        let db = Arc::new(EmptyDb);
-
+        let db = EmptyDb;
         // create proposal1 which adds key "k" with value "v" and deletes "z"
         let batch = vec![
             BatchOp::Put {
@@ -148,18 +154,23 @@ mod tests {
             }])
             .await?;
         // both proposals still have (k,v)
-        assert_eq!(proposal1.val(b"k").await.unwrap().unwrap(), b"v");
-        assert_eq!(proposal2.val(b"k").await.unwrap().unwrap(), b"v");
+        assert_eq!(proposal1.val(b"k").await.unwrap().unwrap().to_vec(), b"v");
+        assert_eq!(proposal2.val(b"k").await.unwrap().unwrap().to_vec(), b"v");
         // only proposal1 doesn't have z
         assert!(proposal1.val(b"z").await.unwrap().is_none());
         // proposal2 has z with value "undo"
-        assert_eq!(proposal2.val(b"z").await.unwrap().unwrap(), b"undo");
+        assert_eq!(
+            proposal2.val(b"z").await.unwrap().unwrap().to_vec(),
+            b"undo"
+        );
 
         // create a proposal3 by adding the two proposals together, keeping the originals
-        // TODO: consider making this possible again
-        // let proposal3 = proposal1.as_ref() + proposal2.as_ref();
-        // assert_eq!(proposal3.val(b"k").await.unwrap().unwrap(), b"v");
-        // assert_eq!(proposal3.val(b"z").await.unwrap().unwrap(), b"undo");
+        let proposal3 = proposal1.as_ref() + proposal2.as_ref();
+        assert_eq!(proposal3.val(b"k").await.unwrap().unwrap().to_vec(), b"v");
+        assert_eq!(
+            proposal3.val(b"z").await.unwrap().unwrap().to_vec(),
+            b"undo"
+        );
 
         // now consume proposal1 and proposal2
         proposal2.commit().await?;

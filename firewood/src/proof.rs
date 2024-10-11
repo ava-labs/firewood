@@ -238,7 +238,7 @@ impl<T: Hashable> Proof<T> {
     /// If the hash is None, the trie doesn't contain any keys with the given key prefix.
     pub(super) fn implied_hashes(&self) -> impl Iterator<Item = (Box<[u8]>, Option<&TrieHash>)> {
         ImpliedHashIterator::FromNode {
-            node: &self.0[0], // TODO don't use indexing
+            node: self.0.first().expect("must not be empty"),
             child: None,
             next_index: 0,
         }

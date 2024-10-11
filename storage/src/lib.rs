@@ -17,6 +17,9 @@ mod node;
 mod nodestore;
 mod trie_hash;
 
+/// Logger module for handling logging functionality
+pub mod logger;
+
 // re-export these so callers don't need to know where they are
 pub use hashednode::{hash_node, hash_preimage, Hashable, Preimage, ValueDigest};
 pub use linear::{ReadableStorage, WritableStorage};
@@ -25,7 +28,7 @@ pub use node::{
 };
 pub use nodestore::{
     Committed, HashedNodeReader, ImmutableProposal, LinearAddress, MutableProposal, NodeReader,
-    NodeStore, ReadInMemoryNode, RootReader, TrieReader, UpdateError,
+    NodeStore, Parentable, ReadInMemoryNode, RootReader, TrieReader, UpdateError,
 };
 
 pub use linear::{filebacked::FileBacked, memory::MemStore};
