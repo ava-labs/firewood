@@ -6,7 +6,7 @@ use arc_swap::access::DynAccess;
 use arc_swap::ArcSwap;
 use bincode::{DefaultOptions, Options as _};
 use bytemuck_derive::{AnyBitPattern, NoUninit};
-use metrics::{counter, histogram};
+use metrics::counter;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;

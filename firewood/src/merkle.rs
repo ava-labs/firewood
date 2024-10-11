@@ -6,7 +6,7 @@ use crate::range_proof::RangeProof;
 use crate::stream::{MerkleKeyValueStream, PathIterator};
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
-use metrics::{counter, histogram};
+use metrics::counter;
 use smallvec::SmallVec;
 use std::collections::HashSet;
 use std::fmt::Debug;
