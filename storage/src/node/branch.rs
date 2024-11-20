@@ -8,6 +8,7 @@ use crate::{LeafNode, LinearAddress, Node, Path, TrieHash};
 use std::fmt::{Debug, Error as FmtError, Formatter};
 
 #[derive(PartialEq, Eq, Clone, Debug)]
+#[repr(C)]
 /// A child of a branch node.
 pub enum Child {
     /// There is a child at this index, but we haven't hashed it

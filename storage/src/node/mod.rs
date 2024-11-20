@@ -2,10 +2,12 @@
 // See the file LICENSE.md for licensing terms.
 
 use enum_as_inner::EnumAsInner;
-use integer_encoding::VarIntWriter as _;
+use integer_encoding::{VarIntReader as _, VarIntWriter as _};
 use serde::{Deserialize, Serialize};
 use smallvec::{smallvec, SmallVec};
-use std::io::Read;
+use std::io::{Error, Read};
+use std::num::NonZero;
+use std::vec;
 use std::{fmt::Debug, sync::Arc};
 
 mod branch;
@@ -22,6 +24,7 @@ use crate::Path;
 
 // TODO: explain why Branch is boxed but Leaf is not
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner, Serialize, Deserialize)]
+#[repr(C)]
 pub enum Node {
     /// This node is a [BranchNode]
     Branch(Box<BranchNode>),
@@ -208,14 +211,108 @@ impl Node {
                 }
                 encoded.extend_from_slice(l.partial_path.0.as_ref());
 
+                // encode the value
+                encoded
+                    .write_varint(l.value.len())
+                    .expect("write to array should succeed");
+                encoded.extend_from_slice(&l.value);
+
                 encoded.into_boxed_slice()
             }
         }
     }
 
     /// Given a reader, return a [Node] from those bytes
-    pub fn deserialize_from_reader(_serialized: impl Read) -> Self {
-        todo!()
+    pub fn deserialize_from_reader(mut serialized: impl Read) -> Result<Self, std::io::Error> {
+        let mut first_byte: [u8; 1] = [0];
+        serialized.read_exact(&mut first_byte)?;
+        match first_byte[0] {
+            leaf_first_byte if leaf_first_byte & 1 == 1 => {
+                let partial_path_len = if leaf_first_byte != 255 {
+                    // less than 127 nibbles
+                    (leaf_first_byte >> 1) as usize
+                } else {
+                    serialized.read_varint()?
+                };
+
+                let mut partial_path = vec![0u8; partial_path_len];
+                serialized.read_exact(&mut partial_path)?;
+
+                let mut value_len_buf = [0u8; 1];
+                serialized.read_exact(&mut value_len_buf)?;
+                let value_len = value_len_buf[0] as usize;
+
+                let mut value = vec![0u8; value_len];
+                serialized.read_exact(&mut value)?;
+
+                Ok(Node::Leaf(LeafNode {
+                    partial_path: Path::from(partial_path),
+                    value: value.into(),
+                }))
+            }
+            branch_first_byte => {
+                let has_value = branch_first_byte & 2 == 2;
+                let childcount = (branch_first_byte >> 2) as usize;
+
+                let partial_path_len = if branch_first_byte >> 6 == 3 {
+                    serialized.read_varint()?
+                } else {
+                    (branch_first_byte >> 6) as usize
+                };
+
+                let mut partial_path = vec![0u8; partial_path_len];
+                serialized.read_exact(&mut partial_path)?;
+
+                let mut value_len_buf = [0u8; 1];
+                serialized.read_exact(&mut value_len_buf)?;
+                let value_len = value_len_buf[0] as usize;
+
+                let mut value = vec![0u8; value_len];
+                serialized.read_exact(&mut value)?;
+
+                let mut children = [const { None }; BranchNode::MAX_CHILDREN];
+                if childcount == BranchNode::MAX_CHILDREN {
+                    for child in children.iter_mut() {
+                        // TODO: we can read them all at once
+                        let mut address_buf = [0u8; 8];
+                        serialized.read_exact(&mut address_buf)?;
+                        let address = u64::from_ne_bytes(address_buf);
+
+                        let mut hash = [0u8; 32];
+                        serialized.read_exact(&mut hash)?;
+
+                        *child = Some(Child::AddressWithHash(
+                            NonZero::new(address).ok_or(Error::other("zero address in child"))?,
+                            hash.into(),
+                        ));
+                    }
+                } else {
+                    for _ in 0..childcount {
+                        let mut position_buf = [0u8; 1];
+                        serialized.read_exact(&mut position_buf)?;
+                        let position = position_buf[0] as usize;
+
+                        let mut address_buf = [0u8; 8];
+                        serialized.read_exact(&mut address_buf)?;
+                        let address = u64::from_ne_bytes(address_buf);
+
+                        let mut hash = [0u8; 32];
+                        serialized.read_exact(&mut hash)?;
+
+                        children[position] = Some(Child::AddressWithHash(
+                            NonZero::new(address).ok_or(Error::other("zero address in child"))?,
+                            hash.into(),
+                        ));
+                    }
+                }
+
+                Ok(Node::Branch(Box::new(BranchNode {
+                    partial_path: Path::from(partial_path),
+                    value: if has_value { Some(value.into()) } else { None },
+                    children,
+                })))
+            }
+        }
     }
 }
 
@@ -233,4 +330,25 @@ pub struct PathIterItem {
     /// children array.
     /// None if `node` is the last node in the path.
     pub next_nibble: Option<u8>,
+}
+
+#[cfg(test)]
+mod test {
+    #[test]
+    fn test_serialize_deserialize() {
+        use crate::node::Node;
+        use crate::Path;
+        use std::io::Cursor;
+
+        let leaf = Node::Leaf(crate::node::LeafNode {
+            partial_path: Path::from(vec![0, 1, 2, 3]),
+            value: vec![4, 5, 6, 7].into(),
+        });
+
+        let serialized = leaf.serialize_for_storage();
+        println!("{:?}", serialized);
+        let deserialized = Node::deserialize_from_reader(Cursor::new(&serialized)).unwrap();
+
+        assert_eq!(leaf, deserialized);
+    }
 }
