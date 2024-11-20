@@ -5,14 +5,14 @@ use std::{array::from_fn, fs::File, num::NonZeroU64, os::raw::c_int};
 
 use bincode::Options;
 use criterion::{criterion_group, criterion_main, profiler::Profiler, Criterion};
+use pprof::ProfilerGuard;
 use smallvec::SmallVec;
 use storage::{LeafNode, Node, Path};
-use pprof::ProfilerGuard;
 
 use std::path::Path as FsPath;
 
 // For flamegraphs:
-// cargo bench --bench serializers -- --profile-time=5
+// cargo bench --bench serializer -- --profile-time=5
 
 enum FlamegraphProfiler {
     Init(c_int),
@@ -53,22 +53,20 @@ impl Profiler for FlamegraphProfiler {
     }
 }
 
-
 fn leaf(c: &mut Criterion) {
-    let mut group = c.benchmark_group("serde leaf");
+    let mut group = c.benchmark_group("leaf");
     let input = Node::Leaf(LeafNode {
-//        partial_path: Path(SmallVec::from_slice(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9])),
         partial_path: Path(SmallVec::from_slice(&[0, 1])),
         value: SmallVec::from_slice(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
     });
     let serializer = bincode::DefaultOptions::new().with_varint_encoding();
-    group.bench_with_input("leaf", &input, |b, input| {
+    group.bench_with_input("serde", &input, |b, input| {
         b.iter(|| {
             serializer.serialize(input).unwrap();
         })
     });
 
-    group.bench_with_input("leaf_manual", &input, |b, input| {
+    group.bench_with_input("manual", &input, |b, input| {
         b.iter(|| {
             input.serialize_for_storage();
         })
@@ -77,7 +75,7 @@ fn leaf(c: &mut Criterion) {
 }
 
 fn branch(c: &mut Criterion) {
-    let mut group = c.benchmark_group("has value");
+    let mut group = c.benchmark_group("has_value");
     let mut input = Node::Branch(Box::new(storage::BranchNode {
         partial_path: Path(SmallVec::from_slice(&[0, 1])),
         value: Some(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9].into_boxed_slice()),
@@ -109,21 +107,20 @@ fn branch(c: &mut Criterion) {
     group.bench_with_input("manual", &input, manual_serializer);
     group.finish();
 
-
-    let mut group = c.benchmark_group("1 child");
+    let mut group = c.benchmark_group("1_child");
     input.as_branch_mut().unwrap().value = None;
     group.bench_with_input("serde", &input, serde_serializer);
     group.bench_with_input("manual", &input, manual_serializer);
     let child = input.as_branch().unwrap().children[0].clone();
     group.finish();
 
-    let mut group = c.benchmark_group("2 child");
+    let mut group = c.benchmark_group("2_child");
     input.as_branch_mut().unwrap().children[1] = child.clone();
     group.bench_with_input("serde", &input, serde_serializer);
     group.bench_with_input("manual", &input, manual_serializer);
     group.finish();
 
-    let mut group = c.benchmark_group("16 child");
+    let mut group = c.benchmark_group("16_child");
     input.as_branch_mut().unwrap().children = std::array::from_fn(|_| child.clone());
     group.bench_with_input("serde", &input, serde_serializer);
     group.bench_with_input("manual", &input, manual_serializer);
