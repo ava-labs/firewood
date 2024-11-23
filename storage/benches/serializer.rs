@@ -68,7 +68,7 @@ fn leaf(c: &mut Criterion) {
 
     group.bench_with_input("manual", &input, |b, input| {
         b.iter(|| {
-            input.serialize_for_storage();
+            input.as_bytes();
         })
     });
     group.finish();
@@ -99,7 +99,7 @@ fn branch(c: &mut Criterion) {
 
     let manual_serializer = |b: &mut criterion::Bencher, input: &storage::Node| {
         b.iter(|| {
-            input.serialize_for_storage();
+            input.as_bytes();
         })
     };
 

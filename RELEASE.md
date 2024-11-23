@@ -4,10 +4,6 @@ Releasing firewood is straightforward and can be done entirely in CI.
 
 Firewood is made up of several sub-projects in a workspace. Each project is in
 its own crate and has an independent version. 
-* firewood
-* growth-ring
-* libaio
-* shale
 
 The first step in drafting a release is ensuring all crates within the firewood
 project are using the version of the new release.  There is a utility to ensure

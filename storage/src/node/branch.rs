@@ -43,7 +43,7 @@ impl Serialize for BranchNode {
         state.serialize_field("partial_path", &self.partial_path)?;
         state.serialize_field("value", &self.value)?;
 
-        let children: SmallVec<[(u8, LinearAddress, TrieHash); Self::MAX_CHILDREN]> = self
+        let children: SmallVec<[(u8, LinearAddress, &TrieHash); Self::MAX_CHILDREN]> = self
             .children
             .iter()
             .enumerate()
@@ -52,9 +52,7 @@ impl Serialize for BranchNode {
                 Some(Child::Node(_)) => {
                     panic!("serializing in-memory node for disk storage")
                 }
-                Some(Child::AddressWithHash(addr, hash)) => {
-                    Some((offset as u8, *addr, (*hash).clone()))
-                }
+                Some(Child::AddressWithHash(addr, hash)) => Some((offset as u8, *addr, hash)),
             })
             .collect();
 

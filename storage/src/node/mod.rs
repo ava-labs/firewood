@@ -1,10 +1,11 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use bitfield::bitfield;
 use enum_as_inner::EnumAsInner;
 use integer_encoding::{VarIntReader as _, VarIntWriter as _};
 use serde::{Deserialize, Serialize};
-use smallvec::{smallvec, SmallVec};
+use smallvec::SmallVec;
 use std::io::{Error, Read};
 use std::num::NonZero;
 use std::vec;
@@ -50,6 +51,46 @@ impl From<BranchNode> for Node {
 impl From<LeafNode> for Node {
     fn from(leaf: LeafNode) -> Self {
         Node::Leaf(leaf)
+    }
+}
+
+#[cfg(not(feature = "branch_factor_256"))]
+bitfield! {
+    struct BranchFirstByte(u8);
+    impl Debug;
+    impl new;
+    u8;
+    has_value, set_has_value: 1, 1;
+    number_children, set_number_children: 4, 2;
+    partial_path_length, set_partial_path_length: 7, 6;
+}
+#[cfg(not(feature = "branch_factor_256"))]
+const MAX_ENCODED_PARTIAL_PATH_LEN: usize = 2;
+
+#[cfg(feature = "branch_factor_256")]
+bitfield! {
+    struct BranchFirstByte(u8);
+    impl Debug;
+    impl new;
+    u8;
+    has_value, set_has_value: 1, 1;
+    partial_path_length, set_partial_path_length: 7, 2;
+}
+#[cfg(feature = "branch_factor_256")]
+const MAX_ENCODED_PARTIAL_PATH_LEN: usize = 63;
+
+bitfield! {
+    struct LeafFirstByte(u8);
+    impl Debug;
+    impl new;
+    u8;
+    is_leaf, set_is_leaf: 0, 0;
+    partial_path_length, set_partial_path_length: 7, 1;
+}
+
+impl Default for LeafFirstByte {
+    fn default() -> Self {
+        LeafFirstByte(1)
     }
 }
 
@@ -122,15 +163,19 @@ impl Node {
     /// For a leaf:
     ///  - Byte 0:
     ///    - Bit 0: always 1
-    ///    - Bits 1-7: the length of the partial path. If the partial path is longer than 127 nibbles, this is set to
-    ///      127 and the length is encoded in the next byte.
+    ///    - Bits 1-7: the length of the partial path. If the partial path is longer than 126 nibbles, this is set to
+    ///      126 and the length is encoded in the next byte.
     ///
     /// The remaining bytes are in the following order:
-    ///    - The partial path, possibly preceeded by the length if it is longer than 127 nibbles (varint encoded)
+    ///    - The partial path, possibly preceeded by the length if it is longer than 126 nibbles (varint encoded)
     ///    - The value, always preceeded by the length, varint encoded
-    pub fn serialize_for_storage(&self) -> Box<[u8]> {
+    ///
+    /// Note that this means the first byte cannot be 255, which would be a leaf with 127 nibbles. We save this extra
+    /// value to mark this as a freed area.
+    ///
+    /// TODO: We could pack two bytes of the partial path into one and handle the odd byte length
+    pub fn as_bytes(&self) -> Vec<u8> {
         match self {
-            #[cfg(not(feature = "branch_factor_256"))]
             Node::Branch(b) => {
                 let child_iter = b
                     .children
@@ -140,25 +185,35 @@ impl Node {
                 let childcount = child_iter.clone().count();
 
                 // encode the first byte
-                let first_byte = (b.value.is_some() as u8) << 1
-                    | (childcount as u8) << 2
-                    | if b.partial_path.0.len() < 3 {
-                        (b.partial_path.0.len() as u8) << 6
-                    } else {
-                        3 << 6
-                    };
+                let pp_len = if b.partial_path.0.len() <= MAX_ENCODED_PARTIAL_PATH_LEN {
+                    b.partial_path.0.len() as u8
+                } else {
+                    MAX_ENCODED_PARTIAL_PATH_LEN as u8 + 1
+                };
+                #[cfg(not(feature = "branch_factor_256"))]
+                let first_byte: BranchFirstByte = BranchFirstByte::new(
+                    b.value.is_some() as u8,
+                    (childcount % BranchNode::MAX_CHILDREN) as u8,
+                    pp_len,
+                );
+                #[cfg(feature = "branch_factor_256")]
+                let first_byte: BranchFirstByte =
+                    BranchFirstByte::new(b.value.is_some() as u8, pp_len);
 
                 // create an output stack item, which can overflow to memory for very large branch nodes
                 const OPTIMIZE_BRANCHES_FOR_SIZE: usize = 1024;
-                let mut encoded: SmallVec<[_; OPTIMIZE_BRANCHES_FOR_SIZE]> = smallvec![first_byte];
+                let mut encoded: Vec<u8> = Vec::with_capacity(OPTIMIZE_BRANCHES_FOR_SIZE);
+                encoded.push(first_byte.0);
+                #[cfg(feature = "branch_factor_256")]
+                encoded.push((childcount % BranchNode::MAX_CHILDREN) as u8);
 
                 // encode the partial path, including the length if it didn't fit above
-                if b.partial_path.0.len() >= 3 {
+                if b.partial_path.0.len() > MAX_ENCODED_PARTIAL_PATH_LEN {
                     encoded
                         .write_varint(b.partial_path.len())
                         .expect("writing to vec should succeed");
                 }
-                encoded.extend_from_slice(&b.partial_path.0);
+                encoded.extend_from_slice(&b.partial_path);
 
                 // encode the value. For tries that have the same length keys, this is always empty
                 if let Some(v) = &b.value {
@@ -191,17 +246,14 @@ impl Node {
                         }
                     }
                 }
-                encoded.into_boxed_slice()
+                encoded
             }
             Node::Leaf(l) => {
-                let first_byte = if l.partial_path.0.len() < 127 {
-                    ((l.partial_path.0.len() as u8) << 1) | 1
-                } else {
-                    255
-                };
+                let first_byte: LeafFirstByte = LeafFirstByte::new(1, l.partial_path.0.len() as u8);
 
                 const OPTIMIZE_LEAVES_FOR_SIZE: usize = 128;
-                let mut encoded: SmallVec<[_; OPTIMIZE_LEAVES_FOR_SIZE]> = smallvec![first_byte];
+                let mut encoded: Vec<u8> = Vec::with_capacity(OPTIMIZE_LEAVES_FOR_SIZE);
+                encoded.push(first_byte.0);
 
                 // encode the partial path, including the length if it didn't fit above
                 if l.partial_path.0.len() >= 127 {
@@ -209,7 +261,7 @@ impl Node {
                         .write_varint(l.partial_path.len())
                         .expect("write to array should succeed");
                 }
-                encoded.extend_from_slice(l.partial_path.0.as_ref());
+                encoded.extend_from_slice(&l.partial_path);
 
                 // encode the value
                 encoded
@@ -217,20 +269,20 @@ impl Node {
                     .expect("write to array should succeed");
                 encoded.extend_from_slice(&l.value);
 
-                encoded.into_boxed_slice()
+                encoded
             }
         }
     }
 
     /// Given a reader, return a [Node] from those bytes
-    pub fn deserialize_from_reader(mut serialized: impl Read) -> Result<Self, std::io::Error> {
+    pub fn from_reader(mut serialized: impl Read) -> Result<Self, std::io::Error> {
         let mut first_byte: [u8; 1] = [0];
         serialized.read_exact(&mut first_byte)?;
         match first_byte[0] {
             leaf_first_byte if leaf_first_byte & 1 == 1 => {
-                let partial_path_len = if leaf_first_byte != 255 {
-                    // less than 127 nibbles
-                    (leaf_first_byte >> 1) as usize
+                let partial_path_len = if leaf_first_byte < 255 {
+                    // less than 126 nibbles
+                    LeafFirstByte(leaf_first_byte).partial_path_length() as usize
                 } else {
                     serialized.read_varint()?
                 };
@@ -251,27 +303,41 @@ impl Node {
                 }))
             }
             branch_first_byte => {
-                let has_value = branch_first_byte & 2 == 2;
-                let childcount = (branch_first_byte >> 2) as usize;
+                let branch_first_byte = BranchFirstByte(branch_first_byte);
 
-                let partial_path_len = if branch_first_byte >> 6 == 3 {
-                    serialized.read_varint()?
-                } else {
-                    (branch_first_byte >> 6) as usize
+                let has_value = branch_first_byte.has_value() == 1;
+                #[cfg(not(feature = "branch_factor_256"))]
+                let childcount = branch_first_byte.number_children() as usize;
+                #[cfg(feature = "branch_factor_256")]
+                let childcount = {
+                    let mut childcount_buf = [0u8; 1];
+                    serialized.read_exact(&mut childcount_buf)?;
+                    childcount_buf[0] as usize
                 };
+
+                let mut partial_path_len = branch_first_byte.partial_path_length() as usize;
+                if partial_path_len > MAX_ENCODED_PARTIAL_PATH_LEN {
+                    partial_path_len = serialized.read_varint()?;
+                }
 
                 let mut partial_path = vec![0u8; partial_path_len];
                 serialized.read_exact(&mut partial_path)?;
 
-                let mut value_len_buf = [0u8; 1];
-                serialized.read_exact(&mut value_len_buf)?;
-                let value_len = value_len_buf[0] as usize;
+                let value = if has_value {
+                    let mut value_len_buf = [0u8; 1];
+                    serialized.read_exact(&mut value_len_buf)?;
+                    let value_len = value_len_buf[0] as usize;
 
-                let mut value = vec![0u8; value_len];
-                serialized.read_exact(&mut value)?;
+                    let mut value = vec![0u8; value_len];
+                    serialized.read_exact(&mut value)?;
+                    Some(value.into())
+                } else {
+                    None
+                };
 
                 let mut children = [const { None }; BranchNode::MAX_CHILDREN];
-                if childcount == BranchNode::MAX_CHILDREN {
+                if childcount == 0 {
+                    // branch is full of all children
                     for child in children.iter_mut() {
                         // TODO: we can read them all at once
                         let mut address_buf = [0u8; 8];
@@ -307,8 +373,8 @@ impl Node {
                 }
 
                 Ok(Node::Branch(Box::new(BranchNode {
-                    partial_path: Path::from(partial_path),
-                    value: if has_value { Some(value.into()) } else { None },
+                    partial_path: partial_path.into(),
+                    value,
                     children,
                 })))
             }
@@ -333,22 +399,47 @@ pub struct PathIterItem {
 }
 
 #[cfg(test)]
+
 mod test {
-    #[test]
-    fn test_serialize_deserialize() {
+    use crate::{
+        node::{BranchNode, LeafNode, Node},
+        Child, LinearAddress, Path,
+    };
+    use test_case::test_case;
+
+    #[test_case(
+        Node::Leaf(LeafNode {
+            partial_path: Path::from(vec![0, 1, 2, 3]),
+            value: vec![4, 5, 6, 7].into()
+        }), 10; "leaf node with value")]
+    #[test_case(Node::Branch(Box::new(BranchNode {
+        partial_path: Path::from(vec![0, 1]),
+        value: None,
+        children: std::array::from_fn(|i| {
+            if i == 15 {
+                Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
+            } else {
+                None
+            }
+        })})), 44; "one child branch node with short partial path and no value"
+    )]
+    #[test_case(Node::Branch(Box::new(BranchNode {
+        partial_path: Path::from(vec![0, 1, 2, 3]),
+        value: Some(vec![4, 5, 6, 7].into()),
+        children: std::array::from_fn(|_|
+                Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
+        )})), 651; "full branch node with long partial path and value"
+    )]
+    #[allow(unused_variables)]
+    fn test_serialize_deserialize(node: Node, expected_length: usize) {
         use crate::node::Node;
-        use crate::Path;
         use std::io::Cursor;
 
-        let leaf = Node::Leaf(crate::node::LeafNode {
-            partial_path: Path::from(vec![0, 1, 2, 3]),
-            value: vec![4, 5, 6, 7].into(),
-        });
+        let serialized = node.as_bytes();
+        #[cfg(not(feature = "branch_factor_256"))]
+        assert_eq!(serialized.len(), expected_length);
+        let deserialized = Node::from_reader(Cursor::new(&serialized)).unwrap();
 
-        let serialized = leaf.serialize_for_storage();
-        println!("{:?}", serialized);
-        let deserialized = Node::deserialize_from_reader(Cursor::new(&serialized)).unwrap();
-
-        assert_eq!(leaf, deserialized);
+        assert_eq!(node, deserialized);
     }
 }

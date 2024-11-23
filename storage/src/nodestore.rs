@@ -927,53 +927,6 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
     }
 }
 
-impl<S: WritableStorage> NodeStore<ImmutableProposal, S> {
-    /// Persist the freelist from this proposal to storage.
-    pub fn flush_freelist(&self) -> Result<(), Error> {
-        // Write the free lists to storage
-        let free_list_bytes = bytemuck::bytes_of(&self.header.free_lists);
-        let free_list_offset = offset_of!(NodeStoreHeader, free_lists) as u64;
-        self.storage.write(free_list_offset, free_list_bytes)?;
-        Ok(())
-    }
-
-    /// Persist all the nodes of a proposal to storage.
-    pub fn flush_nodes(&self) -> Result<(), Error> {
-        for (addr, (area_size_index, node)) in self.kind.new.iter() {
-            let stored_area = StoredArea {
-                area_size_index: *area_size_index,
-                area: Area::<_, FreeArea>::Node(node.as_ref()),
-            };
-
-            let stored_area_bytes = serializer()
-                .serialize(&stored_area)
-                .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-
-            self.storage
-                .write(addr.get(), stored_area_bytes.as_slice())?;
-        }
-        self.storage
-            .write_cached_nodes(self.kind.new.iter().map(|(addr, (_, node))| (addr, node)))?;
-
-        Ok(())
-    }
-}
-
-impl NodeStore<ImmutableProposal, FileBacked> {
-    /// Return a Committed version of this proposal, which doesn't have any modified nodes.
-    /// This function is used during commit.
-    pub fn as_committed(&self) -> NodeStore<Committed, FileBacked> {
-        NodeStore {
-            header: self.header,
-            kind: Committed {
-                deleted: self.kind.deleted.clone(),
-                root_hash: self.kind.root_hash.clone(),
-            },
-            storage: self.storage.clone(),
-        }
-    }
-}
-
 impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     /// Persist the freelist from this proposal to storage.
     pub fn flush_freelist(&self) -> Result<(), Error> {
