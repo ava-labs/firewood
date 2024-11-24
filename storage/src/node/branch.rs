@@ -91,18 +91,16 @@ impl<'de> Deserialize<'de> for BranchNode {
 
 impl Debug for BranchNode {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), FmtError> {
-        write!(f, "[Branch")?;
+        write!(f, "[BranchNode")?;
         write!(f, r#" path="{:?}""#, self.partial_path)?;
 
         for (i, c) in self.children.iter().enumerate() {
             match c {
                 None => {}
                 Some(Child::Node(_)) => {} //TODO
-                Some(Child::AddressWithHash(addr, hash)) => write!(
-                    f,
-                    "(index: {i:?}), address={addr:?}, hash={:?})",
-                    hex::encode(hash),
-                )?,
+                Some(Child::AddressWithHash(addr, hash)) => {
+                    write!(f, "({i:?}: address={addr:?} hash={})", hex::encode(hash),)?
+                }
             }
         }
 

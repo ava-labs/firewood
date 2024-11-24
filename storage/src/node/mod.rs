@@ -6,7 +6,7 @@ use enum_as_inner::EnumAsInner;
 use integer_encoding::{VarIntReader as _, VarIntWriter as _};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use std::io::{Error, Read};
+use std::io::{Error, ErrorKind, Read, Write};
 use std::num::NonZero;
 use std::vec;
 use std::{fmt::Debug, sync::Arc};
@@ -61,7 +61,7 @@ bitfield! {
     impl new;
     u8;
     has_value, set_has_value: 1, 1;
-    number_children, set_number_children: 4, 2;
+    number_children, set_number_children: 5, 2;
     partial_path_length, set_partial_path_length: 7, 6;
 }
 #[cfg(not(feature = "branch_factor_256"))]
@@ -91,6 +91,65 @@ bitfield! {
 impl Default for LeafFirstByte {
     fn default() -> Self {
         LeafFirstByte(1)
+    }
+}
+
+// TODO: Unstable extend_reserve re-implemented here
+// Extend<A>::extend_reserve is unstable so we implement it here
+// see https://github.com/rust-lang/rust/issues/72631
+pub trait ExtendableBytes: Write {
+    fn extend<T: IntoIterator<Item = u8>>(&mut self, other: T);
+    fn reserve(&mut self, reserve: usize) {
+        let _ = reserve;
+    }
+    fn push(&mut self, value: u8);
+
+    fn extend_from_slice(&mut self, other: &[u8]) {
+        self.extend(other.iter().copied());
+    }
+}
+
+impl ExtendableBytes for Vec<u8> {
+    fn extend<T: IntoIterator<Item = u8>>(&mut self, other: T) {
+        std::iter::Extend::extend(self, other);
+    }
+    fn reserve(&mut self, reserve: usize) {
+        self.reserve(reserve);
+    }
+    fn push(&mut self, value: u8) {
+        Vec::push(self, value);
+    }
+}
+
+pub struct ByteCounter(u64);
+
+impl ByteCounter {
+    pub fn new() -> Self {
+        ByteCounter(0)
+    }
+
+    pub fn count(&self) -> u64 {
+        self.0
+    }
+}
+
+impl Write for ByteCounter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 += buf.len() as u64;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl ExtendableBytes for ByteCounter {
+    fn extend<T: IntoIterator<Item = u8>>(&mut self, other: T) {
+        self.0 += other.into_iter().count() as u64;
+    }
+    fn push(&mut self, _value: u8) {
+        self.0 += 1;
     }
 }
 
@@ -173,8 +232,11 @@ impl Node {
     /// Note that this means the first byte cannot be 255, which would be a leaf with 127 nibbles. We save this extra
     /// value to mark this as a freed area.
     ///
+    /// Note that there is a "prefix" byte which is the size of the area when serializing this object. Since
+    /// we always have one of those, we include it as a parameter for serialization.
+    ///
     /// TODO: We could pack two bytes of the partial path into one and handle the odd byte length
-    pub fn as_bytes(&self) -> Vec<u8> {
+    pub fn as_bytes<T: ExtendableBytes>(&self, prefix: u8, encoded: &mut T) {
         match self {
             Node::Branch(b) => {
                 let child_iter = b
@@ -202,10 +264,11 @@ impl Node {
 
                 // create an output stack item, which can overflow to memory for very large branch nodes
                 const OPTIMIZE_BRANCHES_FOR_SIZE: usize = 1024;
-                let mut encoded: Vec<u8> = Vec::with_capacity(OPTIMIZE_BRANCHES_FOR_SIZE);
+                encoded.reserve(OPTIMIZE_BRANCHES_FOR_SIZE);
+                encoded.push(prefix);
                 encoded.push(first_byte.0);
                 #[cfg(feature = "branch_factor_256")]
-                encoded.push((childcount % BranchNode::MAX_CHILDREN) as u8);
+                encoded.extend_one((childcount % BranchNode::MAX_CHILDREN) as u8);
 
                 // encode the partial path, including the length if it didn't fit above
                 if b.partial_path.0.len() > MAX_ENCODED_PARTIAL_PATH_LEN {
@@ -246,13 +309,13 @@ impl Node {
                         }
                     }
                 }
-                encoded
             }
             Node::Leaf(l) => {
                 let first_byte: LeafFirstByte = LeafFirstByte::new(1, l.partial_path.0.len() as u8);
 
                 const OPTIMIZE_LEAVES_FOR_SIZE: usize = 128;
-                let mut encoded: Vec<u8> = Vec::with_capacity(OPTIMIZE_LEAVES_FOR_SIZE);
+                encoded.reserve(OPTIMIZE_LEAVES_FOR_SIZE);
+                encoded.push(prefix);
                 encoded.push(first_byte.0);
 
                 // encode the partial path, including the length if it didn't fit above
@@ -268,8 +331,6 @@ impl Node {
                     .write_varint(l.value.len())
                     .expect("write to array should succeed");
                 encoded.extend_from_slice(&l.value);
-
-                encoded
             }
         }
     }
@@ -279,6 +340,10 @@ impl Node {
         let mut first_byte: [u8; 1] = [0];
         serialized.read_exact(&mut first_byte)?;
         match first_byte[0] {
+            255 => {
+                // this is a freed area
+                Err(Error::new(ErrorKind::Other, "attempt to read freed area"))
+            }
             leaf_first_byte if leaf_first_byte & 1 == 1 => {
                 let partial_path_len = if leaf_first_byte < 255 {
                     // less than 126 nibbles
@@ -411,7 +476,7 @@ mod test {
         Node::Leaf(LeafNode {
             partial_path: Path::from(vec![0, 1, 2, 3]),
             value: vec![4, 5, 6, 7].into()
-        }), 10; "leaf node with value")]
+        }), 11; "leaf node with value")]
     #[test_case(Node::Branch(Box::new(BranchNode {
         partial_path: Path::from(vec![0, 1]),
         value: None,
@@ -421,24 +486,27 @@ mod test {
             } else {
                 None
             }
-        })})), 44; "one child branch node with short partial path and no value"
+        })})), 45; "one child branch node with short partial path and no value"
     )]
     #[test_case(Node::Branch(Box::new(BranchNode {
         partial_path: Path::from(vec![0, 1, 2, 3]),
         value: Some(vec![4, 5, 6, 7].into()),
         children: std::array::from_fn(|_|
                 Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
-        )})), 651; "full branch node with long partial path and value"
+        )})), 652; "full branch node with long partial path and value"
     )]
     #[allow(unused_variables)]
     fn test_serialize_deserialize(node: Node, expected_length: usize) {
         use crate::node::Node;
         use std::io::Cursor;
 
-        let serialized = node.as_bytes();
-        #[cfg(not(feature = "branch_factor_256"))]
+        let mut serialized = Vec::new();
+        node.as_bytes(0, &mut serialized);
+        #[cfg(not(feature = "branch_factor_256"))] // TODO: enable this test for branch_factor_256
         assert_eq!(serialized.len(), expected_length);
-        let deserialized = Node::from_reader(Cursor::new(&serialized)).unwrap();
+        let mut cursor = Cursor::new(&serialized);
+        cursor.set_position(1);
+        let deserialized = Node::from_reader(cursor).unwrap();
 
         assert_eq!(node, deserialized);
     }

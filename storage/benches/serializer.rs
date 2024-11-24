@@ -68,7 +68,8 @@ fn leaf(c: &mut Criterion) {
 
     group.bench_with_input("manual", &input, |b, input| {
         b.iter(|| {
-            input.as_bytes();
+            let mut bytes = Vec::<u8>::new();
+            input.as_bytes(0, &mut bytes);
         })
     });
     group.finish();
@@ -99,7 +100,8 @@ fn branch(c: &mut Criterion) {
 
     let manual_serializer = |b: &mut criterion::Bencher, input: &storage::Node| {
         b.iter(|| {
-            input.as_bytes();
+            let mut bytes = Vec::new();
+            input.as_bytes(0, &mut bytes);
         })
     };
 
