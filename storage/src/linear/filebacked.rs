@@ -163,17 +163,20 @@ impl Read for PredictiveReader {
 mod test {
     use super::*;
     use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn basic_reader_test() {
-        let path = "/tmp/test_filebacked";
-        let mut output = File::create(path).unwrap();
-        write!(output, "hello world").unwrap();
-        drop(output);
 
-        // whole thing at once
+        let mut tf = NamedTempFile::new().unwrap();
+        let path = tf.path().to_path_buf();
+        let output = tf.as_file_mut();
+        write!(output, "hello world").unwrap();
+
+        // whole thing at once, this is always less than 1K so it should
+        // read the whole thing in
         let fb = FileBacked::new(
-            PathBuf::from("/tmp/test_filebacked"),
+            path,
             NonZero::new(10).unwrap(),
             NonZero::new(10).unwrap(),
             false,
@@ -204,15 +207,16 @@ mod test {
 
     #[test]
     fn big_file() {
-        let path = "/tmp/test_filebacked";
-        let mut output = File::create(path).unwrap();
+       
+        let mut tf = NamedTempFile::new().unwrap();
+        let path = tf.path().to_path_buf();
+        let output = tf.as_file_mut();
         for _ in 0..1000 {
             write!(output, "hello world").unwrap();
         }
-        drop(output);
-
+        
         let fb = FileBacked::new(
-            PathBuf::from("/tmp/test_filebacked"),
+            path,
             NonZero::new(10).unwrap(),
             NonZero::new(10).unwrap(),
             false,
