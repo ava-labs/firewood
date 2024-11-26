@@ -141,6 +141,7 @@ impl<'a, T: TrieReader> Stream for MerkleNodeStream<'a, T> {
 
                             let child = match child {
                                 Child::AddressWithHash(addr, _) => merkle.read_node(addr)?,
+                                Child::HashedNode(node, _) => node.clone(),
                                 Child::Node(node) => Arc::new(node.clone()),
                             };
 
@@ -251,6 +252,7 @@ fn get_iterator_intial_state<T: TrieReader>(
                     node = match child {
                         None => return Ok(NodeStreamState::Iterating { iter_stack }),
                         Some(Child::AddressWithHash(addr, _)) => merkle.read_node(*addr)?,
+                        Some(Child::HashedNode(node, _)) => node.clone(),
                         Some(Child::Node(node)) => Arc::new((*node).clone()), // TODO can we avoid cloning this?
                     };
 
@@ -492,6 +494,19 @@ impl<'a, 'b, T: TrieReader> Iterator for PathIterator<'a, 'b, T> {
 
                                         let ret = node.clone();
                                         *node = child;
+
+                                        Some(Ok(PathIterItem {
+                                            key_nibbles: node_key,
+                                            node: ret,
+                                            next_nibble: Some(next_unmatched_key_nibble),
+                                        }))
+                                    }
+                                    Some(Child::HashedNode(child, _)) => {
+                                        let node_key = matched_key.clone().into_boxed_slice();
+                                        matched_key.push(next_unmatched_key_nibble);
+
+                                        let ret = node.clone();
+                                        *node = child.clone();
 
                                         Some(Ok(PathIterItem {
                                             key_nibbles: node_key,

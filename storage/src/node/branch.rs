@@ -5,7 +5,10 @@ use serde::{ser::SerializeStruct as _, Deserialize, Serialize};
 use smallvec::SmallVec;
 
 use crate::{LeafNode, LinearAddress, Node, Path, TrieHash};
-use std::fmt::{Debug, Error as FmtError, Formatter};
+use std::{
+    fmt::{Debug, Error as FmtError, Formatter},
+    sync::Arc,
+};
 
 #[derive(PartialEq, Eq, Clone, Debug)]
 /// A child of a branch node.
@@ -13,6 +16,8 @@ pub enum Child {
     /// There is a child at this index, but we haven't hashed it
     /// or allocated space in storage for it yet.
     Node(Node),
+    /// There is a child at this index, still in memory, and we know it's hash
+    HashedNode(Arc<Node>, TrieHash),
     /// We know the child's address and hash.
     AddressWithHash(LinearAddress, TrieHash),
 }
@@ -48,7 +53,7 @@ impl Serialize for BranchNode {
             .enumerate()
             .filter_map(|(offset, child)| match child {
                 None => None,
-                Some(Child::Node(_)) => {
+                Some(Child::Node(_)) | Some(Child::HashedNode(_, _)) => {
                     panic!("serializing in-memory node for disk storage")
                 }
                 Some(Child::AddressWithHash(addr, hash)) => {
@@ -98,7 +103,17 @@ impl Debug for BranchNode {
         for (i, c) in self.children.iter().enumerate() {
             match c {
                 None => {}
-                Some(Child::Node(_)) => {} //TODO
+                Some(Child::HashedNode(node, hash)) => {
+                    write!(
+                        f,
+                        "(index: {i:?}), node={:?} hash={:?})",
+                        node,
+                        hex::encode(hash)
+                    )?;
+                }
+                Some(Child::Node(node)) => {
+                    write!(f, "(index: {i:?}), node={:?})", node)?;
+                }
                 Some(Child::AddressWithHash(addr, hash)) => write!(
                     f,
                     "(index: {i:?}), address={addr:?}, hash={:?})",
@@ -107,14 +122,10 @@ impl Debug for BranchNode {
             }
         }
 
-        write!(
-            f,
-            " v={}]",
-            match &self.value {
-                Some(v) => hex::encode(&**v),
-                None => "nil".to_string(),
-            }
-        )
+        if let Some(v) = &self.value {
+            write!(f, " v={}", hex::encode(v))?;
+        }
+        Ok(())
     }
 }
 
@@ -152,6 +163,7 @@ impl BranchNode {
             #[allow(clippy::indexing_slicing)]
             |(i, child)| match child {
                 None => None,
+                Some(Child::HashedNode(_, hash)) => Some((i, hash)),
                 Some(Child::Node(_)) => unreachable!("TODO make unreachable"),
                 Some(Child::AddressWithHash(_, hash)) => Some((i, hash)),
             },

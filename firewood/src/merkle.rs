@@ -124,6 +124,9 @@ fn get_helper<T: TrieReader>(
                 {
                     None => Ok(None),
                     Some(Child::Node(ref child)) => get_helper(nodestore, child, remaining_key),
+                    Some(Child::HashedNode(ref child, _)) => {
+                        get_helper(nodestore, child, remaining_key)
+                    }
                     Some(Child::AddressWithHash(addr, _)) => {
                         let child = nodestore.read_node(*addr)?;
                         get_helper(nodestore, &child, remaining_key)
@@ -366,7 +369,9 @@ impl<T: HashedNodeReader> Merkle<T> {
                 for (childidx, child) in b.children.iter().enumerate() {
                     let (child_addr, child_hash) = match child {
                         None => continue,
-                        Some(Child::Node(_)) => continue, // TODO
+                        Some(Child::Node(_)) | Some(Child::HashedNode(_, _)) => {
+                            unreachable!("nodes on disk cannot reference in-memory nodes")
+                        }
                         Some(Child::AddressWithHash(addr, hash)) => (*addr, Some(hash)),
                     };
 
@@ -524,6 +529,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                 return Ok(node);
                             }
                             Some(Child::Node(child)) => child,
+                            Some(Child::HashedNode(child, _)) => (*child).clone(),
                             Some(Child::AddressWithHash(addr, _)) => {
                                 self.nodestore.read_for_update(addr)?
                             }
@@ -667,6 +673,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                             // The branch's only child becomes the root of this subtrie.
                             let mut child = match child {
                                 Child::Node(ref mut child_node) => std::mem::take(child_node),
+                                Child::HashedNode(child_node, _) => (**child_node).clone(),
                                 Child::AddressWithHash(addr, _) => {
                                     self.nodestore.read_for_update(*addr)?
                                 }
@@ -737,6 +744,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                 return Ok((Some(node), None));
                             }
                             Some(Child::Node(node)) => node,
+                            Some(Child::HashedNode(node, _)) => (*node).clone(),
                             Some(Child::AddressWithHash(addr, _)) => {
                                 self.nodestore.read_for_update(addr)?
                             }
@@ -785,6 +793,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                     partial_path: Path::new(),
                                 }),
                             ),
+                            Child::HashedNode(child_node, _) => (**child_node).clone(),
+
                             Child::AddressWithHash(addr, _) => {
                                 self.nodestore.read_for_update(*addr)?
                             }
