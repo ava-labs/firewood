@@ -216,7 +216,7 @@ impl Node {
     /// The remaining bytes are in the following order:
     ///   - The partial path, possibly preceeded by the length if it is longer than 3 nibbles (varint encoded)
     ///   - The number of children, if the branch factor is 256
-    ///   - The children. If the number of children == [Self::MAX_CHILDREN], then the children are just
+    ///   - The children. If the number of children == [BranchNode::MAX_CHILDREN], then the children are just
     ///     addresses with hashes. Otherwise, they are offset, address, hash tuples.
     ///
     /// For a leaf:

@@ -167,7 +167,6 @@ mod test {
 
     #[test]
     fn basic_reader_test() {
-
         let mut tf = NamedTempFile::new().unwrap();
         let path = tf.path().to_path_buf();
         let output = tf.as_file_mut();
@@ -207,14 +206,13 @@ mod test {
 
     #[test]
     fn big_file() {
-       
         let mut tf = NamedTempFile::new().unwrap();
         let path = tf.path().to_path_buf();
         let output = tf.as_file_mut();
         for _ in 0..1000 {
             write!(output, "hello world").unwrap();
         }
-        
+
         let fb = FileBacked::new(
             path,
             NonZero::new(10).unwrap(),
