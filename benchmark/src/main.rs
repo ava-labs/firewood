@@ -16,8 +16,10 @@ use firewood::logger::trace;
 use log::LevelFilter;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use metrics_util::MetricKindMask;
+use pretty_duration::pretty_duration;
 use sha2::{Digest, Sha256};
 use std::error::Error;
+use std::fmt::{Display, Formatter};
 use std::net::{Ipv6Addr, SocketAddr};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -93,7 +95,7 @@ enum TestName {
 }
 
 trait TestRunner {
-    async fn run(&self, db: &Db, args: &Args) -> Result<(), Box<dyn Error>>;
+    async fn run(&self, db: &Db, args: &Args) -> Result<Stats, Box<dyn Error>>;
 
     fn generate_inserts(
         start: u64,
@@ -171,28 +173,46 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await
         .expect("db initiation should succeed");
 
-    match args.test_name {
+    let stats = match args.test_name {
         TestName::Create => {
             let runner = create::Create;
-            runner.run(&db, &args).await?;
+            runner.run(&db, &args).await?
         }
         TestName::TenKRandom => {
             let runner = tenkrandom::TenKRandom;
-            runner.run(&db, &args).await?;
+            runner.run(&db, &args).await?
         }
         TestName::Zipf(_) => {
             let runner = zipf::Zipf;
-            runner.run(&db, &args).await?;
+            runner.run(&db, &args).await?
         }
         TestName::Single => {
             let runner = single::Single;
-            runner.run(&db, &args).await?;
+            runner.run(&db, &args).await?
         }
-    }
+    };
 
     if args.stats_dump {
         println!("{}", prometheus_handle.render());
     }
 
+    println!("{stats}");
     Ok(())
+}
+
+struct Stats {
+    total_ops: u64,
+    total_time: Duration,
+}
+
+impl Display for Stats {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "ops: {}, elapsed: {}\nops/sec: {}",
+            self.total_ops,
+            pretty_duration(&self.total_time, None),
+            self.total_ops as f64 / self.total_time.as_secs_f64()
+        )
+    }
 }

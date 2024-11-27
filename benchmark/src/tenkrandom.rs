@@ -8,19 +8,20 @@ use firewood::db::{BatchOp, Db};
 use firewood::logger::debug;
 use firewood::v2::api::{Db as _, Proposal as _};
 
-use crate::{Args, TestRunner};
+use crate::{Args, Stats, TestRunner};
 use sha2::{Digest, Sha256};
 
 #[derive(Clone, Default)]
 pub struct TenKRandom;
 
 impl TestRunner for TenKRandom {
-    async fn run(&self, db: &Db, args: &Args) -> Result<(), Box<dyn Error>> {
+    async fn run(&self, db: &Db, args: &Args) -> Result<Stats, Box<dyn Error>> {
         let mut low = 0;
         let mut high = args.number_of_batches * args.batch_size;
         let twenty_five_pct = args.batch_size / 4;
 
         let start = Instant::now();
+        let mut batch_id = 0;
 
         while start.elapsed().as_secs() / 60 < args.global_opts.duration_minutes {
             let batch: Vec<BatchOp<_, _>> = Self::generate_inserts(high, twenty_five_pct)
@@ -31,8 +32,12 @@ impl TestRunner for TenKRandom {
             proposal.commit().await?;
             low += twenty_five_pct;
             high += twenty_five_pct;
+            batch_id += 1;
         }
-        Ok(())
+        Ok(Stats {
+            total_ops: batch_id,
+            total_time: start.elapsed(),
+        })
     }
 }
 fn generate_updates(

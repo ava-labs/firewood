@@ -10,13 +10,13 @@ use log::info;
 
 use pretty_duration::pretty_duration;
 
-use crate::{Args, TestRunner};
+use crate::{Args, Stats, TestRunner};
 
 #[derive(Clone)]
 pub struct Create;
 
 impl TestRunner for Create {
-    async fn run(&self, db: &Db, args: &Args) -> Result<(), Box<dyn Error>> {
+    async fn run(&self, db: &Db, args: &Args) -> Result<Stats, Box<dyn Error>> {
         let keys = args.batch_size;
         let start = Instant::now();
 
@@ -33,6 +33,9 @@ impl TestRunner for Create {
             pretty_duration(&duration, None)
         );
 
-        Ok(())
+        Ok(Stats {
+            total_ops: args.number_of_batches * keys,
+            total_time: duration,
+        })
     }
 }

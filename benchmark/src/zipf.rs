@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::TestRunner;
+use crate::{Stats, TestRunner};
 use firewood::db::{BatchOp, Db};
 use firewood::v2::api::{Db as _, Proposal as _};
 use log::{debug, trace};
@@ -23,7 +23,7 @@ pub struct Args {
 pub struct Zipf;
 
 impl TestRunner for Zipf {
-    async fn run(&self, db: &Db, args: &crate::Args) -> Result<(), Box<dyn Error>> {
+    async fn run(&self, db: &Db, args: &crate::Args) -> Result<Stats, Box<dyn Error>> {
         let exponent = if let crate::TestName::Zipf(args) = &args.test_name {
             args.exponent
         } else {
@@ -65,11 +65,14 @@ impl TestRunner for Zipf {
             }
             batch_id += 1;
         }
-        Ok(())
+        Ok(Stats {
+            total_ops: batch_id,
+            total_time: start.elapsed(),
+        })
     }
 }
 fn generate_updates(
-    batch_id: u32,
+    batch_id: u64,
     batch_size: usize,
     zipf: &zipf::ZipfDistribution,
 ) -> impl Iterator<Item = BatchOp<Vec<u8>, Vec<u8>>> {

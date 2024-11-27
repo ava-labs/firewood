@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::TestRunner;
+use crate::{Stats, TestRunner};
 use firewood::db::{BatchOp, Db};
 use firewood::v2::api::{Db as _, Proposal as _};
 use log::debug;
@@ -14,7 +14,7 @@ use std::time::Instant;
 pub struct Single;
 
 impl TestRunner for Single {
-    async fn run(&self, db: &Db, args: &crate::Args) -> Result<(), Box<dyn Error>> {
+    async fn run(&self, db: &Db, args: &crate::Args) -> Result<Stats, Box<dyn Error>> {
         let start = Instant::now();
         let inner_keys: Vec<_> = (0..args.batch_size)
             .map(|i| Sha256::digest(i.to_ne_bytes()))
@@ -41,6 +41,9 @@ impl TestRunner for Single {
             }
             batch_id += 1;
         }
-        Ok(())
+        Ok(Stats {
+            total_ops: batch_id,
+            total_time: start.elapsed(),
+        })
     }
 }
