@@ -3,19 +3,22 @@
 Releasing firewood is straightforward and can be done entirely in CI. 
 
 Firewood is made up of several sub-projects in a workspace. Each project is in
-its own crate and has an independent version. 
+its own crate and has an independent version.
+
 * firewood
-* growth-ring
-* libaio
-* shale
+* storage
+* fwdctl
+* grpc-testtool
 
 The first step in drafting a release is ensuring all crates within the firewood
 project are using the version of the new release.  There is a utility to ensure
 all versions are updated simultaneously in `cargo-workspace-version`. To use it
-to update to 0.0.4, for example:
+to update to 0.0.5, for example:
 
-    $ cargo install cargo-workspace-version $ cargo workspace-version update
-v0.0.5
+```sh
+   cargo install cargo-workspace-version
+   cargo workspace-version update v0.0.5
+```
 
 See the [source code](https://github.com/ava-labs/cargo-workspace-version) for
 more information on the tool.
