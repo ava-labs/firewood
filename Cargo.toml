@@ -3,7 +3,7 @@ members = [
   "firewood",
   "fwdctl",
   "storage",
-  "grpc-testtool", "benchmark",
+  "grpc-testtool", "benchmark", "ffi",
 ]
 resolver = "2"
 

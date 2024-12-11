@@ -18,6 +18,7 @@
       "CODEOWNERS",
       "CONTRIBUTING.md",
       "benchmark/**",
+      "ffi/**",
     ],
     "license": "./.github/license-header.txt"
   },
