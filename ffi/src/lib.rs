@@ -1,10 +1,13 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::{fmt::{self, Display, Formatter}, sync::OnceLock};
+use std::fmt::{self, Display, Formatter};
+use std::sync::OnceLock;
 
-use firewood::{db::{BatchOp, Db, DbConfig, DbViewSync as _}, manager::RevisionManagerConfig};
+use firewood::db::{BatchOp as DbBatchOp, Db, DbConfig, DbViewSync as _};
+use firewood::manager::RevisionManagerConfig;
 
+/// cbindgen:ignore
 static DB: OnceLock<Db> = OnceLock::new();
 
 #[derive(Debug)]
@@ -20,28 +23,75 @@ impl Display for Value {
     }
 }
 
-
-
 #[no_mangle]
 #[allow(unused_variables)]
 pub extern "C" fn get(key: Value) -> Value {
     // sample data
     let db = DB.get_or_init(get_db);
-    let root = db.root_hash_sync().expect("shoulds succeed").expect("root hash should exist");
+    let root = db
+        .root_hash_sync()
+        .expect("shoulds succeed")
+        .expect("root hash should exist");
     let rev = db.revision_sync(root).expect("revision should exist");
-    let value = rev.val_sync(key.as_slice()).expect("get should succeed").unwrap_or_default();
+    let value = rev
+        .val_sync(key.as_slice())
+        .expect("get should succeed")
+        .unwrap_or_default();
     value.into()
 }
-
 #[repr(C)]
 #[allow(unused)]
+#[no_mangle]
 pub struct KeyValue {
     key: Value,
     value: Value,
 }
 
+/// Puts the given key-value pairs into the database.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers.
+/// The caller must ensure that `values` is a valid pointer and that it points to an array of `KeyValue` structs of length `nkeys`.
 #[no_mangle]
-pub extern "C" fn put() {}
+pub unsafe extern "C" fn batch(nkeys: usize, values: *const KeyValue) {
+    let db = DB.get_or_init(get_db);
+    let mut batch = Vec::with_capacity(nkeys);
+    for i in 0..nkeys {
+        let kv = unsafe { values.add(i).as_ref() }.expect("values should be non-null");
+        if kv.value.len == 0 {
+            batch.push(DbBatchOp::Delete {
+                key: kv.key.as_slice(),
+            });
+            continue;
+        }
+        batch.push(DbBatchOp::Put {
+            key: kv.key.as_slice(),
+            value: kv.value.as_slice(),
+        });
+    }
+    let proposal = db.propose_sync(batch).expect("proposal should succeed");
+    proposal.commit_sync().expect("commit should succeed");
+}
+
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers.
+/// The caller must ensure that `values` is a valid pointer and that it points to an array of `KeyValue` structs of length `nkeys`.
+#[no_mangle]
+pub unsafe extern "C" fn put(nkeys: usize, values: *const KeyValue) {
+    let db = DB.get_or_init(get_db);
+    let mut batch = Vec::with_capacity(nkeys);
+    for i in 0..nkeys {
+        let kv = unsafe { values.add(i).as_ref() }.expect("values should be non-null");
+        batch.push(DbBatchOp::Put {
+            key: kv.key.as_slice(),
+            value: kv.value.as_slice(),
+        });
+    }
+    let proposal = db.propose_sync(batch).expect("proposal should succeed");
+    proposal.commit_sync().expect("commit should succeed");
+}
 
 impl Value {
     pub fn as_slice(&self) -> &[u8] {
@@ -69,7 +119,10 @@ impl From<Box<[u8]>> for Value {
 #[no_mangle]
 pub extern "C" fn free_value(value: Value) {
     let recreated_box = unsafe {
-        Box::from_raw(std::slice::from_raw_parts_mut(value.data as *mut u8, value.len))
+        Box::from_raw(std::slice::from_raw_parts_mut(
+            value.data as *mut u8,
+            value.len,
+        ))
     };
     drop(recreated_box);
 }
@@ -84,20 +137,13 @@ fn get_db() -> Db {
     const REVISIONS: usize = 100;
 
     let mgrcfg = RevisionManagerConfig::builder()
-    .node_cache_size(CACHE_SIZE.try_into().expect("constant will always be non-zero"))
-    .max_revisions(REVISIONS)
-    .build();
-let cfg = DbConfig::builder()
-    .truncate(true)
-    .manager(mgrcfg)
-    .build();
-let db = Db::new_sync("rev_db", cfg).expect("db initialization should succeed");
-let proposal = db.propose_sync(vec![
-     BatchOp::Put {
-        key: b"abc",
-        value: b"def",
-    }]
-).expect("put should succeed");
-proposal.commit_sync().expect("commit should succeed");
-db
+        .node_cache_size(
+            CACHE_SIZE
+                .try_into()
+                .expect("constant will always be non-zero"),
+        )
+        .max_revisions(REVISIONS)
+        .build();
+    let cfg = DbConfig::builder().truncate(true).manager(mgrcfg).build();
+    Db::new_sync("rev_db", cfg).expect("db initialization should succeed")
 }

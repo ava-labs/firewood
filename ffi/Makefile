@@ -1,5 +1,5 @@
-dbtest: dbtest.go firewood.h
-	go build dbtest.go
+../target/release/libfirewood.so: src/lib.rs firewood.h
+	cargo build --release
 
 firewood.h: src/lib.rs
 	if [ ! -x "$$(which cbindgen)" ]; then cargo install --force cbindgen; fi
@@ -7,4 +7,4 @@ firewood.h: src/lib.rs
 	cbindgen -o "$@"
 
 clean:
-	rm firewood.h dbtest
+	rm firewood.h 
