@@ -24,14 +24,16 @@ impl Display for Value {
 }
 
 #[no_mangle]
-#[allow(unused_variables)]
 pub extern "C" fn get(key: Value) -> Value {
-    // sample data
     let db = DB.get_or_init(get_db);
     let root = db
-        .root_hash_sync()
-        .expect("shoulds succeed")
-        .expect("root hash should exist");
+        .root_hash_sync();
+    let Ok(Some(root)) = root else {
+        return Value {
+            len: 0,
+            data: std::ptr::null(),
+        }
+    };
     let rev = db.revision_sync(root).expect("revision should exist");
     let value = rev
         .val_sync(key.as_slice())
@@ -136,6 +138,7 @@ fn get_db() -> Db {
     const CACHE_SIZE: usize = 1000000;
     const REVISIONS: usize = 100;
 
+    println!("db initialized (1)");
     let mgrcfg = RevisionManagerConfig::builder()
         .node_cache_size(
             CACHE_SIZE

@@ -1,5 +1,5 @@
 [package]
-name = "ffi"
+name = "firewood-ffi"
 version = "0.1.0"
 edition = "2021"
 
@@ -9,3 +9,6 @@ crate-type = ["staticlib"]
 [dependencies]
 libc = "0.2.2"
 firewood = { path = "../firewood" }
+
+[build-dependencies]
+cbindgen = "0.27.0"

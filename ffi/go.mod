@@ -1,3 +1,3 @@
-module avalabs.org/ffi/v2
+module github.com/ava-labs/firewood/ffi/v2
 
-go 1.23.4
+go 1.22.3
