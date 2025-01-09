@@ -30,10 +30,29 @@ typedef struct KeyValue {
 struct Value batch(size_t nkeys,
                    const struct KeyValue *values);
 
-void free_value(struct Value value);
+/**
+ * Frees the memory associated with a `Value`.
+ *
+ * # Safety
+ *
+ * This function is unsafe because it dereferences raw pointers.
+ * The caller must ensure that `value` is a valid pointer.
+ */
+void free_value(const struct Value *value);
 
+/**
+ * Gets the value associated with the given key from the database.
+ * Don't forget to call `free_value` to free the memory associated with the returned `Value`.
+ */
 struct Value get(struct Value key);
 
+/**
+ * Get the root hash of the latest version of the database
+ * Don't forget to call `free_value` to free the memory associated with the returned `Value`.
+ */
 struct Value root_hash(void);
 
+/**
+ * Setup the global database handle. You don't need to call this fuction; it is called automatically by the library.
+ */
 void setup_globals(void);

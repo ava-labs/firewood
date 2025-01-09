@@ -23,6 +23,8 @@ impl Display for Value {
     }
 }
 
+/// Gets the value associated with the given key from the database.
+/// Don't forget to call `free_value` to free the memory associated with the returned `Value`.
 #[no_mangle]
 pub extern "C" fn get(key: Value) -> Value {
     let db = DB.get_or_init(get_db);
@@ -80,6 +82,9 @@ pub unsafe extern "C" fn batch(nkeys: usize, values: *const KeyValue) -> Value {
     hash(db)
 }
 
+
+/// Get the root hash of the latest version of the database
+/// Don't forget to call `free_value` to free the memory associated with the returned `Value`.
 #[no_mangle]
 pub extern "C" fn root_hash() -> Value {
     let db = DB.get_or_init(get_db);
@@ -103,10 +108,8 @@ impl Value {
 
 impl From<&[u8]> for Value {
     fn from(data: &[u8]) -> Self {
-        Value {
-            len: data.len(),
-            data: data.as_ptr(),
-        }
+        let boxed: Box<[u8]> = data.into();
+        boxed.into()
     }
 }
 
@@ -118,17 +121,27 @@ impl From<Box<[u8]>> for Value {
     }
 }
 
+/// Frees the memory associated with a `Value`.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers.
+/// The caller must ensure that `value` is a valid pointer.
 #[no_mangle]
-pub extern "C" fn free_value(value: Value) {
+pub unsafe extern "C" fn free_value(value: *const Value) {
+    if (*value).len == 0 {
+        return;
+    }
     let recreated_box = unsafe {
         Box::from_raw(std::slice::from_raw_parts_mut(
-            value.data as *mut u8,
-            value.len,
+            (*value).data as *mut u8,
+            (*value).len,
         ))
     };
     drop(recreated_box);
 }
 
+/// Setup the global database handle. You don't need to call this fuction; it is called automatically by the library.
 #[no_mangle]
 pub extern "C" fn setup_globals() {
     DB.set(get_db()).expect("db should be set once");

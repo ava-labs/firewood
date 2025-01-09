@@ -36,7 +36,7 @@ func (f *Firewood) Batch(ops []KeyValue) []byte {
 	ptr := (*C.struct_KeyValue)(unsafe.Pointer(&ffi_ops[0]))
 	hash := C.batch(C.size_t(len(ops)), ptr)
 	hash_bytes := C.GoBytes(unsafe.Pointer(hash.data), C.int(hash.len))
-	C.free_value(hash)
+	C.free_value(&hash)
 	return hash_bytes
 }
 
@@ -47,7 +47,7 @@ func (f *Firewood) Get(input_key []byte) []byte {
 
 	value := C.get(ffi_key)
 	ffi_bytes := C.GoBytes(unsafe.Pointer(value.data), C.int(value.len))
-	C.free_value(value)
+	C.free_value(&value)
 	return ffi_bytes
 }
 func make_value(pin *runtime.Pinner, data []byte) C.struct_Value {
@@ -56,3 +56,8 @@ func make_value(pin *runtime.Pinner, data []byte) C.struct_Value {
 	return C.struct_Value{C.size_t(len(data)), ptr}
 }
 
+func (f *Firewood) RootHash() []byte {
+	hash := C.root_hash()
+	hash_bytes := C.GoBytes(unsafe.Pointer(hash.data), C.int(hash.len))
+	return hash_bytes
+}

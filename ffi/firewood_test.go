@@ -31,4 +31,14 @@ func TestInsert100(t *testing.T) {
 			t.Errorf("expected value%d, got %s", i, value)
 		}
 	}
+
+	hash := f.RootHash()
+	if len(hash) != 32 {
+		t.Errorf("expected 32 bytes, got %d", len(hash))
+	}
+
+	// we know the hash starts with 0xe
+	if hash[0] != 0xe {
+		t.Errorf("expected 0xe, got %x", hash[0])
+	}
 }
