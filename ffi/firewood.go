@@ -22,7 +22,7 @@ type KeyValue struct {
 	Value []byte
 }
 
-func (f *Firewood) Batch(ops []KeyValue) {
+func (f *Firewood) Batch(ops []KeyValue) []byte {
 	var pin runtime.Pinner
 	defer pin.Unpin()
 
@@ -34,8 +34,10 @@ func (f *Firewood) Batch(ops []KeyValue) {
 		}
 	}
 	ptr := (*C.struct_KeyValue)(unsafe.Pointer(&ffi_ops[0]))
-	C.batch(C.size_t(len(ops)), ptr)
-
+	hash := C.batch(C.size_t(len(ops)), ptr)
+	hash_bytes := C.GoBytes(unsafe.Pointer(hash.data), C.int(hash.len))
+	C.free_value(hash)
+	return hash_bytes
 }
 
 func (f *Firewood) Get(input_key []byte) []byte {
@@ -53,3 +55,4 @@ func make_value(pin *runtime.Pinner, data []byte) C.struct_Value {
 	pin.Pin(ptr)
 	return C.struct_Value{C.size_t(len(data)), ptr}
 }
+

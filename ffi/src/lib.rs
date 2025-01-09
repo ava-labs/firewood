@@ -26,13 +26,12 @@ impl Display for Value {
 #[no_mangle]
 pub extern "C" fn get(key: Value) -> Value {
     let db = DB.get_or_init(get_db);
-    let root = db
-        .root_hash_sync();
+    let root = db.root_hash_sync();
     let Ok(Some(root)) = root else {
         return Value {
             len: 0,
             data: std::ptr::null(),
-        }
+        };
     };
     let rev = db.revision_sync(root).expect("revision should exist");
     let value = rev
@@ -51,12 +50,16 @@ pub struct KeyValue {
 
 /// Puts the given key-value pairs into the database.
 ///
+/// # Returns
+///
+/// The current root hash of the database, in Value form.
+///
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers.
 /// The caller must ensure that `values` is a valid pointer and that it points to an array of `KeyValue` structs of length `nkeys`.
 #[no_mangle]
-pub unsafe extern "C" fn batch(nkeys: usize, values: *const KeyValue) {
+pub unsafe extern "C" fn batch(nkeys: usize, values: *const KeyValue) -> Value {
     let db = DB.get_or_init(get_db);
     let mut batch = Vec::with_capacity(nkeys);
     for i in 0..nkeys {
@@ -74,25 +77,22 @@ pub unsafe extern "C" fn batch(nkeys: usize, values: *const KeyValue) {
     }
     let proposal = db.propose_sync(batch).expect("proposal should succeed");
     proposal.commit_sync().expect("commit should succeed");
+    hash(db)
 }
 
-/// # Safety
-///
-/// This function is unsafe because it dereferences raw pointers.
-/// The caller must ensure that `values` is a valid pointer and that it points to an array of `KeyValue` structs of length `nkeys`.
 #[no_mangle]
-pub unsafe extern "C" fn put(nkeys: usize, values: *const KeyValue) {
+pub extern "C" fn root_hash() -> Value {
     let db = DB.get_or_init(get_db);
-    let mut batch = Vec::with_capacity(nkeys);
-    for i in 0..nkeys {
-        let kv = unsafe { values.add(i).as_ref() }.expect("values should be non-null");
-        batch.push(DbBatchOp::Put {
-            key: kv.key.as_slice(),
-            value: kv.value.as_slice(),
-        });
-    }
-    let proposal = db.propose_sync(batch).expect("proposal should succeed");
-    proposal.commit_sync().expect("commit should succeed");
+    hash(db)
+}
+
+/// cbindgen::ignore
+///
+/// This function is not exposed to the C API.
+/// It returns the current hash of an already-fetched database handle
+fn hash(db: &Db) -> Value {
+    let root = db.root_hash_sync().unwrap_or_default().unwrap_or_default();
+    Value::from(root.as_slice())
 }
 
 impl Value {

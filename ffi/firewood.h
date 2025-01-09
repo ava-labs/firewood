@@ -18,25 +18,22 @@ typedef struct KeyValue {
 /**
  * Puts the given key-value pairs into the database.
  *
+ * # Returns
+ *
+ * The current root hash of the database, in Value form.
+ *
  * # Safety
  *
  * This function is unsafe because it dereferences raw pointers.
  * The caller must ensure that `values` is a valid pointer and that it points to an array of `KeyValue` structs of length `nkeys`.
  */
-void batch(size_t nkeys,
-           const struct KeyValue *values);
+struct Value batch(size_t nkeys,
+                   const struct KeyValue *values);
 
 void free_value(struct Value value);
 
 struct Value get(struct Value key);
 
-/**
- * # Safety
- *
- * This function is unsafe because it dereferences raw pointers.
- * The caller must ensure that `values` is a valid pointer and that it points to an array of `KeyValue` structs of length `nkeys`.
- */
-void put(size_t nkeys,
-         const struct KeyValue *values);
+struct Value root_hash(void);
 
 void setup_globals(void);
