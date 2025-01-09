@@ -10,6 +10,13 @@ import (
 )
 
 type Firewood struct {
+	Db *C.void
+}
+
+func NewFirewood(path string) Firewood {
+	db := C.create_db(C.CString(path), C.size_t(1000000), C.size_t(100))
+	ptr := (*C.void)(db)
+	return Firewood{Db: ptr}
 }
 
 const (
@@ -34,7 +41,7 @@ func (f *Firewood) Batch(ops []KeyValue) []byte {
 		}
 	}
 	ptr := (*C.struct_KeyValue)(unsafe.Pointer(&ffi_ops[0]))
-	hash := C.batch(C.size_t(len(ops)), ptr)
+	hash := C.batch(unsafe.Pointer(f.Db), C.size_t(len(ops)), ptr)
 	hash_bytes := C.GoBytes(unsafe.Pointer(hash.data), C.int(hash.len))
 	C.free_value(&hash)
 	return hash_bytes
@@ -45,7 +52,7 @@ func (f *Firewood) Get(input_key []byte) []byte {
 	defer pin.Unpin()
 	ffi_key := make_value(&pin, input_key)
 
-	value := C.get(ffi_key)
+	value := C.get(unsafe.Pointer(f.Db), ffi_key)
 	ffi_bytes := C.GoBytes(unsafe.Pointer(value.data), C.int(value.len))
 	C.free_value(&value)
 	return ffi_bytes
@@ -57,7 +64,7 @@ func make_value(pin *runtime.Pinner, data []byte) C.struct_Value {
 }
 
 func (f *Firewood) RootHash() []byte {
-	hash := C.root_hash()
+	hash := C.root_hash(unsafe.Pointer(f.Db))
 	hash_bytes := C.GoBytes(unsafe.Pointer(hash.data), C.int(hash.len))
 	return hash_bytes
 }

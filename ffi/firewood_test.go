@@ -6,7 +6,7 @@ import (
 )
 
 func TestInsert(t *testing.T) {
-	var f Firewood
+	var f Firewood = NewFirewood("test.db")
 	f.Batch([]KeyValue{
 		{[]byte("abc"), []byte("def")},
 	})
@@ -18,7 +18,7 @@ func TestInsert(t *testing.T) {
 }
 
 func TestInsert100(t *testing.T) {
-	var f Firewood
+	var f Firewood = NewFirewood("test.db")
 	ops := make([]KeyValue, 100)
 	for i := 0; i < 100; i++ {
 		ops[i] = KeyValue{[]byte("key" + strconv.Itoa(i)), []byte("value" + strconv.Itoa(i))}
@@ -37,8 +37,8 @@ func TestInsert100(t *testing.T) {
 		t.Errorf("expected 32 bytes, got %d", len(hash))
 	}
 
-	// we know the hash starts with 0xe
-	if hash[0] != 0xe {
-		t.Errorf("expected 0xe, got %x", hash[0])
+	// we know the hash starts with 0xf8
+	if hash[0] != 0xf8 {
+		t.Errorf("expected 0xf8, got %x", hash[0])
 	}
 }

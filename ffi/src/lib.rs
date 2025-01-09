@@ -1,14 +1,13 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use std::ffi::{CStr, OsStr};
 use std::fmt::{self, Display, Formatter};
-use std::sync::OnceLock;
+use std::os::unix::ffi::OsStrExt as _;
+use std::path::Path;
 
 use firewood::db::{BatchOp as DbBatchOp, Db, DbConfig, DbViewSync as _};
 use firewood::manager::RevisionManagerConfig;
-
-/// cbindgen:ignore
-static DB: OnceLock<Db> = OnceLock::new();
 
 #[derive(Debug)]
 #[repr(C)]
@@ -24,10 +23,20 @@ impl Display for Value {
 }
 
 /// Gets the value associated with the given key from the database.
-/// Don't forget to call `free_value` to free the memory associated with the returned `Value`.
+///
+/// # Arguments
+///
+/// * `db` - The database handle returned by `open_db`
+///
+/// # Safety
+///
+/// The caller must:
+///  * ensure that `db` is a valid pointer returned by `open_db`
+///  * ensure that `key` is a valid pointer to a `Value` struct
+///  * call `free_value` to free the memory associated with the returned `Value`
 #[no_mangle]
-pub extern "C" fn get(key: Value) -> Value {
-    let db = DB.get_or_init(get_db);
+pub unsafe extern "C" fn get(db: *mut Db, key: Value) -> Value {
+    let db = unsafe { db.as_ref() }.expect("db should be non-null");
     let root = db.root_hash_sync();
     let Ok(Some(root)) = root else {
         return Value {
@@ -42,6 +51,8 @@ pub extern "C" fn get(key: Value) -> Value {
         .unwrap_or_default();
     value.into()
 }
+
+/// A `KeyValue` struct that represents a key-value pair in the database.
 #[repr(C)]
 #[allow(unused)]
 #[no_mangle]
@@ -59,10 +70,14 @@ pub struct KeyValue {
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers.
-/// The caller must ensure that `values` is a valid pointer and that it points to an array of `KeyValue` structs of length `nkeys`.
+/// The caller must:
+///  * ensure that `db` is a valid pointer returned by `open_db`
+///  * ensure that `values` is a valid pointer and that it points to an array of `KeyValue` structs of length `nkeys`.
+///  * ensure that the `Value` fields of the `KeyValue` structs are valid pointers.
+///
 #[no_mangle]
-pub unsafe extern "C" fn batch(nkeys: usize, values: *const KeyValue) -> Value {
-    let db = DB.get_or_init(get_db);
+pub unsafe extern "C" fn batch(db: *mut Db, nkeys: usize, values: *const KeyValue) -> Value {
+    let db = unsafe { db.as_ref() }.expect("db should be non-null");
     let mut batch = Vec::with_capacity(nkeys);
     for i in 0..nkeys {
         let kv = unsafe { values.add(i).as_ref() }.expect("values should be non-null");
@@ -82,12 +97,16 @@ pub unsafe extern "C" fn batch(nkeys: usize, values: *const KeyValue) -> Value {
     hash(db)
 }
 
-
 /// Get the root hash of the latest version of the database
 /// Don't forget to call `free_value` to free the memory associated with the returned `Value`.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers.
+/// The caller must ensure that `db` is a valid pointer returned by `open_db`
 #[no_mangle]
-pub extern "C" fn root_hash() -> Value {
-    let db = DB.get_or_init(get_db);
+pub unsafe extern "C" fn root_hash(db: *mut Db) -> Value {
+    let db = unsafe { db.as_ref() }.expect("db should be non-null");
     hash(db)
 }
 
@@ -141,25 +160,100 @@ pub unsafe extern "C" fn free_value(value: *const Value) {
     drop(recreated_box);
 }
 
-/// Setup the global database handle. You don't need to call this fuction; it is called automatically by the library.
+/// Create a database with the given cache size and maximum number of revisions
+///
+/// # Arguments
+///
+/// * `path` - The path to the database file, which will be overwritten
+/// * `cache_size` - The size of the node cache, panics if <= 0
+/// * `revisions` - The maximum number of revisions to keep; firewood currently requires this to be at least 2
+///
+/// # Returns
+///
+/// A database handle, or panics if it cannot be created
+///
+/// # Safety
+///
+/// This function uses raw pointers so it is unsafe.
+/// It is the caller's responsibility to ensure that path is a valid pointer to a null-terminated string.
+/// The caller must also ensure that the cache size is greater than 0 and that the number of revisions is at least 2.
+/// The caller must call `close` to free the memory associated with the returned database handle.
+///
 #[no_mangle]
-pub extern "C" fn setup_globals() {
-    DB.set(get_db()).expect("db should be set once");
+pub unsafe extern "C" fn create_db(
+    path: *const std::ffi::c_char,
+    cache_size: usize,
+    revisions: usize,
+) -> *mut Db {
+    let cfg = DbConfig::builder()
+        .truncate(true)
+        .manager(manager_config(cache_size, revisions))
+        .build();
+    common_create(path, cfg)
 }
 
-fn get_db() -> Db {
-    const CACHE_SIZE: usize = 1000000;
-    const REVISIONS: usize = 100;
-
-    println!("db initialized (1)");
-    let mgrcfg = RevisionManagerConfig::builder()
-        .node_cache_size(
-            CACHE_SIZE
-                .try_into()
-                .expect("constant will always be non-zero"),
-        )
-        .max_revisions(REVISIONS)
+/// Open a database with the given cache size and maximum number of revisions
+///
+/// # Arguments
+///
+/// * `path` - The path to the database file, which should exist
+/// * `cache_size` - The size of the node cache, panics if <= 0
+/// * `revisions` - The maximum number of revisions to keep; firewood currently requires this to be at least 2
+///
+/// # Returns
+///
+/// A database handle, or panics if it cannot be created
+///
+/// # Safety
+///
+/// This function uses raw pointers so it is unsafe.
+/// It is the caller's responsibility to ensure that path is a valid pointer to a null-terminated string.
+/// The caller must also ensure that the cache size is greater than 0 and that the number of revisions is at least 2.
+/// The caller must call `close` to free the memory associated with the returned database handle.
+///
+#[no_mangle]
+pub unsafe extern "C" fn open_db(
+    path: *const std::ffi::c_char,
+    cache_size: usize,
+    revisions: usize,
+) -> *mut Db {
+    let cfg = DbConfig::builder()
+        .truncate(false)
+        .manager(manager_config(cache_size, revisions))
         .build();
-    let cfg = DbConfig::builder().truncate(true).manager(mgrcfg).build();
-    Db::new_sync("rev_db", cfg).expect("db initialization should succeed")
+    common_create(path, cfg)
+}
+
+unsafe fn common_create(path: *const std::ffi::c_char, cfg: DbConfig) -> *mut Db {
+    let path = unsafe { CStr::from_ptr(path) };
+    let path: &Path = OsStr::from_bytes(path.to_bytes()).as_ref();
+    Box::into_raw(Box::new(
+        Db::new_sync(path, cfg).expect("db initialization should succeed"),
+    ))
+}
+
+fn manager_config(cache_size: usize, revisions: usize) -> RevisionManagerConfig {
+    RevisionManagerConfig::builder()
+        .node_cache_size(
+            cache_size
+                .try_into()
+                .expect("cache size should always be non-zero"),
+        )
+        .max_revisions(revisions)
+        .build()
+}
+
+/// Close iand free the memory for a database handle
+///
+/// # Safety
+///
+/// This function uses raw pointers so it is unsafe.
+/// It is the caller's responsibility to ensure that the database handle is valid.
+/// Using the db after calling this function is undefined behavior
+///
+/// # Arguments
+///
+/// * `db` - The database handle to close, previously returned from a call to open_db()
+pub unsafe extern "C" fn close(db: *mut Db) {
+    let _ = Box::from_raw(db);
 }
