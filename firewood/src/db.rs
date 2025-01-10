@@ -161,6 +161,7 @@ where
         Ok(self.manager.read().expect("poisoned lock").all_hashes())
     }
 
+    #[fastrace::trace(short_name = true)]
     async fn propose<'p, K: KeyType, V: ValueType>(
         &'p self,
         batch: api::Batch<K, V>,
@@ -171,6 +172,7 @@ where
         let parent = self.manager.read().expect("poisoned lock").current_revision();
         let proposal = NodeStore::new(parent)?;
         let mut merkle = Merkle::from(proposal);
+        let span = fastrace::Span::enter_with_local_parent("merkleops");
         for op in batch {
             match op {
                 BatchOp::Put { key, value } => {
@@ -181,9 +183,15 @@ where
                 }
             }
         }
+
+        drop(span);
+        let span = fastrace::Span::enter_with_local_parent("freeze");
+
         let nodestore = merkle.into_inner();
         let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
             Arc::new(nodestore.into());
+
+        drop(span);
         self.manager.write().expect("poisoned lock").add_proposal(immutable.clone());
 
         self.metrics.proposals.increment(1);
@@ -337,6 +345,7 @@ impl api::DbView for Proposal<'_> {
 impl<'a> api::Proposal for Proposal<'a> {
     type Proposal = Proposal<'a>;
 
+    #[fastrace::trace(short_name = true)]
     async fn propose<K: KeyType, V: ValueType>(
         self: Arc<Self>,
         batch: api::Batch<K, V>,
