@@ -35,7 +35,7 @@ impl Display for Value {
 ///  * ensure that `key` is a valid pointer to a `Value` struct
 ///  * call `free_value` to free the memory associated with the returned `Value`
 #[no_mangle]
-pub unsafe extern "C" fn get(db: *mut Db, key: Value) -> Value {
+pub unsafe extern "C" fn fwd_get(db: *mut Db, key: Value) -> Value {
     let db = unsafe { db.as_ref() }.expect("db should be non-null");
     let root = db.root_hash_sync();
     let Ok(Some(root)) = root else {
@@ -76,7 +76,7 @@ pub struct KeyValue {
 ///  * ensure that the `Value` fields of the `KeyValue` structs are valid pointers.
 ///
 #[no_mangle]
-pub unsafe extern "C" fn batch(db: *mut Db, nkeys: usize, values: *const KeyValue) -> Value {
+pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const KeyValue) -> Value {
     let db = unsafe { db.as_ref() }.expect("db should be non-null");
     let mut batch = Vec::with_capacity(nkeys);
     for i in 0..nkeys {
@@ -105,7 +105,7 @@ pub unsafe extern "C" fn batch(db: *mut Db, nkeys: usize, values: *const KeyValu
 /// This function is unsafe because it dereferences raw pointers.
 /// The caller must ensure that `db` is a valid pointer returned by `open_db`
 #[no_mangle]
-pub unsafe extern "C" fn root_hash(db: *mut Db) -> Value {
+pub unsafe extern "C" fn fwd_root_hash(db: *mut Db) -> Value {
     let db = unsafe { db.as_ref() }.expect("db should be non-null");
     hash(db)
 }
@@ -147,7 +147,7 @@ impl From<Box<[u8]>> for Value {
 /// This function is unsafe because it dereferences raw pointers.
 /// The caller must ensure that `value` is a valid pointer.
 #[no_mangle]
-pub unsafe extern "C" fn free_value(value: *const Value) {
+pub unsafe extern "C" fn fwd_free_value(value: *const Value) {
     if (*value).len == 0 {
         return;
     }
@@ -180,7 +180,7 @@ pub unsafe extern "C" fn free_value(value: *const Value) {
 /// The caller must call `close` to free the memory associated with the returned database handle.
 ///
 #[no_mangle]
-pub unsafe extern "C" fn create_db(
+pub unsafe extern "C" fn fwd_create_db(
     path: *const std::ffi::c_char,
     cache_size: usize,
     revisions: usize,
@@ -212,7 +212,7 @@ pub unsafe extern "C" fn create_db(
 /// The caller must call `close` to free the memory associated with the returned database handle.
 ///
 #[no_mangle]
-pub unsafe extern "C" fn open_db(
+pub unsafe extern "C" fn fwd_open_db(
     path: *const std::ffi::c_char,
     cache_size: usize,
     revisions: usize,
@@ -254,6 +254,7 @@ fn manager_config(cache_size: usize, revisions: usize) -> RevisionManagerConfig 
 /// # Arguments
 ///
 /// * `db` - The database handle to close, previously returned from a call to open_db()
-pub unsafe extern "C" fn close(db: *mut Db) {
+#[no_mangle]
+pub unsafe extern "C" fn fwd_close_db(db: *mut Db) {
     let _ = Box::from_raw(db);
 }

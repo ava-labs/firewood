@@ -34,9 +34,24 @@ typedef struct KeyValue {
  *  * ensure that the `Value` fields of the `KeyValue` structs are valid pointers.
  *
  */
-struct Value batch(void *db,
-                   size_t nkeys,
-                   const struct KeyValue *values);
+struct Value fwd_batch(void *db,
+                       size_t nkeys,
+                       const struct KeyValue *values);
+
+/**
+ * Close iand free the memory for a database handle
+ *
+ * # Safety
+ *
+ * This function uses raw pointers so it is unsafe.
+ * It is the caller's responsibility to ensure that the database handle is valid.
+ * Using the db after calling this function is undefined behavior
+ *
+ * # Arguments
+ *
+ * * `db` - The database handle to close, previously returned from a call to open_db()
+ */
+void fwd_close_db(void *db);
 
 /**
  * Create a database with the given cache size and maximum number of revisions
@@ -59,9 +74,9 @@ struct Value batch(void *db,
  * The caller must call `close` to free the memory associated with the returned database handle.
  *
  */
-void *create_db(const char *path,
-                size_t cache_size,
-                size_t revisions);
+void *fwd_create_db(const char *path,
+                    size_t cache_size,
+                    size_t revisions);
 
 /**
  * Frees the memory associated with a `Value`.
@@ -71,7 +86,7 @@ void *create_db(const char *path,
  * This function is unsafe because it dereferences raw pointers.
  * The caller must ensure that `value` is a valid pointer.
  */
-void free_value(const struct Value *value);
+void fwd_free_value(const struct Value *value);
 
 /**
  * Gets the value associated with the given key from the database.
@@ -87,7 +102,7 @@ void free_value(const struct Value *value);
  *  * ensure that `key` is a valid pointer to a `Value` struct
  *  * call `free_value` to free the memory associated with the returned `Value`
  */
-struct Value get(void *db, struct Value key);
+struct Value fwd_get(void *db, struct Value key);
 
 /**
  * Open a database with the given cache size and maximum number of revisions
@@ -110,9 +125,9 @@ struct Value get(void *db, struct Value key);
  * The caller must call `close` to free the memory associated with the returned database handle.
  *
  */
-void *open_db(const char *path,
-              size_t cache_size,
-              size_t revisions);
+void *fwd_open_db(const char *path,
+                  size_t cache_size,
+                  size_t revisions);
 
 /**
  * Get the root hash of the latest version of the database
@@ -123,4 +138,4 @@ void *open_db(const char *path,
  * This function is unsafe because it dereferences raw pointers.
  * The caller must ensure that `db` is a valid pointer returned by `open_db`
  */
-struct Value root_hash(void *db);
+struct Value fwd_root_hash(void *db);
