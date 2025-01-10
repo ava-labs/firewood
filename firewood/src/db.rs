@@ -69,7 +69,7 @@ pub trait DbViewSync {
 impl DbViewSync for HistoricalRev {
     fn val_sync<K: KeyType>(&self, key: K) -> Result<Option<Box<[u8]>>, DbError> {
         let merkle = Merkle::from(self);
-        let value= merkle.get_value(key.as_ref()).map_err(DbError::Merkle)?;
+        let value = merkle.get_value(key.as_ref()).map_err(DbError::Merkle)?;
         Ok(value)
     }
 }
@@ -149,7 +149,11 @@ where
         Self: 'p;
 
     async fn revision(&self, root_hash: TrieHash) -> Result<Arc<Self::Historical>, api::Error> {
-        let nodestore = self.manager.read().expect("poisoned lock").revision(root_hash)?;
+        let nodestore = self
+            .manager
+            .read()
+            .expect("poisoned lock")
+            .revision(root_hash)?;
         Ok(nodestore)
     }
 
@@ -169,7 +173,11 @@ where
     where
         Self: 'p,
     {
-        let parent = self.manager.read().expect("poisoned lock").current_revision();
+        let parent = self
+            .manager
+            .read()
+            .expect("poisoned lock")
+            .current_revision();
         let proposal = NodeStore::new(parent)?;
         let mut merkle = Merkle::from(proposal);
         let span = fastrace::Span::enter_with_local_parent("merkleops");
@@ -192,7 +200,10 @@ where
             Arc::new(nodestore.into());
 
         drop(span);
-        self.manager.write().expect("poisoned lock").add_proposal(immutable.clone());
+        self.manager
+            .write()
+            .expect("poisoned lock")
+            .add_proposal(immutable.clone());
 
         self.metrics.proposals.increment(1);
 
@@ -248,13 +259,24 @@ impl Db {
 
     /// Synchronously get a revision from a root hash
     pub fn revision_sync(&self, root_hash: TrieHash) -> Result<Arc<HistoricalRev>, api::Error> {
-        let nodestore = self.manager.read().expect("poisoned lock").revision(root_hash)?;
+        let nodestore = self
+            .manager
+            .read()
+            .expect("poisoned lock")
+            .revision(root_hash)?;
         Ok(nodestore)
     }
 
     /// propose a new batch synchronously
-    pub fn propose_sync<K: KeyType, V: ValueType>(&'_ self, batch: Batch<K, V>) -> Result<Arc<Proposal<'_>>, api::Error> {
-        let parent = self.manager.read().expect("poisoned lock").current_revision();
+    pub fn propose_sync<K: KeyType, V: ValueType>(
+        &'_ self,
+        batch: Batch<K, V>,
+    ) -> Result<Arc<Proposal<'_>>, api::Error> {
+        let parent = self
+            .manager
+            .read()
+            .expect("poisoned lock")
+            .current_revision();
         let proposal = NodeStore::new(parent)?;
         let mut merkle = Merkle::from(proposal);
         for op in batch {
@@ -270,7 +292,10 @@ impl Db {
         let nodestore = merkle.into_inner();
         let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
             Arc::new(nodestore.into());
-        self.manager.write().expect("poisoned lock").add_proposal(immutable.clone());
+        self.manager
+            .write()
+            .expect("poisoned lock")
+            .add_proposal(immutable.clone());
 
         self.metrics.proposals.increment(1);
 
@@ -280,10 +305,13 @@ impl Db {
         }))
     }
 
-
     /// Dump the Trie of the latest revision.
     pub async fn dump(&self, w: &mut dyn Write) -> Result<(), DbError> {
-        let latest_rev_nodestore = self.manager.read().expect("poisoned lock").current_revision();
+        let latest_rev_nodestore = self
+            .manager
+            .read()
+            .expect("poisoned lock")
+            .current_revision();
         let merkle = Merkle::from(latest_rev_nodestore);
         // TODO: This should be a stream
         let output = merkle.dump().map_err(DbError::Merkle)?;
