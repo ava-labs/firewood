@@ -48,6 +48,30 @@ pub struct Options {
     )]
     pub stop_key: Option<Key>,
 
+    /// The key to start dumping from (if no key is provided, start from the beginning) in hex format.
+    /// Defaults to None.
+    #[arg(
+        long,
+        required = false,
+        conflicts_with = "start_key",
+        value_name = "START_KEY_HEX",
+        value_parser = key_parser,
+        help = "Start dumping from this key (inclusive) in hex format. Conflicts with start_key"
+    )]
+    pub start_key_hex: Option<Key>,
+
+    /// The key to stop dumping to (if no key is provided, stop to the end) in hex format.
+    /// Defaults to None.
+    #[arg(
+        long,
+        required = false,
+        conflicts_with = "stop_key",
+        value_name = "STOP_KEY_HEX",
+        value_parser = key_parser,
+        help = "Stop dumping to this key (inclusive) in hex format. Conflicts with stop_key"
+    )]
+    pub stop_key_hex: Option<Key>,
+
     /// The max number of the keys going to be dumped.
     /// Defaults to None.
     #[arg(
@@ -79,6 +103,7 @@ pub struct Options {
         short = 'f',
         long,
         requires = "output_format",
+        value_name = "OUTPUT_FILE_NAME",
         default_value = "dump",
         help = "Output file name of database dump, default to dump. Output format must be set when the file name is set."
     )]
@@ -100,8 +125,18 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     };
     let latest_rev = db.revision(latest_hash).await?;
 
-    let start_key = opts.start_key.clone().unwrap_or_else(|| Box::new([]));
-    let stop_key = opts.stop_key.clone().unwrap_or_else(|| Box::new([]));
+    let start_key = opts
+        .start_key_hex
+        .clone()
+        .and_then(|start_key_hex| parse_hex_key(start_key_hex).ok())
+        .or_else(|| opts.start_key.clone())
+        .unwrap_or_else(|| Box::new([]));
+    let stop_key = opts
+        .stop_key_hex
+        .clone()
+        .and_then(|stop_key_hex| parse_hex_key(stop_key_hex).ok())
+        .or_else(|| opts.stop_key.clone())
+        .unwrap_or_else(|| Box::new([]));
     let mut key_count = 0;
 
     let mut stream = MerkleKeyValueStream::from_key(&latest_rev, start_key);
@@ -141,6 +176,12 @@ fn key_parser(s: &str) -> Result<Box<[u8]>, std::io::Error> {
     Ok(Box::from(s.as_bytes()))
 }
 
+fn parse_hex_key(hex_str: Box<[u8]>) -> Result<Key, Box<dyn Error>> {
+    hex::decode(String::from_utf8_lossy(&hex_str).as_bytes())
+        .map(|decoded| decoded.into_boxed_slice())
+        .map_err(|e| e.into())
+}
+
 // Helper function to convert key and value to a string
 fn key_value_to_string(key: &[u8], value: &[u8], hex: bool) -> (String, String) {
     let key_str = if hex {
@@ -160,8 +201,9 @@ async fn handle_next_key(next_key: KeyFromStream) {
     match next_key {
         Some(Ok((key, _))) => {
             println!(
-                "Next key is {0}, resume with \"--start-key={0}\".",
-                u8_to_string(&key)
+                "Next key is {0}, resume with \"--start-key={0}\" or \"--start-key-hex={1}\".",
+                u8_to_string(&key),
+                hex::encode(&key)
             );
         }
         Some(Err(e)) => {

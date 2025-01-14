@@ -258,7 +258,7 @@ fn fwdctl_dump_with_start_stop_and_max() -> Result<()> {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "Next key is c, resume with \"--start-key=c\".",
+            "Next key is c, resume with \"--start-key=c\"",
         ));
 
     // Test stop in the end
@@ -295,7 +295,7 @@ fn fwdctl_dump_with_start_stop_and_max() -> Result<()> {
         .success()
         .stdout(predicate::str::starts_with("\'b"))
         .stdout(predicate::str::contains(
-            "Next key is c, resume with \"--start-key=c\".",
+            "Next key is c, resume with \"--start-key=c\"",
         ));
 
     // Test start and stop
@@ -310,7 +310,7 @@ fn fwdctl_dump_with_start_stop_and_max() -> Result<()> {
         .success()
         .stdout(predicate::str::starts_with("\'b"))
         .stdout(predicate::str::contains(
-            "Next key is c, resume with \"--start-key=c\".",
+            "Next key is c, resume with \"--start-key=c\"",
         ));
 
     fwdctl_delete_db().map_err(|e| anyhow!(e))?;
@@ -453,6 +453,86 @@ fn fwdctl_dump_with_file_name() -> Result<()> {
     let contents = fs::read_to_string("test.json").expect("Should read test.json file");
     assert_eq!(contents, "{\n  \"a\": \"1\"\n}\n");
     fs::remove_file("test.json").expect("Should remove test.json file");
+
+    fwdctl_delete_db().map_err(|e| anyhow!(e))?;
+
+    Ok(())
+}
+
+#[test]
+#[serial]
+fn fwdctl_dump_with_hex() -> Result<()> {
+    Command::cargo_bin(PRG)?
+        .arg("create")
+        .arg(tmpdb::path())
+        .assert()
+        .success();
+
+    Command::cargo_bin(PRG)?
+        .arg("insert")
+        .args(["a"])
+        .args(["1"])
+        .args(["--db"])
+        .args([tmpdb::path()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("a"));
+
+    Command::cargo_bin(PRG)?
+        .arg("insert")
+        .args(["b"])
+        .args(["2"])
+        .args(["--db"])
+        .args([tmpdb::path()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("b"));
+
+    Command::cargo_bin(PRG)?
+        .arg("insert")
+        .args(["c"])
+        .args(["3"])
+        .args(["--db"])
+        .args([tmpdb::path()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("c"));
+
+    // Test without output format
+    Command::cargo_bin(PRG)?
+        .arg("dump")
+        .args(["--start-key"])
+        .arg("a")
+        .args(["--start-key-hex"])
+        .arg("61")
+        .args([tmpdb::path()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--start-key"))
+        .stderr(predicate::str::contains("--start-key-hex"));
+
+    // Test start with hex value
+    Command::cargo_bin(PRG)?
+        .arg("dump")
+        .args(["--start-key-hex"])
+        .arg("62")
+        .args([tmpdb::path()])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("\'b"));
+
+    // Test stop with hex value
+    Command::cargo_bin(PRG)?
+        .arg("dump")
+        .args(["--stop-key-hex"])
+        .arg("62")
+        .args([tmpdb::path()])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("\'a"))
+        .stdout(predicate::str::contains("Next key is c"))
+        .stdout(predicate::str::contains("--start-key=c"))
+        .stdout(predicate::str::contains("--start-key-hex=63"));
 
     fwdctl_delete_db().map_err(|e| anyhow!(e))?;
 
