@@ -99,11 +99,13 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     while let Some(item) = stream.next().await {
         match item {
             Ok((key, value)) => {
-                output_handler.handle_record(&key, &value);
+                output_handler.handle_record(&key, &value)?;
 
                 key_count += 1;
 
-                if key == stop_key || key_count_exceeded(opts.max_key_count, key_count) {
+                if (!stop_key.is_empty() && key >= stop_key)
+                    || key_count_exceeded(opts.max_key_count, key_count)
+                {
                     handle_next_key(stream.next().await).await;
                     break;
                 }
@@ -111,13 +113,13 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
             Err(e) => return Err(e),
         }
     }
-    output_handler.flush();
+    output_handler.flush()?;
 
     Ok(())
 }
 
-const fn key_count_exceeded(max: Option<u32>, key_count: u32) -> bool {
-    matches!(max, Some(max) if key_count >= max)
+fn key_count_exceeded(max: Option<u32>, key_count: u32) -> bool {
+    max.map(|max| key_count >= max).unwrap_or(false)
 }
 
 fn u8_to_string(data: &[u8]) -> String {
@@ -161,8 +163,8 @@ async fn handle_next_key(next_key: KeyFromStream) {
 }
 
 trait OutputHandler {
-    fn handle_record(&mut self, key: &[u8], value: &[u8]);
-    fn flush(&mut self);
+    fn handle_record(&mut self, key: &[u8], value: &[u8]) -> Result<(), std::io::Error>;
+    fn flush(&mut self) -> Result<(), std::io::Error>;
 }
 
 struct CsvOutputHandler {
@@ -171,15 +173,15 @@ struct CsvOutputHandler {
 }
 
 impl OutputHandler for CsvOutputHandler {
-    fn handle_record(&mut self, key: &[u8], value: &[u8]) {
+    fn handle_record(&mut self, key: &[u8], value: &[u8]) -> Result<(), std::io::Error> {
         let (key_str, value_str) = key_value_to_string(key, value, self.hex);
-        self.writer
-            .write_record(&[key_str, value_str])
-            .expect("Failed to write CSV record");
+        self.writer.write_record(&[key_str, value_str])?;
+        Ok(())
     }
 
-    fn flush(&mut self) {
-        self.writer.flush().expect("Failed to flush CSV writer");
+    fn flush(&mut self) -> Result<(), std::io::Error> {
+        self.writer.flush()?;
+        Ok(())
     }
 }
 
@@ -189,37 +191,24 @@ struct JsonOutputHandler {
     is_first: bool,
 }
 
-impl JsonOutputHandler {
-    fn new(mut writer: BufWriter<File>, hex: bool) -> JsonOutputHandler {
-        let _ = writer.write("{\n".as_bytes());
-        JsonOutputHandler {
-            writer,
-            hex,
-            is_first: true,
-        }
-    }
-}
-
 impl OutputHandler for JsonOutputHandler {
-    fn handle_record(&mut self, key: &[u8], value: &[u8]) {
+    fn handle_record(&mut self, key: &[u8], value: &[u8]) -> Result<(), std::io::Error> {
         let (key_str, value_str) = key_value_to_string(key, value, self.hex);
         if self.is_first {
-            let _ = self
-                .writer
-                .write(format!("  \"{}\": \"{}\"", key_str, value_str).as_bytes());
+            self.writer.write_all(b"{\n")?;
             self.is_first = false;
         } else {
-            let _ = self
-                .writer
-                .write(format!(",\n  \"{}\": \"{}\"", key_str, value_str).as_bytes());
+            self.writer.write_all(b",\n")?;
         }
+
+        write!(self.writer, r#"  "{key_str}": "{value_str}""#)?;
+        Ok(())
     }
 
-    fn flush(&mut self) {
-        let _ = self.writer.write("\n}\n".as_bytes());
-        self.writer
-            .flush()
-            .expect("Failed to flush Json Buf writer");
+    fn flush(&mut self) -> Result<(), std::io::Error> {
+        let _ = self.writer.write(b"\n}\n");
+        self.writer.flush()?;
+        Ok(())
     }
 }
 
@@ -228,11 +217,14 @@ struct StdoutOutputHandler {
 }
 
 impl OutputHandler for StdoutOutputHandler {
-    fn handle_record(&mut self, key: &[u8], value: &[u8]) {
+    fn handle_record(&mut self, key: &[u8], value: &[u8]) -> Result<(), std::io::Error> {
         let (key_str, value_str) = key_value_to_string(key, value, self.hex);
         println!("'{}': '{}'", key_str, value_str);
+        Ok(())
     }
-    fn flush(&mut self) {}
+    fn flush(&mut self) -> Result<(), std::io::Error> {
+        Ok(())
+    }
 }
 
 fn create_output_handler(
@@ -249,7 +241,11 @@ fn create_output_handler(
         }
         "json" => {
             let file = File::create("dump.json")?;
-            Ok(Box::new(JsonOutputHandler::new(BufWriter::new(file), hex)))
+            Ok(Box::new(JsonOutputHandler {
+                writer: BufWriter::new(file),
+                hex,
+                is_first: true,
+            }))
         }
         "stdout" => Ok(Box::new(StdoutOutputHandler { hex })),
         _ => Err("Unknown output format".into()),
