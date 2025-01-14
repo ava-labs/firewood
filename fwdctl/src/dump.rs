@@ -73,6 +73,17 @@ pub struct Options {
     )]
     pub output_format: String,
 
+    /// The output file name of database dump.
+    /// Output format must be set when the file name is set.
+    #[arg(
+        short = 'f',
+        long,
+        requires = "output_format",
+        default_value = "dump",
+        help = "Output file name of database dump, default to dump. Output format must be set when the file name is set."
+    )]
+    pub output_file_name: String,
+
     #[arg(short = 'x', long, help = "Print the keys and values in hex format.")]
     pub hex: bool,
 }
@@ -233,14 +244,18 @@ fn create_output_handler(
     let hex = opts.hex;
     match opts.output_format.as_str() {
         "csv" => {
-            let file = File::create("dump.csv")?;
+            let file_name = format!("{}.csv", opts.output_file_name);
+            println!("Dumping to {}", file_name);
+            let file = File::create(file_name)?;
             Ok(Box::new(CsvOutputHandler {
                 writer: csv::Writer::from_writer(file),
                 hex,
             }))
         }
         "json" => {
-            let file = File::create("dump.json")?;
+            let file_name = format!("{}.json", opts.output_file_name);
+            println!("Dumping to {}", file_name);
+            let file = File::create(file_name)?;
             Ok(Box::new(JsonOutputHandler {
                 writer: BufWriter::new(file),
                 hex,

@@ -365,7 +365,7 @@ fn fwdctl_dump_with_csv_and_json() -> Result<()> {
         .args([tmpdb::path()])
         .assert()
         .success()
-        .stdout(predicate::str::is_empty());
+        .stdout(predicate::str::contains("Dumping to dump.csv"));
 
     let contents = fs::read_to_string("dump.csv").expect("Should read dump.csv file");
     assert_eq!(contents, "a,1\nb,2\nc,3\n");
@@ -379,7 +379,7 @@ fn fwdctl_dump_with_csv_and_json() -> Result<()> {
         .args([tmpdb::path()])
         .assert()
         .success()
-        .stdout(predicate::str::is_empty());
+        .stdout(predicate::str::contains("Dumping to dump.json"));
 
     let contents = fs::read_to_string("dump.json").expect("Should read dump.json file");
     assert_eq!(
@@ -387,6 +387,72 @@ fn fwdctl_dump_with_csv_and_json() -> Result<()> {
         "{\n  \"a\": \"1\",\n  \"b\": \"2\",\n  \"c\": \"3\"\n}\n"
     );
     fs::remove_file("dump.json").expect("Should remove dump.json file");
+
+    fwdctl_delete_db().map_err(|e| anyhow!(e))?;
+
+    Ok(())
+}
+
+#[test]
+#[serial]
+fn fwdctl_dump_with_file_name() -> Result<()> {
+    Command::cargo_bin(PRG)?
+        .arg("create")
+        .arg(tmpdb::path())
+        .assert()
+        .success();
+
+    Command::cargo_bin(PRG)?
+        .arg("insert")
+        .args(["a"])
+        .args(["1"])
+        .args(["--db"])
+        .args([tmpdb::path()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("a"));
+
+    // Test without output format
+    Command::cargo_bin(PRG)?
+        .arg("dump")
+        .args(["--output-file-name"])
+        .arg("test")
+        .args([tmpdb::path()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--output-format"));
+
+    // Test output csv
+    Command::cargo_bin(PRG)?
+        .arg("dump")
+        .args(["--output-format"])
+        .arg("csv")
+        .args(["--output-file-name"])
+        .arg("test")
+        .args([tmpdb::path()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Dumping to test.csv"));
+
+    let contents = fs::read_to_string("test.csv").expect("Should read test.csv file");
+    assert_eq!(contents, "a,1\n");
+    fs::remove_file("test.csv").expect("Should remove test.csv file");
+
+    // Test output json
+    Command::cargo_bin(PRG)?
+        .arg("dump")
+        .args(["--output-format"])
+        .arg("json")
+        .args(["--output-file-name"])
+        .arg("test")
+        .args([tmpdb::path()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Dumping to test.json"));
+
+    let contents = fs::read_to_string("test.json").expect("Should read test.json file");
+    assert_eq!(contents, "{\n  \"a\": \"1\"\n}\n");
+    fs::remove_file("test.json").expect("Should remove test.json file");
 
     fwdctl_delete_db().map_err(|e| anyhow!(e))?;
 
