@@ -726,10 +726,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 // 3. The key is below the node (i.e. its descendant)
                 match node {
                     // we found a non-matching leaf node, so the value does not exist
-                    Node::Leaf(_) => Ok((
-                        Some(node),
-                        None
-                    )),
+                    Node::Leaf(_) => Ok((Some(node), None)),
                     Node::Branch(ref mut branch) => {
                         #[allow(clippy::indexing_slicing)]
                         let child = match std::mem::take(&mut branch.children[child_index as usize])
