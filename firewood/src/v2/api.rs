@@ -52,7 +52,7 @@ pub enum BatchOp<K: KeyType, V: ValueType> {
         /// The key
         key: K,
     },
-    
+
     /// Delete a range of keys by prefix
     DeleteRange {
         /// The prefix of the keys to delete

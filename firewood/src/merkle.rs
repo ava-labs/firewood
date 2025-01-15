@@ -848,12 +848,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 .map(|(index, path)| (*index, Path::from(path))),
             unique_node.split_first(),
         ) {
-            (_, Some(_)) => {
-                // Case (2) or (4)
-                Ok(Some(node))
-            }
-            (None, None) => {
-                // 1. The node is at `key`
+            (None, _) => {
+                // 1. The node is at `key`, or we're just above it
+                // so we can start deleting below here
                 match &mut node {
                     Node::Branch(ref mut branch) => {
                         if branch.value.is_some() {
@@ -869,10 +866,14 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 };
                 Ok(None)
             }
+            (_, Some(_)) => {
+                // Case (2) or (4)
+                Ok(Some(node))
+            }
             (Some((child_index, child_partial_path)), None) => {
                 // 3. The key is below the node (i.e. its descendant)
                 match node {
-                    Node::Leaf(_) => Ok(None),
+                    Node::Leaf(_) => Ok(Some(node)),
                     Node::Branch(ref mut branch) => {
                         #[allow(clippy::indexing_slicing)]
                         let child = match std::mem::take(&mut branch.children[child_index as usize])
@@ -886,7 +887,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                             }
                         };
 
-                        let child = self.remove_prefix_helper(child, child_partial_path.as_ref(), deleted)?;
+                        let child =
+                            self.remove_prefix_helper(child, child_partial_path.as_ref(), deleted)?;
 
                         if let Some(child) = child {
                             branch.update_child(child_index, Some(Child::Node(child)));
@@ -1177,6 +1179,51 @@ mod tests {
         assert!(merkle.remove(&key3).unwrap().is_none());
 
         assert!(merkle.nodestore.root_node().is_none());
+    }
+
+    #[test]
+    fn remove_prefix_exact() {
+        let mut merkle = two_byte_all_keys();
+        for key_val in u8::MIN..=u8::MAX {
+            let key = [key_val];
+            let got = merkle.remove_prefix(&key).unwrap();
+            assert_eq!(got, 1);
+            let got = merkle.get_value(&key).unwrap();
+            assert!(got.is_none());
+        }
+    }
+
+    fn two_byte_all_keys() -> Merkle<NodeStore<MutableProposal, MemStore>> {
+        let mut merkle = create_in_memory_merkle();
+        for key_val in u8::MIN..=u8::MAX {
+            let key = [key_val, key_val];
+            let val = [key_val];
+
+            merkle.insert(&key, Box::new(val)).unwrap();
+            let got = merkle.get_value(&key).unwrap().unwrap();
+            assert_eq!(&*got, val);
+        }
+        merkle
+    }
+
+    #[test]
+    fn remove_prefix_all() {
+        let mut merkle = two_byte_all_keys();
+        let got = merkle.remove_prefix(&[]).unwrap();
+        assert_eq!(got, 256);
+    }
+
+    #[test]
+    fn remove_prefix_partial() {
+        let mut merkle = create_in_memory_merkle();
+        merkle
+            .insert(b"abc", Box::from(b"value".as_slice()))
+            .unwrap();
+        merkle
+            .insert(b"abd", Box::from(b"value".as_slice()))
+            .unwrap();
+        let got = merkle.remove_prefix(b"ab").unwrap();
+        assert_eq!(got, 2);
     }
 
     #[test]
@@ -2844,9 +2891,7 @@ mod tests {
     // }
     #[test]
     fn remove_nonexistent_with_one() {
-        let items = vec![
-            ("do", "verb"),
-        ];
+        let items = vec![("do", "verb")];
         let mut merkle = merkle_build_test(items).unwrap();
 
         assert_eq!(merkle.remove(b"does_not_exist").unwrap(), None);
