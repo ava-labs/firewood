@@ -189,6 +189,9 @@ where
                 BatchOp::Delete { key } => {
                     merkle.remove(key.as_ref())?;
                 }
+                BatchOp::DeleteRange { prefix } => {
+                    merkle.remove_prefix(prefix.as_ref())?;
+                }
             }
         }
 
@@ -286,6 +289,9 @@ impl Db {
                 }
                 BatchOp::Delete { key } => {
                     merkle.remove(key.as_ref())?;
+                }
+                BatchOp::DeleteRange { prefix } => {
+                    merkle.remove_prefix(prefix.as_ref())?;
                 }
             }
         }
@@ -388,6 +394,9 @@ impl<'a> api::Proposal for Proposal<'a> {
                 }
                 BatchOp::Delete { key } => {
                     merkle.remove(key.as_ref())?;
+                }
+                BatchOp::DeleteRange { prefix } => {
+                    merkle.remove_prefix(prefix.as_ref())?;
                 }
             }
         }
