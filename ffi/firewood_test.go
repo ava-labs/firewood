@@ -55,11 +55,12 @@ func TestInsert100(t *testing.T) {
 }
 
 func TestRangeDelete(t *testing.T) {
+	const N = 100
 	var f Firewood = CreateDatabase("test.db")
 	defer f.Close()
 	defer os.Remove("test.db")
-	ops := make([]KeyValue, 10)
-	for i := 0; i < 10; i++ {
+	ops := make([]KeyValue, N)
+	for i := 0; i < N; i++ {
 		ops[i] = KeyValue{[]byte("key" + strconv.Itoa(i)), []byte("value" + strconv.Itoa(i))}
 	}
 	f.Batch(ops)
@@ -69,14 +70,14 @@ func TestRangeDelete(t *testing.T) {
 	delete_ops[0] = KeyValue{[]byte("key1"), []byte("")}
 	f.Batch(delete_ops)
 
-	for i := 0; i < 10; i++ {
+	for i := 0; i < N; i++ {
 		keystring := "key" + strconv.Itoa(i)
 		value, err := f.Get([]byte(keystring))
 		if err != nil {
 			t.FailNow()
 		}
 		if (value != nil) == (keystring[3] == '1') {
-			t.Errorf("incorrect response for %s", keystring)
+			t.Errorf("incorrect response for %s %s %x", keystring, value, keystring[3])
 		}
 	}
 }
