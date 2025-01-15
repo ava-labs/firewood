@@ -82,8 +82,8 @@ pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const Key
     for i in 0..nkeys {
         let kv = unsafe { values.add(i).as_ref() }.expect("values should be non-null");
         if kv.value.len == 0 {
-            batch.push(DbBatchOp::Delete {
-                key: kv.key.as_slice(),
+            batch.push(DbBatchOp::DeleteRange {
+                prefix: kv.key.as_slice(),
             });
             continue;
         }
