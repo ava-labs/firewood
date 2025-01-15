@@ -7,11 +7,13 @@ use firewood::merkle::Key;
 use firewood::stream::MerkleKeyValueStream;
 use firewood::v2::api::{self, Db as _};
 use futures_util::StreamExt;
+use std::borrow::Cow;
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufWriter, Write};
+use std::path::PathBuf;
 
-type KeyFromStream = Option<Result<(Box<[u8]>, Vec<u8>), api::Error>>;
+type KeyFromStream = Option<Result<(Key, Vec<u8>), api::Error>>;
 
 #[derive(Debug, Args)]
 pub struct Options {
@@ -55,7 +57,7 @@ pub struct Options {
         required = false,
         conflicts_with = "start_key",
         value_name = "START_KEY_HEX",
-        value_parser = key_parser,
+        value_parser = key_parser_hex,
         help = "Start dumping from this key (inclusive) in hex format. Conflicts with start_key"
     )]
     pub start_key_hex: Option<Key>,
@@ -67,7 +69,7 @@ pub struct Options {
         required = false,
         conflicts_with = "stop_key",
         value_name = "STOP_KEY_HEX",
-        value_parser = key_parser,
+        value_parser = key_parser_hex,
         help = "Stop dumping to this key (inclusive) in hex format. Conflicts with stop_key"
     )]
     pub stop_key_hex: Option<Key>,
@@ -107,7 +109,7 @@ pub struct Options {
         default_value = "dump",
         help = "Output file name of database dump, default to dump. Output format must be set when the file name is set."
     )]
-    pub output_file_name: String,
+    pub output_file_name: PathBuf,
 
     #[arg(short = 'x', long, help = "Print the keys and values in hex format.")]
     pub hex: bool,
@@ -126,17 +128,11 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     let latest_rev = db.revision(latest_hash).await?;
 
     let start_key = opts
-        .start_key_hex
+        .start_key
         .clone()
-        .and_then(|start_key_hex| parse_hex_key(start_key_hex).ok())
-        .or_else(|| opts.start_key.clone())
-        .unwrap_or_else(|| Box::new([]));
-    let stop_key = opts
-        .stop_key_hex
-        .clone()
-        .and_then(|stop_key_hex| parse_hex_key(stop_key_hex).ok())
-        .or_else(|| opts.stop_key.clone())
-        .unwrap_or_else(|| Box::new([]));
+        .or(opts.start_key_hex.clone())
+        .unwrap_or_default();
+    let stop_key = opts.stop_key.clone().or(opts.stop_key_hex.clone());
     let mut key_count = 0;
 
     let mut stream = MerkleKeyValueStream::from_key(&latest_rev, start_key);
@@ -149,7 +145,7 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
 
                 key_count += 1;
 
-                if (!stop_key.is_empty() && key >= stop_key)
+                if (stop_key.as_ref().is_some_and(|stop_key| key >= *stop_key))
                     || key_count_exceeded(opts.max_key_count, key_count)
                 {
                     handle_next_key(stream.next().await).await;
@@ -168,18 +164,18 @@ fn key_count_exceeded(max: Option<u32>, key_count: u32) -> bool {
     max.map(|max| key_count >= max).unwrap_or(false)
 }
 
-fn u8_to_string(data: &[u8]) -> String {
-    String::from_utf8_lossy(data).to_string()
+fn u8_to_string(data: &[u8]) -> Cow<'_, str> {
+    String::from_utf8_lossy(data)
 }
 
 fn key_parser(s: &str) -> Result<Box<[u8]>, std::io::Error> {
     Ok(Box::from(s.as_bytes()))
 }
 
-fn parse_hex_key(hex_str: Box<[u8]>) -> Result<Key, Box<dyn Error>> {
-    hex::decode(String::from_utf8_lossy(&hex_str).as_bytes())
-        .map(|decoded| decoded.into_boxed_slice())
-        .map_err(|e| e.into())
+fn key_parser_hex(s: &str) -> Result<Box<[u8]>, std::io::Error> {
+    hex::decode(s)
+        .map(Vec::into_boxed_slice)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))
 }
 
 // Helper function to convert key and value to a string
@@ -187,12 +183,12 @@ fn key_value_to_string(key: &[u8], value: &[u8], hex: bool) -> (String, String) 
     let key_str = if hex {
         hex::encode(key)
     } else {
-        u8_to_string(key)
+        u8_to_string(key).to_string()
     };
     let value_str = if hex {
         hex::encode(value)
     } else {
-        u8_to_string(value)
+        u8_to_string(value).to_string()
     };
     (key_str, value_str)
 }
@@ -284,10 +280,11 @@ fn create_output_handler(
     opts: &Options,
 ) -> Result<Box<dyn OutputHandler + Send + Sync>, Box<dyn Error>> {
     let hex = opts.hex;
+    let mut file_name = opts.output_file_name.clone();
+    file_name.set_extension(opts.output_format.as_str());
     match opts.output_format.as_str() {
         "csv" => {
-            let file_name = format!("{}.csv", opts.output_file_name);
-            println!("Dumping to {}", file_name);
+            println!("Dumping to {}", file_name.display());
             let file = File::create(file_name)?;
             Ok(Box::new(CsvOutputHandler {
                 writer: csv::Writer::from_writer(file),
@@ -295,8 +292,7 @@ fn create_output_handler(
             }))
         }
         "json" => {
-            let file_name = format!("{}.json", opts.output_file_name);
-            println!("Dumping to {}", file_name);
+            println!("Dumping to {}", file_name.display());
             let file = File::create(file_name)?;
             Ok(Box::new(JsonOutputHandler {
                 writer: BufWriter::new(file),
@@ -305,6 +301,6 @@ fn create_output_handler(
             }))
         }
         "stdout" => Ok(Box::new(StdoutOutputHandler { hex })),
-        _ => Err("Unknown output format".into()),
+        _ => unreachable!(),
     }
 }
