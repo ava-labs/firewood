@@ -36,6 +36,7 @@
       "libaio/**",
       "docs/**",
       "benchmark/**",
+      "ffi/**",
       "CODEOWNERS",
       "CONTRIBUTING.md"
     ],
