@@ -313,6 +313,11 @@ impl Db {
 
     /// Dump the Trie of the latest revision.
     pub async fn dump(&self, w: &mut dyn Write) -> Result<(), DbError> {
+        self.dump_sync(w)
+    }
+
+    /// Dump the Trie of the latest revision, synchronously.
+    pub fn dump_sync(&self, w: &mut dyn Write) -> Result<(), DbError> {
         let latest_rev_nodestore = self
             .manager
             .read()
