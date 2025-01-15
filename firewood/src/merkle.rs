@@ -725,9 +725,10 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
             (Some((child_index, child_partial_path)), None) => {
                 // 3. The key is below the node (i.e. its descendant)
                 match node {
-                    Node::Leaf(ref mut leaf) => Ok((
-                        None,
-                        Some(std::mem::take(&mut leaf.value).into_boxed_slice()),
+                    // we found a non-matching leaf node, so the value does not exist
+                    Node::Leaf(_) => Ok((
+                        Some(node),
+                        None
                     )),
                     Node::Branch(ref mut branch) => {
                         #[allow(clippy::indexing_slicing)]
@@ -1528,6 +1529,15 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_delete_child() {
+        let items = vec![("do", "verb")];
+        let mut merkle = merkle_build_test(items).unwrap();
+
+        assert_eq!(merkle.remove(b"does_not_exist").unwrap(), None);
+        assert_eq!(&*merkle.get_value(b"do").unwrap().unwrap(), b"verb");
     }
 
     // #[test]
