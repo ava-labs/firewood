@@ -1273,22 +1273,7 @@ mod tests {
 
         // remove key-value pairs with prefix [0]
         let prefix = [0];
-        let mut removed = 0;
-        for key_val in u8::MIN..=u8::MAX {
-            let key = [key_val];
-            let val = [key_val];
-
-            if key[0] == prefix[0] {
-                let got = merkle.remove_prefix(&key).unwrap();
-                assert_eq!(got, 1);
-                removed += 1;
-            } else {
-                let got = merkle.get_value(&key).unwrap().unwrap();
-                assert_eq!(&*got, val);
-            }
-        }
-
-        assert_eq!(merkle.remove_prefix(&prefix).unwrap(), removed);
+        assert_eq!(merkle.remove_prefix(&[0]).unwrap(), 1);
 
         // make sure all keys with prefix [0] were removed
         for key_val in u8::MIN..=u8::MAX {
@@ -1803,6 +1788,27 @@ mod tests {
 
         assert_eq!(merkle.remove(b"does_not_exist").unwrap(), None);
         assert_eq!(&*merkle.get_value(b"do").unwrap().unwrap(), b"verb");
+    }
+
+    #[test]
+    fn test_delete_some() {
+        let items = (0..100)
+            .map(|n| {
+                let key = format!("key{}", n);
+                let val = format!("value{}", n);
+                (key.as_bytes().to_vec(), val.as_bytes().to_vec())
+            })
+            .collect::<Vec<(Vec<u8>, Vec<u8>)>>();
+        let mut merkle = merkle_build_test(items.clone()).unwrap();
+        merkle.remove_prefix(b"key1").unwrap();
+        for item in items {
+            let (key, val) = item;
+            if key.starts_with(b"key1") {
+                assert!(merkle.get_value(&key).unwrap().is_none());
+            } else {
+                assert_eq!(&*merkle.get_value(&key).unwrap().unwrap(), val.as_slice());
+            }
+        }
     }
 
     // #[test]
