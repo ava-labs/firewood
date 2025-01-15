@@ -76,6 +76,9 @@ func (f *Firewood) Get(input_key []byte) ([]byte, error) {
 	return ffi_bytes, nil
 }
 func make_value(pin *runtime.Pinner, data []byte) C.struct_Value {
+	if len(data) == 0 {
+		return C.struct_Value{0, nil}
+	}
 	ptr := (*C.uchar)(unsafe.Pointer(&data[0]))
 	pin.Pin(ptr)
 	return C.struct_Value{C.size_t(len(data)), ptr}

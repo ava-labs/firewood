@@ -48,6 +48,37 @@ func TestInsert100(t *testing.T) {
 	if hash[0] != 0xf8 {
 		t.Errorf("expected 0xf8, got %x", hash[0])
 	}
+
+	delete_ops := make([]KeyValue, 1)
+	ops[0] = KeyValue{[]byte(""), []byte("")}
+	f.Batch(delete_ops)
+}
+
+func TestRangeDelete(t *testing.T) {
+	var f Firewood = CreateDatabase("test.db")
+	defer f.Close()
+	defer os.Remove("test.db")
+	ops := make([]KeyValue, 10)
+	for i := 0; i < 10; i++ {
+		ops[i] = KeyValue{[]byte("key" + strconv.Itoa(i)), []byte("value" + strconv.Itoa(i))}
+	}
+	f.Batch(ops)
+
+	// delete all keys that start with "key"
+	delete_ops := make([]KeyValue, 1)
+	delete_ops[0] = KeyValue{[]byte("key1"), []byte("")}
+	f.Batch(delete_ops)
+
+	for i := 0; i < 10; i++ {
+		keystring := "key" + strconv.Itoa(i)
+		value, err := f.Get([]byte(keystring))
+		if err != nil {
+			t.FailNow()
+		}
+		if (value != nil) == (keystring[3] == '1') {
+			t.Errorf("incorrect response for %s", keystring)
+		}
+	}
 }
 
 func TestInvariants(t *testing.T) {
