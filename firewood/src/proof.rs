@@ -11,58 +11,95 @@ use storage::{
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+/// Reasons why a proof is invalid
 pub enum ProofError {
+    /// Expected start proof but got None
     #[error("expected start proof but got None")]
     MissingStartProof,
+    /// expected end proof but got None
     #[error("expected end proof but got None")]
     MissingEndProof,
     #[error("expected a child but got None")]
+    /// expected a child but got None")]
     MissingChild,
     #[error("proof keys should be monotonically increasing")]
+    /// proof keys should be monotonically increasing
     NonIncreasingKeys,
     #[error("key before range start")]
+    /// key before range start
     KeyBeforeRangeStart,
     #[error("key after range end")]
+    /// key after range end
     KeyAfterRangeEnd,
     #[error("unexpected hash")]
+    /// unexpected hash
     UnexpectedHash,
     #[error("unexpected key")]
+    /// unexpected key
     UnexpectedKey,
     #[error("unexpected value")]
+    /// unexpected value
     UnexpectedValue,
     #[error("proof should contain only the root")]
+    /// proof should contain only the root
     ShouldBeJustRoot,
     #[error("expected non-empty trie")]
+    /// expected non-empty trie
     UnexpectedEmptyTrie,
     #[error("missing key-value pair impled by proof")]
+    /// missing key-value pair impled by proof
     MissingKeyValue,
     #[error("got start proof but didn't request one")]
+    /// got start proof but didn't request one
     UnexpectedStartProof,
     #[error("value mismatch")]
+    /// value mismatch
     ValueMismatch,
+
+    /// Expected value but got None
     #[error("expected value but got None")]
     ExpectedValue,
+
+    /// Proof is empty
     #[error("proof can't be empty")]
     Empty,
+
+    /// Each proof node key should be a prefix of the proven key
     #[error("each proof node key should be a prefix of the proven key")]
     ShouldBePrefixOfProvenKey,
+
+    /// Each proof node key should be a prefix of the next key
     #[error("each proof node key should be a prefix of the next key")]
     ShouldBePrefixOfNextKey,
+
+    /// Child index is out of bounds
     #[error("child index is out of bounds")]
     ChildIndexOutOfBounds,
+
+    /// Only nodes with even length key can have values
     #[error("only nodes with even length key can have values")]
     ValueAtOddNibbleLength,
+
+    /// Node not in trie
     #[error("node not in trie")]
     NodeNotInTrie,
+
+    /// Error from the merkle package
     #[error("{0:?}")]
     Merkle(#[from] MerkleError),
+
     #[error("proof is empty; should have key-values or a start/end proof")]
+    /// proof is empty; should have key-values or a start/end proof
     EmptyProof,
+
     #[error("expected branch node but got leaf")]
+    /// expected branch node but got leaf
     UnexpectedLeaf,
 }
 
 #[derive(Clone, Debug)]
+
+/// A node in a proof.
 pub struct ProofNode {
     /// The key this node is at. Each byte is a nibble.
     pub key: Box<[u8]>,
@@ -95,7 +132,8 @@ impl Hashable for ProofNode {
 
 impl From<PathIterItem> for ProofNode {
     fn from(item: PathIterItem) -> Self {
-        let mut child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] = Default::default();
+        let mut child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] =
+            [const { None }; BranchNode::MAX_CHILDREN];
 
         if let Some(branch) = item.node.as_branch() {
             // TODO danlaine: can we avoid indexing?
@@ -127,6 +165,7 @@ impl From<&ProofNode> for TrieHash {
 pub struct Proof<T: Hashable>(pub Box<[T]>);
 
 impl<T: Hashable> Proof<T> {
+    /// Verify a proof
     pub fn verify<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         &self,
         key: K,
@@ -194,6 +233,7 @@ impl<T: Hashable> Proof<T> {
 
             // Assert that only nodes whose keys are an even number of nibbles
             // have a `value_digest`.
+            #[cfg(not(feature = "branch_factor_256"))]
             if node.key().count() % 2 != 0 && node.value_digest().is_some() {
                 return Err(ProofError::ValueAtOddNibbleLength);
             }

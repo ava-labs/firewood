@@ -12,11 +12,13 @@
 //
 
 use clap::{Parser, Subcommand};
+use fastrace_opentelemetry::OpenTelemetryReporter;
 use firewood::logger::trace;
 use log::LevelFilter;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use metrics_util::MetricKindMask;
 use sha2::{Digest, Sha256};
+use std::borrow::Cow;
 use std::error::Error;
 use std::net::{Ipv6Addr, SocketAddr};
 use std::num::NonZeroUsize;
@@ -25,6 +27,15 @@ use std::time::Duration;
 
 use firewood::db::{BatchOp, Db, DbConfig};
 use firewood::manager::RevisionManagerConfig;
+
+use fastrace::collector::Config;
+
+use opentelemetry::trace::SpanKind;
+use opentelemetry::InstrumentationScope;
+use opentelemetry::KeyValue;
+use opentelemetry_otlp::SpanExporter;
+use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::Resource;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -36,9 +47,19 @@ struct Args {
     cache_size: NonZeroUsize,
     #[arg(short, long, default_value_t = 128)]
     revisions: usize,
-    #[arg(short = 'p', long, default_value_t = 3000)]
+    #[arg(
+        short = 'p',
+        long,
+        default_value_t = 3000,
+        help = "Port to listen for prometheus"
+    )]
     prometheus_port: u16,
-    #[arg(short = 's', long, default_value_t = false)]
+    #[arg(
+        short = 's',
+        long,
+        default_value_t = false,
+        help = "Dump prometheus stats on exit"
+    )]
     stats_dump: bool,
 
     #[clap(flatten)]
@@ -66,7 +87,6 @@ struct GlobalOpts {
         short = 'd',
         required = false,
         help = "Use this database name instead of the default",
-        value_name = "TRUNCATE",
         default_value = PathBuf::from("benchmark_db").into_os_string(),
     )]
     dbname: PathBuf,
@@ -75,7 +95,6 @@ struct GlobalOpts {
         short = 't',
         required = false,
         help = "Terminate the test after this many minutes",
-        value_name = "TRUNCATE",
         default_value_t = 65
     )]
     duration_minutes: u64,
@@ -86,7 +105,7 @@ mod single;
 mod tenkrandom;
 mod zipf;
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Subcommand, PartialEq)]
 enum TestName {
     Create,
     TenKRandom,
@@ -122,7 +141,32 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn Error>> {
+    let reporter = OpenTelemetryReporter::new(
+        SpanExporter::builder()
+            .with_tonic()
+            .with_endpoint("http://127.0.0.1:4317".to_string())
+            .with_protocol(opentelemetry_otlp::Protocol::Grpc)
+            .with_timeout(Duration::from_secs(
+                opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT,
+            ))
+            .build()
+            .expect("initialize oltp exporter"),
+        SpanKind::Server,
+        Cow::Owned(Resource::new([KeyValue::new(
+            "service.name",
+            "avalabs.firewood.benchmark",
+        )])),
+        InstrumentationScope::builder("firewood")
+            .with_version(env!("CARGO_PKG_VERSION"))
+            .build(),
+    );
+    fastrace::set_reporter(reporter, Config::default());
+
     let args = Args::parse();
+
+    if args.test_name == TestName::Single && args.batch_size > 1000 {
+        panic!("Single test is not designed to handle batch sizes > 1000");
+    }
 
     env_logger::Builder::new()
         .filter_level(match args.global_opts.log_level.as_str() {
@@ -156,7 +200,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mgrcfg = RevisionManagerConfig::builder()
         .node_cache_size(args.cache_size)
         .free_list_cache_size(
-            NonZeroUsize::new(2 * args.batch_size as usize).expect("batch size > 0"),
+            NonZeroUsize::new(4 * args.batch_size as usize).expect("batch size > 0"),
         )
         .max_revisions(args.revisions)
         .build();
@@ -191,6 +235,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if args.stats_dump {
         println!("{}", prometheus_handle.render());
     }
+
+    fastrace::flush();
 
     Ok(())
 }

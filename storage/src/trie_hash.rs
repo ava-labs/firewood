@@ -51,13 +51,8 @@ impl From<GenericArray<u8, typenum::U32>> for TrieHash {
 
 impl TrieHash {
     /// Return the length of a TrieHash
-    const fn len() -> usize {
+    pub(crate) const fn len() -> usize {
         std::mem::size_of::<TrieHash>()
-    }
-
-    /// Returns true iff each element in this hash is 0.
-    pub fn is_empty(&self) -> bool {
-        *self == TrieHash::default()
     }
 }
 
@@ -81,7 +76,7 @@ impl<'de> Deserialize<'de> for TrieHash {
 
 struct TrieVisitor;
 
-impl<'de> Visitor<'de> for TrieVisitor {
+impl Visitor<'_> for TrieVisitor {
     type Value = TrieHash;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {

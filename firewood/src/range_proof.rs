@@ -37,7 +37,7 @@ where
         // TODO clone iterator and use next
         if let Some(start_key) = &start_key {
             if let Some(first_key) = keys_iter.peek() {
-                if first_key.as_ref() < start_key.as_ref() {
+                if first_key.as_ref() < *start_key {
                     return Err(ProofError::KeyBeforeRangeStart);
                 }
             }
@@ -55,7 +55,7 @@ where
                 // TODO danlaine: do we want to check this every key (i.e. short circuit)
                 // or just here at the end of iteration?
                 if let Some(end_key) = end_key.as_ref() {
-                    if key.as_ref() > end_key.as_ref() {
+                    if key.as_ref() > *end_key {
                         return Err(ProofError::KeyAfterRangeEnd);
                     }
                 }
@@ -141,7 +141,7 @@ where
         } else {
             // There is no end proof iff there are no key-value pairs in the range
             // and no end key was specified.
-            if end_key.is_some() || self.key_values.first().is_some() {
+            if end_key.is_some() || !self.key_values.is_empty() {
                 return Err(ProofError::MissingEndProof);
             }
         }
@@ -202,8 +202,7 @@ where
 
                 let child_index = next_proof_node
                     .key()
-                    .skip(proof_node.key().count())
-                    .next()
+                    .nth(proof_node.key().count())
                     .expect("proof is valid");
 
                 let mut children: [Option<TrieHash>; BranchNode::MAX_CHILDREN] = Default::default();

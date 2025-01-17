@@ -6,7 +6,8 @@ use arc_swap::access::DynAccess;
 use arc_swap::ArcSwap;
 use bincode::{DefaultOptions, Options as _};
 use bytemuck_derive::{AnyBitPattern, NoUninit};
-use metrics::{counter, histogram};
+use fastrace::local::LocalSpan;
+use metrics::counter;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -59,7 +60,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::hashednode::hash_node;
-use crate::node::Node;
+use crate::node::{ByteCounter, Node};
 use crate::{Child, FileBacked, Path, ReadableStorage, TrieHash};
 
 use super::linear::WritableStorage;
@@ -167,14 +168,20 @@ fn area_size_to_index(n: u64) -> Result<AreaIndex, Error> {
 pub type LinearAddress = NonZeroU64;
 
 /// Each [StoredArea] contains an [Area] which is either a [Node] or a [FreeArea].
+#[repr(u8)]
 #[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
 enum Area<T, U> {
     Node(T),
-    Free(U),
+    Free(U) = 255, // this is magic: no node starts with a byte of 255
 }
 
 /// Every item stored in the [NodeStore]'s ReadableStorage  after the
 /// [NodeStoreHeader] is a [StoredArea].
+///
+/// As an overview of what this looks like stored, we get something like this:
+///  - Byte 0: The index of the area size
+///  - Byte 1: 0x255 if free, otherwise the low-order bit indicates Branch or Leaf
+///  - Bytes 2..n: The actual data
 #[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
 struct StoredArea<T> {
     /// Index in [AREA_SIZES] of this area's size
@@ -210,20 +217,13 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
 
         debug_assert!(addr.get() % 8 == 0);
 
-        let addr = addr.get() + 1; // Skip the index byte
+        let addr = addr.get() + 1; // skip the length byte
+
+        let _span = LocalSpan::enter_with_local_parent("read_and_deserialize");
 
         let area_stream = self.storage.stream_from(addr)?;
-        let area: Area<Node, FreeArea> = serializer()
-            .deserialize_from(area_stream)
-            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-
-        match area {
-            Area::Node(node) => Ok(node.into()),
-            Area::Free(_) => Err(Error::new(
-                ErrorKind::InvalidData,
-                "Attempted to read a freed area",
-            )),
-        }
+        let node = Node::from_reader(area_stream)?;
+        Ok(node.into())
     }
 }
 
@@ -482,9 +482,9 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
 
     /// Returns the length of the serialized area for a node.
     fn stored_len(node: &Node) -> u64 {
-        let area: Area<&Node, FreeArea> = Area::Node(node);
-
-        serializer().serialized_size(&area).expect("fixme") + 1
+        let mut bytecounter = ByteCounter::new();
+        node.as_bytes(0, &mut bytecounter);
+        bytecounter.count()
     }
 
     /// Returns an address that can be used to store the given `node` and updates
@@ -492,7 +492,6 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     /// Also returns the index of the free list the node was allocated from.
     pub fn allocate_node(&mut self, node: &Node) -> Result<(LinearAddress, AreaIndex), Error> {
         let stored_area_size = Self::stored_len(node);
-        histogram!("firewood.node_size").record(stored_area_size as f64);
 
         // Attempt to allocate from a free list.
         // If we can't allocate from a free list, allocate past the existing
@@ -603,7 +602,6 @@ impl NodeStoreHeader {
     /// The first SIZE bytes of the ReadableStorage are reserved for the
     /// [NodeStoreHeader].
     /// We also want it aligned to a disk block
-
     const SIZE: u64 = 2048;
 
     /// Number of extra bytes to write on the first creation of the NodeStoreHeader
@@ -710,7 +708,7 @@ impl PartialEq for NodeStoreParent {
 
 impl Eq for NodeStoreParent {}
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 /// Contains state for a proposed revision of the trie.
 pub struct ImmutableProposal {
     /// Address --> Node for nodes created in this proposal.
@@ -928,55 +926,9 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
     }
 }
 
-impl<S: WritableStorage> NodeStore<ImmutableProposal, S> {
-    /// Persist the freelist from this proposal to storage.
-    pub fn flush_freelist(&self) -> Result<(), Error> {
-        // Write the free lists to storage
-        let free_list_bytes = bytemuck::bytes_of(&self.header.free_lists);
-        let free_list_offset = offset_of!(NodeStoreHeader, free_lists) as u64;
-        self.storage.write(free_list_offset, free_list_bytes)?;
-        Ok(())
-    }
-
-    /// Persist all the nodes of a proposal to storage.
-    pub fn flush_nodes(&self) -> Result<(), Error> {
-        for (addr, (area_size_index, node)) in self.kind.new.iter() {
-            let stored_area = StoredArea {
-                area_size_index: *area_size_index,
-                area: Area::<_, FreeArea>::Node(node.as_ref()),
-            };
-
-            let stored_area_bytes = serializer()
-                .serialize(&stored_area)
-                .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-
-            self.storage
-                .write(addr.get(), stored_area_bytes.as_slice())?;
-        }
-        self.storage
-            .write_cached_nodes(self.kind.new.iter().map(|(addr, (_, node))| (addr, node)))?;
-
-        Ok(())
-    }
-}
-
-impl NodeStore<ImmutableProposal, FileBacked> {
-    /// Return a Committed version of this proposal, which doesn't have any modified nodes.
-    /// This function is used during commit.
-    pub fn as_committed(&self) -> NodeStore<Committed, FileBacked> {
-        NodeStore {
-            header: self.header,
-            kind: Committed {
-                deleted: self.kind.deleted.clone(),
-                root_hash: self.kind.root_hash.clone(),
-            },
-            storage: self.storage.clone(),
-        }
-    }
-}
-
 impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     /// Persist the freelist from this proposal to storage.
+    #[fastrace::trace(short_name = true)]
     pub fn flush_freelist(&self) -> Result<(), Error> {
         // Write the free lists to storage
         let free_list_bytes = bytemuck::bytes_of(&self.header.free_lists);
@@ -986,20 +938,15 @@ impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     }
 
     /// Persist all the nodes of a proposal to storage.
+    #[fastrace::trace(short_name = true)]
     pub fn flush_nodes(&self) -> Result<(), Error> {
         for (addr, (area_size_index, node)) in self.kind.new.iter() {
-            let stored_area = StoredArea {
-                area_size_index: *area_size_index,
-                area: Area::<_, FreeArea>::Node(node.as_ref()),
-            };
-
-            let stored_area_bytes = serializer()
-                .serialize(&stored_area)
-                .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-
+            let mut stored_area_bytes = Vec::new();
+            node.as_bytes(*area_size_index, &mut stored_area_bytes);
             self.storage
                 .write(addr.get(), stored_area_bytes.as_slice())?;
         }
+
         self.storage
             .write_cached_nodes(self.kind.new.iter().map(|(addr, (_, node))| (addr, node)))?;
 
@@ -1146,6 +1093,8 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use std::array::from_fn;
+
     use crate::linear::memory::MemStore;
     use crate::{BranchNode, LeafNode};
     use arc_swap::access::DynGuard;
@@ -1233,8 +1182,21 @@ mod tests {
     #[test_case(BranchNode {
         partial_path: Path::from([6, 7, 8]),
         value: Some(vec![9, 10, 11].into_boxed_slice()),
-        children: [None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))],
+        children: from_fn(|i| {
+            if i == 15 {
+                Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
+            } else {
+                None
+            }
+        }),
     }; "branch node with 1 child")]
+    #[test_case(BranchNode {
+        partial_path: Path::from([6, 7, 8]),
+        value: Some(vec![9, 10, 11].into_boxed_slice()),
+        children: from_fn(|_|
+            Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
+        ),
+    }; "branch node with all child")]
     #[test_case(
     Node::Leaf(LeafNode {
         partial_path: Path::from([0, 1, 2]),
@@ -1244,10 +1206,29 @@ mod tests {
     fn test_serialized_len<N: Into<Node>>(node: N) {
         let node = node.into();
 
-        let area_size = NodeStore::<std::sync::Arc<ImmutableProposal>, MemStore>::stored_len(&node);
+        let computed_length =
+            NodeStore::<std::sync::Arc<ImmutableProposal>, MemStore>::stored_len(&node);
 
-        let area: Area<&Node, FreeArea> = Area::Node(&node);
-        let actually_serialized = serializer().serialize(&area).unwrap().len() as u64;
-        assert_eq!(area_size, actually_serialized + 1);
+        let mut serialized = Vec::new();
+        node.as_bytes(0, &mut serialized);
+        assert_eq!(serialized.len() as u64, computed_length);
+    }
+    #[test]
+    #[should_panic(expected = "Node size 16777225 is too large")]
+    fn giant_node() {
+        let memstore = MemStore::new(vec![]);
+        let mut node_store = NodeStore::new_empty_proposal(memstore.into());
+
+        let huge_value = vec![0u8; *AREA_SIZES.last().unwrap() as usize];
+
+        let giant_leaf = Node::Leaf(LeafNode {
+            partial_path: Path::from([0, 1, 2]),
+            value: SmallVec::from_vec(huge_value),
+        });
+
+        node_store.mut_root().replace(giant_leaf);
+
+        let immutable = NodeStore::<Arc<ImmutableProposal>, _>::from(node_store);
+        println!("{:?}", immutable); // should not be reached, but need to consume immutable to avoid optimization removal
     }
 }
