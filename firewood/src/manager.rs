@@ -17,15 +17,17 @@ use crate::v2::api::HashKey;
 use storage::{Committed, FileBacked, ImmutableProposal, NodeStore, Parentable, TrieHash};
 
 #[derive(Clone, Debug, TypedBuilder)]
+/// Revision manager configuratoin
 pub struct RevisionManagerConfig {
     /// The number of historical revisions to keep in memory.
     #[builder(default = 128)]
     max_revisions: usize,
 
+    /// The size of the node cache
     #[builder(default_code = "NonZero::new(1500000).expect(\"non-zero\")")]
     node_cache_size: NonZero<usize>,
 
-    #[builder(default_code = "NonZero::new(20000).expect(\"non-zero\")")]
+    #[builder(default_code = "NonZero::new(40000).expect(\"non-zero\")")]
     free_list_cache_size: NonZero<usize>,
 }
 
@@ -133,6 +135,7 @@ impl RevisionManager {
     ///    This write can be delayed, but would mean that recovery will not roll forward to this revision.
     /// 8. Proposal Cleanup.
     ///    Any other proposals that have this proposal as a parent should be reparented to the committed version.
+    #[fastrace::trace(short_name = true)]
     pub fn commit(&mut self, proposal: ProposedRevision) -> Result<(), RevisionManagerError> {
         // 1. Commit check
         let current_revision = self.current_revision();

@@ -6,7 +6,7 @@ use crate::range_proof::RangeProof;
 use crate::stream::{MerkleKeyValueStream, PathIterator};
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
-use metrics::{counter, histogram};
+use metrics::counter;
 use smallvec::SmallVec;
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -23,33 +23,28 @@ use storage::{
 
 use thiserror::Error;
 
+/// Keys are boxed u8 slices
 pub type Key = Box<[u8]>;
+
+/// Values are vectors
+/// TODO: change to Box<[u8]>
 pub type Value = Vec<u8>;
 
 #[derive(Debug, Error)]
+/// Errors that can occur when interacting with the Merkle trie
 pub enum MerkleError {
+    /// Can't generate proof for empty node
     #[error("can't generate proof for empty node")]
     Empty,
-    #[error("read only")]
-    ReadOnly,
-    #[error("node not a branch node")]
-    NotBranchNode,
+
+    /// IO error
     #[error("IO error: {0:?}")]
     IO(#[from] std::io::Error),
-    #[error("parent should not be a leaf branch")]
-    ParentLeafBranch,
-    #[error("removing internal node references failed")]
-    UnsetInternal,
-    #[error("merkle serde error: {0}")]
-    BinarySerdeError(String),
-    #[error("invalid utf8")]
-    UTF8Error,
-    #[error("node not found")]
-    NodeNotFound,
 }
 
 // convert a set of nibbles into a printable string
 // panics if there is a non-nibble byte in the set
+#[cfg(not(feature = "branch_factor_256"))]
 fn nibbles_formatter<X: IntoIterator<Item = u8>>(nib: X) -> String {
     nib.into_iter()
         .map(|c| {
@@ -58,6 +53,12 @@ fn nibbles_formatter<X: IntoIterator<Item = u8>>(nib: X) -> String {
                 .expect("requires nibbles") as char
         })
         .collect::<String>()
+}
+
+#[cfg(feature = "branch_factor_256")]
+fn nibbles_formatter<X: IntoIterator<Item = u8>>(nib: X) -> String {
+    let collected: Box<[u8]> = nib.into_iter().collect();
+    hex::encode(&collected)
 }
 
 macro_rules! write_attributes {
@@ -134,12 +135,13 @@ fn get_helper<T: TrieReader>(
 }
 
 #[derive(Debug)]
+/// Merkle operations against a nodestore
 pub struct Merkle<T> {
     nodestore: T,
 }
 
 impl<T> Merkle<T> {
-    pub fn into_inner(self) -> T {
+    pub(crate) fn into_inner(self) -> T {
         self.nodestore
     }
 }
@@ -151,11 +153,12 @@ impl<T> From<T> for Merkle<T> {
 }
 
 impl<T: TrieReader> Merkle<T> {
-    pub fn root(&self) -> Option<Arc<Node>> {
+    pub(crate) fn root(&self) -> Option<Arc<Node>> {
         self.nodestore.root_node()
     }
 
-    pub const fn nodestore(&self) -> &T {
+    #[cfg(test)]
+    pub(crate) const fn nodestore(&self) -> &T {
         &self.nodestore
     }
 
@@ -182,7 +185,8 @@ impl<T: TrieReader> Merkle<T> {
             // No nodes, even the root, are before `key`.
             // The root alone proves the non-existence of `key`.
             // TODO reduce duplicate code with ProofNode::from<PathIterItem>
-            let mut child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] = Default::default();
+            let mut child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] =
+                [const { None }; BranchNode::MAX_CHILDREN];
             if let Some(branch) = root.as_branch() {
                 // TODO danlaine: can we avoid indexing?
                 #[allow(clippy::indexing_slicing)]
@@ -203,6 +207,7 @@ impl<T: TrieReader> Merkle<T> {
         Ok(Proof(proof.into_boxed_slice()))
     }
 
+    /// Verify a proof that a key has a certain value, or that the key isn't in the trie.
     pub fn verify_range_proof<V: AsRef<[u8]>>(
         &self,
         _proof: &Proof<impl Hashable>,
@@ -214,7 +219,10 @@ impl<T: TrieReader> Merkle<T> {
         todo!()
     }
 
-    pub fn path_iter<'a>(&self, key: &'a [u8]) -> Result<PathIterator<'_, 'a, T>, MerkleError> {
+    pub(crate) fn path_iter<'a>(
+        &self,
+        key: &'a [u8],
+    ) -> Result<PathIterator<'_, 'a, T>, MerkleError> {
         PathIterator::new(&self.nodestore, key)
     }
 
@@ -321,14 +329,14 @@ impl<T: TrieReader> Merkle<T> {
         })
     }
 
-    pub fn get_value(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
+    pub(crate) fn get_value(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
         let Some(node) = self.get_node(key)? else {
             return Ok(None);
         };
         Ok(node.value().map(|v| v.to_vec().into_boxed_slice()))
     }
 
-    pub fn get_node(&self, key: &[u8]) -> Result<Option<Arc<Node>>, MerkleError> {
+    pub(crate) fn get_node(&self, key: &[u8]) -> Result<Option<Arc<Node>>, MerkleError> {
         let Some(root) = self.root() else {
             return Ok(None);
         };
@@ -339,7 +347,7 @@ impl<T: TrieReader> Merkle<T> {
 }
 
 impl<T: HashedNodeReader> Merkle<T> {
-    pub fn dump_node(
+    pub(crate) fn dump_node(
         &self,
         addr: LinearAddress,
         hash: Option<&TrieHash>,
@@ -384,7 +392,7 @@ impl<T: HashedNodeReader> Merkle<T> {
         Ok(())
     }
 
-    pub fn dump(&self) -> Result<String, MerkleError> {
+    pub(crate) fn dump(&self) -> Result<String, MerkleError> {
         let mut result = vec![];
         writeln!(result, "digraph Merkle {{\n  rankdir=LR;")?;
         if let Some((root_addr, root_hash)) = self.nodestore.root_address_and_hash()? {
@@ -409,6 +417,8 @@ impl<S: ReadableStorage> From<Merkle<NodeStore<MutableProposal, S>>>
 }
 
 impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
+    /// Convert a merkle backed by an MutableProposal into an ImmutableProposal
+    /// TODO: We probably don't need this function
     pub fn hash(self) -> Merkle<NodeStore<Arc<ImmutableProposal>, S>> {
         self.into()
     }
@@ -416,9 +426,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Map `key` to `value` in the trie.
     /// Each element of key is 2 nibbles.
     pub fn insert(&mut self, key: &[u8], value: Box<[u8]>) -> Result<(), MerkleError> {
-        histogram!("firewood.insert.key.length").record(key.len() as f64);
-        histogram!("firewood.insert.data.length").record(value.len() as f64);
-
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
         let root = self.nodestore.mut_root();
@@ -483,7 +490,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 let mut branch = BranchNode {
                     partial_path: path_overlap.shared.into(),
                     value: Some(value),
-                    children: Default::default(),
+                    children: [const { None }; BranchNode::MAX_CHILDREN],
                 };
 
                 // Shorten the node's partial path since it has a new parent.
@@ -531,7 +538,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                         let mut branch = BranchNode {
                             partial_path: std::mem::replace(&mut leaf.partial_path, Path::new()),
                             value: Some(std::mem::take(&mut leaf.value).into_boxed_slice()),
-                            children: Default::default(),
+                            children: [const { None }; BranchNode::MAX_CHILDREN],
                         };
 
                         let new_leaf = Node::Leaf(LeafNode {
@@ -557,7 +564,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 let mut branch = BranchNode {
                     partial_path: path_overlap.shared.into(),
                     value: None,
-                    children: Default::default(),
+                    children: [const { None }; BranchNode::MAX_CHILDREN],
                 };
 
                 node.update_partial_path(node_partial_path);
@@ -718,10 +725,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
             (Some((child_index, child_partial_path)), None) => {
                 // 3. The key is below the node (i.e. its descendant)
                 match node {
-                    Node::Leaf(ref mut leaf) => Ok((
-                        None,
-                        Some(std::mem::take(&mut leaf.value).into_boxed_slice()),
-                    )),
+                    // we found a non-matching leaf node, so the value does not exist
+                    Node::Leaf(_) => Ok((Some(node), None)),
                     Node::Branch(ref mut branch) => {
                         #[allow(clippy::indexing_slicing)]
                         let child = match std::mem::take(&mut branch.children[child_index as usize])
@@ -802,6 +807,184 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 }
             }
         }
+    }
+
+    /// Removes any key-value pairs with keys that have the given `prefix`.
+    /// Returns the number of key-value pairs removed.
+    pub fn remove_prefix(&mut self, prefix: &[u8]) -> Result<usize, MerkleError> {
+        let prefix = Path::from_nibbles_iterator(NibblesIterator::new(prefix));
+
+        let root = self.nodestore.mut_root();
+        let Some(root_node) = std::mem::take(root) else {
+            // The trie is empty. There is nothing to remove.
+            return Ok(0);
+        };
+
+        let mut deleted = 0;
+        let root_node = self.remove_prefix_helper(root_node, &prefix, &mut deleted)?;
+        *self.nodestore.mut_root() = root_node;
+        Ok(deleted)
+    }
+
+    fn remove_prefix_helper(
+        &mut self,
+        mut node: Node,
+        key: &[u8],
+        deleted: &mut usize,
+    ) -> Result<Option<Node>, MerkleError> {
+        // 4 possibilities for the position of the `key` relative to `node`:
+        // 1. The node is at `key`, in which case we need to delete this node and all its children.
+        // 2. The key is above the node (i.e. its ancestor), so the parent needs to be restructured (TODO).
+        // 3. The key is below the node (i.e. its descendant), so continue traversing the trie.
+        // 4. Neither is an ancestor of the other, in which case there's no work to do.
+        let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
+
+        let unique_key = path_overlap.unique_a;
+        let unique_node = path_overlap.unique_b;
+
+        match (
+            unique_key
+                .split_first()
+                .map(|(index, path)| (*index, Path::from(path))),
+            unique_node.split_first(),
+        ) {
+            (None, _) => {
+                // 1. The node is at `key`, or we're just above it
+                // so we can start deleting below here
+                match &mut node {
+                    Node::Branch(ref mut branch) => {
+                        if branch.value.is_some() {
+                            // a KV pair was in the branch itself
+                            *deleted += 1;
+                        }
+                        self.delete_children(branch, deleted)?;
+                    }
+                    Node::Leaf(_) => {
+                        // the prefix matched only a leaf, so we remove it and indicate only one item was removed
+                        *deleted += 1;
+                    }
+                };
+                Ok(None)
+            }
+            (_, Some(_)) => {
+                // Case (2) or (4)
+                Ok(Some(node))
+            }
+            (Some((child_index, child_partial_path)), None) => {
+                // 3. The key is below the node (i.e. its descendant)
+                match node {
+                    Node::Leaf(_) => Ok(Some(node)),
+                    Node::Branch(ref mut branch) => {
+                        #[allow(clippy::indexing_slicing)]
+                        let child = match std::mem::take(&mut branch.children[child_index as usize])
+                        {
+                            None => {
+                                return Ok(Some(node));
+                            }
+                            Some(Child::Node(node)) => node,
+                            Some(Child::AddressWithHash(addr, _)) => {
+                                self.nodestore.read_for_update(addr)?
+                            }
+                        };
+
+                        let child =
+                            self.remove_prefix_helper(child, child_partial_path.as_ref(), deleted)?;
+
+                        if let Some(child) = child {
+                            branch.update_child(child_index, Some(Child::Node(child)));
+                        } else {
+                            branch.update_child(child_index, None);
+                        }
+
+                        let mut children_iter =
+                            branch
+                                .children
+                                .iter_mut()
+                                .enumerate()
+                                .filter_map(|(index, child)| {
+                                    child.as_mut().map(|child| (index, child))
+                                });
+
+                        let Some((child_index, child)) = children_iter.next() else {
+                            // The branch has no children. Turn it into a leaf.
+                            let leaf = Node::Leaf(LeafNode {
+                                    value: SmallVec::from(&(*branch.value.take().expect(
+                                        "branch node must have a value if it previously had only 1 child",
+                                    ))[..]),
+                                    partial_path: branch.partial_path.clone(), // TODO remove clone
+                                });
+                            return Ok(Some(leaf));
+                        };
+
+                        if children_iter.next().is_some() {
+                            // The branch has more than 1 child. Return the branch.
+                            return Ok(Some(node));
+                        }
+
+                        // The branch has only 1 child. Remove the branch and return the child.
+                        let mut child = match child {
+                            Child::Node(child_node) => std::mem::replace(
+                                child_node,
+                                Node::Leaf(LeafNode {
+                                    value: SmallVec::default(),
+                                    partial_path: Path::new(),
+                                }),
+                            ),
+                            Child::AddressWithHash(addr, _) => {
+                                self.nodestore.read_for_update(*addr)?
+                            }
+                        };
+
+                        // The child's partial path is the concatenation of its (now removed) parent,
+                        // its (former) child index, and its partial path.
+                        let branch_partial_path =
+                            std::mem::replace(&mut branch.partial_path, Path::new());
+
+                        let child_partial_path = Path::from_nibbles_iterator(
+                            branch_partial_path
+                                .iter()
+                                .chain(once(&(child_index as u8)))
+                                .chain(child.partial_path().iter())
+                                .copied(),
+                        );
+                        child.update_partial_path(child_partial_path);
+
+                        Ok(Some(child))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Recursively deletes all children of a branch node.
+    fn delete_children(
+        &mut self,
+        branch: &mut BranchNode,
+        deleted: &mut usize,
+    ) -> Result<(), std::io::Error> {
+        if branch.value.is_some() {
+            // a KV pair was in the branch itself
+            *deleted += 1;
+        }
+        for children in branch.children.iter_mut() {
+            // read the child node
+            let child = match children {
+                Some(Child::Node(node)) => node,
+                Some(Child::AddressWithHash(addr, _)) => {
+                    &mut self.nodestore.read_for_update(*addr)?
+                }
+                None => continue,
+            };
+            match child {
+                Node::Branch(ref mut child_branch) => {
+                    self.delete_children(child_branch, deleted)?;
+                }
+                Node::Leaf(_) => {
+                    *deleted += 1;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -999,6 +1182,51 @@ mod tests {
     }
 
     #[test]
+    fn remove_prefix_exact() {
+        let mut merkle = two_byte_all_keys();
+        for key_val in u8::MIN..=u8::MAX {
+            let key = [key_val];
+            let got = merkle.remove_prefix(&key).unwrap();
+            assert_eq!(got, 1);
+            let got = merkle.get_value(&key).unwrap();
+            assert!(got.is_none());
+        }
+    }
+
+    fn two_byte_all_keys() -> Merkle<NodeStore<MutableProposal, MemStore>> {
+        let mut merkle = create_in_memory_merkle();
+        for key_val in u8::MIN..=u8::MAX {
+            let key = [key_val, key_val];
+            let val = [key_val];
+
+            merkle.insert(&key, Box::new(val)).unwrap();
+            let got = merkle.get_value(&key).unwrap().unwrap();
+            assert_eq!(&*got, val);
+        }
+        merkle
+    }
+
+    #[test]
+    fn remove_prefix_all() {
+        let mut merkle = two_byte_all_keys();
+        let got = merkle.remove_prefix(&[]).unwrap();
+        assert_eq!(got, 256);
+    }
+
+    #[test]
+    fn remove_prefix_partial() {
+        let mut merkle = create_in_memory_merkle();
+        merkle
+            .insert(b"abc", Box::from(b"value".as_slice()))
+            .unwrap();
+        merkle
+            .insert(b"abd", Box::from(b"value".as_slice()))
+            .unwrap();
+        let got = merkle.remove_prefix(b"ab").unwrap();
+        assert_eq!(got, 2);
+    }
+
+    #[test]
     fn remove_many() {
         let mut merkle = create_in_memory_merkle();
 
@@ -1027,6 +1255,36 @@ mod tests {
             assert!(got.is_none());
         }
         assert!(merkle.nodestore.root_node().is_none());
+    }
+
+    #[test]
+    fn remove_prefix() {
+        let mut merkle = create_in_memory_merkle();
+
+        // insert key-value pairs
+        for key_val in u8::MIN..=u8::MAX {
+            let key = [key_val, key_val];
+            let val = [key_val];
+
+            merkle.insert(&key, Box::new(val)).unwrap();
+            let got = merkle.get_value(&key).unwrap().unwrap();
+            assert_eq!(&*got, val);
+        }
+
+        // remove key-value pairs with prefix [0]
+        let prefix = [0];
+        assert_eq!(merkle.remove_prefix(&[0]).unwrap(), 1);
+
+        // make sure all keys with prefix [0] were removed
+        for key_val in u8::MIN..=u8::MAX {
+            let key = [key_val, key_val];
+            let got = merkle.get_value(&key).unwrap();
+            if key[0] == prefix[0] {
+                assert!(got.is_none());
+            } else {
+                assert!(got.is_some());
+            }
+        }
     }
 
     #[test]
@@ -1467,19 +1725,24 @@ mod tests {
     #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1])], Some("c3bdc20aff5cba30f81ffd7689e94e1dbeece4a08e27f0104262431604cf45c6"); "root with leaf child")]
     #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1]),(&[0,1,2],&[0,1,2])], Some("229011c50ad4d5c2f4efe02b8db54f361ad295c4eee2bf76ea4ad1bb92676f97"); "root with branch child")]
     #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1]),(&[0,8],&[0,8]),(&[0,1,2],&[0,1,2])], Some("a683b4881cb540b969f885f538ba5904699d480152f350659475a962d6240ef9"); "root with branch child and leaf child")]
+    #[allow(unused_variables)]
     fn test_root_hash_merkledb_compatible(kvs: Vec<(&[u8], &[u8])>, expected_hash: Option<&str>) {
-        let merkle = merkle_build_test(kvs).unwrap().hash();
-        let Some(got_hash) = merkle.nodestore.root_hash().unwrap() else {
-            assert!(expected_hash.is_none());
-            return;
-        };
+        // TODO: get the hashes from merkledb and verify compatibility with branch factor 256
+        #[cfg(not(feature = "branch_factor_256"))]
+        {
+            let merkle = merkle_build_test(kvs).unwrap().hash();
+            let Some(got_hash) = merkle.nodestore.root_hash().unwrap() else {
+                assert!(expected_hash.is_none());
+                return;
+            };
 
-        let expected_hash = expected_hash.unwrap();
+            let expected_hash = expected_hash.unwrap();
 
-        // This hash is from merkledb
-        let expected_hash: [u8; 32] = hex::decode(expected_hash).unwrap().try_into().unwrap();
+            // This hash is from merkledb
+            let expected_hash: [u8; 32] = hex::decode(expected_hash).unwrap().try_into().unwrap();
 
-        assert_eq!(got_hash, TrieHash::from(expected_hash));
+            assert_eq!(got_hash, TrieHash::from(expected_hash));
+        }
     }
 
     #[test]
@@ -1516,6 +1779,36 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_delete_child() {
+        let items = vec![("do", "verb")];
+        let mut merkle = merkle_build_test(items).unwrap();
+
+        assert_eq!(merkle.remove(b"does_not_exist").unwrap(), None);
+        assert_eq!(&*merkle.get_value(b"do").unwrap().unwrap(), b"verb");
+    }
+
+    #[test]
+    fn test_delete_some() {
+        let items = (0..100)
+            .map(|n| {
+                let key = format!("key{}", n);
+                let val = format!("value{}", n);
+                (key.as_bytes().to_vec(), val.as_bytes().to_vec())
+            })
+            .collect::<Vec<(Vec<u8>, Vec<u8>)>>();
+        let mut merkle = merkle_build_test(items.clone()).unwrap();
+        merkle.remove_prefix(b"key1").unwrap();
+        for item in items {
+            let (key, val) = item;
+            if key.starts_with(b"key1") {
+                assert!(merkle.get_value(&key).unwrap().is_none());
+            } else {
+                assert_eq!(&*merkle.get_value(&key).unwrap().unwrap(), val.as_slice());
+            }
+        }
     }
 
     // #[test]
@@ -2602,4 +2895,12 @@ mod tests {
     //     }
     //     new_key
     // }
+    #[test]
+    fn remove_nonexistent_with_one() {
+        let items = vec![("do", "verb")];
+        let mut merkle = merkle_build_test(items).unwrap();
+
+        assert_eq!(merkle.remove(b"does_not_exist").unwrap(), None);
+        assert_eq!(&*merkle.get_value(b"do").unwrap().unwrap(), b"verb");
+    }
 }

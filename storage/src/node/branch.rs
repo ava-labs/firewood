@@ -8,6 +8,7 @@ use crate::{LeafNode, LinearAddress, Node, Path, TrieHash};
 use std::fmt::{Debug, Error as FmtError, Formatter};
 
 #[derive(PartialEq, Eq, Clone, Debug)]
+#[repr(C)]
 /// A child of a branch node.
 pub enum Child {
     /// There is a child at this index, but we haven't hashed it
@@ -42,7 +43,7 @@ impl Serialize for BranchNode {
         state.serialize_field("partial_path", &self.partial_path)?;
         state.serialize_field("value", &self.value)?;
 
-        let children: SmallVec<[(u8, LinearAddress, TrieHash); 16]> = self
+        let children: SmallVec<[(u8, LinearAddress, &TrieHash); Self::MAX_CHILDREN]> = self
             .children
             .iter()
             .enumerate()
@@ -51,9 +52,7 @@ impl Serialize for BranchNode {
                 Some(Child::Node(_)) => {
                     panic!("serializing in-memory node for disk storage")
                 }
-                Some(Child::AddressWithHash(addr, hash)) => {
-                    Some((offset as u8, *addr, (*hash).clone()))
-                }
+                Some(Child::AddressWithHash(addr, hash)) => Some((offset as u8, *addr, hash)),
             })
             .collect();
 
@@ -71,12 +70,13 @@ impl<'de> Deserialize<'de> for BranchNode {
         struct SerializedBranchNode {
             partial_path: Path,
             value: Option<Box<[u8]>>,
-            children: SmallVec<[(u8, LinearAddress, TrieHash); 16]>,
+            children: SmallVec<[(u8, LinearAddress, TrieHash); BranchNode::MAX_CHILDREN]>,
         }
 
         let s: SerializedBranchNode = Deserialize::deserialize(deserializer)?;
 
-        let mut children: [Option<Child>; BranchNode::MAX_CHILDREN] = Default::default();
+        let mut children: [Option<Child>; BranchNode::MAX_CHILDREN] =
+            [const { None }; BranchNode::MAX_CHILDREN];
         for (offset, addr, hash) in s.children.iter() {
             children[*offset as usize] = Some(Child::AddressWithHash(*addr, hash.clone()));
         }
@@ -91,18 +91,16 @@ impl<'de> Deserialize<'de> for BranchNode {
 
 impl Debug for BranchNode {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), FmtError> {
-        write!(f, "[Branch")?;
+        write!(f, "[BranchNode")?;
         write!(f, r#" path="{:?}""#, self.partial_path)?;
 
         for (i, c) in self.children.iter().enumerate() {
             match c {
                 None => {}
                 Some(Child::Node(_)) => {} //TODO
-                Some(Child::AddressWithHash(addr, hash)) => write!(
-                    f,
-                    "(index: {i:?}), address={addr:?}, hash={:?})",
-                    hex::encode(hash),
-                )?,
+                Some(Child::AddressWithHash(addr, hash)) => {
+                    write!(f, "({i:?}: address={addr:?} hash={})", hex::encode(hash),)?
+                }
             }
         }
 
@@ -119,6 +117,11 @@ impl Debug for BranchNode {
 
 impl BranchNode {
     /// The maximum number of children in a [BranchNode]
+    #[cfg(feature = "branch_factor_256")]
+    pub const MAX_CHILDREN: usize = 256;
+
+    /// The maximum number of children in a [BranchNode]
+    #[cfg(not(feature = "branch_factor_256"))]
     pub const MAX_CHILDREN: usize = 16;
 
     /// Returns the address of the child at the given index.
@@ -158,7 +161,7 @@ impl From<&LeafNode> for BranchNode {
         BranchNode {
             partial_path: leaf.partial_path.clone(),
             value: Some(Box::from(&leaf.value[..])),
-            children: Default::default(),
+            children: [const { None }; BranchNode::MAX_CHILDREN],
         }
     }
 }

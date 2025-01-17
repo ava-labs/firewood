@@ -21,22 +21,19 @@ use typed_builder::TypedBuilder;
 
 #[derive(Debug)]
 #[non_exhaustive]
+/// Represents the different types of errors that can occur in the database.
 pub enum DbError {
-    InvalidParams,
+    /// Merkle error occurred.
     Merkle(MerkleError),
-    CreateError,
+    /// I/O error occurred.
     IO(std::io::Error),
-    InvalidProposal,
 }
 
 impl fmt::Display for DbError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DbError::InvalidParams => write!(f, "invalid parameters provided"),
             DbError::Merkle(e) => write!(f, "merkle error: {e:?}"),
-            DbError::CreateError => write!(f, "database create error"),
             DbError::IO(e) => write!(f, "I/O error: {e:?}"),
-            DbError::InvalidProposal => write!(f, "invalid proposal"),
         }
     }
 }
@@ -51,6 +48,8 @@ impl Error for DbError {}
 
 type HistoricalRev = NodeStore<Committed, FileBacked>;
 
+/// Metrics for the database.
+/// TODO: Add more metrics
 pub struct DbMetrics {
     proposals: metrics::Counter,
 }
@@ -58,6 +57,20 @@ pub struct DbMetrics {
 impl std::fmt::Debug for DbMetrics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DbMetrics").finish()
+    }
+}
+
+/// A synchronous view of the database.
+pub trait DbViewSync {
+    /// find a value synchronously
+    fn val_sync<K: KeyType>(&self, key: K) -> Result<Option<Box<[u8]>>, DbError>;
+}
+
+impl DbViewSync for HistoricalRev {
+    fn val_sync<K: KeyType>(&self, key: K) -> Result<Option<Box<[u8]>>, DbError> {
+        let merkle = Merkle::from(self);
+        let value = merkle.get_value(key.as_ref()).map_err(DbError::Merkle)?;
+        Ok(value)
     }
 }
 
@@ -109,11 +122,13 @@ pub struct DbConfig {
     /// existing contents will be lost.
     #[builder(default = false)]
     pub truncate: bool,
+    /// Revision manager configuration.
     #[builder(default = RevisionManagerConfig::builder().build())]
     pub manager: RevisionManagerConfig,
 }
 
 #[derive(Debug)]
+/// A database instance.
 pub struct Db {
     metrics: Arc<DbMetrics>,
     // TODO: consider using https://docs.rs/lock_api/latest/lock_api/struct.RwLock.html#method.upgradable_read
@@ -150,6 +165,7 @@ where
         Ok(self.manager.read().expect("poisoned lock").all_hashes())
     }
 
+    #[fastrace::trace(short_name = true)]
     async fn propose<'p, K: KeyType, V: ValueType>(
         &'p self,
         batch: api::Batch<K, V>,
@@ -164,6 +180,7 @@ where
             .current_revision();
         let proposal = NodeStore::new(parent)?;
         let mut merkle = Merkle::from(proposal);
+        let span = fastrace::Span::enter_with_local_parent("merkleops");
         for op in batch {
             match op {
                 BatchOp::Put { key, value } => {
@@ -172,11 +189,20 @@ where
                 BatchOp::Delete { key } => {
                     merkle.remove(key.as_ref())?;
                 }
+                BatchOp::DeleteRange { prefix } => {
+                    merkle.remove_prefix(prefix.as_ref())?;
+                }
             }
         }
+
+        drop(span);
+        let span = fastrace::Span::enter_with_local_parent("freeze");
+
         let nodestore = merkle.into_inner();
         let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
             Arc::new(nodestore.into());
+
+        drop(span);
         self.manager
             .write()
             .expect("poisoned lock")
@@ -193,6 +219,7 @@ where
 }
 
 impl Db {
+    /// Create a new database instance.
     pub async fn new<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> Result<Self, api::Error> {
         let metrics = Arc::new(DbMetrics {
             proposals: counter!("firewood.proposals"),
@@ -210,8 +237,87 @@ impl Db {
         Ok(db)
     }
 
+    /// Create a new database instance with synchronous I/O.
+    pub fn new_sync<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> Result<Self, api::Error> {
+        let metrics = Arc::new(DbMetrics {
+            proposals: counter!("firewood.proposals"),
+        });
+        describe_counter!("firewood.proposals", "Number of proposals created");
+        let manager = RevisionManager::new(
+            db_path.as_ref().to_path_buf(),
+            cfg.truncate,
+            cfg.manager.clone(),
+        )?;
+        let db = Self {
+            metrics,
+            manager: manager.into(),
+        };
+        Ok(db)
+    }
+
+    /// Synchronously get the root hash of the latest revision.
+    pub fn root_hash_sync(&self) -> Result<Option<TrieHash>, api::Error> {
+        Ok(self.manager.read().expect("poisoned lock").root_hash()?)
+    }
+
+    /// Synchronously get a revision from a root hash
+    pub fn revision_sync(&self, root_hash: TrieHash) -> Result<Arc<HistoricalRev>, api::Error> {
+        let nodestore = self
+            .manager
+            .read()
+            .expect("poisoned lock")
+            .revision(root_hash)?;
+        Ok(nodestore)
+    }
+
+    /// propose a new batch synchronously
+    pub fn propose_sync<K: KeyType, V: ValueType>(
+        &'_ self,
+        batch: Batch<K, V>,
+    ) -> Result<Arc<Proposal<'_>>, api::Error> {
+        let parent = self
+            .manager
+            .read()
+            .expect("poisoned lock")
+            .current_revision();
+        let proposal = NodeStore::new(parent)?;
+        let mut merkle = Merkle::from(proposal);
+        for op in batch {
+            match op {
+                BatchOp::Put { key, value } => {
+                    merkle.insert(key.as_ref(), value.as_ref().into())?;
+                }
+                BatchOp::Delete { key } => {
+                    merkle.remove(key.as_ref())?;
+                }
+                BatchOp::DeleteRange { prefix } => {
+                    merkle.remove_prefix(prefix.as_ref())?;
+                }
+            }
+        }
+        let nodestore = merkle.into_inner();
+        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
+            Arc::new(nodestore.into());
+        self.manager
+            .write()
+            .expect("poisoned lock")
+            .add_proposal(immutable.clone());
+
+        self.metrics.proposals.increment(1);
+
+        Ok(Arc::new(Proposal {
+            nodestore: immutable,
+            db: self,
+        }))
+    }
+
     /// Dump the Trie of the latest revision.
-    pub fn dump(&self, w: &mut dyn Write) -> Result<(), DbError> {
+    pub async fn dump(&self, w: &mut dyn Write) -> Result<(), DbError> {
+        self.dump_sync(w)
+    }
+
+    /// Dump the Trie of the latest revision, synchronously.
+    pub fn dump_sync(&self, w: &mut dyn Write) -> Result<(), DbError> {
         let latest_rev_nodestore = self
             .manager
             .read()
@@ -223,19 +329,21 @@ impl Db {
         write!(w, "{}", output).map_err(DbError::IO)
     }
 
+    /// Get a copy of the database metrics
     pub fn metrics(&self) -> Arc<DbMetrics> {
         self.metrics.clone()
     }
 }
 
 #[derive(Debug)]
+/// A user-visible database proposal
 pub struct Proposal<'p> {
     nodestore: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>,
     db: &'p Db,
 }
 
 #[async_trait]
-impl<'a> api::DbView for Proposal<'a> {
+impl api::DbView for Proposal<'_> {
     type Stream<'b>
         = MerkleKeyValueStream<'b, NodeStore<Arc<ImmutableProposal>, FileBacked>>
     where
@@ -276,6 +384,7 @@ impl<'a> api::DbView for Proposal<'a> {
 impl<'a> api::Proposal for Proposal<'a> {
     type Proposal = Proposal<'a>;
 
+    #[fastrace::trace(short_name = true)]
     async fn propose<K: KeyType, V: ValueType>(
         self: Arc<Self>,
         batch: api::Batch<K, V>,
@@ -290,6 +399,9 @@ impl<'a> api::Proposal for Proposal<'a> {
                 }
                 BatchOp::Delete { key } => {
                     merkle.remove(key.as_ref())?;
+                }
+                BatchOp::DeleteRange { prefix } => {
+                    merkle.remove_prefix(prefix.as_ref())?;
                 }
             }
         }
@@ -310,6 +422,19 @@ impl<'a> api::Proposal for Proposal<'a> {
     }
 
     async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
+        match Arc::into_inner(self) {
+            Some(proposal) => {
+                let mut manager = proposal.db.manager.write().expect("poisoned lock");
+                Ok(manager.commit(proposal.nodestore.clone())?)
+            }
+            None => Err(api::Error::CannotCommitClonedProposal),
+        }
+    }
+}
+
+impl Proposal<'_> {
+    /// Commit a proposal synchronously
+    pub fn commit_sync(self: Arc<Self>) -> Result<(), api::Error> {
         match Arc::into_inner(self) {
             Some(proposal) => {
                 let mut manager = proposal.db.manager.write().expect("poisoned lock");

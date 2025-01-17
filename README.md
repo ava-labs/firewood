@@ -63,17 +63,28 @@ Firewood guarantees recoverability by not referencing the new nodes in a new rev
   `Revision`.
 
 ## Roadmap
- - [ ] Complete the proof code
- - [ ] Complete the revision manager
- - [ ] Complete the API implementation
- - [ ] Implement a node cache
- - [ ] Hook up the RPC
+
+- [X] Complete the revision manager
+- [X] Complete the API implementation
+- [X] Implement a node cache
+- [ ] Complete the proof code
+- [ ] Hook up the RPC
+
+## Build
+
+In order to build firewood, `protoc` must be installed. See instructions for installation [here](https://grpc.io/docs/protoc-installation/).
+
+On Mac, you can install via brew:
+
+```sh
+brew install protobuf
+```
 
 ## Run
 
 There are several examples, in the examples directory, that simulate real world
 use-cases. Try running them via the command-line, via `cargo run --release
---example simple`.
+--example insert`.
 
 For maximum performance, use `cargo run --maxperf` instead, which enables maximum
 link time compiler optimizations, but takes a lot longer to compile.
@@ -94,7 +105,7 @@ Firewood comes with a CLI tool called `fwdctl` that enables one to create and in
 
 ## Test
 
-```
+```sh
 cargo test --release
 ```
 
