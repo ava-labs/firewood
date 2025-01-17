@@ -203,7 +203,7 @@ async fn handle_next_key(next_key: KeyFromStream) {
             );
         }
         Some(Err(e)) => {
-            eprintln!("Error occurred while fetching the next key: {}", e);
+            eprintln!("Error occurred while fetching the next key: {}.", e);
         }
         None => {
             println!("There is no next key. Data dump completed.");
