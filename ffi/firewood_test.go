@@ -1,6 +1,8 @@
 package firewood
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"os"
 	"strconv"
 	"testing"
@@ -103,4 +105,42 @@ func TestInvariants(t *testing.T) {
 	if val != nil || err != nil {
 		t.Errorf("expected nil, nil, got %v, %v", val, err)
 	}
+}
+
+var livesForever Firewood
+
+func BenchmarkLotsOfBatches(b *testing.B) {
+	var f Firewood = CreateDatabase("test.db")
+
+	h := sha256.New()
+	buf := make([]byte, 32)
+
+	get := func(prefix string, i int, out []byte) []byte {
+		copy(buf, prefix)
+		binary.BigEndian.PutUint64(buf[len(prefix):], uint64(i))
+		out = h.Sum(out)
+		h.Reset()
+		return out
+	}
+
+	batchSize := 10_000
+	logEach := 10
+	ks := make([][]byte, batchSize)
+	vs := make([][]byte, batchSize)
+
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < batchSize; j++ {
+			ks[j] = get("key", i*batchSize+j, ks[j])
+			vs[j] = get("value", i*batchSize+j, vs[j])
+		}
+		_, err := f.Update(ks, vs)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if i%logEach == 0 {
+			b.Logf("batch %d", i)
+		}
+	}
+
+	livesForever = f
 }
