@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 firewood = { version = "0.0.4", path = "../firewood" }
+storage = { version = "0.0.4", path = "../storage" }
 clap = { version = "4.5.0", features = ["cargo", "derive"] }
 anyhow = "1.0.79"
 env_logger = "0.11.2"
