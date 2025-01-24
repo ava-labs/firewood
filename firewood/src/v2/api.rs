@@ -103,6 +103,10 @@ pub enum Error {
         end_key: Box<[u8]>,
     },
 
+    /// Limit must be positive
+    #[error("limit must be positive")]
+    InvalidLimit,
+
     #[error("IO error: {0}")]
     /// An IO error occurred
     IO(#[from] std::io::Error),
