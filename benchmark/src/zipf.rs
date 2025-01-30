@@ -6,8 +6,8 @@ use firewood::db::{BatchOp, Db};
 use firewood::v2::api::{Db as _, Proposal as _};
 use log::{debug, trace};
 use pretty_duration::pretty_duration;
-use rand::prelude::Distribution as _;
-use rand::thread_rng;
+use rand::distr::Distribution as _;
+use rand::rng;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::error::Error;
@@ -74,7 +74,7 @@ fn generate_updates(
     zipf: &zipf::ZipfDistribution,
 ) -> impl Iterator<Item = BatchOp<Vec<u8>, Vec<u8>>> {
     let hash_of_batch_id = Sha256::digest(batch_id.to_ne_bytes()).to_vec();
-    let rng = thread_rng();
+    let rng = rng();
     zipf.sample_iter(rng)
         .take(batch_size)
         .map(|inner_key| {
