@@ -887,8 +887,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                     .0
                     .extend(b.partial_path.0.iter().copied().chain(once(nibble as u8)));
 
-                let (child_addr, child_hash) =
-                    self.hash_helper(child_node, path_prefix, new_nodes);
+                let (child_addr, child_hash) = self.hash_helper(child_node, path_prefix, new_nodes);
                 *child = Some(Child::AddressWithHash(child_addr, child_hash));
                 path_prefix.0.truncate(original_length);
             }
