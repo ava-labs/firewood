@@ -130,6 +130,8 @@ func BenchmarkLotsOfBatches(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		for j := 0; j < batchSize; j++ {
+			ks[j] = ks[j][:0]
+			vs[j] = vs[j][:0]
 			ks[j] = get("key", i*batchSize+j, ks[j])
 			vs[j] = get("value", i*batchSize+j, vs[j])
 		}
