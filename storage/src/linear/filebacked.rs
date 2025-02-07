@@ -135,7 +135,9 @@ impl Read for PredictiveReader<'_> {
         if self.len == self.pos {
             let bytes_left_in_page = PREDICTIVE_READ_BUFFER_SIZE
                 - (self.offset % PREDICTIVE_READ_BUFFER_SIZE as u64) as usize;
-            let read = self.fd.read_at(&mut self.buffer[..bytes_left_in_page], self.offset)?;
+            let read = self
+                .fd
+                .read_at(&mut self.buffer[..bytes_left_in_page], self.offset)?;
             self.offset += read as u64;
             self.len = read;
             self.pos = 0;
