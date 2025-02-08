@@ -939,12 +939,76 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
 
     /// Persist all the nodes of a proposal to storage.
     #[fastrace::trace(short_name = true)]
+    #[cfg(not(feature = "io-uring"))]
     pub fn flush_nodes(&self) -> Result<(), Error> {
         for (addr, (area_size_index, node)) in self.kind.new.iter() {
             let mut stored_area_bytes = Vec::new();
             node.as_bytes(*area_size_index, &mut stored_area_bytes);
             self.storage
                 .write(addr.get(), stored_area_bytes.as_slice())?;
+        }
+
+        self.storage
+            .write_cached_nodes(self.kind.new.iter().map(|(addr, (_, node))| (addr, node)))?;
+
+        Ok(())
+    }
+
+    /// Persist all the nodes of a proposal to storage.
+    #[fastrace::trace(short_name = true)]
+    #[cfg(feature = "io-uring")]
+    pub fn flush_nodes(&self) -> Result<(), Error> {
+        use itertools::Itertools as _;
+
+        const RINGSIZE: usize = FileBacked::RINGSIZE as usize;
+        // This lock is only needed to keep the compiler happy, as the ring is
+        // only accessed by flush_nodes, which only happens with a locked revision
+        // manager, so there can only be one of these running at a time for now.
+        // We don't want to bypass this lock because in the future we may have multiple
+        // writers for different revisions at the same time, which would require this lock.
+        let mut guard = self.storage.ring.lock().expect("poisoned queue");
+        // We shunk the buffers because we can only schedule RINGSIZE entries to the kernel at a time
+        for chunk in &self.kind.new.iter().chunks(RINGSIZE) {
+            // We need to keep the buffers pinned until the write is complete, so we save them here.
+            let mut saved_pinned_buffers = Vec::with_capacity(RINGSIZE);
+            let iovecs: Box<_> = chunk
+                .map(|(addr, (area_size_index, node))| {
+                    // serialize the nodes
+                    // TODO: parallel iterator? or thread pool with message passing?
+                    let mut serialized = Vec::with_capacity(100); // TODO: better size?
+                    node.as_bytes(*area_size_index, &mut serialized);
+                    trace!("node: {addr} {node:?} {serialized:x?}");
+                    (addr, serialized)
+                })
+                .map(|(addr, serialized)| {
+                    // The buffer must not move at this point, and we don't need to grow
+                    // or shrink it, so we convert it into a boxed slice and pin it.
+                    let buffer = std::pin::Pin::new(serialized.into_boxed_slice());
+                    // These pinned slices have to outlive the next set of calls, so
+                    // we save them into the saved_pinned_buffers vec.
+                    saved_pinned_buffers.push(buffer);
+                    // we put the address in the user_data field just for debugging
+                    // if this loop is rewritten, we can use this field to indicate
+                    // which write buffer is being freed and is availble for reuse
+                    self.storage
+                        .make_op(saved_pinned_buffers.last().unwrap())
+                        .offset(addr.get())
+                        .build()
+                        .user_data(addr.get())
+                })
+                .collect();
+            #[allow(unsafe_code)]
+            // SAFETY: the saved_slices vec is not modified and is preserved until the
+            // end of this block. The same applies to the iovecs vec.
+            // TODO: We don't need to pin iovecs, as it gets allocated on the
+            // heap and shouldn't move. Should we pin it anyway?
+            unsafe { guard.submission().push_multiple(&iovecs) }.map_err(Error::other)?;
+            guard.submit_and_wait(iovecs.len())?;
+            while let Some(entry) = guard.completion().next() {
+                if entry.result() <= 0 {
+                    return Err(Error::other("IO error on uring"));
+                }
+            }
         }
 
         self.storage
