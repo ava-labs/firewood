@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use lru::LruCache;
-use moka::sync::Cache;
+use mini_moka::sync::Cache;
 use metrics::counter;
 
 use crate::{LinearAddress, Node};
@@ -93,7 +93,7 @@ impl WritableStorage for FileBacked {
 
     fn invalidate_cached_nodes<'a>(&self, addresses: impl Iterator<Item = &'a LinearAddress>) {
         for addr in addresses {
-            self.cache.remove(addr);
+            self.cache.invalidate(addr);
         }
     }
 

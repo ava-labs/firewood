@@ -22,7 +22,7 @@ bytemuck = "1.7.0"
 bytemuck_derive = "1.7.0"
 bitfield = "0.18.1"
 fastrace = { version = "0.7.4" }
-moka = { version = "0.12.10", features = ["sync"] }
+mini-moka = "0.10.3"
 
 [dev-dependencies]
 rand = "0.8.5"
