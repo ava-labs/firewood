@@ -229,8 +229,7 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
     /// Put a [Node] into the cache at the given address.
     fn cache_node(&self, addr: LinearAddress, node: Arc<Node>) -> Result<Arc<Node>, Error> {
         self.storage
-            .write_cached_nodes(once((&addr, &node)))
-            .expect("failed to write cached nodes");
+            .write_cached_nodes(once((&addr, &node)))?;
         Ok(node)
     }
 }
