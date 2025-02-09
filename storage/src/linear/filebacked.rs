@@ -14,8 +14,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use lru::LruCache;
-use mini_moka::sync::Cache;
 use metrics::counter;
+use mini_moka::sync::Cache;
 
 use crate::{LinearAddress, Node};
 
