@@ -225,6 +225,14 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
         let node = Node::from_reader(area_stream)?;
         Ok(node.into())
     }
+
+    /// Put a [Node] into the cache at the given address.
+    fn cache_node(&self, addr: LinearAddress, node: Arc<Node>) -> Result<Arc<Node>, Error> {
+        self.storage
+            .write_cached_nodes(once((&addr, &node)))
+            .expect("failed to write cached nodes");
+        Ok(node)
+    }
 }
 
 impl<S: ReadableStorage> NodeStore<Committed, S> {
@@ -1021,6 +1029,7 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeReader for NodeStore<T, S> {
         }
 
         self.read_node_from_disk(addr)
+            .and_then(|node| self.cache_node(addr, node))
     }
 }
 

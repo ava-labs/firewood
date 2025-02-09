@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use lru::LruCache;
+use moka::sync::Cache;
 use metrics::counter;
 
 use crate::{LinearAddress, Node};
@@ -24,7 +25,7 @@ use super::{ReadableStorage, WritableStorage};
 /// A [ReadableStorage] backed by a file
 pub struct FileBacked {
     fd: File,
-    cache: Mutex<LruCache<LinearAddress, Arc<Node>>>,
+    cache: Cache<LinearAddress, Arc<Node>>,
     free_list_cache: Mutex<LruCache<LinearAddress, Option<LinearAddress>>>,
 }
 
@@ -45,7 +46,7 @@ impl FileBacked {
 
         Ok(Self {
             fd,
-            cache: Mutex::new(LruCache::new(node_cache_size)),
+            cache: Cache::new(node_cache_size.get() as u64),
             free_list_cache: Mutex::new(LruCache::new(free_list_cache_size)),
         })
     }
@@ -61,8 +62,7 @@ impl ReadableStorage for FileBacked {
     }
 
     fn read_cached_node(&self, addr: LinearAddress) -> Option<Arc<Node>> {
-        let mut guard = self.cache.lock().expect("poisoned lock");
-        let cached = guard.get(&addr).cloned();
+        let cached = self.cache.get(&addr);
         counter!("firewood.cache.node", "type" => if cached.is_some() { "hit" } else { "miss" })
             .increment(1);
         cached
@@ -74,6 +74,16 @@ impl ReadableStorage for FileBacked {
         counter!("firewood.cache.freelist", "type" => if cached.is_some() { "hit" } else { "miss" }).increment(1);
         cached
     }
+
+    fn write_cached_nodes<'a>(
+        &self,
+        nodes: impl Iterator<Item = (&'a std::num::NonZero<u64>, &'a std::sync::Arc<crate::Node>)>,
+    ) -> Result<(), Error> {
+        for (addr, node) in nodes {
+            self.cache.insert(*addr, node.clone());
+        }
+        Ok(())
+    }
 }
 
 impl WritableStorage for FileBacked {
@@ -81,21 +91,9 @@ impl WritableStorage for FileBacked {
         self.fd.write_at(object, offset)
     }
 
-    fn write_cached_nodes<'a>(
-        &self,
-        nodes: impl Iterator<Item = (&'a std::num::NonZero<u64>, &'a std::sync::Arc<crate::Node>)>,
-    ) -> Result<(), Error> {
-        let mut guard = self.cache.lock().expect("poisoned lock");
-        for (addr, node) in nodes {
-            guard.put(*addr, node.clone());
-        }
-        Ok(())
-    }
-
     fn invalidate_cached_nodes<'a>(&self, addresses: impl Iterator<Item = &'a LinearAddress>) {
-        let mut guard = self.cache.lock().expect("poisoned lock");
         for addr in addresses {
-            guard.pop(addr);
+            self.cache.remove(addr);
         }
     }
 
