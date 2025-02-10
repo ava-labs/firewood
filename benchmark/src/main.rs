@@ -39,8 +39,8 @@ use opentelemetry_sdk::Resource;
 
 #[derive(Parser, Debug)]
 struct Args {
-    #[arg(short = 't', long, default_value_t = false)]
-    no_telemetry_server: bool,
+    #[arg(short = 'e', long, default_value_t = false, help = "Enable telemetry server reporting")]
+    telemetry_server: bool,
     #[arg(short, long, default_value_t = 10000)]
     batch_size: u64,
     #[arg(short, long, default_value_t = 1000)]
@@ -145,7 +145,7 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
-    if !args.no_telemetry_server {
+    if args.telemetry_server {
         let reporter = OpenTelemetryReporter::new(
             SpanExporter::builder()
                 .with_tonic()
