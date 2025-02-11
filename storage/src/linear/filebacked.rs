@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use lru::LruCache;
 use metrics::counter;
 
-use crate::{LinearAddress, Node, CacheReadStrategy};
+use crate::{CacheReadStrategy, LinearAddress, Node};
 
 use super::{ReadableStorage, WritableStorage};
 

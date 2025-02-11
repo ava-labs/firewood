@@ -14,8 +14,9 @@ use typed_builder::TypedBuilder;
 
 use crate::v2::api::HashKey;
 
-use storage::{CacheReadStrategy, Committed, FileBacked, ImmutableProposal, NodeStore, Parentable, TrieHash};
-
+use storage::{
+    CacheReadStrategy, Committed, FileBacked, ImmutableProposal, NodeStore, Parentable, TrieHash,
+};
 
 #[derive(Clone, Debug, TypedBuilder)]
 /// Revision manager configuratoin
