@@ -958,61 +958,75 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
     #[fastrace::trace(short_name = true)]
     #[cfg(feature = "io-uring")]
     pub fn flush_nodes(&self) -> Result<(), Error> {
-        use itertools::Itertools as _;
-
         const RINGSIZE: usize = FileBacked::RINGSIZE as usize;
-        // This lock is only needed to keep the compiler happy, as the ring is
-        // only accessed by flush_nodes, which only happens with a locked revision
-        // manager, so there can only be one of these running at a time for now.
-        // We don't want to bypass this lock because in the future we may have multiple
-        // writers for different revisions at the same time, which would require this lock.
-        let mut guard = self.storage.ring.lock().expect("poisoned queue");
-        // We shunk the buffers because we can only schedule RINGSIZE entries to the kernel at a time
-        for chunk in &self.kind.new.iter().chunks(RINGSIZE) {
-            // We need to keep the buffers pinned until the write is complete, so we save them here.
-            let mut saved_pinned_buffers = Vec::with_capacity(RINGSIZE);
-            let iovecs: Box<_> = chunk
-                .map(|(addr, (area_size_index, node))| {
-                    // serialize the nodes
-                    // TODO: parallel iterator? or thread pool with message passing?
-                    let mut serialized = Vec::with_capacity(100); // TODO: better size?
-                    node.as_bytes(*area_size_index, &mut serialized);
-                    trace!("node: {addr} {node:?} {serialized:x?}");
-                    (addr, serialized)
-                })
-                .map(|(addr, serialized)| {
-                    // The buffer must not move at this point, and we don't need to grow
-                    // or shrink it, so we convert it into a boxed slice and pin it.
-                    let buffer = std::pin::Pin::new(serialized.into_boxed_slice());
-                    // These pinned slices have to outlive the next set of calls, so
-                    // we save them into the saved_pinned_buffers vec.
-                    saved_pinned_buffers.push(buffer);
-                    // we put the address in the user_data field just for debugging
-                    // if this loop is rewritten, we can use this field to indicate
-                    // which write buffer is being freed and is availble for reuse
-                    self.storage
-                        .make_op(saved_pinned_buffers.last().unwrap())
+
+        let mut ring = self.storage.ring.lock().expect("poisoned lock");
+        let mut saved_pinned_buffers = vec![(false, std::pin::Pin::new(Box::default())); RINGSIZE];
+        for (&addr, &(area_size_index, ref node)) in self.kind.new.iter() {
+            let mut serialized = Vec::with_capacity(100); // TODO: better size? we can guess branches are larger
+            node.as_bytes(area_size_index, &mut serialized);
+            let mut serialized = serialized.into_boxed_slice();
+            loop {
+                // Find the first available write buffer, enumerate to get the position for marking it completed
+                if let Some((pos, (busy, found))) = saved_pinned_buffers
+                    .iter_mut()
+                    .enumerate()
+                    .find(|(_, (busy, _))| !*busy)
+                {
+                    *found = std::pin::Pin::new(std::mem::take(&mut serialized));
+                    let submission_queue_entry = self
+                        .storage
+                        .make_op(found)
                         .offset(addr.get())
                         .build()
-                        .user_data(addr.get())
-                })
-                .collect();
-            #[allow(unsafe_code)]
-            // SAFETY: the saved_slices vec is not modified and is preserved until the
-            // end of this block. The same applies to the iovecs vec.
-            // TODO: We don't need to pin iovecs, as it gets allocated on the
-            // heap and shouldn't move. Should we pin it anyway?
-            unsafe { guard.submission().push_multiple(&iovecs) }.map_err(Error::other)?;
-            guard.submit_and_wait(iovecs.len())?;
-            while let Some(entry) = guard.completion().next() {
-                if entry.result() <= 0 {
-                    return Err(Error::other("IO error on uring"));
+                        .user_data(pos as u64);
+
+                    *busy = true;
+                    // SAFETY: the submission_queue_entry's found buffer must not move or go out of scope
+                    // until the operation has been completed. This is ensured by marking the slot busy,
+                    // and not marking it !busy until the kernel has said it's done below.
+                    #[allow(unsafe_code)]
+                    while unsafe { ring.submission().push(&submission_queue_entry) }.is_err() {
+                        ring.submitter().squeue_wait()?;
+                        trace!("submission queue is full");
+                        counter!("ring.full").increment(1);
+                    }
+                    break;
+                }
+                // if we get here, that means we couldn't find a place to queue the request, so wait for at least one operation
+                // to complete, then handle the completion queue
+                counter!("ring.full").increment(1);
+                ring.submit_and_wait(1)?;
+                let completion_queue = ring.completion();
+                trace!("competion queue length: {}", completion_queue.len());
+                for entry in completion_queue {
+                    let item = entry.user_data() as usize;
+                    saved_pinned_buffers
+                        .get_mut(item)
+                        .expect("should be an index into the array")
+                        .0 = false;
                 }
             }
         }
+        let pending = saved_pinned_buffers
+            .iter()
+            .filter(|(busy, _)| *busy)
+            .count();
+        ring.submit_and_wait(pending)?;
+
+        for entry in ring.completion() {
+            let item = entry.user_data() as usize;
+            saved_pinned_buffers
+                .get_mut(item)
+                .expect("should be an index into the array")
+                .0 = false;
+        }
+
+        debug_assert_eq!(saved_pinned_buffers.iter().find(|(busy, _)| *busy), None);
 
         self.storage
             .write_cached_nodes(self.kind.new.iter().map(|(addr, (_, node))| (addr, node)))?;
+        debug_assert!(ring.completion().is_empty());
 
         Ok(())
     }

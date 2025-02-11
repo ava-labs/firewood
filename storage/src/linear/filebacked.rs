@@ -59,7 +59,7 @@ impl FileBacked {
     // The size of the kernel ring buffer. This buffer will control how many writes we do with
     // a single system call.
     // TODO: make this configurable
-    pub(crate) const RINGSIZE: u32 = 16;
+    pub(crate) const RINGSIZE: u32 = 32;
 
     /// Create or open a file at a given path
     pub fn new(
@@ -75,12 +75,30 @@ impl FileBacked {
             .truncate(truncate)
             .open(path)?;
 
+        #[cfg(feature = "io-uring")]
+        let ring= {
+            use io_uring::cqueue::Entry as CompletionQueueEntry;
+
+            // The kernel will stop the worker thread in this many ms if there is no work to do
+            const IDLETIME_MS: u32 = 1000;
+            
+            io_uring::IoUring::builder()
+                // we promise not to fork and we are the only issuer of writes to this ring
+                .dontfork()
+                .setup_single_issuer()
+                // completion queue should be larger than the request queue, we allocate double
+                .setup_cqsize(FileBacked::RINGSIZE * 2)
+                // start a kernel thread to do the IO
+                .setup_sqpoll(IDLETIME_MS)
+                .build::<_, CompletionQueueEntry>(FileBacked::RINGSIZE)?
+        };
+
         Ok(Self {
             fd,
             cache: Mutex::new(LruCache::new(node_cache_size)),
             free_list_cache: Mutex::new(LruCache::new(free_list_cache_size)),
             #[cfg(feature = "io-uring")]
-            ring: io_uring::IoUring::new(Self::RINGSIZE)?.into(),
+            ring: ring.into(),
         })
     }
 }
