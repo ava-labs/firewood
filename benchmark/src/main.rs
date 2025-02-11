@@ -39,7 +39,12 @@ use opentelemetry_sdk::Resource;
 
 #[derive(Parser, Debug)]
 struct Args {
-    #[arg(short = 'e', long, default_value_t = false, help = "Enable telemetry server reporting")]
+    #[arg(
+        short = 'e',
+        long,
+        default_value_t = false,
+        help = "Enable telemetry server reporting"
+    )]
     telemetry_server: bool,
     #[arg(short, long, default_value_t = 10000)]
     batch_size: u64,
