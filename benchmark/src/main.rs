@@ -32,7 +32,6 @@ use fastrace::collector::Config;
 
 use opentelemetry::trace::SpanKind;
 use opentelemetry::InstrumentationScope;
-use opentelemetry::KeyValue;
 use opentelemetry_otlp::SpanExporter;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::Resource;
@@ -162,10 +161,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .build()
                 .expect("initialize oltp exporter"),
             SpanKind::Server,
-            Cow::Owned(Resource::new([KeyValue::new(
-                "service.name",
-                "avalabs.firewood.benchmark",
-            )])),
+            Cow::Owned(
+                Resource::builder()
+                    .with_service_name("avalabs.firewood.benchmark")
+                    .build(),
+            ),
             InstrumentationScope::builder("firewood")
                 .with_version(env!("CARGO_PKG_VERSION"))
                 .build(),
