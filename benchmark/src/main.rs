@@ -32,8 +32,7 @@ use fastrace::collector::Config;
 
 use opentelemetry::trace::SpanKind;
 use opentelemetry::InstrumentationScope;
-use opentelemetry_otlp::SpanExporter;
-use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_otlp::{SpanExporter, WithExportConfig};
 use opentelemetry_sdk::Resource;
 
 #[derive(Parser, Debug)]
