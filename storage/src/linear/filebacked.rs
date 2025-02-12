@@ -76,12 +76,10 @@ impl FileBacked {
             .open(path)?;
 
         #[cfg(feature = "io-uring")]
-        let ring= {
-            use io_uring::cqueue::Entry as CompletionQueueEntry;
-
+        let ring = {
             // The kernel will stop the worker thread in this many ms if there is no work to do
             const IDLETIME_MS: u32 = 1000;
-            
+
             io_uring::IoUring::builder()
                 // we promise not to fork and we are the only issuer of writes to this ring
                 .dontfork()
@@ -90,7 +88,7 @@ impl FileBacked {
                 .setup_cqsize(FileBacked::RINGSIZE * 2)
                 // start a kernel thread to do the IO
                 .setup_sqpoll(IDLETIME_MS)
-                .build::<_, CompletionQueueEntry>(FileBacked::RINGSIZE)?
+                .build(FileBacked::RINGSIZE)?
         };
 
         Ok(Self {
