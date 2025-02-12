@@ -38,6 +38,15 @@ use opentelemetry_sdk::Resource;
 
 #[derive(Parser, Debug)]
 struct Args {
+    #[clap(flatten)]
+    global_opts: GlobalOpts,
+
+    #[clap(subcommand)]
+    test_name: TestName,
+}
+
+#[derive(clap::Args, Debug)]
+struct GlobalOpts {
     #[arg(
         short = 'e',
         long,
@@ -68,15 +77,6 @@ struct Args {
     )]
     stats_dump: bool,
 
-    #[clap(flatten)]
-    global_opts: GlobalOpts,
-
-    #[clap(subcommand)]
-    test_name: TestName,
-}
-
-#[derive(clap::Args, Debug)]
-struct GlobalOpts {
     #[arg(
         long,
         short = 'l',
@@ -145,9 +145,16 @@ mod zipf;
 
 #[derive(Debug, Subcommand, PartialEq)]
 enum TestName {
+    /// Create a database
     Create,
+
+    /// Insert batches of random keys
     TenKRandom,
+
+    /// Insert batches of keys following a Zipf distribution
     Zipf(zipf::Args),
+
+    /// Repeatedly update a single row
     Single,
 }
 
@@ -181,7 +188,7 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
-    if args.telemetry_server {
+    if args.global_opts.telemetry_server {
         let reporter = OpenTelemetryReporter::new(
             SpanExporter::builder()
                 .with_tonic()
@@ -205,7 +212,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         fastrace::set_reporter(reporter, Config::default());
     }
 
-    if args.test_name == TestName::Single && args.batch_size > 1000 {
+    if args.test_name == TestName::Single && args.global_opts.batch_size > 1000 {
         panic!("Single test is not designed to handle batch sizes > 1000");
     }
 
@@ -224,7 +231,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let (prometheus_recorder, listener_future) = builder
         .with_http_listener(SocketAddr::new(
             Ipv6Addr::UNSPECIFIED.into(),
-            args.prometheus_port,
+            args.global_opts.prometheus_port,
         ))
         .idle_timeout(
             MetricKindMask::COUNTER | MetricKindMask::HISTOGRAM,
@@ -239,12 +246,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tokio::spawn(listener_future);
 
     let mgrcfg = RevisionManagerConfig::builder()
-        .node_cache_size(args.cache_size)
+        .node_cache_size(args.global_opts.cache_size)
         .free_list_cache_size(
-            NonZeroUsize::new(4 * args.batch_size as usize).expect("batch size > 0"),
+            NonZeroUsize::new(4 * args.global_opts.batch_size as usize).expect("batch size > 0"),
         )
         .cache_read_strategy(args.global_opts.cache_read_strategy.clone().into())
-        .max_revisions(args.revisions)
+        .max_revisions(args.global_opts.revisions)
         .build();
     let cfg = DbConfig::builder()
         .truncate(matches!(args.test_name, TestName::Create))
@@ -274,7 +281,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    if args.stats_dump {
+    if args.global_opts.stats_dump {
         println!("{}", prometheus_handle.render());
     }
 
