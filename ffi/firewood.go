@@ -15,8 +15,8 @@ type Firewood struct {
 	db *C.void
 }
 
-// OpenConfig is used to configure the database at open time
-type OpenConfig struct {
+// openConfig is used to configure the database at open time
+type openConfig struct {
 	path              string
 	nodeCacheEntries  uintptr
 	revisions         uintptr
@@ -25,11 +25,11 @@ type OpenConfig struct {
 }
 
 // OpenOption is a function that configures the database at open time
-type OpenOption func(*OpenConfig)
+type OpenOption func(*openConfig)
 
 // WithPath sets the path for the database
 func WithPath(path string) OpenOption {
-	return func(o *OpenConfig) {
+	return func(o *openConfig) {
 		o.path = path
 	}
 }
@@ -39,7 +39,7 @@ func WithNodeCacheEntries(entries uintptr) OpenOption {
 	if entries < 1 {
 		panic("Node cache entries must be >= 1")
 	}
-	return func(o *OpenConfig) {
+	return func(o *openConfig) {
 		o.nodeCacheEntries = entries
 	}
 }
@@ -49,7 +49,7 @@ func WithRevisions(revisions uintptr) OpenOption {
 	if revisions < 2 {
 		panic("Revisions must be >= 2")
 	}
-	return func(o *OpenConfig) {
+	return func(o *openConfig) {
 		o.revisions = revisions
 	}
 }
@@ -62,7 +62,7 @@ func WithReadCacheStrategy(strategy int8) OpenOption {
 	if (strategy < 0) || (strategy > 2) {
 		panic("Invalid read cache strategy " + strconv.Itoa(int(strategy)))
 	}
-	return func(o *OpenConfig) {
+	return func(o *openConfig) {
 		o.readCacheStrategy = strategy
 	}
 }
@@ -71,7 +71,7 @@ func WithReadCacheStrategy(strategy int8) OpenOption {
 // If false, the database will be opened
 // If true, the database will be created
 func WithCreate(create bool) OpenOption {
-	return func(o *OpenConfig) {
+	return func(o *openConfig) {
 		o.create = create
 	}
 }
@@ -79,7 +79,7 @@ func WithCreate(create bool) OpenOption {
 // NewDatabase opens or creates a new Firewood database with the given options.
 // Returns a handle that can be used for subsequent database operations.
 func NewDatabase(options ...OpenOption) Firewood {
-	opts := &OpenConfig{
+	opts := &openConfig{
 		nodeCacheEntries:  1_000_000,
 		revisions:         100,
 		readCacheStrategy: 0,
