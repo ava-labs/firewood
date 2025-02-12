@@ -23,13 +23,13 @@ type Firewood struct {
 // CreateDatabase creates a new Firewood database at the given path.
 // Returns a handle that can be used for subsequent database operations.
 func CreateDatabase(path string) Firewood {
-	db := C.fwd_create_db(C.CString(path), C.size_t(NodeCache), C.size_t(Revisions))
+	db := C.fwd_create_db(C.CString(path), C.size_t(NodeCache), C.size_t(Revisions), 0)
 	ptr := (*C.void)(db)
 	return Firewood{Db: ptr}
 }
 
 func OpenDatabase(path string) Firewood {
-	db := C.fwd_open_db(C.CString(path), C.size_t(NodeCache), C.size_t(Revisions))
+	db := C.fwd_open_db(C.CString(path), C.size_t(NodeCache), C.size_t(Revisions), 0)
 	ptr := (*C.void)(db)
 	return Firewood{Db: ptr}
 }
