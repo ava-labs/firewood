@@ -29,6 +29,8 @@ impl WritableStorage for MemStore {
         if offset + object.len() > guard.len() {
             guard.resize(offset + object.len(), 0);
         }
+        // TODO: rustify and eliminate indexing
+        #[allow(clippy::indexing_slicing)]
         guard[offset..offset + object.len()].copy_from_slice(object);
         Ok(object.len())
     }

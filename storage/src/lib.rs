@@ -1,6 +1,5 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
-#![warn(missing_debug_implementations, rust_2018_idioms, missing_docs)]
 #![forbid(unsafe_code)]
 
 //! # storage implements the storage of a [Node] on top of a LinearStore

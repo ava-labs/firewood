@@ -105,7 +105,6 @@
 //! A commit involves simply writing the nodes and the freelist to disk. If the proposal is
 //! abandoned, nothing has actually been written to disk.
 //!
-#![warn(missing_debug_implementations, rust_2018_idioms, missing_docs)]
 /// Database module for Firewood.
 pub mod db;
 

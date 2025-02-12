@@ -77,6 +77,8 @@ impl<'de> Deserialize<'de> for BranchNode {
 
         let mut children: [Option<Child>; BranchNode::MAX_CHILDREN] =
             [const { None }; BranchNode::MAX_CHILDREN];
+
+        #[allow(clippy::indexing_slicing)]
         for (offset, addr, hash) in s.children.iter() {
             children[*offset as usize] = Some(Child::AddressWithHash(*addr, hash.clone()));
         }

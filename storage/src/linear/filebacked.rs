@@ -117,7 +117,7 @@ struct PredictiveReader<'a> {
 }
 
 impl<'a> PredictiveReader<'a> {
-    fn new(fb: &'a FileBacked, start: u64) -> Self {
+    const fn new(fb: &'a FileBacked, start: u64) -> Self {
         let fd = &fb.fd;
 
         Self {
@@ -130,6 +130,8 @@ impl<'a> PredictiveReader<'a> {
     }
 }
 
+// TODO: don't use indexing_slicing here (rustify)
+#[allow(clippy::indexing_slicing)]
 impl Read for PredictiveReader<'_> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
         if self.len == self.pos {
@@ -150,6 +152,7 @@ impl Read for PredictiveReader<'_> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod test {
     use super::*;
     use std::io::Write;

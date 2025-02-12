@@ -123,11 +123,11 @@ impl ExtendableBytes for Vec<u8> {
 pub struct ByteCounter(u64);
 
 impl ByteCounter {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         ByteCounter(0)
     }
 
-    pub fn count(&self) -> u64 {
+    pub const fn count(&self) -> u64 {
         self.0
     }
 }
@@ -154,7 +154,7 @@ impl ExtendableBytes for ByteCounter {
 
 impl Node {
     /// Returns the partial path of the node.
-    pub fn partial_path(&self) -> &Path {
+    pub const fn partial_path(&self) -> &Path {
         match self {
             Node::Branch(b) => &b.partial_path,
             Node::Leaf(l) => &l.partial_path,
@@ -417,6 +417,7 @@ impl Node {
                         ));
                     }
                 } else {
+                    #[allow(clippy::indexing_slicing)]
                     for _ in 0..childcount {
                         let mut position_buf = [0u8; 1];
                         serialized.read_exact(&mut position_buf)?;
@@ -462,6 +463,7 @@ pub struct PathIterItem {
     pub next_nibble: Option<u8>,
 }
 
+#[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 #[cfg(test)]
 mod test {
     use crate::{

@@ -23,8 +23,8 @@ fn file_error_panic<T, U>(path: &FsPath) -> impl FnOnce(T) -> U + '_ {
     |_| panic!("Error on file `{}`", path.display())
 }
 
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 impl Profiler for FlamegraphProfiler {
-    #[allow(clippy::unwrap_used)]
     fn start_profiling(&mut self, _benchmark_id: &str, _benchmark_dir: &FsPath) {
         if let Self::Init(frequency) = self {
             let guard = ProfilerGuard::new(*frequency).unwrap();
@@ -32,16 +32,13 @@ impl Profiler for FlamegraphProfiler {
         }
     }
 
-    #[allow(clippy::unwrap_used)]
     fn stop_profiling(&mut self, _benchmark_id: &str, benchmark_dir: &FsPath) {
         std::fs::create_dir_all(benchmark_dir).unwrap();
         let filename = "firewood-flamegraph.svg";
         let flamegraph_path = benchmark_dir.join(filename);
-        #[allow(clippy::unwrap_used)]
         let flamegraph_file =
             File::create(&flamegraph_path).unwrap_or_else(file_error_panic(&flamegraph_path));
 
-        #[allow(clippy::unwrap_used)]
         if let Self::Active(profiler) = self {
             profiler
                 .report()
@@ -62,7 +59,7 @@ fn leaf(c: &mut Criterion) {
     let serializer = bincode::DefaultOptions::new().with_varint_encoding();
     group.bench_with_input("serde", &input, |b, input| {
         b.iter(|| {
-            serializer.serialize(input).unwrap();
+            serializer.serialize(input).expect("leaf serialization failure");
         })
     });
 
@@ -83,7 +80,7 @@ fn branch(c: &mut Criterion) {
         children: from_fn(|i| {
             if i == 0 {
                 Some(storage::Child::AddressWithHash(
-                    NonZeroU64::new(1).unwrap(),
+                    NonZeroU64::new(1).expect("constant"),
                     storage::TrieHash::from([0; 32]),
                 ))
             } else {
@@ -94,7 +91,7 @@ fn branch(c: &mut Criterion) {
     let serializer = bincode::DefaultOptions::new().with_varint_encoding();
     let serde_serializer = |b: &mut criterion::Bencher, input: &storage::Node| {
         b.iter(|| {
-            serializer.serialize(input).unwrap();
+            serializer.serialize(input).expect("serialization");
         })
     };
 
@@ -110,20 +107,20 @@ fn branch(c: &mut Criterion) {
     group.finish();
 
     let mut group = c.benchmark_group("1_child");
-    input.as_branch_mut().unwrap().value = None;
+    input.as_branch_mut().expect("we know this is a branch").value = None;
     group.bench_with_input("serde", &input, serde_serializer);
     group.bench_with_input("manual", &input, manual_serializer);
-    let child = input.as_branch().unwrap().children[0].clone();
+    let child = input.as_branch().expect("we know this is a branch").children[0].clone();
     group.finish();
 
     let mut group = c.benchmark_group("2_child");
-    input.as_branch_mut().unwrap().children[1] = child.clone();
+    input.as_branch_mut().expect("we know this is a branch").children[1] = child.clone();
     group.bench_with_input("serde", &input, serde_serializer);
     group.bench_with_input("manual", &input, manual_serializer);
     group.finish();
 
     let mut group = c.benchmark_group("16_child");
-    input.as_branch_mut().unwrap().children = std::array::from_fn(|_| child.clone());
+    input.as_branch_mut().expect("we know this is a branch").children = std::array::from_fn(|_| child.clone());
     group.bench_with_input("serde", &input, serde_serializer);
     group.bench_with_input("manual", &input, manual_serializer);
     group.finish();

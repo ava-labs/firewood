@@ -98,7 +98,7 @@ fn serializer() -> impl bincode::Options {
 }
 
 // TODO: automate this, must stay in sync with above
-fn index_name(index: AreaIndex) -> &'static str {
+const fn index_name(index: AreaIndex) -> &'static str {
     match index {
         0 => "16",
         1 => "32",
@@ -451,10 +451,12 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 *free_stored_area_addr = free_head.next_free_block;
             }
 
-            counter!("firewood.space.reused", "index" => index_name(index as u8))
-                .increment(AREA_SIZES[index]);
-            counter!("firewood.space.wasted", "index" => index_name(index as u8))
-                .increment(AREA_SIZES[index] - n);
+            if let Some(&size) = AREA_SIZES.get(index) {
+                counter!("firewood.space.reused", "index" => index_name(index as u8))
+                    .increment(size);
+                counter!("firewood.space.wasted", "index" => index_name(index as u8))
+                    .increment(size - n);
+            }
 
             // Return the address of the newly allocated block.
             trace!(
@@ -465,6 +467,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         }
 
         trace!("No free blocks of sufficient size {index_wanted} found");
+        #[allow(clippy::indexing_slicing)]
         counter!("firewood.space.from_end", "index" => index_name(index_wanted as u8))
             .increment(AREA_SIZES[index_wanted as usize]);
         Ok(None)
@@ -472,6 +475,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
 
     fn allocate_from_end(&mut self, n: u64) -> Result<(LinearAddress, AreaIndex), Error> {
         let index = area_size_to_index(n)?;
+        #[allow(clippy::indexing_slicing)]
         let area_size = AREA_SIZES[index as usize];
         let addr = LinearAddress::new(self.header.size).expect("node store size can't be 0");
         self.header.size += area_size;
@@ -509,6 +513,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Deletes the [Node] at the given address, updating the next pointer at
     /// the given addr, and changing the header of this committed nodestore to
     /// have the address on the freelist
+    #[allow(clippy::indexing_slicing)] // TODO: remove this and fix the warnings
     pub fn delete_node(&mut self, addr: LinearAddress) -> Result<(), Error> {
         debug_assert!(addr.get() % 8 == 0);
 
