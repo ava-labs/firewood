@@ -68,7 +68,7 @@ func WithMetricIntervalSeconds(interval_seconds uint32) OpenOption {
 // 1: Branch reads are cached
 // 2: All reads are cached
 func WithReadCacheStrategy(strategy uint8) OpenOption {
-	if (strategy < 0) || (strategy > 2) {
+	if strategy > 2 {
 		panic("Invalid read cache strategy " + strconv.Itoa(int(strategy)))
 	}
 	return func(o *openConfig) {
