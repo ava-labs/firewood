@@ -79,7 +79,7 @@ void *fwd_create_db(const char *path,
                     size_t cache_size,
                     size_t revisions,
                     uint8_t strategy,
-                    uint32_t metrics_interval);
+                    uint16_t metrics_port);
 
 /**
  * Frees the memory associated with a `Value`.
@@ -132,7 +132,7 @@ void *fwd_open_db(const char *path,
                   size_t cache_size,
                   size_t revisions,
                   uint8_t strategy,
-                  uint32_t metrics_interval);
+                  uint16_t metrics_port);
 
 /**
  * Get the root hash of the latest version of the database
