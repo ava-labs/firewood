@@ -45,7 +45,7 @@ pub(crate) fn setup_metrics(metrics_port: u16) {
         })
         .bind((Ipv4Addr::LOCALHOST, metrics_port))
         .bind((Ipv6Addr::LOCALHOST, metrics_port))
-        .with_global_timeout(Duration::from_secs(60*60))
+        .with_global_timeout(Duration::from_secs(60 * 60))
         .with_max_concurrent_connections(2)
         .spawn()
         .expect("failed to spawn server");
@@ -78,7 +78,12 @@ impl TextRecorder {
         for (key, counter) in counters {
             let sanitized_key_name = key.name().to_string().replace('.', "_");
             if !seen.contains(&sanitized_key_name) {
-                writeln!(output, "# TYPE {} counter", key.name().to_string().replace('.', "_")).expect("write error");
+                writeln!(
+                    output,
+                    "# TYPE {} counter",
+                    key.name().to_string().replace('.', "_")
+                )
+                .expect("write error");
                 seen.insert(sanitized_key_name.clone());
             }
             write!(output, "{sanitized_key_name}").expect("write error");

@@ -231,7 +231,11 @@ pub unsafe extern "C" fn fwd_open_db(
     common_create(path, metrics_port, cfg)
 }
 
-unsafe fn common_create(path: *const std::ffi::c_char, metrics_port: u16, cfg: DbConfig) -> *mut Db {
+unsafe fn common_create(
+    path: *const std::ffi::c_char,
+    metrics_port: u16,
+    cfg: DbConfig,
+) -> *mut Db {
     let path = unsafe { CStr::from_ptr(path) };
     let path: &Path = OsStr::from_bytes(path.to_bytes()).as_ref();
     if metrics_port > 0 {
