@@ -1,6 +1,6 @@
 package firewood
 
-// #cgo LDFLAGS: -L../target/release -L/usr/local/lib -lfirewood_ffi
+// #cgo LDFLAGS: -L../target/release -L/usr/local/lib -lfirewood_ffi -lm
 // #include "firewood.h"
 // #include <stdlib.h>
 import "C"

@@ -38,6 +38,7 @@ pub(crate) fn setup_metrics(metrics_port: u16) {
             } else {
                 Response::builder()
                     .status(StatusCode::OK)
+                    .header("Content-Type", "text/plain")
                     .body(Body::from(recorder.stats()))
                     .expect("failed to build response")
             }
@@ -75,17 +76,18 @@ impl TextRecorder {
         let counters = self.registry.get_counter_handles();
         let mut seen = HashSet::new();
         for (key, counter) in counters {
-            if !seen.contains(key.name()) {
-                writeln!(output, "# TYPE {} counter", key.name()).expect("write error");
-                seen.insert(key.name().to_string());
+            let sanitized_key_name = key.name().to_string().replace('.', "_");
+            if !seen.contains(&sanitized_key_name) {
+                writeln!(output, "# TYPE {} counter", key.name().to_string().replace('.', "_")).expect("write error");
+                seen.insert(sanitized_key_name.clone());
             }
-            write!(output, "{}", key.name().to_string().replace('.', "_")).expect("write error");
+            write!(output, "{sanitized_key_name}").expect("write error");
             if key.labels().len() > 0 {
                 write!(
                     output,
                     "{{{}}}",
                     key.labels()
-                        .map(|l| format!("{}=\"{}\"", l.key(), l.value()))
+                        .map(|label| format!("{}=\"{}\"", label.key(), label.value()))
                         .collect::<Vec<_>>()
                         .join(",")
                 )
