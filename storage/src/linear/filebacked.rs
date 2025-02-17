@@ -11,10 +11,11 @@ use std::io::{Error, Read};
 use std::num::NonZero;
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use lru::LruCache;
 use metrics::counter;
+use s3_fifo::S3FIFO;
 
 use crate::{CacheReadStrategy, LinearAddress, Node};
 
@@ -24,7 +25,7 @@ use super::{ReadableStorage, WritableStorage};
 /// A [ReadableStorage] backed by a file
 pub struct FileBacked {
     fd: File,
-    cache: Mutex<LruCache<LinearAddress, Arc<Node>>>,
+    cache: RwLock<S3FIFO<LinearAddress, Arc<Node>>>,
     free_list_cache: Mutex<LruCache<LinearAddress, Option<LinearAddress>>>,
     cache_read_strategy: CacheReadStrategy,
 }
@@ -47,7 +48,7 @@ impl FileBacked {
 
         Ok(Self {
             fd,
-            cache: Mutex::new(LruCache::new(node_cache_size)),
+            cache: RwLock::new(S3FIFO::new(node_cache_size.into())),
             free_list_cache: Mutex::new(LruCache::new(free_list_cache_size)),
             cache_read_strategy,
         })
@@ -64,7 +65,7 @@ impl ReadableStorage for FileBacked {
     }
 
     fn read_cached_node(&self, addr: LinearAddress) -> Option<Arc<Node>> {
-        let mut guard = self.cache.lock().expect("poisoned lock");
+        let guard = self.cache.read().expect("poisoned lock");
         let cached = guard.get(&addr).cloned();
         counter!("firewood.cache.node", "type" => if cached.is_some() { "hit" } else { "miss" })
             .increment(1);
@@ -88,12 +89,12 @@ impl ReadableStorage for FileBacked {
                 // we don't cache reads
             }
             CacheReadStrategy::All => {
-                let mut guard = self.cache.lock().expect("poisoned lock");
+                let mut guard = self.cache.write().expect("poisoned lock");
                 guard.put(addr, node);
             }
             CacheReadStrategy::BranchReads => {
                 if !node.is_leaf() {
-                    let mut guard = self.cache.lock().expect("poisoned lock");
+                    let mut guard = self.cache.write().expect("poisoned lock");
                     guard.put(addr, node);
                 }
             }
@@ -110,18 +111,15 @@ impl WritableStorage for FileBacked {
         &self,
         nodes: impl Iterator<Item = (&'a std::num::NonZero<u64>, &'a std::sync::Arc<crate::Node>)>,
     ) -> Result<(), Error> {
-        let mut guard = self.cache.lock().expect("poisoned lock");
+        let mut guard = self.cache.write().expect("poisoned lock");
         for (addr, node) in nodes {
             guard.put(*addr, node.clone());
         }
         Ok(())
     }
 
-    fn invalidate_cached_nodes<'a>(&self, addresses: impl Iterator<Item = &'a LinearAddress>) {
-        let mut guard = self.cache.lock().expect("poisoned lock");
-        for addr in addresses {
-            guard.pop(addr);
-        }
+    fn invalidate_cached_nodes<'a>(&self, _addresses: impl Iterator<Item = &'a LinearAddress>) {
+        // TODO: We might be able to implement this, but currently S3FIFO doesn't support it
     }
 
     fn add_to_free_list_cache(&self, addr: LinearAddress, next: Option<LinearAddress>) {
