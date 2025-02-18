@@ -43,7 +43,7 @@ pub trait ReadableStorage: Debug + Sync + Send {
     fn size(&self) -> Result<u64, Error>;
 
     /// Read a node from the cache (if any)
-    fn read_cached_node(&self, _addr: LinearAddress) -> Option<Arc<Node>> {
+    fn read_cached_node(&self, _addr: LinearAddress, _mode: &'static str) -> Option<Arc<Node>> {
         None
     }
 
