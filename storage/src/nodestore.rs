@@ -61,7 +61,7 @@ use std::sync::Arc;
 
 use crate::hashednode::hash_node;
 use crate::node::{ByteCounter, Node};
-use crate::{CacheReadStrategy, Child, FileBacked, Path, ReadableStorage, TrieHash};
+use crate::{CacheReadStrategy, Child, FileBacked, Path, ReadableStorage, SharedNode, TrieHash};
 
 use super::linear::WritableStorage;
 
@@ -214,7 +214,7 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
         &self,
         addr: LinearAddress,
         mode: &'static str,
-    ) -> Result<Arc<Node>, Error> {
+    ) -> Result<SharedNode, Error> {
         if let Some(node) = self.storage.read_cached_node(addr, mode) {
             return Ok(node);
         }
@@ -226,7 +226,7 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
         let _span = LocalSpan::enter_with_local_parent("read_and_deserialize");
 
         let area_stream = self.storage.stream_from(actual_addr)?;
-        let node = Arc::new(Node::from_reader(area_stream)?);
+        let node: SharedNode = Node::from_reader(area_stream)?.into();
         match self.storage.cache_read_strategy() {
             CacheReadStrategy::All => {
                 self.storage.cache_node(addr, node.clone());
@@ -661,7 +661,7 @@ impl<T> TrieReader for T where T: NodeReader + RootReader {}
 /// Reads nodes from a merkle trie.
 pub trait NodeReader {
     /// Returns the node at `addr`.
-    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error>;
+    fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, Error>;
 }
 
 impl<T> NodeReader for T
@@ -669,7 +669,7 @@ where
     T: Deref,
     T::Target: NodeReader,
 {
-    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
+    fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, Error> {
         self.deref().read_node(addr)
     }
 }
@@ -679,7 +679,7 @@ where
     T: Deref,
     T::Target: RootReader,
 {
-    fn root_node(&self) -> Option<Arc<Node>> {
+    fn root_node(&self) -> Option<SharedNode> {
         self.deref().root_node()
     }
 }
@@ -687,7 +687,7 @@ where
 /// Reads the root of a merkle trie.
 pub trait RootReader {
     /// Returns the root of the trie.
-    fn root_node(&self) -> Option<Arc<Node>>;
+    fn root_node(&self) -> Option<SharedNode>;
 }
 
 /// A committed revision of a merkle trie.
@@ -700,7 +700,7 @@ pub struct Committed {
 
 impl ReadInMemoryNode for Committed {
     // A committed revision has no in-memory changes. All its nodes are in storage.
-    fn read_in_memory_node(&self, _addr: LinearAddress) -> Option<Arc<Node>> {
+    fn read_in_memory_node(&self, _addr: LinearAddress) -> Option<SharedNode> {
         None
     }
 }
@@ -727,7 +727,7 @@ impl Eq for NodeStoreParent {}
 /// Contains state for a proposed revision of the trie.
 pub struct ImmutableProposal {
     /// Address --> Node for nodes created in this proposal.
-    new: HashMap<LinearAddress, (u8, Arc<Node>)>,
+    new: HashMap<LinearAddress, (u8, SharedNode)>,
     /// Nodes that have been deleted in this proposal.
     deleted: Box<[LinearAddress]>,
     /// The parent of this proposal.
@@ -751,7 +751,7 @@ impl ImmutableProposal {
 }
 
 impl ReadInMemoryNode for ImmutableProposal {
-    fn read_in_memory_node(&self, addr: LinearAddress) -> Option<Arc<Node>> {
+    fn read_in_memory_node(&self, addr: LinearAddress) -> Option<SharedNode> {
         // Check if the node being requested was created in this proposal.
         if let Some((_, node)) = self.new.get(&addr) {
             return Some(node.clone());
@@ -774,7 +774,7 @@ impl ReadInMemoryNode for ImmutableProposal {
 pub trait ReadInMemoryNode {
     /// Returns the node at `addr` if it is in memory.
     /// Returns None if it isn't.
-    fn read_in_memory_node(&self, addr: LinearAddress) -> Option<Arc<Node>>;
+    fn read_in_memory_node(&self, addr: LinearAddress) -> Option<SharedNode>;
 }
 
 impl<T> ReadInMemoryNode for T
@@ -782,7 +782,7 @@ where
     T: Deref,
     T::Target: ReadInMemoryNode,
 {
-    fn read_in_memory_node(&self, addr: LinearAddress) -> Option<Arc<Node>> {
+    fn read_in_memory_node(&self, addr: LinearAddress) -> Option<SharedNode> {
         self.deref().read_in_memory_node(addr)
     }
 }
@@ -823,7 +823,7 @@ pub struct MutableProposal {
 impl ReadInMemoryNode for NodeStoreParent {
     /// Returns the node at `addr` if it is in memory from a parent proposal.
     /// If the base revision is committed, there are no in-memory nodes, so we return None
-    fn read_in_memory_node(&self, addr: LinearAddress) -> Option<Arc<Node>> {
+    fn read_in_memory_node(&self, addr: LinearAddress) -> Option<SharedNode> {
         match self {
             NodeStoreParent::Proposed(proposed) => proposed.read_in_memory_node(addr),
             NodeStoreParent::Committed(_) => None,
@@ -834,7 +834,7 @@ impl ReadInMemoryNode for NodeStoreParent {
 impl ReadInMemoryNode for MutableProposal {
     /// [MutableProposal] types do not have any nodes in memory, but their parent proposal might, so we check there.
     /// This might be recursive: a grandparent might also have that node in memory.
-    fn read_in_memory_node(&self, addr: LinearAddress) -> Option<Arc<Node>> {
+    fn read_in_memory_node(&self, addr: LinearAddress) -> Option<SharedNode> {
         self.parent.read_in_memory_node(addr)
     }
 }
@@ -876,7 +876,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         &mut self,
         mut node: Node,
         path_prefix: &mut Path,
-        new_nodes: &mut HashMap<LinearAddress, (u8, Arc<Node>)>,
+        new_nodes: &mut HashMap<LinearAddress, (u8, SharedNode)>,
     ) -> (LinearAddress, TrieHash) {
         // If this is a branch, find all unhashed children and recursively call hash_helper on them.
         if let Node::Branch(ref mut b) = node {
@@ -912,7 +912,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         let hash = hash_node(&node, path_prefix);
         let (addr, size) = self.allocate_node(&node).expect("TODO handle error");
 
-        new_nodes.insert(addr, (size, Arc::new(node)));
+        new_nodes.insert(addr, (size, node.into()));
 
         (addr, hash)
     }
@@ -941,7 +941,7 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
     }
 }
 
-impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
+impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
     /// Persist the freelist from this proposal to storage.
     #[fastrace::trace(short_name = true)]
     pub fn flush_freelist(&self) -> Result<(), Error> {
@@ -954,6 +954,7 @@ impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
 
     /// Persist all the nodes of a proposal to storage.
     #[fastrace::trace(short_name = true)]
+    #[cfg(not(feature = "io-uring"))]
     pub fn flush_nodes(&self) -> Result<(), Error> {
         for (addr, (area_size_index, node)) in self.kind.new.iter() {
             let mut stored_area_bytes = Vec::new();
@@ -964,6 +965,83 @@ impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
 
         self.storage
             .write_cached_nodes(self.kind.new.iter().map(|(addr, (_, node))| (addr, node)))?;
+
+        Ok(())
+    }
+
+    /// Persist all the nodes of a proposal to storage.
+    #[fastrace::trace(short_name = true)]
+    #[cfg(feature = "io-uring")]
+    pub fn flush_nodes(&self) -> Result<(), Error> {
+        const RINGSIZE: usize = FileBacked::RINGSIZE as usize;
+
+        let mut ring = self.storage.ring.lock().expect("poisoned lock");
+        let mut saved_pinned_buffers = vec![(false, std::pin::Pin::new(Box::default())); RINGSIZE];
+        for (&addr, &(area_size_index, ref node)) in self.kind.new.iter() {
+            let mut serialized = Vec::with_capacity(100); // TODO: better size? we can guess branches are larger
+            node.as_bytes(area_size_index, &mut serialized);
+            let mut serialized = serialized.into_boxed_slice();
+            loop {
+                // Find the first available write buffer, enumerate to get the position for marking it completed
+                if let Some((pos, (busy, found))) = saved_pinned_buffers
+                    .iter_mut()
+                    .enumerate()
+                    .find(|(_, (busy, _))| !*busy)
+                {
+                    *found = std::pin::Pin::new(std::mem::take(&mut serialized));
+                    let submission_queue_entry = self
+                        .storage
+                        .make_op(found)
+                        .offset(addr.get())
+                        .build()
+                        .user_data(pos as u64);
+
+                    *busy = true;
+                    // SAFETY: the submission_queue_entry's found buffer must not move or go out of scope
+                    // until the operation has been completed. This is ensured by marking the slot busy,
+                    // and not marking it !busy until the kernel has said it's done below.
+                    #[allow(unsafe_code)]
+                    while unsafe { ring.submission().push(&submission_queue_entry) }.is_err() {
+                        ring.submitter().squeue_wait()?;
+                        trace!("submission queue is full");
+                        counter!("ring.full").increment(1);
+                    }
+                    break;
+                }
+                // if we get here, that means we couldn't find a place to queue the request, so wait for at least one operation
+                // to complete, then handle the completion queue
+                counter!("ring.full").increment(1);
+                ring.submit_and_wait(1)?;
+                let completion_queue = ring.completion();
+                trace!("competion queue length: {}", completion_queue.len());
+                for entry in completion_queue {
+                    let item = entry.user_data() as usize;
+                    saved_pinned_buffers
+                        .get_mut(item)
+                        .expect("should be an index into the array")
+                        .0 = false;
+                }
+            }
+        }
+        let pending = saved_pinned_buffers
+            .iter()
+            .filter(|(busy, _)| *busy)
+            .count();
+        ring.submit_and_wait(pending)?;
+
+        for entry in ring.completion() {
+            let item = entry.user_data() as usize;
+            saved_pinned_buffers
+                .get_mut(item)
+                .expect("should be an index into the array")
+                .0 = false;
+        }
+
+        debug_assert_eq!(saved_pinned_buffers.iter().find(|(busy, _)| *busy), None);
+
+        self.storage
+            .write_cached_nodes(self.kind.new.iter().map(|(addr, (_, node))| (addr, node)))?;
+        debug_assert!(ring.completion().is_empty());
 
         Ok(())
     }
@@ -1030,7 +1108,7 @@ impl<S: ReadableStorage> From<NodeStore<MutableProposal, S>>
 }
 
 impl<S: ReadableStorage> NodeReader for NodeStore<MutableProposal, S> {
-    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
+    fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, Error> {
         if let Some(node) = self.kind.read_in_memory_node(addr) {
             return Ok(node);
         }
@@ -1040,19 +1118,19 @@ impl<S: ReadableStorage> NodeReader for NodeStore<MutableProposal, S> {
 }
 
 impl<T: Parentable + ReadInMemoryNode, S: ReadableStorage> NodeReader for NodeStore<T, S> {
-    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, Error> {
+    fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, Error> {
         self.read_node_from_disk(addr, "read")
     }
 }
 
 impl<S: ReadableStorage> RootReader for NodeStore<MutableProposal, S> {
-    fn root_node(&self) -> Option<Arc<Node>> {
-        self.kind.root.as_ref().map(|node| Arc::new(node.clone()))
+    fn root_node(&self) -> Option<SharedNode> {
+        self.kind.root.as_ref().map(|node| node.clone().into())
     }
 }
 
 impl<T: ReadInMemoryNode + Parentable, S: ReadableStorage> RootReader for NodeStore<T, S> {
-    fn root_node(&self) -> Option<Arc<Node>> {
+    fn root_node(&self) -> Option<SharedNode> {
         // TODO: If the read_node fails, we just say there is no root; this is incorrect
         self.header
             .root_address

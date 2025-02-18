@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 #![warn(missing_debug_implementations, rust_2018_idioms, missing_docs)]
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 //! # storage implements the storage of a [Node] on top of a LinearStore
 //!
@@ -33,14 +33,16 @@ pub use nodestore::{
 pub use linear::filebacked::FileBacked;
 pub use linear::memory::MemStore;
 
-use strum_macros::VariantArray;
 pub use trie_hash::TrieHash;
+
+/// A shared node, which is just a triophe Arc of a node
+pub type SharedNode = triomphe::Arc<Node>;
 
 /// The strategy for caching nodes that are read
 /// from the storage layer. Generally, we only want to
 /// cache write operations, but for some read-heavy workloads
 /// you can enable caching of branch reads or all reads.
-#[derive(Clone, Debug, VariantArray)]
+#[derive(Clone, Debug)]
 pub enum CacheReadStrategy {
     /// Only cache writes (no reads will be cached)
     WritesOnly,
