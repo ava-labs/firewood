@@ -113,10 +113,10 @@ impl ReadableStorage for FileBacked {
         Ok(self.fd.metadata()?.len())
     }
 
-    fn read_cached_node(&self, addr: LinearAddress, source: &'static str) -> Option<SharedNode> {
+    fn read_cached_node(&self, addr: LinearAddress, mode: &'static str) -> Option<SharedNode> {
         let mut guard = self.cache.lock().expect("poisoned lock");
         let cached = guard.get(&addr).cloned();
-        counter!("firewood.cache.node", "mode" => source, "type" => if cached.is_some() { "hit" } else { "miss" })
+        counter!("firewood.cache.node", "mode" => mode, "type" => if cached.is_some() { "hit" } else { "miss" })
             .increment(1);
         cached
     }

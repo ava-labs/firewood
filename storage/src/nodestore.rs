@@ -1119,6 +1119,9 @@ impl<S: ReadableStorage> NodeReader for NodeStore<MutableProposal, S> {
 
 impl<T: Parentable + ReadInMemoryNode, S: ReadableStorage> NodeReader for NodeStore<T, S> {
     fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, Error> {
+        if let Some(node) = self.kind.read_in_memory_node(addr) {
+            return Ok(node);
+        }
         self.read_node_from_disk(addr, "read")
     }
 }
