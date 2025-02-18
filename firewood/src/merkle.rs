@@ -16,8 +16,8 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use storage::{
     BranchNode, Child, Hashable, HashedNodeReader, ImmutableProposal, LeafNode, LinearAddress,
-    MutableProposal, NibblesIterator, Node, NodeStore, Path, ReadableStorage, TrieHash, TrieReader,
-    ValueDigest,
+    MutableProposal, NibblesIterator, Node, NodeStore, Path, ReadableStorage, SharedNode, TrieHash,
+    TrieReader, ValueDigest,
 };
 
 use thiserror::Error;
@@ -93,7 +93,7 @@ fn get_helper<T: TrieReader>(
     nodestore: &T,
     node: &Node,
     key: &[u8],
-) -> Result<Option<Arc<Node>>, MerkleError> {
+) -> Result<Option<SharedNode>, MerkleError> {
     // 4 possibilities for the position of the `key` relative to `node`:
     // 1. The node is at `key`
     // 2. The key is above the node (i.e. its ancestor)
@@ -111,7 +111,7 @@ fn get_helper<T: TrieReader>(
             // Case (2) or (4)
             Ok(None)
         }
-        (None, None) => Ok(Some(Arc::new(node.clone()))), // 1. The node is at `key`
+        (None, None) => Ok(Some(node.clone().into())), // 1. The node is at `key`
         (Some((child_index, remaining_key)), None) => {
             // 3. The key is below the node (i.e. its descendant)
             match node {
@@ -152,7 +152,7 @@ impl<T> From<T> for Merkle<T> {
 }
 
 impl<T: TrieReader> Merkle<T> {
-    pub(crate) fn root(&self) -> Option<Arc<Node>> {
+    pub(crate) fn root(&self) -> Option<SharedNode> {
         self.nodestore.root_node()
     }
 
@@ -161,7 +161,7 @@ impl<T: TrieReader> Merkle<T> {
         &self.nodestore
     }
 
-    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, MerkleError> {
+    fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, MerkleError> {
         self.nodestore.read_node(addr).map_err(Into::into)
     }
 
@@ -335,7 +335,7 @@ impl<T: TrieReader> Merkle<T> {
         Ok(node.value().map(|v| v.to_vec().into_boxed_slice()))
     }
 
-    pub(crate) fn get_node(&self, key: &[u8]) -> Result<Option<Arc<Node>>, MerkleError> {
+    pub(crate) fn get_node(&self, key: &[u8]) -> Result<Option<SharedNode>, MerkleError> {
         let Some(root) = self.root() else {
             return Ok(None);
         };
@@ -591,16 +591,18 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         let root = self.nodestore.mut_root();
         let Some(root_node) = std::mem::take(root) else {
             // The trie is empty. There is nothing to remove.
-            counter!("firewood.remove", "result" => "nonexistent").increment(1);
+            counter!("firewood.remove", "prefix" => "false", "result" => "nonexistent")
+                .increment(1);
             return Ok(None);
         };
 
         let (root_node, removed_value) = self.remove_helper(root_node, &key)?;
         *self.nodestore.mut_root() = root_node;
         if removed_value.is_some() {
-            counter!("firewood.remove", "result" => "success").increment(1);
+            counter!("firewood.remove", "prefix" => "false", "result" => "success").increment(1);
         } else {
-            counter!("firewood.remove", "result" => "nonexistent").increment(1);
+            counter!("firewood.remove", "prefix" => "false", "result" => "nonexistent")
+                .increment(1);
         }
         Ok(removed_value)
     }
@@ -816,11 +818,14 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         let root = self.nodestore.mut_root();
         let Some(root_node) = std::mem::take(root) else {
             // The trie is empty. There is nothing to remove.
+            counter!("firewood.remove", "prefix" => "true", "result" => "nonexistent").increment(1);
             return Ok(0);
         };
 
         let mut deleted = 0;
         let root_node = self.remove_prefix_helper(root_node, &prefix, &mut deleted)?;
+        counter!("firewood.remove", "prefix" => "true", "result" => "success")
+            .increment(deleted as u64);
         *self.nodestore.mut_root() = root_node;
         Ok(deleted)
     }
