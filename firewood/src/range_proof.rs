@@ -2,8 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 use crate::merkle::_new_in_memory_merkle;
 use crate::proof::{Proof, ProofError};
-use storage::{BranchNode, Hashable, TrieHash};
-use storage::{Preimage, ValueDigest};
+use storage::{BranchNode, Hashable, Preimage, TrieHash, ValueDigest};
 
 /// A range proof proves that a given set of key-value pairs
 /// are in the trie with a given root hash.

@@ -16,7 +16,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use storage::{
     BranchNode, Child, Hashable, HashedNodeReader, ImmutableProposal, LeafNode, LinearAddress,
-    MemStore, MutableProposal, NibblesIterator, Node, NodeStore, Path, ReadableStorage,
+    MemStore, MutableProposal, NibblesIterator, Node, NodeStore, Path, ReadableStorage, SharedNode,
     TrieHash, TrieReader, ValueDigest,
 };
 
@@ -329,7 +329,10 @@ impl<T: TrieReader> Merkle<T> {
 
     // TODO have a key type so we don't need separate functions for this and get_node, etc.
     // All key usage should be standardized (i.e. nibbles vs bytes)
-    pub(crate) fn get_node_from_nibbles(&self, key: &[u8]) -> Result<Option<Arc<Node>>, MerkleError> {
+    pub(crate) fn get_node_from_nibbles(
+        &self,
+        key: &[u8],
+    ) -> Result<Option<SharedNode>, MerkleError> {
         let Some(root) = self.root() else {
             return Ok(None);
         };
@@ -1087,7 +1090,7 @@ mod tests {
         merkle.insert(b"abc", Box::new([])).unwrap()
     }
 
-    fn _create_in_memory_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
+    fn create_in_memory_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
         let memstore = MemStore::new(vec![]);
 
         let nodestore = NodeStore::new_empty_proposal(memstore.into());
