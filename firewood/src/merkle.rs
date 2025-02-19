@@ -7,7 +7,6 @@ use crate::stream::{MerkleKeyValueStream, PathIterator};
 use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
 use metrics::counter;
-use smallvec::SmallVec;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::future::ready;
@@ -94,7 +93,7 @@ fn get_helper<T: TrieReader>(
     nodestore: &T,
     node: &Node,
     key: &[u8],
-) -> Result<Option<Arc<Node>>, MerkleError> {
+) -> Result<Option<SharedNode>, MerkleError> {
     // 4 possibilities for the position of the `key` relative to `node`:
     // 1. The node is at `key`
     // 2. The key is above the node (i.e. its ancestor)
@@ -112,7 +111,7 @@ fn get_helper<T: TrieReader>(
             // Case (2) or (4)
             Ok(None)
         }
-        (None, None) => Ok(Some(Arc::new(node.clone()))), // 1. The node is at `key`
+        (None, None) => Ok(Some(node.clone().into())), // 1. The node is at `key`
         (Some((child_index, remaining_key)), None) => {
             // 3. The key is below the node (i.e. its descendant)
             match node {
@@ -159,7 +158,7 @@ impl<T> From<T> for Merkle<T> {
 }
 
 impl<T: TrieReader> Merkle<T> {
-    pub(crate) fn root(&self) -> Option<Arc<Node>> {
+    pub(crate) fn root(&self) -> Option<SharedNode> {
         self.nodestore.root_node()
     }
 
@@ -168,7 +167,7 @@ impl<T: TrieReader> Merkle<T> {
         &self.nodestore
     }
 
-    fn read_node(&self, addr: LinearAddress) -> Result<Arc<Node>, MerkleError> {
+    fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, MerkleError> {
         self.nodestore.read_node(addr).map_err(Into::into)
     }
 
@@ -319,7 +318,7 @@ impl<T: TrieReader> Merkle<T> {
         Ok(node.value().map(|v| v.to_vec().into_boxed_slice()))
     }
 
-    pub(crate) fn get_node(&self, key: &[u8]) -> Result<Option<Arc<Node>>, MerkleError> {
+    pub(crate) fn get_node(&self, key: &[u8]) -> Result<Option<SharedNode>, MerkleError> {
         let Some(root) = self.root() else {
             return Ok(None);
         };
@@ -432,7 +431,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
             // it as the root.
             let root_node = Node::Leaf(LeafNode {
                 partial_path: key,
-                value: SmallVec::from(&value[..]),
+                value,
             });
             *root = root_node.into();
             return Ok(());
@@ -513,7 +512,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                 // There is no child at this index.
                                 // Create a new leaf and put it here.
                                 let new_leaf = Node::Leaf(LeafNode {
-                                    value: SmallVec::from(&value[..]),
+                                    value,
                                     partial_path,
                                 });
                                 branch.update_child(child_index, Some(Child::Node(new_leaf)));
@@ -534,12 +533,12 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                         // Turn this node into a branch node and put a new leaf as a child.
                         let mut branch = BranchNode {
                             partial_path: std::mem::replace(&mut leaf.partial_path, Path::new()),
-                            value: Some(std::mem::take(&mut leaf.value).into_boxed_slice()),
+                            value: Some(std::mem::take(&mut leaf.value)),
                             children: [const { None }; BranchNode::MAX_CHILDREN],
                         };
 
                         let new_leaf = Node::Leaf(LeafNode {
-                            value: SmallVec::from(&value[..]),
+                            value,
                             partial_path,
                         });
 
@@ -568,7 +567,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 branch.update_child(node_index, Some(Child::Node(node)));
 
                 let new_leaf = Node::Leaf(LeafNode {
-                    value: SmallVec::from(&value[..]),
+                    value,
                     partial_path: key_partial_path,
                 });
                 branch.update_child(key_index, Some(Child::Node(new_leaf)));
@@ -589,16 +588,18 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         let root = self.nodestore.mut_root();
         let Some(root_node) = std::mem::take(root) else {
             // The trie is empty. There is nothing to remove.
-            counter!("firewood.remove", "result" => "nonexistent").increment(1);
+            counter!("firewood.remove", "prefix" => "false", "result" => "nonexistent")
+                .increment(1);
             return Ok(None);
         };
 
         let (root_node, removed_value) = self.remove_helper(root_node, &key)?;
         *self.nodestore.mut_root() = root_node;
         if removed_value.is_some() {
-            counter!("firewood.remove", "result" => "success").increment(1);
+            counter!("firewood.remove", "prefix" => "false", "result" => "success").increment(1);
         } else {
-            counter!("firewood.remove", "result" => "nonexistent").increment(1);
+            counter!("firewood.remove", "prefix" => "false", "result" => "nonexistent")
+                .increment(1);
         }
         Ok(removed_value)
     }
@@ -715,7 +716,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                     }
                     Node::Leaf(leaf) => {
                         let removed_value = std::mem::take(&mut leaf.value);
-                        Ok((None, Some(removed_value.into_boxed_slice())))
+                        Ok((None, Some(removed_value)))
                     }
                 }
             }
@@ -758,9 +759,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                         let Some((child_index, child)) = children_iter.next() else {
                             // The branch has no children. Turn it into a leaf.
                             let leaf = Node::Leaf(LeafNode {
-                                    value: SmallVec::from(&(*branch.value.take().expect(
+                                    value: branch.value.take().expect(
                                         "branch node must have a value if it previously had only 1 child",
-                                    ))[..]),
+                                    ),
                                     partial_path: branch.partial_path.clone(), // TODO remove clone
                                 });
                             return Ok((Some(leaf), removed_value));
@@ -776,7 +777,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                             Child::Node(child_node) => std::mem::replace(
                                 child_node,
                                 Node::Leaf(LeafNode {
-                                    value: SmallVec::default(),
+                                    value: Box::default(),
                                     partial_path: Path::new(),
                                 }),
                             ),
@@ -814,11 +815,14 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         let root = self.nodestore.mut_root();
         let Some(root_node) = std::mem::take(root) else {
             // The trie is empty. There is nothing to remove.
+            counter!("firewood.remove", "prefix" => "true", "result" => "nonexistent").increment(1);
             return Ok(0);
         };
 
         let mut deleted = 0;
         let root_node = self.remove_prefix_helper(root_node, &prefix, &mut deleted)?;
+        counter!("firewood.remove", "prefix" => "true", "result" => "success")
+            .increment(deleted as u64);
         *self.nodestore.mut_root() = root_node;
         Ok(deleted)
     }
@@ -905,9 +909,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                         let Some((child_index, child)) = children_iter.next() else {
                             // The branch has no children. Turn it into a leaf.
                             let leaf = Node::Leaf(LeafNode {
-                                    value: SmallVec::from(&(*branch.value.take().expect(
+                                    value: branch.value.take().expect(
                                         "branch node must have a value if it previously had only 1 child",
-                                    ))[..]),
+                                    ),
                                     partial_path: branch.partial_path.clone(), // TODO remove clone
                                 });
                             return Ok(Some(leaf));
@@ -923,7 +927,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                             Child::Node(child_node) => std::mem::replace(
                                 child_node,
                                 Node::Leaf(LeafNode {
-                                    value: SmallVec::default(),
+                                    value: Box::default(),
                                     partial_path: Path::new(),
                                 }),
                             ),
@@ -1029,7 +1033,7 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
 mod tests {
     use super::*;
     use rand::rngs::StdRng;
-    use rand::{thread_rng, Rng, SeedableRng};
+    use rand::{rng, Rng, SeedableRng};
     use storage::{MemStore, MutableProposal, NodeStore, RootReader};
     use test_case::test_case;
 
@@ -1041,11 +1045,11 @@ mod tests {
 
         let mut kvs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
         for _ in 0..n {
-            let key_len = rng.gen_range(1..=4096);
-            let key: Vec<u8> = (0..key_len).map(|_| rng.gen()).collect();
+            let key_len = rng.random_range(1..=4096);
+            let key: Vec<u8> = (0..key_len).map(|_| rng.random()).collect();
 
-            let val_len = rng.gen_range(1..=4096);
-            let val: Vec<u8> = (0..val_len).map(|_| rng.gen()).collect();
+            let val_len = rng.random_range(1..=4096);
+            let val: Vec<u8> = (0..val_len).map(|_| rng.random()).collect();
 
             kvs.push((key, val));
         }
@@ -1301,7 +1305,7 @@ mod tests {
                 || None,
                 |s| Some(str::parse(&s).expect("couldn't parse FIREWOOD_TEST_SEED; must be a u64")),
             )
-            .unwrap_or_else(|| thread_rng().gen());
+            .unwrap_or_else(|| rng().random());
 
         const TEST_SIZE: usize = 1;
 
@@ -1753,13 +1757,13 @@ mod tests {
             let (len0, len1): (usize, usize) = {
                 let mut rng = rng.borrow_mut();
                 (
-                    rng.gen_range(1..max_len0 + 1),
-                    rng.gen_range(1..max_len1 + 1),
+                    rng.random_range(1..max_len0 + 1),
+                    rng.random_range(1..max_len1 + 1),
                 )
             };
             let key: Vec<u8> = (0..len0)
-                .map(|_| rng.borrow_mut().gen_range(0..2))
-                .chain((0..len1).map(|_| rng.borrow_mut().gen()))
+                .map(|_| rng.borrow_mut().random_range(0..2))
+                .chain((0..len1).map(|_| rng.borrow_mut().random()))
                 .collect();
             key
         };
@@ -1768,7 +1772,7 @@ mod tests {
             let mut items = Vec::new();
 
             for _ in 0..10 {
-                let val: Vec<u8> = (0..8).map(|_| rng.borrow_mut().gen()).collect();
+                let val: Vec<u8> = (0..8).map(|_| rng.borrow_mut().random()).collect();
                 items.push((keygen(), val));
             }
 
@@ -1820,13 +1824,13 @@ mod tests {
     //         let (len0, len1): (usize, usize) = {
     //             let mut rng = rng.borrow_mut();
     //             (
-    //                 rng.gen_range(1..max_len0 + 1),
-    //                 rng.gen_range(1..max_len1 + 1),
+    //                 rng.random_range(1..max_len0 + 1),
+    //                 rng.random_range(1..max_len1 + 1),
     //             )
     //         };
     //         let key: Vec<u8> = (0..len0)
-    //             .map(|_| rng.borrow_mut().gen_range(0..2))
-    //             .chain((0..len1).map(|_| rng.borrow_mut().gen()))
+    //             .map(|_| rng.borrow_mut().random_range(0..2))
+    //             .chain((0..len1).map(|_| rng.borrow_mut().random()))
     //             .collect();
     //         key
     //     };
@@ -1835,7 +1839,7 @@ mod tests {
     //         let mut items: Vec<_> = (0..10)
     //             .map(|_| keygen())
     //             .map(|key| {
-    //                 let val: Box<[u8]> = (0..8).map(|_| rng.borrow_mut().gen()).collect();
+    //                 let val: Box<[u8]> = (0..8).map(|_| rng.borrow_mut().random()).collect();
     //                 (key, val)
     //             })
     //             .collect();
@@ -1891,13 +1895,13 @@ mod tests {
     //         let (len0, len1): (usize, usize) = {
     //             let mut rng = rng.borrow_mut();
     //             (
-    //                 rng.gen_range(1..max_len0 + 1),
-    //                 rng.gen_range(1..max_len1 + 1),
+    //                 rng.random_range(1..max_len0 + 1),
+    //                 rng.random_range(1..max_len1 + 1),
     //             )
     //         };
     //         let key: Vec<u8> = (0..len0)
-    //             .map(|_| rng.borrow_mut().gen_range(0..2))
-    //             .chain((0..len1).map(|_| rng.borrow_mut().gen()))
+    //             .map(|_| rng.borrow_mut().random_range(0..2))
+    //             .chain((0..len1).map(|_| rng.borrow_mut().random()))
     //             .collect();
     //         key
     //     };
@@ -1906,7 +1910,7 @@ mod tests {
     //         let mut items = std::collections::HashMap::new();
 
     //         for _ in 0..10 {
-    //             let val: Box<[u8]> = (0..8).map(|_| rng.borrow_mut().gen()).collect();
+    //             let val: Box<[u8]> = (0..8).map(|_| rng.borrow_mut().random()).collect();
     //             items.insert(keygen(), val);
     //         }
 
@@ -2080,8 +2084,8 @@ mod tests {
     //     let merkle = merkle_build_test(items.clone())?;
 
     //     for _ in 0..10 {
-    //         let start = rand::thread_rng().gen_range(0..items.len());
-    //         let end = rand::thread_rng().gen_range(0..items.len() - start) + start - 1;
+    //         let start = rand::rng().random_range(0..items.len());
+    //         let end = rand::rng().random_range(0..items.len() - start) + start - 1;
 
     //         if end <= start {
     //             continue;
@@ -2116,8 +2120,8 @@ mod tests {
     //     let merkle = merkle_build_test(items.clone())?;
 
     //     for _ in 0..10 {
-    //         let start = rand::thread_rng().gen_range(0..items.len());
-    //         let end = rand::thread_rng().gen_range(0..items.len() - start) + start - 1;
+    //         let start = rand::rng().random_range(0..items.len());
+    //         let end = rand::rng().random_range(0..items.len() - start) + start - 1;
 
     //         if end <= start {
     //             continue;
@@ -2136,16 +2140,16 @@ mod tests {
     //             vals.push(*item.1);
     //         }
 
-    //         let test_case: u32 = rand::thread_rng().gen_range(0..6);
-    //         let index = rand::thread_rng().gen_range(0..end - start);
+    //         let test_case: u32 = rand::rng().random_range(0..6);
+    //         let index = rand::rng().random_range(0..end - start);
     //         match test_case {
     //             0 => {
     //                 // Modified key
-    //                 keys[index] = rand::thread_rng().gen::<[u8; 32]>(); // In theory it can't be same
+    //                 keys[index] = rand::rng().random::<[u8; 32]>(); // In theory it can't be same
     //             }
     //             1 => {
     //                 // Modified val
-    //                 vals[index] = rand::thread_rng().gen::<[u8; 20]>(); // In theory it can't be same
+    //                 vals[index] = rand::rng().random::<[u8; 20]>(); // In theory it can't be same
     //             }
     //             2 => {
     //                 // Gapped entry slice
@@ -2157,8 +2161,8 @@ mod tests {
     //             }
     //             3 => {
     //                 // Out of order
-    //                 let index_1 = rand::thread_rng().gen_range(0..end - start);
-    //                 let index_2 = rand::thread_rng().gen_range(0..end - start);
+    //                 let index_1 = rand::rng().random_range(0..end - start);
+    //                 let index_2 = rand::rng().random_range(0..end - start);
     //                 if index_1 == index_2 {
     //                     continue;
     //                 }
@@ -2196,8 +2200,8 @@ mod tests {
     //     let merkle = merkle_build_test(items.clone())?;
 
     //     for _ in 0..10 {
-    //         let start = rand::thread_rng().gen_range(0..items.len());
-    //         let end = rand::thread_rng().gen_range(0..items.len() - start) + start - 1;
+    //         let start = rand::rng().random_range(0..items.len());
+    //         let end = rand::rng().random_range(0..items.len() - start) + start - 1;
 
     //         if end <= start {
     //             continue;
@@ -2386,8 +2390,8 @@ mod tests {
     //     )?;
 
     //     // Test the mini trie with only a single element.
-    //     let key = rand::thread_rng().gen::<[u8; 32]>();
-    //     let val = rand::thread_rng().gen::<[u8; 20]>();
+    //     let key = rand::rng().random::<[u8; 32]>();
+    //     let val = rand::rng().random::<[u8; 20]>();
     //     let merkle = merkle_build_test(vec![(key, val)])?;
 
     //     let first = &[0; 32];
@@ -2590,8 +2594,8 @@ mod tests {
     //     for _ in 0..10 {
     //         let mut set = HashMap::new();
     //         for _ in 0..4096_u32 {
-    //             let key = rand::thread_rng().gen::<[u8; 32]>();
-    //             let val = rand::thread_rng().gen::<[u8; 20]>();
+    //             let key = rand::rng().random::<[u8; 32]>();
+    //             let val = rand::rng().random::<[u8; 20]>();
     //             set.insert(key, val);
     //         }
     //         let mut items = Vec::from_iter(set.iter());
@@ -2624,8 +2628,8 @@ mod tests {
     //     for _ in 0..10 {
     //         let mut set = HashMap::new();
     //         for _ in 0..1024_u32 {
-    //             let key = rand::thread_rng().gen::<[u8; 32]>();
-    //             let val = rand::thread_rng().gen::<[u8; 20]>();
+    //             let key = rand::rng().random::<[u8; 32]>();
+    //             let val = rand::rng().random::<[u8; 20]>();
     //             set.insert(key, val);
     //         }
     //         let mut items = Vec::from_iter(set.iter());
@@ -2657,8 +2661,8 @@ mod tests {
     //     for _ in 0..10 {
     //         let mut set = HashMap::new();
     //         for _ in 0..4096_u32 {
-    //             let key = rand::thread_rng().gen::<[u8; 32]>();
-    //             let val = rand::thread_rng().gen::<[u8; 20]>();
+    //             let key = rand::rng().random::<[u8; 32]>();
+    //             let val = rand::rng().random::<[u8; 20]>();
     //             set.insert(key, val);
     //         }
     //         let mut items = Vec::from_iter(set.iter());
@@ -2854,7 +2858,7 @@ mod tests {
     //             || None,
     //             |s| Some(str::parse(&s).expect("couldn't parse FIREWOOD_TEST_SEED; must be a u64")),
     //         )
-    //         .unwrap_or_else(|| thread_rng().gen());
+    //         .unwrap_or_else(|| rng().random());
 
     //     // the test framework will only render this in verbose mode or if the test fails
     //     // to re-run the test when it fails, just specify the seed instead of randomly
@@ -2862,8 +2866,8 @@ mod tests {
     //     eprintln!("Seed {seed}: to rerun with this data, export FIREWOOD_TEST_SEED={seed}");
     //     let mut r = StdRng::seed_from_u64(seed);
     //     for _ in 0..random_count {
-    //         let key = r.gen::<[u8; 32]>();
-    //         let val = r.gen::<[u8; 20]>();
+    //         let key = r.random::<[u8; 32]>();
+    //         let val = r.random::<[u8; 20]>();
     //         items.insert(key, val);
     //     }
     //     items

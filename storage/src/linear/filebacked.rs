@@ -7,34 +7,68 @@
 // read/write operations at once
 
 use std::fs::{File, OpenOptions};
-use std::io::{Error, Read, Seek};
+use std::io::{Error, Read};
 use std::num::NonZero;
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use lru::LruCache;
 use metrics::counter;
 
-use crate::{LinearAddress, Node};
+use crate::{CacheReadStrategy, LinearAddress, SharedNode};
 
 use super::{ReadableStorage, WritableStorage};
 
-#[derive(Debug)]
 /// A [ReadableStorage] backed by a file
 pub struct FileBacked {
-    fd: Mutex<File>,
-    cache: Mutex<LruCache<LinearAddress, Arc<Node>>>,
+    fd: File,
+    cache: Mutex<LruCache<LinearAddress, SharedNode>>,
     free_list_cache: Mutex<LruCache<LinearAddress, Option<LinearAddress>>>,
+    cache_read_strategy: CacheReadStrategy,
+    #[cfg(feature = "io-uring")]
+    pub(crate) ring: Mutex<io_uring::IoUring>,
+}
+
+// Manual implementation since ring doesn't implement Debug :(
+impl std::fmt::Debug for FileBacked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FileBacked")
+            .field("fd", &self.fd)
+            .field("cache", &self.cache)
+            .field("free_list_cache", &self.free_list_cache)
+            .finish()
+    }
 }
 
 impl FileBacked {
+    /// Make a write operation from a raw data buffer for this file
+    #[cfg(feature = "io-uring")]
+    pub(crate) fn make_op(&self, data: &[u8]) -> io_uring::opcode::Write {
+        use std::os::fd::AsRawFd as _;
+
+        use io_uring::{opcode::Write, types};
+
+        Write::new(
+            types::Fd(self.fd.as_raw_fd()),
+            data.as_ptr(),
+            data.len() as _,
+        )
+    }
+
+    #[cfg(feature = "io-uring")]
+    // The size of the kernel ring buffer. This buffer will control how many writes we do with
+    // a single system call.
+    // TODO: make this configurable
+    pub(crate) const RINGSIZE: u32 = 32;
+
     /// Create or open a file at a given path
     pub fn new(
         path: PathBuf,
         node_cache_size: NonZero<usize>,
         free_list_cache_size: NonZero<usize>,
         truncate: bool,
+        cache_read_strategy: CacheReadStrategy,
     ) -> Result<Self, Error> {
         let fd = OpenOptions::new()
             .read(true)
@@ -43,30 +77,46 @@ impl FileBacked {
             .truncate(truncate)
             .open(path)?;
 
+        #[cfg(feature = "io-uring")]
+        let ring = {
+            // The kernel will stop the worker thread in this many ms if there is no work to do
+            const IDLETIME_MS: u32 = 1000;
+
+            io_uring::IoUring::builder()
+                // we promise not to fork and we are the only issuer of writes to this ring
+                .dontfork()
+                .setup_single_issuer()
+                // completion queue should be larger than the request queue, we allocate double
+                .setup_cqsize(FileBacked::RINGSIZE * 2)
+                // start a kernel thread to do the IO
+                .setup_sqpoll(IDLETIME_MS)
+                .build(FileBacked::RINGSIZE)?
+        };
+
         Ok(Self {
-            fd: Mutex::new(fd),
+            fd,
             cache: Mutex::new(LruCache::new(node_cache_size)),
             free_list_cache: Mutex::new(LruCache::new(free_list_cache_size)),
+            cache_read_strategy,
+            #[cfg(feature = "io-uring")]
+            ring: ring.into(),
         })
     }
 }
 
 impl ReadableStorage for FileBacked {
-    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read>, Error> {
+    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, Error> {
         Ok(Box::new(PredictiveReader::new(self, addr)))
     }
 
     fn size(&self) -> Result<u64, Error> {
-        self.fd
-            .lock()
-            .expect("poisoned lock")
-            .seek(std::io::SeekFrom::End(0))
+        Ok(self.fd.metadata()?.len())
     }
 
-    fn read_cached_node(&self, addr: LinearAddress) -> Option<Arc<Node>> {
+    fn read_cached_node(&self, addr: LinearAddress, mode: &'static str) -> Option<SharedNode> {
         let mut guard = self.cache.lock().expect("poisoned lock");
         let cached = guard.get(&addr).cloned();
-        counter!("firewood.cache.node", "type" => if cached.is_some() { "hit" } else { "miss" })
+        counter!("firewood.cache.node", "mode" => mode, "type" => if cached.is_some() { "hit" } else { "miss" })
             .increment(1);
         cached
     }
@@ -77,19 +127,38 @@ impl ReadableStorage for FileBacked {
         counter!("firewood.cache.freelist", "type" => if cached.is_some() { "hit" } else { "miss" }).increment(1);
         cached
     }
+
+    fn cache_read_strategy(&self) -> &CacheReadStrategy {
+        &self.cache_read_strategy
+    }
+
+    fn cache_node(&self, addr: LinearAddress, node: SharedNode) {
+        match self.cache_read_strategy {
+            CacheReadStrategy::WritesOnly => {
+                // we don't cache reads
+            }
+            CacheReadStrategy::All => {
+                let mut guard = self.cache.lock().expect("poisoned lock");
+                guard.put(addr, node);
+            }
+            CacheReadStrategy::BranchReads => {
+                if !node.is_leaf() {
+                    let mut guard = self.cache.lock().expect("poisoned lock");
+                    guard.put(addr, node);
+                }
+            }
+        }
+    }
 }
 
 impl WritableStorage for FileBacked {
     fn write(&self, offset: u64, object: &[u8]) -> Result<usize, Error> {
-        self.fd
-            .lock()
-            .expect("poisoned lock")
-            .write_at(object, offset)
+        self.fd.write_at(object, offset)
     }
 
     fn write_cached_nodes<'a>(
         &self,
-        nodes: impl Iterator<Item = (&'a std::num::NonZero<u64>, &'a std::sync::Arc<crate::Node>)>,
+        nodes: impl Iterator<Item = (&'a std::num::NonZero<u64>, &'a SharedNode)>,
     ) -> Result<(), Error> {
         let mut guard = self.cache.lock().expect("poisoned lock");
         for (addr, node) in nodes {
@@ -111,29 +180,24 @@ impl WritableStorage for FileBacked {
     }
 }
 
+const PREDICTIVE_READ_BUFFER_SIZE: usize = 1024;
+
 /// A reader that can predictively read from a file, avoiding reading past boundaries, but reading in 1k chunks
-struct PredictiveReader {
-    fd: File,
-    buffer: [u8; Self::PREDICTIVE_READ_BUFFER_SIZE],
+struct PredictiveReader<'a> {
+    fd: &'a File,
+    buffer: [u8; PREDICTIVE_READ_BUFFER_SIZE],
     offset: u64,
     len: usize,
     pos: usize,
 }
 
-impl PredictiveReader {
-    const PREDICTIVE_READ_BUFFER_SIZE: usize = 1024;
-
-    fn new(fb: &FileBacked, start: u64) -> Self {
-        let fd = fb
-            .fd
-            .lock()
-            .expect("poisoned lock")
-            .try_clone()
-            .expect("resource exhaustion");
+impl<'a> PredictiveReader<'a> {
+    fn new(fb: &'a FileBacked, start: u64) -> Self {
+        let fd = &fb.fd;
 
         Self {
             fd,
-            buffer: [0u8; Self::PREDICTIVE_READ_BUFFER_SIZE],
+            buffer: [0u8; PREDICTIVE_READ_BUFFER_SIZE],
             offset: start,
             len: 0,
             pos: 0,
@@ -141,13 +205,14 @@ impl PredictiveReader {
     }
 }
 
-impl Read for PredictiveReader {
+impl Read for PredictiveReader<'_> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
         if self.len == self.pos {
-            let bytes_left_in_page = Self::PREDICTIVE_READ_BUFFER_SIZE
-                - (self.offset % Self::PREDICTIVE_READ_BUFFER_SIZE as u64) as usize;
-            self.fd.seek(std::io::SeekFrom::Start(self.offset))?;
-            let read = self.fd.read(&mut self.buffer[..bytes_left_in_page])?;
+            let bytes_left_in_page = PREDICTIVE_READ_BUFFER_SIZE
+                - (self.offset % PREDICTIVE_READ_BUFFER_SIZE as u64) as usize;
+            let read = self
+                .fd
+                .read_at(&mut self.buffer[..bytes_left_in_page], self.offset)?;
             self.offset += read as u64;
             self.len = read;
             self.pos = 0;
@@ -179,6 +244,7 @@ mod test {
             NonZero::new(10).unwrap(),
             NonZero::new(10).unwrap(),
             false,
+            CacheReadStrategy::WritesOnly,
         )
         .unwrap();
         let mut reader = fb.stream_from(0).unwrap();
@@ -218,6 +284,7 @@ mod test {
             NonZero::new(10).unwrap(),
             NonZero::new(10).unwrap(),
             false,
+            CacheReadStrategy::WritesOnly,
         )
         .unwrap();
         let mut reader = fb.stream_from(0).unwrap();
