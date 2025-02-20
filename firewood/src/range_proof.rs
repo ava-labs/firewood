@@ -1,6 +1,6 @@
 // Copyright (C) 2024, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
-use crate::merkle::_new_in_memory_merkle;
+use crate::merkle::new_in_memory_merkle;
 use crate::proof::{Proof, ProofError};
 use storage::{BranchNode, Hashable, Preimage, TrieHash, ValueDigest};
 
@@ -93,7 +93,7 @@ where
         }
 
         if let Some(end_proof) = &self.end_proof {
-            match (&end_key, self.key_values.first()) {
+            match (&end_key, self.key_values.last()) {
                 (Some(end_key), None) => {
                     end_proof.verify(end_key, None::<&[u8]>, &expected_root_hash)?;
                 }
@@ -146,7 +146,7 @@ where
         }
 
         // Insert all key-value paris into an empty trie.
-        let mut merkle = _new_in_memory_merkle();
+        let mut merkle = new_in_memory_merkle();
 
         for (key, value) in self.key_values.iter() {
             merkle.insert(key.as_ref(), Box::from(value.as_ref()))?;
@@ -193,8 +193,8 @@ where
             let mut matched_key: Vec<u8> = vec![];
 
             for window in start_proof.0.windows(2) {
-                let proof_node = &window[0];
-                let next_proof_node = &window[1];
+                let proof_node = window.first().expect("slice length 2");
+                let next_proof_node = window.last().expect("slice length 2");
 
                 // This node isn't the last in the proof, so it must be a branch.
                 let current_branch = current.as_branch().ok_or(ProofError::UnexpectedLeaf)?;
@@ -205,26 +205,36 @@ where
                     .expect("proof is valid");
 
                 let mut children: [Option<TrieHash>; BranchNode::MAX_CHILDREN] = Default::default();
-                for (i, hash) in proof_node
-                    .children()
-                    .filter(|(i, _)| *i < child_index as usize)
-                {
-                    children[i] = Some(hash.clone());
-                }
-                for i in child_index as usize..BranchNode::MAX_CHILDREN {
-                    children[i] = current_branch.children[i]
-                        .as_ref()
-                        .map(|child| match child {
+
+                // fill in the children to the left of child_index from the proof
+                children
+                    .iter_mut()
+                    .take(child_index as usize)
+                    .zip(proof_node.children())
+                    .for_each(|(child, (_, hash))| {
+                        *child = Some(hash.clone());
+                    });
+
+                // fill in the children to the right of child_index (inclusive) from the
+                // current branch
+                children
+                    .iter_mut()
+                    .zip(&current_branch.children)
+                    .skip(child_index as usize)
+                    .for_each(|(child, current_child)| {
+                        *child = current_child.as_ref().map(|child| match child {
                             storage::Child::Node(_) => {
                                 unreachable!("hashes should be filled in")
                             }
                             storage::Child::AddressWithHash(_, hash) => hash.clone(),
                         });
-                }
+                    });
 
-                let expected_child_hash = children[child_index as usize]
+                let expected_child_hash = children
+                    .get(child_index as usize)
+                    .expect("child index valid")
                     .as_ref()
-                    .expect("proof is valid")
+                    .expect("child index valid")
                     .clone();
 
                 matched_key.extend(current.partial_path().iter().copied());
@@ -336,7 +346,7 @@ mod tests {
     #[test_case(None, None, &[&[0],&[1]]; "2 kv no start key no end key")]
     #[tokio::test]
     async fn test_verify(start_key: Option<&[u8]>, end_key: Option<&[u8]>, keys: &[&[u8]]) {
-        let mut merkle = _new_in_memory_merkle();
+        let mut merkle = new_in_memory_merkle();
         for k in keys {
             merkle.insert(k, Box::from(*k)).unwrap();
         }
@@ -351,6 +361,8 @@ mod tests {
             )
             .await
             .unwrap();
+
+        eprintln!("{:#?}", range_proof);
 
         range_proof
             .verify(start_key, end_key, root_hash.clone())

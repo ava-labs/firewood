@@ -322,11 +322,14 @@ impl<'a, T: Hashable> Iterator for ImpliedHashIterator<'a, T> {
                             let grandchild_key = grandchild.key();
                             let grandchild_index =
                                 next_nibble(child_key.clone(), grandchild_key).expect("TODO");
-                            (&remaining_nodes[1..], grandchild_index)
+                            (
+                                remaining_nodes.get(1..).unwrap_or_default(),
+                                grandchild_index,
+                            )
                         });
 
                         let child = Box::new(ImpliedHashIterator::FromNode {
-                            node: &remaining_nodes[0],
+                            node: remaining_nodes.first()?,
                             child,
                             next_index: 0,
                         });
