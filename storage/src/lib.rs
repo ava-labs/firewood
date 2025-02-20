@@ -21,7 +21,7 @@ mod trie_hash;
 pub mod logger;
 
 // re-export these so callers don't need to know where they are
-pub use hashednode::{hash_node, hash_preimage, Hashable, Preimage, ValueDigest};
+pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
 pub use linear::{ReadableStorage, WritableStorage};
 pub use node::path::{NibblesIterator, Path};
 pub use node::{BranchNode, Child, LeafNode, Node, PathIterItem};

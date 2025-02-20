@@ -36,7 +36,7 @@ impl Display for Value {
 ///  * ensure that `db` is a valid pointer returned by `open_db`
 ///  * ensure that `key` is a valid pointer to a `Value` struct
 ///  * call `free_value` to free the memory associated with the returned `Value`
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_get(db: *mut Db, key: Value) -> Value {
     let db = unsafe { db.as_ref() }.expect("db should be non-null");
     let root = db.root_hash_sync();
@@ -57,7 +57,7 @@ pub unsafe extern "C" fn fwd_get(db: *mut Db, key: Value) -> Value {
 /// A `KeyValue` struct that represents a key-value pair in the database.
 #[repr(C)]
 #[allow(unused)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub struct KeyValue {
     key: Value,
     value: Value,
@@ -77,7 +77,7 @@ pub struct KeyValue {
 ///  * ensure that `values` is a valid pointer and that it points to an array of `KeyValue` structs of length `nkeys`.
 ///  * ensure that the `Value` fields of the `KeyValue` structs are valid pointers.
 ///
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const KeyValue) -> Value {
     let db = unsafe { db.as_ref() }.expect("db should be non-null");
     let mut batch = Vec::with_capacity(nkeys);
@@ -106,7 +106,7 @@ pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const Key
 ///
 /// This function is unsafe because it dereferences raw pointers.
 /// The caller must ensure that `db` is a valid pointer returned by `open_db`
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_root_hash(db: *mut Db) -> Value {
     let db = unsafe { db.as_ref() }.expect("db should be non-null");
     hash(db)
@@ -148,15 +148,16 @@ impl From<Box<[u8]>> for Value {
 ///
 /// This function is unsafe because it dereferences raw pointers.
 /// The caller must ensure that `value` is a valid pointer.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_free_value(value: *const Value) {
-    if (*value).len == 0 {
+    let value = unsafe { &*value as &Value };
+    if value.len == 0 {
         return;
     }
     let recreated_box = unsafe {
         Box::from_raw(std::slice::from_raw_parts_mut(
-            (*value).data as *mut u8,
-            (*value).len,
+            value.data as *mut u8,
+            value.len,
         ))
     };
     drop(recreated_box);
@@ -182,7 +183,7 @@ pub unsafe extern "C" fn fwd_free_value(value: *const Value) {
 /// The caller must also ensure that the cache size is greater than 0 and that the number of revisions is at least 2.
 /// The caller must call `close` to free the memory associated with the returned database handle.
 ///
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_create_db(
     path: *const std::ffi::c_char,
     cache_size: usize,
@@ -194,7 +195,7 @@ pub unsafe extern "C" fn fwd_create_db(
         .truncate(true)
         .manager(manager_config(cache_size, revisions, strategy))
         .build();
-    common_create(path, metrics_port, cfg)
+    unsafe { common_create(path, metrics_port, cfg) }
 }
 
 /// Open a database with the given cache size and maximum number of revisions
@@ -216,7 +217,7 @@ pub unsafe extern "C" fn fwd_create_db(
 /// The caller must also ensure that the cache size is greater than 0 and that the number of revisions is at least 2.
 /// The caller must call `close` to free the memory associated with the returned database handle.
 ///
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_open_db(
     path: *const std::ffi::c_char,
     cache_size: usize,
@@ -228,7 +229,7 @@ pub unsafe extern "C" fn fwd_open_db(
         .truncate(false)
         .manager(manager_config(cache_size, revisions, strategy))
         .build();
-    common_create(path, metrics_port, cfg)
+    unsafe { common_create(path, metrics_port, cfg) }
 }
 
 unsafe fn common_create(
@@ -275,7 +276,7 @@ fn manager_config(cache_size: usize, revisions: usize, strategy: u8) -> Revision
 /// # Arguments
 ///
 /// * `db` - The database handle to close, previously returned from a call to open_db()
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_close_db(db: *mut Db) {
-    let _ = Box::from_raw(db);
+    let _ = unsafe { Box::from_raw(db) };
 }
