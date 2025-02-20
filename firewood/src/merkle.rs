@@ -69,7 +69,6 @@ macro_rules! write_attributes {
                 nibbles_formatter($node.partial_path.0.clone())
             )?;
         }
-        #[allow(clippy::unnecessary_to_owned)]
         if !$value.is_empty() {
             match std::str::from_utf8($value) {
                 Ok(string) if string.chars().all(char::is_alphanumeric) => {
@@ -122,7 +121,7 @@ fn get_helper<T: TrieReader>(
                     .expect("index is in bounds")
                 {
                     None => Ok(None),
-                    Some(Child::Node(ref child)) => get_helper(nodestore, child, remaining_key),
+                    Some(Child::Node(child)) => get_helper(nodestore, child, remaining_key),
                     Some(Child::AddressWithHash(addr, _)) => {
                         let child = nodestore.read_node(*addr)?;
                         get_helper(nodestore, &child, remaining_key)
@@ -188,7 +187,7 @@ impl<T: TrieReader> Merkle<T> {
                 [const { None }; BranchNode::MAX_CHILDREN];
             if let Some(branch) = root.as_branch() {
                 // TODO danlaine: can we avoid indexing?
-                #[allow(clippy::indexing_slicing)]
+                #[expect(clippy::indexing_slicing)]
                 for (i, hash) in branch.children_iter() {
                     child_hashes[i] = Some(hash.clone());
                 }
@@ -225,10 +224,12 @@ impl<T: TrieReader> Merkle<T> {
         PathIterator::new(&self.nodestore, key)
     }
 
+    #[allow(dead_code)]
     pub(super) fn key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
         MerkleKeyValueStream::from(&self.nodestore)
     }
 
+    #[allow(dead_code)]
     pub(super) fn key_value_iter_from_key<K: AsRef<[u8]>>(
         &self,
         key: K,
@@ -291,7 +292,6 @@ impl<T: TrieReader> Merkle<T> {
 
         // we stop streaming if either we hit the limit or the key returned was larger
         // than the largest key requested
-        #[allow(clippy::unwrap_used)]
         key_values.extend(
             stream
                 .take(limit.unwrap_or(usize::MAX))
@@ -508,7 +508,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 //    ... (key may be below)       ... (key is below)
                 match node {
                     Node::Branch(ref mut branch) => {
-                        #[allow(clippy::indexing_slicing)]
+                        #[expect(clippy::indexing_slicing)]
                         let child = match std::mem::take(&mut branch.children[child_index as usize])
                         {
                             None => {
@@ -610,7 +610,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Removes the value associated with the given `key` from the subtrie rooted at `node`.
     /// Returns the new root of the subtrie and the value that was removed, if any.
     /// Each element of `key` is 1 nibble.
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     fn remove_helper(
         &mut self,
         mut node: Node,
@@ -639,7 +639,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
             (None, None) => {
                 // 1. The node is at `key`
                 match &mut node {
-                    Node::Branch(ref mut branch) => {
+                    Node::Branch(branch) => {
                         let Some(removed_value) = branch.value.take() else {
                             // The branch has no value. Return the node as is.
                             return Ok((Some(node), None));
@@ -667,7 +667,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                         } else {
                             // The branch's only child becomes the root of this subtrie.
                             let mut child = match child {
-                                Child::Node(ref mut child_node) => std::mem::take(child_node),
+                                Child::Node(child_node) => std::mem::take(child_node),
                                 Child::AddressWithHash(addr, _) => {
                                     self.nodestore.read_for_update(*addr)?
                                 }
@@ -729,7 +729,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                     // we found a non-matching leaf node, so the value does not exist
                     Node::Leaf(_) => Ok((Some(node), None)),
                     Node::Branch(ref mut branch) => {
-                        #[allow(clippy::indexing_slicing)]
+                        #[expect(clippy::indexing_slicing)]
                         let child = match std::mem::take(&mut branch.children[child_index as usize])
                         {
                             None => {
@@ -856,7 +856,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 // 1. The node is at `key`, or we're just above it
                 // so we can start deleting below here
                 match &mut node {
-                    Node::Branch(ref mut branch) => {
+                    Node::Branch(branch) => {
                         if branch.value.is_some() {
                             // a KV pair was in the branch itself
                             *deleted += 1;
@@ -879,7 +879,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 match node {
                     Node::Leaf(_) => Ok(Some(node)),
                     Node::Branch(ref mut branch) => {
-                        #[allow(clippy::indexing_slicing)]
+                        #[expect(clippy::indexing_slicing)]
                         let child = match std::mem::take(&mut branch.children[child_index as usize])
                         {
                             None => {
@@ -980,7 +980,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 None => continue,
             };
             match child {
-                Node::Branch(ref mut child_branch) => {
+                Node::Branch(child_branch) => {
                     self.delete_children(child_branch, deleted)?;
                 }
                 Node::Leaf(_) => {
@@ -997,7 +997,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 /// debug mode and drops the final nibble in release mode.
 pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
     debug_assert_eq!(nibbles.len() & 1, 0);
-    #[allow(clippy::indexing_slicing)]
+    #[expect(clippy::indexing_slicing)]
     nibbles.chunks_exact(2).map(|p| (p[0] << 4) | p[1])
 }
 
@@ -1032,7 +1032,7 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
 }
 
 #[cfg(test)]
-#[allow(clippy::indexing_slicing, clippy::unwrap_used)]
+#[expect(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
     use super::*;
     use rand::rngs::StdRng;
@@ -1729,7 +1729,6 @@ mod tests {
     #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1])], Some("c3bdc20aff5cba30f81ffd7689e94e1dbeece4a08e27f0104262431604cf45c6"); "root with leaf child")]
     #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1]),(&[0,1,2],&[0,1,2])], Some("229011c50ad4d5c2f4efe02b8db54f361ad295c4eee2bf76ea4ad1bb92676f97"); "root with branch child")]
     #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1]),(&[0,8],&[0,8]),(&[0,1,2],&[0,1,2])], Some("a683b4881cb540b969f885f538ba5904699d480152f350659475a962d6240ef9"); "root with branch child and leaf child")]
-    #[allow(unused_variables)]
     fn test_root_hash_merkledb_compatible(kvs: Vec<(&[u8], &[u8])>, expected_hash: Option<&str>) {
         // TODO: get the hashes from merkledb and verify compatibility with branch factor 256
         #[cfg(not(feature = "branch_factor_256"))]

@@ -28,7 +28,7 @@ fn file_error_panic<T, U>(path: &FsPath) -> impl FnOnce(T) -> U + '_ {
 }
 
 impl Profiler for FlamegraphProfiler {
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     fn start_profiling(&mut self, _benchmark_id: &str, _benchmark_dir: &FsPath) {
         if let Self::Init(frequency) = self {
             let guard = ProfilerGuard::new(*frequency).unwrap();
@@ -36,16 +36,14 @@ impl Profiler for FlamegraphProfiler {
         }
     }
 
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     fn stop_profiling(&mut self, _benchmark_id: &str, benchmark_dir: &FsPath) {
         std::fs::create_dir_all(benchmark_dir).unwrap();
         let filename = "firewood-flamegraph.svg";
         let flamegraph_path = benchmark_dir.join(filename);
-        #[allow(clippy::unwrap_used)]
         let flamegraph_file =
             File::create(&flamegraph_path).unwrap_or_else(file_error_panic(&flamegraph_path));
 
-        #[allow(clippy::unwrap_used)]
         if let Self::Active(profiler) = self {
             profiler
                 .report()

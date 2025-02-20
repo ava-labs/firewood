@@ -192,7 +192,6 @@ struct StoredArea<T> {
 impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
     /// Returns (index, area_size) for the [StoredArea] at `addr`.
     /// `index` is the index of `area_size` in [AREA_SIZES].
-    #[allow(dead_code)]
     fn area_index_and_size(&self, addr: LinearAddress) -> Result<(AreaIndex, u64), Error> {
         let mut area_stream = self.storage.stream_from(addr.get())?;
 
@@ -693,7 +692,6 @@ pub trait RootReader {
 /// A committed revision of a merkle trie.
 #[derive(Clone, Debug)]
 pub struct Committed {
-    #[allow(dead_code)]
     deleted: Box<[LinearAddress]>,
     root_hash: Option<TrieHash>,
 }
@@ -1000,7 +998,7 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
                     // SAFETY: the submission_queue_entry's found buffer must not move or go out of scope
                     // until the operation has been completed. This is ensured by marking the slot busy,
                     // and not marking it !busy until the kernel has said it's done below.
-                    #[allow(unsafe_code)]
+                    #[expect(unsafe_code)]
                     while unsafe { ring.submission().push(&submission_queue_entry) }.is_err() {
                         ring.submitter().squeue_wait()?;
                         trace!("submission queue is full");
@@ -1189,7 +1187,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use std::array::from_fn;
 

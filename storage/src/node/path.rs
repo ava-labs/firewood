@@ -170,10 +170,10 @@ impl Iterator for NibblesIterator<'_> {
             return None;
         }
         let result = if self.head % 2 == 0 {
-            #[allow(clippy::indexing_slicing)]
+            #[expect(clippy::indexing_slicing)]
             NIBBLES[(self.data[self.head / 2] >> 4) as usize]
         } else {
-            #[allow(clippy::indexing_slicing)]
+            #[expect(clippy::indexing_slicing)]
             NIBBLES[(self.data[self.head / 2] & 0xf) as usize]
         };
         self.head += 1;
@@ -220,10 +220,10 @@ impl DoubleEndedIterator for NibblesIterator<'_> {
         }
 
         let result = if self.tail % 2 == 0 {
-            #[allow(clippy::indexing_slicing)]
+            #[expect(clippy::indexing_slicing)]
             NIBBLES[(self.data[self.tail / 2 - 1] & 0xf) as usize]
         } else {
-            #[allow(clippy::indexing_slicing)]
+            #[expect(clippy::indexing_slicing)]
             NIBBLES[(self.data[self.tail / 2] >> 4) as usize]
         };
         self.tail -= 1;
@@ -238,7 +238,6 @@ impl DoubleEndedIterator for NibblesIterator<'_> {
 }
 
 #[cfg(test)]
-#[allow(clippy::indexing_slicing)]
 mod test {
     use super::*;
     use std::fmt::Debug;

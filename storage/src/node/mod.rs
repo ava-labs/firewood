@@ -475,7 +475,6 @@ mod test {
                 Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
         )})), 652; "full branch node with long partial path and value"
     )]
-    #[allow(unused_variables)]
     fn test_serialize_deserialize(node: Node, expected_length: usize) {
         use crate::node::Node;
         use std::io::Cursor;

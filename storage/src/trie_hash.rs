@@ -20,12 +20,6 @@ impl std::ops::Deref for TrieHash {
     }
 }
 
-impl std::ops::DerefMut for TrieHash {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
 impl AsRef<[u8]> for TrieHash {
     fn as_ref(&self) -> &[u8] {
         &self.0
@@ -39,8 +33,10 @@ impl Debug for TrieHash {
     }
 }
 
+const TRIE_HASH_LEN: usize = std::mem::size_of::<TrieHash>();
+
 impl From<[u8; 32]> for TrieHash {
-    fn from(value: [u8; Self::len()]) -> Self {
+    fn from(value: [u8; TRIE_HASH_LEN]) -> Self {
         TrieHash(value.into())
     }
 }
@@ -48,13 +44,6 @@ impl From<[u8; 32]> for TrieHash {
 impl From<GenericArray<u8, typenum::U32>> for TrieHash {
     fn from(value: GenericArray<u8, typenum::U32>) -> Self {
         TrieHash(value)
-    }
-}
-
-impl TrieHash {
-    /// Return the length of a TrieHash
-    pub(crate) const fn len() -> usize {
-        std::mem::size_of::<TrieHash>()
     }
 }
 
