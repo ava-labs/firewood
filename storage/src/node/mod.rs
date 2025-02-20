@@ -5,21 +5,19 @@ use bitfield::bitfield;
 use enum_as_inner::EnumAsInner;
 use integer_encoding::{VarIntReader as _, VarIntWriter as _};
 use serde::{Deserialize, Serialize};
-use smallvec::SmallVec;
+use std::fmt::Debug;
 use std::io::{Error, ErrorKind, Read, Write};
 use std::num::NonZero;
 use std::vec;
-use std::{fmt::Debug, sync::Arc};
 
 mod branch;
 mod leaf;
 pub mod path;
 
-pub use branch::BranchNode;
-pub use branch::Child;
+pub use branch::{BranchNode, Child};
 pub use leaf::LeafNode;
 
-use crate::Path;
+use crate::{Path, SharedNode};
 
 /// A node, either a Branch or Leaf
 
@@ -37,7 +35,7 @@ impl Default for Node {
     fn default() -> Self {
         Node::Leaf(LeafNode {
             partial_path: Path::new(),
-            value: SmallVec::default(),
+            value: Box::default(),
         })
     }
 }
@@ -174,22 +172,7 @@ impl Node {
     pub fn update_value(&mut self, value: Box<[u8]>) {
         match self {
             Node::Branch(b) => b.value = Some(value),
-            Node::Leaf(l) => l.value = SmallVec::from(&value[..]),
-        }
-    }
-
-    /// Returns a new `Arc<Node>` which is the same as `self` but with the given `partial_path`.
-    pub fn new_with_partial_path(self: &Node, partial_path: Path) -> Node {
-        match self {
-            Node::Branch(b) => Node::Branch(Box::new(BranchNode {
-                partial_path,
-                value: b.value.clone(),
-                children: b.children.clone(),
-            })),
-            Node::Leaf(l) => Node::Leaf(LeafNode {
-                partial_path,
-                value: l.value.clone(),
-            }),
+            Node::Leaf(l) => l.value = value,
         }
     }
 
@@ -455,7 +438,7 @@ pub struct PathIterItem {
     /// The key of the node at `address` as nibbles.
     pub key_nibbles: Box<[u8]>,
     /// A reference to the node
-    pub node: Arc<Node>,
+    pub node: SharedNode,
     /// The next item returned by the iterator is a child of `node`.
     /// Specifically, it's the child at index `next_nibble` in `node`'s
     /// children array.
@@ -465,10 +448,8 @@ pub struct PathIterItem {
 
 #[cfg(test)]
 mod test {
-    use crate::{
-        node::{BranchNode, LeafNode, Node},
-        Child, LinearAddress, Path,
-    };
+    use crate::node::{BranchNode, LeafNode, Node};
+    use crate::{Child, LinearAddress, Path};
     use test_case::test_case;
 
     #[test_case(

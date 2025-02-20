@@ -5,17 +5,18 @@
 // insert some random keys using the front-end API.
 
 use clap::Parser;
-use std::{
-    borrow::BorrowMut as _, collections::HashMap, error::Error, num::NonZeroUsize,
-    ops::RangeInclusive, time::Instant,
-};
+use std::borrow::BorrowMut as _;
+use std::collections::HashMap;
+use std::error::Error;
+use std::num::NonZeroUsize;
+use std::ops::RangeInclusive;
+use std::time::Instant;
 
-use firewood::{
-    db::{Batch, BatchOp, Db, DbConfig},
-    manager::RevisionManagerConfig,
-    v2::api::{Db as _, DbView, Proposal as _},
-};
-use rand::{distributions::Alphanumeric, Rng, SeedableRng as _};
+use firewood::db::{Batch, BatchOp, Db, DbConfig};
+use firewood::manager::RevisionManagerConfig;
+use firewood::v2::api::{Db as _, DbView, Proposal as _};
+use rand::{Rng, SeedableRng as _};
+use rand_distr::Alphanumeric;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -74,12 +75,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut rng = if let Some(seed) = args.seed {
         rand::rngs::StdRng::seed_from_u64(seed)
     } else {
-        rand::rngs::StdRng::from_entropy()
+        rand::rngs::StdRng::from_os_rng()
     };
 
     for _ in 0..args.number_of_batches {
-        let keylen = rng.gen_range(args.keylen.clone());
-        let valuelen = rng.gen_range(args.valuelen.clone());
+        let keylen = rng.random_range(args.keylen.clone());
+        let valuelen = rng.random_range(args.valuelen.clone());
         let batch: Batch<Vec<u8>, Vec<u8>> = (0..keys)
             .map(|_| {
                 (
@@ -119,7 +120,7 @@ fn get_keys_to_verify(batch: &Batch<Vec<u8>, Vec<u8>>, pct: u16) -> HashMap<Vec<
     } else {
         batch
             .iter()
-            .filter(|_last_key| rand::thread_rng().gen_range(0..=(100 - pct)) == 0)
+            .filter(|_last_key| rand::rng().random_range(0..=(100 - pct)) == 0)
             .map(|op| {
                 if let BatchOp::Put { key, value } = op {
                     (key.clone(), value.clone().into_boxed_slice())

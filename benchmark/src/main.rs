@@ -11,7 +11,7 @@
 // 3. 50% of batch size is updating rows in the middle, but setting the value to the hash of the first row inserted
 //
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use fastrace_opentelemetry::OpenTelemetryReporter;
 use firewood::logger::trace;
 use log::LevelFilter;
@@ -20,25 +20,40 @@ use metrics_util::MetricKindMask;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::error::Error;
+use std::fmt::Display;
 use std::net::{Ipv6Addr, SocketAddr};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use firewood::db::{BatchOp, Db, DbConfig};
-use firewood::manager::RevisionManagerConfig;
+use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
 
 use fastrace::collector::Config;
 
 use opentelemetry::trace::SpanKind;
 use opentelemetry::InstrumentationScope;
-use opentelemetry::KeyValue;
-use opentelemetry_otlp::SpanExporter;
-use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_otlp::{SpanExporter, WithExportConfig};
 use opentelemetry_sdk::Resource;
 
 #[derive(Parser, Debug)]
 struct Args {
+    #[clap(flatten)]
+    global_opts: GlobalOpts,
+
+    #[clap(subcommand)]
+    test_name: TestName,
+}
+
+#[derive(clap::Args, Debug)]
+struct GlobalOpts {
+    #[arg(
+        short = 'e',
+        long,
+        default_value_t = false,
+        help = "Enable telemetry server reporting"
+    )]
+    telemetry_server: bool,
     #[arg(short, long, default_value_t = 10000)]
     batch_size: u64,
     #[arg(short, long, default_value_t = 1000)]
@@ -62,15 +77,6 @@ struct Args {
     )]
     stats_dump: bool,
 
-    #[clap(flatten)]
-    global_opts: GlobalOpts,
-
-    #[clap(subcommand)]
-    test_name: TestName,
-}
-
-#[derive(clap::Args, Debug)]
-struct GlobalOpts {
     #[arg(
         long,
         short = 'l',
@@ -98,6 +104,38 @@ struct GlobalOpts {
         default_value_t = 65
     )]
     duration_minutes: u64,
+    #[arg(
+        long,
+        short = 'C',
+        required = false,
+        help = "Read cache strategy",
+        default_value_t = ArgCacheReadStrategy::WritesOnly
+    )]
+    cache_read_strategy: ArgCacheReadStrategy,
+}
+#[derive(Debug, PartialEq, ValueEnum, Clone)]
+pub enum ArgCacheReadStrategy {
+    WritesOnly,
+    BranchReads,
+    All,
+}
+impl Display for ArgCacheReadStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ArgCacheReadStrategy::WritesOnly => write!(f, "writes-only"),
+            ArgCacheReadStrategy::BranchReads => write!(f, "branch-reads"),
+            ArgCacheReadStrategy::All => write!(f, "all"),
+        }
+    }
+}
+impl From<ArgCacheReadStrategy> for CacheReadStrategy {
+    fn from(arg: ArgCacheReadStrategy) -> Self {
+        match arg {
+            ArgCacheReadStrategy::WritesOnly => CacheReadStrategy::WritesOnly,
+            ArgCacheReadStrategy::BranchReads => CacheReadStrategy::BranchReads,
+            ArgCacheReadStrategy::All => CacheReadStrategy::All,
+        }
+    }
 }
 
 mod create;
@@ -107,9 +145,16 @@ mod zipf;
 
 #[derive(Debug, Subcommand, PartialEq)]
 enum TestName {
+    /// Create a database
     Create,
+
+    /// Insert batches of random keys
     TenKRandom,
+
+    /// Insert batches of keys following a Zipf distribution
     Zipf(zipf::Args),
+
+    /// Repeatedly update a single row
     Single,
 }
 
@@ -141,30 +186,33 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let reporter = OpenTelemetryReporter::new(
-        SpanExporter::builder()
-            .with_tonic()
-            .with_endpoint("http://127.0.0.1:4317".to_string())
-            .with_protocol(opentelemetry_otlp::Protocol::Grpc)
-            .with_timeout(Duration::from_secs(
-                opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT,
-            ))
-            .build()
-            .expect("initialize oltp exporter"),
-        SpanKind::Server,
-        Cow::Owned(Resource::new([KeyValue::new(
-            "service.name",
-            "avalabs.firewood.benchmark",
-        )])),
-        InstrumentationScope::builder("firewood")
-            .with_version(env!("CARGO_PKG_VERSION"))
-            .build(),
-    );
-    fastrace::set_reporter(reporter, Config::default());
-
     let args = Args::parse();
 
-    if args.test_name == TestName::Single && args.batch_size > 1000 {
+    if args.global_opts.telemetry_server {
+        let reporter = OpenTelemetryReporter::new(
+            SpanExporter::builder()
+                .with_tonic()
+                .with_endpoint("http://127.0.0.1:4317".to_string())
+                .with_protocol(opentelemetry_otlp::Protocol::Grpc)
+                .with_timeout(Duration::from_secs(
+                    opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT,
+                ))
+                .build()
+                .expect("initialize oltp exporter"),
+            SpanKind::Server,
+            Cow::Owned(
+                Resource::builder()
+                    .with_service_name("avalabs.firewood.benchmark")
+                    .build(),
+            ),
+            InstrumentationScope::builder("firewood")
+                .with_version(env!("CARGO_PKG_VERSION"))
+                .build(),
+        );
+        fastrace::set_reporter(reporter, Config::default());
+    }
+
+    if args.test_name == TestName::Single && args.global_opts.batch_size > 1000 {
         panic!("Single test is not designed to handle batch sizes > 1000");
     }
 
@@ -183,7 +231,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let (prometheus_recorder, listener_future) = builder
         .with_http_listener(SocketAddr::new(
             Ipv6Addr::UNSPECIFIED.into(),
-            args.prometheus_port,
+            args.global_opts.prometheus_port,
         ))
         .idle_timeout(
             MetricKindMask::COUNTER | MetricKindMask::HISTOGRAM,
@@ -198,11 +246,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tokio::spawn(listener_future);
 
     let mgrcfg = RevisionManagerConfig::builder()
-        .node_cache_size(args.cache_size)
+        .node_cache_size(args.global_opts.cache_size)
         .free_list_cache_size(
-            NonZeroUsize::new(4 * args.batch_size as usize).expect("batch size > 0"),
+            NonZeroUsize::new(4 * args.global_opts.batch_size as usize).expect("batch size > 0"),
         )
-        .max_revisions(args.revisions)
+        .cache_read_strategy(args.global_opts.cache_read_strategy.clone().into())
+        .max_revisions(args.global_opts.revisions)
         .build();
     let cfg = DbConfig::builder()
         .truncate(matches!(args.test_name, TestName::Create))
@@ -232,7 +281,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    if args.stats_dump {
+    if args.global_opts.stats_dump {
         println!("{}", prometheus_handle.render());
     }
 

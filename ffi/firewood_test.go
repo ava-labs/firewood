@@ -7,7 +7,8 @@ import (
 )
 
 func TestInsert(t *testing.T) {
-	var f Firewood = CreateDatabase("test.db")
+	var f Firewood = NewDatabase(WithCreate(true), WithPath("test.db"))
+	defer os.Remove("test.db")
 	defer f.Close()
 	f.Batch([]KeyValue{
 		{[]byte("abc"), []byte("def")},
@@ -20,9 +21,9 @@ func TestInsert(t *testing.T) {
 }
 
 func TestInsert100(t *testing.T) {
-	var f Firewood = CreateDatabase("test.db")
-	defer f.Close()
+	var f Firewood = NewDatabase(WithCreate(true), WithPath("test.db"))
 	defer os.Remove("test.db")
+	defer f.Close()
 	ops := make([]KeyValue, 100)
 	for i := 0; i < 100; i++ {
 		ops[i] = KeyValue{[]byte("key" + strconv.Itoa(i)), []byte("value" + strconv.Itoa(i))}
@@ -56,9 +57,9 @@ func TestInsert100(t *testing.T) {
 
 func TestRangeDelete(t *testing.T) {
 	const N = 100
-	var f Firewood = CreateDatabase("test.db")
-	defer f.Close()
+	var f Firewood = NewDatabase(WithCreate(true), WithPath("test.db"))
 	defer os.Remove("test.db")
+	defer f.Close()
 	ops := make([]KeyValue, N)
 	for i := 0; i < N; i++ {
 		ops[i] = KeyValue{[]byte("key" + strconv.Itoa(i)), []byte("value" + strconv.Itoa(i))}
@@ -83,9 +84,9 @@ func TestRangeDelete(t *testing.T) {
 }
 
 func TestInvariants(t *testing.T) {
-	var f Firewood = CreateDatabase("test.db")
-	defer f.Close()
+	var f Firewood = NewDatabase(WithCreate(true), WithPath("test.db"))
 	defer os.Remove("test.db")
+	defer f.Close()
 
 	// validate that the root of an empty trie is all zeroes
 	empty_root := f.Root()
