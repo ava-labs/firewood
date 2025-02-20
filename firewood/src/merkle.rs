@@ -995,7 +995,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 /// Returns an iterator where each element is the result of combining
 /// 2 nibbles of `nibbles`. If `nibbles` is odd length, panics in
 /// debug mode and drops the final nibble in release mode.
-pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
+pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> {
     debug_assert_eq!(nibbles.len() & 1, 0);
     #[expect(clippy::indexing_slicing)]
     nibbles.chunks_exact(2).map(|p| (p[0] << 4) | p[1])

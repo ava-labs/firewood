@@ -23,7 +23,7 @@ enum FlamegraphProfiler {
     Active(ProfilerGuard<'static>),
 }
 
-fn file_error_panic<T, U>(path: &FsPath) -> impl FnOnce(T) -> U + '_ {
+fn file_error_panic<T, U>(path: &FsPath) -> impl FnOnce(T) -> U {
     |_| panic!("Error on file `{}`", path.display())
 }
 
