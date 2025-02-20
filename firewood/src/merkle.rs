@@ -1036,7 +1036,7 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
 mod tests {
     use super::*;
     use rand::rngs::StdRng;
-    use rand::{rng, Rng, SeedableRng};
+    use rand::{Rng, SeedableRng, rng};
     use storage::{MemStore, MutableProposal, NodeStore, RootReader};
     use test_case::test_case;
 
@@ -1338,9 +1338,11 @@ mod tests {
 
             {
                 // Test that the proof is invalid when the hash is different
-                assert!(proof
-                    .verify(key, Some(value), &TrieHash::default())
-                    .is_err());
+                assert!(
+                    proof
+                        .verify(key, Some(value), &TrieHash::default())
+                        .is_err()
+                );
             }
         }
     }

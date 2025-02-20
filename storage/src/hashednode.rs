@@ -17,10 +17,11 @@ pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
         Node::Branch(node) => {
             // All child hashes should be filled in.
             // TODO danlaine: Enforce this with the type system.
-            debug_assert!(node
-                .children
-                .iter()
-                .all(|c| !matches!(c, Some(Child::Node(_)))));
+            debug_assert!(
+                node.children
+                    .iter()
+                    .all(|c| !matches!(c, Some(Child::Node(_))))
+            );
             NodeAndPrefix {
                 node: node.as_ref(),
                 prefix: path_prefix,

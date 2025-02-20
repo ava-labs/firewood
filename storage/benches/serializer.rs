@@ -8,7 +8,7 @@ use std::os::raw::c_int;
 
 use bincode::Options;
 use criterion::profiler::Profiler;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use pprof::ProfilerGuard;
 use smallvec::SmallVec;
 use storage::{LeafNode, Node, Path};

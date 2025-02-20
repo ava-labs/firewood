@@ -3,12 +3,12 @@ use std::{
     io::Write,
     net::Ipv6Addr,
     ops::Deref,
-    sync::{atomic::Ordering, Arc, Once},
+    sync::{Arc, Once, atomic::Ordering},
     time::SystemTime,
 };
 
-use oxhttp::model::{Body, Response, StatusCode};
 use oxhttp::Server;
+use oxhttp::model::{Body, Response, StatusCode};
 use std::net::Ipv4Addr;
 use std::time::Duration;
 

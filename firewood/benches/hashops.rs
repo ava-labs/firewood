@@ -4,7 +4,7 @@
 // hash benchmarks; run with 'cargo bench'
 
 use criterion::profiler::Profiler;
-use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use firewood::db::{BatchOp, DbConfig};
 use firewood::merkle::Merkle;
 use firewood::v2::api::{Db as _, Proposal as _};

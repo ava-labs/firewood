@@ -2,8 +2,8 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::logger::trace;
-use arc_swap::access::DynAccess;
 use arc_swap::ArcSwap;
+use arc_swap::access::DynAccess;
 use bincode::{DefaultOptions, Options as _};
 use bytemuck_derive::{AnyBitPattern, NoUninit};
 use fastrace::local::LocalSpan;

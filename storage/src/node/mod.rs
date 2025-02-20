@@ -276,7 +276,9 @@ impl Node {
                             encoded.extend_from_slice(&address.get().to_ne_bytes());
                             encoded.extend_from_slice(hash);
                         } else {
-                            panic!("attempt to serialize to persist a branch with a child that is not an AddressWithHash");
+                            panic!(
+                                "attempt to serialize to persist a branch with a child that is not an AddressWithHash"
+                            );
                         }
                     }
                 } else {
@@ -288,7 +290,9 @@ impl Node {
                             encoded.extend_from_slice(&address.get().to_ne_bytes());
                             encoded.extend_from_slice(hash);
                         } else {
-                            panic!("attempt to serialize to persist a branch with a child that is not an AddressWithHash");
+                            panic!(
+                                "attempt to serialize to persist a branch with a child that is not an AddressWithHash"
+                            );
                         }
                     }
                 }
