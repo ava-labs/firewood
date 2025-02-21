@@ -245,22 +245,23 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
     pub fn uncached_read_node_and_size(
         &self,
         addr: LinearAddress,
-    ) -> Result<(Arc<Node>, u8), Error> {
+    ) -> Result<(SharedNode, u8), Error> {
         let mut area_stream = self.storage.stream_from(addr.get())?;
         let mut size = [0u8];
         area_stream.read_exact(&mut size)?;
-        let area: Area<Node, FreeArea> = DefaultOptions::new()
-            .deserialize_from(area_stream)
-            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-
-        let node = match area {
-            Area::Node(node) => Ok(node.into()),
-            Area::Free(_) => Err(Error::new(
-                ErrorKind::InvalidData,
-                "Attempted to read a freed area",
-            )),
-        }?;
+        self.storage.stream_from(addr.get() + 1)?;
+        let node: SharedNode = Node::from_reader(area_stream)?.into();
         Ok((node, size[0]))
+    }
+
+    /// Get a reference to the header of this nodestore
+    pub fn header(&self) -> &NodeStoreHeader {
+        &self.header
+    }
+
+    /// Get the size of an area index (used by the checker)
+    pub fn size_from_area_index(&self, index: AreaIndex) -> u64 {
+        AREA_SIZES[index as usize]
     }
 }
 
@@ -347,7 +348,7 @@ impl Parentable for Arc<ImmutableProposal> {
 impl<S> NodeStore<Arc<ImmutableProposal>, S> {
     /// When an immutable proposal commits, we need to reparent any proposal that
     /// has the committed proposal as it's parent
-    pub fn commit_reparent(&self, other: &Arc<NodeStore<Arc<ImmutableProposal>, S>>) -> bool {
+    pub fn commit_reparent(&self, other: &Arc<NodeStore<Arc<ImmutableProposal>, S>>) {
         match *other.kind.parent.load() {
             NodeStoreParent::Proposed(ref parent) => {
                 if Arc::ptr_eq(&self.kind, parent) {
@@ -355,12 +356,9 @@ impl<S> NodeStore<Arc<ImmutableProposal>, S> {
                         .kind
                         .parent
                         .store(NodeStoreParent::Committed(self.kind.root_hash()).into());
-                    true
-                } else {
-                    false
                 }
             }
-            NodeStoreParent::Committed(_) => false,
+            NodeStoreParent::Committed(_) => {}
         }
     }
 }
@@ -624,7 +622,7 @@ pub type FreeLists = [Option<LinearAddress>; NUM_AREA_SIZES];
 /// The [NodeStoreHeader] is at the start of the ReadableStorage.
 #[derive(Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Clone, NoUninit, AnyBitPattern)]
 #[repr(C)]
-struct NodeStoreHeader {
+pub struct NodeStoreHeader {
     /// Identifies the version of firewood used to create this [NodeStore].
     version: Version,
     /// always "1"; verifies endianness
@@ -655,6 +653,11 @@ impl NodeStoreHeader {
             version: Version::new(),
             free_lists: Default::default(),
         }
+    }
+
+    // return the size of this nodestore
+    pub fn size(&self) -> u64 {
+        self.size
     }
 }
 

@@ -50,8 +50,6 @@ enum Commands {
     Check(check::Options),
     /// Produce a dot file of the database
     Graph(graph::Options),
-    /// Check a database
-    Check(check::Options),
 }
 
 #[tokio::main]

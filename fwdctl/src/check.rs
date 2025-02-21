@@ -4,7 +4,8 @@
 use clap::Args;
 use log::warn;
 use std::collections::BTreeMap;
-use std::io::Error;
+use std::io::{Error, ErrorKind};
+use std::ops::Bound;
 use std::str;
 use std::sync::Arc;
 
@@ -19,7 +20,7 @@ pub struct Options {
         long,
         required = false,
         value_name = "DB_NAME",
-        default_value_t = String::from("firewood"),
+        default_value_t = String::from("firewood.db"),
         help = "Name of the database"
     )]
     pub db: String,
@@ -46,8 +47,21 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
 
     visitor(rev.clone(), addr, &mut allocated)?;
 
+    let mut expected = 2048;
     for (addr, size) in allocated.iter() {
-        println!("{:?} {}", addr, size);
+        match addr.get().cmp(&expected) {
+            std::cmp::Ordering::Less => {
+                warn!(
+                    "Node at {:?} is before the expected address {}",
+                    addr, expected
+                );
+            }
+            std::cmp::Ordering::Greater => {
+                warn!("{} bytes missing at {}", addr.get() - expected, expected);
+            }
+            std::cmp::Ordering::Equal => {}
+        }
+        expected = addr.get() + rev.size_from_area_index(*size);
     }
 
     Ok(())
@@ -58,28 +72,58 @@ fn visitor<T: ReadableStorage>(
     addr: LinearAddress,
     allocated: &mut BTreeMap<LinearAddress, u8>,
 ) -> Result<(), Error> {
-    let (node, size) = rev.uncached_read_node_and_size(addr)?;
-    if let Some(duplicate) = allocated.insert(addr, size) {
-        warn!("Duplicate allocation at {:?} (size: {})", addr, duplicate);
-    }
-
-    println!("{:?} {:?}", addr, node);
-
-    match node.as_ref() {
-        Node::Branch(branch) => {
-            for child in branch.children.iter() {
-                match child {
-                    None => {}
-                    Some(child) => match child {
-                        storage::Child::Node(_) => unreachable!(),
-                        storage::Child::AddressWithHash(addr, _hash) => {
-                            visitor(rev.clone(), *addr, allocated)?;
-                        }
-                    },
+    // find the node before this one, check if it overlaps
+    if let Some((found_addr, found_size)) = allocated
+        .range((Bound::Unbounded, Bound::Included(addr)))
+        .next_back()
+    {
+        match found_addr
+            .get()
+            .checked_add(rev.size_from_area_index(*found_size))
+        {
+            None => warn!("Node at {:?} overflows a u64", found_addr),
+            Some(end) => {
+                if end > addr.get() {
+                    warn!(
+                        "Node at {:?} overlaps with another node at {:?} (size: {})",
+                        addr, found_addr, found_size
+                    );
+                    return Err(Error::new(ErrorKind::Other, "Overlapping nodes"));
                 }
             }
         }
-        Node::Leaf(_leaf) => {}
+    }
+    if addr.get() > rev.header().size() {
+        warn!(
+            "Node at {:?} starts past the database high water mark",
+            addr
+        );
+        return Err(Error::new(ErrorKind::Other, "Node overflows database"));
+    }
+
+    let (node, size) = rev.uncached_read_node_and_size(addr)?;
+    if addr.get() + rev.size_from_area_index(size) > rev.header().size() {
+        warn!(
+            "Node at {:?} extends past the database high water mark",
+            addr
+        );
+        return Err(Error::new(ErrorKind::Other, "Node overflows database"));
+    }
+
+    allocated.insert(addr, size);
+
+    if let Node::Branch(branch) = node.as_ref() {
+        for child in branch.children.iter() {
+            match child {
+                None => {}
+                Some(child) => match child {
+                    storage::Child::Node(_) => unreachable!(),
+                    storage::Child::AddressWithHash(addr, _hash) => {
+                        visitor(rev.clone(), *addr, allocated)?;
+                    }
+                },
+            }
+        }
     }
     Ok(())
 }
