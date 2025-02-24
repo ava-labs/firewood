@@ -41,7 +41,6 @@
 /// I --> |commit|N("New commit NodeStore&lt;Committed, S&gt;")
 /// style E color:#FFFFFF, fill:#AA00FF, stroke:#AA00FF
 /// ```
-
 use crate::logger::trace;
 use arc_swap::access::DynAccess;
 use arc_swap::ArcSwap;
