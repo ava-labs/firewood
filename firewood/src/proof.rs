@@ -85,7 +85,7 @@ impl Hashable for ProofNode {
     fn value_digest(&self) -> Option<ValueDigest<&[u8]>> {
         self.value_digest.as_ref().map(|vd| match vd {
             ValueDigest::Value(v) => ValueDigest::Value(v.as_ref()),
-            ValueDigest::_Hash(h) => ValueDigest::_Hash(h.as_ref()),
+            ValueDigest::Hash(h) => ValueDigest::Hash(h.as_ref()),
         })
     }
 
@@ -162,7 +162,7 @@ impl<T: Hashable> Proof<T> {
                     return Err(ProofError::ValueMismatch);
                 }
             }
-            ValueDigest::_Hash(got_hash) => {
+            ValueDigest::Hash(got_hash) => {
                 // This proof proves that `key` maps to a value
                 // whose hash is `got_hash`.
                 let value_hash = Sha256::digest(expected_value.as_ref());

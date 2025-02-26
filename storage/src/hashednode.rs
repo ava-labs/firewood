@@ -1,19 +1,9 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use sha2::{Digest, Sha256};
-use sha3::Keccak256;
 use std::iter::{self};
 
 use crate::{BranchNode, Child, LeafNode, Node, Path, TrieHash};
-
-#[cfg(not(feature = "ethhash"))]
-use integer_encoding::VarInt;
-
-#[cfg(not(feature = "ethhash"))]
-const MAX_VARINT_SIZE: usize = 10;
-#[cfg(not(feature = "ethhash"))]
-const BITS_PER_NIBBLE: u64 = 4;
 
 /// Returns the hash of `node`, which is at the given `path_prefix`.
 pub fn hash_node(node: &Node, path_prefix: &Path) -> TrieHash {
@@ -66,18 +56,6 @@ pub trait HasUpdate {
     fn update<T: AsRef<[u8]>>(&mut self, data: T);
 }
 
-impl HasUpdate for Sha256 {
-    fn update<T: AsRef<[u8]>>(&mut self, data: T) {
-        sha2::Digest::update(self, data)
-    }
-}
-
-impl HasUpdate for Keccak256 {
-    fn update<T: AsRef<[u8]>>(&mut self, data: T) {
-        sha3::Digest::update(self, data)
-    }
-}
-
 impl HasUpdate for Vec<u8> {
     fn update<T: AsRef<[u8]>>(&mut self, data: T) {
         self.extend(data.as_ref());
@@ -92,7 +70,7 @@ pub enum ValueDigest<T> {
     /// TODO this variant will be used when we deserialize a proof node
     /// from a remote Firewood instance. The serialized proof node they
     /// send us may the hash of the value, not the value itself.
-    _Hash(T),
+    Hash(T),
 }
 
 /// A node in the trie that can be hashed.
@@ -112,63 +90,6 @@ pub trait Preimage {
     fn to_hash(&self) -> TrieHash;
     /// Write this hash preimage to `buf`.
     fn write(&self, buf: &mut impl HasUpdate);
-}
-
-// Implement Preimage for all types that implement Hashable
-impl<T: Hashable> Preimage for T {
-    fn to_hash(&self) -> TrieHash {
-        #[cfg(not(feature = "ethhash"))]
-        let mut hasher = Sha256::new();
-        #[cfg(feature = "ethhash")]
-        let mut hasher = sha3::Keccak256::new();
-
-        self.write(&mut hasher);
-        hasher.finalize().into()
-    }
-
-    #[cfg(not(feature = "ethhash"))]
-    fn write(&self, buf: &mut impl HasUpdate) {
-        let children = self.children();
-
-        let num_children = children.clone().count() as u64;
-        add_varint_to_buf(buf, num_children);
-
-        for (index, hash) in children {
-            add_varint_to_buf(buf, index as u64);
-            buf.update(hash);
-        }
-
-        // Add value digest (if any) to hash pre-image
-        add_value_digest_to_buf(buf, self.value_digest());
-
-        // Add key length (in bits) to hash pre-image
-        let mut key = self.key();
-        // let mut key = key.as_ref().iter();
-        let key_bit_len = BITS_PER_NIBBLE * key.clone().count() as u64;
-        add_varint_to_buf(buf, key_bit_len);
-
-        // Add key to hash pre-image
-        while let Some(high_nibble) = key.next() {
-            let low_nibble = key.next().unwrap_or(0);
-            let byte = (high_nibble << 4) | low_nibble;
-            buf.update([byte]);
-        }
-    }
-
-    #[cfg(feature = "ethhash")]
-    fn write(&self, buf: &mut impl HasUpdate) {
-        use rlp::RlpStream;
-        
-        let key: Box<[u8]> = self.key().collect();
-
-
-        let mut rlp = RlpStream::new();
-        rlp.begin_list(1) // TODO: 3
-            .append(&&*key);
-            // TODO .append(&self.value_digest())
-            // TODO .append(&self.children().collect::<Vec<_>>())
-        buf.update(rlp.out())
-    }
 }
 
 trait HashableNode {
@@ -232,54 +153,4 @@ impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
     fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
         self.node.children_iter()
     }
-}
-
-#[cfg(not(feature = "ethhash"))]
-fn add_value_digest_to_buf<H: HasUpdate, T: AsRef<[u8]>>(
-    buf: &mut H,
-    value_digest: Option<ValueDigest<T>>,
-) {
-    let Some(value_digest) = value_digest else {
-        let value_exists: u8 = 0;
-        buf.update([value_exists]);
-        return;
-    };
-
-    let value_exists: u8 = 1;
-    buf.update([value_exists]);
-
-    match value_digest {
-        ValueDigest::Value(value) if value.as_ref().len() >= 32 => {
-            let hash = Sha256::digest(value);
-            add_len_and_value_to_buf(buf, hash);
-        }
-        ValueDigest::Value(value) => {
-            add_len_and_value_to_buf(buf, value);
-        }
-        ValueDigest::_Hash(hash) => {
-            add_len_and_value_to_buf(buf, hash);
-        }
-    }
-}
-
-#[inline]
-#[cfg(not(feature = "ethhash"))]
-/// Writes the length of `value` and `value` to `buf`.
-fn add_len_and_value_to_buf<H: HasUpdate, V: AsRef<[u8]>>(buf: &mut H, value: V) {
-    let value_len = value.as_ref().len();
-    buf.update([value_len as u8]);
-    buf.update(value);
-}
-
-#[cfg(not(feature = "ethhash"))]
-#[inline]
-/// Encodes `value` as a varint and writes it to `buf`.
-fn add_varint_to_buf<H: HasUpdate>(buf: &mut H, value: u64) {
-    let mut buf_arr = [0u8; MAX_VARINT_SIZE];
-    let len = value.encode_var(&mut buf_arr);
-    buf.update(
-        buf_arr
-            .get(..len)
-            .expect("length is always less than MAX_VARINT_SIZE"),
-    );
 }

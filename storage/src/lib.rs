@@ -12,6 +12,7 @@
 //! A [NodeStore] is backed by a [ReadableStorage] which is persisted storage.
 
 mod hashednode;
+mod hashers;
 mod linear;
 mod node;
 mod nodestore;
