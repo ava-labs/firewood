@@ -28,7 +28,7 @@ impl<T: Hashable> Preimage for T {
         let mut key = Vec::with_capacity(32);
         while let Some((len, part)) = self.key().enumerate().next() {
             if len == 33 {
-                key = Vec::with_capacity(32);
+                key.truncate(0);
             }
             key.push(part);
         }
