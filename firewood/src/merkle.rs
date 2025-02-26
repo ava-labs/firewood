@@ -1038,6 +1038,8 @@ mod tests {
     use rand::rngs::StdRng;
     use rand::{rng, Rng, SeedableRng};
     use storage::{MemStore, MutableProposal, NodeStore, RootReader};
+
+    #[cfg(not(feature = "ethhash"))]
     use test_case::test_case;
 
     // Returns n random key-value pairs.
@@ -1721,6 +1723,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(not(feature = "ethhash"))]
     #[test_case(vec![], None; "empty trie")]
     #[test_case(vec![(&[0],&[0])], Some("073615413d814b23383fc2c8d8af13abfffcb371b654b98dbf47dd74b1e4d1b9"); "root")]
     #[test_case(vec![(&[0,1],&[0,1])], Some("28e67ae4054c8cdf3506567aa43f122224fe65ef1ab3e7b7899f75448a69a6fd"); "root with partial path")]

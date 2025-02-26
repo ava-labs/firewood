@@ -2,13 +2,17 @@
 // See the file LICENSE.md for licensing terms.
 
 use sha2::{Digest, Sha256};
+use sha3::Keccak256;
 use std::iter::{self};
 
 use crate::{BranchNode, Child, LeafNode, Node, Path, TrieHash};
 
+#[cfg(not(feature = "ethhash"))]
 use integer_encoding::VarInt;
 
+#[cfg(not(feature = "ethhash"))]
 const MAX_VARINT_SIZE: usize = 10;
+#[cfg(not(feature = "ethhash"))]
 const BITS_PER_NIBBLE: u64 = 4;
 
 /// Returns the hash of `node`, which is at the given `path_prefix`.
@@ -68,6 +72,12 @@ impl HasUpdate for Sha256 {
     }
 }
 
+impl HasUpdate for Keccak256 {
+    fn update<T: AsRef<[u8]>>(&mut self, data: T) {
+        sha3::Digest::update(self, data)
+    }
+}
+
 impl HasUpdate for Vec<u8> {
     fn update<T: AsRef<[u8]>>(&mut self, data: T) {
         self.extend(data.as_ref());
@@ -107,11 +117,16 @@ pub trait Preimage {
 // Implement Preimage for all types that implement Hashable
 impl<T: Hashable> Preimage for T {
     fn to_hash(&self) -> TrieHash {
+        #[cfg(not(feature = "ethhash"))]
         let mut hasher = Sha256::new();
+        #[cfg(feature = "ethhash")]
+        let mut hasher = sha3::Keccak256::new();
+
         self.write(&mut hasher);
         hasher.finalize().into()
     }
 
+    #[cfg(not(feature = "ethhash"))]
     fn write(&self, buf: &mut impl HasUpdate) {
         let children = self.children();
 
@@ -138,6 +153,21 @@ impl<T: Hashable> Preimage for T {
             let byte = (high_nibble << 4) | low_nibble;
             buf.update([byte]);
         }
+    }
+
+    #[cfg(feature = "ethhash")]
+    fn write(&self, buf: &mut impl HasUpdate) {
+        use rlp::RlpStream;
+        
+        let key: Box<[u8]> = self.key().collect();
+
+
+        let mut rlp = RlpStream::new();
+        rlp.begin_list(1) // TODO: 3
+            .append(&&*key);
+            // TODO .append(&self.value_digest())
+            // TODO .append(&self.children().collect::<Vec<_>>())
+        buf.update(rlp.out())
     }
 }
 
@@ -204,6 +234,7 @@ impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
     }
 }
 
+#[cfg(not(feature = "ethhash"))]
 fn add_value_digest_to_buf<H: HasUpdate, T: AsRef<[u8]>>(
     buf: &mut H,
     value_digest: Option<ValueDigest<T>>,
@@ -232,6 +263,7 @@ fn add_value_digest_to_buf<H: HasUpdate, T: AsRef<[u8]>>(
 }
 
 #[inline]
+#[cfg(not(feature = "ethhash"))]
 /// Writes the length of `value` and `value` to `buf`.
 fn add_len_and_value_to_buf<H: HasUpdate, V: AsRef<[u8]>>(buf: &mut H, value: V) {
     let value_len = value.as_ref().len();
@@ -239,6 +271,7 @@ fn add_len_and_value_to_buf<H: HasUpdate, V: AsRef<[u8]>>(buf: &mut H, value: V)
     buf.update(value);
 }
 
+#[cfg(not(feature = "ethhash"))]
 #[inline]
 /// Encodes `value` as a varint and writes it to `buf`.
 fn add_varint_to_buf<H: HasUpdate>(buf: &mut H, value: u64) {
