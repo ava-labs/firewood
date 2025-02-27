@@ -52,7 +52,6 @@ ethereum-types = "0.15.1"
 sha3 = "0.10.8"
 plain_hasher = "0.2.3"
 hash-db = "0.15.2"
-hex-literal = "0.4.1"
 
 [[bench]]
 name = "hashops"
