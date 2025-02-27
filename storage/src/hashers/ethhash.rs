@@ -26,7 +26,7 @@ impl<T: Hashable> Preimage for T {
     fn write(&self, buf: &mut impl HasUpdate) {
         // accumulate the key, but if the key is longer than 32 bytes, just take the remainder
         let mut key = Vec::with_capacity(32);
-        while let Some((len, part)) = self.key().enumerate().next() {
+        for (len, part) in self.key().enumerate() {
             if len == 33 {
                 key.truncate(0);
             }
