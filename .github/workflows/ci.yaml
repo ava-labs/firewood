@@ -122,7 +122,7 @@ jobs:
             target/
           key: ${{ needs.build.outputs.cache-key }}
       - name: Run tests with ethhash enabled
-        run: cargo test --verbose --features ethash
+        run: cargo test --verbose --features ethhash
       - name: Run tests with ethhash disabled
         run: cargo test --verbose
 
