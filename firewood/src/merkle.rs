@@ -1038,8 +1038,6 @@ mod tests {
     use rand::rngs::StdRng;
     use rand::{rng, Rng, SeedableRng};
     use storage::{MemStore, MutableProposal, NodeStore, RootReader};
-
-    #[cfg(not(feature = "ethhash"))]
     use test_case::test_case;
 
     // Returns n random key-value pairs.
@@ -1750,6 +1748,50 @@ mod tests {
 
             assert_eq!(got_hash, TrieHash::from(expected_hash));
         }
+    }
+
+    #[cfg(feature = "ethhash")]
+    mod ethhasher {
+        use ethereum_types::H256;
+        use sha3::{Digest, Keccak256};
+        use plain_hasher::PlainHasher;
+        use hash_db::Hasher;
+    
+        #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
+        pub struct KeccakHasher;
+    
+        impl Hasher for KeccakHasher {
+            type Out = H256;
+            type StdHasher = PlainHasher;
+            const LENGTH: usize = 32;
+        
+            #[inline]
+            fn hash(x: &[u8]) -> Self::Out {
+                let mut hasher = Keccak256::new();
+                hasher.update(x);
+                let result = hasher.finalize();
+                H256::from_slice(result.as_slice())
+            }
+        }
+    }
+
+    #[cfg(feature = "ethhash")]
+    #[test_case(vec![("doe", "reindeer"),("dog", "puppy"),("dogglesworth", "cat")])]
+    fn test_root_hash_eth_compatible(kvs: Vec<(&str, &str)>) {
+        use ethhasher::KeccakHasher;
+        use triehash::trie_root;
+        use ethereum_types::H256;
+
+        let merkle = merkle_build_test(kvs.clone()).unwrap().hash();
+        let Some(firewood_hash) = merkle.nodestore.root_hash().unwrap() else {
+            // Empty trie
+            assert_eq!(kvs.len(), 0);
+            return;
+        };
+        let eth_hash = trie_root::<KeccakHasher, _, _, _>(kvs);
+        let firewood_hash = H256::from_slice(firewood_hash.as_ref().into());
+
+        assert_eq!(firewood_hash, eth_hash);
     }
 
     #[test]
