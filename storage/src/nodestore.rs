@@ -61,7 +61,7 @@ use std::sync::Arc;
 
 use crate::hashednode::hash_node;
 use crate::node::{ByteCounter, Node};
-use crate::{CacheReadStrategy, Child, FileBacked, Path, ReadableStorage, SharedNode, TrieHash};
+use crate::{CacheReadStrategy, Child, FileBacked, HashType, Path, ReadableStorage, SharedNode, TrieHash};
 
 use super::linear::WritableStorage;
 
@@ -278,7 +278,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         if let Some(root_address) = nodestore.header.root_address {
             let node = nodestore.read_node_from_disk(root_address, "open");
             let root_hash = node.map(|n| hash_node(&n, &Path(Default::default())))?;
-            nodestore.kind.root_hash = Some(root_hash);
+            nodestore.kind.root_hash = Some(root_hash.into());
         }
 
         Ok(nodestore)
@@ -877,7 +877,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         mut node: Node,
         path_prefix: &mut Path,
         new_nodes: &mut HashMap<LinearAddress, (u8, SharedNode)>,
-    ) -> (LinearAddress, TrieHash) {
+    ) -> (LinearAddress, HashType) {
         // If this is a branch, find all unhashed children and recursively call hash_helper on them.
         if let Node::Branch(ref mut b) = node {
             for (nibble, child) in b.children.iter_mut().enumerate() {
@@ -908,6 +908,8 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
             }
         }
         // At this point, we either have a leaf or a branch with all children hashed.
+
+        // if the encoded child hash <32 bytes then we use that RLP
 
         let hash = hash_node(&node, path_prefix);
         let (addr, size) = self.allocate_node(&node).expect("TODO handle error");
@@ -1110,7 +1112,7 @@ impl<S: ReadableStorage> From<NodeStore<MutableProposal, S>>
             new: new_nodes,
             deleted: immutable_proposal.deleted,
             parent: immutable_proposal.parent,
-            root_hash: Some(root_hash),
+            root_hash: Some(root_hash.into()),
         });
 
         nodestore
@@ -1161,7 +1163,7 @@ where
         if let Some(root_addr) = self.header.root_address {
             let root_node = self.read_node(root_addr)?;
             let root_hash = hash_node(&root_node, &Path::new());
-            Ok(Some((root_addr, root_hash)))
+            Ok(Some((root_addr, root_hash.into())))
         } else {
             Ok(None)
         }
@@ -1178,7 +1180,7 @@ where
         if let Some(root_addr) = self.header.root_address {
             let root_node = self.read_node(root_addr)?;
             let root_hash = hash_node(&root_node, &Path::new());
-            Ok(Some((root_addr, root_hash)))
+            Ok(Some((root_addr, root_hash.into())))
         } else {
             Ok(None)
         }

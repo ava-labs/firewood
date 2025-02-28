@@ -1,0 +1,16 @@
+[package]
+name = "coarsetime-metrics-macros"
+version = "0.0.4"
+edition = "2024"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+metrics = "0.24.1"
+syn = {version = "2.0.98", features = ["full", "printing"] }
+quote = "1.0.9"
+
+[dev-dependencies]
+metrics = "0.24.1"
+coarsetime = "0.1.35"

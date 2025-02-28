@@ -15,9 +15,9 @@ use std::iter::once;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use storage::{
-    BranchNode, Child, Hashable, HashedNodeReader, ImmutableProposal, LeafNode, LinearAddress,
-    MutableProposal, NibblesIterator, Node, NodeStore, Path, ReadableStorage, SharedNode, TrieHash,
-    TrieReader, ValueDigest,
+    BranchNode, Child, HashType, Hashable, HashedNodeReader, ImmutableProposal, LeafNode,
+    LinearAddress, MutableProposal, NibblesIterator, Node, NodeStore, Path, ReadableStorage,
+    SharedNode, TrieReader, ValueDigest,
 };
 
 use thiserror::Error;
@@ -184,7 +184,7 @@ impl<T: TrieReader> Merkle<T> {
             // No nodes, even the root, are before `key`.
             // The root alone proves the non-existence of `key`.
             // TODO reduce duplicate code with ProofNode::from<PathIterItem>
-            let mut child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] =
+            let mut child_hashes: [Option<HashType>; BranchNode::MAX_CHILDREN] =
                 [const { None }; BranchNode::MAX_CHILDREN];
             if let Some(branch) = root.as_branch() {
                 // TODO danlaine: can we avoid indexing?
@@ -349,7 +349,7 @@ impl<T: HashedNodeReader> Merkle<T> {
     pub(crate) fn dump_node(
         &self,
         addr: LinearAddress,
-        hash: Option<&TrieHash>,
+        hash: Option<&HashType>,
         seen: &mut HashSet<LinearAddress>,
         writer: &mut dyn Write,
     ) -> Result<(), MerkleError> {
@@ -397,7 +397,12 @@ impl<T: HashedNodeReader> Merkle<T> {
         if let Some((root_addr, root_hash)) = self.nodestore.root_address_and_hash()? {
             writeln!(result, " root -> {root_addr}")?;
             let mut seen = HashSet::new();
-            self.dump_node(root_addr, Some(&root_hash), &mut seen, &mut result)?;
+            self.dump_node(
+                root_addr,
+                Some(&root_hash.into()),
+                &mut seen,
+                &mut result,
+            )?;
         }
         write!(result, "}}")?;
 
@@ -1339,7 +1344,7 @@ mod tests {
             {
                 // Test that the proof is invalid when the hash is different
                 assert!(proof
-                    .verify(key, Some(value), &TrieHash::default())
+                    .verify(key, Some(value), &HashType::default().into())
                     .is_err());
             }
         }
@@ -1698,7 +1703,7 @@ mod tests {
     ) -> Result<Merkle<NodeStore<MutableProposal, MemStore>>, MerkleError> {
         let nodestore = NodeStore::new_empty_proposal(MemStore::new(vec![]).into());
         let mut merkle = Merkle::from(nodestore);
-        for (k, v) in items.iter() {
+        for (k, v) in items {
             merkle.insert(k.as_ref(), Box::from(v.as_ref()))?;
         }
 
@@ -1753,18 +1758,18 @@ mod tests {
     #[cfg(feature = "ethhash")]
     mod ethhasher {
         use ethereum_types::H256;
-        use sha3::{Digest, Keccak256};
-        use plain_hasher::PlainHasher;
         use hash_db::Hasher;
-    
+        use plain_hasher::PlainHasher;
+        use sha3::{Digest, Keccak256};
+
         #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
         pub struct KeccakHasher;
-    
+
         impl Hasher for KeccakHasher {
             type Out = H256;
             type StdHasher = PlainHasher;
             const LENGTH: usize = 32;
-        
+
             #[inline]
             fn hash(x: &[u8]) -> Self::Out {
                 let mut hasher = Keccak256::new();
@@ -1775,21 +1780,55 @@ mod tests {
         }
     }
 
+    // serialized leaf-bytes: "ca20887265696e64656572"
+    // serialized leaf-bytes: "ce89376c6573776f72746883636174"
+    // pass 1 bytes "f6808080808080a06c5112d862dbba220e8a398b3e36e5f290f0e42e9567f743077b913e7c728cc0808080808080808080857075707079"
+    // full bytes:   e4808080808080ce89376c6573776f72746883636174                                    808080808080808080857075707079
+    //                             ce 14 bytes
+    // pass 2 bytes "e280a0e8f16a506602fad9fc32a127e4ebb7ed23cf6dc4784ec93a32ea02bdb61ee64c"
+    // pass 1 bytes "f8518080808080a0e1850687f4a8551960aede310f4fa74b99e68bea53f50255c95f88cb0761cd9680a0ff9375f48d0855ff015ad03b306c0af3afb53a28da1a549bf8264ae7243b297e808080808080808080"
+    // pass 2 bytes "e7850604060f06a0981d4451b3a6c74aa1b323853154ec63b8f4c99213b57f10243bda4ec2cfa960"
+    // pass 1 bytes "f8518080808080a0e1850687f4a8551960aede310f4fa74b99e68bea53f50255c95f88cb0761cd9680a0ff9375f48d0855ff015ad03b306c0af3afb53a28da1a549bf8264ae7243b297e808080808080808080"
+    // pass 2 bytes "e7850604060f06a0981d4451b3a6c74aa1b323853154ec63b8f4c99213b57f10243bda4ec2cfa960"
+
+    // full bytes: 887265696e64656572
+    // short node: ca20887265696e64656572
+    // final: ca20887265696e64656572
+    // full bytes: 83636174
+    // short node: ce89376c6573776f72746883636174
+    // final: ce89376c6573776f72746883636174
+    // full bytes: e4808080808080ce89376c6573776f72746883636174808080808080808080857075707079
+    // short node: e4808080808080ce89376c6573776f72746883636174808080808080808080857075707079
+    // final: 37efd11993cb04a54048c25320e9f29c50a432d28afdf01598b2978ce1ca3068
+    // full bytes: f83b8080808080ca20887265696e6465657280a037efd11993cb04a54048c25320e9f29c50a432d28afdf01598b2978ce1ca3068808080808080808080
+    // short node: e5831646f6a0db6ae1fda66890f6693f36560d36b4dca68b4d838f17016b151efe1d4c95c453
+    // final:      8aad789dff2f538bca5d8ea56e8abe10f4c7ba3a5dea95fea4cd6e7c3a1168d3
+
+    //serialized leaf-bytes: "ca20887265696e64656572"
+    //serialized leaf-bytes: "ce89376c6573776f72746883636174"
+    //pass 1 bytes "e4808080808080ce89376c6573776f72746883636174808080808080808080857075707079"
+    //pass 2=bytes "e4808080808080ce89376c6573776f72746883636174808080808080808080857075707079"
+    //pass 1 bytes "f83b8080808080ca20887265696e6465657280a037efd11993cb04a54048c25320e9f29c50a432d28afdf01598b2978ce1ca3068808080808080808080"
+    //pass 2 bytes "e5833646f6a0db6ae1fda66890f6693f36560d36b4dca68b4d838f17016b151efe1d4c95c453"
+    //pass 1 bytes "f83b8080808080ca20887265696e6465657280a037efd11993cb04a54048c25320e9f29c50a432d28afdf01598b2978ce1ca3068808080808080808080"
+    //pass 2 bytes "e5833 646f6a0db6ae1fda66890f6693f36560d36b4dca68b4d838f17016b151efe1d4c95c453"
+    // short node:  e5831 646f6a0db6ae1fda66890f6693f36560d36b4dca68b4d838f17016b151efe1d4c95c453
+
+
     #[cfg(feature = "ethhash")]
-    #[test_case(vec![("doe", "reindeer"),("dog", "puppy"),("dogglesworth", "cat")])]
-    fn test_root_hash_eth_compatible(kvs: Vec<(&str, &str)>) {
+    #[test_case(&[("doe", "reindeer")])]
+    #[test_case(&[("doe", "reindeer"),("dog", "puppy"),("dogglesworth", "cat")])]
+    #[test_case(&[("doe", "reindeer"),("dog", "puppy"),("dogglesworth", "cacatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatt")])]
+    #[test_case(&[("dogglesworth", "cacatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatt")])]
+    fn test_root_hash_eth_compatible<T: AsRef<[u8]> + Clone + Ord>(kvs: &[(T, T)]) {
+        use ethereum_types::H256;
         use ethhasher::KeccakHasher;
         use triehash::trie_root;
-        use ethereum_types::H256;
 
-        let merkle = merkle_build_test(kvs.clone()).unwrap().hash();
-        let Some(firewood_hash) = merkle.nodestore.root_hash().unwrap() else {
-            // Empty trie
-            assert_eq!(kvs.len(), 0);
-            return;
-        };
-        let eth_hash = trie_root::<KeccakHasher, _, _, _>(kvs);
-        let firewood_hash = H256::from_slice(firewood_hash.as_ref().into());
+        let merkle = merkle_build_test(kvs.to_vec()).unwrap().hash();
+        let firewood_hash = merkle.nodestore.root_hash().unwrap().unwrap_or_default();
+        let eth_hash = trie_root::<KeccakHasher, _, _, _>(kvs.to_vec());
+        let firewood_hash = H256::from_slice(firewood_hash.as_ref());
 
         assert_eq!(firewood_hash, eth_hash);
     }
@@ -1816,14 +1855,15 @@ mod tests {
             key
         };
 
-        for _ in 0..10 {
+        for _ in 0..100 {
             let mut items = Vec::new();
 
-            for _ in 0..10 {
-                let val: Vec<u8> = (0..8).map(|_| rng.borrow_mut().random()).collect();
+            for _ in 0..100 {
+                let val: Vec<u8> = (0..256).map(|_| rng.borrow_mut().random()).collect();
                 items.push((keygen(), val));
             }
 
+            test_root_hash_eth_compatible(&items);
             merkle_build_test(items)?;
         }
 

@@ -10,8 +10,8 @@ use std::io::{Error, ErrorKind, Read, Write};
 use std::num::NonZero;
 use std::vec;
 
-mod branch;
 mod leaf;
+pub mod branch;
 pub mod path;
 
 pub use branch::{BranchNode, Child};
