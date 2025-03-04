@@ -5,7 +5,6 @@ package firewood
 
 // #cgo LDFLAGS: -L${SRCDIR}/../target/release -lfirewood_ffi
 // #include "firewood.h"
-// #include <stdlib.h>
 import "C"
 
 import (
