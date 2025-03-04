@@ -141,6 +141,7 @@ func (db *Database) Root() []byte {
 // nil.
 func (db *Database) Close() error {
 	C.fwd_close_db(db.handle)
+	db.handle = nil
 	return nil
 }
 
