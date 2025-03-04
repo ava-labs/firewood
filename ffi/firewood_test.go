@@ -1,12 +1,39 @@
 package firewood
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestMain(m *testing.M) {
+	// The cgocheck debugging flag checks that all pointers are pinned.
+	// TODO(arr4n) why doesn't `//go:debug cgocheck=1` work? https://go.dev/doc/godebug
+	debug := strings.Split(os.Getenv("GODEBUG"), ",")
+	var hasCgoCheck bool
+	for _, kv := range debug {
+		switch strings.TrimSpace(kv) {
+		case "cgocheck=1":
+			hasCgoCheck = true
+			break
+		case "cgocheck=0":
+			fmt.Fprint(os.Stderr, "GODEBUG=cgocheck=0; MUST be 1 for tests")
+			os.Exit(1)
+		}
+	}
+
+	if !hasCgoCheck {
+		debug = append(debug, "cgocheck=1")
+	}
+	os.Setenv("GODEBUG", strings.Join(debug, ","))
+
+	os.Exit(m.Run())
+}
 
 func newTestDatabase(t *testing.T) *Database {
 	t.Helper()

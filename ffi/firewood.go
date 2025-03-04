@@ -117,7 +117,7 @@ func (db *Database) Batch(ops []KeyValue) []byte {
 
 	hash := C.fwd_batch(
 		db.handle,
-		C.size_t(len(ops)),
+		C.size_t(len(ffiOps)),
 		(*C.struct_KeyValue)(unsafe.SliceData(ffiOps)), // implicitly pinned
 	)
 	return db.extractBytesThenFree(&hash)
