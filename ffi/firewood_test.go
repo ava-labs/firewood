@@ -1,6 +1,7 @@
 package firewood
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,89 +56,86 @@ func newTestDatabase(t *testing.T) *Database {
 
 func TestInsert(t *testing.T) {
 	f := newTestDatabase(t)
+	const (
+		key = "abc"
+		val = "def"
+	)
 	f.Batch([]KeyValue{
-		{[]byte("abc"), []byte("def")},
+		{[]byte(key), []byte(val)},
 	})
 
-	value, err := f.Get([]byte("abc"))
-	require.NoError(t, err)
-	if string(value) != "def" {
-		t.Errorf("expected def, got %s", value)
+	got, err := f.Get([]byte(key))
+	require.NoErrorf(t, err, "%T.Get(%q)", f, key)
+	assert.Equal(t, val, string(got), "Recover lone batch-inserted value")
+}
+
+func keyForTest(i int) []byte {
+	return []byte("key" + strconv.Itoa(i))
+}
+
+func kvForTest(i int) KeyValue {
+	return KeyValue{
+		Key:   keyForTest(i),
+		Value: []byte("value" + strconv.Itoa(i)),
 	}
 }
 
 func TestInsert100(t *testing.T) {
 	f := newTestDatabase(t)
+
 	ops := make([]KeyValue, 100)
-	for i := 0; i < 100; i++ {
-		ops[i] = KeyValue{[]byte("key" + strconv.Itoa(i)), []byte("value" + strconv.Itoa(i))}
+	for i := range ops {
+		ops[i] = kvForTest(i)
 	}
 	f.Batch(ops)
 
-	for i := 0; i < 100; i++ {
-		value, err := f.Get([]byte("key" + strconv.Itoa(i)))
-		require.NoError(t, err)
-		if string(value) != "value"+strconv.Itoa(i) {
-			t.Errorf("expected value%d, got %s", i, value)
-		}
+	for _, op := range ops {
+		got, err := f.Get(op.Key)
+		require.NoErrorf(t, err, "%T.Get(%q)", f, op.Key)
+		// Cast as strings to improve debug messages.
+		want := string(op.Value)
+		assert.Equal(t, want, string(got), "Recover nth batch-inserted value")
 	}
 
 	hash := f.Root()
-	if len(hash) != 32 {
-		t.Errorf("expected 32 bytes, got %d", len(hash))
-	}
-
+	assert.Lenf(t, hash, 32, "%T.Root()", f)
 	// we know the hash starts with 0xf8
-	if hash[0] != 0xf8 {
-		t.Errorf("expected 0xf8, got %x", hash[0])
-	}
-
-	delete_ops := make([]KeyValue, 1)
-	ops[0] = KeyValue{[]byte(""), []byte("")}
-	f.Batch(delete_ops)
+	assert.Equalf(t, byte(0xf8), hash[0], "First byte of %T.Root()", f)
 }
 
 func TestRangeDelete(t *testing.T) {
 	f := newTestDatabase(t)
-	const N = 100
-	ops := make([]KeyValue, N)
-	for i := 0; i < N; i++ {
-		ops[i] = KeyValue{[]byte("key" + strconv.Itoa(i)), []byte("value" + strconv.Itoa(i))}
+	ops := make([]KeyValue, 100)
+	for i := range ops {
+		ops[i] = kvForTest(i)
 	}
 	f.Batch(ops)
 
-	// delete all keys that start with "key"
-	delete_ops := make([]KeyValue, 1)
-	delete_ops[0] = KeyValue{[]byte("key1"), []byte("")}
-	f.Batch(delete_ops)
+	const deletePrefix = 1
+	f.Batch([]KeyValue{{
+		Key: keyForTest(deletePrefix),
+		// delete all keys that start with "key1"
+		Value: nil,
+	}})
 
-	for i := 0; i < N; i++ {
-		keystring := "key" + strconv.Itoa(i)
-		value, err := f.Get([]byte(keystring))
+	for _, op := range ops {
+		got, err := f.Get(op.Key)
 		require.NoError(t, err)
-		if (value != nil) == (keystring[3] == '1') {
-			t.Errorf("incorrect response for %s %s %x", keystring, value, keystring[3])
+
+		var want []byte
+		if !bytes.HasPrefix(op.Key, keyForTest(deletePrefix)) {
+			want = op.Value
 		}
+		assert.Equal(t, want, got)
 	}
 }
 
 func TestInvariants(t *testing.T) {
 	f := newTestDatabase(t)
 
-	// validate that the root of an empty trie is all zeroes
-	empty_root := f.Root()
-	if len(empty_root) != 32 {
-		t.Errorf("expected 32 bytes, got %d", len(empty_root))
-	}
-	empty_array := [32]byte(empty_root)
-	if empty_array != [32]byte{} {
-		t.Errorf("expected empty root, got %x", empty_root)
-	}
+	assert.Equalf(t, make([]byte, 32), f.Root(), "%T.Root() of empty trie")
 
-	// validate that get returns nil, nil for non-existent key
-	val, err := f.Get([]byte("non-existent"))
+	got, err := f.Get([]byte("non-existent"))
 	require.NoError(t, err)
-	if val != nil {
-		t.Errorf("expected nil, got %v", val)
-	}
+	assert.Nilf(t, got, "%T.Get([non-existent key])", f)
 }
