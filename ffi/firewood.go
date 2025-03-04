@@ -113,6 +113,14 @@ func (db *Database) Batch(ops []KeyValue) []byte {
 	return db.extractBytesThenFree(&hash)
 }
 
+// extractBytesThenFree converts the cgo `Value` payload to a byte slice, frees
+// the `Value`, and returns the extracted slice.
+func (db *Database) extractBytesThenFree(v *C.struct_Value) []byte {
+	buf := C.GoBytes(unsafe.Pointer(v.data), C.int(v.len))
+	C.fwd_free_value(v)
+	return buf
+}
+
 // Get retrieves the value for the given key. It always returns a nil error.
 func (db *Database) Get(key []byte) ([]byte, error) {
 	values, cleanup := newValueFactory()
@@ -165,17 +173,4 @@ func (f *valueFactory) from(data []byte) C.struct_Value {
 	ptr := (*C.uchar)(unsafe.SliceData(data))
 	f.pin.Pin(ptr)
 	return C.struct_Value{C.size_t(len(data)), ptr}
-}
-
-// extractBytesThenFree converts the cgo `Value` payload to a byte slice, frees
-// the `Value`, and returns the extracted slice.
-func (db *Database) extractBytesThenFree(v *C.struct_Value) []byte {
-	b := bytesFromValue(v)
-	C.fwd_free_value(v)
-	return b
-}
-
-// bytesFromValue returns the cgo `Value` as a byte slice.
-func bytesFromValue(v *C.struct_Value) []byte {
-	return C.GoBytes(unsafe.Pointer(v.data), C.int(v.len))
 }
