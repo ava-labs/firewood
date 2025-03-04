@@ -206,12 +206,14 @@ pub struct CreateOrOpenArgs {
 /// The caller must call `close` to free the memory associated with the returned database handle.
 ///
 #[no_mangle]
-pub unsafe extern "C" fn fwd_create_db(
-    args: CreateOrOpenArgs,
-) -> *mut Db {
+pub unsafe extern "C" fn fwd_create_db(args: CreateOrOpenArgs) -> *mut Db {
     let cfg = DbConfig::builder()
         .truncate(true)
-        .manager(manager_config(args.cache_size, args.revisions, args.strategy))
+        .manager(manager_config(
+            args.cache_size,
+            args.revisions,
+            args.strategy,
+        ))
         .build();
     common_create(args.path, args.metrics_port, cfg)
 }
@@ -234,12 +236,14 @@ pub unsafe extern "C" fn fwd_create_db(
 /// The caller must call `close` to free the memory associated with the returned database handle.
 ///
 #[no_mangle]
-pub unsafe extern "C" fn fwd_open_db(
-    args: CreateOrOpenArgs,
-) -> *mut Db {
+pub unsafe extern "C" fn fwd_open_db(args: CreateOrOpenArgs) -> *mut Db {
     let cfg = DbConfig::builder()
         .truncate(false)
-        .manager(manager_config(args.cache_size, args.revisions, args.strategy))
+        .manager(manager_config(
+            args.cache_size,
+            args.revisions,
+            args.strategy,
+        ))
         .build();
     common_create(args.path, args.metrics_port, cfg)
 }
