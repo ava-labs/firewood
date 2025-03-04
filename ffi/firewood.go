@@ -105,10 +105,15 @@ func (db *Database) Batch(ops []KeyValue) []byte {
 			value: values.from(op.Value),
 		}
 	}
-	ptr := (*C.struct_KeyValue)(unsafe.SliceData(ffiOps))
-	hash := C.fwd_batch(db.handle, C.size_t(len(ops)), ptr)
+
+	hash := C.fwd_batch(
+		db.handle,
+		C.size_t(len(ops)),
+		(*C.struct_KeyValue)(unsafe.SliceData(ffiOps)), // implicitly pinned
+	)
 	hashBytes := C.GoBytes(unsafe.Pointer(hash.data), C.int(hash.len))
 	C.fwd_free_value(&hash)
+
 	return hashBytes
 }
 
