@@ -23,7 +23,6 @@ type Database struct {
 
 // Config configures the opening of a [Database].
 type Config struct {
-	Path              string
 	Create            bool
 	NodeCacheEntries  uint
 	Revisions         uint
@@ -37,7 +36,6 @@ func DefaultConfig() *Config {
 		NodeCacheEntries:  1_000_000,
 		Revisions:         100,
 		ReadCacheStrategy: OnlyCacheWrites,
-		Path:              "firewood.db",
 		MetricsPort:       3000,
 	}
 }
@@ -55,23 +53,35 @@ const (
 	invalidCacheStrategy
 )
 
-// New opens or creates a new Firewood database with the given configuration.
-func New(opts *Config) (*Database, error) {
-	if opts.ReadCacheStrategy >= invalidCacheStrategy {
-		return nil, fmt.Errorf("invalid %T (%[1]d)", opts.ReadCacheStrategy)
+// New opens or creates a new Firewood database with the given configuration. If
+// a nil `Config` is provided [DefaultConfig] will be used instead.
+func New(filePath string, conf *Config) (*Database, error) {
+	if conf == nil {
+		conf = DefaultConfig()
 	}
-	if opts.Revisions < 2 {
-		return nil, fmt.Errorf("%T.Revisions must be >= 2", opts)
+	if conf.ReadCacheStrategy >= invalidCacheStrategy {
+		return nil, fmt.Errorf("invalid %T (%[1]d)", conf.ReadCacheStrategy)
 	}
-	if opts.NodeCacheEntries < 1 {
-		return nil, fmt.Errorf("%T.NodeCacheEntries must be >= 1", opts)
+	if conf.Revisions < 2 {
+		return nil, fmt.Errorf("%T.Revisions must be >= 2", conf)
+	}
+	if conf.NodeCacheEntries < 1 {
+		return nil, fmt.Errorf("%T.NodeCacheEntries must be >= 1", conf)
+	}
+
+	args := C.struct_CreateOrOpenArgs{
+		path:         C.CString(filePath),
+		cache_size:   C.size_t(conf.NodeCacheEntries),
+		revisions:    C.size_t(conf.Revisions),
+		strategy:     C.uint8_t(conf.ReadCacheStrategy),
+		metrics_port: C.uint16_t(conf.MetricsPort),
 	}
 
 	var db unsafe.Pointer
-	if opts.Create {
-		db = C.fwd_create_db(C.CString(opts.Path), C.size_t(opts.NodeCacheEntries), C.size_t(opts.Revisions), C.uint8_t(opts.ReadCacheStrategy), C.uint16_t(opts.MetricsPort))
+	if conf.Create {
+		db = C.fwd_create_db(args)
 	} else {
-		db = C.fwd_open_db(C.CString(opts.Path), C.size_t(opts.NodeCacheEntries), C.size_t(opts.Revisions), C.uint8_t(opts.ReadCacheStrategy), C.uint16_t(opts.MetricsPort))
+		db = C.fwd_open_db(args)
 	}
 	return &Database{handle: db}, nil
 }

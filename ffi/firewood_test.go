@@ -15,9 +15,9 @@ func newTestDatabase(t *testing.T) *Database {
 	conf.Create = true
 	// The TempDir directory is automatically cleaned up so there's no need to
 	// remove test.db.
-	conf.Path = filepath.Join(t.TempDir(), "test.db")
+	dbFile := filepath.Join(t.TempDir(), "test.db")
 
-	f, err := New(conf)
+	f, err := New(dbFile, conf)
 	require.NoErrorf(t, err, "NewDatabase(%+v)", conf)
 	// Close() always returns nil, its signature returning an error only to
 	// conform with an externally required interface.
