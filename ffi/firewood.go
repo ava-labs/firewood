@@ -3,7 +3,7 @@
 // [Firewood]: https://github.com/ava-labs/firewood
 package firewood
 
-// #cgo LDFLAGS: -L../target/release -L/usr/local/lib -lfirewood_ffi -lm
+// #cgo LDFLAGS: -L${SRCDIR}/../target/release -L/usr/local/lib -lfirewood_ffi -lm
 // #include "firewood.h"
 // #include <stdlib.h>
 import "C"
