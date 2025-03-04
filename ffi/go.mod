@@ -1,8 +1,8 @@
-module github.com/ava-labs/firewood/ffi/v2
+module github.com/ava-labs/firewood/ffi
 
-go 1.22.8
+go 1.23
 
-toolchain go1.23.4
+toolchain go1.23.6
 
 require github.com/stretchr/testify v1.10.0
 
