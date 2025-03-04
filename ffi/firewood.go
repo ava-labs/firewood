@@ -16,7 +16,10 @@ import (
 
 // A Database is a handle to a Firewood database.
 type Database struct {
-	handle *C.void
+	// handle is returned and accepted by cgo functions. It MUST be treated as
+	// an opaque value without special meaning.
+	// https://en.wikipedia.org/wiki/Blinkenlights
+	handle unsafe.Pointer
 }
 
 // Config configures the opening of a [Database].
@@ -71,8 +74,7 @@ func New(opts *Config) (*Database, error) {
 	} else {
 		db = C.fwd_open_db(C.CString(opts.Path), C.size_t(opts.NodeCacheEntries), C.size_t(opts.Revisions), C.uint8_t(opts.ReadCacheStrategy), C.uint16_t(opts.MetricsPort))
 	}
-
-	return &Database{handle: (*C.void)(db)}, nil
+	return &Database{handle: db}, nil
 }
 
 // KeyValue is a key-value pair.
@@ -104,7 +106,7 @@ func (db *Database) Batch(ops []KeyValue) []byte {
 		}
 	}
 	ptr := (*C.struct_KeyValue)(unsafe.Pointer(&ffiOps[0]))
-	hash := C.fwd_batch(unsafe.Pointer(db.handle), C.size_t(len(ops)), ptr)
+	hash := C.fwd_batch(db.handle, C.size_t(len(ops)), ptr)
 	hashBytes := C.GoBytes(unsafe.Pointer(hash.data), C.int(hash.len))
 	C.fwd_free_value(&hash)
 	return hashBytes
@@ -116,7 +118,7 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 	defer pin.Unpin()
 	ffiKey := makeValue(pin, key)
 
-	value := C.fwd_get(unsafe.Pointer(db.handle), ffiKey)
+	value := C.fwd_get(db.handle, ffiKey)
 	ffiBytes := C.GoBytes(unsafe.Pointer(value.data), C.int(value.len))
 	C.fwd_free_value(&value)
 	if len(ffiBytes) == 0 {
@@ -136,7 +138,7 @@ func makeValue(pin *runtime.Pinner, data []byte) C.struct_Value {
 
 // Root returns the current root hash of the trie.
 func (db *Database) Root() []byte {
-	hash := C.fwd_root_hash(unsafe.Pointer(db.handle))
+	hash := C.fwd_root_hash(db.handle)
 	hashBytes := C.GoBytes(unsafe.Pointer(hash.data), C.int(hash.len))
 	C.fwd_free_value(&hash)
 	return hashBytes
@@ -145,6 +147,6 @@ func (db *Database) Root() []byte {
 // Close closes the database and releases all held resources. It always returns
 // nil.
 func (db *Database) Close() error {
-	C.fwd_close_db(unsafe.Pointer(db.handle))
+	C.fwd_close_db(db.handle)
 	return nil
 }
