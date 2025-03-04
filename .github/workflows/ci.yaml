@@ -196,4 +196,5 @@ jobs:
           cache-dependency-path: "ffi/go.sum"
       - name: Test Go FFI bindings
         working-directory: ffi
-        run: go test ./...
+        # cgocheck2 is expensive but provides complete pointer checks
+        run: GOEXPERIMENT=cgocheck2 go test ./...
