@@ -117,14 +117,18 @@ func (db *Database) Batch(ops []KeyValue) []byte {
 func (db *Database) Get(key []byte) ([]byte, error) {
 	values, cleanup := newValueFactory()
 	defer cleanup()
-	ffiKey := values.from(key)
 
-	value := C.fwd_get(db.handle, ffiKey)
-	ffiBytes := db.extractBytesThenFree(&value)
-	if len(ffiBytes) == 0 {
+	val := C.fwd_get(db.handle, values.from(key))
+	switch buf := db.extractBytesThenFree(&val); len(buf) {
+	case 0:
+		// TODO(arr4n): discuss with Firewood team if this is necessary.
+		// Typically an Go API shouldn't differentiate between empty and
+		// nil-valued slices. See:
+		// https://google.github.io/styleguide/go/decisions#nil-slices:~:text=Do%20not%20create%20APIs%20that%20force%20their%20clients%20to%20make%20distinctions%20between%20nil%20and%20the%20empty%20slice.
 		return nil, nil
+	default:
+		return buf, nil
 	}
-	return ffiBytes, nil
 }
 
 // Root returns the current root hash of the trie.
