@@ -95,17 +95,17 @@ func (db *Database) Batch(ops []KeyValue) []byte {
 	// TODO(arr4n) refactor this to require explicit signalling from the caller
 	// that they want prefix deletion, similar to `rm --no-preserve-root`.
 
-	pin := new(runtime.Pinner)
-	defer pin.Unpin()
+	values, cleanup := newValueFactory()
+	defer cleanup()
 
 	ffiOps := make([]C.struct_KeyValue, len(ops))
 	for i, op := range ops {
 		ffiOps[i] = C.struct_KeyValue{
-			key:   makeValue(pin, op.Key),
-			value: makeValue(pin, op.Value),
+			key:   values.from(op.Key),
+			value: values.from(op.Value),
 		}
 	}
-	ptr := (*C.struct_KeyValue)(unsafe.Pointer(&ffiOps[0]))
+	ptr := (*C.struct_KeyValue)(unsafe.SliceData(ffiOps))
 	hash := C.fwd_batch(db.handle, C.size_t(len(ops)), ptr)
 	hashBytes := C.GoBytes(unsafe.Pointer(hash.data), C.int(hash.len))
 	C.fwd_free_value(&hash)
@@ -114,9 +114,9 @@ func (db *Database) Batch(ops []KeyValue) []byte {
 
 // Get retrieves the value for the given key. It always returns a nil error.
 func (db *Database) Get(key []byte) ([]byte, error) {
-	pin := new(runtime.Pinner)
-	defer pin.Unpin()
-	ffiKey := makeValue(pin, key)
+	values, cleanup := newValueFactory()
+	defer cleanup()
+	ffiKey := values.from(key)
 
 	value := C.fwd_get(db.handle, ffiKey)
 	ffiBytes := C.GoBytes(unsafe.Pointer(value.data), C.int(value.len))
@@ -125,15 +125,6 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 		return nil, nil
 	}
 	return ffiBytes, nil
-}
-
-func makeValue(pin *runtime.Pinner, data []byte) C.struct_Value {
-	if len(data) == 0 {
-		return C.struct_Value{0, nil}
-	}
-	ptr := (*C.uchar)(unsafe.Pointer(&data[0]))
-	pin.Pin(ptr)
-	return C.struct_Value{C.size_t(len(data)), ptr}
 }
 
 // Root returns the current root hash of the trie.
@@ -149,4 +140,26 @@ func (db *Database) Root() []byte {
 func (db *Database) Close() error {
 	C.fwd_close_db(db.handle)
 	return nil
+}
+
+// newValueFactory returns a factory for converting byte slices into cgo Value
+// structs that can be passed as arguments to cgo functions. The returned
+// cleanup function MUST be called when the constructed values are no longer
+// required, after which they can no longer be used as cgo arguments.
+func newValueFactory() (*valueFactory, func()) {
+	f := new(valueFactory)
+	return f, func() { f.pin.Unpin() }
+}
+
+type valueFactory struct {
+	pin runtime.Pinner
+}
+
+func (f *valueFactory) from(data []byte) C.struct_Value {
+	if len(data) == 0 {
+		return C.struct_Value{0, nil}
+	}
+	ptr := (*C.uchar)(unsafe.SliceData(data))
+	f.pin.Pin(ptr)
+	return C.struct_Value{C.size_t(len(data)), ptr}
 }
