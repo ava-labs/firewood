@@ -1,29 +1,45 @@
 package firewood
 
 import (
-	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
+func newTestDatabase(t *testing.T) *Database {
+	t.Helper()
+
+	conf := DefaultConfig()
+	conf.Create = true
+	// The TempDir directory is automatically cleaned up so there's no need to
+	// remove test.db.
+	conf.Path = filepath.Join(t.TempDir(), "test.db")
+
+	f, err := New(conf)
+	require.NoErrorf(t, err, "NewDatabase(%+v)", conf)
+	// Close() always returns nil, its signature returning an error only to
+	// conform with an externally required interface.
+	t.Cleanup(func() { f.Close() })
+	return f
+}
+
 func TestInsert(t *testing.T) {
-	var f Firewood = NewDatabase(WithCreate(true), WithPath("test.db"))
-	defer os.Remove("test.db")
-	defer f.Close()
+	f := newTestDatabase(t)
 	f.Batch([]KeyValue{
 		{[]byte("abc"), []byte("def")},
 	})
 
-	value, _ := f.Get([]byte("abc"))
+	value, err := f.Get([]byte("abc"))
+	require.NoError(t, err)
 	if string(value) != "def" {
 		t.Errorf("expected def, got %s", value)
 	}
 }
 
 func TestInsert100(t *testing.T) {
-	var f Firewood = NewDatabase(WithCreate(true), WithPath("test.db"))
-	defer os.Remove("test.db")
-	defer f.Close()
+	f := newTestDatabase(t)
 	ops := make([]KeyValue, 100)
 	for i := 0; i < 100; i++ {
 		ops[i] = KeyValue{[]byte("key" + strconv.Itoa(i)), []byte("value" + strconv.Itoa(i))}
@@ -32,9 +48,7 @@ func TestInsert100(t *testing.T) {
 
 	for i := 0; i < 100; i++ {
 		value, err := f.Get([]byte("key" + strconv.Itoa(i)))
-		if err != nil {
-			t.FailNow()
-		}
+		require.NoError(t, err)
 		if string(value) != "value"+strconv.Itoa(i) {
 			t.Errorf("expected value%d, got %s", i, value)
 		}
@@ -56,10 +70,8 @@ func TestInsert100(t *testing.T) {
 }
 
 func TestRangeDelete(t *testing.T) {
+	f := newTestDatabase(t)
 	const N = 100
-	var f Firewood = NewDatabase(WithCreate(true), WithPath("test.db"))
-	defer os.Remove("test.db")
-	defer f.Close()
 	ops := make([]KeyValue, N)
 	for i := 0; i < N; i++ {
 		ops[i] = KeyValue{[]byte("key" + strconv.Itoa(i)), []byte("value" + strconv.Itoa(i))}
@@ -74,9 +86,7 @@ func TestRangeDelete(t *testing.T) {
 	for i := 0; i < N; i++ {
 		keystring := "key" + strconv.Itoa(i)
 		value, err := f.Get([]byte(keystring))
-		if err != nil {
-			t.FailNow()
-		}
+		require.NoError(t, err)
 		if (value != nil) == (keystring[3] == '1') {
 			t.Errorf("incorrect response for %s %s %x", keystring, value, keystring[3])
 		}
@@ -84,9 +94,7 @@ func TestRangeDelete(t *testing.T) {
 }
 
 func TestInvariants(t *testing.T) {
-	var f Firewood = NewDatabase(WithCreate(true), WithPath("test.db"))
-	defer os.Remove("test.db")
-	defer f.Close()
+	f := newTestDatabase(t)
 
 	// validate that the root of an empty trie is all zeroes
 	empty_root := f.Root()
@@ -100,7 +108,8 @@ func TestInvariants(t *testing.T) {
 
 	// validate that get returns nil, nil for non-existent key
 	val, err := f.Get([]byte("non-existent"))
-	if val != nil || err != nil {
-		t.Errorf("expected nil, nil, got %v, %v", val, err)
+	require.NoError(t, err)
+	if val != nil {
+		t.Errorf("expected nil, got %v", val)
 	}
 }
