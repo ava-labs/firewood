@@ -111,10 +111,7 @@ func (db *Database) Batch(ops []KeyValue) []byte {
 		C.size_t(len(ops)),
 		(*C.struct_KeyValue)(unsafe.SliceData(ffiOps)), // implicitly pinned
 	)
-	hashBytes := C.GoBytes(unsafe.Pointer(hash.data), C.int(hash.len))
-	C.fwd_free_value(&hash)
-
-	return hashBytes
+	return db.extractBytesThenFree(&hash)
 }
 
 // Get retrieves the value for the given key. It always returns a nil error.
@@ -124,8 +121,7 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 	ffiKey := values.from(key)
 
 	value := C.fwd_get(db.handle, ffiKey)
-	ffiBytes := C.GoBytes(unsafe.Pointer(value.data), C.int(value.len))
-	C.fwd_free_value(&value)
+	ffiBytes := db.extractBytesThenFree(&value)
 	if len(ffiBytes) == 0 {
 		return nil, nil
 	}
@@ -135,9 +131,7 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 // Root returns the current root hash of the trie.
 func (db *Database) Root() []byte {
 	hash := C.fwd_root_hash(db.handle)
-	hashBytes := C.GoBytes(unsafe.Pointer(hash.data), C.int(hash.len))
-	C.fwd_free_value(&hash)
-	return hashBytes
+	return db.extractBytesThenFree(&hash)
 }
 
 // Close closes the database and releases all held resources. It always returns
@@ -147,7 +141,7 @@ func (db *Database) Close() error {
 	return nil
 }
 
-// newValueFactory returns a factory for converting byte slices into cgo Value
+// newValueFactory returns a factory for converting byte slices into cgo `Value`
 // structs that can be passed as arguments to cgo functions. The returned
 // cleanup function MUST be called when the constructed values are no longer
 // required, after which they can no longer be used as cgo arguments.
@@ -167,4 +161,17 @@ func (f *valueFactory) from(data []byte) C.struct_Value {
 	ptr := (*C.uchar)(unsafe.SliceData(data))
 	f.pin.Pin(ptr)
 	return C.struct_Value{C.size_t(len(data)), ptr}
+}
+
+// extractBytesThenFree converts the cgo `Value` payload to a byte slice, frees
+// the `Value`, and returns the extracted slice.
+func (db *Database) extractBytesThenFree(v *C.struct_Value) []byte {
+	b := bytesFromValue(v)
+	C.fwd_free_value(v)
+	return b
+}
+
+// bytesFromValue returns the cgo `Value` as a byte slice.
+func bytesFromValue(v *C.struct_Value) []byte {
+	return C.GoBytes(unsafe.Pointer(v.data), C.int(v.len))
 }
