@@ -73,34 +73,67 @@ func keyForTest(i int) []byte {
 	return []byte("key" + strconv.Itoa(i))
 }
 
+func valForTest(i int) []byte {
+	return []byte("value" + strconv.Itoa(i))
+}
+
 func kvForTest(i int) KeyValue {
 	return KeyValue{
 		Key:   keyForTest(i),
-		Value: []byte("value" + strconv.Itoa(i)),
+		Value: valForTest(i),
 	}
 }
 
 func TestInsert100(t *testing.T) {
-	f := newTestDatabase(t)
-
-	ops := make([]KeyValue, 100)
-	for i := range ops {
-		ops[i] = kvForTest(i)
+	tests := []struct {
+		name   string
+		insert func(*Database, []KeyValue) (root []byte, _ error)
+	}{
+		{
+			name: "Batch",
+			insert: func(d *Database, kvs []KeyValue) ([]byte, error) {
+				return d.Batch(kvs), nil
+			},
+		},
+		{
+			name: "Update",
+			insert: func(d *Database, kvs []KeyValue) ([]byte, error) {
+				var keys, vals [][]byte
+				for _, kv := range kvs {
+					keys = append(keys, kv.Key)
+					vals = append(vals, kv.Value)
+				}
+				return d.Update(keys, vals)
+			},
+		},
 	}
-	f.Batch(ops)
 
-	for _, op := range ops {
-		got, err := f.Get(op.Key)
-		require.NoErrorf(t, err, "%T.Get(%q)", f, op.Key)
-		// Cast as strings to improve debug messages.
-		want := string(op.Value)
-		assert.Equal(t, want, string(got), "Recover nth batch-inserted value")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newTestDatabase(t)
+
+			ops := make([]KeyValue, 100)
+			for i := range ops {
+				ops[i] = kvForTest(i)
+			}
+			rootFromInsert, err := tt.insert(f, ops)
+			require.NoError(t, err, "inserting")
+
+			for _, op := range ops {
+				got, err := f.Get(op.Key)
+				require.NoErrorf(t, err, "%T.Get(%q)", f, op.Key)
+				// Cast as strings to improve debug messages.
+				want := string(op.Value)
+				assert.Equal(t, want, string(got), "Recover nth batch-inserted value")
+			}
+
+			hash := f.Root()
+			assert.Lenf(t, hash, 32, "%T.Root()", f)
+			// we know the hash starts with 0xf8
+			assert.Equalf(t, byte(0xf8), hash[0], "First byte of %T.Root()", f)
+			assert.Equalf(t, rootFromInsert, hash, "%T.Root() matches value returned by insertion", f)
+		})
 	}
-
-	hash := f.Root()
-	assert.Lenf(t, hash, 32, "%T.Root()", f)
-	// we know the hash starts with 0xf8
-	assert.Equalf(t, byte(0xf8), hash[0], "First byte of %T.Root()", f)
 }
 
 func TestRangeDelete(t *testing.T) {
