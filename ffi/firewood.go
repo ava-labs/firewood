@@ -120,12 +120,12 @@ func (db *Database) Batch(ops []KeyValue) []byte {
 		C.size_t(len(ffiOps)),
 		(*C.struct_KeyValue)(unsafe.SliceData(ffiOps)), // implicitly pinned
 	)
-	return db.extractBytesThenFree(&hash)
+	return extractBytesThenFree(&hash)
 }
 
 // extractBytesThenFree converts the cgo `Value` payload to a byte slice, frees
 // the `Value`, and returns the extracted slice.
-func (db *Database) extractBytesThenFree(v *C.struct_Value) []byte {
+func extractBytesThenFree(v *C.struct_Value) []byte {
 	buf := C.GoBytes(unsafe.Pointer(v.data), C.int(v.len))
 	C.fwd_free_value(v)
 	return buf
@@ -137,7 +137,7 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 	defer cleanup()
 
 	val := C.fwd_get(db.handle, values.from(key))
-	switch buf := db.extractBytesThenFree(&val); len(buf) {
+	switch buf := extractBytesThenFree(&val); len(buf) {
 	case 0:
 		// TODO(arr4n): discuss with Firewood team if this is necessary.
 		// Typically an Go API shouldn't differentiate between empty and
@@ -152,7 +152,7 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 // Root returns the current root hash of the trie.
 func (db *Database) Root() []byte {
 	hash := C.fwd_root_hash(db.handle)
-	return db.extractBytesThenFree(&hash)
+	return extractBytesThenFree(&hash)
 }
 
 // Close closes the database and releases all held resources. It always returns
