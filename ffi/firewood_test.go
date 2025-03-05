@@ -55,17 +55,17 @@ func newTestDatabase(t *testing.T) *Database {
 }
 
 func TestInsert(t *testing.T) {
-	f := newTestDatabase(t)
+	db := newTestDatabase(t)
 	const (
 		key = "abc"
 		val = "def"
 	)
-	f.Batch([]KeyValue{
+	db.Batch([]KeyValue{
 		{[]byte(key), []byte(val)},
 	})
 
-	got, err := f.Get([]byte(key))
-	require.NoErrorf(t, err, "%T.Get(%q)", f, key)
+	got, err := db.Get([]byte(key))
+	require.NoErrorf(t, err, "%T.Get(%q)", db, key)
 	assert.Equal(t, val, string(got), "Recover lone batch-inserted value")
 }
 
@@ -91,68 +91,68 @@ func TestInsert100(t *testing.T) {
 	}{
 		{
 			name: "Batch",
-			insert: func(d *Database, kvs []KeyValue) ([]byte, error) {
-				return d.Batch(kvs), nil
+			insert: func(db *Database, kvs []KeyValue) ([]byte, error) {
+				return db.Batch(kvs), nil
 			},
 		},
 		{
 			name: "Update",
-			insert: func(d *Database, kvs []KeyValue) ([]byte, error) {
+			insert: func(db *Database, kvs []KeyValue) ([]byte, error) {
 				var keys, vals [][]byte
 				for _, kv := range kvs {
 					keys = append(keys, kv.Key)
 					vals = append(vals, kv.Value)
 				}
-				return d.Update(keys, vals)
+				return db.Update(keys, vals)
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := newTestDatabase(t)
+			db := newTestDatabase(t)
 
 			ops := make([]KeyValue, 100)
 			for i := range ops {
 				ops[i] = kvForTest(i)
 			}
-			rootFromInsert, err := tt.insert(f, ops)
+			rootFromInsert, err := tt.insert(db, ops)
 			require.NoError(t, err, "inserting")
 
 			for _, op := range ops {
-				got, err := f.Get(op.Key)
-				require.NoErrorf(t, err, "%T.Get(%q)", f, op.Key)
+				got, err := db.Get(op.Key)
+				require.NoErrorf(t, err, "%T.Get(%q)", db, op.Key)
 				// Cast as strings to improve debug messages.
 				want := string(op.Value)
 				assert.Equal(t, want, string(got), "Recover nth batch-inserted value")
 			}
 
-			hash := f.Root()
-			assert.Lenf(t, hash, 32, "%T.Root()", f)
+			hash := db.Root()
+			assert.Lenf(t, hash, 32, "%T.Root()", db)
 			// we know the hash starts with 0xf8
-			assert.Equalf(t, byte(0xf8), hash[0], "First byte of %T.Root()", f)
-			assert.Equalf(t, rootFromInsert, hash, "%T.Root() matches value returned by insertion", f)
+			assert.Equalf(t, byte(0xf8), hash[0], "First byte of %T.Root()", db)
+			assert.Equalf(t, rootFromInsert, hash, "%T.Root() matches value returned by insertion", db)
 		})
 	}
 }
 
 func TestRangeDelete(t *testing.T) {
-	f := newTestDatabase(t)
+	db := newTestDatabase(t)
 	ops := make([]KeyValue, 100)
 	for i := range ops {
 		ops[i] = kvForTest(i)
 	}
-	f.Batch(ops)
+	db.Batch(ops)
 
 	const deletePrefix = 1
-	f.Batch([]KeyValue{{
+	db.Batch([]KeyValue{{
 		Key: keyForTest(deletePrefix),
 		// delete all keys that start with "key1"
 		Value: nil,
 	}})
 
 	for _, op := range ops {
-		got, err := f.Get(op.Key)
+		got, err := db.Get(op.Key)
 		require.NoError(t, err)
 
 		var want []byte
@@ -164,11 +164,11 @@ func TestRangeDelete(t *testing.T) {
 }
 
 func TestInvariants(t *testing.T) {
-	f := newTestDatabase(t)
+	db := newTestDatabase(t)
 
-	assert.Equalf(t, make([]byte, 32), f.Root(), "%T.Root() of empty trie")
+	assert.Equalf(t, make([]byte, 32), db.Root(), "%T.Root() of empty trie")
 
-	got, err := f.Get([]byte("non-existent"))
+	got, err := db.Get([]byte("non-existent"))
 	require.NoError(t, err)
-	assert.Nilf(t, got, "%T.Get([non-existent key])", f)
+	assert.Nilf(t, got, "%T.Get([non-existent key])", db)
 }
