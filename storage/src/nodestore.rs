@@ -278,7 +278,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         if let Some(root_address) = nodestore.header.root_address {
             let node = nodestore.read_node_from_disk(root_address, "open");
             let root_hash = node.map(|n| hash_node(&n, &Path(Default::default())))?;
-            nodestore.kind.root_hash = Some(root_hash.into());
+            nodestore.kind.root_hash = Some(root_hash.into_triehash());
         }
 
         Ok(nodestore)
@@ -1112,7 +1112,7 @@ impl<S: ReadableStorage> From<NodeStore<MutableProposal, S>>
             new: new_nodes,
             deleted: immutable_proposal.deleted,
             parent: immutable_proposal.parent,
-            root_hash: Some(root_hash.into()),
+            root_hash: Some(root_hash.into_triehash()),
         });
 
         nodestore
@@ -1163,7 +1163,7 @@ where
         if let Some(root_addr) = self.header.root_address {
             let root_node = self.read_node(root_addr)?;
             let root_hash = hash_node(&root_node, &Path::new());
-            Ok(Some((root_addr, root_hash.into())))
+            Ok(Some((root_addr, root_hash.into_triehash())))
         } else {
             Ok(None)
         }
@@ -1180,7 +1180,7 @@ where
         if let Some(root_addr) = self.header.root_address {
             let root_node = self.read_node(root_addr)?;
             let root_hash = hash_node(&root_node, &Path::new());
-            Ok(Some((root_addr, root_hash.into())))
+            Ok(Some((root_addr, root_hash.into_triehash())))
         } else {
             Ok(None)
         }

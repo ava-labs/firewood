@@ -397,6 +397,7 @@ impl<T: HashedNodeReader> Merkle<T> {
         if let Some((root_addr, root_hash)) = self.nodestore.root_address_and_hash()? {
             writeln!(result, " root -> {root_addr}")?;
             let mut seen = HashSet::new();
+            #[allow(clippy::useless_conversion)] // TODO: eliminate this
             self.dump_node(
                 root_addr,
                 Some(&root_hash.into()),
@@ -1042,7 +1043,7 @@ mod tests {
     use super::*;
     use rand::rngs::StdRng;
     use rand::{rng, Rng, SeedableRng};
-    use storage::{MemStore, MutableProposal, NodeStore, RootReader};
+    use storage::{MemStore, MutableProposal, NodeStore, RootReader, TrieHash};
     use test_case::test_case;
 
     // Returns n random key-value pairs.
@@ -1344,7 +1345,7 @@ mod tests {
             {
                 // Test that the proof is invalid when the hash is different
                 assert!(proof
-                    .verify(key, Some(value), &HashType::default().into())
+                    .verify(key, Some(value), &TrieHash::default())
                     .is_err());
             }
         }
@@ -1863,6 +1864,7 @@ mod tests {
                 items.push((keygen(), val));
             }
 
+            #[cfg(feature = "ethhash")]
             test_root_hash_eth_compatible(&items);
             merkle_build_test(items)?;
         }

@@ -62,6 +62,12 @@ impl TrieHash {
     pub(crate) const fn len() -> usize {
         std::mem::size_of::<TrieHash>()
     }
+
+    /// Some code needs a TrieHash even though it only has a HashType.
+    /// This function is a no-op, as HashType is a TrieHash in this context.
+    pub const fn into_triehash(self) -> Self {
+        self
+    }
 }
 
 impl Serialize for TrieHash {

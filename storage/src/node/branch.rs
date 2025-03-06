@@ -3,22 +3,20 @@
 
 use serde::ser::SerializeStruct as _;
 use serde::{Deserialize, Serialize};
-use sha2::Digest as _;
-use sha3::Keccak256;
 use smallvec::SmallVec;
 
-use crate::{LeafNode, LinearAddress, Node, Path, TrieHash};
-use std::fmt::{Debug, Display, Error as FmtError, Formatter};
-use std::ops::Deref as _;
+use crate::{LeafNode, LinearAddress, Node, Path};
+use std::fmt::{Debug, Formatter};
 
 /// The type of a hash. For ethereum compatible hashes, this might be a RLP encoded
 /// value if it's small enough to fit in less than 32 bytes. For merkledb compatible
 /// hashes, it's always a TrieHash.
 #[cfg(feature = "ethhash")]
-pub type HashType = HashOrRlp;
-#[cfg(not(feature = "ethhash"))]
-pub type HashType = TrieHash;
+pub type HashType = ethhash::HashOrRlp;
 
+#[cfg(not(feature = "ethhash"))]
+/// The type of a hash. For non-ethereum compatible hashes, this is always a TrieHash.
+pub type HashType = crate::TrieHash;
 
 #[derive(PartialEq, Eq, Clone, Debug)]
 #[repr(C)]
@@ -32,77 +30,90 @@ pub enum Child {
 }
 
 #[cfg(feature = "ethhash")]
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum HashOrRlp {
-    Hash(TrieHash),
-    // TODO: this slice is never larger than 32 bytes so smallvec is probably not our best container
-    // the length is stored in a `usize` but it could be in a `u8` and it will never overflow
-    Rlp(SmallVec::<[u8; 32]>),
-}
+mod ethhash {
+    use std::{fmt::{Display, Formatter}, ops::Deref as _};
+    use sha2::Digest as _;
+    use sha3::Keccak256;
+    use serde::{Serialize, Deserialize};
+    use smallvec::SmallVec;
 
-impl HashOrRlp {
-    pub fn as_slice(&self) -> &[u8] {
-        self.deref()
+    use crate::TrieHash;
+
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    pub enum HashOrRlp {
+        Hash(TrieHash),
+        // TODO: this slice is never larger than 32 bytes so smallvec is probably not our best container
+        // the length is stored in a `usize` but it could be in a `u8` and it will never overflow
+        Rlp(SmallVec<[u8; 32]>),
     }
-}
 
-impl From<HashOrRlp> for TrieHash {
-    fn from(val: HashOrRlp) -> Self {
-        match val {
-            HashOrRlp::Hash(h) => h,
-            HashOrRlp::Rlp(r) => Keccak256::digest(&r).into(),
+    impl HashOrRlp {
+        pub fn as_slice(&self) -> &[u8] {
+            self.deref()
+        }
+
+        pub(crate) fn into_triehash(self) -> TrieHash {
+            self.into()
         }
     }
-}
 
-impl From<TrieHash> for HashOrRlp {
-    fn from(val: TrieHash) -> Self {
-        HashOrRlp::Hash(val)
-    }
-}
-
-impl From<[u8; 32]> for HashOrRlp {
-    fn from(value: [u8; 32]) -> Self {
-        HashOrRlp::Hash(TrieHash::into(value.into()))
-    }
-}
-
-
-impl AsRef<[u8]> for HashOrRlp {
-    fn as_ref(&self) -> &[u8] {
-        // TODO: Use deref() here?
-        match self {
-            HashOrRlp::Hash(h) => h.as_ref(),
-            HashOrRlp::Rlp(r) => r.as_ref(),
-        }
-    }
-}
-
-impl std::ops::Deref for HashOrRlp {
-    type Target = [u8];
-    fn deref(&self) -> &Self::Target {
-        match self {
-            HashOrRlp::Hash(h) => h.deref(),
-            HashOrRlp::Rlp(r) => r.deref(),
-        }
-    }
-}
-
-impl Display for HashOrRlp {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), FmtError> {
-        match self {
-            HashOrRlp::Hash(h) => write!(f, "{}", h),
-            HashOrRlp::Rlp(r) => {
-                let width = f.precision().unwrap_or_default();
-                write!(f, "{:.*}", width, hex::encode(r))
+    impl From<HashOrRlp> for TrieHash {
+        fn from(val: HashOrRlp) -> Self {
+            match val {
+                HashOrRlp::Hash(h) => h,
+                HashOrRlp::Rlp(r) => Keccak256::digest(&r).into(),
             }
         }
     }
-}
 
-impl Default for HashOrRlp {
-    fn default() -> Self {
-        HashOrRlp::Hash(TrieHash::default())
+    impl From<TrieHash> for HashOrRlp {
+        fn from(val: TrieHash) -> Self {
+            HashOrRlp::Hash(val)
+        }
+    }
+
+    impl From<[u8; 32]> for HashOrRlp {
+        fn from(value: [u8; 32]) -> Self {
+            HashOrRlp::Hash(TrieHash::into(value.into()))
+        }
+    }
+
+    impl AsRef<[u8]> for HashOrRlp {
+        fn as_ref(&self) -> &[u8] {
+            // TODO: Use deref() here?
+            match self {
+                HashOrRlp::Hash(h) => h.as_ref(),
+                HashOrRlp::Rlp(r) => r.as_ref(),
+            }
+        }
+    }
+
+    impl std::ops::Deref for HashOrRlp {
+        type Target = [u8];
+        fn deref(&self) -> &Self::Target {
+            match self {
+                HashOrRlp::Hash(h) => h.deref(),
+                HashOrRlp::Rlp(r) => r.deref(),
+            }
+        }
+    }
+
+    impl Display for HashOrRlp {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            match self {
+                HashOrRlp::Hash(h) => write!(f, "{}", h),
+                HashOrRlp::Rlp(r) => {
+                    let width = f.precision().unwrap_or_default();
+                    write!(f, "{:.*}", width, hex::encode(r))
+                }
+            }
+        }
+    }
+
+    impl Default for HashOrRlp {
+        fn default() -> Self {
+            HashOrRlp::Hash(TrieHash::default())
+        }
     }
 }
 
@@ -178,7 +189,7 @@ impl<'de> Deserialize<'de> for BranchNode {
 }
 
 impl Debug for BranchNode {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), FmtError> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result<> {
         write!(f, "[BranchNode")?;
         write!(f, r#" path="{:?}""#, self.partial_path)?;
 
