@@ -6,6 +6,7 @@
 use std::iter::once;
 
 use crate::{hashednode::HasUpdate, logger::trace, HashType, Hashable, Preimage, ValueDigest};
+use bitfield::bitfield;
 use sha3::{Digest, Keccak256};
 use smallvec::SmallVec;
 
@@ -29,16 +30,42 @@ impl HasUpdate for Keccak256 {
 // CCCC is the first nibble if B is 1, otherwise it is all 0s
 
 fn nibbles_to_eth_compact<T: AsRef<[u8]>>(nibbles: T, is_leaf: bool) -> SmallVec<[u8; 32]> {
-    let mut nibbles = nibbles.as_ref();
-    let mut first_byte = if is_leaf { 0x20 } else { 0x00 };
-
-    if nibbles.len() & 1 == 1 {
-        first_byte |= (1 << 4) | nibbles[0];
-        nibbles = &nibbles[1..];
+    // This is a bitfield that represents the first byte of the output, documented above
+    bitfield! {
+        struct CompactFirstByte(u8);
+        impl Debug;
+        impl new;
+        u8;
+        is_leaf, set_is_leaf: 5;
+        odd_nibbles, set_odd_nibbles: 4;
+        low_nibble, set_low_nibble: 3, 0;
     }
-    debug_assert!(nibbles.len() % 2 == 0);
-    once(first_byte)
-        .chain(nibbles.chunks(2).map(|chunk| (chunk[0] << 4) | chunk[1]))
+
+    let nibbles = nibbles.as_ref();
+
+    // nibble_pairs points to the first nibble that will be combined with the next nibble
+    // so we skip the first byte if there's an odd length and set the odd_nibbles bit to true
+    let (nibble_pairs, first_byte) = if nibbles.len() & 1 == 1 {
+        let low_nibble = nibbles[0];
+        debug_assert!(low_nibble < 16);
+        (
+            &nibbles[1..],
+            CompactFirstByte::new(is_leaf, true, low_nibble),
+        )
+    } else {
+        (nibbles, CompactFirstByte::new(is_leaf, false, 0))
+    };
+
+    // at this point, we can be sure that nibble_pairs has an even length
+    debug_assert!(nibble_pairs.len() % 2 == 0);
+
+    // now assemble everything: the first byte, and the nibble pairs compacted back together
+    once(first_byte.0)
+        .chain(
+            nibble_pairs
+                .chunks(2)
+                .map(|chunk| (chunk[0] << 4) | chunk[1]),
+        )
         .collect()
 }
 

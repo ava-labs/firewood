@@ -95,7 +95,7 @@ mod ethhash {
         type Target = [u8];
         fn deref(&self) -> &Self::Target {
             match self {
-                HashOrRlp::Hash(h) => h.deref(),
+                HashOrRlp::Hash(h) => h,
                 HashOrRlp::Rlp(r) => r.deref(),
             }
         }
