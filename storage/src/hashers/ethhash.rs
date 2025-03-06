@@ -5,10 +5,9 @@
 
 use std::iter::once;
 
+use crate::{hashednode::HasUpdate, logger::trace, HashType, Hashable, Preimage, ValueDigest};
 use sha3::{Digest, Keccak256};
 use smallvec::SmallVec;
-
-use crate::{hashednode::HasUpdate, HashType, Hashable, Preimage, ValueDigest};
 
 use rlp::RlpStream;
 
@@ -18,7 +17,7 @@ impl HasUpdate for Keccak256 {
     }
 }
 
-// Takes a set of mostly nibbles and converts them to a set of bytes that we can hash
+// Takes a set of nibbles and converts them to a set of bytes that we can hash
 // The input consists of nibbles, but there may be an invalid nibble at the end of 0x10
 // which indicates that we need to set bit 5 of the first output byte
 // The input may also have an odd number of nibbles, in which case the first output byte
@@ -29,16 +28,17 @@ impl HasUpdate for Keccak256 {
 // B is 1 if the input had an odd number of nibbles
 // CCCC is the first nibble if B is 1, otherwise it is all 0s
 
-fn hex_to_compact<T: AsRef<[u8]>>(hex: T, is_leaf: bool) -> SmallVec<[u8; 32]> {
-    let mut hex = hex.as_ref();
+fn nibbles_to_eth_compact<T: AsRef<[u8]>>(nibbles: T, is_leaf: bool) -> SmallVec<[u8; 32]> {
+    let mut nibbles = nibbles.as_ref();
     let mut first_byte = if is_leaf { 0x20 } else { 0x00 };
 
-    if hex.len() & 1 == 1 {
-        first_byte |= (1 << 4) | hex[0];
-        hex = &hex[1..];
+    if nibbles.len() & 1 == 1 {
+        first_byte |= (1 << 4) | nibbles[0];
+        nibbles = &nibbles[1..];
     }
+    debug_assert!(nibbles.len() % 2 == 0);
     once(first_byte)
-        .chain(hex.chunks(2).map(|chunk| (chunk[0] << 4) | chunk[1]))
+        .chain(nibbles.chunks(2).map(|chunk| (chunk[0] << 4) | chunk[1]))
         .collect()
 }
 
@@ -57,19 +57,28 @@ impl<T: Hashable> Preimage for T {
 
     fn write(&self, buf: &mut impl HasUpdate) {
         if self.children().size_hint().1.unwrap_or(1) == 0 {
+            // since there are no children, this must be a leaf
+            // we append two items, the partial_path, encoded, and the value
+            // note that leaves must always have a value, so we know there
+            // will be 2 items
             let mut rlp = RlpStream::new_list(2);
 
-            // TODO: if self.partial_path() > 0 ... insert extension node?
-
-            rlp.append(&&*hex_to_compact(self.partial_path().collect::<Vec<_>>(), true));
+            rlp.append(&&*nibbles_to_eth_compact(
+                self.partial_path().collect::<Box<_>>(),
+                true,
+            ));
             match self.value_digest().expect("must have a value") {
                 ValueDigest::Value(bytes) => rlp.append(&bytes),
                 ValueDigest::Hash(hash) => rlp.append(&hash),
             };
             let bytes = rlp.out();
-            eprintln!("serialized leaf-bytes: {:02X?}", hex::encode(&bytes));
+            if crate::logger::trace_enabled() {
+                trace!("serialized leaf-rlp: {:?}", hex::encode(&bytes));
+            }
             buf.update(&bytes);
         } else {
+            // for a branch, there are always 16 children and a value
+            // some of these are not present, which we encode as RLP empty_data
             let mut rlp = RlpStream::new_list(17);
             let mut child_iter = self.children().peekable();
             for index in 0..=15 {
@@ -94,16 +103,22 @@ impl<T: Hashable> Preimage for T {
                 rlp.append_empty_data();
             }
             let bytes = rlp.out();
-            eprintln!("pass 1 bytes {:02X?}", hex::encode(&bytes));
+            if crate::logger::trace_enabled() {
+                trace!("pass 1 bytes {:02X?}", hex::encode(&bytes));
+            }
 
             let partial_path = self.partial_path().collect::<Box<_>>();
             if partial_path.is_empty() {
-                eprintln!("pass 2=bytes {:02X?}", hex::encode(&bytes));
+                if crate::logger::trace_enabled() {
+                    trace!("pass 2=bytes {:02X?}", hex::encode(&bytes));
+                }
                 buf.update(bytes);
             } else {
                 let mut final_bytes = RlpStream::new_list(2);
-                final_bytes.append(&&*hex_to_compact(partial_path, false));
-                
+                final_bytes.append(&&*nibbles_to_eth_compact(partial_path, false));
+
+                // if the RLP is short enough, we can use it as-is, otherwise we hash it
+                // to make the maximum length 32 bytes
                 if bytes.len() > 31 {
                     let hashed_bytes = Keccak256::digest(bytes);
                     final_bytes.append(&hashed_bytes.as_slice());
@@ -111,7 +126,9 @@ impl<T: Hashable> Preimage for T {
                     final_bytes.append(&bytes);
                 }
                 let final_bytes = final_bytes.out();
-                eprintln!("pass 2 bytes {:02X?}", hex::encode(&final_bytes));
+                if crate::logger::trace_enabled() {
+                    trace!("pass 2 bytes {:02X?}", hex::encode(&final_bytes));
+                }
                 buf.update(final_bytes);
             }
         }
@@ -129,6 +146,9 @@ mod test {
     #[test_case(&[15, 1, 12, 11, 8], true, &[0x3f, 0x1c, 0xb8])]
     #[test_case(&[0, 15, 1, 12, 11, 8], true, &[0x20, 0x0f, 0x1c, 0xb8])]
     fn test_hex_to_compact(hex: &[u8], has_value: bool, expected_compact: &[u8]) {
-        assert_eq!(&*super::hex_to_compact(hex, has_value), expected_compact);
+        assert_eq!(
+            &*super::nibbles_to_eth_compact(hex, has_value),
+            expected_compact
+        );
     }
 }

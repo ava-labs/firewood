@@ -31,11 +31,14 @@ pub enum Child {
 
 #[cfg(feature = "ethhash")]
 mod ethhash {
-    use std::{fmt::{Display, Formatter}, ops::Deref as _};
+    use serde::{Deserialize, Serialize};
     use sha2::Digest as _;
     use sha3::Keccak256;
-    use serde::{Serialize, Deserialize};
     use smallvec::SmallVec;
+    use std::{
+        fmt::{Display, Formatter},
+        ops::Deref as _,
+    };
 
     use crate::TrieHash;
 
@@ -189,7 +192,7 @@ impl<'de> Deserialize<'de> for BranchNode {
 }
 
 impl Debug for BranchNode {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result<> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "[BranchNode")?;
         write!(f, r#" path="{:?}""#, self.partial_path)?;
 

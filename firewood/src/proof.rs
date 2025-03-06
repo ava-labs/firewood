@@ -4,7 +4,7 @@
 use crate::merkle::MerkleError;
 use sha2::{Digest, Sha256};
 use storage::{
-    BranchNode, HashType, Hashable, NibblesIterator, PathIterItem, Preimage, TrieHash, ValueDigest
+    BranchNode, HashType, Hashable, NibblesIterator, PathIterItem, Preimage, TrieHash, ValueDigest,
 };
 use thiserror::Error;
 

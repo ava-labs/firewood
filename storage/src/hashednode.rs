@@ -1,11 +1,14 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::{iter::{self}, ops::Deref};
+use std::{
+    iter::{self},
+    ops::Deref,
+};
 
 use smallvec::SmallVec;
 
-use crate::{BranchNode, Child, LeafNode, Node, Path, HashType};
+use crate::{BranchNode, Child, HashType, LeafNode, Node, Path};
 
 /// Returns the hash of `node`, which is at the given `path_prefix`.
 pub fn hash_node(node: &Node, path_prefix: &Path) -> HashType {

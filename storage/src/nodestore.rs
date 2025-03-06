@@ -61,7 +61,9 @@ use std::sync::Arc;
 
 use crate::hashednode::hash_node;
 use crate::node::{ByteCounter, Node};
-use crate::{CacheReadStrategy, Child, FileBacked, HashType, Path, ReadableStorage, SharedNode, TrieHash};
+use crate::{
+    CacheReadStrategy, Child, FileBacked, HashType, Path, ReadableStorage, SharedNode, TrieHash,
+};
 
 use super::linear::WritableStorage;
 
