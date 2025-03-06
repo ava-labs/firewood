@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::fmt::{self, Debug};
+use std::fmt::{self, Debug, Display, Formatter};
 
 use serde::de::Visitor;
 use serde::{Deserialize, Serialize};
@@ -38,6 +38,12 @@ impl Debug for TrieHash {
         write!(f, "{:.*}", width, hex::encode(self.0))
     }
 }
+impl Display for TrieHash {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
+        let width = f.precision().unwrap_or_default();
+        write!(f, "{:.*}", width, hex::encode(self.0))
+    }
+}
 
 impl From<[u8; 32]> for TrieHash {
     fn from(value: [u8; Self::len()]) -> Self {
@@ -55,6 +61,12 @@ impl TrieHash {
     /// Return the length of a TrieHash
     pub(crate) const fn len() -> usize {
         std::mem::size_of::<TrieHash>()
+    }
+
+    /// Some code needs a TrieHash even though it only has a HashType.
+    /// This function is a no-op, as HashType is a TrieHash in this context.
+    pub const fn into_triehash(self) -> Self {
+        self
     }
 }
 

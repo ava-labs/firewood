@@ -15,9 +15,9 @@ use std::iter::once;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use storage::{
-    BranchNode, Child, Hashable, HashedNodeReader, ImmutableProposal, LeafNode, LinearAddress,
-    MutableProposal, NibblesIterator, Node, NodeStore, Path, ReadableStorage, SharedNode, TrieHash,
-    TrieReader, ValueDigest,
+    BranchNode, Child, HashType, Hashable, HashedNodeReader, ImmutableProposal, LeafNode,
+    LinearAddress, MutableProposal, NibblesIterator, Node, NodeStore, Path, ReadableStorage,
+    SharedNode, TrieReader, ValueDigest,
 };
 
 /// Keys are boxed u8 slices
@@ -171,7 +171,7 @@ impl<T: TrieReader> Merkle<T> {
             // No nodes, even the root, are before `key`.
             // The root alone proves the non-existence of `key`.
             // TODO reduce duplicate code with ProofNode::from<PathIterItem>
-            let mut child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] =
+            let mut child_hashes: [Option<HashType>; BranchNode::MAX_CHILDREN] =
                 [const { None }; BranchNode::MAX_CHILDREN];
             if let Some(branch) = root.as_branch() {
                 // TODO danlaine: can we avoid indexing?
@@ -333,7 +333,7 @@ impl<T: HashedNodeReader> Merkle<T> {
     pub(crate) fn dump_node(
         &self,
         addr: LinearAddress,
-        hash: Option<&TrieHash>,
+        hash: Option<&HashType>,
         seen: &mut HashSet<LinearAddress>,
         writer: &mut dyn Write,
     ) -> Result<(), Error> {
@@ -383,7 +383,8 @@ impl<T: HashedNodeReader> Merkle<T> {
         if let Some((root_addr, root_hash)) = self.nodestore.root_address_and_hash()? {
             writeln!(result, " root -> {root_addr}").map_err(Error::other)?;
             let mut seen = HashSet::new();
-            self.dump_node(root_addr, Some(&root_hash), &mut seen, &mut result)?;
+            #[allow(clippy::useless_conversion)]
+            self.dump_node(root_addr, Some(&root_hash.into()), &mut seen, &mut result)?;
         }
         write!(result, "}}").map_err(Error::other)?;
 
@@ -1023,7 +1024,7 @@ mod tests {
     use super::*;
     use rand::rngs::StdRng;
     use rand::{rng, Rng, SeedableRng};
-    use storage::{MemStore, MutableProposal, NodeStore, RootReader};
+    use storage::{MemStore, MutableProposal, NodeStore, RootReader, TrieHash};
     use test_case::test_case;
 
     // Returns n random key-value pairs.
@@ -1684,7 +1685,7 @@ mod tests {
     ) -> Result<Merkle<NodeStore<MutableProposal, MemStore>>, Error> {
         let nodestore = NodeStore::new_empty_proposal(MemStore::new(vec![]).into());
         let mut merkle = Merkle::from(nodestore);
-        for (k, v) in items.iter() {
+        for (k, v) in items {
             merkle.insert(k.as_ref(), Box::from(v.as_ref()))?;
         }
 
@@ -1707,6 +1708,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(not(feature = "ethhash"))]
     #[test_case(vec![], None; "empty trie")]
     #[test_case(vec![(&[0],&[0])], Some("073615413d814b23383fc2c8d8af13abfffcb371b654b98dbf47dd74b1e4d1b9"); "root")]
     #[test_case(vec![(&[0,1],&[0,1])], Some("28e67ae4054c8cdf3506567aa43f122224fe65ef1ab3e7b7899f75448a69a6fd"); "root with partial path")]
@@ -1735,6 +1737,49 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "ethhash")]
+    mod ethhasher {
+        use ethereum_types::H256;
+        use hash_db::Hasher;
+        use plain_hasher::PlainHasher;
+        use sha3::{Digest, Keccak256};
+
+        #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
+        pub struct KeccakHasher;
+
+        impl Hasher for KeccakHasher {
+            type Out = H256;
+            type StdHasher = PlainHasher;
+            const LENGTH: usize = 32;
+
+            #[inline]
+            fn hash(x: &[u8]) -> Self::Out {
+                let mut hasher = Keccak256::new();
+                hasher.update(x);
+                let result = hasher.finalize();
+                H256::from_slice(result.as_slice())
+            }
+        }
+    }
+
+    #[cfg(feature = "ethhash")]
+    #[test_case(&[("doe", "reindeer")])]
+    #[test_case(&[("doe", "reindeer"),("dog", "puppy"),("dogglesworth", "cat")])]
+    #[test_case(&[("doe", "reindeer"),("dog", "puppy"),("dogglesworth", "cacatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatt")])]
+    #[test_case(&[("dogglesworth", "cacatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatt")])]
+    fn test_root_hash_eth_compatible<T: AsRef<[u8]> + Clone + Ord>(kvs: &[(T, T)]) {
+        use ethereum_types::H256;
+        use ethhasher::KeccakHasher;
+        use triehash::trie_root;
+
+        let merkle = merkle_build_test(kvs.to_vec()).unwrap().hash();
+        let firewood_hash = merkle.nodestore.root_hash().unwrap().unwrap_or_default();
+        let eth_hash = trie_root::<KeccakHasher, _, _, _>(kvs.to_vec());
+        let firewood_hash = H256::from_slice(firewood_hash.as_ref());
+
+        assert_eq!(firewood_hash, eth_hash);
+    }
+
     #[test]
     fn test_root_hash_fuzz_insertions() -> Result<(), Error> {
         use rand::rngs::StdRng;
@@ -1757,14 +1802,16 @@ mod tests {
             key
         };
 
-        for _ in 0..10 {
+        for _ in 0..100 {
             let mut items = Vec::new();
 
-            for _ in 0..10 {
-                let val: Vec<u8> = (0..8).map(|_| rng.borrow_mut().random()).collect();
+            for _ in 0..100 {
+                let val: Vec<u8> = (0..256).map(|_| rng.borrow_mut().random()).collect();
                 items.push((keygen(), val));
             }
 
+            #[cfg(feature = "ethhash")]
+            test_root_hash_eth_compatible(&items);
             merkle_build_test(items)?;
         }
 
