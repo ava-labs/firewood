@@ -31,8 +31,8 @@ func TestMain(m *testing.M) {
 
 	if !hasCgoCheck {
 		debug = append(debug, "cgocheck=1")
+		os.Setenv("GODEBUG", strings.Join(debug, ","))
 	}
-	os.Setenv("GODEBUG", strings.Join(debug, ","))
 
 	os.Exit(m.Run())
 }
@@ -155,11 +155,11 @@ func TestRangeDelete(t *testing.T) {
 		got, err := db.Get(op.Key)
 		require.NoError(t, err)
 
-		var want []byte
-		if !bytes.HasPrefix(op.Key, keyForTest(deletePrefix)) {
-			want = op.Value
+		if deleted := bytes.HasPrefix(op.Key, keyForTest(deletePrefix)); deleted {
+			assert.Empty(t, err, got)
+		} else {
+			assert.Equal(t, op.Value, got)
 		}
-		assert.Equal(t, want, got)
 	}
 }
 
@@ -170,5 +170,5 @@ func TestInvariants(t *testing.T) {
 
 	got, err := db.Get([]byte("non-existent"))
 	require.NoError(t, err)
-	assert.Nilf(t, got, "%T.Get([non-existent key])", db)
+	assert.Emptyf(t, got, "%T.Get([non-existent key])", db)
 }

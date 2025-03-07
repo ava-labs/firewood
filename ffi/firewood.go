@@ -3,6 +3,7 @@
 // [Firewood]: https://github.com/ava-labs/firewood
 package firewood
 
+// // Note that -lm is required on Linux but not on Mac.
 // #cgo LDFLAGS: -L${SRCDIR}/../target/release -L/usr/local/lib -lfirewood_ffi -lm
 // #include "firewood.h"
 import "C"
@@ -135,18 +136,8 @@ func extractBytesThenFree(v *C.struct_Value) []byte {
 func (db *Database) Get(key []byte) ([]byte, error) {
 	values, cleanup := newValueFactory()
 	defer cleanup()
-
 	val := C.fwd_get(db.handle, values.from(key))
-	switch buf := extractBytesThenFree(&val); len(buf) {
-	case 0:
-		// TODO(arr4n): discuss with Firewood team if this is necessary.
-		// Typically an Go API shouldn't differentiate between empty and
-		// nil-valued slices. See:
-		// https://google.github.io/styleguide/go/decisions#nil-slices:~:text=Do%20not%20create%20APIs%20that%20force%20their%20clients%20to%20make%20distinctions%20between%20nil%20and%20the%20empty%20slice.
-		return nil, nil
-	default:
-		return buf, nil
-	}
+	return extractBytesThenFree(&val), nil
 }
 
 // Root returns the current root hash of the trie.
