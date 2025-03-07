@@ -31,7 +31,10 @@ func TestMain(m *testing.M) {
 
 	if !hasCgoCheck {
 		debug = append(debug, "cgocheck=1")
-		os.Setenv("GODEBUG", strings.Join(debug, ","))
+		if err := os.Setenv("GODEBUG", strings.Join(debug, ",")); err != nil {
+			fmt.Fprintf(os.Stderr, `os.Setenv("GODEBUG", ...) error %v`, err)
+			os.Exit(1)
+		}
 	}
 
 	os.Exit(m.Run())
