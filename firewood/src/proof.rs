@@ -82,9 +82,7 @@ impl Hashable for ProofNode {
     }
 
     fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
-        todo!();
-        #[allow(unreachable_code)]
-        std::iter::empty()
+        self.key.as_ref().iter().copied()
     }
 
     fn value_digest(&self) -> Option<ValueDigest<&[u8]>> {

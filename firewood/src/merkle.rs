@@ -1779,6 +1779,23 @@ mod tests {
 
         assert_eq!(firewood_hash, eth_hash);
     }
+    
+    #[test_case(&[
+        (&[1; 32][..], b"eb0102a000000000000000000000000000000000000000000000000000030303030303038704040404040404"),
+        (&[1; 33][..], b"eb0102a000000000000000000000000000000000000000000000000000030303030303038704040404040404"),
+    ])]
+    fn test_account_hashes<T: AsRef<[u8]> + Clone + Ord>(kvs: &[(T, T)]) {
+        let new = kvs.iter().map(|(k, v)| {
+            let key = k.clone();
+            let value = hex::decode(v).unwrap();
+            (key, value)
+        }).collect::<Vec<(T, Vec<u8>)>>();
+        let merkle = merkle_build_test(new).unwrap().hash();
+        let _firewood_hash = merkle.nodestore.root_hash().unwrap().unwrap_or_default();
+
+        assert_eq!(1, 2);
+
+    }
 
     #[test]
     fn test_root_hash_fuzz_insertions() -> Result<(), Error> {
