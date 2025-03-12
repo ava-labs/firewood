@@ -1024,12 +1024,13 @@ mod tests {
     use super::*;
     use rand::rngs::StdRng;
     use rand::{rng, Rng, SeedableRng};
+    use sha2::Digest as _;
     use storage::{MemStore, MutableProposal, NodeStore, RootReader, TrieHash};
     use test_case::test_case;
 
     // Returns n random key-value pairs.
     fn generate_random_kvs(seed: u64, n: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
-        eprintln!("Used seed: {}", seed);
+        eprintln!("Seed {seed}: to rerun with this data, export FIREWOOD_TEST_SEED={seed}");
 
         let mut rng = StdRng::seed_from_u64(seed);
 
@@ -1779,22 +1780,113 @@ mod tests {
 
         assert_eq!(firewood_hash, eth_hash);
     }
-    
+
+    // account: 0x0000000000000000000000000000000000000002
+    // key: d52688a8f926c816ca1e079067caba944f158e764817b83fc43594370ca9cf62
+    // value: f844802ca00000000000000000000000000000000000000000000000000000000000000000a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470
+    // ....   f844802ca0c33452a49b253420076b3e5a56a97717351e52c267dc01a1d1a17c48dad0bdbba0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470
+
+    // storage key:
+    // d52688a8f926c816ca1e079067caba944f158e764817b83fc43594370ca9cf62 48078cfed56339ea54962e72c37c7f588fc4f8e5bc173827ba75cb10a63a96a5
+
+    // value: a00200000000000000000000000000000000000000000000000000000000000000
+
+    // expected rlp encoding for the account:
+    // f8                                                                            44802ca0c33452a49b253420076b3e5a56a97717351e52c267dc01a1d1a17c48dad0bdbba0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470
+    // f86aa100d52688a8f926c816ca1e079067caba944f158e764817b83fc43594370ca9cf62b846f844802ca0c33452a49b253420076b3e5a56a97717351e52c267dc01a1d1a17c48dad0bdbba0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470
+    //   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    // expected hash of entire tree:
+    // 91336bf4e6756f68e1af0ad092f4a551c52b4a66860dc31adbd736f0acbadaf6
+
+    // new expected replacement hash: 085a6c8a65071150da475eea797dc9ff695888209c97d84a68b5d957ea13328a
+    // empty expected replacement hash: 56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421
+
+    #[test_case(
+            "0000000000000000000000000000000000000002",
+            "f844802ca00000000000000000000000000000000000000000000000000000000000000000a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+            &[],
+            "c00ca9b8e6a74b03f6b1ae2db4a65ead348e61b74b339fe4b117e860d79c7821"
+    )]
+    #[test_case(
+            "0000000000000000000000000000000000000002",
+            "f844802ca00000000000000000000000000000000000000000000000000000000000000000a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+            &[
+                    ("48078cfed56339ea54962e72c37c7f588fc4f8e5bc173827ba75cb10a63a96a5", "a00200000000000000000000000000000000000000000000000000000000000000")
+            ],
+            "91336bf4e6756f68e1af0ad092f4a551c52b4a66860dc31adbd736f0acbadaf6"
+    )]
+    #[test_case(
+            "0000000000000000000000000000000000000002",
+            "f844802ca00000000000000000000000000000000000000000000000000000000000000000a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+            &[
+                    ("48078cfed56339ea54962e72c37c7f588fc4f8e5bc173827ba75cb10a63a96a5", "a00200000000000000000000000000000000000000000000000000000000000000"),
+                    ("0e81f83a84964b811dd1b8328262a9f57e6bc3e5e7eb53627d10437c73c4b8da", "a02800000000000000000000000000000000000000000000000000000000000000"),
+            ],
+            "c267104830880c966c2cc8c669659e4bfaf3126558dbbd6216123b457944001b"
+    )]
+    fn test_eth_compatible_accounts(
+        account: &str,
+        account_value: &str,
+        key_suffixes_and_values: &[(&str, &str)],
+        expected_root: &str,
+    ) {
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("trace"))
+            .is_test(true)
+            .try_init()
+            .ok();
+
+        let account = make_box(account);
+        let expected_key_hash = sha3::Keccak256::digest(&account);
+
+        let items = once((
+            Box::from(expected_key_hash.as_slice()),
+            make_box(account_value),
+        ))
+        .chain(key_suffixes_and_values.iter().map(|(key_suffix, value)| {
+            let key = expected_key_hash
+                .iter()
+                .copied()
+                .chain(make_box(key_suffix).iter().copied())
+                .collect();
+            let value = make_box(value);
+            (key, value)
+        }))
+        .collect::<Vec<(Box<_>, Box<_>)>>();
+
+        let merkle = merkle_build_test(items).unwrap().hash();
+        let firewood_hash = merkle.nodestore.root_hash().unwrap();
+
+        eprintln!("firewood_hash: {:?}", firewood_hash.clone().unwrap());
+
+        assert_eq!(
+            firewood_hash,
+            TrieHash::try_from(&*make_box(expected_root)).ok()
+        );
+    }
+
+    // helper method to convert a string into a boxed slice
+    fn make_box(hex_str: &str) -> Box<[u8]> {
+        hex::decode(hex_str).unwrap().into_boxed_slice()
+    }
+
     #[test_case(&[
         (&[1; 32][..], b"eb0102a000000000000000000000000000000000000000000000000000030303030303038704040404040404"),
         (&[1; 33][..], b"eb0102a000000000000000000000000000000000000000000000000000030303030303038704040404040404"),
     ])]
     fn test_account_hashes<T: AsRef<[u8]> + Clone + Ord>(kvs: &[(T, T)]) {
-        let new = kvs.iter().map(|(k, v)| {
-            let key = k.clone();
-            let value = hex::decode(v).unwrap();
-            (key, value)
-        }).collect::<Vec<(T, Vec<u8>)>>();
+        let new = kvs
+            .iter()
+            .map(|(k, v)| {
+                let key = k.clone();
+                let value = hex::decode(v).unwrap();
+                (key, value)
+            })
+            .collect::<Vec<(T, Vec<u8>)>>();
         let merkle = merkle_build_test(new).unwrap().hash();
-        let _firewood_hash = merkle.nodestore.root_hash().unwrap().unwrap_or_default();
+        let firewood_hash = merkle.nodestore.root_hash().unwrap().unwrap_or_default();
 
         assert_eq!(1, 2);
-
     }
 
     #[test]

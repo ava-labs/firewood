@@ -5,8 +5,13 @@
 
 use std::iter::once;
 
-use crate::{hashednode::HasUpdate, logger::trace, HashType, Hashable, Preimage, TrieHash, ValueDigest};
+use crate::{
+    hashednode::HasUpdate,
+    logger::{trace, trace_enabled},
+    HashType, Hashable, Preimage, TrieHash, ValueDigest,
+};
 use bitfield::bitfield;
+use bytes::BytesMut;
 use sha3::{Digest, Keccak256};
 use smallvec::SmallVec;
 
@@ -76,10 +81,16 @@ impl<T: Hashable> Preimage for T {
         let mut collector = SmallVec::with_capacity(32);
         self.write(&mut collector);
 
-        if self.key().size_hint().0 == 64 {
-            eprintln!("SIZE WAS 64 {}", hex::encode(&collector));
-        } else {
-            eprintln!("SIZE WAS {1} {0}", hex::encode(&collector), self.key().size_hint().0);
+        if trace_enabled() {
+            if self.key().size_hint().0 == 64 {
+                trace!("SIZE WAS 64 {}", hex::encode(&collector));
+            } else {
+                trace!(
+                    "SIZE WAS {1} {0}",
+                    hex::encode(&collector),
+                    self.key().size_hint().0
+                );
+            }
         }
 
         if collector.len() >= 32 {
@@ -90,54 +101,60 @@ impl<T: Hashable> Preimage for T {
     }
 
     fn write(&self, buf: &mut impl HasUpdate) {
-        // // TODO: 64 should depend on branch factor
-        // if self.key().size_hint().0 == 64 {
-        //     let mut rlp = RlpStream::new_list(2);
-
-        //     rlp.append(&&*nibbles_to_eth_compact(
-        //         self.partial_path().collect::<Box<_>>(),
-        //         true,
-        //     ));
-        //     match self.value_digest().expect("must have a value") {
-        //         ValueDigest::Value(bytes) => { 
-        //             // do things to bytes
-        //             // TODO: Handle corruption
-        //             let list = rlp::decode_list::<Vec<u8>>(bytes);
-        //             eprintln!("list length was {}", list.len());
-        //             rlp.append(&bytes);
-        //         },
-        //         ValueDigest::Hash(_hash) => todo!(), // only for hashes
-        //     };
-        // }
         let is_account = self.key().size_hint().0 == 64;
 
-        println!("is_account: {is_account}");
+        trace!("is_account: {is_account}");
 
-        let children = self.children().clone().count();
+        let children = self.children().count();
 
         if children == 0 {
             // since there are no children, this must be a leaf
             // we append two items, the partial_path, encoded, and the value
             // note that leaves must always have a value, so we know there
             // will be 2 items
+
             let mut rlp = RlpStream::new_list(2);
 
             rlp.append(&&*nibbles_to_eth_compact(
                 self.partial_path().collect::<Box<_>>(),
                 true,
             ));
-            match self.value_digest().expect("must have a value") {
-                ValueDigest::Value(bytes) => rlp.append(&bytes),
-                ValueDigest::Hash(hash) => rlp.append(&hash),
-            };
+
+            if is_account {
+                // we are a leaf that is at depth 32
+                match self.value_digest() {
+                    Some(ValueDigest::Value(bytes)) => {
+                        let new_hash = Keccak256::digest(rlp::NULL_RLP).as_slice().to_vec();
+                        let bytes_mut = BytesMut::from(bytes);
+                        if let Some(result) = replace_hash(bytes_mut, new_hash) {
+                            rlp.append(&&*result);
+                        } else {
+                            rlp.append(&bytes);
+                        }
+                    }
+                    Some(ValueDigest::Hash(hash)) => { rlp.append(&hash); },
+                    None => { rlp.append_empty_data(); },
+                };
+            } else {
+                match self.value_digest() {
+                    Some(ValueDigest::Value(bytes)) => rlp.append(&bytes),
+                    Some(ValueDigest::Hash(hash)) => rlp.append(&hash),
+                    None => rlp.append_empty_data(),
+                };
+            }
+
             let bytes = rlp.out();
             if crate::logger::trace_enabled() {
+                trace!(
+                    "partial path {:?}",
+                    hex::encode(self.partial_path().collect::<Box<_>>())
+                );
                 trace!("serialized leaf-rlp: {:?}", hex::encode(&bytes));
             }
             buf.update(&bytes);
         } else {
             // for a branch, there are always 16 children and a value
-            // some of these are not present, which we encode as RLP empty_data
+            // Child::None we encode as RLP empty_data (0x80)
             let mut rlp = RlpStream::new_list(17);
             let mut child_iter = self.children().peekable();
             for index in 0..=15 {
@@ -175,13 +192,11 @@ impl<T: Hashable> Preimage for T {
 
             let updated_bytes = if is_account {
                 // need to get the value again
-                if let ValueDigest::Value(rlp_encoded_bytes) = self.value_digest().expect("must have a value") {
+                if let ValueDigest::Value(rlp_encoded_bytes) =
+                    self.value_digest().expect("must have a value")
+                {
                     // rlp_encoded__bytes needs to be decoded
                     // TODO: Handle corruption
-                    let mut list = rlp::decode_list::<Vec<u8>>(rlp_encoded_bytes);
-                    eprintln!("list length was {}", list.len());
-                    let replace = list.get_mut(2).expect("3rd value should exist");
-                    // fix this 0xfd to be ... ?
                     // needs to be the hash of the RLP encoding of the root node that
                     // would have existed here (instead of this account node)
                     // the "root node" is actually this branch node iff there is
@@ -189,6 +204,8 @@ impl<T: Hashable> Preimage for T {
                     // child is actually the root node, so we need the hash of that
                     // child here.
                     let replacement_hash = if children == 1 {
+                        // we need to treat this child like it's a root node, so the partial path is
+                        // actually one longer than it is reported
                         match self.children().next().expect("we know there is one").1 {
                             HashType::Hash(hash) => hash.clone(),
                             HashType::Rlp(rlp_bytes) => {
@@ -205,22 +222,17 @@ impl<T: Hashable> Preimage for T {
                     } else {
                         TrieHash::from(Keccak256::digest(bytes))
                     };
-                    *replace = replacement_hash.to_vec();
+                    trace!("replacement hash {:?}", hex::encode(&replacement_hash));
 
-                    // starting here vvv
-
-                    let mut rlp = RlpStream::new_list(list.len());
-                    for item in list {
-                        rlp.append(&item);
-                    }
-                    let bytes = rlp.out();
-                    eprintln!("updated encoded value {:02X?}", hex::encode(&bytes));
+                    let bytes = replace_hash(rlp_encoded_bytes, replacement_hash).unwrap_or_else(|| BytesMut::from(rlp_encoded_bytes));
+                    trace!("updated encoded value {:02X?}", hex::encode(&bytes));
                     bytes
                 } else {
-                    unreachable!("must have a value");
+                    // treat like non-account since it didn't have a value
+                    bytes.as_ref().into()
                 }
             } else {
-                bytes
+                bytes.as_ref().into()
             };
 
             let partial_path = self.partial_path().collect::<Box<_>>();
@@ -231,10 +243,10 @@ impl<T: Hashable> Preimage for T {
                 buf.update(updated_bytes);
             } else {
                 let mut final_bytes = RlpStream::new_list(2);
-                final_bytes.append(&&*nibbles_to_eth_compact(partial_path, false));
+                final_bytes.append(&&*nibbles_to_eth_compact(partial_path, is_account));
                 // if the RLP is short enough, we can use it as-is, otherwise we hash it
                 // to make the maximum length 32 bytes
-                if updated_bytes.len() > 31 {
+                if updated_bytes.len() > 31 && !is_account {
                     let hashed_bytes = Keccak256::digest(updated_bytes);
                     final_bytes.append(&hashed_bytes.as_slice());
                 } else {
@@ -248,6 +260,26 @@ impl<T: Hashable> Preimage for T {
             }
         }
     }
+}
+
+// TODO: we could be super fancy and just plunk the correct bytes into the existing BytesMut
+fn replace_hash<T: AsRef<[u8]>, U: AsRef<[u8]>>(bytes: T, new_hash: U) -> Option<BytesMut> {
+    // rlp_encoded__bytes needs to be decoded
+    // TODO: Handle corruption
+    trace!("inbound bytes: {}", hex::encode(bytes.as_ref()));
+    let mut list = rlp::decode_list::<Vec<u8>>(bytes.as_ref());
+    trace!("list length was {}", list.len());
+    let replace = list.get_mut(2).expect("3rd value should exist");
+    trace!("replacement hash {:?}", hex::encode(&new_hash));
+    *replace = Vec::from(new_hash.as_ref());
+
+    let mut rlp = RlpStream::new_list(list.len());
+    for item in list {
+        rlp.append(&item);
+    }
+    let bytes = rlp.out();
+    trace!("updated encoded value {:02X?}", hex::encode(&bytes));
+    Some(bytes)
 }
 
 #[cfg(test)]

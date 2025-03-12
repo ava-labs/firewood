@@ -34,13 +34,13 @@ impl AsRef<[u8]> for TrieHash {
 
 impl Debug for TrieHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        let width = f.precision().unwrap_or_default();
+        let width = f.precision().unwrap_or(64);
         write!(f, "{:.*}", width, hex::encode(self.0))
     }
 }
 impl Display for TrieHash {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
-        let width = f.precision().unwrap_or_default();
+        let width = f.precision().unwrap_or(64);
         write!(f, "{:.*}", width, hex::encode(self.0))
     }
 }
@@ -48,6 +48,20 @@ impl Display for TrieHash {
 impl From<[u8; 32]> for TrieHash {
     fn from(value: [u8; Self::len()]) -> Self {
         TrieHash(value.into())
+    }
+}
+
+impl TryFrom<&[u8]> for TrieHash {
+    type Error = &'static str;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        if value.len() == Self::len() {
+            let mut hash = TrieHash::default();
+            hash.0.copy_from_slice(value);
+            Ok(hash)
+        } else {
+            Err("Invalid length")
+        }
     }
 }
 
