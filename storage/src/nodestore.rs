@@ -11,6 +11,7 @@ use metrics::counter;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
+use coarsetime::Instant;
 
 /// The [NodeStore] handles the serialization of nodes and
 /// free space management of nodes in the page store. It lays out the format
@@ -954,6 +955,8 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
     #[fastrace::trace(short_name = true)]
     #[cfg(not(feature = "io-uring"))]
     pub fn flush_nodes(&self) -> Result<(), Error> {
+        let flush_start = Instant::now();
+
         for (addr, (area_size_index, node)) in self.kind.new.iter() {
             let mut stored_area_bytes = Vec::new();
             node.as_bytes(*area_size_index, &mut stored_area_bytes);
@@ -964,6 +967,9 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
         self.storage
             .write_cached_nodes(self.kind.new.iter().map(|(addr, (_, node))| (addr, node)))?;
 
+        let flush_time = flush_start.elapsed().as_millis();
+        counter!("firewood.flush_nodes").increment(flush_time);
+
         Ok(())
     }
 
@@ -972,6 +978,8 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
     #[cfg(feature = "io-uring")]
     pub fn flush_nodes(&self) -> Result<(), Error> {
         const RINGSIZE: usize = FileBacked::RINGSIZE as usize;
+
+        let flush_start = Instant::now();
 
         let mut ring = self.storage.ring.lock().expect("poisoned lock");
         let mut saved_pinned_buffers = vec![(false, std::pin::Pin::new(Box::default())); RINGSIZE];
@@ -1040,6 +1048,9 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
         self.storage
             .write_cached_nodes(self.kind.new.iter().map(|(addr, (_, node))| (addr, node)))?;
         debug_assert!(ring.completion().is_empty());
+
+        let flush_time = flush_start.elapsed().as_millis();
+        counter!("firewood.flush_nodes").increment(flush_time);
 
         Ok(())
     }
