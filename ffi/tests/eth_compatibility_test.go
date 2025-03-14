@@ -3,6 +3,7 @@ package tests
 import (
 	"encoding/binary"
 	"math/big"
+	"math/rand"
 	"path"
 	"testing"
 
@@ -36,28 +37,24 @@ func TestInsert(t *testing.T) {
 		key  common.Hash
 	}
 
-	addrs := make(map[common.Address]struct{})
-	storages := make(map[storageKey]struct{})
+	addrs := make([]common.Address, 0)
+	storages := make([]storageKey, 0)
+
+	rand.Seed(0)
 
 	chooseAddr := func() common.Address {
-		for addr := range addrs {
-			return addr
-		}
-		return common.Address{}
+		return addrs[rand.Intn(len(addrs))]
 	}
 
 	chooseStorage := func() storageKey {
-		for key := range storages {
-			return key
-		}
-		return storageKey{}
+		return storages[rand.Intn(len(storages))]
 	}
 
 	memdb := rawdb.NewMemoryDatabase()
 	tdb := state.NewDatabase(memdb)
 	ethRoot := types.EmptyRootHash
 
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 10000; i++ {
 		tr, err := tdb.OpenTrie(ethRoot)
 		require.NoError(t, err)
 		mergeSet := trie.NewMergedNodeSet()
@@ -79,7 +76,7 @@ func TestInsert(t *testing.T) {
 
 			err = tr.TryUpdateAccount(addr, acc)
 			require.NoError(t, err)
-			addrs[addr] = struct{}{}
+			addrs = append(addrs, addr)
 
 			fwKeys = append(fwKeys, accHash[:])
 			fwVals = append(fwVals, enc)
@@ -114,7 +111,7 @@ func TestInsert(t *testing.T) {
 
 			err = str.TryUpdate(key[:], val[:])
 			require.NoError(t, err)
-			storages[storageKey] = struct{}{}
+			storages = append(storages, storageKey)
 
 			strRoot, set := str.Commit(false)
 			err = mergeSet.Merge(set)
@@ -157,7 +154,11 @@ func TestInsert(t *testing.T) {
 
 		err = tdb.TrieDB().Update(mergeSet)
 		require.NoError(t, err)
-		t.Logf("i: %d, next: %x", i, next)
+		t.Logf("- [1] i: %d, next: %x", i, next)
+
+		//for i, key := range fwKeys {
+		//	t.Logf("key: %x, val: %x", key, fwVals[i])
+		//}
 
 		// update firewood db
 		got, err := db.Update(fwKeys, fwVals)
