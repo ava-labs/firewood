@@ -10,7 +10,7 @@ use std::io::{Error, ErrorKind, Read, Write};
 use std::num::NonZero;
 use std::vec;
 
-mod branch;
+pub mod branch;
 mod leaf;
 pub mod path;
 

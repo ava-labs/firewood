@@ -3,7 +3,7 @@
 
 use sha2::{Digest, Sha256};
 use storage::{
-    BranchNode, Hashable, NibblesIterator, PathIterItem, Preimage, TrieHash, ValueDigest,
+    BranchNode, HashType, Hashable, NibblesIterator, PathIterItem, Preimage, TrieHash, ValueDigest,
 };
 use thiserror::Error;
 
@@ -73,7 +73,7 @@ pub struct ProofNode {
     /// Otherwise, the node's value or the hash of its value.
     pub value_digest: Option<ValueDigest<Box<[u8]>>>,
     /// The hash of each child, or None if the child does not exist.
-    pub child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN],
+    pub child_hashes: [Option<HashType>; BranchNode::MAX_CHILDREN],
 }
 
 impl Hashable for ProofNode {
@@ -81,14 +81,18 @@ impl Hashable for ProofNode {
         self.key.as_ref().iter().copied()
     }
 
+    fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
+        self.key.as_ref().iter().copied()
+    }
+
     fn value_digest(&self) -> Option<ValueDigest<&[u8]>> {
         self.value_digest.as_ref().map(|vd| match vd {
             ValueDigest::Value(v) => ValueDigest::Value(v.as_ref()),
-            ValueDigest::_Hash(h) => ValueDigest::_Hash(h.as_ref()),
+            ValueDigest::Hash(h) => ValueDigest::Hash(h.as_ref()),
         })
     }
 
-    fn children(&self) -> impl Iterator<Item = (usize, &TrieHash)> + Clone {
+    fn children(&self) -> impl Iterator<Item = (usize, &HashType)> + Clone {
         self.child_hashes
             .iter()
             .enumerate()
@@ -98,7 +102,7 @@ impl Hashable for ProofNode {
 
 impl From<PathIterItem> for ProofNode {
     fn from(item: PathIterItem) -> Self {
-        let mut child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] =
+        let mut child_hashes: [Option<HashType>; BranchNode::MAX_CHILDREN] =
             [const { None }; BranchNode::MAX_CHILDREN];
 
         if let Some(branch) = item.node.as_branch() {
@@ -120,7 +124,7 @@ impl From<PathIterItem> for ProofNode {
     }
 }
 
-impl From<&ProofNode> for TrieHash {
+impl From<&ProofNode> for HashType {
     fn from(node: &ProofNode) -> Self {
         node.to_hash()
     }
@@ -161,7 +165,7 @@ impl<T: Hashable> Proof<T> {
                     return Err(ProofError::ValueMismatch);
                 }
             }
-            ValueDigest::_Hash(got_hash) => {
+            ValueDigest::Hash(got_hash) => {
                 // This proof proves that `key` maps to a value
                 // whose hash is `got_hash`.
                 let value_hash = Sha256::digest(expected_value.as_ref());
@@ -189,11 +193,12 @@ impl<T: Hashable> Proof<T> {
             return Err(ProofError::Empty);
         };
 
-        let mut expected_hash = root_hash;
+        #[allow(clippy::useless_conversion)]
+        let mut expected_hash: HashType = root_hash.clone().into();
 
         let mut iter = self.0.iter().peekable();
         while let Some(node) = iter.next() {
-            if node.to_hash() != *expected_hash {
+            if node.to_hash() != expected_hash {
                 return Err(ProofError::UnexpectedHash);
             }
 
@@ -222,7 +227,7 @@ impl<T: Hashable> Proof<T> {
                     .children()
                     .find_map(|(i, hash)| {
                         if i == next_nibble as usize {
-                            Some(hash)
+                            Some(hash.clone())
                         } else {
                             None
                         }
