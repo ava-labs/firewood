@@ -53,7 +53,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::io::{Error, ErrorKind, Write};
-use std::iter::once;
 use std::mem::{offset_of, take};
 use std::num::NonZeroU64;
 use std::ops::Deref;
@@ -879,12 +878,15 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         mut node: Node,
         path_prefix: &mut Path,
         new_nodes: &mut HashMap<LinearAddress, (u8, SharedNode)>,
+        #[cfg(feature = "ethhash")]
+        fake_root_extra_nibble: Option<u8>,
     ) -> Result<(LinearAddress, HashType), Error> {
         // If this is a branch, find all unhashed children and recursively call hash_helper on them.
+        trace!("hashing {node:?} at {path_prefix:?}");
         if let Node::Branch(ref mut b) = node {
             // special case code for ethereum hashes at the account level
             #[cfg(feature = "ethhash")]
-            if path_prefix.0.len() + b.partial_path.0.len() == 64 {
+            let make_fake_root = if path_prefix.0.len() + b.partial_path.0.len() == 64 {
                 // looks like we're at an account branch
                 // tally up how many hashes we need to deal with
                 let (unhashed, mut hashed) = b.children.iter_mut().enumerate().fold(
@@ -898,53 +900,42 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                         (unhashed, hashed)
                     },
                 );
-                match (hashed.len(), unhashed.len()) {
-                    (1, 0) => {
-                        // Previously, only one child was hashed, but now there are more, so
-                        // we must recompute the hash of that child without the magic prefix
-                        let invalidated_node = hashed.first_mut().expect("hashed is not empty");
-                        let hashable_node = self.read_node(*invalidated_node.1 .0)?.deref().clone();
-                        let original_length = path_prefix.len();
-                        path_prefix.0.extend(
-                            b.partial_path
-                                .0
-                                .iter()
-                                .copied()
-                                .chain(once(invalidated_node.0 as u8)),
-                        );
-
-                        let hash = hash_node(&hashable_node, path_prefix);
-                        path_prefix.0.truncate(original_length);
-                        *invalidated_node.1 .1 = hash;
-                    }
-                    (0, 1) => {
-                        // there will only be one child left, so we have to hash this child including the
-                        // nibble where it was found. This is true even if that child was previously hashed
-                        // we do this here since we actually don't want to hash the real node
-                        let actual_child = unhashed.first().expect("unhashed is not empty");
-                        let mut phony_root = actual_child.1.clone();
-                        phony_root.update_partial_path(Path::from_nibbles_iterator(
-                            once(actual_child.0 as u8)
-                                .chain(phony_root.partial_path().iter().copied()),
-                        ));
-
-                        // we hash this node without pushing the offset the path_prefix, since `phony_root` contains the nibble
-                        // already
-                        let original_length = path_prefix.len();
-                        path_prefix
+                if hashed.len() == 1 && !unhashed.is_empty() {
+                    // Previously, only one child was hashed, but now there are more, so
+                    // we must recompute the hash of that child without the magic prefix
+                    trace!("Rehashing account branch: hashed {hashed:?} unhashed {unhashed:?}");
+                    let invalidated_node = hashed.first_mut().expect("hashed is not empty");
+                    let hashable_node = self.read_node(*invalidated_node.1 .0)?.deref().clone();
+                    let original_length = path_prefix.len();
+                    path_prefix.0.extend(
+                        b.partial_path
                             .0
-                            .extend(b.partial_path.0.iter().copied());
-                        let hash = hash_node(&phony_root, path_prefix);
-                        path_prefix.0.truncate(original_length);
+                            .iter()
+                            .copied()
+                            .chain(std::iter::once(invalidated_node.0 as u8)),
+                    );
 
-                        let (index, new_node) = (actual_child.0, actual_child.1.clone());
-                        let (addr, size) = self.allocate_node(&new_node)?;
-                        b.children[index] = Some(Child::AddressWithHash(addr, hash));
-                        new_nodes.insert(addr, (size, new_node.into()));
-                    }
-                    (_, _) => {}
+                    let hash = hash_node(&hashable_node, path_prefix);
+                    path_prefix.0.truncate(original_length);
+                    *invalidated_node.1 .1 = hash;
                 }
-            }
+                // handle the single-child case for an account special below
+                if hashed.is_empty() && unhashed.len() == 1 {
+                    Some(unhashed.last().expect("only one").0 as u8)
+                } else {
+                    None
+                }
+            } else {
+                // not a single child
+                None
+            };
+
+            // branch children -- 1. 1 child, already hashed, 2. >1 child, already hashed,
+            // 3. 1 hashed child, 1 unhashed child
+            // 4. 0 hashed, 1 unhashed <-- handle child special
+            // 5. 1 hashed, >0 unhashed <-- rehash case
+            // everything already hashed
+
             for (nibble, child) in b.children.iter_mut().enumerate() {
                 // if this is already hashed, we're done
                 if matches!(child, Some(Child::AddressWithHash(_, _))) {
@@ -963,21 +954,48 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 // Hash this child and update
                 // we extend and truncate path_prefix to reduce memory allocations
                 let original_length = path_prefix.len();
-                path_prefix
-                    .0
-                    .extend(b.partial_path.0.iter().copied().chain(once(nibble as u8)));
+                path_prefix.0.extend(b.partial_path.0.iter().copied());
+                #[cfg(feature = "ethhash")]
+                if make_fake_root.is_none() {
+                    // we don't push the nibble there is only one unhashed child and
+                    // we're on an account
+                    path_prefix.0.push(nibble as u8);
+                }
+                #[cfg(not(feature = "ethhash"))]
+                path_prefix.0.push(nibble as u8);
 
+                #[cfg(feature = "ethhash")]
+                let (child_addr, child_hash) =
+                    self.hash_helper(child_node, path_prefix, new_nodes, make_fake_root)?;
+                #[cfg(not(feature = "ethhash"))]
                 let (child_addr, child_hash) =
                     self.hash_helper(child_node, path_prefix, new_nodes)?;
+
                 *child = Some(Child::AddressWithHash(child_addr, child_hash));
                 path_prefix.0.truncate(original_length);
             }
         }
         // At this point, we either have a leaf or a branch with all children hashed.
-
         // if the encoded child hash <32 bytes then we use that RLP
 
+        #[cfg(feature = "ethhash")]
+        // if we have a child that is the only child of an account branch, we will hash this child as if it
+        // is a root node. This means we have to take the nibble from the parent and prefix it to the partial path
+        let hash = if let Some(nibble) = fake_root_extra_nibble {
+            let mut fake_root = node.clone();
+            trace!("old node: {:?}", fake_root);
+            fake_root.update_partial_path(Path::from_nibbles_iterator(
+                std::iter::once(nibble).chain(fake_root.partial_path().0.iter().copied()),
+            ));
+            trace!("new node: {:?}", fake_root);
+            hash_node(&fake_root, path_prefix)
+        } else {
+            hash_node(&node, path_prefix)
+        };
+
+        #[cfg(not(feature = "ethhash"))]
         let hash = hash_node(&node, path_prefix);
+
         let (addr, size) = self.allocate_node(&node)?;
 
         new_nodes.insert(addr, (size, node.into()));
@@ -1169,6 +1187,11 @@ impl<S: ReadableStorage> From<NodeStore<MutableProposal, S>>
 
         // Hashes the trie and returns the address of the new root.
         let mut new_nodes = HashMap::new();
+        #[cfg(feature = "ethhash")]
+        let (root_addr, root_hash) = nodestore
+            .hash_helper(root, &mut Path::new(), &mut new_nodes, None)
+            .expect("TODO: Handle error");
+        #[cfg(not(feature = "ethhash"))]
         let (root_addr, root_hash) = nodestore
             .hash_helper(root, &mut Path::new(), &mut new_nodes)
             .expect("TODO: Handle error");
