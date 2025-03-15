@@ -117,6 +117,7 @@ func TestInsert(t *testing.T) {
 			err = mergeSet.Merge(set)
 			require.NoError(t, err)
 			acc.Root = strRoot
+			// t.Logf("acc.Root: %x", acc.Root)
 			err = tr.TryUpdateAccount(addr, acc)
 			require.NoError(t, err)
 
@@ -142,6 +143,7 @@ func TestInsert(t *testing.T) {
 			err = mergeSet.Merge(set)
 			require.NoError(t, err)
 			acc.Root = strRoot
+			// t.Logf("acc.Root: %x", acc.Root)
 			err = tr.TryUpdateAccount(storageKey.addr, acc)
 			require.NoError(t, err)
 
@@ -154,11 +156,11 @@ func TestInsert(t *testing.T) {
 
 		err = tdb.TrieDB().Update(mergeSet)
 		require.NoError(t, err)
-		t.Logf("- [1] i: %d, next: %x", i, next)
+		// t.Logf("- [1] i: %d, next: %x", i, next)
 
-		//for i, key := range fwKeys {
-		//	t.Logf("key: %x, val: %x", key, fwVals[i])
-		//}
+		// for i, key := range fwKeys {
+		// 	t.Logf("key: %x, val: %x", key, fwVals[i])
+		// }
 
 		// update firewood db
 		got, err := db.Update(fwKeys, fwVals)
