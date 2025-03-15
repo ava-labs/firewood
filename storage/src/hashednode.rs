@@ -16,10 +16,11 @@ pub fn hash_node(node: &Node, path_prefix: &Path) -> HashType {
         Node::Branch(node) => {
             // All child hashes should be filled in.
             // TODO danlaine: Enforce this with the type system.
+            #[cfg(debug_assertions)]
             debug_assert!(node
                 .children
                 .iter()
-                .all(|c| !matches!(c, Some(Child::Node(_)))));
+                .all(|c| !matches!(c, Some(Child::Node(_)))), "branch children: {:?}", node.children);
             NodeAndPrefix {
                 node: node.as_ref(),
                 prefix: path_prefix,
