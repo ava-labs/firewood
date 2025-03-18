@@ -3,7 +3,9 @@ package tests
 import (
 	"encoding/binary"
 	"math/big"
+	"math/rand"
 	"path"
+	"slices"
 	"testing"
 
 	firewood "github.com/ava-labs/firewood/ffi/v2"
@@ -39,38 +41,32 @@ func TestInsert(t *testing.T) {
 		key  common.Hash
 	}
 
-	addrs := make(map[common.Address]struct{})
-	storages := make(map[storageKey]struct{})
+	rand.Seed(0)
+
+	addrs := make([]common.Address, 0)
+	storages := make([]storageKey, 0)
 
 	chooseAddr := func() common.Address {
-		for addr := range addrs {
-			return addr
-		}
-		return common.Address{}
+		return addrs[rand.Intn(len(addrs))]
 	}
 
 	chooseStorage := func() storageKey {
-		for key := range storages {
-			return key
-		}
-		return storageKey{}
+		return storages[rand.Intn(len(storages))]
 	}
 
 	deleteStorage := func(k storageKey) {
-		delete(storages, k)
+		storages = slices.DeleteFunc(storages, func(s storageKey) bool {
+			return s == k
+		})
 	}
 
 	deleteAccount := func(addr common.Address) {
-		delete(addrs, addr)
-		toDel := make([]storageKey, 0)
-		for k := range storages {
-			if k.addr == addr {
-				toDel = append(toDel, k)
-			}
-		}
-		for _, k := range toDel {
-			delete(storages, k)
-		}
+		addrs = slices.DeleteFunc(addrs, func(a common.Address) bool {
+			return a == addr
+		})
+		storages = slices.DeleteFunc(storages, func(s storageKey) bool {
+			return s.addr == addr
+		})
 	}
 
 	memdb := rawdb.NewMemoryDatabase()
@@ -85,7 +81,7 @@ func TestInsert(t *testing.T) {
 		var fwKeys, fwVals [][]byte
 
 		switch {
-		case i%20 == 19: // delete storage
+		case i%10 == 9: // delete storage
 			storageKey := chooseStorage()
 			accHash := hashData(storageKey.addr[:])
 			keyHash := hashData(storageKey.key[:])
@@ -134,7 +130,7 @@ func TestInsert(t *testing.T) {
 
 			err = tr.TryUpdateAccount(addr, acc)
 			require.NoError(t, err)
-			addrs[addr] = struct{}{}
+			addrs = append(addrs, addr)
 
 			fwKeys = append(fwKeys, accHash[:])
 			fwVals = append(fwVals, enc)
@@ -169,7 +165,7 @@ func TestInsert(t *testing.T) {
 
 			err = str.TryUpdate(key[:], val[:])
 			require.NoError(t, err)
-			storages[storageKey] = struct{}{}
+			storages = append(storages, storageKey)
 
 			strRoot, set := str.Commit(false)
 			err = mergeSet.Merge(set)
