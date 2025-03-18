@@ -84,7 +84,7 @@ impl<T: TrieReader> FusedStream for MerkleNodeStream<'_, T> {
 impl<'a, T: TrieReader> MerkleNodeStream<'a, T> {
     /// Returns a new iterator that will iterate over all the nodes in `merkle`
     /// with keys greater than or equal to `key`.
-    pub(super) fn new(merkle: &'a T, key: Key) -> Self {
+    pub fn new(merkle: &'a T, key: Key) -> Self {
         Self {
             state: NodeStreamState::from(key),
             merkle,
@@ -105,7 +105,7 @@ impl<T: TrieReader> Stream for MerkleNodeStream<'_, T> {
 
         match state {
             NodeStreamState::StartFromKey(key) => {
-                self.state = get_iterator_intial_state(*merkle, key)?;
+                self.state = get_iterator_initial_state(*merkle, key)?;
                 self.poll_next(_cx)
             }
             NodeStreamState::Iterating { iter_stack } => {
@@ -173,7 +173,7 @@ impl<T: TrieReader> Stream for MerkleNodeStream<'_, T> {
 }
 
 /// Returns the initial state for an iterator over the given `merkle` which starts at `key`.
-fn get_iterator_intial_state<T: TrieReader>(
+fn get_iterator_initial_state<T: TrieReader>(
     merkle: &T,
     key: &[u8],
 ) -> Result<NodeStreamState, api::Error> {
