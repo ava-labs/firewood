@@ -56,6 +56,23 @@ func TestInsert(t *testing.T) {
 		return storageKey{}
 	}
 
+	deleteStorage := func(k storageKey) {
+		delete(storages, k)
+	}
+
+	deleteAccount := func(addr common.Address) {
+		delete(addrs, addr)
+		toDel := make([]storageKey, 0)
+		for k := range storages {
+			if k.addr == addr {
+				toDel = append(toDel, k)
+			}
+		}
+		for _, k := range toDel {
+			delete(storages, k)
+		}
+	}
+
 	memdb := rawdb.NewMemoryDatabase()
 	tdb := state.NewDatabase(memdb)
 	ethRoot := types.EmptyRootHash
@@ -67,8 +84,43 @@ func TestInsert(t *testing.T) {
 
 		var fwKeys, fwVals [][]byte
 
-		switch i % 4 {
-		case 0: // add acc
+		switch {
+		case i%20 == 19: // delete storage
+			storageKey := chooseStorage()
+			accHash := hashData(storageKey.addr[:])
+			keyHash := hashData(storageKey.key[:])
+
+			acc, err := tr.TryGetAccount(storageKey.addr)
+			require.NoError(t, err)
+
+			str, err := tdb.OpenStorageTrie(ethRoot, accHash, acc.Root)
+			require.NoError(t, err)
+
+			err = str.TryDelete(storageKey.key[:])
+			require.NoError(t, err)
+			deleteStorage(storageKey)
+
+			strRoot, set := str.Commit(false)
+			err = mergeSet.Merge(set)
+			require.NoError(t, err)
+			acc.Root = strRoot
+			err = tr.TryUpdateAccount(storageKey.addr, acc)
+			require.NoError(t, err)
+
+			fwKeys = append(fwKeys, append(accHash[:], keyHash[:]...))
+			fwVals = append(fwVals, []byte{})
+		case i%100 == 99: // delete acc
+			addr := chooseAddr()
+			accHash := hashData(addr[:])
+
+			err = tr.TryDeleteAccount(addr)
+			require.NoError(t, err)
+			deleteAccount(addr)
+
+			fwKeys = append(fwKeys, accHash[:])
+			fwVals = append(fwVals, []byte{})
+
+		case i%4 == 0: // add acc
 			addr := common.BytesToAddress(hashData(binary.BigEndian.AppendUint64(nil, uint64(i))).Bytes())
 			accHash := hashData(addr[:])
 			acc := &types.StateAccount{
@@ -86,7 +138,7 @@ func TestInsert(t *testing.T) {
 
 			fwKeys = append(fwKeys, accHash[:])
 			fwVals = append(fwVals, enc)
-		case 1: // update acc
+		case i%4 == 1: // update acc
 			addr := chooseAddr()
 			accHash := hashData(addr[:])
 			acc, err := tr.TryGetAccount(addr)
@@ -100,7 +152,7 @@ func TestInsert(t *testing.T) {
 
 			fwKeys = append(fwKeys, accHash[:])
 			fwVals = append(fwVals, enc)
-		case 2: // add storage
+		case i%4 == 2: // add storage
 			addr := chooseAddr()
 			accHash := hashData(addr[:])
 			key := hashData(binary.BigEndian.AppendUint64(nil, uint64(i)))
@@ -128,7 +180,7 @@ func TestInsert(t *testing.T) {
 
 			fwKeys = append(fwKeys, append(accHash[:], keyHash[:]...))
 			fwVals = append(fwVals, val[:])
-		case 3: // update storage
+		case i%4 == 3: // update storage
 			storageKey := chooseStorage()
 			accHash := hashData(storageKey.addr[:])
 			keyHash := hashData(storageKey.key[:])
@@ -161,6 +213,10 @@ func TestInsert(t *testing.T) {
 		err = tdb.TrieDB().Update(mergeSet)
 		require.NoError(t, err)
 		t.Logf("i: %d, next: %x", i, next)
+
+		for i, k := range fwKeys {
+			t.Logf("key: %x, val: %x", k, fwVals[i])
+		}
 
 		// update firewood db
 		got, err := db.Update(fwKeys, fwVals)
