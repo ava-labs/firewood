@@ -1,13 +1,13 @@
 module github.com/ava-labs/firewood/ffi/tests
 
-go 1.22.8
+go 1.23
 
-toolchain go1.23.4
+toolchain go1.23.6
 
 require (
 	github.com/ava-labs/firewood/ffi/v2 v2.0.0-20250218224920-ad24ac0dbc52
 	github.com/ethereum/go-ethereum v1.11.5
-	github.com/stretchr/testify v1.8.0
+	github.com/stretchr/testify v1.10.0
 	golang.org/x/crypto v0.1.0
 )
 

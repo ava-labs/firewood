@@ -28,7 +28,10 @@ func hashData(input []byte) common.Hash {
 
 func TestInsert(t *testing.T) {
 	file := path.Join(t.TempDir(), "test.db")
-	db := firewood.NewDatabase(firewood.WithCreate(true), firewood.WithPath(file))
+	cfg := firewood.DefaultConfig()
+	cfg.Create = true
+	db, err := firewood.New(file, cfg)
+	require.NoError(t, err)
 	defer db.Close()
 
 	type storageKey struct {
@@ -57,7 +60,7 @@ func TestInsert(t *testing.T) {
 	tdb := state.NewDatabase(memdb)
 	ethRoot := types.EmptyRootHash
 
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 10_000; i++ {
 		tr, err := tdb.OpenTrie(ethRoot)
 		require.NoError(t, err)
 		mergeSet := trie.NewMergedNodeSet()
