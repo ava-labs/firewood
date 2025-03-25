@@ -12,6 +12,9 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        feature-set: ["", "ethhash"]
     outputs:
       cache-key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
     steps:
@@ -37,9 +40,9 @@ jobs:
             ${{ runner.os }}-deps-${{ hashFiles('**/Cargo.toml') }}-
             ${{ runner.os }}-deps-
       - name: Check
-        run: cargo check --workspace --tests --examples --benches
+        run: cargo check --workspace --tests --examples --benches ${{ matrix.feature-set }}
       - name: Build
-        run: cargo build --workspace --tests --examples --benches
+        run: cargo build --workspace --tests --examples --benches ${{ matrix.feature-set }}
         # Always update the cache
       - name: Cleanup
         run: |
@@ -190,9 +193,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ needs.build.outputs.cache-key }}
-      - name: Build with ethhash feature
-        run: cargo build --release --features ethhash
+          key: ${{ runner.os }}-deps-${{ hashFiles('**/Cargo.toml') }}-${{ hashFiles('**/*.rs') }}-ethhash
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
