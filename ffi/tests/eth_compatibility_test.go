@@ -81,6 +81,16 @@ func TestInsert(t *testing.T) {
 		var fwKeys, fwVals [][]byte
 
 		switch {
+		case i%100 == 99: // delete acc
+			addr := chooseAddr()
+			accHash := hashData(addr[:])
+
+			err = tr.TryDeleteAccount(addr)
+			require.NoError(t, err)
+			deleteAccount(addr)
+
+			fwKeys = append(fwKeys, accHash[:])
+			fwVals = append(fwVals, []byte{})
 		case i%10 == 9: // delete storage
 			storageKey := chooseStorage()
 			accHash := hashData(storageKey.addr[:])
@@ -104,16 +114,6 @@ func TestInsert(t *testing.T) {
 			require.NoError(t, err)
 
 			fwKeys = append(fwKeys, append(accHash[:], keyHash[:]...))
-			fwVals = append(fwVals, []byte{})
-		case i%100 == 99: // delete acc
-			addr := chooseAddr()
-			accHash := hashData(addr[:])
-
-			err = tr.TryDeleteAccount(addr)
-			require.NoError(t, err)
-			deleteAccount(addr)
-
-			fwKeys = append(fwKeys, accHash[:])
 			fwVals = append(fwVals, []byte{})
 
 		case i%4 == 0: // add acc
