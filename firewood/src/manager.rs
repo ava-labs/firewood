@@ -207,8 +207,8 @@ impl RevisionManager {
         }
 
         if trace_enabled() {
-            let merkle = Merkle::from(committed);
-            trace!("{}", merkle.dump()?);
+            let _merkle = Merkle::from(committed);
+            trace!("{}", _merkle.dump()?);
         }
 
         Ok(())
