@@ -13,6 +13,8 @@ mod metrics_setup;
 
 use metrics::counter;
 
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 #[derive(Debug)]
 #[repr(C)]
 pub struct Value {
