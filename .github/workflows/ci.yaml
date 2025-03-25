@@ -191,9 +191,8 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ needs.build.outputs.cache-key }}
-      - name: Build Firewood FFI
-        working-directory: ffi
-        run: cargo build --release
+      - name: Build with ethhash feature
+        run: cargo build --release --features ethhash
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -203,3 +202,6 @@ jobs:
         working-directory: ffi
         # cgocheck2 is expensive but provides complete pointer checks
         run: GOEXPERIMENT=cgocheck2 go test ./...
+      - name: Test ethhash compatibility
+        working-directory: ffi/tests
+        run: go test -v ./...
