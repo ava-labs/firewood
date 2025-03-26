@@ -5,7 +5,7 @@ authors = ["Parity Technologies <admin@parity.io>", "Ron Kuris <swcafe@gmail.com
 description = "In-memory patricia trie operations"
 repository = "https://github.com/paritytech/parity-common"
 license = "MIT OR Apache-2.0"
-edition = "2018"
+edition = "2024"
 
 [dependencies]
 hash-db = { version = "0.16.0", default-features = false }
