@@ -68,7 +68,7 @@ where
     )
 }
 
-/// Generates a trie root hash for a vector of key-value tuples
+///     enerates a trie root hash for a vector of key-value tuples
 ///
 /// ```
 /// use hex_literal::hex;
@@ -77,9 +77,9 @@ where
 /// use keccak_hasher::KeccakHasher;
 ///
 /// let v = vec![
-/// 	("doe", "reindeer"),
-/// 	("dog", "puppy"),
-/// 	("dogglesworth", "cat"),
+///     ("doe", "reindeer"),
+///     ("dog", "puppy"),
+///     ("dogglesworth", "cat"),
 /// ];
 ///
 /// let root = H256::from(hex!("8aad789dff2f538bca5d8ea56e8abe10f4c7ba3a5dea95fea4cd6e7c3a1168d3"));
@@ -128,9 +128,9 @@ where
 /// use keccak_hasher::KeccakHasher;
 ///
 /// let v = vec![
-/// 	("doe", "reindeer"),
-/// 	("dog", "puppy"),
-/// 	("dogglesworth", "cat"),
+///     ("doe", "reindeer"),
+///     ("dog", "puppy"),
+///     ("dogglesworth", "cat"),
 /// ];
 ///
 /// let root = H256::from(hex!("d4cd937e4a4368d7931a9cf51686b7e10abb3dce38a39000fd7902a092b64585"));
@@ -166,7 +166,7 @@ where
 ///  [1,2,3,4,5,T]     0x312345   // 5 > 3
 ///  [1,2,3,4,T]       0x201234   // 4 > 3
 /// ```
-fn hex_prefix_encode<'a>(nibbles: &'a [u8], leaf: bool) -> impl Iterator<Item = u8> + 'a {
+fn hex_prefix_encode(nibbles: &[u8], leaf: bool) -> impl Iterator<Item = u8> + '_ {
     let inlen = nibbles.len();
     let oddness_factor = inlen % 2;
 
@@ -180,7 +180,7 @@ fn hex_prefix_encode<'a>(nibbles: &'a [u8], leaf: bool) -> impl Iterator<Item = 
     once(first_byte).chain(
         nibbles[oddness_factor..]
             .chunks(2)
-            .map(|ch| ch[0] << 4 | ch[1]),
+            .map(|ch| (ch[0] << 4) | ch[1]),
     )
 }
 
@@ -199,8 +199,8 @@ where
     }
 
     // take slices
-    let key: &[u8] = &input[0].0.as_ref();
-    let value: &[u8] = &input[0].1.as_ref();
+    let key: &[u8] = input[0].0.as_ref();
+    let value: &[u8] = input[0].1.as_ref();
 
     // if the slice contains just one item, append the suffix of the key
     // and then append value
@@ -217,7 +217,7 @@ where
         // skip first tuple
         .skip(1)
         // get minimum number of shared nibbles between first and each successive
-        .fold(key.len(), |acc, &(ref k, _)| {
+        .fold(key.len(), |acc, (k, _)| {
             cmp::min(shared_prefix_len(key, k.as_ref()), acc)
         });
 
