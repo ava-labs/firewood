@@ -13,6 +13,9 @@ mod metrics_setup;
 
 use metrics::counter;
 
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 #[derive(Debug)]
 #[repr(C)]
 pub struct Value {
@@ -254,6 +257,10 @@ unsafe fn common_create(
     metrics_port: u16,
     cfg: DbConfig,
 ) -> *mut Db {
+    #[cfg(feature = "logger")]
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .try_init();
+
     let path = unsafe { CStr::from_ptr(path) };
     let path: &Path = OsStr::from_bytes(path.to_bytes()).as_ref();
     if metrics_port > 0 {
