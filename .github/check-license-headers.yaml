@@ -19,6 +19,7 @@
       "CONTRIBUTING.md",
       "benchmark/**",
       "ffi/**",
+      "triehash/**",
     ],
     "license": "./.github/license-header.txt"
   },
