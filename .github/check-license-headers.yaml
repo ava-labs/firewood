@@ -39,7 +39,7 @@
       "benchmark/**",
       "ffi/**",
       "CODEOWNERS",
-      "CONTRIBUTING.md"
+      "CONTRIBUTING.md",
       "triehash/**",
     ],
   }
