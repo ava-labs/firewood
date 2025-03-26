@@ -68,7 +68,7 @@ where
     )
 }
 
-///     enerates a trie root hash for a vector of key-value tuples
+/// Generates a trie root hash for a vector of key-value tuples
 ///
 /// ```
 /// use hex_literal::hex;
