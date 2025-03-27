@@ -4,7 +4,6 @@
 use crate::logger::trace;
 use arc_swap::ArcSwap;
 use arc_swap::access::DynAccess;
-use bincode::{DefaultOptions, Options as _};
 use bytemuck_derive::{AnyBitPattern, NoUninit};
 use coarsetime::Instant;
 use fastrace::local::LocalSpan;
@@ -95,8 +94,8 @@ const AREA_SIZES: [u64; 23] = [
     1024 << 14,
 ];
 
-fn serializer() -> impl bincode::Options {
-    DefaultOptions::new().with_varint_encoding()
+fn serializer() -> bincode::config::Configuration {
+    bincode::config::legacy().with_variable_int_encoding()
 }
 
 // TODO: automate this, must stay in sync with above
@@ -197,8 +196,7 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
     fn area_index_and_size(&self, addr: LinearAddress) -> Result<(AreaIndex, u64), Error> {
         let mut area_stream = self.storage.stream_from(addr.get())?;
 
-        let index: AreaIndex = serializer()
-            .deserialize_from(&mut area_stream)
+        let index: AreaIndex = bincode::decode_from_std_read(&mut area_stream, serializer())
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
         let size = *AREA_SIZES.get(index as usize).ok_or(Error::new(
@@ -447,10 +445,10 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 *free_stored_area_addr = free_head;
             } else {
                 let free_area_addr = address.get();
-                let free_head_stream = self.storage.stream_from(free_area_addr)?;
-                let free_head: StoredArea<Area<Node, FreeArea>> = serializer()
-                    .deserialize_from(free_head_stream)
-                    .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+                let mut free_head_stream = self.storage.stream_from(free_area_addr)?;
+                let free_head: StoredArea<Area<Node, FreeArea>> =
+                    bincode::serde::decode_from_std_read(&mut free_head_stream, serializer())
+                        .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
                 let StoredArea {
                     area: Area::Free(free_head),
                     area_size_index: read_index,
@@ -544,8 +542,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             area,
         };
 
-        let stored_area_bytes = serializer()
-            .serialize(&stored_area)
+        let stored_area_bytes = bincode::serde::encode_to_vec(&stored_area, serializer())
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
         self.storage.write(addr.into(), &stored_area_bytes)?;
