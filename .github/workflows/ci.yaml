@@ -162,7 +162,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
-      - uses:  Noelware/setup-protoc
+      - uses: Noelware/setup-protoc
       - name: Restore Check Deps
         id: cache-build-deps-restore
         uses: actions/cache/restore@v3
