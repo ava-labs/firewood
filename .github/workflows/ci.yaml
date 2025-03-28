@@ -42,7 +42,7 @@ jobs:
       - name: Check
         run: cargo check --workspace --tests --examples --benches --features ${{ matrix.feature-set }}
       - name: Build
-        run: cargo build --workspace --tests --examples --benches --features ${{ matrix.feature-set }}
+        run: cargo build --workspace --tests --examples --benches --features ${{ matrix.feature-set }} --release
         # Always update the cache
       - name: Cleanup
         run: |
@@ -194,18 +194,15 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-deps-${{ hashFiles('**/Cargo.toml') }}-${{ hashFiles('**/*.rs') }}-ethhash
-      - name: Build Firewood FFI
-        working-directory: ffi
-        run: cargo build --release
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: "ffi/go.mod"
           cache-dependency-path: "ffi/go.sum"
+      - name: Test ethhash compatibility
+        working-directory: ffi/tests
+        run: go test -v ./...
       - name: Test Go FFI bindings
         working-directory: ffi
         # cgocheck2 is expensive but provides complete pointer checks
         run: GOEXPERIMENT=cgocheck2 go test ./...
-      - name: Test ethhash compatibility
-        working-directory: ffi/tests
-        run: go test -v ./...
