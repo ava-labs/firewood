@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Noelware/setup-protoc
+      - uses: Noelware/setup-protoc@1.1.0
       # caution: this is the same restore as in gh-pages.yaml
       - name: Restore Cargo Cache
         id: cargo-cache
@@ -82,7 +82,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Noelware/setup-protoc
+      - uses: Noelware/setup-protoc@1.1.0
       - name: Check license headers
         uses: viperproject/check-license-header@v2
         with:
@@ -112,7 +112,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Noelware/setup-protoc
+      - uses: Noelware/setup-protoc@1.1.0
       - name: Restore Check Deps
         id: cache-build-deps-restore
         uses: actions/cache/restore@v3
@@ -138,7 +138,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Noelware/setup-protoc
+      - uses: Noelware/setup-protoc@1.1.0
       - name: Restore Check Deps
         id: cache-build-deps-restore
         uses: actions/cache/restore@v3
@@ -162,7 +162,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Noelware/setup-protoc
+      - uses: Noelware/setup-protoc@1.1.0
       - name: Restore Check Deps
         id: cache-build-deps-restore
         uses: actions/cache/restore@v3
@@ -182,7 +182,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Noelware/setup-protoc
+      - uses: Noelware/setup-protoc@1.1.0
       - name: Restore Cargo Cache
         id: cache-build-deps-restore
         uses: actions/cache/restore@v3
