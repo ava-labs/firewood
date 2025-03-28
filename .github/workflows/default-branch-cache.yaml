@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
-      - uses: arduino/setup-protoc@v2
+      - uses: Noelware/setup-protoc
       - name: Restore Cargo Cache
         id: cargo-cache
         uses: actions/cache/restore@v3
