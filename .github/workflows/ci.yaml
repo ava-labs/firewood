@@ -194,6 +194,9 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-deps-${{ hashFiles('**/Cargo.toml') }}-${{ hashFiles('**/*.rs') }}-ethhash
+      - name: Build Firewood FFI
+        working-directory: ffi
+        run: cargo build --release
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
