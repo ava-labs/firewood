@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        feature-set: ['""', '"ethhash"']
+        feature-set: ['', 'ethhash']
     outputs:
       cache-key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
     steps:
@@ -40,9 +40,9 @@ jobs:
             ${{ runner.os }}-deps-${{ hashFiles('**/Cargo.toml') }}-
             ${{ runner.os }}-deps-
       - name: Check
-        run: cargo check --workspace --tests --examples --benches --features ${{ matrix.feature-set }}
+        run: cargo check --workspace --tests --examples --benches --features \"${{ matrix.feature-set }}\"
       - name: Build
-        run: cargo build --workspace --tests --examples --benches --features ${{ matrix.feature-set }} --release
+        run: cargo build --workspace --tests --examples --benches --features \"${{ matrix.feature-set }}\" --release
         # Always update the cache
       - name: Cleanup
         run: |
