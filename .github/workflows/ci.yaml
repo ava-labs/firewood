@@ -74,6 +74,11 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
+      - name: Upload target directory
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-${{ matrix.feature-set }}
+          path: target/
 
   lint:
     needs: build
@@ -183,17 +188,10 @@ jobs:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
       - uses: Noelware/setup-protoc@1.1.0
-      - name: Restore Cargo Cache
-        id: cache-build-deps-restore
-        uses: actions/cache/restore@v3
+      - name: Download target directory
+        uses: actions/download-artifact@v4
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-deps-${{ hashFiles('**/Cargo.toml') }}-${{ hashFiles('**/*.rs') }}-ethhash
+          name: target-ethhash
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
