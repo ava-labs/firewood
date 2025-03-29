@@ -74,11 +74,11 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
-      - name: Upload target directory
+      - name: Upload firewood ffi lib
         uses: actions/upload-artifact@v4
         with:
           name: target-${{ matrix.feature-set }}
-          path: target/
+          path: target/release/libfirewood*
 
   lint:
     needs: build
