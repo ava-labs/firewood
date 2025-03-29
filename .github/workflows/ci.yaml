@@ -12,12 +12,15 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        feature-set: ['', 'ethhash']
     outputs:
       cache-key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
-      - uses: arduino/setup-protoc@v2
+      - uses: Noelware/setup-protoc@1.1.0
       # caution: this is the same restore as in gh-pages.yaml
       - name: Restore Cargo Cache
         id: cargo-cache
@@ -37,9 +40,9 @@ jobs:
             ${{ runner.os }}-deps-${{ hashFiles('**/Cargo.toml') }}-
             ${{ runner.os }}-deps-
       - name: Check
-        run: cargo check --workspace --tests --examples --benches
+        run: cargo check --workspace --tests --examples --benches --features "${{ matrix.feature-set }}"
       - name: Build
-        run: cargo build --workspace --tests --examples --benches
+        run: cargo build --workspace --tests --examples --benches --features "${{ matrix.feature-set }}" --release
         # Always update the cache
       - name: Cleanup
         run: |
@@ -71,6 +74,11 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
+      - name: Upload firewood ffi lib
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-${{ matrix.feature-set }}
+          path: target/release/libfirewood*
 
   lint:
     needs: build
@@ -79,7 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
-      - uses: arduino/setup-protoc@v2
+      - uses: Noelware/setup-protoc@1.1.0
       - name: Check license headers
         uses: viperproject/check-license-header@v2
         with:
@@ -109,7 +117,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
-      - uses: arduino/setup-protoc@v2
+      - uses: Noelware/setup-protoc@1.1.0
       - name: Restore Check Deps
         id: cache-build-deps-restore
         uses: actions/cache/restore@v3
@@ -135,7 +143,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
-      - uses: arduino/setup-protoc@v2
+      - uses: Noelware/setup-protoc@1.1.0
       - name: Restore Check Deps
         id: cache-build-deps-restore
         uses: actions/cache/restore@v3
@@ -159,7 +167,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
-      - uses: arduino/setup-protoc@v2
+      - uses: Noelware/setup-protoc@1.1.0
       - name: Restore Check Deps
         id: cache-build-deps-restore
         uses: actions/cache/restore@v3
@@ -179,26 +187,19 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
-      - uses: arduino/setup-protoc@v2
-      - name: Restore Cargo Cache
-        id: cache-build-deps-restore
-        uses: actions/cache/restore@v3
+      - uses: Noelware/setup-protoc@1.1.0
+      - name: Download target directory
+        uses: actions/download-artifact@v4
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ needs.build.outputs.cache-key }}
-      - name: Build Firewood FFI
-        working-directory: ffi
-        run: cargo build --release
+          name: target-ethhash
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: "ffi/go.mod"
           cache-dependency-path: "ffi/go.sum"
+      - name: Test ethhash compatibility
+        working-directory: ffi/tests
+        run: go test -v ./...
       - name: Test Go FFI bindings
         working-directory: ffi
         # cgocheck2 is expensive but provides complete pointer checks
