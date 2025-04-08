@@ -8,7 +8,7 @@ require (
 	github.com/ava-labs/firewood/ffi/v2 v2.0.0 // this is replaced to use the parent folder
 	github.com/ethereum/go-ethereum v1.11.5
 	github.com/stretchr/testify v1.10.0
-	golang.org/x/crypto v0.1.0
+	golang.org/x/crypto v0.31.0
 )
 
 require (
@@ -51,8 +51,8 @@ require (
 	github.com/tklauser/go-sysconf v0.3.5 // indirect
 	github.com/tklauser/numcpus v0.2.2 // indirect
 	golang.org/x/exp v0.0.0-20230206171751-46f607a40771 // indirect
-	golang.org/x/sys v0.5.0 // indirect
-	golang.org/x/text v0.7.0 // indirect
+	golang.org/x/sys v0.28.0 // indirect
+	golang.org/x/text v0.21.0 // indirect
 	google.golang.org/protobuf v1.28.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
