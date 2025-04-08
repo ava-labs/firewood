@@ -232,4 +232,3 @@ jobs:
       - name: Test Ethereum hash compatability
         working-directory: ffi/tests
         run: go test ./...
-      
