@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
-      - uses: arduino/setup-protoc@v2
+      - uses: arduino/setup-protoc@v3
       # caution: this is the same restore as in ci.yaml
       - name: Restore Cargo Cache
         id: cargo-cache
