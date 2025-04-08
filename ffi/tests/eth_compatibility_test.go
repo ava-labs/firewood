@@ -208,11 +208,6 @@ func TestInsert(t *testing.T) {
 
 		err = tdb.TrieDB().Update(mergeSet)
 		require.NoError(t, err)
-		t.Logf("i: %d, next: %x", i, next)
-
-		for i, k := range fwKeys {
-			t.Logf("key: %x, val: %x", k, fwVals[i])
-		}
 
 		// update firewood db
 		got, err := db.Update(fwKeys, fwVals)
