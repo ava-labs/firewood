@@ -79,7 +79,7 @@ jobs:
           save-if: "false"
           shared-key: "ethhash"
       - name: Run benchmark example
-        run: RUST_BACKTRACE=1 cargo run --features ethhash --release --example benchmark -- --nbatch 100 --batch-size 1000
+        run: RUST_BACKTRACE=1 cargo run --features ethhash --release --bin benchmark -- --number-of-batches 100 --batch-size 1000 create
       - name: Run insert example
         run: RUST_BACKTRACE=1 cargo run --features ethhash --release --example insert
 
