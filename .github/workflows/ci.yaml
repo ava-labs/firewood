@@ -35,6 +35,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: "false"
+          shared-key: "build"
       - name: Check license headers
         uses: viperproject/check-license-header@v2
         with:
@@ -57,10 +58,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: "false"
-      - name: Run tests with features enabled
-        run: cargo test --verbose --features logger,ethhash
+          shared-key: "build"
       - name: Run tests with ethhash disabled
         run: cargo test --verbose
+      - name: Run tests with features enabled
+        run: cargo test --verbose --features logger,ethhash
       # TODO: Enable testing with branch_factor_256
       # - name: Run tests with branch_factor_256
       #   run: cargo test --verbose --features branch_factor_256
@@ -75,11 +77,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: "false"
+          shared-key: "build"
   # benchmarks were not being done in --release mode, we can enable this again later
   #     - name: Run benchmark example
   #       run: RUST_BACKTRACE=1 cargo run --example benchmark -- --nbatch 100 --batch-size 1000
-  #   - name: Run insert example
-  #     run: RUST_BACKTRACE=1 cargo run --example insert
+      - name: Run insert example
+        run: RUST_BACKTRACE=1 cargo run --example insert
 
   docs:
     needs: build
@@ -91,6 +94,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: "false"
+          shared-key: "build"
       - run: RUSTDOCFLAGS="-D warnings" cargo doc --document-private-items --no-deps
 
   ffi:
@@ -103,6 +107,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: "false"
+          shared-key: "build"
       - name: Build Firewood FFI
         working-directory: ffi
         run: cargo build --release
@@ -126,6 +131,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: "false"
+          shared-key: "build"
       - name: Build Firewood FFI (with ethhash)
         run: cargo build --release --features ethhash
       - name: Set up Go
