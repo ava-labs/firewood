@@ -156,7 +156,7 @@ func TestInsert(t *testing.T) {
 			acc, err := tr.GetAccount(addr)
 			require.NoError(t, err)
 
-			str, err := tdb.OpenStorageTrie(ethRoot, addr, acc.Root, nil)
+			str, err := tdb.OpenStorageTrie(ethRoot, addr, acc.Root, tr)
 			require.NoError(t, err)
 
 			err = str.UpdateStorage(addr, key[:], val[:])
@@ -186,7 +186,7 @@ func TestInsert(t *testing.T) {
 			acc, err := tr.GetAccount(storageKey.addr)
 			require.NoError(t, err)
 
-			str, err := tdb.OpenStorageTrie(ethRoot, storageKey.addr, acc.Root, nil)
+			str, err := tdb.OpenStorageTrie(ethRoot, storageKey.addr, acc.Root, tr)
 			require.NoError(t, err)
 
 			err = str.UpdateStorage(storageKey.addr, storageKey.key[:], val[:])
