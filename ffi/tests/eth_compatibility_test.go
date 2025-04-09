@@ -210,7 +210,7 @@ func TestInsert(t *testing.T) {
 		err = mergeSet.Merge(set)
 		require.NoError(t, err)
 
-		err = tdb.TrieDB().Update(next, ethRoot, uint64(i+1), mergeSet, nil)
+		err = tdb.TrieDB().Update(next, ethRoot, uint64(i), mergeSet, nil)
 		require.NoError(t, err)
 
 		// update firewood db
