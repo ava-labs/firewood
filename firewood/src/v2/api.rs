@@ -37,7 +37,7 @@ pub type HashKey = storage::TrieHash;
 
 /// A key/value pair operation. Only put (upsert) and delete are
 /// supported
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BatchOp<K: KeyType, V: ValueType> {
     /// Upsert a key/value pair
     Put {
