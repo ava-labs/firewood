@@ -178,7 +178,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn empty_from() -> Result<(), Box<dyn std::error::Error>> {
+    fn half_empty() -> Result<(), Box<dyn std::error::Error>> {
         let old = NodeStore::new_empty_committed(MemStore::new(vec![]).into())?;
         let new = nodestore_from_batch(vec![test_row()])?;
 
