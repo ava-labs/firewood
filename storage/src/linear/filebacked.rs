@@ -47,7 +47,8 @@ impl FileBacked {
     pub(crate) fn make_op(&self, data: &[u8]) -> io_uring::opcode::Write {
         use std::os::fd::AsRawFd as _;
 
-        use io_uring::{opcode::Write, types};
+        use io_uring::opcode::Write;
+        use io_uring::types;
 
         Write::new(
             types::Fd(self.fd.as_raw_fd()),
@@ -189,6 +190,7 @@ struct PredictiveReader<'a> {
     offset: u64,
     len: usize,
     pos: usize,
+    started: coarsetime::Instant,
 }
 
 impl<'a> PredictiveReader<'a> {
@@ -201,7 +203,16 @@ impl<'a> PredictiveReader<'a> {
             offset: start,
             len: 0,
             pos: 0,
+            started: coarsetime::Instant::now(),
         }
+    }
+}
+
+impl Drop for PredictiveReader<'_> {
+    fn drop(&mut self) {
+        let elapsed = self.started.elapsed();
+        counter!("firewood.io.read_ms").increment(elapsed.as_millis());
+        counter!("firewood.io.read").increment(1);
     }
 }
 

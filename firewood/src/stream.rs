@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::merkle::{Key, MerkleError, Value};
+use crate::merkle::{Key, Value};
 use crate::v2::api;
 
 use futures::stream::FusedStream;
@@ -245,7 +245,7 @@ fn get_iterator_initial_state<T: TrieReader>(
                         ),
                     });
 
-                    #[allow(clippy::indexing_slicing)]
+                    #[expect(clippy::indexing_slicing)]
                     let child = &branch.children[next_unmatched_key_nibble as usize];
                     node = match child {
                         None => return Ok(NodeStreamState::Iterating { iter_stack }),
@@ -390,7 +390,7 @@ pub struct PathIterator<'a, 'b, T> {
 }
 
 impl<'a, 'b, T: TrieReader> PathIterator<'a, 'b, T> {
-    pub(super) fn new(merkle: &'a T, key: &'b [u8]) -> Result<Self, MerkleError> {
+    pub(super) fn new(merkle: &'a T, key: &'b [u8]) -> Result<Self, std::io::Error> {
         let Some(root) = merkle.root_node() else {
             return Ok(Self {
                 state: PathIteratorState::Exhausted,
@@ -410,7 +410,7 @@ impl<'a, 'b, T: TrieReader> PathIterator<'a, 'b, T> {
 }
 
 impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
-    type Item = Result<PathIterItem, MerkleError>;
+    type Item = Result<PathIterItem, std::io::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // destructuring is necessary here because we need mutable access to `state`
@@ -466,7 +466,7 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                                     }));
                                 };
 
-                                #[allow(clippy::indexing_slicing)]
+                                #[expect(clippy::indexing_slicing)]
                                 let child = &branch.children[next_unmatched_key_nibble as usize];
                                 match child {
                                     None => {
@@ -483,7 +483,7 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                                     Some(Child::AddressWithHash(child_addr, _)) => {
                                         let child = match merkle.read_node(*child_addr) {
                                             Ok(child) => child,
-                                            Err(e) => return Some(Err(e.into())),
+                                            Err(e) => return Some(Err(e)),
                                         };
 
                                         let node_key = matched_key.clone().into_boxed_slice();
@@ -555,7 +555,7 @@ where
 
 /// Returns an iterator that returns (`pos`,`child`) for each non-empty child of `branch`,
 /// where `pos` is the position of the child in `branch`'s children array.
-fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (u8, Child)> {
+fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (u8, Child)> + use<> {
     branch
         .children
         .clone()
@@ -581,7 +581,7 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
 }
 
 #[cfg(test)]
-#[allow(clippy::indexing_slicing, clippy::unwrap_used)]
+#[expect(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
     use std::sync::Arc;
 
@@ -942,7 +942,7 @@ mod tests {
         };
 
         // we iterate twice because we should get a None then start over
-        #[allow(clippy::indexing_slicing)]
+        #[expect(clippy::indexing_slicing)]
         for k in start.map(|r| r[0]).unwrap_or_default()..=u8::MAX {
             let next = stream.next().await.map(|kv| {
                 let (k, v) = kv.unwrap();

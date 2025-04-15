@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::merkle::{Merkle, MerkleError};
+use crate::merkle::Merkle;
 use crate::proof::{Proof, ProofNode};
 use crate::range_proof::RangeProof;
 use crate::stream::MerkleKeyValueStream;
@@ -23,8 +23,6 @@ use typed_builder::TypedBuilder;
 #[non_exhaustive]
 /// Represents the different types of errors that can occur in the database.
 pub enum DbError {
-    /// Merkle error occurred.
-    Merkle(MerkleError),
     /// I/O error occurred.
     IO(std::io::Error),
 }
@@ -32,7 +30,6 @@ pub enum DbError {
 impl fmt::Display for DbError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DbError::Merkle(e) => write!(f, "merkle error: {e:?}"),
             DbError::IO(e) => write!(f, "I/O error: {e:?}"),
         }
     }
@@ -69,7 +66,7 @@ pub trait DbViewSync {
 impl DbViewSync for HistoricalRev {
     fn val_sync<K: KeyType>(&self, key: K) -> Result<Option<Box<[u8]>>, DbError> {
         let merkle = Merkle::from(self);
-        let value = merkle.get_value(key.as_ref()).map_err(DbError::Merkle)?;
+        let value = merkle.get_value(key.as_ref())?;
         Ok(value)
     }
 }
@@ -200,7 +197,7 @@ where
 
         let nodestore = merkle.into_inner();
         let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
-            Arc::new(nodestore.into());
+            Arc::new(nodestore.try_into()?);
 
         drop(span);
         self.manager
@@ -297,7 +294,7 @@ impl Db {
         }
         let nodestore = merkle.into_inner();
         let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
-            Arc::new(nodestore.into());
+            Arc::new(nodestore.try_into()?);
         self.manager
             .write()
             .expect("poisoned lock")
@@ -312,12 +309,12 @@ impl Db {
     }
 
     /// Dump the Trie of the latest revision.
-    pub async fn dump(&self, w: &mut dyn Write) -> Result<(), DbError> {
+    pub async fn dump(&self, w: &mut dyn Write) -> Result<(), std::io::Error> {
         self.dump_sync(w)
     }
 
     /// Dump the Trie of the latest revision, synchronously.
-    pub fn dump_sync(&self, w: &mut dyn Write) -> Result<(), DbError> {
+    pub fn dump_sync(&self, w: &mut dyn Write) -> Result<(), std::io::Error> {
         let latest_rev_nodestore = self
             .manager
             .read()
@@ -325,8 +322,8 @@ impl Db {
             .current_revision();
         let merkle = Merkle::from(latest_rev_nodestore);
         // TODO: This should be a stream
-        let output = merkle.dump().map_err(DbError::Merkle)?;
-        write!(w, "{}", output).map_err(DbError::IO)
+        let output = merkle.dump()?;
+        write!(w, "{}", output)
     }
 
     /// Get a copy of the database metrics
@@ -407,7 +404,7 @@ impl<'a> api::Proposal for Proposal<'a> {
         }
         let nodestore = merkle.into_inner();
         let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
-            Arc::new(nodestore.into());
+            Arc::new(nodestore.try_into()?);
         self.db
             .manager
             .write()
@@ -445,7 +442,7 @@ impl Proposal<'_> {
     }
 }
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 mod test {
     use std::ops::{Deref, DerefMut};
     use std::path::PathBuf;
@@ -505,10 +502,16 @@ mod test {
     #[tokio::test]
     async fn reopen_test() {
         let db = testdb().await;
-        let batch = vec![BatchOp::Put {
-            key: b"k",
-            value: b"v",
-        }];
+        let batch = vec![
+            BatchOp::Put {
+                key: b"a",
+                value: b"1",
+            },
+            BatchOp::Put {
+                key: b"b",
+                value: b"2",
+            },
+        ];
         let proposal = db.propose(batch).await.unwrap();
         proposal.commit().await.unwrap();
         println!("{:?}", db.root_hash().await.unwrap().unwrap());
@@ -517,7 +520,7 @@ mod test {
         println!("{:?}", db.root_hash().await.unwrap().unwrap());
         let committed = db.root_hash().await.unwrap().unwrap();
         let historical = db.revision(committed).await.unwrap();
-        assert_eq!(&*historical.val(b"k").await.unwrap().unwrap(), b"v");
+        assert_eq!(&*historical.val(b"a").await.unwrap().unwrap(), b"1");
     }
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear

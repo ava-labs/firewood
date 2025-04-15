@@ -8,19 +8,17 @@ use crate::v2::api;
 use futures::{StreamExt, TryStreamExt};
 use metrics::counter;
 use std::collections::HashSet;
-use std::fmt::Debug;
+use std::fmt::{Debug, Write};
 use std::future::ready;
-use std::io::Write;
+use std::io::Error;
 use std::iter::once;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use storage::{
-    BranchNode, Child, Hashable, HashedNodeReader, ImmutableProposal, LeafNode, LinearAddress,
-    MutableProposal, NibblesIterator, Node, NodeStore, Path, ReadableStorage, SharedNode, TrieHash,
-    TrieReader, ValueDigest,
+    BranchNode, Child, HashType, Hashable, HashedNodeReader, ImmutableProposal, LeafNode,
+    LinearAddress, MutableProposal, NibblesIterator, Node, NodeStore, Path, ReadableStorage,
+    SharedNode, TrieReader, ValueDigest,
 };
-
-use thiserror::Error;
 
 /// Keys are boxed u8 slices
 pub type Key = Box<[u8]>;
@@ -28,18 +26,6 @@ pub type Key = Box<[u8]>;
 /// Values are vectors
 /// TODO: change to Box<[u8]>
 pub type Value = Vec<u8>;
-
-#[derive(Debug, Error)]
-/// Errors that can occur when interacting with the Merkle trie
-pub enum MerkleError {
-    /// Can't generate proof for empty node
-    #[error("can't generate proof for empty node")]
-    Empty,
-
-    /// IO error
-    #[error("IO error: {0:?}")]
-    IO(#[from] std::io::Error),
-}
 
 // convert a set of nibbles into a printable string
 // panics if there is a non-nibble byte in the set
@@ -67,20 +53,20 @@ macro_rules! write_attributes {
                 $writer,
                 " pp={}",
                 nibbles_formatter($node.partial_path.0.clone())
-            )?;
+            )
+            .map_err(|e| Error::other(e))?;
         }
-        #[allow(clippy::unnecessary_to_owned)]
         if !$value.is_empty() {
             match std::str::from_utf8($value) {
                 Ok(string) if string.chars().all(char::is_alphanumeric) => {
-                    write!($writer, " val={}", string)?
+                    write!($writer, " val={}", string).map_err(|e| Error::other(e))?
                 }
                 _ => {
                     let hex = hex::encode($value);
                     if hex.len() > 6 {
-                        write!($writer, " val={:.6}...", hex)?;
+                        write!($writer, " val={:.6}...", hex).map_err(|e| Error::other(e))?;
                     } else {
-                        write!($writer, " val={}", hex)?;
+                        write!($writer, " val={}", hex).map_err(|e| Error::other(e))?;
                     }
                 }
             }
@@ -93,7 +79,7 @@ fn get_helper<T: TrieReader>(
     nodestore: &T,
     node: &Node,
     key: &[u8],
-) -> Result<Option<SharedNode>, MerkleError> {
+) -> Result<Option<SharedNode>, Error> {
     // 4 possibilities for the position of the `key` relative to `node`:
     // 1. The node is at `key`
     // 2. The key is above the node (i.e. its ancestor)
@@ -122,7 +108,7 @@ fn get_helper<T: TrieReader>(
                     .expect("index is in bounds")
                 {
                     None => Ok(None),
-                    Some(Child::Node(ref child)) => get_helper(nodestore, child, remaining_key),
+                    Some(Child::Node(child)) => get_helper(nodestore, child, remaining_key),
                     Some(Child::AddressWithHash(addr, _)) => {
                         let child = nodestore.read_node(*addr)?;
                         get_helper(nodestore, &child, remaining_key)
@@ -161,15 +147,15 @@ impl<T: TrieReader> Merkle<T> {
         &self.nodestore
     }
 
-    fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, MerkleError> {
-        self.nodestore.read_node(addr).map_err(Into::into)
+    fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, Error> {
+        self.nodestore.read_node(addr)
     }
 
     /// Returns a proof that the given key has a certain value,
     /// or that the key isn't in the trie.
-    pub fn prove(&self, key: &[u8]) -> Result<Proof<ProofNode>, MerkleError> {
+    pub fn prove(&self, key: &[u8]) -> Result<Proof<ProofNode>, ProofError> {
         let Some(root) = self.root() else {
-            return Err(MerkleError::Empty);
+            return Err(ProofError::Empty);
         };
 
         // Get the path to the key
@@ -184,11 +170,11 @@ impl<T: TrieReader> Merkle<T> {
             // No nodes, even the root, are before `key`.
             // The root alone proves the non-existence of `key`.
             // TODO reduce duplicate code with ProofNode::from<PathIterItem>
-            let mut child_hashes: [Option<TrieHash>; BranchNode::MAX_CHILDREN] =
+            let mut child_hashes: [Option<HashType>; BranchNode::MAX_CHILDREN] =
                 [const { None }; BranchNode::MAX_CHILDREN];
             if let Some(branch) = root.as_branch() {
                 // TODO danlaine: can we avoid indexing?
-                #[allow(clippy::indexing_slicing)]
+                #[expect(clippy::indexing_slicing)]
                 for (i, hash) in branch.children_iter() {
                     child_hashes[i] = Some(hash.clone());
                 }
@@ -196,6 +182,8 @@ impl<T: TrieReader> Merkle<T> {
 
             proof.push(ProofNode {
                 key: root.partial_path().bytes(),
+                #[cfg(feature = "ethhash")]
+                partial_len: root.partial_path().0.len(),
                 value_digest: root
                     .value()
                     .map(|value| ValueDigest::Value(value.to_vec().into_boxed_slice())),
@@ -218,17 +206,16 @@ impl<T: TrieReader> Merkle<T> {
         todo!()
     }
 
-    pub(crate) fn path_iter<'a>(
-        &self,
-        key: &'a [u8],
-    ) -> Result<PathIterator<'_, 'a, T>, MerkleError> {
+    pub(crate) fn path_iter<'a>(&self, key: &'a [u8]) -> Result<PathIterator<'_, 'a, T>, Error> {
         PathIterator::new(&self.nodestore, key)
     }
 
+    #[allow(dead_code)]
     pub(super) fn key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
         MerkleKeyValueStream::from(&self.nodestore)
     }
 
+    #[allow(dead_code)]
     pub(super) fn key_value_iter_from_key<K: AsRef<[u8]>>(
         &self,
         key: K,
@@ -291,7 +278,6 @@ impl<T: TrieReader> Merkle<T> {
 
         // we stop streaming if either we hit the limit or the key returned was larger
         // than the largest key requested
-        #[allow(clippy::unwrap_used)]
         key_values.extend(
             stream
                 .take(limit.unwrap_or(usize::MAX))
@@ -328,14 +314,14 @@ impl<T: TrieReader> Merkle<T> {
         })
     }
 
-    pub(crate) fn get_value(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
+    pub(crate) fn get_value(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, Error> {
         let Some(node) = self.get_node(key)? else {
             return Ok(None);
         };
         Ok(node.value().map(|v| v.to_vec().into_boxed_slice()))
     }
 
-    pub(crate) fn get_node(&self, key: &[u8]) -> Result<Option<SharedNode>, MerkleError> {
+    pub(crate) fn get_node(&self, key: &[u8]) -> Result<Option<SharedNode>, Error> {
         let Some(root) = self.root() else {
             return Ok(None);
         };
@@ -349,19 +335,19 @@ impl<T: HashedNodeReader> Merkle<T> {
     pub(crate) fn dump_node(
         &self,
         addr: LinearAddress,
-        hash: Option<&TrieHash>,
+        hash: Option<&HashType>,
         seen: &mut HashSet<LinearAddress>,
         writer: &mut dyn Write,
-    ) -> Result<(), MerkleError> {
-        write!(writer, "  {addr}[label=\"addr:{addr:?}")?;
+    ) -> Result<(), Error> {
+        write!(writer, "  {addr}[label=\"addr:{addr:?}").map_err(Error::other)?;
         if let Some(hash) = hash {
-            write!(writer, " hash:{hash:.6?}...")?;
+            write!(writer, " hash:{hash:.6?}...").map_err(Error::other)?;
         }
 
         match &*self.read_node(addr)? {
             Node::Branch(b) => {
                 write_attributes!(writer, b, &b.value.clone().unwrap_or(Box::from([])));
-                writeln!(writer, "\"]")?;
+                writeln!(writer, "\"]").map_err(Error::other)?;
                 for (childidx, child) in b.children.iter().enumerate() {
                     let (child_addr, child_hash) = match child {
                         None => continue,
@@ -376,42 +362,48 @@ impl<T: HashedNodeReader> Merkle<T> {
                         writeln!(
                             writer,
                             "  {addr} -> {child_addr}[label=\"{childidx} (dup)\" color=red]"
-                        )?;
+                        )
+                        .map_err(Error::other)?;
                     } else {
-                        writeln!(writer, "  {addr} -> {child_addr}[label=\"{childidx}\"]")?;
+                        writeln!(writer, "  {addr} -> {child_addr}[label=\"{childidx}\"]")
+                            .map_err(Error::other)?;
                         self.dump_node(child_addr, child_hash, seen, writer)?;
                     }
                 }
             }
             Node::Leaf(l) => {
                 write_attributes!(writer, l, &l.value);
-                writeln!(writer, "\" shape=rect]")?;
+                writeln!(writer, "\" shape=rect]").map_err(Error::other)?;
             }
         };
         Ok(())
     }
 
-    pub(crate) fn dump(&self) -> Result<String, MerkleError> {
-        let mut result = vec![];
-        writeln!(result, "digraph Merkle {{\n  rankdir=LR;")?;
+    pub(crate) fn dump(&self) -> Result<String, Error> {
+        let mut result = String::new();
+        writeln!(result, "digraph Merkle {{\n  rankdir=LR;").map_err(Error::other)?;
         if let Some((root_addr, root_hash)) = self.nodestore.root_address_and_hash()? {
-            writeln!(result, " root -> {root_addr}")?;
+            writeln!(result, " root -> {root_addr}").map_err(Error::other)?;
             let mut seen = HashSet::new();
-            self.dump_node(root_addr, Some(&root_hash), &mut seen, &mut result)?;
+            // If ethhash is off, root_hash.into() is already the correct type
+            // so we disable the warning here
+            #[allow(clippy::useless_conversion)]
+            self.dump_node(root_addr, Some(&root_hash.into()), &mut seen, &mut result)?;
         }
-        write!(result, "}}")?;
+        write!(result, "}}").map_err(Error::other)?;
 
-        Ok(String::from_utf8_lossy(&result).to_string())
+        Ok(result)
     }
 }
 
-impl<S: ReadableStorage> From<Merkle<NodeStore<MutableProposal, S>>>
+impl<S: ReadableStorage> TryFrom<Merkle<NodeStore<MutableProposal, S>>>
     for Merkle<NodeStore<Arc<ImmutableProposal>, S>>
 {
-    fn from(m: Merkle<NodeStore<MutableProposal, S>>) -> Self {
-        Merkle {
-            nodestore: m.nodestore.into(),
-        }
+    type Error = std::io::Error;
+    fn try_from(m: Merkle<NodeStore<MutableProposal, S>>) -> Result<Self, Self::Error> {
+        Ok(Merkle {
+            nodestore: m.nodestore.try_into()?,
+        })
     }
 }
 
@@ -419,12 +411,13 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Convert a merkle backed by an MutableProposal into an ImmutableProposal
     /// TODO: We probably don't need this function
     pub fn hash(self) -> Merkle<NodeStore<Arc<ImmutableProposal>, S>> {
-        self.into()
+        // I think this is only used in testing
+        self.try_into().expect("failed to convert")
     }
 
     /// Map `key` to `value` in the trie.
     /// Each element of key is 2 nibbles.
-    pub fn insert(&mut self, key: &[u8], value: Box<[u8]>) -> Result<(), MerkleError> {
+    pub fn insert(&mut self, key: &[u8], value: Box<[u8]>) -> Result<(), Error> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
         let root = self.nodestore.mut_root();
@@ -453,7 +446,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         mut node: Node,
         key: &[u8],
         value: Box<[u8]>,
-    ) -> Result<Node, MerkleError> {
+    ) -> Result<Node, Error> {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`
         // 2. The key is above the node (i.e. its ancestor)
@@ -508,7 +501,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 //    ... (key may be below)       ... (key is below)
                 match node {
                     Node::Branch(ref mut branch) => {
-                        #[allow(clippy::indexing_slicing)]
+                        #[expect(clippy::indexing_slicing)]
                         let child = match std::mem::take(&mut branch.children[child_index as usize])
                         {
                             None => {
@@ -585,7 +578,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Returns the value that was removed, if any.
     /// Otherwise returns `None`.
     /// Each element of `key` is 2 nibbles.
-    pub fn remove(&mut self, key: &[u8]) -> Result<Option<Box<[u8]>>, MerkleError> {
+    pub fn remove(&mut self, key: &[u8]) -> Result<Option<Box<[u8]>>, Error> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
         let root = self.nodestore.mut_root();
@@ -610,12 +603,12 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Removes the value associated with the given `key` from the subtrie rooted at `node`.
     /// Returns the new root of the subtrie and the value that was removed, if any.
     /// Each element of `key` is 1 nibble.
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     fn remove_helper(
         &mut self,
         mut node: Node,
         key: &[u8],
-    ) -> Result<(Option<Node>, Option<Box<[u8]>>), MerkleError> {
+    ) -> Result<(Option<Node>, Option<Box<[u8]>>), Error> {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`
         // 2. The key is above the node (i.e. its ancestor)
@@ -639,7 +632,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
             (None, None) => {
                 // 1. The node is at `key`
                 match &mut node {
-                    Node::Branch(ref mut branch) => {
+                    Node::Branch(branch) => {
                         let Some(removed_value) = branch.value.take() else {
                             // The branch has no value. Return the node as is.
                             return Ok((Some(node), None));
@@ -667,7 +660,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                         } else {
                             // The branch's only child becomes the root of this subtrie.
                             let mut child = match child {
-                                Child::Node(ref mut child_node) => std::mem::take(child_node),
+                                Child::Node(child_node) => std::mem::take(child_node),
                                 Child::AddressWithHash(addr, _) => {
                                     self.nodestore.read_for_update(*addr)?
                                 }
@@ -729,7 +722,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                     // we found a non-matching leaf node, so the value does not exist
                     Node::Leaf(_) => Ok((Some(node), None)),
                     Node::Branch(ref mut branch) => {
-                        #[allow(clippy::indexing_slicing)]
+                        #[expect(clippy::indexing_slicing)]
                         let child = match std::mem::take(&mut branch.children[child_index as usize])
                         {
                             None => {
@@ -770,8 +763,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                             return Ok((Some(leaf), removed_value));
                         };
 
-                        if children_iter.next().is_some() {
-                            // The branch has more than 1 child. Return the branch.
+                        // if there is more than one child or the branch has a value, return it
+                        if branch.value.is_some() || children_iter.next().is_some() {
                             return Ok((Some(node), removed_value));
                         }
 
@@ -791,11 +784,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 
                         // The child's partial path is the concatenation of its (now removed) parent,
                         // its (former) child index, and its partial path.
-                        let branch_partial_path =
-                            std::mem::replace(&mut branch.partial_path, Path::new());
-
                         let child_partial_path = Path::from_nibbles_iterator(
-                            branch_partial_path
+                            branch
+                                .partial_path
                                 .iter()
                                 .chain(once(&(child_index as u8)))
                                 .chain(child.partial_path().iter())
@@ -812,7 +803,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 
     /// Removes any key-value pairs with keys that have the given `prefix`.
     /// Returns the number of key-value pairs removed.
-    pub fn remove_prefix(&mut self, prefix: &[u8]) -> Result<usize, MerkleError> {
+    pub fn remove_prefix(&mut self, prefix: &[u8]) -> Result<usize, Error> {
         let prefix = Path::from_nibbles_iterator(NibblesIterator::new(prefix));
 
         let root = self.nodestore.mut_root();
@@ -835,7 +826,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         mut node: Node,
         key: &[u8],
         deleted: &mut usize,
-    ) -> Result<Option<Node>, MerkleError> {
+    ) -> Result<Option<Node>, Error> {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`, in which case we need to delete this node and all its children.
         // 2. The key is above the node (i.e. its ancestor), so the parent needs to be restructured (TODO).
@@ -856,7 +847,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 // 1. The node is at `key`, or we're just above it
                 // so we can start deleting below here
                 match &mut node {
-                    Node::Branch(ref mut branch) => {
+                    Node::Branch(branch) => {
                         if branch.value.is_some() {
                             // a KV pair was in the branch itself
                             *deleted += 1;
@@ -879,7 +870,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 match node {
                     Node::Leaf(_) => Ok(Some(node)),
                     Node::Branch(ref mut branch) => {
-                        #[allow(clippy::indexing_slicing)]
+                        #[expect(clippy::indexing_slicing)]
                         let child = match std::mem::take(&mut branch.children[child_index as usize])
                         {
                             None => {
@@ -920,8 +911,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                             return Ok(Some(leaf));
                         };
 
-                        if children_iter.next().is_some() {
-                            // The branch has more than 1 child. Return the branch.
+                        // if there is more than one child or the branch has a value, return it
+                        if branch.value.is_some() || children_iter.next().is_some() {
                             return Ok(Some(node));
                         }
 
@@ -941,11 +932,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 
                         // The child's partial path is the concatenation of its (now removed) parent,
                         // its (former) child index, and its partial path.
-                        let branch_partial_path =
-                            std::mem::replace(&mut branch.partial_path, Path::new());
-
                         let child_partial_path = Path::from_nibbles_iterator(
-                            branch_partial_path
+                            branch
+                                .partial_path
                                 .iter()
                                 .chain(once(&(child_index as u8)))
                                 .chain(child.partial_path().iter())
@@ -965,7 +954,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         &mut self,
         branch: &mut BranchNode,
         deleted: &mut usize,
-    ) -> Result<(), std::io::Error> {
+    ) -> Result<(), Error> {
         if branch.value.is_some() {
             // a KV pair was in the branch itself
             *deleted += 1;
@@ -980,7 +969,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 None => continue,
             };
             match child {
-                Node::Branch(ref mut child_branch) => {
+                Node::Branch(child_branch) => {
                     self.delete_children(child_branch, deleted)?;
                 }
                 Node::Leaf(_) => {
@@ -995,9 +984,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 /// Returns an iterator where each element is the result of combining
 /// 2 nibbles of `nibbles`. If `nibbles` is odd length, panics in
 /// debug mode and drops the final nibble in release mode.
-pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> + '_ {
+pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> {
     debug_assert_eq!(nibbles.len() & 1, 0);
-    #[allow(clippy::indexing_slicing)]
+    #[expect(clippy::indexing_slicing)]
     nibbles.chunks_exact(2).map(|p| (p[0] << 4) | p[1])
 }
 
@@ -1032,17 +1021,17 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
 }
 
 #[cfg(test)]
-#[allow(clippy::indexing_slicing, clippy::unwrap_used)]
+#[expect(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
     use super::*;
     use rand::rngs::StdRng;
-    use rand::{rng, Rng, SeedableRng};
-    use storage::{MemStore, MutableProposal, NodeStore, RootReader};
+    use rand::{Rng, SeedableRng, rng};
+    use storage::{MemStore, MutableProposal, NodeStore, RootReader, TrieHash};
     use test_case::test_case;
 
     // Returns n random key-value pairs.
     fn generate_random_kvs(seed: u64, n: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
-        eprintln!("Used seed: {}", seed);
+        eprintln!("Seed {seed}: to rerun with this data, export FIREWOOD_TEST_SEED={seed}");
 
         let mut rng = StdRng::seed_from_u64(seed);
 
@@ -1295,7 +1284,7 @@ mod tests {
     fn get_empty_proof() {
         let merkle = create_in_memory_merkle().hash();
         let proof = merkle.prove(b"any-key");
-        assert!(matches!(proof.unwrap_err(), MerkleError::Empty));
+        assert!(matches!(proof.unwrap_err(), ProofError::Empty));
     }
 
     #[test]
@@ -1338,9 +1327,11 @@ mod tests {
 
             {
                 // Test that the proof is invalid when the hash is different
-                assert!(proof
-                    .verify(key, Some(value), &TrieHash::default())
-                    .is_err());
+                assert!(
+                    proof
+                        .verify(key, Some(value), &TrieHash::default())
+                        .is_err()
+                );
             }
         }
     }
@@ -1655,6 +1646,29 @@ mod tests {
         assert_eq!(*got, val_2);
     }
 
+    #[test]
+    fn test_delete_one_child_with_branch_value() {
+        let mut merkle = create_in_memory_merkle();
+        // insert a parent with a value
+        merkle.insert(&[0], Box::new([42u8])).unwrap();
+        // insert child1 with a value
+        merkle.insert(&[0, 1], Box::new([43u8])).unwrap();
+        // insert child2 with a value
+        merkle.insert(&[0, 2], Box::new([44u8])).unwrap();
+
+        // now delete one of the children
+        let deleted = merkle.remove(&[0, 1]).unwrap();
+        assert_eq!(deleted, Some([43u8].to_vec().into_boxed_slice()));
+
+        // make sure the parent still has the correct value
+        let got = merkle.get_value(&[0]).unwrap().unwrap();
+        assert_eq!(*got, [42u8]);
+
+        // and check the remaining child
+        let other_child = merkle.get_value(&[0, 2]).unwrap().unwrap();
+        assert_eq!(*other_child, [44u8]);
+    }
+
     //     #[test]
     //     fn single_key_proof_with_one_node() {
     //         let mut merkle = create_in_memory_merkle();
@@ -1695,10 +1709,10 @@ mod tests {
 
     fn merkle_build_test<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         items: Vec<(K, V)>,
-    ) -> Result<Merkle<NodeStore<MutableProposal, MemStore>>, MerkleError> {
+    ) -> Result<Merkle<NodeStore<MutableProposal, MemStore>>, Error> {
         let nodestore = NodeStore::new_empty_proposal(MemStore::new(vec![]).into());
         let mut merkle = Merkle::from(nodestore);
-        for (k, v) in items.iter() {
+        for (k, v) in items {
             merkle.insert(k.as_ref(), Box::from(v.as_ref()))?;
         }
 
@@ -1706,7 +1720,7 @@ mod tests {
     }
 
     #[test]
-    fn test_root_hash_simple_insertions() -> Result<(), MerkleError> {
+    fn test_root_hash_simple_insertions() -> Result<(), Error> {
         let items = vec![
             ("do", "verb"),
             ("doe", "reindeer"),
@@ -1721,6 +1735,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(not(feature = "ethhash"))]
     #[test_case(vec![], None; "empty trie")]
     #[test_case(vec![(&[0],&[0])], Some("073615413d814b23383fc2c8d8af13abfffcb371b654b98dbf47dd74b1e4d1b9"); "root")]
     #[test_case(vec![(&[0,1],&[0,1])], Some("28e67ae4054c8cdf3506567aa43f122224fe65ef1ab3e7b7899f75448a69a6fd"); "root with partial path")]
@@ -1729,7 +1744,6 @@ mod tests {
     #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1])], Some("c3bdc20aff5cba30f81ffd7689e94e1dbeece4a08e27f0104262431604cf45c6"); "root with leaf child")]
     #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1]),(&[0,1,2],&[0,1,2])], Some("229011c50ad4d5c2f4efe02b8db54f361ad295c4eee2bf76ea4ad1bb92676f97"); "root with branch child")]
     #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1]),(&[0,8],&[0,8]),(&[0,1,2],&[0,1,2])], Some("a683b4881cb540b969f885f538ba5904699d480152f350659475a962d6240ef9"); "root with branch child and leaf child")]
-    #[allow(unused_variables)]
     fn test_root_hash_merkledb_compatible(kvs: Vec<(&[u8], &[u8])>, expected_hash: Option<&str>) {
         // TODO: get the hashes from merkledb and verify compatibility with branch factor 256
         #[cfg(not(feature = "branch_factor_256"))]
@@ -1749,8 +1763,122 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "ethhash")]
+    mod ethhasher {
+        use ethereum_types::H256;
+        use hash_db::Hasher;
+        use plain_hasher::PlainHasher;
+        use sha3::{Digest, Keccak256};
+
+        #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
+        pub struct KeccakHasher;
+
+        impl Hasher for KeccakHasher {
+            type Out = H256;
+            type StdHasher = PlainHasher;
+            const LENGTH: usize = 32;
+
+            #[inline]
+            fn hash(x: &[u8]) -> Self::Out {
+                let mut hasher = Keccak256::new();
+                hasher.update(x);
+                let result = hasher.finalize();
+                H256::from_slice(result.as_slice())
+            }
+        }
+    }
+
+    #[cfg(feature = "ethhash")]
+    #[test_case(&[("doe", "reindeer")])]
+    #[test_case(&[("doe", "reindeer"),("dog", "puppy"),("dogglesworth", "cat")])]
+    #[test_case(&[("doe", "reindeer"),("dog", "puppy"),("dogglesworth", "cacatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatt")])]
+    #[test_case(&[("dogglesworth", "cacatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatcatt")])]
+    fn test_root_hash_eth_compatible<T: AsRef<[u8]> + Clone + Ord>(kvs: &[(T, T)]) {
+        use ethereum_types::H256;
+        use ethhasher::KeccakHasher;
+        use triehash::trie_root;
+
+        let merkle = merkle_build_test(kvs.to_vec()).unwrap().hash();
+        let firewood_hash = merkle.nodestore.root_hash().unwrap().unwrap_or_default();
+        let eth_hash = trie_root::<KeccakHasher, _, _, _>(kvs.to_vec());
+        let firewood_hash = H256::from_slice(firewood_hash.as_ref());
+
+        assert_eq!(firewood_hash, eth_hash);
+    }
+
+    #[cfg(feature = "ethhash")]
+    #[test_case(
+            "0000000000000000000000000000000000000002",
+            "f844802ca00000000000000000000000000000000000000000000000000000000000000000a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+            &[],
+            "c00ca9b8e6a74b03f6b1ae2db4a65ead348e61b74b339fe4b117e860d79c7821"
+    )]
+    #[test_case(
+            "0000000000000000000000000000000000000002",
+            "f844802ca00000000000000000000000000000000000000000000000000000000000000000a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+            &[
+                    ("48078cfed56339ea54962e72c37c7f588fc4f8e5bc173827ba75cb10a63a96a5", "a00200000000000000000000000000000000000000000000000000000000000000")
+            ],
+            "91336bf4e6756f68e1af0ad092f4a551c52b4a66860dc31adbd736f0acbadaf6"
+    )]
+    #[test_case(
+            "0000000000000000000000000000000000000002",
+            "f844802ca00000000000000000000000000000000000000000000000000000000000000000a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+            &[
+                    ("48078cfed56339ea54962e72c37c7f588fc4f8e5bc173827ba75cb10a63a96a5", "a00200000000000000000000000000000000000000000000000000000000000000"),
+                    ("0e81f83a84964b811dd1b8328262a9f57e6bc3e5e7eb53627d10437c73c4b8da", "a02800000000000000000000000000000000000000000000000000000000000000"),
+            ],
+            "c267104830880c966c2cc8c669659e4bfaf3126558dbbd6216123b457944001b"
+    )]
+    fn test_eth_compatible_accounts(
+        account: &str,
+        account_value: &str,
+        key_suffixes_and_values: &[(&str, &str)],
+        expected_root: &str,
+    ) {
+        use sha2::Digest as _;
+        use sha3::Keccak256;
+
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("trace"))
+            .is_test(true)
+            .try_init()
+            .ok();
+
+        let account = make_box(account);
+        let expected_key_hash = Keccak256::digest(&account);
+
+        let items = once((
+            Box::from(expected_key_hash.as_slice()),
+            make_box(account_value),
+        ))
+        .chain(key_suffixes_and_values.iter().map(|(key_suffix, value)| {
+            let key = expected_key_hash
+                .iter()
+                .copied()
+                .chain(make_box(key_suffix).iter().copied())
+                .collect();
+            let value = make_box(value);
+            (key, value)
+        }))
+        .collect::<Vec<(Box<_>, Box<_>)>>();
+
+        let merkle = merkle_build_test(items).unwrap().hash();
+        let firewood_hash = merkle.nodestore.root_hash().unwrap();
+
+        assert_eq!(
+            firewood_hash,
+            TrieHash::try_from(&*make_box(expected_root)).ok()
+        );
+    }
+
+    // helper method to convert a string into a boxed slice
+    #[cfg(feature = "ethhash")]
+    fn make_box(hex_str: &str) -> Box<[u8]> {
+        hex::decode(hex_str).unwrap().into_boxed_slice()
+    }
+
     #[test]
-    fn test_root_hash_fuzz_insertions() -> Result<(), MerkleError> {
+    fn test_root_hash_fuzz_insertions() -> Result<(), Error> {
         use rand::rngs::StdRng;
         use rand::{Rng, SeedableRng};
         let rng = std::cell::RefCell::new(StdRng::seed_from_u64(42));
@@ -1771,14 +1899,17 @@ mod tests {
             key
         };
 
-        for _ in 0..10 {
+        // TODO: figure out why this fails if we use more than 27 iterations with branch_factor_256
+        for _ in 0..27 {
             let mut items = Vec::new();
 
-            for _ in 0..10 {
-                let val: Vec<u8> = (0..8).map(|_| rng.borrow_mut().random()).collect();
+            for _ in 0..100 {
+                let val: Vec<u8> = (0..256).map(|_| rng.borrow_mut().random()).collect();
                 items.push((keygen(), val));
             }
 
+            // #[cfg(feature = "ethhash")]
+            // test_root_hash_eth_compatible(&items);
             merkle_build_test(items)?;
         }
 
@@ -1815,79 +1946,91 @@ mod tests {
         }
     }
 
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_root_hash_reversed_deletions() -> Result<(), Error> {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+        let rng = std::cell::RefCell::new(StdRng::seed_from_u64(42));
+        let max_len0 = 8;
+        let max_len1 = 4;
+        let keygen = || {
+            let (len0, len1): (usize, usize) = {
+                let mut rng = rng.borrow_mut();
+                (
+                    rng.random_range(1..max_len0 + 1),
+                    rng.random_range(1..max_len1 + 1),
+                )
+            };
+            let key: Vec<u8> = (0..len0)
+                .map(|_| rng.borrow_mut().random_range(0..2))
+                .chain((0..len1).map(|_| rng.borrow_mut().random()))
+                .collect();
+            key
+        };
+
+        for _ in 0..10 {
+            let mut items: Vec<_> = (0..10)
+                .map(|_| keygen())
+                .map(|key| {
+                    let val: Box<[u8]> = (0..8).map(|_| rng.borrow_mut().random()).collect();
+                    (key, val)
+                })
+                .collect();
+
+            items.sort();
+
+            let mut merkle = merkle_build_test(items.clone())?;
+
+            let mut hashes = Vec::new();
+
+            for (k, v) in items.iter() {
+                let root_hash = merkle
+                    .nodestore
+                    .root_address_and_hash()?
+                    .map(|(_, hash)| hash);
+                hashes.push((root_hash, merkle.dump()?));
+                merkle.insert(k, v.clone())?;
+            }
+
+            let mut new_hashes = Vec::new();
+
+            for (k, _) in items.iter().rev() {
+                let before = merkle.dump()?;
+                merkle.remove(k)?;
+                let root_hash = merkle
+                    .nodestore
+                    .root_address_and_hash()?
+                    .map(|(_, hash)| hash);
+                new_hashes.push((root_hash, k, before, merkle.dump()?));
+            }
+
+            hashes.reverse();
+
+            for i in 0..hashes.len() {
+                #[allow(clippy::indexing_slicing)]
+                let (new_hash, key, before_removal, after_removal) = &new_hashes[i];
+                #[allow(clippy::indexing_slicing)]
+                let expected_hash = &hashes[i];
+                let key = key.iter().fold(String::new(), |mut s, b| {
+                    let _ = write!(s, "{:02x}", b);
+                    s
+                });
+                assert_eq!(
+                    new_hash.clone(),
+                    expected_hash.0,
+                    "\n\nkey: {key}\nbefore:\n{before_removal}\nafter:\n{after_removal}\n\nexpected:\n{:?}\n",
+                    expected_hash.0
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     // #[test]
     // #[allow(clippy::unwrap_used)]
-    // fn test_root_hash_reversed_deletions() -> Result<(), MerkleError> {
-    //     use rand::rngs::StdRng;
-    //     use rand::{Rng, SeedableRng};
-    //     let rng = std::cell::RefCell::new(StdRng::seed_from_u64(42));
-    //     let max_len0 = 8;
-    //     let max_len1 = 4;
-    //     let keygen = || {
-    //         let (len0, len1): (usize, usize) = {
-    //             let mut rng = rng.borrow_mut();
-    //             (
-    //                 rng.random_range(1..max_len0 + 1),
-    //                 rng.random_range(1..max_len1 + 1),
-    //             )
-    //         };
-    //         let key: Vec<u8> = (0..len0)
-    //             .map(|_| rng.borrow_mut().random_range(0..2))
-    //             .chain((0..len1).map(|_| rng.borrow_mut().random()))
-    //             .collect();
-    //         key
-    //     };
-
-    //     for _ in 0..10 {
-    //         let mut items: Vec<_> = (0..10)
-    //             .map(|_| keygen())
-    //             .map(|key| {
-    //                 let val: Box<[u8]> = (0..8).map(|_| rng.borrow_mut().random()).collect();
-    //                 (key, val)
-    //             })
-    //             .collect();
-
-    //         items.sort();
-
-    //         let mut merkle =
-    //             Merkle::new(HashedNodeStore::initialize(MemStore::new(vec![])).unwrap());
-
-    //         let mut hashes = Vec::new();
-
-    //         for (k, v) in items.iter() {
-    //             hashes.push((merkle.root_hash()?, merkle.dump()?));
-    //             merkle.insert(k, v.clone())?;
-    //         }
-
-    //         let mut new_hashes = Vec::new();
-
-    //         for (k, _) in items.iter().rev() {
-    //             let before = merkle.dump()?;
-    //             merkle.remove(k)?;
-    //             new_hashes.push((merkle.root_hash()?, k, before, merkle.dump()?));
-    //         }
-
-    //         hashes.reverse();
-
-    //         for i in 0..hashes.len() {
-    //             #[allow(clippy::indexing_slicing)]
-    //             let (new_hash, key, before_removal, after_removal) = &new_hashes[i];
-    //             #[allow(clippy::indexing_slicing)]
-    //             let expected_hash = &hashes[i];
-    //             let key = key.iter().fold(String::new(), |mut s, b| {
-    //                 let _ = write!(s, "{:02x}", b);
-    //                 s
-    //             });
-    //             // assert_eq!(new_hash, expected_hash, "\n\nkey: {key}\nbefore:\n{before_removal}\nafter:\n{after_removal}\n\nexpected:\n{expected_dump}\n");
-    //         }
-    //     }
-
-    //     Ok(())
-    // }
-
-    // #[test]
-    // #[allow(clippy::unwrap_used)]
-    // fn test_root_hash_random_deletions() -> Result<(), MerkleError> {
+    // fn test_root_hash_random_deletions() -> Result<(), Error> {
     //     use rand::rngs::StdRng;
     //     use rand::seq::SliceRandom;
     //     use rand::{Rng, SeedableRng};
@@ -1963,7 +2106,7 @@ mod tests {
 
     // #[test]
     // #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
-    // fn test_proof() -> Result<(), MerkleError> {
+    // fn test_proof() -> Result<(), Error> {
     //     let set = fixed_and_pseudorandom_data(500);
     //     let mut items = Vec::from_iter(set.iter());
     //     items.sort();
@@ -1983,7 +2126,7 @@ mod tests {
 
     // #[test]
     // /// Verify the proofs that end with leaf node with the given key.
-    // fn test_proof_end_with_leaf() -> Result<(), MerkleError> {
+    // fn test_proof_end_with_leaf() -> Result<(), Error> {
     //     let items = vec![
     //         ("do", "verb"),
     //         ("doe", "reindeer"),
@@ -2006,7 +2149,7 @@ mod tests {
 
     // #[test]
     // /// Verify the proofs that end with branch node with the given key.
-    // fn test_proof_end_with_branch() -> Result<(), MerkleError> {
+    // fn test_proof_end_with_branch() -> Result<(), Error> {
     //     let items = vec![
     //         ("d", "verb"),
     //         ("do", "verb"),
@@ -2026,7 +2169,7 @@ mod tests {
     // }
 
     // #[test]
-    // fn test_bad_proof() -> Result<(), MerkleError> {
+    // fn test_bad_proof() -> Result<(), Error> {
     //     let set = fixed_and_pseudorandom_data(800);
     //     let mut items = Vec::from_iter(set.iter());
     //     items.sort();
@@ -2049,7 +2192,7 @@ mod tests {
     // #[test]
     // // Tests that missing keys can also be proven. The test explicitly uses a single
     // // entry trie and checks for missing keys both before and after the single entry.
-    // fn test_missing_key_proof() -> Result<(), MerkleError> {
+    // fn test_missing_key_proof() -> Result<(), Error> {
     //     let items = vec![("k", "v")];
     //     let merkle = merkle_build_test(items)?;
     //     for key in ["a", "j", "l", "z"] {
@@ -2065,7 +2208,7 @@ mod tests {
     // }
 
     // #[test]
-    // fn test_empty_tree_proof() -> Result<(), MerkleError> {
+    // fn test_empty_tree_proof() -> Result<(), Error> {
     //     let items: Vec<(&str, &str)> = Vec::new();
     //     let merkle = merkle_build_test(items)?;
     //     let key = "x".as_ref();
@@ -2540,7 +2683,7 @@ mod tests {
     // #[test]
     // // Tests the element is not in the range covered by proofs.
     // #[allow(clippy::indexing_slicing)]
-    // fn test_same_side_proof() -> Result<(), MerkleError> {
+    // fn test_same_side_proof() -> Result<(), Error> {
     //     let set = fixed_and_pseudorandom_data(4096);
     //     let mut items = Vec::from_iter(set.iter());
     //     items.sort();
