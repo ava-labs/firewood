@@ -298,7 +298,6 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
                 "Database cannot be opened as it was created without ethhash enabled",
             ));
         }
-        
 
         let mut nodestore = Self {
             header,
