@@ -192,9 +192,9 @@ struct StoredArea<T> {
 }
 
 impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
-    /// Returns (index, area_size) for the [StoredArea] at `addr`.
-    /// `index` is the index of `area_size` in [AREA_SIZES].
-    fn area_index_and_size(&self, addr: LinearAddress) -> Result<(AreaIndex, u64), Error> {
+    /// Returns (index, area_size) for the stored area at `addr`.
+    /// `index` is the index of `area_size` in the array of valid block sizes.
+    pub fn area_index_and_size(&self, addr: LinearAddress) -> Result<(AreaIndex, u64), Error> {
         let mut area_stream = self.storage.stream_from(addr.get())?;
 
         let index: AreaIndex = serializer()
@@ -240,6 +240,30 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
             CacheReadStrategy::WritesOnly => {}
         }
         Ok(node)
+    }
+
+    /// Read a [Node] from the provided [LinearAddress] and size.
+    /// This is an uncached read, primarily used by check utilities
+    pub fn uncached_read_node_and_size(
+        &self,
+        addr: LinearAddress,
+    ) -> Result<(SharedNode, u8), Error> {
+        let mut area_stream = self.storage.stream_from(addr.get())?;
+        let mut size = [0u8];
+        area_stream.read_exact(&mut size)?;
+        self.storage.stream_from(addr.get() + 1)?;
+        let node: SharedNode = Node::from_reader(area_stream)?.into();
+        Ok((node, size[0]))
+    }
+
+    /// Get a reference to the header of this nodestore
+    pub fn header(&self) -> &NodeStoreHeader {
+        &self.header
+    }
+
+    /// Get the size of an area index (used by the checker)
+    pub fn size_from_area_index(&self, index: AreaIndex) -> u64 {
+        AREA_SIZES[index as usize]
     }
 }
 
@@ -326,7 +350,7 @@ impl Parentable for Arc<ImmutableProposal> {
 impl<S> NodeStore<Arc<ImmutableProposal>, S> {
     /// When an immutable proposal commits, we need to reparent any proposal that
     /// has the committed proposal as it's parent
-    pub fn commit_reparent(&self, other: &Arc<NodeStore<Arc<ImmutableProposal>, S>>) -> bool {
+    pub fn commit_reparent(&self, other: &Arc<NodeStore<Arc<ImmutableProposal>, S>>) {
         match *other.kind.parent.load() {
             NodeStoreParent::Proposed(ref parent) => {
                 if Arc::ptr_eq(&self.kind, parent) {
@@ -334,12 +358,9 @@ impl<S> NodeStore<Arc<ImmutableProposal>, S> {
                         .kind
                         .parent
                         .store(NodeStoreParent::Committed(self.kind.root_hash()).into());
-                    true
-                } else {
-                    false
                 }
             }
-            NodeStoreParent::Committed(_) => false,
+            NodeStoreParent::Committed(_) => {}
         }
     }
 }
@@ -603,7 +624,7 @@ pub type FreeLists = [Option<LinearAddress>; NUM_AREA_SIZES];
 /// The [NodeStoreHeader] is at the start of the ReadableStorage.
 #[derive(Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Clone, NoUninit, AnyBitPattern)]
 #[repr(C)]
-struct NodeStoreHeader {
+pub struct NodeStoreHeader {
     /// Identifies the version of firewood used to create this [NodeStore].
     version: Version,
     /// always "1"; verifies endianness
@@ -634,6 +655,11 @@ impl NodeStoreHeader {
             version: Version::new(),
             free_lists: Default::default(),
         }
+    }
+
+    // return the size of this nodestore
+    pub fn size(&self) -> u64 {
+        self.size
     }
 }
 
