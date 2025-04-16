@@ -2,8 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use storage::{
-    Node, NodeStore, Parentable, ReadInMemoryNode, ReadableStorage, RootReader, TrieHash,
-    TrieReader,
+    FileIoError, Node, NodeStore, Parentable, ReadInMemoryNode, ReadableStorage, RootReader, TrieHash, TrieReader
 };
 
 use crate::{
@@ -34,7 +33,7 @@ pub trait Diffable {
         new: &NodeStore<TN, SN>,
         start: Option<Key>,
         limit: Option<usize>,
-    ) -> Result<Batch<Key, Value>, std::io::Error>
+    ) -> Result<Batch<Key, Value>, FileIoError>
     where
         Self: TrieReader,
         NodeStore<TN, SN>: TrieReader,
@@ -53,7 +52,7 @@ where
         new: &NodeStore<TN, SN>,
         start: Option<Key>,
         limit: Option<usize>,
-    ) -> Result<Batch<Key, Value>, std::io::Error>
+    ) -> Result<Batch<Key, Value>, FileIoError>
     where
         NodeStore<TN, SN>: TrieReader,
         TN: ReadInMemoryNode + Parentable,
@@ -119,7 +118,7 @@ where
                 // the diff consists of everything from the new root
                 MerkleNodeStream::new(new, start.unwrap_or_default())
                     .take(limit.unwrap_or(usize::MAX))
-                    .try_for_each(|item| -> Result<(), std::io::Error> {
+                    .try_for_each(|item| -> Result<(), FileIoError> {
                         let item = item?;
                         match *item.1 {
                             Node::Leaf(ref leaf) => {
@@ -144,7 +143,7 @@ where
             (Some(_), None) => {
                 MerkleNodeStream::new(self, start.unwrap_or_default())
                     .take(limit.unwrap_or(usize::MAX))
-                    .try_for_each(|item| -> Result<(), std::io::Error> {
+                    .try_for_each(|item| -> Result<(), FileIoError> {
                         let item = item?;
                         match *item.1 {
                             Node::Leaf(ref _leaf) => {

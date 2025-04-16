@@ -9,7 +9,7 @@ use futures::{Stream, StreamExt};
 use std::cmp::Ordering;
 use std::iter::{FusedIterator, once};
 use std::task::Poll;
-use storage::{BranchNode, Child, NibblesIterator, Node, PathIterItem, SharedNode, TrieReader};
+use storage::{BranchNode, Child, FileIoError, NibblesIterator, Node, PathIterItem, SharedNode, TrieReader};
 
 /// Represents an ongoing iteration over a node and its children.
 enum IterationNode {
@@ -95,7 +95,7 @@ impl<'a, T: TrieReader> MerkleNodeStream<'a, T> {
 
     /// Internal function that handles the core iteration logic shared between Iterator and Stream implementations.
     /// Returns None when iteration is complete, or Some(Result) with either a node or an error.
-    fn next_internal(&mut self) -> Option<Result<(Key, SharedNode), std::io::Error>> {
+    fn next_internal(&mut self) -> Option<Result<(Key, SharedNode), FileIoError>> {
         let Self { state, merkle } = &mut *self;
 
         match state {
@@ -178,7 +178,7 @@ impl<'a, T: TrieReader> MerkleNodeStream<'a, T> {
 }
 
 impl<T: TrieReader> Stream for MerkleNodeStream<'_, T> {
-    type Item = Result<(Key, SharedNode), std::io::Error>;
+    type Item = Result<(Key, SharedNode), FileIoError>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
@@ -192,7 +192,7 @@ impl<T: TrieReader> Stream for MerkleNodeStream<'_, T> {
 }
 
 impl<T: TrieReader> Iterator for MerkleNodeStream<'_, T> {
-    type Item = Result<(Key, SharedNode), std::io::Error>;
+    type Item = Result<(Key, SharedNode), FileIoError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.next_internal()
@@ -203,7 +203,7 @@ impl<T: TrieReader> Iterator for MerkleNodeStream<'_, T> {
 fn get_iterator_intial_state<T: TrieReader>(
     merkle: &T,
     key: &[u8],
-) -> Result<NodeStreamState, std::io::Error> {
+) -> Result<NodeStreamState, FileIoError> {
     let Some(root) = merkle.root_node() else {
         // This merkle is empty.
         return Ok(NodeStreamState::Iterating { iter_stack: vec![] });
@@ -417,7 +417,7 @@ pub struct PathIterator<'a, 'b, T> {
 }
 
 impl<'a, 'b, T: TrieReader> PathIterator<'a, 'b, T> {
-    pub(super) fn new(merkle: &'a T, key: &'b [u8]) -> Result<Self, std::io::Error> {
+    pub(super) fn new(merkle: &'a T, key: &'b [u8]) -> Result<Self, FileIoError> {
         let Some(root) = merkle.root_node() else {
             return Ok(Self {
                 state: PathIteratorState::Exhausted,
@@ -437,7 +437,7 @@ impl<'a, 'b, T: TrieReader> PathIterator<'a, 'b, T> {
 }
 
 impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
-    type Item = Result<PathIterItem, std::io::Error>;
+    type Item = Result<PathIterItem, FileIoError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // destructuring is necessary here because we need mutable access to `state`
