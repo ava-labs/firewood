@@ -178,15 +178,14 @@ impl<'a, T: TrieReader> MerkleNodeStream<'a, T> {
 }
 
 impl<T: TrieReader> Stream for MerkleNodeStream<'_, T> {
-    type Item = Result<(Key, SharedNode), api::Error>;
+    type Item = Result<(Key, SharedNode), std::io::Error>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         match self.next_internal() {
-            Some(Ok(item)) => Poll::Ready(Some(Ok(item))),
-            Some(Err(e)) => Poll::Ready(Some(Err(api::Error::from(e)))),
+            Some(result) => Poll::Ready(Some(result)),
             None => Poll::Ready(None),
         }
     }
@@ -380,7 +379,7 @@ impl<T: TrieReader> Stream for MerkleKeyValueStream<'_, T> {
                                 Poll::Ready(Some(Ok((key, value))))
                             }
                         },
-                        Some(Err(e)) => Poll::Ready(Some(Err(e))),
+                        Some(Err(e)) => Poll::Ready(Some(Err(api::Error::from(e)))),
                         None => Poll::Ready(None),
                     },
                     Poll::Pending => Poll::Pending,
