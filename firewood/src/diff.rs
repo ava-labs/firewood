@@ -71,12 +71,48 @@ where
                 let start = start.unwrap_or_default();
                 let left = Merkle::from(self);
                 let right = Merkle::from(new);
-                let left_stream = left.path_iter(&start)?;
+                let mut left_stream = left.path_iter(&start)?;
                 let mut right_stream = right.path_iter(&start)?;
 
-                for _left_item in left_stream {
-                    let _right_item = right_stream.next();
-                    todo!()
+                let left_item = left_stream.next();
+                let right_item = right_stream.next();
+                while left_item.is_some() || right_item.is_some() {
+                    match (left_item, right_item) {
+                        (Some(left_item), Some(right_item)) => {
+                            match *left_item?.node {
+                                Node::Leaf(ref _left_leaf) => {
+                                    match *right_item?.node {
+                                        Node::Leaf(ref _right_leaf) => {
+                                            todo!()
+                                        }
+                                        Node::Branch(ref _right_branch) => {
+                                            todo!()
+                                        }
+                                    }
+                                }
+                                Node::Branch(ref _left_branch) => {
+                                    match *right_item?.node {
+                                        Node::Branch(ref _right_branch) => {
+                                            // if the branches have the same hash, then jump to the next nibble
+                                            todo!()
+                                        }
+                                        Node::Leaf(ref _right_leaf) => {
+                                            todo!()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        (Some(_), None) => {
+                            todo!()
+                        }
+                        (None, Some(_)) => {
+                            todo!()
+                        }
+                        (None, None) => {
+                            break;
+                        }
+                    }
                 }
             }
             (None, Some(_)) => {

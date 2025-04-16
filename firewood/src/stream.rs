@@ -92,97 +92,10 @@ impl<'a, T: TrieReader> MerkleNodeStream<'a, T> {
             merkle,
         }
     }
-}
 
-impl<T: TrieReader> Stream for MerkleNodeStream<'_, T> {
-    type Item = Result<(Key, SharedNode), api::Error>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        // destructuring is necessary here because we need mutable access to `state`
-        // at the same time as immutable access to `merkle`.
-        let Self { state, merkle } = &mut *self;
-
-        match state {
-            NodeStreamState::StartFromKey(key) => {
-                self.state = get_iterator_intial_state(*merkle, key)?;
-                self.poll_next(_cx)
-            }
-            NodeStreamState::Iterating { iter_stack } => {
-                while let Some(mut iter_node) = iter_stack.pop() {
-                    match iter_node {
-                        IterationNode::Unvisited { key, node } => {
-                            match &*node {
-                                Node::Leaf(_) => {}
-                                Node::Branch(branch) => {
-                                    // `node` is a branch node. Visit its children next.
-                                    iter_stack.push(IterationNode::Visited {
-                                        key: key.clone(),
-                                        children_iter: Box::new(as_enumerated_children_iter(
-                                            branch,
-                                        )),
-                                    });
-                                }
-                            }
-
-                            let key = key_from_nibble_iter(key.iter().copied());
-                            return Poll::Ready(Some(Ok((key, node))));
-                        }
-                        IterationNode::Visited {
-                            ref key,
-                            ref mut children_iter,
-                        } => {
-                            // We returned `node` already. Visit its next child.
-                            let Some((pos, child)) = children_iter.next() else {
-                                // We visited all this node's descendants. Go back to its parent.
-                                continue;
-                            };
-
-                            let child = match child {
-                                Child::AddressWithHash(addr, _) => match merkle.read_node(addr) {
-                                    Ok(node) => node,
-                                    Err(e) => return Poll::Ready(Some(Err(api::Error::from(e)))),
-                                },
-                                Child::Node(node) => node.clone().into(),
-                            };
-
-                            let child_partial_path = child.partial_path().iter().copied();
-
-                            // The child's key is its parent's key, followed by the child's index,
-                            // followed by the child's partial path (if any).
-                            let child_key: Key = key
-                                .iter()
-                                .copied()
-                                .chain(once(pos))
-                                .chain(child_partial_path)
-                                .collect();
-
-                            // There may be more children of this node to visit.
-                            // Visit it again after visiting its `child`.
-                            iter_stack.push(iter_node);
-
-                            iter_stack.push(IterationNode::Unvisited {
-                                key: child_key,
-                                node: child,
-                            });
-                            return self.poll_next(_cx);
-                        }
-                    }
-                }
-                Poll::Ready(None)
-            }
-        }
-    }
-}
-
-impl<T: TrieReader> Iterator for MerkleNodeStream<'_, T> {
-    type Item = Result<(Key, SharedNode), std::io::Error>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        // destructuring is necessary here because we need mutable access to `state`
-        // at the same time as immutable access to `merkle`.
+    /// Internal function that handles the core iteration logic shared between Iterator and Stream implementations.
+    /// Returns None when iteration is complete, or Some(Result) with either a node or an error.
+    fn next_internal(&mut self) -> Option<Result<(Key, SharedNode), std::io::Error>> {
         let Self { state, merkle } = &mut *self;
 
         match state {
@@ -195,7 +108,7 @@ impl<T: TrieReader> Iterator for MerkleNodeStream<'_, T> {
                         return Some(Err(e));
                     }
                 }
-                std::iter::Iterator::next(self)
+                self.next_internal()
             }
             NodeStreamState::Iterating { iter_stack } => {
                 while let Some(mut iter_node) = iter_stack.pop() {
@@ -254,13 +167,36 @@ impl<T: TrieReader> Iterator for MerkleNodeStream<'_, T> {
                                 key: child_key,
                                 node: child,
                             });
-                            return std::iter::Iterator::next(self);
+                            return self.next_internal();
                         }
                     }
                 }
                 None
             }
         }
+    }
+}
+
+impl<T: TrieReader> Stream for MerkleNodeStream<'_, T> {
+    type Item = Result<(Key, SharedNode), api::Error>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        match self.next_internal() {
+            Some(Ok(item)) => Poll::Ready(Some(Ok(item))),
+            Some(Err(e)) => Poll::Ready(Some(Err(api::Error::from(e)))),
+            None => Poll::Ready(None),
+        }
+    }
+}
+
+impl<T: TrieReader> Iterator for MerkleNodeStream<'_, T> {
+    type Item = Result<(Key, SharedNode), std::io::Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next_internal()
     }
 }
 
