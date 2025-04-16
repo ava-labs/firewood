@@ -15,7 +15,9 @@ use std::iter::once;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use storage::{
-    BranchNode, Child, FileIoError, HashType, Hashable, HashedNodeReader, ImmutableProposal, LeafNode, LinearAddress, MutableProposal, NibblesIterator, Node, NodeStore, Path, ReadableStorage, SharedNode, TrieReader, ValueDigest
+    BranchNode, Child, FileIoError, HashType, Hashable, HashedNodeReader, ImmutableProposal,
+    LeafNode, LinearAddress, MutableProposal, NibblesIterator, Node, NodeStore, Path,
+    ReadableStorage, SharedNode, TrieReader, ValueDigest,
 };
 
 /// Keys are boxed u8 slices
@@ -204,7 +206,10 @@ impl<T: TrieReader> Merkle<T> {
         todo!()
     }
 
-    pub(crate) fn path_iter<'a>(&self, key: &'a [u8]) -> Result<PathIterator<'_, 'a, T>, FileIoError> {
+    pub(crate) fn path_iter<'a>(
+        &self,
+        key: &'a [u8],
+    ) -> Result<PathIterator<'_, 'a, T>, FileIoError> {
         PathIterator::new(&self.nodestore, key)
     }
 
@@ -380,7 +385,11 @@ impl<T: HashedNodeReader> Merkle<T> {
     pub(crate) fn dump(&self) -> Result<String, Error> {
         let mut result = String::new();
         writeln!(result, "digraph Merkle {{\n  rankdir=LR;").map_err(Error::other)?;
-        if let Some((root_addr, root_hash)) = self.nodestore.root_address_and_hash().expect("failed to get root address and hash") {
+        if let Some((root_addr, root_hash)) = self
+            .nodestore
+            .root_address_and_hash()
+            .expect("failed to get root address and hash")
+        {
             writeln!(result, " root -> {root_addr}").map_err(Error::other)?;
             let mut seen = HashSet::new();
             // If ethhash is off, root_hash.into() is already the correct type

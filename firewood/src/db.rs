@@ -14,9 +14,11 @@ use metrics::{counter, describe_counter};
 use std::io::Write;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
-use storage::{Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore, TrieHash};
-use typed_builder::TypedBuilder;
+use storage::{
+    Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore, TrieHash,
+};
 use thiserror::Error;
+use typed_builder::TypedBuilder;
 
 #[derive(Error, Debug)]
 /// Represents the different types of errors that can occur in the database.

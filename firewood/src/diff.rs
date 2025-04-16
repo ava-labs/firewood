@@ -2,7 +2,8 @@
 // See the file LICENSE.md for licensing terms.
 
 use storage::{
-    FileIoError, Node, NodeStore, Parentable, ReadInMemoryNode, ReadableStorage, RootReader, TrieHash, TrieReader
+    FileIoError, Node, NodeStore, Parentable, ReadInMemoryNode, ReadableStorage, RootReader,
+    TrieHash, TrieReader,
 };
 
 use crate::{
@@ -79,16 +80,14 @@ where
                     match (left_item, right_item) {
                         (Some(left_item), Some(right_item)) => {
                             match *left_item?.node {
-                                Node::Leaf(ref _left_leaf) => {
-                                    match *right_item?.node {
-                                        Node::Leaf(ref _right_leaf) => {
-                                            todo!()
-                                        }
-                                        Node::Branch(ref _right_branch) => {
-                                            todo!()
-                                        }
+                                Node::Leaf(ref _left_leaf) => match *right_item?.node {
+                                    Node::Leaf(ref _right_leaf) => {
+                                        todo!()
                                     }
-                                }
+                                    Node::Branch(ref _right_branch) => {
+                                        todo!()
+                                    }
+                                },
                                 Node::Branch(ref _left_branch) => {
                                     match *right_item?.node {
                                         Node::Branch(ref _right_branch) => {

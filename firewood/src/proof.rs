@@ -3,7 +3,8 @@
 
 use sha2::{Digest, Sha256};
 use storage::{
-    BranchNode, FileIoError, HashType, Hashable, NibblesIterator, PathIterItem, Preimage, TrieHash, ValueDigest
+    BranchNode, FileIoError, HashType, Hashable, NibblesIterator, PathIterItem, Preimage, TrieHash,
+    ValueDigest,
 };
 use thiserror::Error;
 

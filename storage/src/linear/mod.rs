@@ -49,7 +49,11 @@ impl std::fmt::Display for FileIoError {
             "{inner} at offset {offset} of file '{filename}' {context}",
             inner = self.inner,
             offset = self.offset,
-            filename = self.filename.as_ref().unwrap_or(&PathBuf::from("[unknown]")).display(),
+            filename = self
+                .filename
+                .as_ref()
+                .unwrap_or(&PathBuf::from("[unknown]"))
+                .display(),
             context = self.context.as_ref().unwrap_or(&String::from(""))
         )
     }

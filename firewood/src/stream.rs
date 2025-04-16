@@ -9,7 +9,9 @@ use futures::{Stream, StreamExt};
 use std::cmp::Ordering;
 use std::iter::{FusedIterator, once};
 use std::task::Poll;
-use storage::{BranchNode, Child, FileIoError, NibblesIterator, Node, PathIterItem, SharedNode, TrieReader};
+use storage::{
+    BranchNode, Child, FileIoError, NibblesIterator, Node, PathIterItem, SharedNode, TrieReader,
+};
 
 /// Represents an ongoing iteration over a node and its children.
 enum IterationNode {

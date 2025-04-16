@@ -13,7 +13,9 @@ use crate::merkle::Merkle;
 use crate::v2::api::HashKey;
 
 pub use storage::CacheReadStrategy;
-use storage::{Committed, FileBacked, FileIoError, ImmutableProposal, NodeStore, Parentable, TrieHash};
+use storage::{
+    Committed, FileBacked, FileIoError, ImmutableProposal, NodeStore, Parentable, TrieHash,
+};
 
 #[derive(Clone, Debug, TypedBuilder)]
 /// Revision manager configuratoin
@@ -55,9 +57,7 @@ pub(crate) enum RevisionManagerError {
         "The proposal cannot be committed since it is not a direct child of the most recent commit"
     )]
     NotLatest,
-    #[error(
-        "Revision not found"
-    )]
+    #[error("Revision not found")]
     RevisionNotFound,
     #[error("An IO error occurred during the commit")]
     FileIoError(#[from] FileIoError),
