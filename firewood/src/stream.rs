@@ -293,7 +293,7 @@ fn get_iterator_intial_state<T: TrieReader>(
 enum MerkleKeyValueStreamState<'a, T> {
     /// The iterator state is lazily initialized when poll_next is called
     /// for the first time. The iteration start key is stored here.
-    _Uninitialized(Key),
+    Uninitialized(Key),
     /// The iterator works by iterating over the nodes in the merkle trie
     /// and returning the key-value pairs for nodes that have values.
     Initialized { node_iter: MerkleNodeStream<'a, T> },
@@ -301,14 +301,14 @@ enum MerkleKeyValueStreamState<'a, T> {
 
 impl<T, K: AsRef<[u8]>> From<K> for MerkleKeyValueStreamState<'_, T> {
     fn from(key: K) -> Self {
-        Self::_Uninitialized(key.as_ref().into())
+        Self::Uninitialized(key.as_ref().into())
     }
 }
 
 impl<T: TrieReader> MerkleKeyValueStreamState<'_, T> {
     /// Returns a new iterator that will iterate over all the key-value pairs in `merkle`.
     fn _new() -> Self {
-        Self::_Uninitialized(Box::new([]))
+        Self::Uninitialized(Box::new([]))
     }
 }
 
@@ -357,7 +357,7 @@ impl<T: TrieReader> Stream for MerkleKeyValueStream<'_, T> {
         let Self { state, merkle } = &mut *self;
 
         match state {
-            MerkleKeyValueStreamState::_Uninitialized(key) => {
+            MerkleKeyValueStreamState::Uninitialized(key) => {
                 let iter = MerkleNodeStream::new(*merkle, key.clone());
                 self.state = MerkleKeyValueStreamState::Initialized { node_iter: iter };
                 self.poll_next(_cx)
