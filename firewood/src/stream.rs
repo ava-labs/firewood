@@ -140,6 +140,7 @@ impl<T: TrieReader> Stream for MerkleNodeStream<'_, T> {
 
                             let child = match child {
                                 Child::AddressWithHash(addr, _) => merkle.read_node(addr)?,
+                                Child::SharedNode(node, _, _) => node.clone(),
                                 Child::Node(node) => node.clone().into(),
                             };
 
@@ -249,8 +250,7 @@ fn get_iterator_intial_state<T: TrieReader>(
                     let child = &branch.children[next_unmatched_key_nibble as usize];
                     node = match child {
                         None => return Ok(NodeStreamState::Iterating { iter_stack }),
-                        Some(Child::AddressWithHash(addr, _)) => merkle.read_node(*addr)?,
-                        Some(Child::Node(node)) => (*node).clone().into(), // TODO can we avoid cloning this?
+                        Some(child) => child.as_shared_node(merkle)?,
                     };
 
                     matched_key_nibbles.push(next_unmatched_key_nibble);
@@ -480,34 +480,21 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                                             next_nibble: None,
                                         }))
                                     }
-                                    Some(Child::AddressWithHash(child_addr, _)) => {
-                                        let child = match merkle.read_node(*child_addr) {
-                                            Ok(child) => child,
-                                            Err(e) => return Some(Err(e)),
+                                    Some(child) => {
+                                        let node_key = matched_key.clone().into_boxed_slice();
+                                        matched_key.push(next_unmatched_key_nibble);
+
+                                        let previous_node = node.clone();
+                                        *node = match child.as_shared_node(merkle) {
+                                            Ok(node) => node,
+                                            Err(e) => {
+                                                return Some(Err(e));
+                                            }
                                         };
 
-                                        let node_key = matched_key.clone().into_boxed_slice();
-                                        matched_key.push(next_unmatched_key_nibble);
-
-                                        let ret = node.clone();
-                                        *node = child;
-
                                         Some(Ok(PathIterItem {
                                             key_nibbles: node_key,
-                                            node: ret,
-                                            next_nibble: Some(next_unmatched_key_nibble),
-                                        }))
-                                    }
-                                    Some(Child::Node(child)) => {
-                                        let node_key = matched_key.clone().into_boxed_slice();
-                                        matched_key.push(next_unmatched_key_nibble);
-
-                                        let ret = node.clone();
-                                        *node = child.clone().into();
-
-                                        Some(Ok(PathIterItem {
-                                            key_nibbles: node_key,
-                                            node: ret,
+                                            node: previous_node,
                                             next_nibble: Some(next_unmatched_key_nibble),
                                         }))
                                     }

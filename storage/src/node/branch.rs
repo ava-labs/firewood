@@ -5,8 +5,9 @@ use serde::ser::SerializeStruct as _;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
-use crate::{LeafNode, LinearAddress, Node, Path};
+use crate::{LeafNode, LinearAddress, Node, NodeReader, Path, SharedNode};
 use std::fmt::{Debug, Formatter};
+use std::sync::OnceLock;
 
 /// The type of a hash. For ethereum compatible hashes, this might be a RLP encoded
 /// value if it's small enough to fit in less than 32 bytes. For merkledb compatible
@@ -32,8 +33,22 @@ pub enum Child {
     /// There is a child at this index, but we haven't hashed it
     /// or allocated space in storage for it yet.
     Node(Node),
+    /// We have a node in-memory and we know the hash, but it has
+    /// not been assigned an address nor written to storage yet.
+    SharedNode(SharedNode, HashType, OnceLock<LinearAddress>),
     /// We know the child's address and hash.
     AddressWithHash(LinearAddress, HashType),
+}
+
+impl Child {
+    /// Returns the shared node for this child, reading it from storage if necessary.
+    pub fn as_shared_node<S: NodeReader>(&self, storage: S) -> Result<SharedNode, std::io::Error> {
+        match self {
+            Child::Node(node) => Ok(node.clone().into()),
+            Child::SharedNode(node, _, _) => Ok(node.clone()),
+            Child::AddressWithHash(addr, _) => storage.read_node(*addr),
+        }
+    }
 }
 
 #[cfg(feature = "ethhash")]
@@ -199,7 +214,7 @@ impl Serialize for BranchNode {
             .enumerate()
             .filter_map(|(offset, child)| match child {
                 None => None,
-                Some(Child::Node(_)) => {
+                Some(Child::Node(_) | Child::SharedNode(_, _, _)) => {
                     panic!("serializing in-memory node for disk storage")
                 }
                 Some(Child::AddressWithHash(addr, hash)) => Some((offset as u8, *addr, hash)),
@@ -247,7 +262,7 @@ impl Debug for BranchNode {
         for (i, c) in self.children.iter().enumerate() {
             match c {
                 None => {}
-                Some(Child::Node(_)) => {} //TODO
+                Some(Child::Node(_) | Child::SharedNode(_, _, _)) => {} //TODO
                 Some(Child::AddressWithHash(addr, hash)) => {
                     write!(f, "({i:?}: address={addr:?} hash={})", hash)?
                 }
@@ -301,7 +316,9 @@ impl BranchNode {
             .filter_map(|(i, child)| match child {
                 None => None,
                 Some(Child::Node(_)) => unreachable!("TODO make unreachable"),
-                Some(Child::AddressWithHash(_, hash)) => Some((i, hash)),
+                Some(Child::SharedNode(_, hash, _) | Child::AddressWithHash(_, hash)) => {
+                    Some((i, hash))
+                }
             })
     }
 }

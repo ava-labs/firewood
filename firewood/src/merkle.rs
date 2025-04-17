@@ -109,6 +109,9 @@ fn get_helper<T: TrieReader>(
                 {
                     None => Ok(None),
                     Some(Child::Node(child)) => get_helper(nodestore, child, remaining_key),
+                    Some(Child::SharedNode(node, _, _)) => {
+                        get_helper(nodestore, node, remaining_key)
+                    }
                     Some(Child::AddressWithHash(addr, _)) => {
                         let child = nodestore.read_node(*addr)?;
                         get_helper(nodestore, &child, remaining_key)
@@ -351,7 +354,7 @@ impl<T: HashedNodeReader> Merkle<T> {
                 for (childidx, child) in b.children.iter().enumerate() {
                     let (child_addr, child_hash) = match child {
                         None => continue,
-                        Some(Child::Node(_)) => continue, // TODO
+                        Some(Child::Node(_) | Child::SharedNode(_, _, _)) => continue, // TODO
                         Some(Child::AddressWithHash(addr, hash)) => (*addr, Some(hash)),
                     };
 
@@ -516,6 +519,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                 return Ok(node);
                             }
                             Some(Child::Node(child)) => child,
+                            Some(Child::SharedNode(node, _, addr)) => {
+                                self.nodestore.update_shared_node(&node, &addr)
+                            }
                             Some(Child::AddressWithHash(addr, _)) => {
                                 self.nodestore.read_for_update(addr)?
                             }
@@ -661,6 +667,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                             // The branch's only child becomes the root of this subtrie.
                             let mut child = match child {
                                 Child::Node(child_node) => std::mem::take(child_node),
+                                Child::SharedNode(node, _, addr) => {
+                                    self.nodestore.update_shared_node(&*node, addr)
+                                }
                                 Child::AddressWithHash(addr, _) => {
                                     self.nodestore.read_for_update(*addr)?
                                 }
@@ -729,6 +738,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                 return Ok((Some(node), None));
                             }
                             Some(Child::Node(node)) => node,
+                            Some(Child::SharedNode(node, _, addr)) => {
+                                self.nodestore.update_shared_node(&node, &addr)
+                            }
                             Some(Child::AddressWithHash(addr, _)) => {
                                 self.nodestore.read_for_update(addr)?
                             }
@@ -777,6 +789,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                     partial_path: Path::new(),
                                 }),
                             ),
+                            Child::SharedNode(node, _, addr) => {
+                                self.nodestore.update_shared_node(&*node, addr)
+                            }
                             Child::AddressWithHash(addr, _) => {
                                 self.nodestore.read_for_update(*addr)?
                             }
@@ -877,6 +892,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                 return Ok(Some(node));
                             }
                             Some(Child::Node(node)) => node,
+                            Some(Child::SharedNode(node, _, addr)) => {
+                                self.nodestore.update_shared_node(&node, &addr)
+                            }
                             Some(Child::AddressWithHash(addr, _)) => {
                                 self.nodestore.read_for_update(addr)?
                             }
@@ -925,6 +943,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                     partial_path: Path::new(),
                                 }),
                             ),
+                            Child::SharedNode(node, _, addr) => {
+                                self.nodestore.update_shared_node(&*node, addr)
+                            }
                             Child::AddressWithHash(addr, _) => {
                                 self.nodestore.read_for_update(*addr)?
                             }
@@ -963,6 +984,10 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
             // read the child node
             let child = match children {
                 Some(Child::Node(node)) => node,
+                Some(Child::SharedNode(node, _, addr)) => {
+                    &mut self.nodestore.update_shared_node(node, addr)
+                }
+
                 Some(Child::AddressWithHash(addr, _)) => {
                     &mut self.nodestore.read_for_update(*addr)?
                 }

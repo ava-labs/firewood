@@ -58,7 +58,7 @@ use std::io::{Error, ErrorKind, Write};
 use std::mem::{offset_of, take};
 use std::num::NonZeroU64;
 use std::ops::Deref;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::hashednode::hash_node;
 use crate::node::{ByteCounter, Node};
@@ -423,6 +423,22 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
         self.delete_node(addr);
         let arc_wrapped_node = self.read_node(addr)?;
         Ok((*arc_wrapped_node).clone())
+    }
+
+    /// Clone a SharedNode for update, possibly marking it deleted in this proposal
+    /// if it has been assigned an address.
+    pub fn update_shared_node(
+        &mut self,
+        node: &SharedNode,
+        addr: &OnceLock<LinearAddress>,
+    ) -> Node {
+        // TODO: This is racy. addr.get() might return None if it is being initialized
+        // this can happen if a commit is happening at the same time a new proposal is being
+        // created altering this shared node. In that case, we'll leak a node, which is not a big deal.
+        if let Some(addr) = addr.get() {
+            self.delete_node(*addr);
+        }
+        (**node).clone()
     }
 
     /// Returns the root of this proposal.
