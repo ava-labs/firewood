@@ -42,7 +42,8 @@ ARGS="--collector.filesystem.mount-points-exclude=\"^/(dev|proc|run|sys|media|va
 !
 
 # restart the grafana and prometheus services
-killall grafana-server
+# it's okay if the grafana service is not running
+killall grafana-server || true
 systemctl daemon-reload
 systemctl enable grafana-server
 systemctl start grafana-server
