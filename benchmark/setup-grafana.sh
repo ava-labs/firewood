@@ -52,7 +52,8 @@ if ! grep -q '^  - job_name: firewood$' /etc/prometheus/prometheus.yml; then
   - job_name: firewood
     static_configs:
       - targets: ['localhost:3000']
-  - job_name: geth
+  - job_name: coreth
+    metrics_path: /debug/metrics/prometheus
     static_configs:
       - targets: ['localhost:6060']
 !
