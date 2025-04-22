@@ -208,8 +208,8 @@ pub struct CreateOrOpenArgs {
 pub unsafe extern "C" fn fwd_create_db(args: CreateOrOpenArgs) -> *mut Db {
     let manager_config = match manager_config(args.cache_size, args.revisions, args.strategy) {
         Ok(manager_config) => manager_config,
-        Err(e) => {
-            error!("error initializing manager config: {}", e);
+        Err(_e) => {
+            error!("error initializing manager config: {}", _e);
             return std::ptr::null_mut();
         }
     };
@@ -241,8 +241,8 @@ pub unsafe extern "C" fn fwd_create_db(args: CreateOrOpenArgs) -> *mut Db {
 pub unsafe extern "C" fn fwd_open_db(args: CreateOrOpenArgs) -> *mut Db {
     let manager_config = match manager_config(args.cache_size, args.revisions, args.strategy) {
         Ok(manager_config) => manager_config,
-        Err(e) => {
-            error!("error initializing manager config: {}", e);
+        Err(_e) => {
+            error!("error initializing manager config: {}", _e);
             return std::ptr::null_mut();
         }
     };
@@ -269,8 +269,8 @@ unsafe fn common_create(
     }
     match Db::new_sync(path, cfg) {
         Ok(db) => Box::into_raw(Box::new(db)),
-        Err(e) => {
-            error!("db initialization failed: {}", e);
+        Err(_e) => {
+            error!("db initialization failed: {}", _e);
             std::ptr::null_mut()
         }
     }
