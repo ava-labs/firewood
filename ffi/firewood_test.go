@@ -22,7 +22,6 @@ func TestMain(m *testing.M) {
 		switch strings.TrimSpace(kv) {
 		case "cgocheck=1":
 			hasCgoCheck = true
-			break
 		case "cgocheck=0":
 			fmt.Fprint(os.Stderr, "GODEBUG=cgocheck=0; MUST be 1 for Firewood cgo tests")
 			os.Exit(1)

@@ -84,6 +84,9 @@ func New(filePath string, conf *Config) (*Database, error) {
 	} else {
 		db = C.fwd_open_db(args)
 	}
+	if db == nil {
+		return nil, fmt.Errorf("failed to create or open database")
+	}
 	return &Database{handle: db}, nil
 }
 
