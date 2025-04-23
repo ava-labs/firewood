@@ -14,7 +14,10 @@ use crate::merkle::Merkle;
 use crate::v2::api::HashKey;
 
 pub use storage::CacheReadStrategy;
-use storage::{Committed, FileBacked, ImmutableProposal, NodeStore, Parentable, TrieHash};
+use storage::{
+    Committed, FileBacked, ImmutableProposal, MemStore, NodeStore, Parentable,
+    TrieHash, WritableStorage,
+};
 
 #[derive(Clone, Debug, TypedBuilder)]
 /// Revision manager configuratoin
@@ -34,20 +37,21 @@ pub struct RevisionManagerConfig {
     cache_read_strategy: CacheReadStrategy,
 }
 
-type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
-type ProposedRevision = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>;
+type CommittedRevision<S> = Arc<NodeStore<Committed, S>>;
+type ProposedRevision<S> = Arc<NodeStore<Arc<ImmutableProposal>, S>>;
 
 #[derive(Debug)]
-pub(crate) struct RevisionManager {
+pub(crate) struct RevisionManager<S>
+{
     /// Maximum number of revisions to keep on disk
     max_revisions: usize,
 
     /// The list of revisions that are on disk; these point to the different roots
     /// stored in the filebacked storage.
-    historical: VecDeque<CommittedRevision>,
-    proposals: Vec<ProposedRevision>,
+    historical: VecDeque<CommittedRevision<S>>,
+    proposals: Vec<ProposedRevision<S>>,
     // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
-    by_hash: HashMap<TrieHash, CommittedRevision>,
+    by_hash: HashMap<TrieHash, CommittedRevision<S>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -60,12 +64,25 @@ pub(crate) enum RevisionManagerError {
     IO(#[from] std::io::Error),
 }
 
-impl RevisionManager {
+impl<S: WritableStorage> RevisionManager<S>
+{
+    pub fn new_in_memory(config: RevisionManagerConfig) -> Result<RevisionManager<MemStore>, Error> {
+        let storage = Arc::new(MemStore::new(vec![]));
+        let nodestore = Arc::new(NodeStore::new_empty_committed(storage.clone())?);
+        nodestore.flush_header_with_padding()?;
+        let manager: RevisionManager<MemStore>  = RevisionManager {
+            max_revisions: config.max_revisions,
+            historical: VecDeque::from([nodestore]),
+            by_hash: Default::default(),
+            proposals: Default::default(),
+        };
+        Ok(manager)
+    }
     pub fn new(
         filename: PathBuf,
         truncate: bool,
         config: RevisionManagerConfig,
-    ) -> Result<Self, Error> {
+    ) -> Result<RevisionManager<FileBacked>, Error> {
         let storage = Arc::new(FileBacked::new(
             filename,
             config.node_cache_size,
@@ -73,11 +90,11 @@ impl RevisionManager {
             truncate,
             config.cache_read_strategy,
         )?);
-        let nodestore = match truncate {
+        let nodestore: Arc<NodeStore<Committed, FileBacked>> = match truncate {
             true => Arc::new(NodeStore::new_empty_committed(storage.clone())?),
             false => Arc::new(NodeStore::open(storage.clone())?),
         };
-        let mut manager = Self {
+        let mut manager = RevisionManager {
             max_revisions: config.max_revisions,
             historical: VecDeque::from([nodestore.clone()]),
             by_hash: Default::default(),
@@ -109,7 +126,7 @@ impl RevisionManager {
     /// Commit a proposal
     /// To commit a proposal involves a few steps:
     /// 1. Commit check.
-    ///    The proposal’s parent must be the last committed revision, otherwise the commit fails.
+    ///    The proposal's parent must be the last committed revision, otherwise the commit fails.
     /// 2. Persist delete list.
     ///    The list of all nodes that were to be deleted for this proposal must be fully flushed to disk.
     ///    The address of the root node and the root hash is also persisted.
@@ -134,7 +151,7 @@ impl RevisionManager {
     /// 8. Proposal Cleanup.
     ///    Any other proposals that have this proposal as a parent should be reparented to the committed version.
     #[fastrace::trace(short_name = true)]
-    pub fn commit(&mut self, proposal: ProposedRevision) -> Result<(), RevisionManagerError> {
+    pub fn commit(&mut self, proposal: ProposedRevision<S>) -> Result<(), RevisionManagerError> {
         // 1. Commit check
         let current_revision = self.current_revision();
         if !proposal
@@ -173,7 +190,7 @@ impl RevisionManager {
         }
 
         // 4. Set last committed revision
-        let committed: CommittedRevision = committed.into();
+        let committed = Arc::new(committed);
         self.historical.push_back(committed.clone());
         if let Some(hash) = committed.kind.root_hash() {
             self.by_hash.insert(hash, committed.clone());
@@ -207,12 +224,16 @@ impl RevisionManager {
     }
 }
 
-impl RevisionManager {
-    pub fn add_proposal(&mut self, proposal: ProposedRevision) {
+impl<S: WritableStorage> RevisionManager<S>
+{
+    pub fn add_proposal(&mut self, proposal: ProposedRevision<S>) {
         self.proposals.push(proposal);
     }
 
-    pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
+    pub fn revision(
+        &self,
+        root_hash: HashKey,
+    ) -> Result<CommittedRevision<S>, RevisionManagerError> {
         self.by_hash
             .get(&root_hash)
             .cloned()
@@ -233,7 +254,7 @@ impl RevisionManager {
             )))
     }
 
-    pub fn current_revision(&self) -> CommittedRevision {
+    pub fn current_revision(&self) -> CommittedRevision<S> {
         self.historical
             .back()
             .expect("there is always one revision")

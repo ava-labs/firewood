@@ -7,6 +7,7 @@ use std::ops::Deref;
 use std::path::PathBuf;
 
 use firewood::db::{Db, DbConfig};
+use storage::FileBacked;
 use typed_builder::TypedBuilder;
 
 #[derive(Clone, Debug, TypedBuilder)]
@@ -22,7 +23,7 @@ pub struct TestDbCreator {
 pub struct TestDb {
     creator: TestDbCreator,
     preserve_on_drop: bool,
-    db: Db,
+    db: Db<FileBacked>,
 }
 
 impl TestDbCreator {
@@ -49,7 +50,7 @@ impl TestDbCreator {
 }
 
 impl Deref for TestDb {
-    type Target = Db;
+    type Target = Db<FileBacked>;
 
     fn deref(&self) -> &Self::Target {
         &self.db

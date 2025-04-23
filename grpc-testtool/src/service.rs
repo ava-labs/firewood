@@ -3,6 +3,7 @@
 
 use firewood::db::{Db, DbConfig};
 use firewood::v2::api::{Db as _, Error};
+use firewood::FileBacked;
 
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -37,7 +38,7 @@ impl<T> IntoStatusResultExt<T> for Result<T, Error> {
 
 #[derive(Debug)]
 pub struct Database {
-    db: Db,
+    db: Db<FileBacked>,
     iterators: Arc<Mutex<Iterators>>,
 }
 
@@ -59,7 +60,7 @@ impl Database {
 }
 
 impl Deref for Database {
-    type Target = Db;
+    type Target = Db<FileBacked>;
 
     fn deref(&self) -> &Self::Target {
         &self.db
@@ -67,7 +68,7 @@ impl Deref for Database {
 }
 
 impl Database {
-    async fn latest(&self) -> Result<Arc<<Db as firewood::v2::api::Db>::Historical>, Error> {
+    async fn latest(&self) -> Result<Arc<<Db<FileBacked> as firewood::v2::api::Db<FileBacked>>::Historical>, Error> {
         let root_hash = self.root_hash().await?.ok_or(Error::LatestIsEmpty)?;
         self.revision(root_hash).await
     }

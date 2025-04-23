@@ -8,6 +8,7 @@ use log::{debug, trace};
 use pretty_duration::pretty_duration;
 use rand::prelude::*;
 use sha2::{Digest, Sha256};
+use firewood::FileBacked;
 use std::collections::HashSet;
 use std::error::Error;
 use std::time::Instant;
@@ -22,7 +23,7 @@ pub struct Args {
 pub struct Zipf;
 
 impl TestRunner for Zipf {
-    async fn run(&self, db: &Db, args: &crate::Args) -> Result<(), Box<dyn Error>> {
+    async fn run(&self, db: &Db<FileBacked>, args: &crate::Args) -> Result<(), Box<dyn Error>> {
         let exponent = if let crate::TestName::Zipf(args) = &args.test_name {
             args.exponent
         } else {

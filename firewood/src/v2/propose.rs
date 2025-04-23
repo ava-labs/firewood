@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::stream::Empty;
+use storage::WritableStorage;
 
 use super::api::{KeyType, ValueType};
 use crate::proof::{Proof, ProofNode};
@@ -20,18 +21,23 @@ pub(crate) enum KeyOp<V: ValueType> {
 }
 
 #[derive(Debug)]
-pub(crate) enum ProposalBase<T> {
-    Proposal(Arc<Proposal<T>>),
+pub(crate) enum ProposalBase<T, S: WritableStorage> {
+    Proposal(Arc<Proposal<T, S>>),
     View(Arc<T>),
+    #[doc(hidden)]
+    _Marker(std::marker::PhantomData<S>),
 }
 
 // Implement Clone because T doesn't need to be Clone
 // so an automatically derived Clone won't work
-impl<T: api::DbView> Clone for ProposalBase<T> {
+impl<T: api::DbView<S>, S: WritableStorage> Clone
+    for ProposalBase<T, S>
+{
     fn clone(&self) -> Self {
         match self {
             Self::Proposal(arg0) => Self::Proposal(arg0.clone()),
             Self::View(arg0) => Self::View(arg0.clone()),
+            Self::_Marker(_) => unreachable!(),
         }
     }
 }
@@ -68,14 +74,16 @@ impl<T: api::DbView> Clone for ProposalBase<T> {
 ///   committed_head ==> new_committing
 /// ```
 #[derive(Debug)]
-pub struct Proposal<T> {
-    pub(crate) base: ProposalBase<T>,
+pub struct Proposal<T, S: WritableStorage> {
+    pub(crate) base: ProposalBase<T, S>,
     pub(crate) delta: BTreeMap<Box<[u8]>, KeyOp<Box<[u8]>>>,
 }
 
 // Implement Clone because T doesn't need to be Clone
 // so an automatically derived Clone won't work
-impl<T: api::DbView> Clone for Proposal<T> {
+impl<T: api::DbView<S>, S: WritableStorage> Clone
+    for Proposal<T, S>
+{
     fn clone(&self) -> Self {
         Self {
             base: self.base.clone(),
@@ -84,9 +92,9 @@ impl<T: api::DbView> Clone for Proposal<T> {
     }
 }
 
-impl<T> Proposal<T> {
+impl<T, S: WritableStorage> Proposal<T, S> {
     pub(crate) fn new<K: KeyType, V: ValueType>(
-        base: ProposalBase<T>,
+        base: ProposalBase<T, S>,
         batch: api::Batch<K, V>,
     ) -> Arc<Self> {
         let delta = batch
@@ -110,7 +118,11 @@ impl<T> Proposal<T> {
 }
 
 #[async_trait]
-impl<T: api::DbView + Send + Sync> api::DbView for Proposal<T> {
+impl<
+    T: api::DbView<S> + Send + Sync,
+    S: WritableStorage,
+> api::DbView<S> for Proposal<T, S>
+{
     // TODO: Replace with the correct stream type for an in-memory proposal implementation
     type Stream<'a>
         = Empty<Result<(Box<[u8]>, Vec<u8>), api::Error>>
@@ -133,6 +145,7 @@ impl<T: api::DbView + Send + Sync> api::DbView for Proposal<T> {
                 // key not in this proposal, so delegate to base
                 ProposalBase::Proposal(p) => p.val(key).await,
                 ProposalBase::View(view) => view.val(key).await,
+                ProposalBase::_Marker(_) => unreachable!(),
             },
         }
     }
@@ -159,8 +172,10 @@ impl<T: api::DbView + Send + Sync> api::DbView for Proposal<T> {
 }
 
 #[async_trait]
-impl<T: api::DbView + Send + Sync> api::Proposal for Proposal<T> {
-    type Proposal = Proposal<T>;
+impl<S: WritableStorage + Send + Sync + 'static, T: api::DbView<S> + Send + Sync> api::Proposal<S>
+    for Proposal<T, S>
+{
+    type Proposal = Proposal<T, S>;
 
     async fn propose<K: KeyType, V: ValueType>(
         self: Arc<Self>,
@@ -174,12 +189,15 @@ impl<T: api::DbView + Send + Sync> api::Proposal for Proposal<T> {
         match &self.base {
             ProposalBase::Proposal(base) => base.clone().commit().await,
             ProposalBase::View(_) => Ok(()),
+            ProposalBase::_Marker(_) => unreachable!(),
         }
     }
 }
 
-impl<T: api::DbView> std::ops::Add for Proposal<T> {
-    type Output = Arc<Proposal<T>>;
+impl<T: api::DbView<S>, S: WritableStorage>
+    std::ops::Add for Proposal<T, S>
+{
+    type Output = Arc<Proposal<T, S>>;
 
     fn add(self, rhs: Self) -> Self::Output {
         let mut delta = self.delta.clone();
@@ -195,8 +213,10 @@ impl<T: api::DbView> std::ops::Add for Proposal<T> {
     }
 }
 
-impl<T: api::DbView> std::ops::Add for &Proposal<T> {
-    type Output = Arc<Proposal<T>>;
+impl<T: api::DbView<S>, S: WritableStorage>
+    std::ops::Add for &Proposal<T, S>
+{
+    type Output = Arc<Proposal<T, S>>;
 
     fn add(self, rhs: Self) -> Self::Output {
         let mut delta = self.delta.clone();

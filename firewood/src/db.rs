@@ -16,7 +16,10 @@ use std::fmt;
 use std::io::Write;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
-use storage::{Committed, FileBacked, HashedNodeReader, ImmutableProposal, NodeStore, TrieHash};
+use storage::{
+    Committed, HashedNodeReader, ImmutableProposal, NodeStore, TrieHash, WritableStorage,
+};
+use crate::{FileBacked, MemStore};
 use typed_builder::TypedBuilder;
 
 #[derive(Debug)]
@@ -43,7 +46,7 @@ impl From<std::io::Error> for DbError {
 
 impl Error for DbError {}
 
-type HistoricalRev = NodeStore<Committed, FileBacked>;
+type HistoricalRev<S> = NodeStore<Committed, S>;
 
 /// Metrics for the database.
 /// TODO: Add more metrics
@@ -57,13 +60,23 @@ impl std::fmt::Debug for DbMetrics {
     }
 }
 
+impl Default for DbMetrics {
+    fn default() -> Self {
+        Self {
+            proposals: counter!("firewood.proposals"),
+        }
+    }
+}
+
 /// A synchronous view of the database.
 pub trait DbViewSync {
     /// find a value synchronously
     fn val_sync<K: KeyType>(&self, key: K) -> Result<Option<Box<[u8]>>, DbError>;
 }
 
-impl DbViewSync for HistoricalRev {
+impl<S: WritableStorage> DbViewSync
+    for HistoricalRev<S>
+{
     fn val_sync<K: KeyType>(&self, key: K) -> Result<Option<Box<[u8]>>, DbError> {
         let merkle = Merkle::from(self);
         let value = merkle.get_value(key.as_ref())?;
@@ -72,7 +85,9 @@ impl DbViewSync for HistoricalRev {
 }
 
 #[async_trait]
-impl api::DbView for HistoricalRev {
+impl<S: WritableStorage> api::DbView<S>
+    for HistoricalRev<S>
+{
     type Stream<'a>
         = MerkleKeyValueStream<'a, Self>
     where
@@ -126,22 +141,22 @@ pub struct DbConfig {
 
 #[derive(Debug)]
 /// A database instance.
-pub struct Db {
+pub struct Db<S> {
     metrics: Arc<DbMetrics>,
     // TODO: consider using https://docs.rs/lock_api/latest/lock_api/struct.RwLock.html#method.upgradable_read
     // TODO: This should probably use an async RwLock
-    manager: RwLock<RevisionManager>,
+    manager: RwLock<RevisionManager<S>>,
 }
 
 #[async_trait]
-impl api::Db for Db
+impl<S: WritableStorage> api::Db<S> for Db<S>
 where
-    for<'p> Proposal<'p>: api::Proposal,
+    for<'p> Proposal<'p, S>: api::Proposal<S>,
 {
-    type Historical = NodeStore<Committed, FileBacked>;
+    type Historical = NodeStore<Committed, S>;
 
     type Proposal<'p>
-        = Proposal<'p>
+        = Proposal<'p, S>
     where
         Self: 'p;
 
@@ -196,8 +211,7 @@ where
         let span = fastrace::Span::enter_with_local_parent("freeze");
 
         let nodestore = merkle.into_inner();
-        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
-            Arc::new(nodestore.try_into()?);
+        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, S>> = Arc::new(nodestore.try_into()?);
 
         drop(span);
         self.manager
@@ -215,50 +229,56 @@ where
     }
 }
 
-impl Db {
-    /// Create a new database instance.
+impl Db<MemStore> {
+    /// Create a new database instance backed by an in-memory store.
+    pub async fn new_in_memory(cfg: DbConfig) -> Result<Self, api::Error> {
+        let metrics = Arc::new(DbMetrics::default());
+        let manager = RevisionManager::<MemStore>::new_in_memory(cfg.manager)?;
+        Ok(Self {
+            metrics,
+            manager: manager.into(),
+        })
+    }
+}
+
+impl Db<FileBacked> {
+    /// Create a new database instance with asynchronous I/O.
     pub async fn new<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> Result<Self, api::Error> {
-        let metrics = Arc::new(DbMetrics {
-            proposals: counter!("firewood.proposals"),
-        });
+        let metrics = Arc::new(DbMetrics::default());
         describe_counter!("firewood.proposals", "Number of proposals created");
-        let manager = RevisionManager::new(
+        let manager = RevisionManager::<FileBacked>::new(
             db_path.as_ref().to_path_buf(),
             cfg.truncate,
             cfg.manager.clone(),
         )?;
-        let db = Self {
+        Ok(Self {
             metrics,
             manager: manager.into(),
-        };
-        Ok(db)
+        })
     }
-
     /// Create a new database instance with synchronous I/O.
     pub fn new_sync<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> Result<Self, api::Error> {
-        let metrics = Arc::new(DbMetrics {
-            proposals: counter!("firewood.proposals"),
-        });
+        let metrics = Arc::new(DbMetrics::default());
         describe_counter!("firewood.proposals", "Number of proposals created");
-        let manager = RevisionManager::new(
+        let manager = RevisionManager::<FileBacked>::new(
             db_path.as_ref().to_path_buf(),
             cfg.truncate,
             cfg.manager.clone(),
         )?;
-        let db = Self {
+        Ok(Self {
             metrics,
             manager: manager.into(),
-        };
-        Ok(db)
+        })
     }
+}
 
+impl<S: WritableStorage> Db<S> {
     /// Synchronously get the root hash of the latest revision.
     pub fn root_hash_sync(&self) -> Result<Option<TrieHash>, api::Error> {
         Ok(self.manager.read().expect("poisoned lock").root_hash()?)
     }
-
     /// Synchronously get a revision from a root hash
-    pub fn revision_sync(&self, root_hash: TrieHash) -> Result<Arc<HistoricalRev>, api::Error> {
+    pub fn revision_sync(&self, root_hash: TrieHash) -> Result<Arc<HistoricalRev<S>>, api::Error> {
         let nodestore = self
             .manager
             .read()
@@ -271,7 +291,7 @@ impl Db {
     pub fn propose_sync<K: KeyType, V: ValueType>(
         &'_ self,
         batch: Batch<K, V>,
-    ) -> Result<Arc<Proposal<'_>>, api::Error> {
+    ) -> Result<Arc<Proposal<'_, S>>, api::Error> {
         let parent = self
             .manager
             .read()
@@ -293,8 +313,7 @@ impl Db {
             }
         }
         let nodestore = merkle.into_inner();
-        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
-            Arc::new(nodestore.try_into()?);
+        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, S>> = Arc::new(nodestore.try_into()?);
         self.manager
             .write()
             .expect("poisoned lock")
@@ -334,15 +353,17 @@ impl Db {
 
 #[derive(Debug)]
 /// A user-visible database proposal
-pub struct Proposal<'p> {
-    nodestore: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>,
-    db: &'p Db,
+pub struct Proposal<'p, S> {
+    nodestore: Arc<NodeStore<Arc<ImmutableProposal>, S>>,
+    db: &'p Db<S>,
 }
 
 #[async_trait]
-impl api::DbView for Proposal<'_> {
+impl<S: WritableStorage> api::DbView<S>
+    for Proposal<'_, S>
+{
     type Stream<'b>
-        = MerkleKeyValueStream<'b, NodeStore<Arc<ImmutableProposal>, FileBacked>>
+        = MerkleKeyValueStream<'b, NodeStore<Arc<ImmutableProposal>, S>>
     where
         Self: 'b;
 
@@ -378,8 +399,10 @@ impl api::DbView for Proposal<'_> {
 }
 
 #[async_trait]
-impl<'a> api::Proposal for Proposal<'a> {
-    type Proposal = Proposal<'a>;
+impl<'a, S: WritableStorage> api::Proposal<S>
+    for Proposal<'a, S>
+{
+    type Proposal = Proposal<'a, S>;
 
     #[fastrace::trace(short_name = true)]
     async fn propose<K: KeyType, V: ValueType>(
@@ -403,8 +426,7 @@ impl<'a> api::Proposal for Proposal<'a> {
             }
         }
         let nodestore = merkle.into_inner();
-        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
-            Arc::new(nodestore.try_into()?);
+        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, S>> = Arc::new(nodestore.try_into()?);
         self.db
             .manager
             .write()
@@ -429,7 +451,7 @@ impl<'a> api::Proposal for Proposal<'a> {
     }
 }
 
-impl Proposal<'_> {
+impl<S: WritableStorage> Proposal<'_, S> {
     /// Commit a proposal synchronously
     pub fn commit_sync(self: Arc<Self>) -> Result<(), api::Error> {
         match Arc::into_inner(self) {
@@ -441,16 +463,47 @@ impl Proposal<'_> {
         }
     }
 }
+
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod test {
     use std::ops::{Deref, DerefMut};
     use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use storage::{FileBacked, WritableStorage};
 
     use crate::db::Db;
-    use crate::v2::api::{Db as _, DbView as _, Error, Proposal as _};
+    use crate::v2::api::{self, Db as _, DbView as _, Error, KeyType, Proposal as _, ValueType};
+    use storage::TrieHash;
 
-    use super::{BatchOp, DbConfig};
+    use super::{BatchOp, DbConfig, HistoricalRev};
+
+    #[async_trait]
+    impl api::Db<FileBacked> for TestDb<FileBacked> {
+        type Historical = HistoricalRev<FileBacked>;
+        type Proposal<'p> = super::Proposal<'p, FileBacked>;
+
+        async fn revision(&self, hash: TrieHash) -> Result<Arc<Self::Historical>, api::Error> {
+            self.db.revision(hash).await
+        }
+
+        async fn root_hash(&self) -> Result<Option<TrieHash>, api::Error> {
+            self.db.root_hash().await
+        }
+
+        async fn all_hashes(&self) -> Result<Vec<TrieHash>, api::Error> {
+            self.db.all_hashes().await
+        }
+
+        async fn propose<'p, K: KeyType, V: ValueType>(
+            &'p self,
+            data: api::Batch<K, V>,
+        ) -> Result<Arc<Self::Proposal<'p>>, api::Error> {
+            self.db.propose(data).await
+        }
+    }
 
     #[tokio::test]
     async fn test_cloned_proposal_error() {
@@ -524,23 +577,23 @@ mod test {
     }
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
-    struct TestDb {
-        db: Db,
+    struct TestDb<S: WritableStorage> {
+        db: Db<S>,
         tmpdir: tempfile::TempDir,
     }
-    impl Deref for TestDb {
-        type Target = Db;
+    impl<S: WritableStorage> Deref for TestDb<S> {
+        type Target = Db<S>;
         fn deref(&self) -> &Self::Target {
             &self.db
         }
     }
-    impl DerefMut for TestDb {
+    impl<S: WritableStorage> DerefMut for TestDb<S> {
         fn deref_mut(&mut self) -> &mut Self::Target {
             &mut self.db
         }
     }
 
-    async fn testdb() -> TestDb {
+    async fn testdb() -> TestDb<FileBacked> {
         let tmpdir = tempfile::tempdir().unwrap();
         let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
             .iter()
@@ -550,7 +603,7 @@ mod test {
         TestDb { db, tmpdir }
     }
 
-    impl TestDb {
+    impl TestDb<FileBacked> {
         fn path(&self) -> PathBuf {
             [self.tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
                 .iter()

@@ -11,10 +11,13 @@ use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
 
 mod metrics_setup;
 
+use firewood::FileBacked;
 use metrics::counter;
 
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+type Database = Db<FileBacked>;
 
 #[derive(Debug)]
 #[repr(C)]
@@ -42,7 +45,7 @@ impl Display for Value {
 ///  * ensure that `key` is a valid pointer to a `Value` struct
 ///  * call `free_value` to free the memory associated with the returned `Value`
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_get(db: *mut Db, key: Value) -> Value {
+pub unsafe extern "C" fn fwd_get(db: *mut Database, key: Value) -> Value {
     let db = unsafe { db.as_ref() }.expect("db should be non-null");
     let root = db.root_hash_sync();
     let Ok(Some(root)) = root else {
@@ -83,7 +86,7 @@ pub struct KeyValue {
 ///  * ensure that the `Value` fields of the `KeyValue` structs are valid pointers.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const KeyValue) -> Value {
+pub unsafe extern "C" fn fwd_batch(db: *mut Database, nkeys: usize, values: *const KeyValue) -> Value {
     let start = coarsetime::Instant::now();
     let db = unsafe { db.as_ref() }.expect("db should be non-null");
     let mut batch = Vec::with_capacity(nkeys);
@@ -120,7 +123,7 @@ pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const Key
 /// This function is unsafe because it dereferences raw pointers.
 /// The caller must ensure that `db` is a valid pointer returned by `open_db`
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_root_hash(db: *mut Db) -> Value {
+pub unsafe extern "C" fn fwd_root_hash(db: *mut Database) -> Value {
     let db = unsafe { db.as_ref() }.expect("db should be non-null");
     hash(db)
 }
@@ -129,7 +132,7 @@ pub unsafe extern "C" fn fwd_root_hash(db: *mut Db) -> Value {
 ///
 /// This function is not exposed to the C API.
 /// It returns the current hash of an already-fetched database handle
-fn hash(db: &Db) -> Value {
+fn hash(db: &Database) -> Value {
     let root = db.root_hash_sync().unwrap_or_default().unwrap_or_default();
     Value::from(root.as_slice())
 }
@@ -210,7 +213,7 @@ pub struct CreateOrOpenArgs {
 /// The caller must call `close` to free the memory associated with the returned database handle.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_create_db(args: CreateOrOpenArgs) -> *mut Db {
+pub unsafe extern "C" fn fwd_create_db(args: CreateOrOpenArgs) -> *mut Database {
     let cfg = DbConfig::builder()
         .truncate(true)
         .manager(manager_config(
@@ -240,7 +243,7 @@ pub unsafe extern "C" fn fwd_create_db(args: CreateOrOpenArgs) -> *mut Db {
 /// The caller must call `close` to free the memory associated with the returned database handle.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_open_db(args: CreateOrOpenArgs) -> *mut Db {
+pub unsafe extern "C" fn fwd_open_db(args: CreateOrOpenArgs) -> *mut Database {
     let cfg = DbConfig::builder()
         .truncate(false)
         .manager(manager_config(
@@ -256,7 +259,7 @@ unsafe fn common_create(
     path: *const std::ffi::c_char,
     metrics_port: u16,
     cfg: DbConfig,
-) -> *mut Db {
+) -> *mut Database {
     #[cfg(feature = "logger")]
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .try_init();
@@ -301,6 +304,6 @@ fn manager_config(cache_size: usize, revisions: usize, strategy: u8) -> Revision
 ///
 /// * `db` - The database handle to close, previously returned from a call to open_db()
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_close_db(db: *mut Db) {
+pub unsafe extern "C" fn fwd_close_db(db: *mut Database) {
     let _ = unsafe { Box::from_raw(db) };
 }

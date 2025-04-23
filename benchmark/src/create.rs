@@ -11,6 +11,7 @@ use firewood::v2::api::{Db as _, Proposal as _};
 use log::info;
 
 use pretty_duration::pretty_duration;
+use firewood::FileBacked;
 
 use crate::{Args, TestRunner};
 
@@ -18,7 +19,7 @@ use crate::{Args, TestRunner};
 pub struct Create;
 
 impl TestRunner for Create {
-    async fn run(&self, db: &Db, args: &Args) -> Result<(), Box<dyn Error>> {
+    async fn run(&self, db: &Db<FileBacked>, args: &Args) -> Result<(), Box<dyn Error>> {
         let keys = args.global_opts.batch_size;
         let start = Instant::now();
 

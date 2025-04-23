@@ -63,7 +63,7 @@ use std::sync::Arc;
 use crate::hashednode::hash_node;
 use crate::node::{ByteCounter, Node};
 use crate::{
-    CacheReadStrategy, Child, FileBacked, HashType, Path, ReadableStorage, SharedNode, TrieHash,
+    CacheReadStrategy, Child, HashType, Path, ReadableStorage, SharedNode, TrieHash,
 };
 
 use super::linear::WritableStorage;
@@ -319,7 +319,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 
     /// Create a new, empty, Committed [NodeStore] and clobber
     /// the underlying store with an empty freelist and no root node
-    pub fn new_empty_committed(storage: Arc<S>) -> Result<Self, Error> {
+    pub fn new_empty_committed(storage: Arc<S>) -> Result<NodeStore<Committed, S>, Error> {
         let header = NodeStoreHeader::new();
 
         Ok(Self {
@@ -1067,7 +1067,7 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
     }
 }
 
-impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
+impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     /// Persist the freelist from this proposal to storage.
     #[fastrace::trace(short_name = true)]
     pub fn flush_freelist(&self) -> Result<(), Error> {
@@ -1183,10 +1183,10 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
     }
 }
 
-impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
+impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     /// Return a Committed version of this proposal, which doesn't have any modified nodes.
     /// This function is used during commit.
-    pub fn as_committed(&self) -> NodeStore<Committed, FileBacked> {
+    pub fn as_committed(&self) -> NodeStore<Committed, S> {
         NodeStore {
             header: self.header,
             kind: Committed {

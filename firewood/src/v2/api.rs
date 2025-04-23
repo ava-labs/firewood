@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use futures::Stream;
 use std::fmt::Debug;
 use std::sync::Arc;
-use storage::TrieHash;
+use storage::{TrieHash, WritableStorage};
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
 /// and can be sent and shared across threads. References with
@@ -157,12 +157,12 @@ impl From<RevisionManagerError> for Error {
 /// the database (the DbView). The most common implementation of the DbView
 /// is the api::DbView trait defined next.
 #[async_trait]
-pub trait Db {
+pub trait Db<S: WritableStorage + Send + Sync + 'static> {
     /// The type of a historical revision
-    type Historical: DbView;
+    type Historical: DbView<S>;
 
     /// The type of a proposal
-    type Proposal<'p>: DbView + Proposal
+    type Proposal<'p>: DbView<S> + Proposal<S>
     where
         Self: 'p;
 
@@ -207,7 +207,7 @@ pub trait Db {
 ///
 /// A [Proposal] requires implementing DbView
 #[async_trait]
-pub trait DbView {
+pub trait DbView<S: WritableStorage> {
     /// The type of a stream of key/value pairs
     type Stream<'a>: Stream<Item = Result<(Box<[u8]>, Vec<u8>), Error>>
     where
@@ -273,9 +273,11 @@ pub trait DbView {
 /// [DbView], which means you can fetch values from it or
 /// obtain proofs.
 #[async_trait]
-pub trait Proposal: DbView + Send + Sync {
+pub trait Proposal<S: WritableStorage + Send + Sync + 'static>:
+    DbView<S> + Send + Sync
+{
     /// The type of a proposal
-    type Proposal: DbView + Proposal;
+    type Proposal: DbView<S> + Proposal<S>;
 
     /// Commit this revision
     async fn commit(self: Arc<Self>) -> Result<(), Error>;

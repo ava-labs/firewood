@@ -7,6 +7,7 @@ use std::time::Instant;
 use firewood::db::{BatchOp, Db};
 use firewood::logger::debug;
 use firewood::v2::api::{Db as _, Proposal as _};
+use firewood::FileBacked;
 
 use crate::{Args, TestRunner};
 use sha2::{Digest, Sha256};
@@ -15,7 +16,7 @@ use sha2::{Digest, Sha256};
 pub struct TenKRandom;
 
 impl TestRunner for TenKRandom {
-    async fn run(&self, db: &Db, args: &Args) -> Result<(), Box<dyn Error>> {
+    async fn run(&self, db: &Db<FileBacked>, args: &Args) -> Result<(), Box<dyn Error>> {
         let mut low = 0;
         let mut high = args.global_opts.number_of_batches * args.global_opts.batch_size;
         let twenty_five_pct = args.global_opts.batch_size / 4;

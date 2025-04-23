@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use firewood::db::{BatchOp, Db, DbConfig};
 use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
+use firewood::FileBacked;
 
 use fastrace::collector::Config;
 
@@ -39,7 +40,7 @@ struct Args {
 }
 
 #[derive(clap::Args, Debug)]
-struct GlobalOpts {
+pub struct GlobalOpts {
     #[arg(
         short = 'e',
         long,
@@ -152,7 +153,7 @@ enum TestName {
 }
 
 trait TestRunner {
-    async fn run(&self, db: &Db, args: &Args) -> Result<(), Box<dyn Error>>;
+    async fn run(&self, db: &Db<FileBacked>, args: &Args) -> Result<(), Box<dyn Error>>;
 
     fn generate_inserts(
         start: u64,
@@ -249,7 +250,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .manager(mgrcfg)
         .build();
 
-    let db = Db::new(args.global_opts.dbname.clone(), cfg)
+    let db = Db::<FileBacked>::new(args.global_opts.dbname.clone(), cfg)
         .await
         .expect("db initiation should succeed");
 

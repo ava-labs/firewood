@@ -133,7 +133,7 @@ fn get_keys_to_verify(batch: &Batch<Vec<u8>, Vec<u8>>, pct: u16) -> HashMap<Vec<
 }
 
 async fn verify_keys(
-    db: &impl firewood::v2::api::Db,
+    db: &impl firewood::v2::api::Db<storage::FileBacked>,
     verify: HashMap<Vec<u8>, Box<[u8]>>,
 ) -> Result<(), firewood::v2::api::Error> {
     if !verify.is_empty() {

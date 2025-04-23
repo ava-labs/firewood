@@ -135,3 +135,6 @@ pub mod v2;
 
 /// Expose the storage logger
 pub use storage::logger;
+
+/// Expose the storage types
+pub use storage::{FileBacked, MemStore};

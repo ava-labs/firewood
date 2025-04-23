@@ -8,7 +8,9 @@ use super::api::{Batch, Db, DbView, Error, HashKey, KeyType, ValueType};
 use super::propose::{Proposal, ProposalBase};
 use async_trait::async_trait;
 use futures::Stream;
+use storage::WritableStorage;
 use std::sync::Arc;
+use crate::MemStore;
 
 /// An EmptyDb is a simple implementation of api::Db
 /// that doesn't store any data. It contains a single
@@ -22,10 +24,10 @@ pub struct EmptyDb;
 pub struct HistoricalImpl;
 
 #[async_trait]
-impl Db for EmptyDb {
+impl Db<crate::MemStore> for EmptyDb {
     type Historical = HistoricalImpl;
 
-    type Proposal<'p> = Proposal<HistoricalImpl>;
+    type Proposal<'p> = Proposal<HistoricalImpl, MemStore>;
 
     async fn revision(&self, hash_key: HashKey) -> Result<Arc<Self::Historical>, Error> {
         Err(Error::HashNotFound { provided: hash_key })
@@ -55,7 +57,7 @@ impl Db for EmptyDb {
 }
 
 #[async_trait]
-impl DbView for HistoricalImpl {
+impl<S: WritableStorage> DbView<S> for HistoricalImpl {
     type Stream<'a> = EmptyStreamer;
 
     async fn root_hash(&self) -> Result<Option<HashKey>, Error> {

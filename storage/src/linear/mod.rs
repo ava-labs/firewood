@@ -23,7 +23,7 @@ pub(super) mod filebacked;
 pub mod memory;
 
 /// Trait for readable storage.
-pub trait ReadableStorage: Debug + Sync + Send {
+pub trait ReadableStorage: Debug + Sync + Send + 'static {
     /// Stream data from the specified address.
     ///
     /// # Arguments

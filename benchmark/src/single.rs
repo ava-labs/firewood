@@ -9,12 +9,13 @@ use pretty_duration::pretty_duration;
 use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::time::Instant;
+use firewood::FileBacked;
 
 #[derive(Clone)]
 pub struct Single;
 
 impl TestRunner for Single {
-    async fn run(&self, db: &Db, args: &crate::Args) -> Result<(), Box<dyn Error>> {
+    async fn run(&self, db: &Db<FileBacked>, args: &crate::Args) -> Result<(), Box<dyn Error>> {
         let start = Instant::now();
         let inner_keys: Vec<_> = (0..args.global_opts.batch_size)
             .map(|i| Sha256::digest(i.to_ne_bytes()))
