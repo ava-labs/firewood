@@ -19,9 +19,9 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use firewood::FileBacked;
 use firewood::db::{BatchOp, Db, DbConfig};
 use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
-use firewood::FileBacked;
 
 use fastrace::collector::Config;
 
