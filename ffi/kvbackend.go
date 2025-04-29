@@ -10,7 +10,7 @@ type kVBackend interface {
 	// Returns the current root hash of the trie.
 	// Empty trie must return common.Hash{}.
 	// Length of the returned slice must be common.HashLength.
-	Root() []byte
+	Root() ([]byte, error)
 
 	// Get retrieves the value for the given key.
 	// If the key does not exist, it must return (nil, nil).
@@ -57,5 +57,5 @@ func (db *Database) Update(keys, vals [][]byte) ([]byte, error) {
 	for i := range keys {
 		ops[i] = KeyValue{keys[i], vals[i]}
 	}
-	return db.Batch(ops), nil
+	return db.Batch(ops)
 }

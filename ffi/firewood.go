@@ -9,6 +9,7 @@ package firewood
 import "C"
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
 	"unsafe"
@@ -101,7 +102,7 @@ type KeyValue struct {
 //
 // WARNING: a consequence of prefix deletion is that calling Batch with an empty
 // key and value will delete the entire database.
-func (db *Database) Batch(ops []KeyValue) []byte {
+func (db *Database) Batch(ops []KeyValue) ([]byte, error) {
 	// TODO(arr4n) refactor this to require explicit signalling from the caller
 	// that they want prefix deletion, similar to `rm --no-preserve-root`.
 
@@ -126,10 +127,15 @@ func (db *Database) Batch(ops []KeyValue) []byte {
 
 // extractBytesThenFree converts the cgo `Value` payload to a byte slice, frees
 // the `Value`, and returns the extracted slice.
-func extractBytesThenFree(v *C.struct_Value) []byte {
-	buf := C.GoBytes(unsafe.Pointer(v.data), C.int(v.len))
+// Generates error if the error term is nonnull.
+func extractBytesThenFree(v *C.struct_ReturnValue) (buf []byte, err error) {
+	buf = C.GoBytes(unsafe.Pointer(v.data), C.int(v.len))
+	if v.err != nil {
+		errStr := C.GoString(v.err)
+		err = fmt.Errorf("internal firewood error: %s", errStr)
+	}
 	C.fwd_free_value(v)
-	return buf
+	return
 }
 
 // Get retrieves the value for the given key. It always returns a nil error.
@@ -138,22 +144,27 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 	values, cleanup := newValueFactory()
 	defer cleanup()
 	val := C.fwd_get(db.handle, values.from(key))
-	bytes := extractBytesThenFree(&val)
-	if len(bytes) == 0 {
+	bytes, err := extractBytesThenFree(&val)
+
+	// Ignore the error.
+	if err != nil {
 		return nil, nil
 	}
-	return bytes, nil
+	return bytes, err
 }
 
 // Root returns the current root hash of the trie.
-func (db *Database) Root() []byte {
+func (db *Database) Root() ([]byte, error) {
 	hash := C.fwd_root_hash(db.handle)
 	return extractBytesThenFree(&hash)
 }
 
-// Close closes the database and releases all held resources. It always returns
-// nil.
+// Close closes the database and releases all held resources.
+// Returns an error if already closed.
 func (db *Database) Close() error {
+	if db.handle == nil {
+		return errors.New("database already closed")
+	}
 	C.fwd_close_db(db.handle)
 	db.handle = nil
 	return nil
@@ -172,11 +183,11 @@ type valueFactory struct {
 	pin runtime.Pinner
 }
 
-func (f *valueFactory) from(data []byte) C.struct_Value {
+func (f *valueFactory) from(data []byte) C.struct_InputValue {
 	if len(data) == 0 {
-		return C.struct_Value{0, nil}
+		return C.struct_InputValue{0, nil}
 	}
 	ptr := (*C.uchar)(unsafe.SliceData(data))
 	f.pin.Pin(ptr)
-	return C.struct_Value{C.size_t(len(data)), ptr}
+	return C.struct_InputValue{C.size_t(len(data)), ptr}
 }

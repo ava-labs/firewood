@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::ffi::{CStr, OsStr};
+use std::ffi::{c_char, CStr, CString, OsStr};
 use std::fmt::{self, Display, Formatter};
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::Path;
@@ -18,15 +18,23 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 #[derive(Debug)]
 #[repr(C)]
-pub struct Value {
+pub struct InputValue {
     pub len: usize,
     pub data: *const u8,
 }
 
-impl Display for Value {
+impl Display for InputValue {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{:?}", self.as_slice())
     }
+}
+
+#[derive(Debug)]
+#[repr(C)]
+pub struct ReturnValue {
+    pub len: usize,
+    pub data: *const u8,
+    pub err: *const c_char,
 }
 
 /// Gets the value associated with the given key from the database.
@@ -42,21 +50,34 @@ impl Display for Value {
 ///  * ensure that `key` is a valid pointer to a `Value` struct
 ///  * call `free_value` to free the memory associated with the returned `Value`
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_get(db: *mut Db, key: Value) -> Value {
-    let db = unsafe { db.as_ref() }.expect("db should be non-null");
-    let root = db.root_hash_sync();
-    let Ok(Some(root)) = root else {
-        return Value {
-            len: 0,
-            data: std::ptr::null(),
-        };
+pub unsafe extern "C" fn fwd_get(db: *mut Db, key: InputValue) -> ReturnValue {
+    // Check db is valid.
+    let db = match unsafe { db.as_ref() } {
+        Some(db) => db,
+        None => { return unsafe { make_err_return("db should be non-null") }; }
     };
-    let rev = db.revision_sync(root).expect("revision should exist");
-    let value = rev
-        .val_sync(key.as_slice())
-        .expect("get should succeed")
-        .unwrap_or_default();
-    value.into()
+
+    // Find root hash.
+    let root = match db.root_hash_sync() {
+        Ok(Some(root)) => root,
+        Ok(None) => { return unsafe { make_err_return("couldn't find root hash for db") }; }
+        Err(e) => { return unsafe { make_err_return(&format!("couldn't get root hash: {}", e)) }; }
+    };
+
+    // Find revision assoicated with root.
+    let rev = match db.revision_sync(root) {
+        Ok(rev) => rev,
+        Err(e) => { return unsafe { make_err_return(&format!("couldn't get revision: {}", e)) }; }
+    };
+    
+    // Get value associated with key.
+    let value = rev.val_sync(key.as_slice());
+    let data = match value {
+        Ok(Some(value)) => { value },
+        Ok(None) => { return unsafe { make_err_return("key not found") }; }
+        Err(e) => { return unsafe { make_err_return(&format!("couldn't get value: {}", e)) }; }
+    };
+    ReturnValue::from(data)
 }
 
 /// A `KeyValue` struct that represents a key-value pair in the database.
@@ -64,8 +85,8 @@ pub unsafe extern "C" fn fwd_get(db: *mut Db, key: Value) -> Value {
 #[allow(unused)]
 #[unsafe(no_mangle)]
 pub struct KeyValue {
-    key: Value,
-    value: Value,
+    key: InputValue,
+    value: InputValue,
 }
 
 /// Puts the given key-value pairs into the database.
@@ -83,9 +104,15 @@ pub struct KeyValue {
 ///  * ensure that the `Value` fields of the `KeyValue` structs are valid pointers.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const KeyValue) -> Value {
+pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const KeyValue) -> ReturnValue {
     let start = coarsetime::Instant::now();
-    let db = unsafe { db.as_ref() }.expect("db should be non-null");
+    // Check db is valid.
+    let db = match unsafe { db.as_ref() } {
+        Some(db) => db,
+        None => { return unsafe { make_err_return("db should be non-null") }; }
+    };
+
+    // Create a batch of operations to perform.
     let mut batch = Vec::with_capacity(nkeys);
     for i in 0..nkeys {
         let kv = unsafe { values.add(i).as_ref() }.expect("values should be non-null");
@@ -100,16 +127,29 @@ pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const Key
             value: kv.value.as_slice(),
         });
     }
-    let proposal = db.propose_sync(batch).expect("proposal should succeed");
+
+    // Propose the batch of operations.
+    let proposal = match db.propose_sync(batch) {
+        Ok(proposal) => proposal,
+        Err(e) => { return unsafe { make_err_return(&format!("propose failed: {}", e)) }; }
+    };
     let propose_time = start.elapsed().as_millis();
     counter!("firewood.ffi.propose_ms").increment(propose_time);
-    proposal.commit_sync().expect("commit should succeed");
-    let hash = hash(db);
+
+    // Commit the proposal.
+    let result = proposal.commit_sync();
+    match result {
+        Ok(_) => {}
+        Err(e) => { return unsafe { make_err_return(&format!("commit failed: {}", e)) }; }
+    }
+
+    // Get the root hash of the database post-commit.
+    let hash_val = hash(db);
     let propose_plus_commit_time = start.elapsed().as_millis();
     counter!("firewood.ffi.batch_ms").increment(propose_plus_commit_time);
     counter!("firewood.ffi.commit_ms").increment(propose_plus_commit_time - propose_time);
     counter!("firewood.ffi.batch").increment(1);
-    hash
+    hash_val
 }
 
 /// Get the root hash of the latest version of the database
@@ -120,8 +160,12 @@ pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const Key
 /// This function is unsafe because it dereferences raw pointers.
 /// The caller must ensure that `db` is a valid pointer returned by `open_db`
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_root_hash(db: *mut Db) -> Value {
-    let db = unsafe { db.as_ref() }.expect("db should be non-null");
+pub unsafe extern "C" fn fwd_root_hash(db: *mut Db) -> ReturnValue {
+    // Check db is valid.
+    let db = match unsafe { db.as_ref() } {
+        Some(db) => db,
+        None => { return unsafe { make_err_return("db should be non-null") }; }
+    };
     hash(db)
 }
 
@@ -129,29 +173,61 @@ pub unsafe extern "C" fn fwd_root_hash(db: *mut Db) -> Value {
 ///
 /// This function is not exposed to the C API.
 /// It returns the current hash of an already-fetched database handle
-fn hash(db: &Db) -> Value {
-    let root = db.root_hash_sync().unwrap_or_default().unwrap_or_default();
-    Value::from(root.as_slice())
+fn hash(db: &Db) -> ReturnValue {
+    let root = match db.root_hash_sync() {
+        Ok(Some(root)) => root,
+        Ok(None) => { return unsafe { make_err_return("couldn't find root hash for db") }; }
+        Err(e) => { return unsafe { make_err_return(&format!("couldn't get root hash: {}", e)) }; }
+    };
+
+    ReturnValue::from(root.as_slice())
 }
 
-impl Value {
+impl InputValue {
     pub fn as_slice(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.data, self.len) }
     }
 }
 
-impl From<&[u8]> for Value {
+impl From<&[u8]> for InputValue {
     fn from(data: &[u8]) -> Self {
         let boxed: Box<[u8]> = data.into();
         boxed.into()
     }
 }
 
-impl From<Box<[u8]>> for Value {
+impl From<Box<[u8]>> for InputValue {
     fn from(data: Box<[u8]>) -> Self {
         let len = data.len();
         let data = Box::leak(data).as_ptr();
-        Value { len, data }
+        InputValue { len, data }
+    }
+}
+
+impl From<&[u8]> for ReturnValue {
+    fn from(data: &[u8]) -> Self {
+        let boxed: Box<[u8]> = data.into();
+        boxed.into()
+    }
+}
+
+impl From<Box<[u8]>> for ReturnValue {
+    fn from(data: Box<[u8]>) -> Self {
+        let len = data.len();
+        let data = Box::leak(data).as_ptr();
+        let err = std::ptr::null();
+        ReturnValue { len, data, err }
+    }
+}
+
+impl From<InputValue> for ReturnValue {
+    fn from(value: InputValue) -> Self {
+        let err = std::ptr::null();
+        ReturnValue {
+            len: value.len,
+            data: value.data,
+            err,
+        }
     }
 }
 
@@ -162,18 +238,22 @@ impl From<Box<[u8]>> for Value {
 /// This function is unsafe because it dereferences raw pointers.
 /// The caller must ensure that `value` is a valid pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_free_value(value: *const Value) {
-    let value = unsafe { &*value as &Value };
-    if value.len == 0 {
-        return;
+pub unsafe extern "C" fn fwd_free_value(value: *const ReturnValue) {
+    let value = unsafe { &*value as &ReturnValue };
+    if value.len > 0 {
+        let recreated_box = unsafe {
+            Box::from_raw(std::slice::from_raw_parts_mut(
+                value.data as *mut u8,
+                value.len,
+            ))
+        };
+        drop(recreated_box);
     }
-    let recreated_box = unsafe {
-        Box::from_raw(std::slice::from_raw_parts_mut(
-            value.data as *mut u8,
-            value.len,
-        ))
-    };
-    drop(recreated_box);
+    
+    if !value.err.is_null() {
+        let cstr = unsafe { CString::from_raw(value.err as *mut c_char) };
+        drop(cstr);
+    }
 }
 
 /// Common arguments, accepted by both `fwd_create_db()` and `fwd_open_db()`.
@@ -302,5 +382,26 @@ fn manager_config(cache_size: usize, revisions: usize, strategy: u8) -> Revision
 /// * `db` - The database handle to close, previously returned from a call to open_db()
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_close_db(db: *mut Db) {
+    if db.is_null() {
+        return;
+    }
     let _ = unsafe { Box::from_raw(db) };
+}
+
+/// Creates a C string from a Rust string.
+/// The caller is responsible for freeing the memory associated with the returned C string.
+/// Returns a null pointer if the string contains a null byte.
+unsafe fn create_cstr(err: &str) -> *const c_char {
+    match CString::new(String::from(err)) {
+        Ok(cstr) => cstr.into_raw(), // leaks the CString (caller must free)
+        Err(_) => std::ptr::null(), // contains null byte, invalid C string
+    }
+}
+
+unsafe fn make_err_return(err: &str) -> ReturnValue {
+    ReturnValue {
+        len: 0,
+        data: std::ptr::null(),
+        err: unsafe { create_cstr(err) },
+    }
 }
