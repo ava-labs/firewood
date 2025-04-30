@@ -15,6 +15,8 @@ import (
 	"unsafe"
 )
 
+var dbClosedErr = errors.New("firewood database already closed")
+
 // A Database is a handle to a Firewood database.
 type Database struct {
 	// handle is returned and accepted by cgo functions. It MUST be treated as
@@ -168,7 +170,7 @@ func (db *Database) Root() ([]byte, error) {
 // Returns an error if already closed.
 func (db *Database) Close() error {
 	if db.handle == nil {
-		return errors.New("database already closed")
+		return dbClosedErr
 	}
 	C.fwd_close_db(db.handle)
 	db.handle = nil
