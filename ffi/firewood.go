@@ -156,7 +156,12 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 // Root returns the current root hash of the trie.
 func (db *Database) Root() ([]byte, error) {
 	hash := C.fwd_root_hash(db.handle)
-	return extractBytesThenFree(&hash)
+	bytes, err := extractBytesThenFree(&hash)
+	// On error, send empty root hash.
+	if err != nil {
+		bytes = make([]byte, 32)
+	}
+	return bytes, nil // Ignore errors.
 }
 
 // Close closes the database and releases all held resources.

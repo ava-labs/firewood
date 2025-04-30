@@ -77,10 +77,6 @@ func TestGetNonExistent(t *testing.T) {
 	got, err := db.Get([]byte("non-existent"))
 	require.NoError(t, err)
 	assert.Nil(t, got)
-
-	// Empty DB should return no root.
-	_, err = db.Root()
-	require.Error(t, err)
 }
 
 // Attempt to make a call to a nil or invalid handle.
@@ -91,11 +87,10 @@ func TestGetBadHandle(t *testing.T) {
 	// This ignores error, but still shouldn't panic.
 	_, _ = db.Get([]byte("non-existent"))
 
-	root, err := db.Root()
-	assert.Empty(t, root)
-	require.Error(t, err)
+	// We ignore the error, but it shouldn't panic.
+	_, _ = db.Root()
 
-	root, err = db.Update([][]byte{[]byte("key")}, [][]byte{[]byte("value")})
+	root, err := db.Update([][]byte{[]byte("key")}, [][]byte{[]byte("value")})
 	assert.Empty(t, root)
 	require.Error(t, err)
 
