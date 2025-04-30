@@ -137,6 +137,9 @@ func extractBytesThenFree(v *C.struct_ReturnValue) (buf []byte, err error) {
 		err = fmt.Errorf("internal firewood error: %s", errStr)
 	}
 	C.fwd_free_value(v)
+
+	// Pin the returned value to prevent it from being garbage collected.
+	runtime.KeepAlive(v)
 	return
 }
 
