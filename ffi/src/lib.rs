@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::ffi::{c_char, CStr, CString, OsStr};
+use std::ffi::{CStr, CString, OsStr, c_char};
 use std::fmt::{self, Display, Formatter};
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::Path;
@@ -54,28 +54,40 @@ pub unsafe extern "C" fn fwd_get(db: *mut Db, key: InputValue) -> ReturnValue {
     // Check db is valid.
     let db = match unsafe { db.as_ref() } {
         Some(db) => db,
-        None => { return unsafe { make_err_return("db should be non-null") }; }
+        None => {
+            return unsafe { make_err_return("db should be non-null") };
+        }
     };
 
     // Find root hash.
     let root = match db.root_hash_sync() {
         Ok(Some(root)) => root,
-        Ok(None) => { return unsafe { make_err_return("couldn't find root hash for db") }; }
-        Err(e) => { return unsafe { make_err_return(&format!("couldn't get root hash: {}", e)) }; }
+        Ok(None) => {
+            return unsafe { make_err_return("couldn't find root hash for db") };
+        }
+        Err(e) => {
+            return unsafe { make_err_return(&format!("couldn't get root hash: {}", e)) };
+        }
     };
 
     // Find revision assoicated with root.
     let rev = match db.revision_sync(root) {
         Ok(rev) => rev,
-        Err(e) => { return unsafe { make_err_return(&format!("couldn't get revision: {}", e)) }; }
+        Err(e) => {
+            return unsafe { make_err_return(&format!("couldn't get revision: {}", e)) };
+        }
     };
-    
+
     // Get value associated with key.
     let value = rev.val_sync(key.as_slice());
     let data = match value {
-        Ok(Some(value)) => { value },
-        Ok(None) => { return unsafe { make_err_return("key not found") }; }
-        Err(e) => { return unsafe { make_err_return(&format!("couldn't get value: {}", e)) }; }
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            return unsafe { make_err_return("key not found") };
+        }
+        Err(e) => {
+            return unsafe { make_err_return(&format!("couldn't get value: {}", e)) };
+        }
     };
     ReturnValue::from(data)
 }
@@ -104,12 +116,18 @@ pub struct KeyValue {
 ///  * ensure that the `Value` fields of the `KeyValue` structs are valid pointers.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const KeyValue) -> ReturnValue {
+pub unsafe extern "C" fn fwd_batch(
+    db: *mut Db,
+    nkeys: usize,
+    values: *const KeyValue,
+) -> ReturnValue {
     let start = coarsetime::Instant::now();
     // Check db is valid.
     let db = match unsafe { db.as_ref() } {
         Some(db) => db,
-        None => { return unsafe { make_err_return("db should be non-null") }; }
+        None => {
+            return unsafe { make_err_return("db should be non-null") };
+        }
     };
 
     // Create a batch of operations to perform.
@@ -131,7 +149,9 @@ pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const Key
     // Propose the batch of operations.
     let proposal = match db.propose_sync(batch) {
         Ok(proposal) => proposal,
-        Err(e) => { return unsafe { make_err_return(&format!("propose failed: {}", e)) }; }
+        Err(e) => {
+            return unsafe { make_err_return(&format!("propose failed: {}", e)) };
+        }
     };
     let propose_time = start.elapsed().as_millis();
     counter!("firewood.ffi.propose_ms").increment(propose_time);
@@ -140,7 +160,9 @@ pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const Key
     let result = proposal.commit_sync();
     match result {
         Ok(_) => {}
-        Err(e) => { return unsafe { make_err_return(&format!("commit failed: {}", e)) }; }
+        Err(e) => {
+            return unsafe { make_err_return(&format!("commit failed: {}", e)) };
+        }
     }
 
     // Get the root hash of the database post-commit.
@@ -164,7 +186,9 @@ pub unsafe extern "C" fn fwd_root_hash(db: *mut Db) -> ReturnValue {
     // Check db is valid.
     let db = match unsafe { db.as_ref() } {
         Some(db) => db,
-        None => { return unsafe { make_err_return("db should be non-null") }; }
+        None => {
+            return unsafe { make_err_return("db should be non-null") };
+        }
     };
     hash(db)
 }
@@ -176,8 +200,12 @@ pub unsafe extern "C" fn fwd_root_hash(db: *mut Db) -> ReturnValue {
 fn hash(db: &Db) -> ReturnValue {
     let root = match db.root_hash_sync() {
         Ok(Some(root)) => root,
-        Ok(None) => { return unsafe { make_err_return("couldn't find root hash for db") }; }
-        Err(e) => { return unsafe { make_err_return(&format!("couldn't get root hash: {}", e)) }; }
+        Ok(None) => {
+            return unsafe { make_err_return("couldn't find root hash for db") };
+        }
+        Err(e) => {
+            return unsafe { make_err_return(&format!("couldn't get root hash: {}", e)) };
+        }
     };
 
     ReturnValue::from(root.as_slice())
@@ -249,7 +277,7 @@ pub unsafe extern "C" fn fwd_free_value(value: *const ReturnValue) {
         };
         drop(recreated_box);
     }
-    
+
     if !value.err.is_null() {
         let cstr = unsafe { CString::from_raw(value.err as *mut c_char) };
         drop(cstr);
@@ -394,7 +422,7 @@ pub unsafe extern "C" fn fwd_close_db(db: *mut Db) {
 unsafe fn create_cstr(err: &str) -> *const c_char {
     match CString::new(String::from(err)) {
         Ok(cstr) => cstr.into_raw(), // leaks the CString (caller must free)
-        Err(_) => std::ptr::null(), // contains null byte, invalid C string
+        Err(_) => std::ptr::null(),  // contains null byte, invalid C string
     }
 }
 
