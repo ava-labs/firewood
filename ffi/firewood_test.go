@@ -2,6 +2,7 @@ package firewood
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -95,7 +96,9 @@ func TestGetBadHandle(t *testing.T) {
 	require.Error(t, err)
 
 	err = db.Close()
-	assert.Error(t, err)
+	if !errors.Is(err, dbClosedErr) {
+		t.Fatalf("expected %v, got %v", dbClosedErr, err)
+	}
 }
 
 func keyForTest(i int) []byte {
