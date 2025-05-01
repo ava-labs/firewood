@@ -108,11 +108,7 @@ pub struct KeyValue {
 ///  * ensure that the `Value` fields of the `KeyValue` structs are valid pointers.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_batch(
-    db: *mut Db,
-    nkeys: usize,
-    values: *const KeyValue,
-) -> Value {
+pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const KeyValue) -> Value {
     let start = coarsetime::Instant::now();
     // Check db is valid.
     let db = match unsafe { db.as_ref() } {
@@ -233,6 +229,7 @@ impl From<Box<[u8]>> for Value {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_free_value(value: *const Value) {
     let value = unsafe { &*value as &Value };
+    // We assume that if the length is 0, then the data is a null-terminated string.
     if value.len > 0 {
         let recreated_box = unsafe {
             Box::from_raw(std::slice::from_raw_parts_mut(
