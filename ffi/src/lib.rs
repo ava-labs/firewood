@@ -18,23 +18,15 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 #[derive(Debug)]
 #[repr(C)]
-pub struct InputValue {
+pub struct Value {
     pub len: usize,
     pub data: *const u8,
 }
 
-impl Display for InputValue {
+impl Display for Value {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{:?}", self.as_slice())
     }
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct ReturnValue {
-    pub len: usize,
-    pub data: *const u8,
-    pub err: *const c_char,
 }
 
 /// Gets the value associated with the given key from the database.
@@ -50,7 +42,7 @@ pub struct ReturnValue {
 ///  * ensure that `key` is a valid pointer to a `Value` struct
 ///  * call `free_value` to free the memory associated with the returned `Value`
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_get(db: *mut Db, key: InputValue) -> ReturnValue {
+pub unsafe extern "C" fn fwd_get(db: *mut Db, key: Value) -> Value {
     // Check db is valid.
     let db = match unsafe { db.as_ref() } {
         Some(db) => db,
@@ -89,7 +81,7 @@ pub unsafe extern "C" fn fwd_get(db: *mut Db, key: InputValue) -> ReturnValue {
             return unsafe { make_err_return(&format!("couldn't get value: {}", e)) };
         }
     };
-    ReturnValue::from(data)
+    Value::from(data)
 }
 
 /// A `KeyValue` struct that represents a key-value pair in the database.
@@ -97,8 +89,8 @@ pub unsafe extern "C" fn fwd_get(db: *mut Db, key: InputValue) -> ReturnValue {
 #[allow(unused)]
 #[unsafe(no_mangle)]
 pub struct KeyValue {
-    key: InputValue,
-    value: InputValue,
+    key: Value,
+    value: Value,
 }
 
 /// Puts the given key-value pairs into the database.
@@ -120,7 +112,7 @@ pub unsafe extern "C" fn fwd_batch(
     db: *mut Db,
     nkeys: usize,
     values: *const KeyValue,
-) -> ReturnValue {
+) -> Value {
     let start = coarsetime::Instant::now();
     // Check db is valid.
     let db = match unsafe { db.as_ref() } {
@@ -182,7 +174,7 @@ pub unsafe extern "C" fn fwd_batch(
 /// This function is unsafe because it dereferences raw pointers.
 /// The caller must ensure that `db` is a valid pointer returned by `open_db`
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_root_hash(db: *mut Db) -> ReturnValue {
+pub unsafe extern "C" fn fwd_root_hash(db: *mut Db) -> Value {
     // Check db is valid.
     let db = match unsafe { db.as_ref() } {
         Some(db) => db,
@@ -197,7 +189,7 @@ pub unsafe extern "C" fn fwd_root_hash(db: *mut Db) -> ReturnValue {
 ///
 /// This function is not exposed to the C API.
 /// It returns the current hash of an already-fetched database handle
-fn hash(db: &Db) -> ReturnValue {
+fn hash(db: &Db) -> Value {
     let root = match db.root_hash_sync() {
         Ok(Some(root)) => root,
         Ok(None) => {
@@ -208,54 +200,27 @@ fn hash(db: &Db) -> ReturnValue {
         }
     };
 
-    ReturnValue::from(root.as_slice())
+    Value::from(root.as_slice())
 }
 
-impl InputValue {
+impl Value {
     pub fn as_slice(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.data, self.len) }
     }
 }
 
-impl From<&[u8]> for InputValue {
+impl From<&[u8]> for Value {
     fn from(data: &[u8]) -> Self {
         let boxed: Box<[u8]> = data.into();
         boxed.into()
     }
 }
 
-impl From<Box<[u8]>> for InputValue {
+impl From<Box<[u8]>> for Value {
     fn from(data: Box<[u8]>) -> Self {
         let len = data.len();
         let data = Box::leak(data).as_ptr();
-        InputValue { len, data }
-    }
-}
-
-impl From<&[u8]> for ReturnValue {
-    fn from(data: &[u8]) -> Self {
-        let boxed: Box<[u8]> = data.into();
-        boxed.into()
-    }
-}
-
-impl From<Box<[u8]>> for ReturnValue {
-    fn from(data: Box<[u8]>) -> Self {
-        let len = data.len();
-        let data = Box::leak(data).as_ptr();
-        let err = std::ptr::null();
-        ReturnValue { len, data, err }
-    }
-}
-
-impl From<InputValue> for ReturnValue {
-    fn from(value: InputValue) -> Self {
-        let err = std::ptr::null();
-        ReturnValue {
-            len: value.len,
-            data: value.data,
-            err,
-        }
+        Value { len, data }
     }
 }
 
@@ -266,8 +231,8 @@ impl From<InputValue> for ReturnValue {
 /// This function is unsafe because it dereferences raw pointers.
 /// The caller must ensure that `value` is a valid pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_free_value(value: *const ReturnValue) {
-    let value = unsafe { &*value as &ReturnValue };
+pub unsafe extern "C" fn fwd_free_value(value: *const Value) {
+    let value = unsafe { &*value as &Value };
     if value.len > 0 {
         let recreated_box = unsafe {
             Box::from_raw(std::slice::from_raw_parts_mut(
@@ -276,10 +241,8 @@ pub unsafe extern "C" fn fwd_free_value(value: *const ReturnValue) {
             ))
         };
         drop(recreated_box);
-    }
-
-    if !value.err.is_null() {
-        let cstr = unsafe { CString::from_raw(value.err as *mut c_char) };
+    } else {
+        let cstr = unsafe { CString::from_raw(value.data as *mut c_char) };
         drop(cstr);
     }
 }
@@ -426,10 +389,9 @@ unsafe fn create_cstr(err: &str) -> *const c_char {
     }
 }
 
-unsafe fn make_err_return(err: &str) -> ReturnValue {
-    ReturnValue {
+unsafe fn make_err_return(err: &str) -> Value {
+    Value {
         len: 0,
-        data: std::ptr::null(),
-        err: unsafe { create_cstr(err) },
+        data: unsafe { create_cstr(err) }.cast::<u8>(),
     }
 }

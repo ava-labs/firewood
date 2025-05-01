@@ -5,23 +5,17 @@
 #include <stdlib.h>
 
 
-typedef struct ReturnValue {
+typedef struct Value {
   size_t len;
   const uint8_t *data;
-  const char *err;
-} ReturnValue;
-
-typedef struct InputValue {
-  size_t len;
-  const uint8_t *data;
-} InputValue;
+} Value;
 
 /**
  * A `KeyValue` struct that represents a key-value pair in the database.
  */
 typedef struct KeyValue {
-  struct InputValue key;
-  struct InputValue value;
+  struct Value key;
+  struct Value value;
 } KeyValue;
 
 /**
@@ -56,9 +50,9 @@ typedef struct CreateOrOpenArgs {
  *  * ensure that the `Value` fields of the `KeyValue` structs are valid pointers.
  *
  */
-struct ReturnValue fwd_batch(void *db,
-                             size_t nkeys,
-                             const struct KeyValue *values);
+struct Value fwd_batch(void *db,
+                       size_t nkeys,
+                       const struct KeyValue *values);
 
 /**
  * Close and free the memory for a database handle
@@ -105,7 +99,7 @@ void *fwd_create_db(struct CreateOrOpenArgs args);
  * This function is unsafe because it dereferences raw pointers.
  * The caller must ensure that `value` is a valid pointer.
  */
-void fwd_free_value(const struct ReturnValue *value);
+void fwd_free_value(const struct Value *value);
 
 /**
  * Gets the value associated with the given key from the database.
@@ -121,7 +115,7 @@ void fwd_free_value(const struct ReturnValue *value);
  *  * ensure that `key` is a valid pointer to a `Value` struct
  *  * call `free_value` to free the memory associated with the returned `Value`
  */
-struct ReturnValue fwd_get(void *db, struct InputValue key);
+struct Value fwd_get(void *db, struct Value key);
 
 /**
  * Open a database with the given cache size and maximum number of revisions
@@ -153,4 +147,4 @@ void *fwd_open_db(struct CreateOrOpenArgs args);
  * This function is unsafe because it dereferences raw pointers.
  * The caller must ensure that `db` is a valid pointer returned by `open_db`
  */
-struct ReturnValue fwd_root_hash(void *db);
+struct Value fwd_root_hash(void *db);

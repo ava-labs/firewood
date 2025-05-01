@@ -130,10 +130,10 @@ func (db *Database) Batch(ops []KeyValue) ([]byte, error) {
 // extractBytesThenFree converts the cgo `Value` payload to a byte slice, frees
 // the `Value`, and returns the extracted slice.
 // Generates error if the error term is nonnull.
-func extractBytesThenFree(v *C.struct_ReturnValue) (buf []byte, err error) {
+func extractBytesThenFree(v *C.struct_Value) (buf []byte, err error) {
 	buf = C.GoBytes(unsafe.Pointer(v.data), C.int(v.len))
-	if v.err != nil {
-		errStr := C.GoString(v.err)
+	if v.len == 0 {
+		errStr := C.GoString((*C.char)(unsafe.Pointer(v.data)))
 		err = fmt.Errorf("internal firewood error: %s", errStr)
 	}
 	C.fwd_free_value(v)
@@ -193,11 +193,11 @@ type valueFactory struct {
 	pin runtime.Pinner
 }
 
-func (f *valueFactory) from(data []byte) C.struct_InputValue {
+func (f *valueFactory) from(data []byte) C.struct_Value {
 	if len(data) == 0 {
-		return C.struct_InputValue{0, nil}
+		return C.struct_Value{0, nil}
 	}
 	ptr := (*C.uchar)(unsafe.SliceData(data))
 	f.pin.Pin(ptr)
-	return C.struct_InputValue{C.size_t(len(data)), ptr}
+	return C.struct_Value{C.size_t(len(data)), ptr}
 }
