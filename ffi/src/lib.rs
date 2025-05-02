@@ -47,7 +47,7 @@ pub unsafe extern "C" fn fwd_get(db: *mut Db, key: Value) -> Value {
     let db = match unsafe { db.as_ref() } {
         Some(db) => db,
         None => {
-            return format!("db should be non-null").into();
+            return "db should be non-null".to_string().into();
         }
     };
 
@@ -55,7 +55,7 @@ pub unsafe extern "C" fn fwd_get(db: *mut Db, key: Value) -> Value {
     let root = match db.root_hash_sync() {
         Ok(Some(root)) => root,
         Ok(None) => {
-            return format!("couldn't find root hash for db").into();
+            return "couldn't find root hash for db".to_string().into();
         }
         Err(e) => {
             return format!("couldn't get root hash: {}", e).into();
@@ -72,16 +72,11 @@ pub unsafe extern "C" fn fwd_get(db: *mut Db, key: Value) -> Value {
 
     // Get value associated with key.
     let value = rev.val_sync(key.as_slice());
-    let data = match value {
-        Ok(Some(value)) => value,
-        Ok(None) => {
-            return format!("key not found").into();
-        }
-        Err(e) => {
-            return format!("couldn't get value: {}", e).into();
-        }
-    };
-    Value::from(data)
+    match value {
+        Ok(Some(value)) => value.into(),
+        Ok(None) => "key not found".to_string().into(),
+        Err(e) => format!("couldn't get value: {}", e).into(),
+    }
 }
 
 /// A `KeyValue` struct that represents a key-value pair in the database.
@@ -114,7 +109,7 @@ pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const Key
     let db = match unsafe { db.as_ref() } {
         Some(db) => db,
         None => {
-            return format!("db should be non-null").into();
+            return "db should be non-null".to_string().into();
         }
     };
 
@@ -124,7 +119,7 @@ pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const Key
         let kv = match unsafe { values.add(i).as_ref() } {
             Some(kv) => kv,
             None => {
-                return format!("couldn't get key-value pair").into();
+                return "couldn't get key-value pair".to_string().into();
             }
         };
         if kv.value.len == 0 {
@@ -177,13 +172,10 @@ pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const Key
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_root_hash(db: *mut Db) -> Value {
     // Check db is valid.
-    let db = match unsafe { db.as_ref() } {
-        Some(db) => db,
-        None => {
-            return format!("db should be non-null").into();
-        }
-    };
-    hash(db)
+    match unsafe { db.as_ref() } {
+        Some(db) => hash(db),
+        None => "db should be non-null".to_string().into(),
+    }
 }
 
 /// cbindgen::ignore
@@ -191,17 +183,11 @@ pub unsafe extern "C" fn fwd_root_hash(db: *mut Db) -> Value {
 /// This function is not exposed to the C API.
 /// It returns the current hash of an already-fetched database handle
 fn hash(db: &Db) -> Value {
-    let root = match db.root_hash_sync() {
-        Ok(Some(root)) => root,
-        Ok(None) => {
-            return format!("couldn't find root hash for db").into();
-        }
-        Err(e) => {
-            return format!("couldn't get root hash: {}", e).into();
-        }
-    };
-
-    Value::from(root.as_slice())
+    match db.root_hash_sync() {
+        Ok(Some(root)) => Value::from(root.as_slice()),
+        Ok(None) => "couldn't find root hash for db".to_string().into(),
+        Err(e) => format!("couldn't get root hash: {}", e).into(),
+    }
 }
 
 impl Value {
@@ -393,6 +379,7 @@ pub unsafe extern "C" fn fwd_close_db(db: *mut Db) {
 /// Creates a C string from a Rust string.
 /// The caller is responsible for freeing the memory associated with the returned C string.
 /// Returns a null pointer if the string contains a null byte.
+/// TODO: Maybe we should return an allocated "error string could not be rendered" 
 fn create_cstr(err: &str) -> *const c_char {
     match CString::new(String::from(err)) {
         Ok(cstr) => cstr.into_raw(), // leaks the CString (caller must free)
