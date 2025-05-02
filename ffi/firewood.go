@@ -18,6 +18,7 @@ import (
 var dbClosedErr = errors.New("firewood database already closed")
 
 // A Database is a handle to a Firewood database.
+// It is not safe to call these methods with a nil handle.
 type Database struct {
 	// handle is returned and accepted by cgo functions. It MUST be treated as
 	// an opaque value without special meaning.
@@ -146,27 +147,38 @@ func extractBytesThenFree(v *C.struct_Value) (buf []byte, err error) {
 // Get retrieves the value for the given key. It always returns a nil error.
 // If the key is not found, the return value will be (nil, nil).
 func (db *Database) Get(key []byte) ([]byte, error) {
+	if db.handle == nil {
+		return nil, dbClosedErr
+	}
+
 	values, cleanup := newValueFactory()
 	defer cleanup()
 	val := C.fwd_get(db.handle, values.from(key))
 	bytes, err := extractBytesThenFree(&val)
 
 	// Ignore the error.
+	// TODO: handle missing key error, return IO errors.
 	if err != nil {
 		return nil, nil
 	}
-	return bytes, err
+	return bytes, nil
 }
 
 // Root returns the current root hash of the trie.
+// Empty trie must return common.Hash{}.
 func (db *Database) Root() ([]byte, error) {
+	if db.handle == nil {
+		return nil, dbClosedErr
+	}
 	hash := C.fwd_root_hash(db.handle)
 	bytes, err := extractBytesThenFree(&hash)
+
 	// On error, send empty root hash.
+	// TODO: return IO errors.
 	if err != nil {
 		bytes = make([]byte, 32)
 	}
-	return bytes, nil // Ignore errors.
+	return bytes, nil
 }
 
 // Close closes the database and releases all held resources.

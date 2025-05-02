@@ -47,7 +47,7 @@ pub unsafe extern "C" fn fwd_get(db: *mut Db, key: Value) -> Value {
     let db = match unsafe { db.as_ref() } {
         Some(db) => db,
         None => {
-            return unsafe { make_err_return("db should be non-null") };
+            return format!("db should be non-null").into();
         }
     };
 
@@ -55,10 +55,10 @@ pub unsafe extern "C" fn fwd_get(db: *mut Db, key: Value) -> Value {
     let root = match db.root_hash_sync() {
         Ok(Some(root)) => root,
         Ok(None) => {
-            return unsafe { make_err_return("couldn't find root hash for db") };
+            return format!("couldn't find root hash for db").into();
         }
         Err(e) => {
-            return unsafe { make_err_return(&format!("couldn't get root hash: {}", e)) };
+            return format!("couldn't get root hash: {}", e).into();
         }
     };
 
@@ -66,7 +66,7 @@ pub unsafe extern "C" fn fwd_get(db: *mut Db, key: Value) -> Value {
     let rev = match db.revision_sync(root) {
         Ok(rev) => rev,
         Err(e) => {
-            return unsafe { make_err_return(&format!("couldn't get revision: {}", e)) };
+            return format!("couldn't get revision: {}", e).into();
         }
     };
 
@@ -75,10 +75,10 @@ pub unsafe extern "C" fn fwd_get(db: *mut Db, key: Value) -> Value {
     let data = match value {
         Ok(Some(value)) => value,
         Ok(None) => {
-            return unsafe { make_err_return("key not found") };
+            return format!("key not found").into();
         }
         Err(e) => {
-            return unsafe { make_err_return(&format!("couldn't get value: {}", e)) };
+            return format!("couldn't get value: {}", e).into();
         }
     };
     Value::from(data)
@@ -114,14 +114,19 @@ pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const Key
     let db = match unsafe { db.as_ref() } {
         Some(db) => db,
         None => {
-            return unsafe { make_err_return("db should be non-null") };
+            return format!("db should be non-null").into();
         }
     };
 
     // Create a batch of operations to perform.
     let mut batch = Vec::with_capacity(nkeys);
     for i in 0..nkeys {
-        let kv = unsafe { values.add(i).as_ref() }.expect("values should be non-null");
+        let kv = match unsafe { values.add(i).as_ref() } {
+            Some(kv) => kv,
+            None => {
+                return format!("couldn't get key-value pair").into();
+            }
+        };
         if kv.value.len == 0 {
             batch.push(DbBatchOp::DeleteRange {
                 prefix: kv.key.as_slice(),
@@ -138,7 +143,7 @@ pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const Key
     let proposal = match db.propose_sync(batch) {
         Ok(proposal) => proposal,
         Err(e) => {
-            return unsafe { make_err_return(&format!("propose failed: {}", e)) };
+            return format!("propose failed: {}", e).into();
         }
     };
     let propose_time = start.elapsed().as_millis();
@@ -149,7 +154,7 @@ pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const Key
     match result {
         Ok(_) => {}
         Err(e) => {
-            return unsafe { make_err_return(&format!("commit failed: {}", e)) };
+            return format!("commit failed: {}", e).into();
         }
     }
 
@@ -175,7 +180,7 @@ pub unsafe extern "C" fn fwd_root_hash(db: *mut Db) -> Value {
     let db = match unsafe { db.as_ref() } {
         Some(db) => db,
         None => {
-            return unsafe { make_err_return("db should be non-null") };
+            return format!("db should be non-null").into();
         }
     };
     hash(db)
@@ -189,10 +194,10 @@ fn hash(db: &Db) -> Value {
     let root = match db.root_hash_sync() {
         Ok(Some(root)) => root,
         Ok(None) => {
-            return unsafe { make_err_return("couldn't find root hash for db") };
+            return format!("couldn't find root hash for db").into();
         }
         Err(e) => {
-            return unsafe { make_err_return(&format!("couldn't get root hash: {}", e)) };
+            return format!("couldn't get root hash: {}", e).into();
         }
     };
 
@@ -220,6 +225,16 @@ impl From<Box<[u8]>> for Value {
     }
 }
 
+impl From<String> for Value {
+    fn from(s: String) -> Self {
+        let cstr = create_cstr(&s);
+        Value {
+            len: 0,
+            data: cstr.cast::<u8>(),
+        }
+    }
+}
+
 /// Frees the memory associated with a `Value`.
 ///
 /// # Safety
@@ -228,6 +243,7 @@ impl From<Box<[u8]>> for Value {
 /// The caller must ensure that `value` is a valid pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_free_value(value: *const Value) {
+    // Borrow the value to avoid double-freeing
     let value = unsafe { &*value as &Value };
     // We assume that if the length is 0, then the data is a null-terminated string.
     if value.len > 0 {
@@ -239,7 +255,8 @@ pub unsafe extern "C" fn fwd_free_value(value: *const Value) {
         };
         drop(recreated_box);
     } else {
-        let cstr = unsafe { CString::from_raw(value.data as *mut c_char) };
+        let raw_str = value.data as *mut c_char;
+        let cstr = unsafe { CString::from_raw(raw_str) };
         drop(cstr);
     }
 }
@@ -370,25 +387,15 @@ fn manager_config(cache_size: usize, revisions: usize, strategy: u8) -> Revision
 /// * `db` - The database handle to close, previously returned from a call to open_db()
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_close_db(db: *mut Db) {
-    if db.is_null() {
-        return;
-    }
     let _ = unsafe { Box::from_raw(db) };
 }
 
 /// Creates a C string from a Rust string.
 /// The caller is responsible for freeing the memory associated with the returned C string.
 /// Returns a null pointer if the string contains a null byte.
-unsafe fn create_cstr(err: &str) -> *const c_char {
+fn create_cstr(err: &str) -> *const c_char {
     match CString::new(String::from(err)) {
         Ok(cstr) => cstr.into_raw(), // leaks the CString (caller must free)
         Err(_) => std::ptr::null(),  // contains null byte, invalid C string
-    }
-}
-
-unsafe fn make_err_return(err: &str) -> Value {
-    Value {
-        len: 0,
-        data: unsafe { create_cstr(err) }.cast::<u8>(),
     }
 }
