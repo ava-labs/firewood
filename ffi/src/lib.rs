@@ -379,7 +379,7 @@ pub unsafe extern "C" fn fwd_close_db(db: *mut Db) {
 /// Creates a C string from a Rust string.
 /// The caller is responsible for freeing the memory associated with the returned C string.
 /// Returns a null pointer if the string contains a null byte.
-/// TODO: Maybe we should return an allocated "error string could not be rendered" 
+/// TODO: Maybe we should return an allocated "error string could not be rendered"
 fn create_cstr(err: &str) -> *const c_char {
     match CString::new(String::from(err)) {
         Ok(cstr) => cstr.into_raw(), // leaks the CString (caller must free)
