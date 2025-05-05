@@ -43,7 +43,6 @@ impl Display for Value {
 ///  * call `free_value` to free the memory associated with the returned `Value`
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_get(db: *mut Db, key: Value) -> Value {
-    // Check db is valid.
     get(db, key).unwrap_or_else(|e| e.into())
 }
 
@@ -98,10 +97,7 @@ pub struct KeyValue {
 ///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const KeyValue) -> Value {
-    match batch(db, nkeys, values) {
-        Ok(value) => value,
-        Err(e) => e.into(),
-    }
+    batch(db, nkeys, values).unwrap_or_else(|e| e.into())
 }
 
 /// cbindgen::ignore
@@ -215,12 +211,6 @@ impl From<String> for Value {
     }
 }
 
-impl From<&str> for Value {
-    fn from(s: &str) -> Self {
-        String::from(s).into()
-    }
-}
-
 /// Frees the memory associated with a `Value`.
 ///
 /// # Safety
@@ -229,7 +219,9 @@ impl From<&str> for Value {
 /// The caller must ensure that `value` is a valid pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_free_value(value: *const Value) {
-    // Borrow the value to avoid double-freeing
+    // Create a Rust reference to the pointer.
+    // Unsafe because we are dereferencing a raw pointer - possible another thread
+    // has a mutable reference to the same memory.
     let value = unsafe { &*value as &Value };
     // We assume that if the length is 0, then the data is a null-terminated string.
     if value.len > 0 {
