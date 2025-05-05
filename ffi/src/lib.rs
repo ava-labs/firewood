@@ -47,7 +47,10 @@ pub unsafe extern "C" fn fwd_get(db: *mut Db, key: Value) -> Value {
     get(db, key).unwrap_or_else(|e| e.into())
 }
 
-// Internal call for `fwd_get` to remove error handling from the C API
+/// cbindgen::ignore
+///
+/// This function is not exposed to the C API.
+/// Internal call for `fwd_get` to remove error handling from the C API
 fn get(db: *mut Db, key: Value) -> Result<Value, String> {
     // Check db is valid.
     let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
@@ -101,6 +104,10 @@ pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const Key
     }
 }
 
+/// cbindgen::ignore
+///
+/// This function is not exposed to the C API.
+/// Internal call for `fwd_batch` to remove error handling from the C API
 fn batch(db: *mut Db, nkeys: usize, values: *const KeyValue) -> Result<Value, String> {
     let start = coarsetime::Instant::now();
     // Check db is valid.
@@ -153,6 +160,10 @@ pub unsafe extern "C" fn fwd_root_hash(db: *mut Db) -> Value {
     root_hash(db).unwrap_or_else(|e| e.into())
 }
 
+/// cbindgen::ignore
+///
+/// This function is not exposed to the C API.
+/// Internal call for `fwd_root_hash` to remove error handling from the C API
 fn root_hash(db: *mut Db) -> Result<Value, String> {
     // Check db is valid.
     let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
