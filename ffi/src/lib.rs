@@ -216,7 +216,7 @@ impl From<String> for Value {
     fn from(s: String) -> Self {
         let cstr = match CString::new(s) {
             Ok(cstr) => cstr.into_raw(), // leaks the CString (caller must free)
-            Err(_) => std::ptr::null(),  // TODO: should this be an empty byte '\0' or a string denoting the error?
+            Err(_) => std::ptr::null(), // TODO: should this be an empty byte '\0' or a string denoting the error?
         };
         Value {
             len: 0,
