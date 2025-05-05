@@ -214,7 +214,10 @@ impl From<Box<[u8]>> for Value {
 
 impl From<String> for Value {
     fn from(s: String) -> Self {
-        let cstr = create_cstr(&s);
+        let cstr = match CString::new(s) {
+            Ok(cstr) => cstr.into_raw(), // leaks the CString (caller must free)
+            Err(_) => std::ptr::null(),  // TODO: should this be an empty byte '\0' or a string denoting the error?
+        };
         Value {
             len: 0,
             data: cstr.cast::<u8>(),
@@ -224,11 +227,7 @@ impl From<String> for Value {
 
 impl From<&str> for Value {
     fn from(s: &str) -> Self {
-        let cstr = create_cstr(&s);
-        Value {
-            len: 0,
-            data: cstr.cast::<u8>(),
-        }
+        String::from(s).into()
     }
 }
 
@@ -385,15 +384,4 @@ fn manager_config(cache_size: usize, revisions: usize, strategy: u8) -> Revision
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_close_db(db: *mut Db) {
     let _ = unsafe { Box::from_raw(db) };
-}
-
-/// Creates a C string from a Rust string.
-/// The caller is responsible for freeing the memory associated with the returned C string.
-/// Returns a null pointer if the string contains a null byte.
-/// TODO: Maybe we should return an allocated "error string could not be rendered"
-fn create_cstr(err: &str) -> *const c_char {
-    match CString::new(String::from(err)) {
-        Ok(cstr) => cstr.into_raw(), // leaks the CString (caller must free)
-        Err(_) => std::ptr::null(),  // contains null byte, invalid C string
-    }
 }
