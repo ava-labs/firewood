@@ -201,7 +201,7 @@ func TestRangeDelete(t *testing.T) {
 func TestInvariants(t *testing.T) {
 	db := newTestDatabase(t)
 	hash, err := db.Root()
-	require.NoError(t, err)
+	require.NoError(t, err, "%T.Root()", db)
 	assert.Equalf(t, make([]byte, 32), hash, "%T.Root() of empty trie")
 
 	got, err := db.Get([]byte("non-existent"))

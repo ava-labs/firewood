@@ -13,7 +13,15 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"unsafe"
+)
+
+// These constants are used to identify errors returned by the Firewood Rust FFI.
+// These must be changed if the Rust FFI changes - should be reported by tests.
+const (
+	rootHashNotFound = "IO error: Root hash not found"
+	keyNotFound      = "key not found"
 )
 
 var dbClosedErr = errors.New("firewood database already closed")
@@ -139,7 +147,7 @@ func extractBytesThenFree(v *C.struct_Value) (buf []byte, err error) {
 	buf = C.GoBytes(unsafe.Pointer(v.data), C.int(v.len))
 	if v.len == 0 {
 		errStr := C.GoString((*C.char)(unsafe.Pointer(v.data)))
-		err = fmt.Errorf("internal firewood error: %s", errStr)
+		err = fmt.Errorf("firewood error: %s", errStr)
 	}
 	C.fwd_free_value(v)
 
@@ -160,12 +168,11 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 	val := C.fwd_get(db.handle, values.from(key))
 	bytes, err := extractBytesThenFree(&val)
 
-	// Ignore the error.
-	// TODO: handle missing key error, return IO errors.
-	if err != nil {
+	// If the root hash or key is not found, return nil.
+	if err != nil && (strings.Contains(err.Error(), rootHashNotFound) || strings.Contains(err.Error(), keyNotFound)) {
 		return nil, nil
 	}
-	return bytes, nil
+	return bytes, err
 }
 
 // Root returns the current root hash of the trie.
@@ -177,12 +184,12 @@ func (db *Database) Root() ([]byte, error) {
 	hash := C.fwd_root_hash(db.handle)
 	bytes, err := extractBytesThenFree(&hash)
 
-	// On error, send empty root hash.
-	// TODO: return IO errors.
-	if err != nil {
+	// If the root hash is not found, return a zeroed slice.
+	if err != nil && strings.Contains(err.Error(), rootHashNotFound) {
 		bytes = make([]byte, 32)
+		err = nil
 	}
-	return bytes, nil
+	return bytes, err
 }
 
 // Close closes the database and releases all held resources.

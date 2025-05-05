@@ -47,18 +47,19 @@ pub unsafe extern "C" fn fwd_get(db: *mut Db, key: Value) -> Value {
     let db = match unsafe { db.as_ref() } {
         Some(db) => db,
         None => {
-            return "db should be non-null".to_string().into();
+            return "db should be non-null".into();
         }
     };
 
     // Find root hash.
+    // Matches `hash` function but we use the TrieHash type here
     let root = match db.root_hash_sync() {
         Ok(Some(root)) => root,
         Ok(None) => {
-            return "couldn't find root hash for db".to_string().into();
+            return "unexpected None from db.root_hash_sync".into();
         }
         Err(e) => {
-            return format!("couldn't get root hash: {}", e).into();
+            return e.to_string().into(); // this is a valid case, handled in Go
         }
     };
 
@@ -66,7 +67,7 @@ pub unsafe extern "C" fn fwd_get(db: *mut Db, key: Value) -> Value {
     let rev = match db.revision_sync(root) {
         Ok(rev) => rev,
         Err(e) => {
-            return format!("couldn't get revision: {}", e).into();
+            return e.to_string().into();
         }
     };
 
@@ -74,7 +75,7 @@ pub unsafe extern "C" fn fwd_get(db: *mut Db, key: Value) -> Value {
     let value = rev.val_sync(key.as_slice());
     match value {
         Ok(Some(value)) => value.into(),
-        Ok(None) => "key not found".to_string().into(),
+        Ok(None) => "key not found".into(), // this is a valid case, handled in Go
         Err(e) => format!("couldn't get value: {}", e).into(),
     }
 }
@@ -109,7 +110,7 @@ pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const Key
     let db = match unsafe { db.as_ref() } {
         Some(db) => db,
         None => {
-            return "db should be non-null".to_string().into();
+            return "db should be non-null".into();
         }
     };
 
@@ -119,7 +120,7 @@ pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const Key
         let kv = match unsafe { values.add(i).as_ref() } {
             Some(kv) => kv,
             None => {
-                return "couldn't get key-value pair".to_string().into();
+                return "couldn't get key-value pair".into();
             }
         };
         if kv.value.len == 0 {
@@ -138,7 +139,7 @@ pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const Key
     let proposal = match db.propose_sync(batch) {
         Ok(proposal) => proposal,
         Err(e) => {
-            return format!("propose failed: {}", e).into();
+            return format!("proposal failed: {}", e).into();
         }
     };
     let propose_time = start.elapsed().as_millis();
@@ -174,7 +175,7 @@ pub unsafe extern "C" fn fwd_root_hash(db: *mut Db) -> Value {
     // Check db is valid.
     match unsafe { db.as_ref() } {
         Some(db) => hash(db),
-        None => "db should be non-null".to_string().into(),
+        None => "db should be non-null".into(),
     }
 }
 
@@ -185,8 +186,8 @@ pub unsafe extern "C" fn fwd_root_hash(db: *mut Db) -> Value {
 fn hash(db: &Db) -> Value {
     match db.root_hash_sync() {
         Ok(Some(root)) => Value::from(root.as_slice()),
-        Ok(None) => "couldn't find root hash for db".to_string().into(),
-        Err(e) => format!("couldn't get root hash: {}", e).into(),
+        Ok(None) => "unexpected None from db.root_hash_sync".into(),
+        Err(e) => e.to_string().into(),
     }
 }
 
@@ -213,6 +214,16 @@ impl From<Box<[u8]>> for Value {
 
 impl From<String> for Value {
     fn from(s: String) -> Self {
+        let cstr = create_cstr(&s);
+        Value {
+            len: 0,
+            data: cstr.cast::<u8>(),
+        }
+    }
+}
+
+impl From<&str> for Value {
+    fn from(s: &str) -> Self {
         let cstr = create_cstr(&s);
         Value {
             len: 0,
