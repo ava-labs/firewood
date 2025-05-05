@@ -44,40 +44,30 @@ impl Display for Value {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_get(db: *mut Db, key: Value) -> Value {
     // Check db is valid.
-    let db = match unsafe { db.as_ref() } {
-        Some(db) => db,
-        None => {
-            return "db should be non-null".into();
-        }
-    };
+    get(db, key).unwrap_or_else(|e| e.into())
+}
+
+// Internal call for `fwd_get` to remove error handling from the C API
+fn get(db: *mut Db, key: Value) -> Result<Value, String> {
+    // Check db is valid.
+    let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
 
     // Find root hash.
     // Matches `hash` function but we use the TrieHash type here
-    let root = match db.root_hash_sync() {
-        Ok(Some(root)) => root,
-        Ok(None) => {
-            return "unexpected None from db.root_hash_sync".into();
-        }
-        Err(e) => {
-            return e.to_string().into(); // this is a valid case, handled in Go
-        }
-    };
+    let root = db
+        .root_hash_sync()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| String::from("unexpected None from db.root_hash_sync"))?;
 
     // Find revision assoicated with root.
-    let rev = match db.revision_sync(root) {
-        Ok(rev) => rev,
-        Err(e) => {
-            return e.to_string().into();
-        }
-    };
+    let rev = db.revision_sync(root).map_err(|e| e.to_string())?;
 
     // Get value associated with key.
-    let value = rev.val_sync(key.as_slice());
-    match value {
-        Ok(Some(value)) => value.into(),
-        Ok(None) => "key not found".into(), // this is a valid case, handled in Go
-        Err(e) => format!("couldn't get value: {}", e).into(),
-    }
+    let value = rev
+        .val_sync(key.as_slice())
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| String::from("key not found"))?;
+    Ok(value.into())
 }
 
 /// A `KeyValue` struct that represents a key-value pair in the database.
@@ -105,24 +95,22 @@ pub struct KeyValue {
 ///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const KeyValue) -> Value {
+    match batch(db, nkeys, values) {
+        Ok(value) => value,
+        Err(e) => e.into(),
+    }
+}
+
+fn batch(db: *mut Db, nkeys: usize, values: *const KeyValue) -> Result<Value, String> {
     let start = coarsetime::Instant::now();
     // Check db is valid.
-    let db = match unsafe { db.as_ref() } {
-        Some(db) => db,
-        None => {
-            return "db should be non-null".into();
-        }
-    };
+    let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
 
     // Create a batch of operations to perform.
     let mut batch = Vec::with_capacity(nkeys);
     for i in 0..nkeys {
-        let kv = match unsafe { values.add(i).as_ref() } {
-            Some(kv) => kv,
-            None => {
-                return "couldn't get key-value pair".into();
-            }
-        };
+        let kv = unsafe { values.add(i).as_ref() }
+            .ok_or_else(|| String::from("couldn't get key-value pair"))?;
         if kv.value.len == 0 {
             batch.push(DbBatchOp::DeleteRange {
                 prefix: kv.key.as_slice(),
@@ -136,31 +124,20 @@ pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const Key
     }
 
     // Propose the batch of operations.
-    let proposal = match db.propose_sync(batch) {
-        Ok(proposal) => proposal,
-        Err(e) => {
-            return format!("proposal failed: {}", e).into();
-        }
-    };
+    let proposal = db.propose_sync(batch).map_err(|e| e.to_string())?;
     let propose_time = start.elapsed().as_millis();
     counter!("firewood.ffi.propose_ms").increment(propose_time);
 
     // Commit the proposal.
-    let result = proposal.commit_sync();
-    match result {
-        Ok(_) => {}
-        Err(e) => {
-            return format!("commit failed: {}", e).into();
-        }
-    }
+    proposal.commit_sync().map_err(|e| e.to_string())?;
 
     // Get the root hash of the database post-commit.
-    let hash_val = hash(db);
+    let hash_val = hash(db)?;
     let propose_plus_commit_time = start.elapsed().as_millis();
     counter!("firewood.ffi.batch_ms").increment(propose_plus_commit_time);
     counter!("firewood.ffi.commit_ms").increment(propose_plus_commit_time - propose_time);
     counter!("firewood.ffi.batch").increment(1);
-    hash_val
+    Ok(hash_val)
 }
 
 /// Get the root hash of the latest version of the database
@@ -173,22 +150,26 @@ pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const Key
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_root_hash(db: *mut Db) -> Value {
     // Check db is valid.
-    match unsafe { db.as_ref() } {
-        Some(db) => hash(db),
-        None => "db should be non-null".into(),
-    }
+    root_hash(db).unwrap_or_else(|e| e.into())
+}
+
+fn root_hash(db: *mut Db) -> Result<Value, String> {
+    // Check db is valid.
+    let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
+
+    // Get the root hash of the database.
+    hash(db)
 }
 
 /// cbindgen::ignore
 ///
 /// This function is not exposed to the C API.
 /// It returns the current hash of an already-fetched database handle
-fn hash(db: &Db) -> Value {
-    match db.root_hash_sync() {
-        Ok(Some(root)) => Value::from(root.as_slice()),
-        Ok(None) => "unexpected None from db.root_hash_sync".into(),
-        Err(e) => e.to_string().into(),
-    }
+fn hash(db: &Db) -> Result<Value, String> {
+    db.root_hash_sync()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| String::from("unexpected None from db.root_hash_sync"))
+        .map(|root| Value::from(root.as_slice()))
 }
 
 impl Value {
