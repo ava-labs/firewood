@@ -191,7 +191,9 @@ impl RevisionManager {
 
         // 8. Proposal Cleanup
         // first remove the committing proposal from the list of outstanding proposals
-        self.proposals.retain(|p| !Arc::ptr_eq(&proposal, p));
+        // Any proposals that are only referenced in this list will be freed
+        self.proposals
+            .retain(|p| !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) > 1);
 
         // then reparent any proposals that have this proposal as a parent
         for p in self.proposals.iter() {

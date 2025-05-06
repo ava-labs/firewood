@@ -446,6 +446,9 @@ impl Proposal<'_> {
 mod test {
     use std::ops::{Deref, DerefMut};
     use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use storage::HashedNodeReader;
 
     use crate::db::Db;
     use crate::v2::api::{Db as _, DbView as _, Error, Proposal as _};
@@ -521,6 +524,57 @@ mod test {
         let committed = db.root_hash().await.unwrap().unwrap();
         let historical = db.revision(committed).await.unwrap();
         assert_eq!(&*historical.val(b"a").await.unwrap().unwrap(), b"1");
+    }
+
+    #[tokio::test]
+    async fn test_proposal_scope() {
+        let db = testdb().await;
+        let batch1 = vec![BatchOp::Put {
+            key: b"k1",
+            value: b"v1",
+        }];
+        let proposal1 = db.propose(batch1).await.unwrap();
+        assert_eq!(&*proposal1.val(b"k1").await.unwrap().unwrap(), b"v1");
+
+        let batch2 = vec![BatchOp::Put {
+            key: b"k2",
+            value: b"v2",
+        }];
+        let proposal2 = db.propose(batch2).await.unwrap();
+        assert_eq!(&*proposal2.val(b"k2").await.unwrap().unwrap(), b"v2");
+
+        let batch3 = vec![BatchOp::Put {
+            key: b"k3",
+            value: b"v3",
+        }];
+        let proposal3 = db.propose(batch3).await.unwrap();
+        assert_eq!(&*proposal3.val(b"k3").await.unwrap().unwrap(), b"v3");
+
+        // the proposal is dropped here, but the underlying
+        // nodestore is still alive because it's referenced by the revision manager
+        // The third proposal remains referenced
+        let weak2 = Arc::downgrade(&proposal2.nodestore);
+        drop(proposal2);
+        assert!(weak2.upgrade().is_some());
+
+        // commit the first proposal
+        proposal1.commit().await.unwrap();
+        // Ensure we committed the first proposal's data
+        let committed = db.root_hash().await.unwrap().unwrap();
+        let historical = db.revision(committed).await.unwrap();
+        assert_eq!(&*historical.val(b"k1").await.unwrap().unwrap(), b"v1");
+
+        // the first nodestore shouldn't be alive anymore
+        assert!(weak2.upgrade().is_none());
+
+        // the third proposal should still be contained within the all_hashes list
+        // would be deleted if another proposal was committed and proposal3 was dropped here
+        let hash3 = proposal3
+            .nodestore
+            .root_hash()
+            .unwrap()
+            .expect("should have a root hash");
+        assert!(db.manager.read().unwrap().all_hashes().contains(&hash3));
     }
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
