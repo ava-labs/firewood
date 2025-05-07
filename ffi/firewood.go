@@ -132,7 +132,7 @@ func (db *Database) Batch(ops []KeyValue) ([]byte, error) {
 		}
 	}
 
-	hash := C.fwd_batch(
+	hash := C.fwd_batch_commit(
 		db.handle,
 		C.size_t(len(ffiOps)),
 		(*C.struct_KeyValue)(unsafe.SliceData(ffiOps)), // implicitly pinned

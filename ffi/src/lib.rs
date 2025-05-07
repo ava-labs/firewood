@@ -1,20 +1,39 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use std::collections::HashMap;
 use std::ffi::{CStr, CString, OsStr, c_char};
 use std::fmt::{self, Display, Formatter};
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 
-use firewood::db::{BatchOp as DbBatchOp, Db, DbConfig, DbViewSync as _};
+use firewood::db::{BatchOp as DbBatchOp, Db, DbConfig, DbViewSync as _, Proposal};
 use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
 
 mod metrics_setup;
 
 use metrics::counter;
 
+static ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+fn next_id() -> u64 {
+    ID_COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+/// Note we have to "lie" to the compiler and say that the lifetime of the db is 'static.
+/// This is because the Db is required to outlive the Proposals.
+/// The callers of this API in C will have to ensure that the Db is not dropped until all Proposals are done.
+/// With the current implementation, this is guaranteed.
+#[derive(Debug)]
+pub struct UnsafeState<'p> {
+    db: Db,
+    proposals: RwLock<HashMap<u64, Arc<Proposal<'p>>>>,
+}
 
 #[derive(Debug)]
 #[repr(C)]
@@ -42,17 +61,18 @@ impl Display for Value {
 ///  * ensure that `key` is a valid pointer to a `Value` struct
 ///  * call `free_value` to free the memory associated with the returned `Value`
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_get(db: *mut Db, key: Value) -> Value {
-    get(db, key).unwrap_or_else(|e| e.into())
+pub unsafe extern "C" fn fwd_get(state: *mut UnsafeState, key: Value) -> Value {
+    get(state, key).unwrap_or_else(|e| e.into())
 }
 
 /// cbindgen::ignore
 ///
 /// This function is not exposed to the C API.
 /// Internal call for `fwd_get` to remove error handling from the C API
-fn get(db: *mut Db, key: Value) -> Result<Value, String> {
+fn get(state: *mut UnsafeState, key: Value) -> Result<Value, String> {
     // Check db is valid.
-    let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
+    let state = unsafe { state.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
+    let db = &state.db;
 
     // Find root hash.
     // Matches `hash` function but we use the TrieHash type here
@@ -96,18 +116,29 @@ pub struct KeyValue {
 ///  * ensure that the `Value` fields of the `KeyValue` structs are valid pointers.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const KeyValue) -> Value {
-    batch(db, nkeys, values).unwrap_or_else(|e| e.into())
+pub unsafe extern "C" fn fwd_batch_commit(
+    unsafe_db: *mut UnsafeState,
+    nkeys: usize,
+    values: *const KeyValue,
+) -> Value {
+    let id = match batch(unsafe_db, nkeys, values) {
+        Ok(id) => id,
+        Err(e) => {
+            return e.into();
+        }
+    };
+    commit(unsafe_db, id).unwrap_or_else(|e| e.into())
 }
 
 /// cbindgen::ignore
 ///
 /// This function is not exposed to the C API.
 /// Internal call for `fwd_batch` to remove error handling from the C API
-fn batch(db: *mut Db, nkeys: usize, values: *const KeyValue) -> Result<Value, String> {
+fn batch(state: *mut UnsafeState, nkeys: usize, values: *const KeyValue) -> Result<u64, String> {
     let start = coarsetime::Instant::now();
     // Check db is valid.
-    let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
+    let state = unsafe { state.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
+    let db = &state.db;
 
     // Create a batch of operations to perform.
     let mut batch = Vec::with_capacity(nkeys);
@@ -130,16 +161,45 @@ fn batch(db: *mut Db, nkeys: usize, values: *const KeyValue) -> Result<Value, St
     let proposal = db.propose_sync(batch).map_err(|e| e.to_string())?;
     let propose_time = start.elapsed().as_millis();
     counter!("firewood.ffi.propose_ms").increment(propose_time);
+    counter!("firewood.ffi.propose").increment(1);
+
+    // Create the proposal id.
+    let id = next_id();
+    state
+        .proposals
+        .write()
+        .expect("poisoned lock")
+        .insert(id, proposal);
+    Ok(id)
+}
+
+/// Commits the proposal with the given id.
+fn commit(state: *mut UnsafeState, id: u64) -> Result<Value, String> {
+    let start = coarsetime::Instant::now();
+    // Check db is valid.
+    let state = unsafe { state.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
+    let db = &state.db;
+
+    // Get the proposal associated with the id.
+    let proposal = state
+        .proposals
+        .write()
+        .expect("poisoned lock")
+        .remove(&id)
+        .ok_or_else(|| String::from("proposal not found"))?;
 
     // Commit the proposal.
     proposal.commit_sync().map_err(|e| e.to_string())?;
 
+    // We can remove this proposal from the list of proposals
+    // because it has been committed.
+    state.proposals.write().expect("poisoned lock").remove(&id);
+
     // Get the root hash of the database post-commit.
     let hash_val = hash(db)?;
-    let propose_plus_commit_time = start.elapsed().as_millis();
-    counter!("firewood.ffi.batch_ms").increment(propose_plus_commit_time);
-    counter!("firewood.ffi.commit_ms").increment(propose_plus_commit_time - propose_time);
-    counter!("firewood.ffi.batch").increment(1);
+    let commit_time = start.elapsed().as_millis();
+    counter!("firewood.ffi.commit_ms").increment(commit_time);
+    counter!("firewood.ffi.commit").increment(1);
     Ok(hash_val)
 }
 
@@ -151,21 +211,21 @@ fn batch(db: *mut Db, nkeys: usize, values: *const KeyValue) -> Result<Value, St
 /// This function is unsafe because it dereferences raw pointers.
 /// The caller must ensure that `db` is a valid pointer returned by `open_db`
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_root_hash(db: *mut Db) -> Value {
+pub unsafe extern "C" fn fwd_root_hash(state: *mut UnsafeState) -> Value {
     // Check db is valid.
-    root_hash(db).unwrap_or_else(|e| e.into())
+    root_hash(state).unwrap_or_else(|e| e.into())
 }
 
 /// cbindgen::ignore
 ///
 /// This function is not exposed to the C API.
 /// Internal call for `fwd_root_hash` to remove error handling from the C API
-fn root_hash(db: *mut Db) -> Result<Value, String> {
+fn root_hash(state: *mut UnsafeState) -> Result<Value, String> {
     // Check db is valid.
-    let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
+    let state = unsafe { state.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
 
     // Get the root hash of the database.
-    hash(db)
+    hash(&state.db)
 }
 
 /// cbindgen::ignore
@@ -273,7 +333,7 @@ pub struct CreateOrOpenArgs {
 /// The caller must call `close` to free the memory associated with the returned database handle.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_create_db(args: CreateOrOpenArgs) -> *mut Db {
+pub unsafe extern "C" fn fwd_create_db(args: CreateOrOpenArgs) -> *mut UnsafeState<'static> {
     let cfg = DbConfig::builder()
         .truncate(true)
         .manager(manager_config(
@@ -303,7 +363,7 @@ pub unsafe extern "C" fn fwd_create_db(args: CreateOrOpenArgs) -> *mut Db {
 /// The caller must call `close` to free the memory associated with the returned database handle.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_open_db(args: CreateOrOpenArgs) -> *mut Db {
+pub unsafe extern "C" fn fwd_open_db(args: CreateOrOpenArgs) -> *mut UnsafeState<'static> {
     let cfg = DbConfig::builder()
         .truncate(false)
         .manager(manager_config(
@@ -315,11 +375,12 @@ pub unsafe extern "C" fn fwd_open_db(args: CreateOrOpenArgs) -> *mut Db {
     unsafe { common_create(args.path, args.metrics_port, cfg) }
 }
 
+/// Common function to create or open a database with the given path and configuration.
 unsafe fn common_create(
     path: *const std::ffi::c_char,
     metrics_port: u16,
     cfg: DbConfig,
-) -> *mut Db {
+) -> *mut UnsafeState<'static> {
     #[cfg(feature = "logger")]
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .try_init();
@@ -329,9 +390,14 @@ unsafe fn common_create(
     if metrics_port > 0 {
         metrics_setup::setup_metrics(metrics_port);
     }
-    Box::into_raw(Box::new(
-        Db::new_sync(path, cfg).expect("db initialization should succeed"),
-    ))
+
+    let db = Db::new_sync(path, cfg).expect("db initialization should succeed");
+    let map = HashMap::new();
+
+    Box::into_raw(Box::new(UnsafeState {
+        db: db,
+        proposals: RwLock::new(map),
+    }))
 }
 
 fn manager_config(cache_size: usize, revisions: usize, strategy: u8) -> RevisionManagerConfig {
@@ -364,6 +430,6 @@ fn manager_config(cache_size: usize, revisions: usize, strategy: u8) -> Revision
 ///
 /// * `db` - The database handle to close, previously returned from a call to open_db()
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_close_db(db: *mut Db) {
-    let _ = unsafe { Box::from_raw(db) };
+pub unsafe extern "C" fn fwd_close_db(state: *mut UnsafeState) {
+    let _ = unsafe { Box::from_raw(state) };
 }

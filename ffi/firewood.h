@@ -4,8 +4,8 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-
-typedef struct Value {
+typedef struct Value
+{
   size_t len;
   const uint8_t *data;
 } Value;
@@ -13,7 +13,8 @@ typedef struct Value {
 /**
  * A `KeyValue` struct that represents a key-value pair in the database.
  */
-typedef struct KeyValue {
+typedef struct KeyValue
+{
   struct Value key;
   struct Value value;
 } KeyValue;
@@ -26,7 +27,8 @@ typedef struct KeyValue {
  * * `cache_size` - The size of the node cache, panics if <= 0
  * * `revisions` - The maximum number of revisions to keep; firewood currently requires this to be at least 2
  */
-typedef struct CreateOrOpenArgs {
+typedef struct CreateOrOpenArgs
+{
   const char *path;
   size_t cache_size;
   size_t revisions;
@@ -50,9 +52,9 @@ typedef struct CreateOrOpenArgs {
  *  * ensure that the `Value` fields of the `KeyValue` structs are valid pointers.
  *
  */
-struct Value fwd_batch(void *db,
-                       size_t nkeys,
-                       const struct KeyValue *values);
+struct Value fwd_batch_commit(void *unsafe_db,
+                              size_t nkeys,
+                              const struct KeyValue *values);
 
 /**
  * Close and free the memory for a database handle
@@ -67,7 +69,7 @@ struct Value fwd_batch(void *db,
  *
  * * `db` - The database handle to close, previously returned from a call to open_db()
  */
-void fwd_close_db(void *db);
+void fwd_close_db(void *state);
 
 /**
  * Create a database with the given cache size and maximum number of revisions, as well
@@ -115,7 +117,7 @@ void fwd_free_value(const struct Value *value);
  *  * ensure that `key` is a valid pointer to a `Value` struct
  *  * call `free_value` to free the memory associated with the returned `Value`
  */
-struct Value fwd_get(void *db, struct Value key);
+struct Value fwd_get(void *state, struct Value key);
 
 /**
  * Open a database with the given cache size and maximum number of revisions
@@ -147,4 +149,4 @@ void *fwd_open_db(struct CreateOrOpenArgs args);
  * This function is unsafe because it dereferences raw pointers.
  * The caller must ensure that `db` is a valid pointer returned by `open_db`
  */
-struct Value fwd_root_hash(void *db);
+struct Value fwd_root_hash(void *state);
