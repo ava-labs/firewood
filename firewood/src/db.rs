@@ -623,15 +623,15 @@ mod test {
         let historical = db.revision(committed).await.unwrap();
         assert_eq!(&*historical.val(b"k1").await.unwrap().unwrap(), b"v1");
 
-        // the first nodestore shouldn't be available to commit anymore
+        // the second proposal shouldn't be available to commit anymore
         assert!(!db.all_hashes().await.unwrap().contains(&p2hash));
 
         // the third proposal should still be contained within the all_hashes list
-        // would be deleted if another proposal was committed and proposal3 was dropped here
         let hash3 = proposal3.root_hash().await.unwrap().unwrap();
         assert!(db.manager.read().unwrap().all_hashes().contains(&hash3));
 
         // moreover, the data from the second and third proposals should still be available
+        // through proposal3
         assert_eq!(&*proposal3.val(b"k2").await.unwrap().unwrap(), b"v2");
         assert_eq!(&*proposal3.val(b"k3").await.unwrap().unwrap(), b"v3");
     }
