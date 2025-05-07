@@ -447,8 +447,6 @@ mod test {
     use std::ops::{Deref, DerefMut};
     use std::path::PathBuf;
 
-    use storage::HashedNodeReader;
-
     use crate::db::Db;
     use crate::v2::api::{Db as _, DbView as _, Error, Proposal as _};
 
@@ -572,11 +570,7 @@ mod test {
 
         // the third proposal should still be contained within the all_hashes list
         // would be deleted if another proposal was committed and proposal3 was dropped here
-        let hash3 = proposal3
-            .nodestore
-            .root_hash()
-            .unwrap()
-            .expect("should have a root hash");
+        let hash3 = proposal3.root_hash().await.unwrap().unwrap();
         assert!(db.manager.read().unwrap().all_hashes().contains(&hash3));
     }
 
