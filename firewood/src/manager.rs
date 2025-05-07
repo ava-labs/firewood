@@ -190,8 +190,8 @@ impl RevisionManager {
         proposal.flush_header()?;
 
         // 8. Proposal Cleanup
-        // first remove the committing proposal from the list of outstanding proposals
-        // Any proposals that are only referenced in this list will be freed
+        // Free proposal that is being committed as well as any proposals no longer
+        // referenced by anyone else.
         self.proposals
             .retain(|p| !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) > 1);
 
