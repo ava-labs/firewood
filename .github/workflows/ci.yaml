@@ -193,7 +193,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: target
-          pattern: linux-*,darwin-*
+          pattern: "*-unknown-linux-*,*-apple-darwin-*"
           merge-multiple: true
 
       - name: Upload organized binaries
