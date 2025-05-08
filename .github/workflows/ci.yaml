@@ -194,6 +194,9 @@ jobs:
         with:
           path: target
 
+      - name: List downloaded files
+        run: find target -type f | sort
+
       - name: Upload organized binaries
         uses: actions/upload-artifact@v4
         with:
