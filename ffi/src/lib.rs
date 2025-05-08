@@ -7,6 +7,7 @@ use std::os::unix::ffi::OsStrExt as _;
 use std::path::Path;
 
 use firewood::db::{BatchOp as DbBatchOp, Db, DbConfig, DbViewSync as _};
+use firewood::logger::error;
 use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
 
 mod metrics_setup;
@@ -185,15 +186,9 @@ impl Value {
     }
 }
 
-impl From<&[u8]> for Value {
-    fn from(data: &[u8]) -> Self {
-        let boxed: Box<[u8]> = data.into();
-        boxed.into()
-    }
-}
-
-impl From<Box<[u8]>> for Value {
-    fn from(data: Box<[u8]>) -> Self {
+impl<T: Into<Box<[u8]>>> From<T> for Value {
+    fn from(data: T) -> Self {
+        let data = data.into();
         let len = data.len();
         let data = Box::leak(data).as_ptr();
         Value { len, data }
@@ -274,13 +269,16 @@ pub struct CreateOrOpenArgs {
 ///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_create_db(args: CreateOrOpenArgs) -> *mut Db {
+    let manager_config = match manager_config(args.cache_size, args.revisions, args.strategy) {
+        Ok(manager_config) => manager_config,
+        Err(_e) => {
+            error!("error initializing manager config: {}", _e);
+            return std::ptr::null_mut();
+        }
+    };
     let cfg = DbConfig::builder()
         .truncate(true)
-        .manager(manager_config(
-            args.cache_size,
-            args.revisions,
-            args.strategy,
-        ))
+        .manager(manager_config)
         .build();
     unsafe { common_create(args.path, args.metrics_port, cfg) }
 }
@@ -304,13 +302,16 @@ pub unsafe extern "C" fn fwd_create_db(args: CreateOrOpenArgs) -> *mut Db {
 ///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_open_db(args: CreateOrOpenArgs) -> *mut Db {
+    let manager_config = match manager_config(args.cache_size, args.revisions, args.strategy) {
+        Ok(manager_config) => manager_config,
+        Err(_e) => {
+            error!("error initializing manager config: {}", _e);
+            return std::ptr::null_mut();
+        }
+    };
     let cfg = DbConfig::builder()
         .truncate(false)
-        .manager(manager_config(
-            args.cache_size,
-            args.revisions,
-            args.strategy,
-        ))
+        .manager(manager_config)
         .build();
     unsafe { common_create(args.path, args.metrics_port, cfg) }
 }
@@ -329,27 +330,35 @@ unsafe fn common_create(
     if metrics_port > 0 {
         metrics_setup::setup_metrics(metrics_port);
     }
-    Box::into_raw(Box::new(
-        Db::new_sync(path, cfg).expect("db initialization should succeed"),
-    ))
+    match Db::new_sync(path, cfg) {
+        Ok(db) => Box::into_raw(Box::new(db)),
+        Err(_e) => {
+            error!("db initialization failed: {}", _e);
+            std::ptr::null_mut()
+        }
+    }
 }
 
-fn manager_config(cache_size: usize, revisions: usize, strategy: u8) -> RevisionManagerConfig {
+fn manager_config(
+    cache_size: usize,
+    revisions: usize,
+    strategy: u8,
+) -> Result<RevisionManagerConfig, String> {
     let cache_read_strategy = match strategy {
         0 => CacheReadStrategy::WritesOnly,
         1 => CacheReadStrategy::BranchReads,
         2 => CacheReadStrategy::All,
         _ => panic!("invalid cache strategy"),
     };
-    RevisionManagerConfig::builder()
+    Ok(RevisionManagerConfig::builder()
         .node_cache_size(
             cache_size
                 .try_into()
-                .expect("cache size should always be non-zero"),
+                .map_err(|_| "cache size should always be non-zero".to_owned())?,
         )
         .max_revisions(revisions)
         .cache_read_strategy(cache_read_strategy)
-        .build()
+        .build())
 }
 
 /// Close and free the memory for a database handle
