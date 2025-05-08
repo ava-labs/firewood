@@ -106,7 +106,10 @@ jobs:
 
   ffi:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -149,3 +152,57 @@ jobs:
       - name: Test Ethereum hash compatability
         working-directory: ffi/tests
         run: go test ./...
+
+  native-build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: linux-x86_64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_name: linux-arm64
+          # - os: macos-latest
+          #   target: x86_64-apple-darwin
+          #   artifact_name: darwin-x86_64
+          # - os: macos-latest
+          #   target: aarch64-apple-darwin
+          #   artifact_name: darwin-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: arduino/setup-protoc@v3
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Add ${{ matrix.target }} Rust toolchain
+        run: rustup target add ${{ matrix.target }}
+      
+      - name: Build for ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }}
+        
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: target/${{ matrix.target }}/release/firewood
+          if-no-files-found: error
+
+  collect-binaries:
+    needs: native-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+          pattern: linux-*,darwin-*
+          merge-multiple: true
+
+      - name: Upload organized binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-binaries
+          path: release/
+          if-no-files-found: error
