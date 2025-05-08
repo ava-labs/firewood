@@ -159,6 +159,7 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 		return nil, err
 	}
 
+	// The C function will never create an id of 0, unless it is an error.
 	return &Proposal{
 		handle: db.handle,
 		id:     id,

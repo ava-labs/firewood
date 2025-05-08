@@ -51,6 +51,7 @@ func extractIdThenFree(v *C.struct_Value) (uint32, error) {
 	}
 	// If the value is an error string, it should be freed and an error
 	// returned.
+	// Any valid ID should be non-zero.
 	if v.len == 0 {
 		go_str := C.GoString((*C.char)(unsafe.Pointer(v.data)))
 		C.fwd_free_value(v)

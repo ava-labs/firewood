@@ -26,6 +26,9 @@ fn next_id() -> ProposalId {
     ID_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
+/// A handle to the database, which contains a reference to the database and a map of proposals.
+// All proposals must be dropped before the database handle is dropped due to lifetime
+// guarantees defined during database creation.
 pub struct DatabaseHandle<'p> {
     proposals: RwLock<HashMap<ProposalId, Arc<Proposal<'p>>>>,
     db: Db,
@@ -61,20 +64,17 @@ impl Display for Value {
     }
 }
 
-impl From<u32> for Value {
-    fn from(v: u32) -> Self {
-        Self {
-            len: v as usize,
-            data: std::ptr::null(),
-        }
-    }
-}
-
 /// Gets the value associated with the given key from the database.
 ///
 /// # Arguments
 ///
 /// * `db` - The database handle returned by `open_db`
+/// * `key` - The key to look up, in `Value` form
+///
+/// # Returns
+///
+/// A `Value` containing the root hash of the database.
+/// A `Value` containing {0, "error message"} if the commit failed.
 ///
 /// # Safety
 ///
@@ -124,9 +124,16 @@ pub struct KeyValue {
 
 /// Puts the given key-value pairs into the database.
 ///
+/// # Arguments
+///
+/// * `db` - The database handle returned by `open_db`
+/// * `nkeys` - The number of key-value pairs to put
+/// * `values` - A pointer to an array of `KeyValue` structs
+///
 /// # Returns
 ///
-/// The current root hash of the database, in Value form.
+/// The new root hash of the database, in Value form.
+/// A `Value` containing {0, "error message"} if the commit failed.
 ///
 /// # Safety
 ///
@@ -145,7 +152,60 @@ pub unsafe extern "C" fn fwd_batch(
     batch(db, nkeys, values).unwrap_or_else(|e| e.into())
 }
 
+/// cbindgen::ignore
+///
+/// This function is not exposed to the C API.
+/// Internal call for `fwd_batch` to remove error handling from the C API
+fn batch(
+    db: *const DatabaseHandle,
+    nkeys: usize,
+    values: *const KeyValue,
+) -> Result<Value, String> {
+    let start = coarsetime::Instant::now();
+    // Check db is valid.
+    let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
+
+    // Create a batch of operations to perform.
+    let mut batch = Vec::with_capacity(nkeys);
+    for i in 0..nkeys {
+        let kv = unsafe { values.add(i).as_ref() }
+            .ok_or_else(|| String::from("key-value pair is null"))?;
+        if kv.value.len == 0 {
+            batch.push(DbBatchOp::DeleteRange {
+                prefix: kv.key.as_slice(),
+            });
+            continue;
+        }
+        batch.push(DbBatchOp::Put {
+            key: kv.key.as_slice(),
+            value: kv.value.as_slice(),
+        });
+    }
+
+    // Propose the batch of operations.
+    let proposal = db.propose_sync(batch).map_err(|e| e.to_string())?;
+    let propose_time = start.elapsed().as_millis();
+    counter!("firewood.ffi.propose_ms").increment(propose_time);
+
+    // Commit the proposal.
+    proposal.commit_sync().map_err(|e| e.to_string())?;
+
+    // Get the root hash of the database post-commit.
+    let hash_val = hash(db)?;
+    let propose_plus_commit_time = start.elapsed().as_millis();
+    counter!("firewood.ffi.batch_ms").increment(propose_plus_commit_time);
+    counter!("firewood.ffi.commit_ms").increment(propose_plus_commit_time - propose_time);
+    counter!("firewood.ffi.batch").increment(1);
+    Ok(hash_val)
+}
+
 /// Proposes a batch of operations to the database.
+///
+/// # Arguments
+///
+/// * `db` - The database handle returned by `open_db`
+/// * `nkeys` - The number of key-value pairs to put
+/// * `values` - A pointer to an array of `KeyValue` structs
 ///
 /// # Returns
 ///
@@ -154,7 +214,10 @@ pub unsafe extern "C" fn fwd_batch(
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers.
-/// The caller must ensure that `db` is a valid pointer returned by `open_db`
+/// The caller must:
+///  * ensure that `db` is a valid pointer returned by `open_db`
+///  * ensure that `values` is a valid pointer and that it points to an array of `KeyValue` structs of length `nkeys`.
+///  * ensure that the `Value` fields of the `KeyValue` structs are valid pointers.
 ///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_propose_on_db(
@@ -162,6 +225,8 @@ pub unsafe extern "C" fn fwd_propose_on_db(
     nkeys: usize,
     values: *const KeyValue,
 ) -> Value {
+    // Note: the id is guaranteed to be non-zero
+    // because we use an atomic counter that starts at 1.
     propose_on_db(db, nkeys, values)
         .map(|id| id.into())
         .unwrap_or_else(|e| e.into())
@@ -195,16 +260,22 @@ fn propose_on_db(
         });
     }
     let proposal = db.propose_sync(batch).map_err(|e| e.to_string())?;
-    let proposal_id = next_id();
+    let proposal_id = next_id(); // Guaranteed to be non-zero
     db.proposals.write().unwrap().insert(proposal_id, proposal);
     Ok(proposal_id)
 }
 
 /// Commits a proposal to the database.
 ///
+/// # Arguments
+///
+/// * `db` - The database handle returned by `open_db`
+/// * `proposal_id` - The ID of the proposal to commit
+///
 /// # Returns
 ///
-/// The root hash of the database after the proposal is committed, or panics if it cannot be committed
+/// A `Value` containing {0, null} if the commit was successful.
+/// A `Value` containing {0, "error message"} if the commit failed.
 ///
 /// # Safety
 ///
@@ -229,55 +300,17 @@ fn commit(db: *const DatabaseHandle, proposal_id: u32) -> Result<(), String> {
     proposal.commit_sync().map_err(|e| e.to_string())
 }
 
-/// cbindgen::ignore
-///
-/// This function is not exposed to the C API.
-/// Internal call for `fwd_batch` to remove error handling from the C API
-fn batch(
-    db: *const DatabaseHandle,
-    nkeys: usize,
-    values: *const KeyValue,
-) -> Result<Value, String> {
-    let start = coarsetime::Instant::now();
-    // Check db is valid.
-    let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
-
-    // Create a batch of operations to perform.
-    let mut batch = Vec::with_capacity(nkeys);
-    for i in 0..nkeys {
-        let kv = unsafe { values.add(i).as_ref() }
-            .ok_or_else(|| String::from("couldn't get key-value pair"))?;
-        if kv.value.len == 0 {
-            batch.push(DbBatchOp::DeleteRange {
-                prefix: kv.key.as_slice(),
-            });
-            continue;
-        }
-        batch.push(DbBatchOp::Put {
-            key: kv.key.as_slice(),
-            value: kv.value.as_slice(),
-        });
-    }
-
-    // Propose the batch of operations.
-    let proposal = db.propose_sync(batch).map_err(|e| e.to_string())?;
-    let propose_time = start.elapsed().as_millis();
-    counter!("firewood.ffi.propose_ms").increment(propose_time);
-
-    // Commit the proposal.
-    proposal.commit_sync().map_err(|e| e.to_string())?;
-
-    // Get the root hash of the database post-commit.
-    let hash_val = hash(db)?;
-    let propose_plus_commit_time = start.elapsed().as_millis();
-    counter!("firewood.ffi.batch_ms").increment(propose_plus_commit_time);
-    counter!("firewood.ffi.commit_ms").increment(propose_plus_commit_time - propose_time);
-    counter!("firewood.ffi.batch").increment(1);
-    Ok(hash_val)
-}
-
 /// Get the root hash of the latest version of the database
 /// Don't forget to call `free_value` to free the memory associated with the returned `Value`.
+///
+/// # Argument
+///
+/// * `db` - The database handle returned by `open_db`
+///
+/// # Returns
+///
+/// A `Value` containing the root hash of the database.
+/// A `Value` containing {0, "error message"} if the commit failed.
 ///
 /// # Safety
 ///
@@ -344,6 +377,18 @@ impl From<String> for Value {
     }
 }
 
+// WARNING: This should only be called with values >= 1.
+// In much of the Go code, v.len == 0 is used to indicate a null-terminated string.
+// This may cause a panic!
+impl From<u32> for Value {
+    fn from(v: u32) -> Self {
+        Self {
+            len: v as usize,
+            data: std::ptr::null(),
+        }
+    }
+}
+
 impl From<()> for Value {
     fn from(_: ()) -> Self {
         Self {
@@ -355,16 +400,23 @@ impl From<()> for Value {
 
 /// Frees the memory associated with a `Value`.
 ///
+/// # Arguments
+///
+/// * `value` - The `Value` to free, previously returned from any Rust function.
+///
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers.
 /// The caller must ensure that `value` is a valid pointer.
+///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_free_value(value: *const Value) {
-    // Create a Rust reference to the pointer.
-    // Unsafe because we are dereferencing a raw pointer - possible another thread
-    // has a mutable reference to the same memory.
-    let value = unsafe { &*value as &Value };
+    // Check value is valid.
+    let value = match unsafe { value.as_ref() } {
+        Some(value) => value,
+        None => return, // invalid call, avoid dereferencing null pointer
+    };
+
     // We assume that if the length is 0, then the data is a null-terminated string.
     if value.len > 0 {
         let recreated_box = unsafe {
@@ -461,7 +513,7 @@ unsafe fn common_create(
     path: *const std::ffi::c_char,
     metrics_port: u16,
     cfg: DbConfig,
-) -> *mut DatabaseHandle<'static> {
+) -> *const DatabaseHandle<'static> {
     #[cfg(feature = "logger")]
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .try_init();

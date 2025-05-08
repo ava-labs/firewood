@@ -261,7 +261,7 @@ func TestMultipleProposals(t *testing.T) {
 	// After attempting to commit the other proposals, they should be completely invalid.
 	for i := 1; i < numProposals; i++ {
 		err := proposals[i].Commit()
-		require.ErrorIs(t, err, errProposalInvalid, "Commit(%d)", i)
+		require.ErrorIs(t, err, errDroppedProposal, "Commit(%d)", i)
 	}
 }
 

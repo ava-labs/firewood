@@ -10,10 +10,9 @@ package firewood
 import "C"
 import (
 	"errors"
-	"fmt"
 )
 
-var errProposalInvalid = errors.New("firewood proposal is invalid")
+var errDroppedProposal = errors.New("proposal already dropped")
 
 type Proposal struct {
 	// handle is returned and accepted by cgo functions. It MUST be treated as
@@ -22,6 +21,7 @@ type Proposal struct {
 	handle *C.DatabaseHandle
 
 	// The proposal ID.
+	// id = 0 is reserved for a dropped proposal.
 	id uint32
 }
 
@@ -31,14 +31,13 @@ func (p *Proposal) Commit() error {
 	}
 
 	if p.id == 0 {
-		return errProposalInvalid
+		return errDroppedProposal
 	}
 
 	// Commit the proposal and return the hash.
 	err_val := C.fwd_commit(p.handle, C.uint32_t(p.id))
 	err := extractErrorThenFree(&err_val)
 	if err != nil {
-		fmt.Printf("Error committing proposal: %v\n", err)
 		// this is unrecoverable due to Rust's ownership model
 		// The underlying proposal is no longer valid.
 		p.id = 0
