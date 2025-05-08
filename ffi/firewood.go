@@ -5,16 +5,29 @@ package firewood
 
 // // Note that -lm is required on Linux but not on Mac.
 // #cgo LDFLAGS: -L${SRCDIR}/../target/release -L/usr/local/lib -lfirewood_ffi -lm
+// #include <stdlib.h>
 // #include "firewood.h"
 import "C"
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"unsafe"
 )
 
+// These constants are used to identify errors returned by the Firewood Rust FFI.
+// These must be changed if the Rust FFI changes - should be reported by tests.
+const (
+	rootHashNotFound = "IO error: Root hash not found"
+	keyNotFound      = "key not found"
+)
+
+var dbClosedErr = errors.New("firewood database already closed")
+
 // A Database is a handle to a Firewood database.
+// It is not safe to call these methods with a nil handle.
 type Database struct {
 	// handle is returned and accepted by cgo functions. It MUST be treated as
 	// an opaque value without special meaning.
@@ -84,9 +97,14 @@ func New(filePath string, conf *Config) (*Database, error) {
 	} else {
 		db = C.fwd_open_db(args)
 	}
+
+	// After creating the db, we can safely free the path string.
+	C.free(unsafe.Pointer(args.path))
+
 	if db == nil {
 		return nil, fmt.Errorf("failed to create or open database")
 	}
+
 	return &Database{handle: db}, nil
 }
 
@@ -104,7 +122,7 @@ type KeyValue struct {
 //
 // WARNING: a consequence of prefix deletion is that calling Batch with an empty
 // key and value will delete the entire database.
-func (db *Database) Batch(ops []KeyValue) []byte {
+func (db *Database) Batch(ops []KeyValue) ([]byte, error) {
 	// TODO(arr4n) refactor this to require explicit signalling from the caller
 	// that they want prefix deletion, similar to `rm --no-preserve-root`.
 
@@ -129,34 +147,62 @@ func (db *Database) Batch(ops []KeyValue) []byte {
 
 // extractBytesThenFree converts the cgo `Value` payload to a byte slice, frees
 // the `Value`, and returns the extracted slice.
-func extractBytesThenFree(v *C.struct_Value) []byte {
-	buf := C.GoBytes(unsafe.Pointer(v.data), C.int(v.len))
+// Generates error if the error term is nonnull.
+func extractBytesThenFree(v *C.struct_Value) (buf []byte, err error) {
+	buf = C.GoBytes(unsafe.Pointer(v.data), C.int(v.len))
+	if v.len == 0 {
+		errStr := C.GoString((*C.char)(unsafe.Pointer(v.data)))
+		err = fmt.Errorf("firewood error: %s", errStr)
+	}
 	C.fwd_free_value(v)
-	return buf
+
+	// Pin the returned value to prevent it from being garbage collected.
+	runtime.KeepAlive(v)
+	return
 }
 
 // Get retrieves the value for the given key. It always returns a nil error.
 // If the key is not found, the return value will be (nil, nil).
 func (db *Database) Get(key []byte) ([]byte, error) {
+	if db.handle == nil {
+		return nil, dbClosedErr
+	}
+
 	values, cleanup := newValueFactory()
 	defer cleanup()
 	val := C.fwd_get(db.handle, values.from(key))
-	bytes := extractBytesThenFree(&val)
-	if len(bytes) == 0 {
+	bytes, err := extractBytesThenFree(&val)
+
+	// If the root hash or key is not found, return nil.
+	if err != nil && (strings.Contains(err.Error(), rootHashNotFound) || strings.Contains(err.Error(), keyNotFound)) {
 		return nil, nil
 	}
-	return bytes, nil
+	return bytes, err
 }
 
 // Root returns the current root hash of the trie.
-func (db *Database) Root() []byte {
+// Empty trie must return common.Hash{}.
+func (db *Database) Root() ([]byte, error) {
+	if db.handle == nil {
+		return nil, dbClosedErr
+	}
 	hash := C.fwd_root_hash(db.handle)
-	return extractBytesThenFree(&hash)
+	bytes, err := extractBytesThenFree(&hash)
+
+	// If the root hash is not found, return a zeroed slice.
+	if err != nil && strings.Contains(err.Error(), rootHashNotFound) {
+		bytes = make([]byte, 32)
+		err = nil
+	}
+	return bytes, err
 }
 
-// Close closes the database and releases all held resources. It always returns
-// nil.
+// Close closes the database and releases all held resources.
+// Returns an error if already closed.
 func (db *Database) Close() error {
+	if db.handle == nil {
+		return dbClosedErr
+	}
 	C.fwd_close_db(db.handle)
 	db.handle = nil
 	return nil
