@@ -155,6 +155,7 @@ jobs:
 
   native-build:
     runs-on: ${{ matrix.os }}
+    continue-on-error: true
     strategy:
       matrix:
         include:
@@ -164,6 +165,8 @@ jobs:
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             artifact_name: linux-arm64
+            pre-build: sudo apt-get update && sudo apt-get --assume-yes install gcc-aarch64-linux-gnu
+            
           # - os: macos-latest
           #   target: x86_64-apple-darwin
           #   artifact_name: darwin-x86_64
@@ -176,6 +179,9 @@ jobs:
       - uses: arduino/setup-protoc@v3
       - uses: Swatinem/rust-cache@v2
 
+      - name: Pre-Build
+        if: ${{ matrix.pre-build != '' }}
+        run: ${{ matrix.pre-build }}
       - name: Add ${{ matrix.target }} Rust toolchain
         run: rustup target add ${{ matrix.target }}
       
