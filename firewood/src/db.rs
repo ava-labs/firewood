@@ -339,7 +339,6 @@ pub struct Proposal<'p> {
     db: &'p Db,
 }
 
-
 impl Proposal<'_> {
     /// Get the root hash of the proposal synchronously
     pub fn root_hash_sync(&self) -> Result<Option<api::HashKey>, api::Error> {
