@@ -24,7 +24,7 @@ const (
 	keyNotFound      = "key not found"
 )
 
-var dbClosedErr = errors.New("firewood database already closed")
+var errDbClosed = errors.New("firewood database already closed")
 
 // A Database is a handle to a Firewood database.
 // It is not safe to call these methods with a nil handle.
@@ -160,7 +160,7 @@ func extractBytesThenFree(v *C.struct_Value) (buf []byte, err error) {
 // If the key is not found, the return value will be (nil, nil).
 func (db *Database) Get(key []byte) ([]byte, error) {
 	if db.handle == nil {
-		return nil, dbClosedErr
+		return nil, errDbClosed
 	}
 
 	values, cleanup := newValueFactory()
@@ -179,7 +179,7 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 // Empty trie must return common.Hash{}.
 func (db *Database) Root() ([]byte, error) {
 	if db.handle == nil {
-		return nil, dbClosedErr
+		return nil, errDbClosed
 	}
 	hash := C.fwd_root_hash(db.handle)
 	bytes, err := extractBytesThenFree(&hash)
@@ -196,7 +196,7 @@ func (db *Database) Root() ([]byte, error) {
 // Returns an error if already closed.
 func (db *Database) Close() error {
 	if db.handle == nil {
-		return dbClosedErr
+		return errDbClosed
 	}
 	C.fwd_close_db(db.handle)
 	db.handle = nil

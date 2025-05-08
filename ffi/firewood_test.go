@@ -86,21 +86,21 @@ func TestGetBadHandle(t *testing.T) {
 
 	// This ignores error, but still shouldn't panic.
 	_, err := db.Get([]byte("non-existent"))
-	assert.ErrorIs(t, err, dbClosedErr)
+	assert.ErrorIs(t, err, errDbClosed)
 
 	// We ignore the error, but it shouldn't panic.
 	_, err = db.Root()
-	assert.ErrorIs(t, err, dbClosedErr)
+	assert.ErrorIs(t, err, errDbClosed)
 
 	root, err := db.Update(
 		[][]byte{[]byte("key")},
 		[][]byte{[]byte("value")},
 	)
 	assert.Empty(t, root)
-	assert.ErrorIs(t, err, dbClosedErr)
+	assert.ErrorIs(t, err, errDbClosed)
 
 	err = db.Close()
-	require.ErrorIs(t, err, dbClosedErr)
+	require.ErrorIs(t, err, errDbClosed)
 }
 
 func keyForTest(i int) []byte {
