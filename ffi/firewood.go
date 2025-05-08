@@ -140,6 +140,37 @@ func (db *Database) Batch(ops []KeyValue) ([]byte, error) {
 	return extractBytesThenFree(&hash)
 }
 
+func (db *Database) Propose(ops []KeyValue) (uint32, error) {
+	values, cleanup := newValueFactory()
+	defer cleanup()
+
+	ffiOps := make([]C.struct_KeyValue, len(ops))
+	for i, op := range ops {
+		ffiOps[i] = C.struct_KeyValue{
+			key:   values.from(op.Key),
+			value: values.from(op.Value),
+		}
+	}
+	id := C.fwd_propose(
+		db.handle,
+		C.size_t(len(ffiOps)),
+		(*C.struct_KeyValue)(unsafe.SliceData(ffiOps)), // implicitly pinned
+	)
+	return extractIdOrError(&id)
+}
+
+func extractIdOrError(v *C.struct_Value) (uint32, error) {
+	if v.len == 0 {
+		return 0, fmt.Errorf("firewood error: %s", C.GoString((*C.char)(unsafe.Pointer(v.data))))
+	}
+	return uint32(v.len), nil
+}
+
+func (db *Database) CommitProposal(id uint32) ([]byte, error) {
+	hash := C.fwd_commit(db.handle, C.uint32_t(id))
+	return extractBytesThenFree(&hash)
+}
+
 // extractBytesThenFree converts the cgo `Value` payload to a byte slice, frees
 // the `Value`, and returns the extracted slice.
 // Generates error if the error term is nonnull.

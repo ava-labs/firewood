@@ -72,6 +72,22 @@ struct Value fwd_batch(const struct DatabaseHandle *db,
 void fwd_close_db(struct DatabaseHandle *db);
 
 /**
+ * Commits a proposal to the database.
+ *
+ * # Returns
+ *
+ * The root hash of the database after the proposal is committed, or panics if it cannot be committed
+ *
+ * # Safety
+ *
+ * This function is unsafe because it dereferences raw pointers.
+ * The caller must ensure that `db` is a valid pointer returned by `open_db`
+ *
+ */
+struct Value fwd_commit(const struct DatabaseHandle *db,
+                        uint32_t proposal_id);
+
+/**
  * Create a database with the given cache size and maximum number of revisions, as well
  * as a specific cache strategy
  *
@@ -139,6 +155,23 @@ struct Value fwd_get(const struct DatabaseHandle *db, struct Value key);
  *
  */
 const struct DatabaseHandle *fwd_open_db(struct CreateOrOpenArgs args);
+
+/**
+ * Proposes a batch of operations to the database.
+ *
+ * # Returns
+ *
+ * The ID of the proposal, or panics if it cannot be created
+ *
+ * # Safety
+ *
+ * This function is unsafe because it dereferences raw pointers.
+ * The caller must ensure that `db` is a valid pointer returned by `open_db`
+ *
+ */
+struct Value fwd_propose(const struct DatabaseHandle *db,
+                         size_t nkeys,
+                         const struct KeyValue *values);
 
 /**
  * Get the root hash of the latest version of the database

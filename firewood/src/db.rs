@@ -339,6 +339,14 @@ pub struct Proposal<'p> {
     db: &'p Db,
 }
 
+
+impl Proposal<'_> {
+    /// Get the root hash of the proposal synchronously
+    pub fn root_hash_sync(&self) -> Result<Option<api::HashKey>, api::Error> {
+        self.nodestore.root_hash().map_err(api::Error::from)
+    }
+}
+
 #[async_trait]
 impl api::DbView for Proposal<'_> {
     type Stream<'b>

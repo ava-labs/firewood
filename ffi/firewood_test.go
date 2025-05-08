@@ -126,7 +126,15 @@ func TestInsert100(t *testing.T) {
 		{
 			name: "Batch",
 			insert: func(db *Database, kvs []KeyValue) ([]byte, error) {
-				return db.Batch(kvs)
+				id, err := db.Propose(kvs)
+				if err != nil {
+					return nil, err
+				}
+				root, err := db.CommitProposal(id)
+				if err != nil {
+					return nil, err
+				}
+				return root, nil
 			},
 		},
 		{

@@ -7,7 +7,8 @@ use std::fmt::{self, Display, Formatter};
 use std::ops::Deref;
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::Path;
-use std::sync::RwLock;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, RwLock};
 
 use firewood::db::{BatchOp as DbBatchOp, Db, DbConfig, DbViewSync as _, Proposal};
 use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
@@ -19,13 +20,18 @@ use metrics::counter;
 type ProposalId = u32;
 
 pub struct DatabaseHandle<'p> {
+    proposals: RwLock<HashMap<ProposalId, Arc<Proposal<'p>>>>,
     db: Db,
-    proposals: RwLock<HashMap<ProposalId, Proposal<'p>>>,
+    next_id: AtomicU32,
 }
 
 impl From<Db> for DatabaseHandle<'_> {
     fn from(db: Db) -> Self {
-        Self { db, proposals: RwLock::new(HashMap::new()) }
+        Self {
+            db,
+            proposals: RwLock::new(HashMap::new()),
+            next_id: AtomicU32::new(1),
+        }
     }
 }
 
@@ -50,6 +56,15 @@ pub struct Value {
 impl Display for Value {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{:?}", self.as_slice())
+    }
+}
+
+impl From<u32> for Value {
+    fn from(v: u32) -> Self {
+        Self {
+            len: v as usize,
+            data: std::ptr::null(),
+        }
     }
 }
 
@@ -120,15 +135,105 @@ pub struct KeyValue {
 ///  * ensure that the `Value` fields of the `KeyValue` structs are valid pointers.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_batch(db: *const DatabaseHandle, nkeys: usize, values: *const KeyValue) -> Value {
+pub unsafe extern "C" fn fwd_batch(
+    db: *const DatabaseHandle,
+    nkeys: usize,
+    values: *const KeyValue,
+) -> Value {
     batch(db, nkeys, values).unwrap_or_else(|e| e.into())
+}
+
+/// Proposes a batch of operations to the database.
+///
+/// # Returns
+///
+/// The ID of the proposal, or panics if it cannot be created
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers.
+/// The caller must ensure that `db` is a valid pointer returned by `open_db`
+///
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_propose(
+    db: *const DatabaseHandle,
+    nkeys: usize,
+    values: *const KeyValue,
+) -> Value {
+    propose(db, nkeys, values).unwrap_or_else(|e| e.into())
+}
+
+fn propose(
+    db: *const DatabaseHandle,
+    nkeys: usize,
+    values: *const KeyValue,
+) -> Result<Value, String> {
+    let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
+
+    // Create a batch of operations to perform.
+    let mut batch = Vec::with_capacity(nkeys);
+    for i in 0..nkeys {
+        let kv = unsafe { values.add(i).as_ref() }
+            .ok_or_else(|| String::from("couldn't get key-value pair"))?;
+        if kv.value.len == 0 {
+            batch.push(DbBatchOp::DeleteRange {
+                prefix: kv.key.as_slice(),
+            });
+            continue;
+        }
+        batch.push(DbBatchOp::Put {
+            key: kv.key.as_slice(),
+            value: kv.value.as_slice(),
+        });
+    }
+    let proposal = db.propose_sync(batch).map_err(|e| e.to_string())?;
+    let proposal_id = db.next_id.fetch_add(1, Ordering::Relaxed);
+    db.proposals.write().unwrap().insert(proposal_id, proposal);
+    Ok(proposal_id.into())
+}
+
+/// Commits a proposal to the database.
+///
+/// # Returns
+///
+/// The root hash of the database after the proposal is committed, or panics if it cannot be committed
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers.
+/// The caller must ensure that `db` is a valid pointer returned by `open_db`
+///
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_commit(db: *const DatabaseHandle, proposal_id: u32) -> Value {
+    commit(db, proposal_id).unwrap_or_else(|e| e.into())
+}
+
+fn commit(db: *const DatabaseHandle, proposal_id: u32) -> Result<Value, String> {
+    let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
+    let proposal = db
+        .proposals
+        .write()
+        .unwrap()
+        .remove(&proposal_id)
+        .ok_or_else(|| String::from("proposal not found"))?;
+    let hash_val = proposal.root_hash_sync().map_err(|e| e.to_string())?;
+    proposal.commit_sync().map_err(|e| e.to_string())?;
+    Ok(hash_val
+        .map(|h| h.as_slice().to_vec())
+        .unwrap_or_default()
+        .deref()
+        .into())
 }
 
 /// cbindgen::ignore
 ///
 /// This function is not exposed to the C API.
 /// Internal call for `fwd_batch` to remove error handling from the C API
-fn batch(db: *const DatabaseHandle, nkeys: usize, values: *const KeyValue) -> Result<Value, String> {
+fn batch(
+    db: *const DatabaseHandle,
+    nkeys: usize,
+    values: *const KeyValue,
+) -> Result<Value, String> {
     let start = coarsetime::Instant::now();
     // Check db is valid.
     let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
