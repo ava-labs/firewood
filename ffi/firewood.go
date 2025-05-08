@@ -12,7 +12,6 @@ import "C"
 import (
 	"errors"
 	"fmt"
-	"runtime"
 	"strings"
 	"unsafe"
 )
@@ -103,12 +102,6 @@ func New(filePath string, conf *Config) (*Database, error) {
 	return &Database{handle: db}, nil
 }
 
-// KeyValue is a key-value pair.
-type KeyValue struct {
-	Key   []byte
-	Value []byte
-}
-
 // Batch applies a batch of updates to the database, returning the hash of the
 // root node after the batch is applied.
 //
@@ -140,51 +133,36 @@ func (db *Database) Batch(ops []KeyValue) ([]byte, error) {
 	return extractBytesThenFree(&hash)
 }
 
-func (db *Database) Propose(ops []KeyValue) (uint32, error) {
+func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
+	if db.handle == nil {
+		return nil, errDbClosed
+	}
+
 	values, cleanup := newValueFactory()
 	defer cleanup()
 
-	ffiOps := make([]C.struct_KeyValue, len(ops))
-	for i, op := range ops {
+	ffiOps := make([]C.struct_KeyValue, len(keys))
+	for i := range keys {
 		ffiOps[i] = C.struct_KeyValue{
-			key:   values.from(op.Key),
-			value: values.from(op.Value),
+			key:   values.from(keys[i]),
+			value: values.from(vals[i]),
 		}
 	}
-	id := C.fwd_propose(
+	id_or_err := C.fwd_propose_on_db(
 		db.handle,
 		C.size_t(len(ffiOps)),
 		(*C.struct_KeyValue)(unsafe.SliceData(ffiOps)), // implicitly pinned
 	)
-	return extractIdOrError(&id)
-}
+	id, err := extractIdThenFree(&id_or_err)
 
-func extractIdOrError(v *C.struct_Value) (uint32, error) {
-	if v.len == 0 {
-		return 0, fmt.Errorf("firewood error: %s", C.GoString((*C.char)(unsafe.Pointer(v.data))))
+	if err != nil {
+		return nil, err
 	}
-	return uint32(v.len), nil
-}
 
-func (db *Database) CommitProposal(id uint32) ([]byte, error) {
-	hash := C.fwd_commit(db.handle, C.uint32_t(id))
-	return extractBytesThenFree(&hash)
-}
-
-// extractBytesThenFree converts the cgo `Value` payload to a byte slice, frees
-// the `Value`, and returns the extracted slice.
-// Generates error if the error term is nonnull.
-func extractBytesThenFree(v *C.struct_Value) (buf []byte, err error) {
-	buf = C.GoBytes(unsafe.Pointer(v.data), C.int(v.len))
-	if v.len == 0 {
-		errStr := C.GoString((*C.char)(unsafe.Pointer(v.data)))
-		err = fmt.Errorf("firewood error: %s", errStr)
-	}
-	C.fwd_free_value(v)
-
-	// Pin the returned value to prevent it from being garbage collected.
-	runtime.KeepAlive(v)
-	return
+	return &Proposal{
+		handle: db.handle,
+		id:     id,
+	}, nil
 }
 
 // Get retrieves the value for the given key. It always returns a nil error.
@@ -232,26 +210,4 @@ func (db *Database) Close() error {
 	C.fwd_close_db(db.handle)
 	db.handle = nil
 	return nil
-}
-
-// newValueFactory returns a factory for converting byte slices into cgo `Value`
-// structs that can be passed as arguments to cgo functions. The returned
-// cleanup function MUST be called when the constructed values are no longer
-// required, after which they can no longer be used as cgo arguments.
-func newValueFactory() (*valueFactory, func()) {
-	f := new(valueFactory)
-	return f, func() { f.pin.Unpin() }
-}
-
-type valueFactory struct {
-	pin runtime.Pinner
-}
-
-func (f *valueFactory) from(data []byte) C.struct_Value {
-	if len(data) == 0 {
-		return C.struct_Value{0, nil}
-	}
-	ptr := (*C.uchar)(unsafe.SliceData(data))
-	f.pin.Pin(ptr)
-	return C.struct_Value{C.size_t(len(data)), ptr}
 }

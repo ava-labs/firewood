@@ -17,12 +17,18 @@ mod metrics_setup;
 
 use metrics::counter;
 
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 type ProposalId = u32;
+static ID_COUNTER: AtomicU32 = AtomicU32::new(1);
+fn next_id() -> ProposalId {
+    ID_COUNTER.fetch_add(1, Ordering::Relaxed)
+}
 
 pub struct DatabaseHandle<'p> {
     proposals: RwLock<HashMap<ProposalId, Arc<Proposal<'p>>>>,
     db: Db,
-    next_id: AtomicU32,
 }
 
 impl From<Db> for DatabaseHandle<'_> {
@@ -30,7 +36,6 @@ impl From<Db> for DatabaseHandle<'_> {
         Self {
             db,
             proposals: RwLock::new(HashMap::new()),
-            next_id: AtomicU32::new(1),
         }
     }
 }
@@ -42,9 +47,6 @@ impl Deref for DatabaseHandle<'_> {
         &self.db
     }
 }
-
-#[global_allocator]
-static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 #[derive(Debug)]
 #[repr(C)]
@@ -155,19 +157,25 @@ pub unsafe extern "C" fn fwd_batch(
 /// The caller must ensure that `db` is a valid pointer returned by `open_db`
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_propose(
+pub unsafe extern "C" fn fwd_propose_on_db(
     db: *const DatabaseHandle,
     nkeys: usize,
     values: *const KeyValue,
 ) -> Value {
-    propose(db, nkeys, values).unwrap_or_else(|e| e.into())
+    propose_on_db(db, nkeys, values)
+        .map(|id| id.into())
+        .unwrap_or_else(|e| e.into())
 }
 
-fn propose(
+/// cbindgen::ignore
+///
+/// This function is not exposed to the C API.
+/// Internal call for `fwd_propose_on_db` to remove error handling from the C API
+fn propose_on_db(
     db: *const DatabaseHandle,
     nkeys: usize,
     values: *const KeyValue,
-) -> Result<Value, String> {
+) -> Result<ProposalId, String> {
     let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
 
     // Create a batch of operations to perform.
@@ -187,9 +195,9 @@ fn propose(
         });
     }
     let proposal = db.propose_sync(batch).map_err(|e| e.to_string())?;
-    let proposal_id = db.next_id.fetch_add(1, Ordering::Relaxed);
+    let proposal_id = next_id();
     db.proposals.write().unwrap().insert(proposal_id, proposal);
-    Ok(proposal_id.into())
+    Ok(proposal_id)
 }
 
 /// Commits a proposal to the database.
@@ -205,10 +213,12 @@ fn propose(
 ///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_commit(db: *const DatabaseHandle, proposal_id: u32) -> Value {
-    commit(db, proposal_id).unwrap_or_else(|e| e.into())
+    commit(db, proposal_id)
+        .map(|e| e.into())
+        .unwrap_or_else(|e| e.into())
 }
 
-fn commit(db: *const DatabaseHandle, proposal_id: u32) -> Result<Value, String> {
+fn commit(db: *const DatabaseHandle, proposal_id: u32) -> Result<(), String> {
     let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
     let proposal = db
         .proposals
@@ -216,13 +226,7 @@ fn commit(db: *const DatabaseHandle, proposal_id: u32) -> Result<Value, String> 
         .unwrap()
         .remove(&proposal_id)
         .ok_or_else(|| String::from("proposal not found"))?;
-    let hash_val = proposal.root_hash_sync().map_err(|e| e.to_string())?;
-    proposal.commit_sync().map_err(|e| e.to_string())?;
-    Ok(hash_val
-        .map(|h| h.as_slice().to_vec())
-        .unwrap_or_default()
-        .deref()
-        .into())
+    proposal.commit_sync().map_err(|e| e.to_string())
 }
 
 /// cbindgen::ignore
@@ -336,6 +340,15 @@ impl From<String> for Value {
         Value {
             len: 0,
             data: cstr.cast::<u8>(),
+        }
+    }
+}
+
+impl From<()> for Value {
+    fn from(_: ()) -> Self {
+        Self {
+            len: 0,
+            data: std::ptr::null(),
         }
     }
 }

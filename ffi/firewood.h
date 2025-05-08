@@ -169,9 +169,9 @@ const struct DatabaseHandle *fwd_open_db(struct CreateOrOpenArgs args);
  * The caller must ensure that `db` is a valid pointer returned by `open_db`
  *
  */
-struct Value fwd_propose(const struct DatabaseHandle *db,
-                         size_t nkeys,
-                         const struct KeyValue *values);
+struct Value fwd_propose_on_db(const struct DatabaseHandle *db,
+                               size_t nkeys,
+                               const struct KeyValue *values);
 
 /**
  * Get the root hash of the latest version of the database

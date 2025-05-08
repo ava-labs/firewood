@@ -1,0 +1,47 @@
+// Package firewood provides a Go wrapper around the [Firewood] database.
+//
+// [Firewood]: https://github.com/ava-labs/firewood
+package firewood
+
+// // Note that -lm is required on Linux but not on Mac.
+// #cgo LDFLAGS: -L${SRCDIR}/../target/release -L/usr/local/lib -lfirewood_ffi -lm
+// #include <stdlib.h>
+// #include "firewood.h"
+import "C"
+import (
+	"errors"
+	"fmt"
+)
+
+var errProposalInvalid = errors.New("firewood proposal is invalid")
+
+type Proposal struct {
+	// handle is returned and accepted by cgo functions. It MUST be treated as
+	// an opaque value without special meaning.
+	// https://en.wikipedia.org/wiki/Blinkenlights
+	handle *C.DatabaseHandle
+
+	// The proposal ID.
+	id uint32
+}
+
+func (p *Proposal) Commit() error {
+	if p.handle == nil {
+		return errDbClosed
+	}
+
+	if p.id == 0 {
+		return errProposalInvalid
+	}
+
+	// Commit the proposal and return the hash.
+	err_val := C.fwd_commit(p.handle, C.uint32_t(p.id))
+	err := extractErrorThenFree(&err_val)
+	if err != nil {
+		fmt.Printf("Error committing proposal: %v\n", err)
+		// this is unrecoverable due to Rust's ownership model
+		// The underlying proposal is no longer valid.
+		p.id = 0
+	}
+	return err
+}
