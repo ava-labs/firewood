@@ -5,6 +5,8 @@
 #include <stdlib.h>
 
 
+typedef struct DatabaseHandle DatabaseHandle;
+
 typedef struct Value {
   size_t len;
   const uint8_t *data;
@@ -50,7 +52,7 @@ typedef struct CreateOrOpenArgs {
  *  * ensure that the `Value` fields of the `KeyValue` structs are valid pointers.
  *
  */
-struct Value fwd_batch(void *db,
+struct Value fwd_batch(const struct DatabaseHandle *db,
                        size_t nkeys,
                        const struct KeyValue *values);
 
@@ -67,7 +69,7 @@ struct Value fwd_batch(void *db,
  *
  * * `db` - The database handle to close, previously returned from a call to open_db()
  */
-void fwd_close_db(void *db);
+void fwd_close_db(struct DatabaseHandle *db);
 
 /**
  * Create a database with the given cache size and maximum number of revisions, as well
@@ -89,7 +91,7 @@ void fwd_close_db(void *db);
  * The caller must call `close` to free the memory associated with the returned database handle.
  *
  */
-void *fwd_create_db(struct CreateOrOpenArgs args);
+const struct DatabaseHandle *fwd_create_db(struct CreateOrOpenArgs args);
 
 /**
  * Frees the memory associated with a `Value`.
@@ -115,7 +117,7 @@ void fwd_free_value(const struct Value *value);
  *  * ensure that `key` is a valid pointer to a `Value` struct
  *  * call `free_value` to free the memory associated with the returned `Value`
  */
-struct Value fwd_get(void *db, struct Value key);
+struct Value fwd_get(const struct DatabaseHandle *db, struct Value key);
 
 /**
  * Open a database with the given cache size and maximum number of revisions
@@ -136,7 +138,7 @@ struct Value fwd_get(void *db, struct Value key);
  * The caller must call `close` to free the memory associated with the returned database handle.
  *
  */
-void *fwd_open_db(struct CreateOrOpenArgs args);
+const struct DatabaseHandle *fwd_open_db(struct CreateOrOpenArgs args);
 
 /**
  * Get the root hash of the latest version of the database
@@ -147,4 +149,4 @@ void *fwd_open_db(struct CreateOrOpenArgs args);
  * This function is unsafe because it dereferences raw pointers.
  * The caller must ensure that `db` is a valid pointer returned by `open_db`
  */
-struct Value fwd_root_hash(void *db);
+struct Value fwd_root_hash(const struct DatabaseHandle *db);

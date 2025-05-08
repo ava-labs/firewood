@@ -32,7 +32,7 @@ type Database struct {
 	// handle is returned and accepted by cgo functions. It MUST be treated as
 	// an opaque value without special meaning.
 	// https://en.wikipedia.org/wiki/Blinkenlights
-	handle unsafe.Pointer
+	handle *C.DatabaseHandle
 }
 
 // Config configures the opening of a [Database].
@@ -91,7 +91,7 @@ func New(filePath string, conf *Config) (*Database, error) {
 		metrics_port: C.uint16_t(conf.MetricsPort),
 	}
 
-	var db unsafe.Pointer
+	var db *C.DatabaseHandle
 	if conf.Create {
 		db = C.fwd_create_db(args)
 	} else {

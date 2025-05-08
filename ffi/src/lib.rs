@@ -1,17 +1,41 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use std::collections::HashMap;
 use std::ffi::{CStr, CString, OsStr, c_char};
 use std::fmt::{self, Display, Formatter};
+use std::ops::Deref;
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::Path;
+use std::sync::RwLock;
 
-use firewood::db::{BatchOp as DbBatchOp, Db, DbConfig, DbViewSync as _};
+use firewood::db::{BatchOp as DbBatchOp, Db, DbConfig, DbViewSync as _, Proposal};
 use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
 
 mod metrics_setup;
 
 use metrics::counter;
+
+type ProposalId = u32;
+
+pub struct DatabaseHandle<'p> {
+    db: Db,
+    proposals: RwLock<HashMap<ProposalId, Proposal<'p>>>,
+}
+
+impl From<Db> for DatabaseHandle<'_> {
+    fn from(db: Db) -> Self {
+        Self { db, proposals: RwLock::new(HashMap::new()) }
+    }
+}
+
+impl Deref for DatabaseHandle<'_> {
+    type Target = Db;
+
+    fn deref(&self) -> &Self::Target {
+        &self.db
+    }
+}
 
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -42,7 +66,7 @@ impl Display for Value {
 ///  * ensure that `key` is a valid pointer to a `Value` struct
 ///  * call `free_value` to free the memory associated with the returned `Value`
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_get(db: *mut Db, key: Value) -> Value {
+pub unsafe extern "C" fn fwd_get(db: *const DatabaseHandle, key: Value) -> Value {
     get(db, key).unwrap_or_else(|e| e.into())
 }
 
@@ -50,7 +74,7 @@ pub unsafe extern "C" fn fwd_get(db: *mut Db, key: Value) -> Value {
 ///
 /// This function is not exposed to the C API.
 /// Internal call for `fwd_get` to remove error handling from the C API
-fn get(db: *mut Db, key: Value) -> Result<Value, String> {
+fn get(db: *const DatabaseHandle, key: Value) -> Result<Value, String> {
     // Check db is valid.
     let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
 
@@ -96,7 +120,7 @@ pub struct KeyValue {
 ///  * ensure that the `Value` fields of the `KeyValue` structs are valid pointers.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const KeyValue) -> Value {
+pub unsafe extern "C" fn fwd_batch(db: *const DatabaseHandle, nkeys: usize, values: *const KeyValue) -> Value {
     batch(db, nkeys, values).unwrap_or_else(|e| e.into())
 }
 
@@ -104,7 +128,7 @@ pub unsafe extern "C" fn fwd_batch(db: *mut Db, nkeys: usize, values: *const Key
 ///
 /// This function is not exposed to the C API.
 /// Internal call for `fwd_batch` to remove error handling from the C API
-fn batch(db: *mut Db, nkeys: usize, values: *const KeyValue) -> Result<Value, String> {
+fn batch(db: *const DatabaseHandle, nkeys: usize, values: *const KeyValue) -> Result<Value, String> {
     let start = coarsetime::Instant::now();
     // Check db is valid.
     let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
@@ -151,7 +175,7 @@ fn batch(db: *mut Db, nkeys: usize, values: *const KeyValue) -> Result<Value, St
 /// This function is unsafe because it dereferences raw pointers.
 /// The caller must ensure that `db` is a valid pointer returned by `open_db`
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_root_hash(db: *mut Db) -> Value {
+pub unsafe extern "C" fn fwd_root_hash(db: *const DatabaseHandle) -> Value {
     // Check db is valid.
     root_hash(db).unwrap_or_else(|e| e.into())
 }
@@ -160,7 +184,7 @@ pub unsafe extern "C" fn fwd_root_hash(db: *mut Db) -> Value {
 ///
 /// This function is not exposed to the C API.
 /// Internal call for `fwd_root_hash` to remove error handling from the C API
-fn root_hash(db: *mut Db) -> Result<Value, String> {
+fn root_hash(db: *const DatabaseHandle) -> Result<Value, String> {
     // Check db is valid.
     let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
 
@@ -273,7 +297,7 @@ pub struct CreateOrOpenArgs {
 /// The caller must call `close` to free the memory associated with the returned database handle.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_create_db(args: CreateOrOpenArgs) -> *mut Db {
+pub unsafe extern "C" fn fwd_create_db(args: CreateOrOpenArgs) -> *const DatabaseHandle<'static> {
     let cfg = DbConfig::builder()
         .truncate(true)
         .manager(manager_config(
@@ -303,7 +327,7 @@ pub unsafe extern "C" fn fwd_create_db(args: CreateOrOpenArgs) -> *mut Db {
 /// The caller must call `close` to free the memory associated with the returned database handle.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_open_db(args: CreateOrOpenArgs) -> *mut Db {
+pub unsafe extern "C" fn fwd_open_db(args: CreateOrOpenArgs) -> *const DatabaseHandle<'static> {
     let cfg = DbConfig::builder()
         .truncate(false)
         .manager(manager_config(
@@ -319,7 +343,7 @@ unsafe fn common_create(
     path: *const std::ffi::c_char,
     metrics_port: u16,
     cfg: DbConfig,
-) -> *mut Db {
+) -> *mut DatabaseHandle<'static> {
     #[cfg(feature = "logger")]
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .try_init();
@@ -329,9 +353,8 @@ unsafe fn common_create(
     if metrics_port > 0 {
         metrics_setup::setup_metrics(metrics_port);
     }
-    Box::into_raw(Box::new(
-        Db::new_sync(path, cfg).expect("db initialization should succeed"),
-    ))
+    let db = Db::new_sync(path, cfg).expect("db initialization should succeed");
+    Box::into_raw(Box::new(db.into()))
 }
 
 fn manager_config(cache_size: usize, revisions: usize, strategy: u8) -> RevisionManagerConfig {
@@ -364,6 +387,6 @@ fn manager_config(cache_size: usize, revisions: usize, strategy: u8) -> Revision
 ///
 /// * `db` - The database handle to close, previously returned from a call to open_db()
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_close_db(db: *mut Db) {
+pub unsafe extern "C" fn fwd_close_db(db: *mut DatabaseHandle) {
     let _ = unsafe { Box::from_raw(db) };
 }
