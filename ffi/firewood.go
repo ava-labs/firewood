@@ -4,7 +4,14 @@
 package firewood
 
 // // Note that -lm is required on Linux but not on Mac.
-// #cgo LDFLAGS: -L${SRCDIR}/../target/release -L/usr/local/lib -lfirewood_ffi -lm
+// #cgo linux,amd64 LDFLAGS: -L${SRCDIR}/libs/x86_64-unknown-linux-gnu -lm
+// #cgo linux,arm64 LDFLAGS: -L${SRCDIR}/libs/aarch64-unknown-linux-gnu -lm
+// #cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/libs/x86_64-apple-darwin
+// #cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/libs/aarch64-apple-darwin
+// // XXX: we pass the path to both the local build and pre-built binaries, which
+// // means the local build takes precedence.
+// #cgo LDFLAGS: -L${SRCDIR}/../target/release
+// #cgo LDFLAGS: -L/usr/local/lib -lfirewood_ffi
 // #include <stdlib.h>
 // #include "firewood.h"
 import "C"
