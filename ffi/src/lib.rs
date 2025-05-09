@@ -441,7 +441,20 @@ impl From<()> for Value {
 
 /// fwd_alloc_test is a test function that allocates data in a Value struct.
 /// This is used to test the allocation and deallocation of memory
-/// in Go.
+/// in Go, and should not be used in production code.
+///
+/// # Arguments
+///
+/// * `input` - A pointer to a null-terminated C-style string.
+///
+/// # Returns
+///
+/// A `Value` containing a copy of the input string.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers.
+/// The caller must ensure that `input` is a valid pointer to a null-terminated C-style string.
 ///
 #[doc(hidden)]
 #[unsafe(no_mangle)]
