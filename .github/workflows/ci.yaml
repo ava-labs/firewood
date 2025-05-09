@@ -153,7 +153,7 @@ jobs:
         working-directory: ffi/tests
         run: go test ./...
 
-  native-build:
+  native-build-ffi:
     runs-on: ${{ matrix.os }}
     continue-on-error: true
     strategy:
@@ -176,7 +176,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build for ${{ matrix.target }}
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --profile maxperf --target ${{ matrix.target }} -p firewood-ffi
         
       - name: Upload binary
         uses: actions/upload-artifact@v4
@@ -186,7 +186,7 @@ jobs:
           if-no-files-found: error
 
   collect-binaries:
-    needs: native-build
+    needs: native-build-ffi
     runs-on: ubuntu-latest
     steps:
       - name: Download all binaries
