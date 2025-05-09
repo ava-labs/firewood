@@ -151,10 +151,10 @@ void fwd_free_value(const struct Value *value);
  *
  * A `Value` containing the root hash of the database.
  * A `Value` containing {0, "error message"} if the get failed.
- * There are two error cases that may be expected to be nil by the caller:
+ * There are two error cases that may be expected to be nil by the caller,
+ * but should be handled externally:
  * * The database has no entries - "IO error: Root hash not found"
  * * The key is not found in the database - "key not found"
- * This should be handled by the caller.
  *
  * # Safety
  *
