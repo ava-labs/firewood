@@ -458,7 +458,7 @@ impl From<()> for Value {
 ///
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_alloc_test(input: *const c_char) -> Value {
+pub unsafe extern "C" fn fwd_alloc_test(input: *const c_char) -> Value {
     // Create a valid CStr from the input pointer.
     let cstr = unsafe { CStr::from_ptr(input) };
     // Use cstr to create a Rust String copying all data.
