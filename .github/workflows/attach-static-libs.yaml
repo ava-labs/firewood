@@ -73,7 +73,7 @@ jobs:
       - uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: 'ci: attach firewood-ffi static libs'
-          branch: ${{ github.ref_name }}-firewood-ffi-libs
+          branch: firewood-ffi-libs/${{ github.ref_name }}
           create_branch: true
           push_options: --force
 
