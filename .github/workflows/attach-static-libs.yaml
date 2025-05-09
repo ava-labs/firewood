@@ -75,6 +75,7 @@ jobs:
           commit_message: 'ci: attach firewood-ffi static libs'
           branch: ${{ github.ref_name }}-firewood-ffi-libs
           create_branch: true
+          push_options: --force
 
   test-firewood-ffi-libs:
     runs-on: ${{ matrix.os }}
