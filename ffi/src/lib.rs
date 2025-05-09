@@ -83,8 +83,6 @@ pub unsafe extern "C" fn fwd_get(db: *const DatabaseHandle, key: Value) -> Value
     get(db, key).unwrap_or_else(|e| e.into())
 }
 
-/// cbindgen::ignore
-///
 /// This function is not exposed to the C API.
 /// Internal call for `fwd_get` to remove error handling from the C API
 fn get(db: *const DatabaseHandle, key: Value) -> Result<Value, String> {
@@ -241,7 +239,6 @@ pub unsafe extern "C" fn fwd_propose_on_db(
 }
 
 /// Internal call for `fwd_propose_on_db` to remove error handling from the C API
-/// cbindgen::ignore
 #[doc(hidden)]
 fn propose_on_db(
     db: *const DatabaseHandle,
@@ -297,7 +294,6 @@ pub unsafe extern "C" fn fwd_commit(db: *const DatabaseHandle, proposal_id: u32)
 }
 
 /// Internal call for `fwd_commit` to remove error handling from the C API
-/// cbindgen::ignore
 #[doc(hidden)]
 fn commit(db: *const DatabaseHandle, proposal_id: u32) -> Result<(), String> {
     let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
@@ -336,8 +332,6 @@ pub unsafe extern "C" fn fwd_root_hash(db: *const DatabaseHandle) -> Value {
 
 /// This function is not exposed to the C API.
 /// Internal call for `fwd_root_hash` to remove error handling from the C API
-///
-/// cbindgen::ignore
 #[doc(hidden)]
 fn root_hash(db: *const DatabaseHandle) -> Result<Value, String> {
     // Check db is valid.
@@ -349,7 +343,6 @@ fn root_hash(db: *const DatabaseHandle) -> Result<Value, String> {
 
 /// This function is not exposed to the C API.
 /// It returns the current hash of an already-fetched database handle
-/// cbindgen::ignore
 #[doc(hidden)]
 fn hash(db: &Db) -> Result<Value, String> {
     db.root_hash_sync()
@@ -410,7 +403,6 @@ impl From<Box<[u8]>> for Value {
 
 impl From<String> for Value {
     fn from(s: String) -> Self {
-        // Create empty CString if s is null.
         if s.is_empty() {
             return Value {
                 len: 0,
@@ -559,7 +551,7 @@ pub unsafe extern "C" fn fwd_open_db(args: CreateOrOpenArgs) -> *const DatabaseH
     unsafe { common_create(args.path, args.metrics_port, cfg) }
 }
 
-/// cbindgen::ignore
+/// Internal call for `fwd_create_db` and `fwd_open_db` to remove error handling from the C API
 #[doc(hidden)]
 unsafe fn common_create(
     path: *const std::ffi::c_char,
