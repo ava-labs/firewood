@@ -6,7 +6,6 @@ on:
   # it works on every PR, but try not to pollute the repo
   # with branches + static lib artifacts.
   push:
-    branches: ['*']
 
 env:
   CARGO_TERM_COLOR: always
