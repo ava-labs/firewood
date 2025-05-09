@@ -1,4 +1,4 @@
-name: ci
+name: attach-static-libs
 
 on:
   # XXX: run on every push while testing the new workflow.
