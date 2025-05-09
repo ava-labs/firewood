@@ -411,6 +411,12 @@ impl From<Box<[u8]>> for Value {
 impl From<String> for Value {
     fn from(s: String) -> Self {
         // Create empty CString if s is null.
+        if s.is_empty() {
+            return Value {
+                len: 0,
+                data: std::ptr::null(),
+            };
+        }
         let cstr = CString::new(s).unwrap_or_default().into_raw();
         Value {
             len: 0,
