@@ -83,7 +83,7 @@ func extractIdThenFree(v *C.struct_Value) (uint32, error) {
 // Generates error if the error term is nonnull.
 func extractBytesThenFree(v *C.struct_Value) (buf []byte, err error) {
 	if v == nil {
-		return nil, errNilBuffer
+		return nil, nil
 	}
 	if v.data == nil {
 		return nil, errBadValue

@@ -178,10 +178,16 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 	val := C.fwd_get(db.handle, values.from(key))
 	bytes, err := extractBytesThenFree(&val)
 
-	// If the root hash or key is not found, return nil.
-	if err != nil && (strings.Contains(err.Error(), rootHashNotFound) || strings.Contains(err.Error(), keyNotFound)) {
+	if err == nil && bytes == nil {
+		// key not found
 		return nil, nil
 	}
+
+	// If the root hash or key is not found, return nil.
+	if err != nil && strings.Contains(err.Error(), rootHashNotFound) {
+		return nil, nil
+	}
+
 	return bytes, err
 }
 

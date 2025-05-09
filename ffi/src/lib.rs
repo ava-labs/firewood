@@ -26,11 +26,16 @@ fn next_id() -> ProposalId {
     ID_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
-/// A handle to the database, which contains a reference to the database and a map of proposals.
-// All proposals must be dropped before the database handle is dropped due to lifetime
-// guarantees defined during database creation.
+/// A handle to the database, returned by `fwd_create_db` and `fwd_open_db`.
+///
+/// These handles are passed to the other FFI functions.
+///
 pub struct DatabaseHandle<'p> {
+    /// List of oustanding proposals, by ID
+    // Keep proposals first, as they must be dropped before the database handle is dropped due to lifetime
+    // issues.
     proposals: RwLock<HashMap<ProposalId, Arc<Proposal<'p>>>>,
+    /// The database
     db: Db,
 }
 
@@ -51,19 +56,6 @@ impl Deref for DatabaseHandle<'_> {
     }
 }
 
-#[derive(Debug)]
-#[repr(C)]
-pub struct Value {
-    pub len: usize,
-    pub data: *const u8,
-}
-
-impl Display for Value {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{:?}", self.as_slice())
-    }
-}
-
 /// Gets the value associated with the given key from the database.
 ///
 /// # Arguments
@@ -78,7 +70,7 @@ impl Display for Value {
 /// There are two error cases that may be expected to be nil by the caller,
 /// but should be handled externally:
 /// * The database has no entries - "IO error: Root hash not found"
-/// * The key is not found in the database - "key not found"
+/// * The key is not found in the database returns a `Value` with length 0 and a null data pointer.
 ///
 /// # Safety
 ///
@@ -113,11 +105,11 @@ fn get(db: *const DatabaseHandle, key: Value) -> Result<Value, String> {
     let value = rev
         .val_sync(key.as_slice())
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| String::from("key not found"))?;
+        .ok_or_else(|| String::from(""))?;
     Ok(value.into())
 }
 
-/// A `KeyValue` struct that represents a key-value pair in the database.
+/// A `KeyValue` represents a key-value pair, passed to the FFI.
 #[repr(C)]
 #[allow(unused)]
 #[unsafe(no_mangle)]
@@ -139,6 +131,13 @@ pub struct KeyValue {
 /// The new root hash of the database, in Value form.
 /// A `Value` containing {0, "error message"} if the commit failed.
 ///
+/// # Errors    
+///
+/// * `"key-value pair is null"` - A `KeyValue` struct is null
+/// * `"db should be non-null"` - The database handle is null
+/// * `"couldn't get key-value pair"` - A `KeyValue` struct is null
+/// * `"proposed revision is empty"` - The proposed revision is empty
+///
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers.
@@ -156,10 +155,8 @@ pub unsafe extern "C" fn fwd_batch(
     batch(db, nkeys, values).unwrap_or_else(|e| e.into())
 }
 
-/// cbindgen::ignore
-///
-/// This function is not exposed to the C API.
 /// Internal call for `fwd_batch` to remove error handling from the C API
+#[doc(hidden)]
 fn batch(
     db: *const DatabaseHandle,
     nkeys: usize,
@@ -191,11 +188,17 @@ fn batch(
     let propose_time = start.elapsed().as_millis();
     counter!("firewood.ffi.propose_ms").increment(propose_time);
 
+    let hash_val = proposal
+        .root_hash_sync()
+        .map_err(|e| e.to_string())?
+        .ok_or(String::from("Proposed revision is empty"))?
+        .as_slice()
+        .into();
+
     // Commit the proposal.
     proposal.commit_sync().map_err(|e| e.to_string())?;
 
     // Get the root hash of the database post-commit.
-    let hash_val = hash(db)?;
     let propose_plus_commit_time = start.elapsed().as_millis();
     counter!("firewood.ffi.batch_ms").increment(propose_plus_commit_time);
     counter!("firewood.ffi.commit_ms").increment(propose_plus_commit_time - propose_time);
@@ -237,10 +240,9 @@ pub unsafe extern "C" fn fwd_propose_on_db(
         .unwrap_or_else(|e| e.into())
 }
 
-/// cbindgen::ignore
-///
-/// This function is not exposed to the C API.
 /// Internal call for `fwd_propose_on_db` to remove error handling from the C API
+/// cbindgen::ignore
+#[doc(hidden)]
 fn propose_on_db(
     db: *const DatabaseHandle,
     nkeys: usize,
@@ -294,6 +296,9 @@ pub unsafe extern "C" fn fwd_commit(db: *const DatabaseHandle, proposal_id: u32)
         .unwrap_or_else(|e| e.into())
 }
 
+/// Internal call for `fwd_commit` to remove error handling from the C API
+/// cbindgen::ignore
+#[doc(hidden)]
 fn commit(db: *const DatabaseHandle, proposal_id: u32) -> Result<(), String> {
     let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
     let proposal = db
@@ -329,10 +334,11 @@ pub unsafe extern "C" fn fwd_root_hash(db: *const DatabaseHandle) -> Value {
     root_hash(db).unwrap_or_else(|e| e.into())
 }
 
-/// cbindgen::ignore
-///
 /// This function is not exposed to the C API.
 /// Internal call for `fwd_root_hash` to remove error handling from the C API
+///
+/// cbindgen::ignore
+#[doc(hidden)]
 fn root_hash(db: *const DatabaseHandle) -> Result<Value, String> {
     // Check db is valid.
     let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
@@ -341,15 +347,44 @@ fn root_hash(db: *const DatabaseHandle) -> Result<Value, String> {
     hash(db)
 }
 
-/// cbindgen::ignore
-///
 /// This function is not exposed to the C API.
 /// It returns the current hash of an already-fetched database handle
+/// cbindgen::ignore
+#[doc(hidden)]
 fn hash(db: &Db) -> Result<Value, String> {
     db.root_hash_sync()
         .map_err(|e| e.to_string())?
         .ok_or_else(|| String::from("unexpected None from db.root_hash_sync"))
         .map(|root| Value::from(root.as_slice()))
+}
+
+/// A value returned by the FFI.
+///
+/// This is used in several different ways:
+///
+/// - When returning data, the length is the length of the data and the data is a pointer to the data.
+/// - When returning an error, the length is 0 and the data is a null-terminated C-style string.
+/// - When returning an ID, the length is the ID and the data is null.
+///
+/// A `Value` with length 0 and a null data pointer indicates that the data was not found.
+#[derive(Debug)]
+#[repr(C)]
+pub struct Value {
+    pub len: usize,
+    pub data: *const u8,
+}
+
+impl Display for Value {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match (self.len, self.data.is_null()) {
+            (0, true) => write!(f, "[not found]"),
+            (0, false) => write!(f, "[error] {}", unsafe {
+                CStr::from_ptr(self.data as *const i8).to_string_lossy()
+            }),
+            (len, true) => write!(f, "[id] {}", len),
+            (_, false) => write!(f, "[data] {:?}", self.as_slice()),
+        }
+    }
 }
 
 impl Value {
@@ -518,6 +553,8 @@ pub unsafe extern "C" fn fwd_open_db(args: CreateOrOpenArgs) -> *const DatabaseH
     unsafe { common_create(args.path, args.metrics_port, cfg) }
 }
 
+/// cbindgen::ignore
+#[doc(hidden)]
 unsafe fn common_create(
     path: *const std::ffi::c_char,
     metrics_port: u16,
@@ -568,4 +605,46 @@ fn manager_config(cache_size: usize, revisions: usize, strategy: u8) -> Revision
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_close_db(db: *mut DatabaseHandle) {
     let _ = unsafe { Box::from_raw(db) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_invalid_value_display() {
+        let value = Value {
+            len: 0,
+            data: std::ptr::null(),
+        };
+        assert_eq!(format!("{}", value), "[not found]");
+    }
+
+    #[test]
+    fn test_value_display_with_error_string() {
+        let cstr = CString::new("test").unwrap();
+        let value = Value {
+            len: 0,
+            data: cstr.as_ptr().cast::<u8>(),
+        };
+        assert_eq!(format!("{}", value), "[error] test");
+    }
+
+    #[test]
+    fn test_value_display_with_data() {
+        let value = Value {
+            len: 4,
+            data: Box::leak(b"test".to_vec().into_boxed_slice()).as_ptr(),
+        };
+        assert_eq!(format!("{}", value), "[data] [116, 101, 115, 116]");
+    }
+
+    #[test]
+    fn test_value_display_with_id() {
+        let value = Value {
+            len: 4,
+            data: std::ptr::null(),
+        };
+        assert_eq!(format!("{}", value), "[id] 4");
+    }
 }
