@@ -342,7 +342,7 @@ pub struct Proposal<'p> {
 impl Proposal<'_> {
     /// Get the root hash of the proposal synchronously
     pub fn root_hash_sync(&self) -> Result<Option<api::HashKey>, api::Error> {
-        self.nodestore.root_hash().map_err(api::Error::from)
+        Ok(self.nodestore.root_hash()?)
     }
 }
 

@@ -15,7 +15,10 @@ import (
 	"unsafe"
 )
 
-var errNilBuffer = errors.New("firewood error: nil buffer returned from cgo")
+var (
+	errNilBuffer = errors.New("firewood error: nil value returned from cgo")
+	errBadValue  = errors.New("firewood error: value from cgo formatted incorrectly")
+)
 
 // KeyValue is a key-value pair.
 type KeyValue struct {
@@ -23,9 +26,20 @@ type KeyValue struct {
 	Value []byte
 }
 
+// extractErrorThenFree converts the cgo `Value` payload to a string, frees the
+// `Value` if an error is returned, and returns the extracted value.
+// If the data is not formatted for a string, and non-null it returns an error.
 func extractErrorThenFree(v *C.struct_Value) error {
 	if v == nil {
 		return errNilBuffer
+	}
+
+	// The length isn't expected to be set in either case.
+	// May indicate a bug.
+	if v.len != 0 {
+		// We should still attempt to free the value.
+		C.fwd_free_value(v)
+		return errBadValue
 	}
 
 	// Expected empty case for Rust's `()`
@@ -35,19 +49,21 @@ func extractErrorThenFree(v *C.struct_Value) error {
 
 	// If the value is an error string, it should be freed and an error
 	// returned.
-	if v.len == 0 {
-		go_str := C.GoString((*C.char)(unsafe.Pointer(v.data)))
-		C.fwd_free_value(v)
-		// Pin the returned value to prevent it from being garbage collected.
-		runtime.KeepAlive(v)
-		return fmt.Errorf("firewood error: %s", go_str)
-	}
-	return nil
+	go_str := C.GoString((*C.char)(unsafe.Pointer(v.data)))
+	C.fwd_free_value(v)
+	// Pin the returned value to prevent it from being garbage collected.
+	runtime.KeepAlive(v)
+	return fmt.Errorf("firewood error: %s", go_str)
 }
 
+// extractIdThenFree converts the cgo `Value` payload to a uint32, frees the
+// `Value` if an error is returned, and returns the extracted value.
 func extractIdThenFree(v *C.struct_Value) (uint32, error) {
-	if v == nil || v.len == 0 && v.data == nil {
+	if v == nil {
 		return 0, errNilBuffer
+	}
+	if v.len == 0 && v.data == nil {
+		return 0, errBadValue
 	}
 	// If the value is an error string, it should be freed and an error
 	// returned.
@@ -66,8 +82,11 @@ func extractIdThenFree(v *C.struct_Value) (uint32, error) {
 // the `Value`, and returns the extracted slice.
 // Generates error if the error term is nonnull.
 func extractBytesThenFree(v *C.struct_Value) (buf []byte, err error) {
-	if v == nil || v.data == nil {
+	if v == nil {
 		return nil, errNilBuffer
+	}
+	if v.data == nil {
+		return nil, errBadValue
 	}
 
 	buf = C.GoBytes(unsafe.Pointer(v.data), C.int(v.len))

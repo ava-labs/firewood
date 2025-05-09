@@ -74,7 +74,11 @@ impl Display for Value {
 /// # Returns
 ///
 /// A `Value` containing the root hash of the database.
-/// A `Value` containing {0, "error message"} if the commit failed.
+/// A `Value` containing {0, "error message"} if the get failed.
+/// There are two error cases that may be expected to be nil by the caller:
+/// * The database has no entries - "IO error: Root hash not found"
+/// * The key is not found in the database - "key not found"
+/// This should be handled by the caller.
 ///
 /// # Safety
 ///
@@ -209,7 +213,8 @@ fn batch(
 ///
 /// # Returns
 ///
-/// The ID of the proposal, or panics if it cannot be created
+/// The new root hash of the database, in Value form.
+/// A `Value` containing {0, "error message"} if creating the proposal failed.
 ///
 /// # Safety
 ///
@@ -310,7 +315,9 @@ fn commit(db: *const DatabaseHandle, proposal_id: u32) -> Result<(), String> {
 /// # Returns
 ///
 /// A `Value` containing the root hash of the database.
-/// A `Value` containing {0, "error message"} if the commit failed.
+/// A `Value` containing {0, "error message"} if the root hash could not be retrieved.
+/// One expected error is "IO error: Root hash not found" if the database is empty.
+/// This should be handled by the caller.
 ///
 /// # Safety
 ///
@@ -377,11 +384,12 @@ impl From<String> for Value {
     }
 }
 
-// WARNING: This should only be called with values >= 1.
-// In much of the Go code, v.len == 0 is used to indicate a null-terminated string.
-// This may cause a panic!
 impl From<u32> for Value {
     fn from(v: u32) -> Self {
+        // WARNING: This should only be called with values >= 1.
+        // In much of the Go code, v.len == 0 is used to indicate a null-terminated string.
+        // This may cause a panic or memory corruption if used incorrectly.
+        assert_ne!(v, 0);
         Self {
             len: v as usize,
             data: std::ptr::null(),
@@ -412,10 +420,11 @@ impl From<()> for Value {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_free_value(value: *const Value) {
     // Check value is valid.
-    let value = match unsafe { value.as_ref() } {
-        Some(value) => value,
-        None => return, // invalid call, avoid dereferencing null pointer
-    };
+    let value = unsafe { value.as_ref() }.expect("value should be non-null");
+
+    if value.data.is_null() {
+        return; // nothing to free, but valid behavior.
+    }
 
     // We assume that if the length is 0, then the data is a null-terminated string.
     if value.len > 0 {

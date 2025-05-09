@@ -150,7 +150,11 @@ void fwd_free_value(const struct Value *value);
  * # Returns
  *
  * A `Value` containing the root hash of the database.
- * A `Value` containing {0, "error message"} if the commit failed.
+ * A `Value` containing {0, "error message"} if the get failed.
+ * There are two error cases that may be expected to be nil by the caller:
+ * * The database has no entries - "IO error: Root hash not found"
+ * * The key is not found in the database - "key not found"
+ * This should be handled by the caller.
  *
  * # Safety
  *
@@ -193,7 +197,8 @@ const struct DatabaseHandle *fwd_open_db(struct CreateOrOpenArgs args);
  *
  * # Returns
  *
- * The ID of the proposal, or panics if it cannot be created
+ * The new root hash of the database, in Value form.
+ * A `Value` containing {0, "error message"} if creating the proposal failed.
  *
  * # Safety
  *
@@ -219,7 +224,9 @@ struct Value fwd_propose_on_db(const struct DatabaseHandle *db,
  * # Returns
  *
  * A `Value` containing the root hash of the database.
- * A `Value` containing {0, "error message"} if the commit failed.
+ * A `Value` containing {0, "error message"} if the root hash could not be retrieved.
+ * One expected error is "IO error: Root hash not found" if the database is empty.
+ * This should be handled by the caller.
  *
  * # Safety
  *
