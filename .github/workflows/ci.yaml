@@ -177,12 +177,15 @@ jobs:
 
       - name: Build for ${{ matrix.target }}
         run: cargo build --profile maxperf --target ${{ matrix.target }} -p firewood-ffi
+
+      - name: List compiled target directory
+        run: find target -type f | sort
         
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: target/${{ matrix.target }}/release
+          path: target/${{ matrix.target }}/maxperf/libfirewood_ffi.a
           if-no-files-found: error
 
   collect-binaries:
@@ -194,12 +197,12 @@ jobs:
         with:
           path: target
 
-      - name: List downloaded files
+      - name: List downloaded target directory
         run: find target -type f | sort
 
       - name: Upload organized binaries
         uses: actions/upload-artifact@v4
         with:
-          name: release-binaries
+          name: firewood-ffi-static-libs
           path: target/
           if-no-files-found: error
