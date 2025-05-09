@@ -22,7 +22,8 @@ mod metrics_setup;
 #[doc(hidden)]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-#[doc(hidden)]
+/// A proposal ID is a 32-bit unsigned integer.
+/// It is used to identify proposals internally.
 type ProposalId = u32;
 
 #[doc(hidden)]
