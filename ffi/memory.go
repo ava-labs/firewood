@@ -10,14 +10,13 @@ package firewood
 import "C"
 import (
 	"errors"
-	"fmt"
 	"runtime"
 	"unsafe"
 )
 
 var (
-	errNilBuffer = errors.New("firewood error: nil value returned from cgo")
-	errBadValue  = errors.New("firewood error: value from cgo formatted incorrectly")
+	errNilValue = errors.New("firewood error: nil value returned from cgo")
+	errBadValue = errors.New("firewood error: value from cgo formatted incorrectly")
 )
 
 // KeyValue is a key-value pair.
@@ -30,8 +29,10 @@ type KeyValue struct {
 // `Value` if an error is returned, and returns the extracted value.
 // If the data is not formatted for a string, and non-null it returns an error.
 func extractErrorThenFree(v *C.struct_Value) error {
+	// Pin the returned value to prevent it from being garbage collected.
+	defer runtime.KeepAlive(v)
 	if v == nil {
-		return errNilBuffer
+		return errNilValue
 	}
 
 	// The length isn't expected to be set in either case.
@@ -49,56 +50,68 @@ func extractErrorThenFree(v *C.struct_Value) error {
 
 	// If the value is an error string, it should be freed and an error
 	// returned.
-	go_str := C.GoString((*C.char)(unsafe.Pointer(v.data)))
+	errStr := C.GoString((*C.char)(unsafe.Pointer(v.data)))
 	C.fwd_free_value(v)
-	// Pin the returned value to prevent it from being garbage collected.
-	runtime.KeepAlive(v)
-	return fmt.Errorf("firewood error: %s", go_str)
+	// Pin the returned value to prevent it from being garbage collected.\
+	return errors.New(errStr)
 }
 
 // extractIdThenFree converts the cgo `Value` payload to a uint32, frees the
 // `Value` if an error is returned, and returns the extracted value.
 func extractIdThenFree(v *C.struct_Value) (uint32, error) {
+	// Pin the returned value to prevent it from being garbage collected.
+	defer runtime.KeepAlive(v)
 	if v == nil {
-		return 0, errNilBuffer
+		return 0, errNilValue
 	}
+	// Any valid ID should be non-zero.
 	if v.len == 0 && v.data == nil {
 		return 0, errBadValue
 	}
+
+	// The length isn't expected to be set if v.data is non-null.
+	// May indicate a bug.
+	if v.len != 0 && v.data != nil {
+		// We should still attempt to free the value.
+		C.fwd_free_value(v)
+		return 0, errBadValue
+	}
+
 	// If the value is an error string, it should be freed and an error
 	// returned.
-	// Any valid ID should be non-zero.
 	if v.len == 0 {
-		go_str := C.GoString((*C.char)(unsafe.Pointer(v.data)))
+		errStr := C.GoString((*C.char)(unsafe.Pointer(v.data)))
 		C.fwd_free_value(v)
 		// Pin the returned value to prevent it from being garbage collected.
-		runtime.KeepAlive(v)
-		return 0, fmt.Errorf("firewood error: %s", go_str)
+		return 0, errors.New(errStr)
 	}
+
+	// This is the only non-error case
 	return uint32(v.len), nil
 }
 
 // extractBytesThenFree converts the cgo `Value` payload to a byte slice, frees
 // the `Value`, and returns the extracted slice.
 // Generates error if the error term is nonnull.
-func extractBytesThenFree(v *C.struct_Value) (buf []byte, err error) {
+func extractBytesThenFree(v *C.struct_Value) ([]byte, error) {
+	// Pin the returned value to prevent it from being garbage collected.
+	defer runtime.KeepAlive(v)
 	if v == nil {
-		return nil, errNilBuffer
+		return nil, errNilValue
 	}
 	if v.data == nil {
 		return nil, errBadValue
 	}
 
-	buf = C.GoBytes(unsafe.Pointer(v.data), C.int(v.len))
 	if v.len == 0 {
 		errStr := C.GoString((*C.char)(unsafe.Pointer(v.data)))
-		err = fmt.Errorf("firewood error: %s", errStr)
+		return nil, errors.New(errStr)
 	}
+
+	buf := C.GoBytes(unsafe.Pointer(v.data), C.int(v.len))
 	C.fwd_free_value(v)
 
-	// Pin the returned value to prevent it from being garbage collected.
-	runtime.KeepAlive(v)
-	return
+	return buf, nil
 }
 
 // newValueFactory returns a factory for converting byte slices into cgo `Value`
@@ -121,4 +134,25 @@ func (f *valueFactory) from(data []byte) C.struct_Value {
 	ptr := (*C.uchar)(unsafe.SliceData(data))
 	f.pin.Pin(ptr)
 	return C.struct_Value{C.size_t(len(data)), ptr}
+}
+
+// WARNING!
+// The following function and type should NOT be used in production code.
+// They are only used for testing and debugging purposes only.
+type testValue = C.struct_Value
+
+func newCValueLen(len int) *testValue {
+	return &C.struct_Value{
+		len:  C.size_t(len),
+		data: nil,
+	}
+}
+
+func newCValueData(len int, data string) *testValue {
+	// convert to C string
+	cstr := C.CString(data)
+	defer C.free(unsafe.Pointer(cstr))
+	val := C.fwd_alloc_test(cstr)
+	val.len = C.size_t(len)
+	return &val
 }

@@ -40,6 +40,14 @@ typedef struct CreateOrOpenArgs {
 } CreateOrOpenArgs;
 
 /**
+ * fwd_alloc_test is a test function that allocates data in a Value struct.
+ * This is used to test the allocation and deallocation of memory
+ * in Go.
+ *
+ */
+struct Value fwd_alloc_test(const char *input);
+
+/**
  * Puts the given key-value pairs into the database.
  *
  * # Arguments

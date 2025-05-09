@@ -406,6 +406,21 @@ impl From<()> for Value {
     }
 }
 
+/// fwd_alloc_test is a test function that allocates data in a Value struct.
+/// This is used to test the allocation and deallocation of memory
+/// in Go.
+///
+#[doc(hidden)]
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_alloc_test(input: *const c_char) -> Value {
+    // Create a valid CStr from the input pointer.
+    let cstr = unsafe { CStr::from_ptr(input) };
+    // Use cstr to create a Rust String copying all data.
+    let string = cstr.to_string_lossy().into_owned();
+    // Convert the string to a Value.
+    string.into()
+}
+
 /// Frees the memory associated with a `Value`.
 ///
 /// # Arguments
