@@ -91,12 +91,13 @@ jobs:
         id: determine_branch
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.create_branch_name }}" ]]; then
-            echo "Using workflow input create_branch_name in target_branch: ${{ github.event.inputs.create_branch_name }}"
-            echo "target_branch=${{ github.event.inputs.create_branch_name }}" >> "$GITHUB_OUTPUT"
+            echo target_branch="${{ github.event.inputs.create_branch_name }}-ffi-libs"
+            echo "Using workflow input + -ffi-libs as target branch: $target_branch"
+            echo "target_branch=$target_branch" >> "$GITHUB_OUTPUT"
           elif [[ "${{ github.event_name }}" == "push" ]]; then
-            tag_name="${GITHUB_REF#refs/tags/}"
-            echo "Using tag name as target_branch: $tag_name"
-            echo "target_branch=$tag_name" >> "$GITHUB_OUTPUT"
+            echo target_branch="${GITHUB_REF#refs/heads/}-ffi-libs"
+            echo "Using tag/branch name + -ffi-libs as target_branch: $target_branch"
+            echo "target_branch=$target_branch" >> "$GITHUB_OUTPUT"
           else
             echo "No valid input or tag found."
             exit 1
