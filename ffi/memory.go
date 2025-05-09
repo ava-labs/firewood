@@ -26,9 +26,11 @@ type KeyValue struct {
 	Value []byte
 }
 
-// extractErrorThenFree converts the cgo `Value` payload to a string, frees the
-// `Value` if an error is returned, and returns the extracted value.
-// If the data is not formatted for a string, and non-null it returns an error.
+// extractErrorThenFree converts the cgo `Value` payload to either:
+// 1. a nil value, indicating no error, or
+// 2. a non-nil error, indicating an error occurred.
+// This should only be called when the `Value` is expected to only contain an error.
+// Otherwise, an error is returned.
 func extractErrorThenFree(v *C.struct_Value) error {
 	if v == nil {
 		return errNilBuffer
@@ -57,8 +59,11 @@ func extractErrorThenFree(v *C.struct_Value) error {
 	return fmt.Errorf("firewood error: %s", errStr)
 }
 
-// extractIdThenFree converts the cgo `Value` payload to a uint32, frees the
-// `Value` if an error is returned, and returns the extracted value.
+// extractIdThenFree converts the cgo `Value` payload to either:
+// 1. a nonzero uint32 and nil error, indicating a valid int
+// 2. a zero uint32 and a non-nil error, indicating an error occurred.
+// This should only be called when the `Value` is expected to only contain an error or an ID.
+// Otherwise, an error is returned.
 func extractIdThenFree(v *C.struct_Value) (uint32, error) {
 	if v == nil {
 		return 0, errNilBuffer
@@ -91,9 +96,12 @@ func extractIdThenFree(v *C.struct_Value) (uint32, error) {
 	return uint32(v.len), nil
 }
 
-// extractBytesThenFree converts the cgo `Value` payload to a byte slice, frees
-// the `Value`, and returns the extracted slice.
-// Generates error if the error term is non-nil.
+// extractBytesThenFree converts the cgo `Value` payload to either:
+// 1. a non-nil byte slice and nil error, indicating a valid byte slice
+// 2. a nil byte slice and nil error, indicating an empty byte slice
+// 3. a nil byte slice and a non-nil error, indicating an error occurred.
+// This should only be called when the `Value` is expected to only contain an error or a byte slice.
+// Otherwise, an error is returned.
 func extractBytesThenFree(v *C.struct_Value) ([]byte, error) {
 	if v == nil {
 		return nil, errNilBuffer
