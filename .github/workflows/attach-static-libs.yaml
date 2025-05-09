@@ -1,16 +1,29 @@
 name: attach-static-libs
 
 on:
-  # XXX: run on every push while testing the new workflow.
-  # We want to run this on manual, tags, and ideally check
-  # it works on every PR, but try not to pollute the repo
-  # with branches + static lib artifacts.
+  workflow_dispatch:
+    inputs:
+      create_branch_name:
+        description: "Name of the new branch to create and attach static libs"
+        required: true
+  # TODO: only trigger on tag push, using push on every commit for testing
   push:
+  # XXX: consider adding pull request trigger that automatically garbage collects created branches
 
 env:
   CARGO_TERM_COLOR: always
 
+# Build, upload, and collect static libraries for each target architecture,
+# so that golang projects can import the FFI package without needing to
+# recompile Firewood locally.
+# Supported architectures are:
+# - x86_64-unknown-linux-gnu
+# - aarch64-unknown-linux-gnu
+# - x86_64-apple-darwin
+# - aarch64-apple-darwin
 jobs:
+  # Build the static libraries for each target architecture and upload 
+  # them as artifacts to collect and attach in the next job.
   build-firewood-ffi-libs:
     runs-on: ${{ matrix.os }}
     continue-on-error: true
@@ -46,6 +59,10 @@ jobs:
           path: target/${{ matrix.target }}/maxperf/libfirewood_ffi.a
           if-no-files-found: error
 
+  # Collect all the static libraries built on the previous matrix of jobs
+  # and add them into ffi/libs directory.
+  # We commit and push this as a new branch with "--force" to overwrite
+  # the previous static libs that will not be on our branch.
   push-firewood-ffi-libs:
     needs: build-firewood-ffi-libs
     permissions:
@@ -70,13 +87,32 @@ jobs:
           path: ffi/libs
           if-no-files-found: error
 
+      - name: Determine branch name
+        id: determine_branch
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.create_branch_name }}" ]]; then
+            echo "Using workflow input create_branch_name in target_branch: ${{ github.event.inputs.create_branch_name }}"
+            echo "target_branch=${{ github.event.inputs.create_branch_name }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            tag_name="${GITHUB_REF#refs/tags/}"
+            echo "Using tag name as target_branch: $tag_name"
+            echo "target_branch=$tag_name" >> "$GITHUB_OUTPUT"
+          else
+            echo "No valid input or tag found."
+            exit 1
+          fi
+
       - uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: 'ci: attach firewood-ffi static libs'
-          branch: firewood-ffi-libs/${{ github.ref_name }}
+          branch: ${{ steps.determine_branch.outputs.target_branch }}
           create_branch: true
-          push_options: --force
 
+  # Check out the branch created in the previous job on a matrix of
+  # our target architectures and test the FFI package on a fresh
+  # machine without re-compiling Firewood locally.
+  # This tests that the Firewood FFI package passes tests on the target
+  # architecture when it is forced to depend on the attached static libs.
   test-firewood-ffi-libs:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -87,7 +123,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref_name }}-firewood-ffi-libs
+          ref: ${{ needs.push-firewood-ffi-libs.outputs.target_branch }}
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
