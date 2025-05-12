@@ -70,6 +70,8 @@ jobs:
       # static libs to the repository.
       contents: write
     runs-on: ubuntu-latest
+    outputs:
+      target_branch: ${{ steps.determine_branch.outputs.target_branch }}
     steps:
       - uses: actions/checkout@v4
       - name: Download all binaries
@@ -131,6 +133,7 @@ jobs:
           git log
           git branch
           ls -R ffi
+          echo "Target branch: ${{ needs.push-firewood-ffi-libs.outputs.target_branch }}"
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
