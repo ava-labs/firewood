@@ -178,10 +178,9 @@ void fwd_free_value(const struct Value *value);
  *
  * A `Value` containing the root hash of the database.
  * A `Value` containing {0, "error message"} if the get failed.
- * There are two error cases that may be expected to be nil by the caller,
- * but should be handled externally:
- * * The database has no entries - "IO error: Root hash not found"
- * * The key is not found in the database returns a `Value` with length 0 and a null data pointer.
+ * There is one error cases that may be expected to be nil by the caller,
+ * but should be handled externally: The database has no entries - "IO error: Root hash not found"
+ * This is expected behavior if the database is empty.
  *
  * # Safety
  *
@@ -205,10 +204,9 @@ struct Value fwd_get_from_db(const struct DatabaseHandle *db, struct Value key);
  *
  * A `Value` containing the root hash of the database.
  * A `Value` containing {0, "error message"} if the get failed.
- * There are two error cases that may be expected to be nil by the caller,
- * but should be handled externally:
- * * The database has no entries - "IO error: Root hash not found"
- * * The key is not found in the database returns a `Value` with length 0 and a null data pointer.
+ * There is one error cases that may be expected to be nil by the caller,
+ * but should be handled externally: The database has no entries - "IO error: Root hash not found"
+ * This is expected behavior if the database is empty.
  *
  * # Safety
  *
