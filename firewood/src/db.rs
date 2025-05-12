@@ -453,6 +453,42 @@ impl Proposal<'_> {
         let merkle = Merkle::from(self.nodestore.clone());
         merkle.get_value(key.as_ref()).map_err(api::Error::from)
     }
+
+    /// Create a new proposal from the current one synchronously
+    pub fn propose_sync<K: KeyType, V: ValueType>(
+        &self,
+        batch: api::Batch<K, V>,
+    ) -> Result<Arc<Self>, api::Error> {
+        let parent = self.nodestore.clone();
+        let proposal = NodeStore::new(parent)?;
+        let mut merkle = Merkle::from(proposal);
+        for op in batch {
+            match op {
+                BatchOp::Put { key, value } => {
+                    merkle.insert(key.as_ref(), value.as_ref().into())?;
+                }
+                BatchOp::Delete { key } => {
+                    merkle.remove(key.as_ref())?;
+                }
+                BatchOp::DeleteRange { prefix } => {
+                    merkle.remove_prefix(prefix.as_ref())?;
+                }
+            }
+        }
+        let nodestore = merkle.into_inner();
+        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
+            Arc::new(nodestore.try_into()?);
+        self.db
+            .manager
+            .write()
+            .expect("poisoned lock")
+            .add_proposal(immutable.clone());
+
+        Ok(Arc::new(Self {
+            nodestore: immutable,
+            db: self.db,
+        }))
+    }
 }
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]

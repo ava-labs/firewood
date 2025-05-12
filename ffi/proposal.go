@@ -10,6 +10,7 @@ package firewood
 import "C"
 import (
 	"errors"
+	"unsafe"
 )
 
 var errDroppedProposal = errors.New("proposal already dropped")
@@ -41,6 +42,47 @@ func (p *Proposal) Get(key []byte) ([]byte, error) {
 	return extractBytesThenFree(&val)
 }
 
+func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
+	if p.handle == nil {
+		return nil, errDbClosed
+	}
+
+	if p.id == 0 {
+		return nil, errDroppedProposal
+	}
+
+	ops := make([]KeyValue, len(keys))
+	for i := range keys {
+		ops[i] = KeyValue{keys[i], vals[i]}
+	}
+
+	values, cleanup := newValueFactory()
+	defer cleanup()
+
+	ffiOps := make([]C.struct_KeyValue, len(ops))
+	for i, op := range ops {
+		ffiOps[i] = C.struct_KeyValue{
+			key:   values.from(op.Key),
+			value: values.from(op.Value),
+		}
+	}
+
+	// Propose the keys and values.
+	val := C.fwd_propose_on_proposal(p.handle, C.uint32_t(p.id),
+		C.size_t(len(ffiOps)),
+		(*C.struct_KeyValue)(unsafe.SliceData(ffiOps)),
+	)
+	id, err := extractIdThenFree(&val)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Proposal{
+		handle: p.handle,
+		id:     id,
+	}, nil
+}
+
 func (p *Proposal) Commit() error {
 	if p.handle == nil {
 		return errDbClosed
@@ -59,4 +101,19 @@ func (p *Proposal) Commit() error {
 		p.id = 0
 	}
 	return err
+}
+
+func (p *Proposal) Drop() error {
+	if p.handle == nil {
+		return errDbClosed
+	}
+
+	if p.id == 0 {
+		return errDroppedProposal
+	}
+
+	// Drop the proposal.
+	C.fwd_drop_proposal(p.handle, C.uint32_t(p.id))
+	p.id = 0
+	return nil
 }
