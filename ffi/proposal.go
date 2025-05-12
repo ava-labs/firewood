@@ -10,6 +10,7 @@ package firewood
 import "C"
 import (
 	"errors"
+	"strings"
 )
 
 var errDroppedProposal = errors.New("proposal already dropped")
@@ -23,6 +24,28 @@ type Proposal struct {
 	// The proposal ID.
 	// id = 0 is reserved for a dropped proposal.
 	id uint32
+}
+
+func (p *Proposal) Get(key []byte) ([]byte, error) {
+	if p.handle == nil {
+		return nil, errDbClosed
+	}
+
+	if p.id == 0 {
+		return nil, errDroppedProposal
+	}
+	values, cleanup := newValueFactory()
+	defer cleanup()
+
+	// Get the value for the given key.
+	val := C.fwd_get_from_proposal(p.handle, C.uint32_t(p.id), values.from(key))
+	bytes, err := extractBytesThenFree(&val)
+
+	// If the root hash is not found, return nil.
+	if err != nil && strings.Contains(err.Error(), rootHashNotFound) {
+		return nil, nil
+	}
+	return bytes, err
 }
 
 func (p *Proposal) Commit() error {
