@@ -8,9 +8,10 @@ package firewood
 // #cgo linux,arm64 LDFLAGS: -L${SRCDIR}/libs/aarch64-unknown-linux-gnu -lm
 // #cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/libs/x86_64-apple-darwin
 // #cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/libs/aarch64-apple-darwin
-// // XXX: we pass the path to both the local build and pre-built binaries, which
-// // means the local build takes precedence.
+// // XXX: last search path takes precedence, which means we prioritize
+// // local builds over pre-built and maxperf over release build
 // #cgo LDFLAGS: -L${SRCDIR}/../target/release
+// #cgo LDFLAGS: -L${SRCDIR}/../target/maxperf
 // #cgo LDFLAGS: -L/usr/local/lib -lfirewood_ffi
 // #include <stdlib.h>
 // #include "firewood.h"
