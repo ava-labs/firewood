@@ -47,7 +47,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build for ${{ matrix.target }}
-        run: cargo build --profile maxperf --target ${{ matrix.target }} -p firewood-ffi
+      # TODO: add ethhash feature flag after updating FFI tests
+        run: cargo build --profile maxperf --features logger --target ${{ matrix.target }} -p firewood-ffi
 
       - name: List compiled target directory
         run: find target -type f | sort
