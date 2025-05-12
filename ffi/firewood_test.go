@@ -44,6 +44,7 @@ func newTestDatabase(t *testing.T) *Database {
 	t.Helper()
 
 	conf := DefaultConfig()
+	conf.MetricsPort = 0
 	conf.Create = true
 	// The TempDir directory is automatically cleaned up so there's no need to
 	// remove test.db.
@@ -57,6 +58,8 @@ func newTestDatabase(t *testing.T) *Database {
 	return f
 }
 
+// Tests that a single key-value pair can be inserted and retrieved.
+// This doesn't require storing a proposal across the FFI boundary.
 func TestInsert(t *testing.T) {
 	db := newTestDatabase(t)
 	const (
@@ -72,13 +75,6 @@ func TestInsert(t *testing.T) {
 	assert.Equal(t, val, string(got), "Recover lone batch-inserted value")
 }
 
-func TestGetNonExistent(t *testing.T) {
-	db := newTestDatabase(t)
-	got, err := db.Get([]byte("non-existent"))
-	require.NoError(t, err)
-	assert.Nil(t, got)
-}
-
 // Attempt to make a call to a nil or invalid handle.
 // Each function should return an error and not panic.
 func TestGetBadHandle(t *testing.T) {
@@ -86,21 +82,21 @@ func TestGetBadHandle(t *testing.T) {
 
 	// This ignores error, but still shouldn't panic.
 	_, err := db.Get([]byte("non-existent"))
-	assert.ErrorIs(t, err, dbClosedErr)
+	assert.ErrorIs(t, err, errDbClosed)
 
 	// We ignore the error, but it shouldn't panic.
 	_, err = db.Root()
-	assert.ErrorIs(t, err, dbClosedErr)
+	assert.ErrorIs(t, err, errDbClosed)
 
 	root, err := db.Update(
 		[][]byte{[]byte("key")},
 		[][]byte{[]byte("value")},
 	)
 	assert.Empty(t, root)
-	assert.ErrorIs(t, err, dbClosedErr)
+	assert.ErrorIs(t, err, errDbClosed)
 
 	err = db.Close()
-	require.ErrorIs(t, err, dbClosedErr)
+	require.ErrorIs(t, err, errDbClosed)
 }
 
 func keyForTest(i int) []byte {
@@ -118,25 +114,32 @@ func kvForTest(i int) KeyValue {
 	}
 }
 
+// Tests that 100 key-value pairs can be inserted and retrieved.
+// This happens in two ways:
+// 1. By calling [Database.Propose] and then [Proposal.Commit].
+// 2. By calling [Database.Update] directly - no proposal storage is needed.
 func TestInsert100(t *testing.T) {
 	tests := []struct {
 		name   string
-		insert func(*Database, []KeyValue) (root []byte, _ error)
+		insert func(*Database, [][]byte, [][]byte) (root []byte, _ error)
 	}{
 		{
-			name: "Batch",
-			insert: func(db *Database, kvs []KeyValue) ([]byte, error) {
-				return db.Batch(kvs)
+			name: "Propose",
+			insert: func(db *Database, keys, vals [][]byte) ([]byte, error) {
+				proposal, err := db.Propose(keys, vals)
+				if err != nil {
+					return nil, err
+				}
+				err = proposal.Commit()
+				if err != nil {
+					return nil, err
+				}
+				return db.Root()
 			},
 		},
 		{
 			name: "Update",
-			insert: func(db *Database, kvs []KeyValue) ([]byte, error) {
-				var keys, vals [][]byte
-				for _, kv := range kvs {
-					keys = append(keys, kv.Key)
-					vals = append(vals, kv.Value)
-				}
+			insert: func(db *Database, keys, vals [][]byte) ([]byte, error) {
 				return db.Update(keys, vals)
 			},
 		},
@@ -146,18 +149,20 @@ func TestInsert100(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			db := newTestDatabase(t)
 
-			ops := make([]KeyValue, 100)
-			for i := range ops {
-				ops[i] = kvForTest(i)
+			keys := make([][]byte, 100)
+			vals := make([][]byte, 100)
+			for i := range keys {
+				keys[i] = keyForTest(i)
+				vals[i] = valForTest(i)
 			}
-			rootFromInsert, err := tt.insert(db, ops)
+			rootFromInsert, err := tt.insert(db, keys, vals)
 			require.NoError(t, err, "inserting")
 
-			for _, op := range ops {
-				got, err := db.Get(op.Key)
-				require.NoErrorf(t, err, "%T.Get(%q)", db, op.Key)
+			for i := range keys {
+				got, err := db.Get(keys[i])
+				require.NoErrorf(t, err, "%T.Get(%q)", db, keys[i])
 				// Cast as strings to improve debug messages.
-				want := string(op.Value)
+				want := string(vals[i])
 				assert.Equal(t, want, string(got), "Recover nth batch-inserted value")
 			}
 
@@ -171,6 +176,7 @@ func TestInsert100(t *testing.T) {
 	}
 }
 
+// Tests that a range of keys can be deleted.
 func TestRangeDelete(t *testing.T) {
 	db := newTestDatabase(t)
 	ops := make([]KeyValue, 100)
@@ -198,6 +204,7 @@ func TestRangeDelete(t *testing.T) {
 	}
 }
 
+// Tests that the database is empty after creation and doesn't panic.
 func TestInvariants(t *testing.T) {
 	db := newTestDatabase(t)
 	hash, err := db.Root()
@@ -207,4 +214,134 @@ func TestInvariants(t *testing.T) {
 	got, err := db.Get([]byte("non-existent"))
 	require.NoError(t, err)
 	assert.Emptyf(t, got, "%T.Get([non-existent key])", db)
+}
+
+func TestMultipleProposals(t *testing.T) {
+	db := newTestDatabase(t)
+
+	// Create 10 proposals, each with 10 keys.
+	const numProposals = 10
+	const numKeys = 10
+	proposals := make([]*Proposal, numProposals)
+	for i := range proposals {
+		keys := make([][]byte, numKeys)
+		vals := make([][]byte, numKeys)
+		for j := 0; j < numKeys; j++ {
+			keys[j] = keyForTest(i*numKeys + j)
+			vals[j] = valForTest(i*numKeys + j)
+		}
+		proposal, err := db.Propose(keys, vals)
+		require.NoError(t, err, "Propose(%d)", i)
+		proposals[i] = proposal
+	}
+
+	// Check that each value is present in each proposal.
+	for i, p := range proposals {
+		for j := 0; j < numKeys; j++ {
+			got, err := p.Get(keyForTest(i*numKeys + j))
+			require.NoError(t, err, "Get(%d)", i*numKeys+j)
+			assert.Equal(t, valForTest(i*numKeys+j), got, "Get(%d)", i*numKeys+j)
+		}
+	}
+
+	// Commit only the first proposal.
+	err := proposals[0].Commit()
+	require.NoError(t, err, "Commit(%d)", 0)
+	// Check that the first proposal's keys are present.
+	for j := 0; j < numKeys; j++ {
+		got, err := db.Get(keyForTest(j))
+		require.NoError(t, err, "Get(%d)", j)
+		assert.Equal(t, valForTest(j), got, "Get(%d)", j)
+	}
+	// Check that the other proposals' keys are not present.
+	for i := 1; i < numProposals; i++ {
+		for j := 0; j < numKeys; j++ {
+			got, err := db.Get(keyForTest(i*numKeys + j))
+			require.NoError(t, err, "Get(%d)", i*numKeys+j)
+			assert.Empty(t, got, "Get(%d)", i*numKeys+j)
+		}
+	}
+
+	// Ensure we can still get values from the other proposals.
+	for i := 1; i < numProposals; i++ {
+		for j := 0; j < numKeys; j++ {
+			got, err := proposals[i].Get(keyForTest(i*numKeys + j))
+			require.NoError(t, err, "Get(%d)", i*numKeys+j)
+			assert.Equal(t, valForTest(i*numKeys+j), got, "Get(%d)", i*numKeys+j)
+		}
+	}
+
+	// Now we ensure we cannot commit the other proposals.
+	for i := 1; i < numProposals; i++ {
+		err := proposals[i].Commit()
+		require.Contains(t, err.Error(), "commit the parents of this proposal first", "Commit(%d)", i)
+	}
+
+	// After attempting to commit the other proposals, they should be completely invalid.
+	for i := 1; i < numProposals; i++ {
+		err := proposals[i].Commit()
+		require.ErrorIs(t, err, errDroppedProposal, "Commit(%d)", i)
+	}
+
+	// Because they're invalid, we should not be able to get values from them.
+	for i := 1; i < numProposals; i++ {
+		for j := 0; j < numKeys; j++ {
+			got, err := proposals[i].Get(keyForTest(i*numKeys + j))
+			require.ErrorIs(t, err, errDroppedProposal, "Get(%d)", i*numKeys+j)
+			assert.Empty(t, got, "Get(%d)", i*numKeys+j)
+		}
+	}
+}
+
+// Tests that a proposal that deletes all keys can be committed.
+func TestDeleteAll(t *testing.T) {
+	db := newTestDatabase(t)
+
+	keys := make([][]byte, 10)
+	vals := make([][]byte, 10)
+	for i := range keys {
+		keys[i] = keyForTest(i)
+		vals[i] = valForTest(i)
+	}
+	// Insert 10 key-value pairs.
+	db.Update(keys, vals)
+
+	// Create a proposal that deletes all keys.
+	proposal, err := db.Propose([][]byte{[]byte("key")}, [][]byte{nil})
+	require.NoError(t, err, "Propose")
+
+	// Check that the proposal doesn't have the keys we just inserted.
+	for i := range keys {
+		got, err := proposal.Get(keys[i])
+		require.NoError(t, err, "Get(%d)", i)
+		assert.Empty(t, got, "Get(%d)", i)
+	}
+
+	// Commit the proposal.
+	err = proposal.Commit()
+	require.NoError(t, err, "Commit")
+
+	// Check that the database is empty.
+	hash, err := db.Root()
+	require.NoError(t, err, "%T.Root()", db)
+	assert.Equalf(t, make([]byte, 32), hash, "%T.Root() of empty trie")
+}
+
+// Tests that a proposal with an invalid ID cannot be committed.
+func TestFakeProposal(t *testing.T) {
+	db := newTestDatabase(t)
+
+	// Create a fake proposal with an invalid ID.
+	proposal := &Proposal{
+		handle: db.handle,
+		id:     1, // note that ID 0 is reserved for invalid proposals
+	}
+
+	// Attempt to get a value from the fake proposal.
+	_, err := proposal.Get([]byte("non-existent"))
+	require.Contains(t, err.Error(), "proposal not found", "Get(fake proposal)")
+
+	// Attempt to commit the fake proposal.
+	err = proposal.Commit()
+	require.Contains(t, err.Error(), "proposal not found", "Commit(fake proposal)")
 }
