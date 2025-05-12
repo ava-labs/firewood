@@ -53,10 +53,6 @@ typedef struct CreateOrOpenArgs {
   uint16_t metrics_port;
 } CreateOrOpenArgs;
 
-/**
- * A proposal ID is a 32-bit unsigned integer.
- * It is used to identify proposals internally.
- */
 typedef uint32_t ProposalId;
 
 /**
@@ -167,31 +163,6 @@ const struct DatabaseHandle *fwd_create_db(struct CreateOrOpenArgs args);
 void fwd_free_value(const struct Value *value);
 
 /**
- * Gets the value associated with the given key from the database.
- *
- * # Arguments
- *
- * * `db` - The database handle returned by `open_db`
- * * `key` - The key to look up, in `Value` form
- *
- * # Returns
- *
- * A `Value` containing the root hash of the database.
- * A `Value` containing {0, "error message"} if the get failed.
- * There is one error cases that may be expected to be nil by the caller,
- * but should be handled externally: The database has no entries - "IO error: Root hash not found"
- * This is expected behavior if the database is empty.
- *
- * # Safety
- *
- * The caller must:
- *  * ensure that `db` is a valid pointer returned by `open_db`
- *  * ensure that `key` is a valid pointer to a `Value` struct
- *  * call `free_value` to free the memory associated with the returned `Value`
- */
-struct Value fwd_get_from_db(const struct DatabaseHandle *db, struct Value key);
-
-/**
  * Gets the value associated with the given key from the proposal provided.
  *
  * # Arguments
@@ -215,6 +186,31 @@ struct Value fwd_get_from_db(const struct DatabaseHandle *db, struct Value key);
 struct Value fwd_get_from_proposal(const struct DatabaseHandle *db,
                                    ProposalId id,
                                    struct Value key);
+
+/**
+ * Gets the value associated with the given key from the database.
+ *
+ * # Arguments
+ *
+ * * `db` - The database handle returned by `open_db`
+ * * `key` - The key to look up, in `Value` form
+ *
+ * # Returns
+ *
+ * A `Value` containing the root hash of the database.
+ * A `Value` containing {0, "error message"} if the get failed.
+ * There is one error case that may be expected to be nil by the caller,
+ * but should be handled externally: The database has no entries - "IO error: Root hash not found"
+ * This is expected behavior if the database is empty.
+ *
+ * # Safety
+ *
+ * The caller must:
+ *  * ensure that `db` is a valid pointer returned by `open_db`
+ *  * ensure that `key` is a valid pointer to a `Value` struct
+ *  * call `free_value` to free the memory associated with the returned `Value`
+ */
+struct Value fwd_get_latest(const struct DatabaseHandle *db, struct Value key);
 
 /**
  * Open a database with the given cache size and maximum number of revisions

@@ -175,7 +175,7 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 
 	values, cleanup := newValueFactory()
 	defer cleanup()
-	val := C.fwd_get_from_db(db.handle, values.from(key))
+	val := C.fwd_get_latest(db.handle, values.from(key))
 	bytes, err := extractBytesThenFree(&val)
 
 	// If the root hash is not found, return nil.

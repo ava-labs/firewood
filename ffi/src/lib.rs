@@ -22,8 +22,6 @@ mod metrics_setup;
 #[doc(hidden)]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-/// A proposal ID is a 32-bit unsigned integer.
-/// It is used to identify proposals internally.
 type ProposalId = u32;
 
 #[doc(hidden)]
@@ -76,7 +74,7 @@ impl Deref for DatabaseHandle<'_> {
 ///
 /// A `Value` containing the root hash of the database.
 /// A `Value` containing {0, "error message"} if the get failed.
-/// There is one error cases that may be expected to be nil by the caller,
+/// There is one error case that may be expected to be nil by the caller,
 /// but should be handled externally: The database has no entries - "IO error: Root hash not found"
 /// This is expected behavior if the database is empty.
 ///
@@ -87,14 +85,14 @@ impl Deref for DatabaseHandle<'_> {
 ///  * ensure that `key` is a valid pointer to a `Value` struct
 ///  * call `free_value` to free the memory associated with the returned `Value`
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_get_from_db(db: *const DatabaseHandle, key: Value) -> Value {
-    get_from_db(db, key).unwrap_or_else(|e| e.into())
+pub unsafe extern "C" fn fwd_get_latest(db: *const DatabaseHandle, key: Value) -> Value {
+    get_latest(db, key).unwrap_or_else(|e| e.into())
 }
 
 /// This function is not exposed to the C API.
-/// Internal call for `fwd_get_from_db` to remove error handling from the C API
+/// Internal call for `fwd_get_latest` to remove error handling from the C API
 #[doc(hidden)]
-fn get_from_db(db: *const DatabaseHandle, key: Value) -> Result<Value, String> {
+fn get_latest(db: *const DatabaseHandle, key: Value) -> Result<Value, String> {
     // Check db is valid.
     let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
 

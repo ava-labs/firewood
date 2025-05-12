@@ -222,7 +222,7 @@ func TestMultipleProposals(t *testing.T) {
 	const numProposals = 10
 	const numKeys = 10
 	proposals := make([]*Proposal, numProposals)
-	for i := 0; i < numProposals; i++ {
+	for i := range proposals {
 		keys := make([][]byte, numKeys)
 		vals := make([][]byte, numKeys)
 		for j := 0; j < numKeys; j++ {
@@ -235,9 +235,9 @@ func TestMultipleProposals(t *testing.T) {
 	}
 
 	// Check that each value is present in each proposal.
-	for i := 0; i < numProposals; i++ {
+	for i, p := range proposals {
 		for j := 0; j < numKeys; j++ {
-			got, err := proposals[i].Get(keyForTest(i*numKeys + j))
+			got, err := p.Get(keyForTest(i*numKeys + j))
 			require.NoError(t, err, "Get(%d)", i*numKeys+j)
 			assert.Equal(t, valForTest(i*numKeys+j), got, "Get(%d)", i*numKeys+j)
 		}
