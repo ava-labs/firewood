@@ -108,6 +108,7 @@ jobs:
           commit_message: 'ci: attach firewood-ffi static libs'
           branch: ${{ steps.determine_branch.outputs.target_branch }}
           create_branch: true
+          push_options: '--force'
 
   # Check out the branch created in the previous job on a matrix of
   # our target architectures and test the FFI package on a fresh
