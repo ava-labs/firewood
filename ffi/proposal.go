@@ -10,7 +10,6 @@ package firewood
 import "C"
 import (
 	"errors"
-	"strings"
 )
 
 var errDroppedProposal = errors.New("proposal already dropped")
@@ -39,13 +38,7 @@ func (p *Proposal) Get(key []byte) ([]byte, error) {
 
 	// Get the value for the given key.
 	val := C.fwd_get_from_proposal(p.handle, C.uint32_t(p.id), values.from(key))
-	bytes, err := extractBytesThenFree(&val)
-
-	// If the root hash is not found, return nil.
-	if err != nil && strings.Contains(err.Error(), rootHashNotFound) {
-		return nil, nil
-	}
-	return bytes, err
+	return extractBytesThenFree(&val)
 }
 
 func (p *Proposal) Commit() error {
