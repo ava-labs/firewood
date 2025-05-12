@@ -26,7 +26,6 @@ jobs:
   # them as artifacts to collect and attach in the next job.
   build-firewood-ffi-libs:
     runs-on: ${{ matrix.os }}
-    continue-on-error: true
     strategy:
       matrix:
         include:
