@@ -130,6 +130,8 @@ jobs:
         with:
           go-version-file: "ffi/go.mod"
           cache-dependency-path: "ffi/go.sum"
+      - name: Clean environment
+        run: go clean
       - name: Test Go FFI bindings
         working-directory: ffi
         # cgocheck2 is expensive but provides complete pointer checks
