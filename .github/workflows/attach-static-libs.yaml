@@ -101,6 +101,10 @@ jobs:
             export target_branch="${GITHUB_REF#refs/heads/}-ffi-libs"
             echo "Using tag/branch name + -ffi-libs as target_branch: $target_branch"
             echo "target_branch=$target_branch" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            export target_branch="${{ github.event.pull_request.head.ref }}-ffi-libs"
+            echo "Using PR head name + -ffi-libs as target branch: $target_branch"
+            echo "target_branch=$target_branch" >> "$GITHUB_OUTPUT"
           else
             echo "No valid input or tag found."
             exit 1
