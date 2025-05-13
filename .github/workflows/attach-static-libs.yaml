@@ -144,6 +144,10 @@ jobs:
   garbage-collect-branch:
     runs-on: ubuntu-latest
     needs: push-firewood-ffi-libs
+    permissions:
+      # Give the default GITHUB_TOKEN write permission to delete the
+      # branch created by the previous job if it is a pull request.
+      contents: write
     if: ${{ github.event_name == 'pull_request' }}
     steps:
       - name: Check out the branch created in the previous job
