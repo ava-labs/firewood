@@ -432,7 +432,7 @@ impl Display for Value {
         match (self.len, self.data.is_null()) {
             (0, true) => write!(f, "[not found]"),
             (0, false) => write!(f, "[error] {}", unsafe {
-                CStr::from_ptr(self.data as *const i8).to_string_lossy()
+                CStr::from_ptr(self.data as *const c_char).to_string_lossy()
             }),
             (len, true) => write!(f, "[id] {}", len),
             (_, false) => write!(f, "[data] {:?}", self.as_slice()),
