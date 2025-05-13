@@ -9,7 +9,7 @@ on:
   push:
     tags:
       - "*"
-  # XXX: consider adding pull request trigger that automatically garbage collects created branches
+  pull_request:
 
 env:
   CARGO_TERM_COLOR: always
@@ -67,7 +67,7 @@ jobs:
   push-firewood-ffi-libs:
     needs: build-firewood-ffi-libs
     permissions:
-      # Give the default GITHUB_TOKEN write permission to commit and push the
+      # Give the GITHUB_TOKEN write permission to commit and push the
       # static libs to the repository.
       contents: write
     runs-on: ubuntu-latest
@@ -101,17 +101,23 @@ jobs:
             export target_branch="${GITHUB_REF#refs/heads/}-ffi-libs"
             echo "Using tag/branch name + -ffi-libs as target_branch: $target_branch"
             echo "target_branch=$target_branch" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            export target_branch="${{ github.event.pull_request.head.ref }}-ffi-libs"
+            echo "Using PR head name + -ffi-libs as target branch: $target_branch"
+            echo "target_branch=$target_branch" >> "$GITHUB_OUTPUT"
           else
             echo "No valid input or tag found."
             exit 1
           fi
 
-      - uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: 'ci: attach firewood-ffi static libs'
-          branch: ${{ steps.determine_branch.outputs.target_branch }}
-          create_branch: true
-          push_options: '--force'
+      - name: Push static libs to branch
+        run: |
+          git config --global user.name "FirewoodCI"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b ${{ steps.determine_branch.outputs.target_branch }}
+          git add .
+          git commit -m "ci: attach firewood static libs"
+          git push -u origin ${{ steps.determine_branch.outputs.target_branch }}
 
   # Check out the branch created in the previous job on a matrix of
   # our target architectures and test the FFI package on a fresh
@@ -138,3 +144,20 @@ jobs:
         working-directory: ffi
         # cgocheck2 is expensive but provides complete pointer checks
         run: GOEXPERIMENT=cgocheck2 go test ./...
+
+  garbage-collect-branch:
+    runs-on: ubuntu-latest
+    needs: [push-firewood-ffi-libs, test-firewood-ffi-libs]
+    if: needs.push-firewood-ffi-libs.result == 'success' && github.event_name == 'pull_request'
+    permissions:
+      # Give the GITHUB_TOKEN write permission to delete the
+      # branch created by the previous job if it is a pull request.
+      contents: write
+    steps:
+      - name: Check out the branch created in the previous job
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.push-firewood-ffi-libs.outputs.target_branch }}
+      - name: Delete branch
+        run: |
+          git push origin --delete ${{ needs.push-firewood-ffi-libs.outputs.target_branch }}
