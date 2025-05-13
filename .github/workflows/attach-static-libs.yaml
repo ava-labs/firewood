@@ -147,7 +147,8 @@ jobs:
 
   garbage-collect-branch:
     runs-on: ubuntu-latest
-    needs: push-firewood-ffi-libs
+    needs: [push-firewood-ffi-libs, test-firewood-ffi-libs]
+    if: needs.push-firewood-ffi-libs.result == 'success'
     permissions:
       # Give the GITHUB_TOKEN write permission to delete the
       # branch created by the previous job if it is a pull request.
