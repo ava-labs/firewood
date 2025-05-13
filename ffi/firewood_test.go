@@ -345,3 +345,100 @@ func TestFakeProposal(t *testing.T) {
 	err = proposal.Commit()
 	require.Contains(t, err.Error(), "proposal not found", "Commit(fake proposal)")
 }
+
+// Tests that an empty revision can be retrieved.
+func TestRevision(t *testing.T) {
+	db := newTestDatabase(t)
+
+	// Create a proposal with 10 key-value pairs.
+	keys := make([][]byte, 10)
+	vals := make([][]byte, 10)
+	for i := range keys {
+		keys[i] = keyForTest(i)
+		vals[i] = valForTest(i)
+	}
+	proposal, err := db.Propose(keys, vals)
+	require.NoError(t, err, "Propose")
+
+	// Commit the proposal.
+	err = proposal.Commit()
+	require.NoError(t, err, "Commit")
+
+	root, err := db.Root()
+	require.NoError(t, err, "%T.Root()", db)
+
+	// Create a revision from this root.
+	revision, err := NewRevision(db.handle, root)
+	require.NoError(t, err, "NewRevision")
+	// Check that all keys can be retrieved from the revision.
+	for i := range keys {
+		got, err := revision.Get(keys[i])
+		require.NoError(t, err, "Get(%d)", i)
+		assert.Equal(t, valForTest(i), got, "Get(%d)", i)
+	}
+
+	// Create a second proposal with 10 key-value pairs.
+	keys2 := make([][]byte, 10)
+	vals2 := make([][]byte, 10)
+	for i := range keys2 {
+		keys2[i] = keyForTest(i + 10)
+		vals2[i] = valForTest(i + 10)
+	}
+	proposal2, err := db.Propose(keys2, vals2)
+	require.NoError(t, err, "Propose")
+	// Commit the proposal.
+	err = proposal2.Commit()
+	require.NoError(t, err, "Commit")
+
+	// Create a "new" revision from the first old root.
+	revision, err = NewRevision(db.handle, root)
+	require.NoError(t, err, "NewRevision")
+	// Check that all keys can be retrieved from the revision.
+	for i := range keys {
+		got, err := revision.Get(keys[i])
+		require.NoError(t, err, "Get(%d)", i)
+		assert.Equal(t, valForTest(i), got, "Get(%d)", i)
+	}
+}
+
+// Tests that after 101 commits, the oldest revision can no longer be
+// retrieved.
+func TestRevisionAfter101Commits(t *testing.T) {
+	db := newTestDatabase(t)
+
+	// Commit a batch of 10 key-value pairs 101 times.
+	keys := make([][]byte, 10)
+	vals := make([][]byte, 10)
+	numProposals := 101
+	roots := make([][]byte, numProposals)
+	for i := 0; i < numProposals; i++ {
+		for j := range keys {
+			keys[j] = keyForTest(i*numProposals + j)
+			vals[j] = valForTest(i*numProposals + j)
+		}
+		root, err := db.Update(keys, vals)
+		require.NoError(t, err, "Update(%d)", i)
+		roots[i] = root
+	}
+
+	// Now that there are 101 roots, the first one should be invalid.
+	revision, err := db.Revision(roots[0])
+	// Note this shouldn't error, because the root is formed correctly.
+	require.NoError(t, err, "Revision")
+
+	// Check that any key cannot be retrieved from the revision.
+	_, err = revision.Get([]byte("any-key"))
+	require.Contains(t, err.Error(), "Revision not found", "Get(any-key)")
+
+	// Check that all other revisions can be retrieved and have the correct
+	// values.
+	for i := 1; i < numProposals; i++ {
+		revision, err := db.Revision(roots[i])
+		require.NoError(t, err, "Revision(%d)", i)
+		for j := range keys {
+			got, err := revision.Get(keyForTest(i*numProposals + j))
+			require.NoError(t, err, "Get(%d)", j)
+			assert.Equal(t, valForTest(i*numProposals+j), got, "Get(%d)", j)
+		}
+	}
+}
