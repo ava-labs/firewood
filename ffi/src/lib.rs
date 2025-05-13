@@ -154,7 +154,10 @@ fn get_from_proposal(
     let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
 
     // Get proposal from ID.
-    let proposals = db.proposals.read().unwrap();
+    let proposals = db
+        .proposals
+        .read()
+        .map_err(|_| "proposal lock is poisoned")?;
     let proposal = proposals
         .get(&id)
         .ok_or_else(|| String::from("proposal not found"))?;
@@ -325,7 +328,10 @@ fn propose_on_db(
     }
     let proposal = db.propose_sync(batch).map_err(|e| e.to_string())?;
     let proposal_id = next_id(); // Guaranteed to be non-zero
-    db.proposals.write().unwrap().insert(proposal_id, proposal);
+    db.proposals
+        .write()
+        .map_err(|_| "proposal lock is poisoned")?
+        .insert(proposal_id, proposal);
     Ok(proposal_id)
 }
 
@@ -375,15 +381,8 @@ fn propose_on_proposal(
 ) -> Result<ProposalId, String> {
     let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
 
-    // Get proposal from ID.
-    // We need write access to add the proposal after we create it.
-    let mut proposals = db.proposals.write().unwrap();
-    let proposal = proposals
-        .get(&proposal_id)
-        .ok_or_else(|| String::from("proposal not found"))?;
-
     // Create a batch of operations to perform.
-    let mut batch = Vec::with_capacity(nkeys);
+    let mut batch: Vec<DbBatchOp<&[u8], &[u8]>> = Vec::with_capacity(nkeys);
     for i in 0..nkeys {
         let kv = unsafe { values.add(i).as_ref() }
             .ok_or_else(|| String::from("couldn't get key-value pair"))?;
@@ -398,9 +397,22 @@ fn propose_on_proposal(
             value: kv.value.as_slice(),
         });
     }
+
+    // Get proposal from ID.
+    // We need write access to add the proposal after we create it.
+    let guard = db.proposals.write().unwrap();
+    let proposal = guard
+        .get(&proposal_id)
+        .ok_or_else(|| String::from("proposal not found"))?;
     let new_proposal = proposal.propose_sync(batch).map_err(|e| e.to_string())?;
+    drop(guard); // Drop the read lock before we get the write lock.
+
+    // Store the proposal in the map. We need the write lock instead.
     let new_id = next_id(); // Guaranteed to be non-zero
-    proposals.insert(new_id, new_proposal);
+    db.proposals
+        .write()
+        .map_err(|_| "proposal lock is poisoned")?
+        .insert(new_id, new_proposal);
     Ok(new_id)
 }
 
@@ -435,7 +447,7 @@ fn commit(db: *const DatabaseHandle, proposal_id: u32) -> Result<(), String> {
     let proposal = db
         .proposals
         .write()
-        .unwrap()
+        .map_err(|_| "proposal lock is poisoned")?
         .remove(&proposal_id)
         .ok_or_else(|| String::from("proposal not found"))?;
     proposal.commit_sync().map_err(|e| e.to_string())
@@ -455,12 +467,24 @@ fn commit(db: *const DatabaseHandle, proposal_id: u32) -> Result<(), String> {
 /// The caller must ensure that `db` is a valid pointer returned by `open_db`
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_drop_proposal(db: *const DatabaseHandle, proposal_id: u32) {
-    let db = match unsafe { db.as_ref() } {
-        Some(db) => db,
-        None => return,
-    };
-    db.proposals.write().unwrap().remove(&proposal_id);
+pub unsafe extern "C" fn fwd_drop_proposal(db: *const DatabaseHandle, proposal_id: u32) -> Value {
+    drop_proposal(db, proposal_id)
+        .map(|e| e.into())
+        .unwrap_or_else(|e| e.into())
+}
+
+/// Internal call for `fwd_drop_proposal` to remove error handling from the C API
+#[doc(hidden)]
+fn drop_proposal(db: *const DatabaseHandle, proposal_id: u32) -> Result<(), String> {
+    let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
+    let mut proposals = db
+        .proposals
+        .write()
+        .map_err(|_| "proposal lock is poisoned")?;
+    proposals
+        .remove(&proposal_id)
+        .ok_or_else(|| String::from("proposal not found"))?;
+    Ok(())
 }
 
 /// Get the root hash of the latest version of the database

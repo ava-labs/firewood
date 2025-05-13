@@ -162,7 +162,7 @@ const struct DatabaseHandle *fwd_create_db(struct CreateOrOpenArgs args);
  * The caller must ensure that `db` is a valid pointer returned by `open_db`
  *
  */
-void fwd_drop_proposal(const struct DatabaseHandle *db, uint32_t proposal_id);
+struct Value fwd_drop_proposal(const struct DatabaseHandle *db, uint32_t proposal_id);
 
 /**
  * Frees the memory associated with a `Value`.

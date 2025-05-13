@@ -363,7 +363,7 @@ func TestDropFakeProposal(t *testing.T) {
 	// Attempt to drop the fake proposal.
 	// This should not be an error, since dropping a proposal is a "no-op".
 	err := proposal.Drop()
-	require.NoError(t, err, "Drop(fake proposal)")
+	require.Contains(t, err.Error(), "proposal not found", "Drop(fake proposal)")
 
 	// Attempt to get drop again will return an error.
 	err = proposal.Drop()
