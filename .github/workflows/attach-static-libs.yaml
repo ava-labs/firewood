@@ -116,7 +116,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b ${{ steps.determine_branch.outputs.target_branch }}
           git add .
-          git commit -m: "ci: attach firewood static libs"
+          git commit -m "ci: attach firewood static libs"
           git push -u origin ${{ steps.determine_branch.outputs.target_branch }}
 
   # Check out the branch created in the previous job on a matrix of
