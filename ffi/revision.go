@@ -49,18 +49,13 @@ func (r *Revision) Get(key []byte) ([]byte, error) {
 		return nil, errRevisionClosed
 	}
 
-	// Special case for empty revision
-	if r.root == nil {
-		return nil, nil
-	}
-
 	values, cleanup := newValueFactory()
 	defer cleanup()
 
 	val := C.fwd_get_from_root(r.handle, values.from(r.root), values.from(key))
 	value, err := extractBytesThenFree(&val)
 	if err != nil {
-		// Any error from this function indicates that the revision is closed.
+		// Any error from this function indicates that the revision is inaccessible.
 		r.root = nil
 	}
 	return value, err
