@@ -96,8 +96,8 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          repository: aaronbuchwald/firewood-go
-          token: ${{ secrets.FORK_FIREWOOD_GO_GITHUB_TOKEN }}
+          repository: ava-labs/firewood-go
+          token: ${{ secrets.FIREWOOD_GO_GITHUB_TOKEN }}
           path: firewood-go
 
       - name: Copy FFI Source Code
@@ -138,8 +138,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          repository: aaronbuchwald/firewood-go
-          token: ${{ secrets.FORK_FIREWOOD_GO_GITHUB_TOKEN }}
+          repository: ava-labs/firewood-go
+          token: ${{ secrets.FIREWOOD_GO_GITHUB_TOKEN }}
           ref: ${{ needs.push-firewood-ffi-libs.outputs.target_branch }}
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -162,8 +162,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          repository: aaronbuchwald/firewood-go
-          token: ${{ secrets.FORK_FIREWOOD_GO_GITHUB_TOKEN }}
+          repository: ava-labs/firewood-go
+          token: ${{ secrets.FIREWOOD_GO_GITHUB_TOKEN }}
           ref: ${{ needs.push-firewood-ffi-libs.outputs.target_branch }}
       - name: Delete branch
         run: |
