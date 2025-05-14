@@ -653,7 +653,7 @@ func TestRevision(t *testing.T) {
 	require.NoError(t, err, "%T.Root()", db)
 
 	// Create a revision from this root.
-	revision, err := NewRevision(db.handle, root)
+	revision, err := db.Revision(root)
 	require.NoError(t, err, "NewRevision")
 	// Check that all keys can be retrieved from the revision.
 	for i := range keys {

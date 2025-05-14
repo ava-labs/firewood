@@ -27,7 +27,7 @@ type Revision struct {
 	root []byte
 }
 
-func NewRevision(handle *C.DatabaseHandle, root []byte) (*Revision, error) {
+func newRevision(handle *C.DatabaseHandle, root []byte) (*Revision, error) {
 	if handle == nil {
 		return nil, errors.New("firewood error: nil handle or root")
 	}
