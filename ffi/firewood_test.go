@@ -702,5 +702,5 @@ func TestFakeRevision(t *testing.T) {
 	validRoot := []byte("counting 32 bytes to make a hash")
 	assert.Len(t, validRoot, 32, "valid root")
 	_, err = db.Revision(validRoot)
-	require.ErrorIs(t, err, errRevisionInaccessible, "Revision(valid root)")
+	require.ErrorIs(t, err, errRevisionNotFound, "Revision(valid root)")
 }
