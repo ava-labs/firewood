@@ -13,7 +13,10 @@ import (
 	"fmt"
 )
 
-var errRevisionClosed = errors.New("firewood revision already closed")
+var (
+	errRevisionClosed = errors.New("firewood revision already closed")
+	errInvalidRoot    = fmt.Errorf("firewood error: root hash must be %d bytes", RootLength)
+)
 
 type Revision struct {
 	// handle is returned and accepted by cgo functions. It MUST be treated as
@@ -25,13 +28,13 @@ type Revision struct {
 }
 
 func NewRevision(handle *C.DatabaseHandle, root []byte) (*Revision, error) {
-	if handle == nil || root == nil {
+	if handle == nil {
 		return nil, errors.New("firewood error: nil handle or root")
 	}
 
 	// Check that the root is the correct length.
-	if len(root) != RootLength {
-		return nil, fmt.Errorf("firewood error: root hash must be %d bytes", RootLength)
+	if root == nil || len(root) != RootLength {
+		return nil, errInvalidRoot
 	}
 
 	// All other verification of the root is done during use.

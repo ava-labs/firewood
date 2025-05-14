@@ -676,7 +676,7 @@ func TestRevision(t *testing.T) {
 	require.NoError(t, err, "Commit")
 
 	// Create a "new" revision from the first old root.
-	revision, err = NewRevision(db.handle, root)
+	revision, err = db.Revision(root)
 	require.NoError(t, err, "NewRevision")
 	// Check that all keys can be retrieved from the revision.
 	for i := range keys {
@@ -686,44 +686,32 @@ func TestRevision(t *testing.T) {
 	}
 }
 
-// Tests that after 101 commits, the oldest revision can no longer be
-// retrieved.
-func TestRevisionAfter101Commits(t *testing.T) {
+func TestFakeRevision(t *testing.T) {
 	db := newTestDatabase(t)
 
-	// Commit a batch of 10 key-value pairs 101 times.
-	keys := make([][]byte, 10)
-	vals := make([][]byte, 10)
-	numProposals := 101
-	roots := make([][]byte, numProposals)
-	for i := 0; i < numProposals; i++ {
-		for j := range keys {
-			keys[j] = keyForTest(i*numProposals + j)
-			vals[j] = valForTest(i*numProposals + j)
-		}
-		root, err := db.Update(keys, vals)
-		require.NoError(t, err, "Update(%d)", i)
-		roots[i] = root
-	}
+	// Create a nil revision.
+	revision, err := db.Revision(nil)
+	require.ErrorIs(t, err, errInvalidRoot, "NewRevision(nil)")
+	assert.Nil(t, revision, "NewRevision(nil)")
 
-	// Now that there are 101 roots, the first one should be invalid.
-	revision, err := db.Revision(roots[0])
-	// Note this shouldn't error, because the root is formed correctly.
-	require.NoError(t, err, "Revision")
+	// Create a fake revision with an invalid root.
+	invalidRoot := []byte("not a valid root")
+	revision, err = db.Revision(invalidRoot)
+	require.ErrorIs(t, err, errInvalidRoot, "NewRevision(invalid root)")
+	require.Nil(t, revision, "NewRevision(invalid root)")
 
-	// Check that any key cannot be retrieved from the revision.
-	_, err = revision.Get([]byte("any-key"))
-	require.Contains(t, err.Error(), "Revision not found", "Get(any-key)")
+	// Create a fake revision with an valid root.
+	validRoot := []byte("counting 32 bytes to make a hash")
+	assert.Len(t, validRoot, 32, "valid root")
+	revision, err = db.Revision(validRoot)
+	require.NoError(t, err, "NewRevision(valid root)")
+	require.NotNil(t, revision, "NewRevision(valid root)")
 
-	// Check that all other revisions can be retrieved and have the correct
-	// values.
-	for i := 1; i < numProposals; i++ {
-		revision, err := db.Revision(roots[i])
-		require.NoError(t, err, "Revision(%d)", i)
-		for j := range keys {
-			got, err := revision.Get(keyForTest(i*numProposals + j))
-			require.NoError(t, err, "Get(%d)", j)
-			assert.Equal(t, valForTest(i*numProposals+j), got, "Get(%d)", j)
-		}
-	}
+	// Attempt to get a value from the fake revision.
+	_, err = revision.Get([]byte("non-existent"))
+	require.Contains(t, err.Error(), "Revision not found", "Get(non-existent)")
+
+	// Attempt to get from the now invalid revision.
+	_, err = revision.Get([]byte("non-existent"))
+	require.ErrorIs(t, err, errRevisionClosed, "Get(non-existent)")
 }
