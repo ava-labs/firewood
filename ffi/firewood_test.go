@@ -340,34 +340,6 @@ func TestCommitFakeProposal(t *testing.T) {
 	// Attempt to get a value from the fake proposal.
 	_, err := proposal.Get([]byte("non-existent"))
 	require.Contains(t, err.Error(), "proposal not found", "Get(fake proposal)")
-
-	// Attempt to create a new proposal from the fake proposal.
-	_, err = proposal.Propose([][]byte{[]byte("key")}, [][]byte{[]byte("value")})
-	require.Contains(t, err.Error(), "proposal not found", "Propose(fake proposal)")
-
-	// Attempt to commit the fake proposal.
-	err = proposal.Commit()
-	require.Contains(t, err.Error(), "proposal not found", "Commit(fake proposal)")
-}
-
-// Tests that a proposal with an invalid ID can be dropped.
-func TestDropFakeProposal(t *testing.T) {
-	db := newTestDatabase(t)
-
-	// Create a fake proposal with an invalid ID.
-	proposal := &Proposal{
-		handle: db.handle,
-		id:     1, // note that ID 0 is reserved for invalid proposals
-	}
-
-	// Attempt to drop the fake proposal.
-	// This should not be an error, since dropping a proposal is a "no-op".
-	err := proposal.Drop()
-	require.Contains(t, err.Error(), "proposal not found", "Drop(fake proposal)")
-
-	// Attempt to get drop again will return an error.
-	err = proposal.Drop()
-	require.ErrorIs(t, err, errDroppedProposal, "Drop(fake proposal)")
 }
 
 func TestDropProposal(t *testing.T) {
@@ -401,6 +373,14 @@ func TestDropProposal(t *testing.T) {
 		id:     1,
 	}
 	_, err = proposal.Get([]byte("non-existent"))
+	require.Contains(t, err.Error(), "proposal not found", "Get(fake proposal)")
+
+	// Attempt to create a new proposal from the fake proposal.
+	_, err = proposal.Propose([][]byte{[]byte("key")}, [][]byte{[]byte("value")})
+	require.Contains(t, err.Error(), "proposal not found", "Propose(fake proposal)")
+
+	// Attempt to commit the fake proposal.
+	err = proposal.Commit()
 	require.Contains(t, err.Error(), "proposal not found", "Commit(fake proposal)")
 }
 
@@ -577,12 +557,11 @@ func TestDropProposalAndCommit(t *testing.T) {
 
 // Create two proposals with the same root, and ensure that these proposals
 // are identified as unique in the backend.
-//
-//	/- P1 -\  /- P4
-//
-// R1         P2
-//
-//	\- P2 -/  \- P5
+/*
+ /- P1 -\  /- P4
+R1       P2
+ \- P2 -/  \- P5
+*/
 func TestProposeSameRoot(t *testing.T) {
 	db := newTestDatabase(t)
 

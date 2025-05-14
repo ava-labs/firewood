@@ -149,7 +149,7 @@ const struct DatabaseHandle *fwd_create_db(struct CreateOrOpenArgs args);
 
 /**
  * Drops a proposal from the database.
- * The propopsal's data will not be freed immediately.
+ * The propopsal's data is now inaccessible, and can be freed by the RevisionManager.
  *
  * # Arguments
  *

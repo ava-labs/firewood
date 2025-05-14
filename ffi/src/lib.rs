@@ -454,7 +454,7 @@ fn commit(db: *const DatabaseHandle, proposal_id: u32) -> Result<(), String> {
 }
 
 /// Drops a proposal from the database.
-/// The propopsal's data will not be freed immediately.
+/// The propopsal's data is now inaccessible, and can be freed by the RevisionManager.
 ///
 /// # Arguments
 ///
