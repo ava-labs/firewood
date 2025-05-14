@@ -160,7 +160,6 @@ jobs:
       # branch created by the previous job if it is a pull request.
       contents: write
     steps:
-      - name: Check out the branch created in the previous job
       - uses: actions/checkout@v4
         with:
           repository: aaronbuchwald/firewood-go
