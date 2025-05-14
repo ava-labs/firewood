@@ -322,21 +322,10 @@ fn propose_on_db(
     let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
 
     // Create a batch of operations to perform.
-    let mut batch = Vec::with_capacity(nkeys);
-    for i in 0..nkeys {
-        let kv = unsafe { values.add(i).as_ref() }
-            .ok_or_else(|| String::from("couldn't get key-value pair"))?;
-        if kv.value.len == 0 {
-            batch.push(DbBatchOp::DeleteRange {
-                prefix: kv.key.as_slice(),
-            });
-            continue;
-        }
-        batch.push(DbBatchOp::Put {
-            key: kv.key.as_slice(),
-            value: kv.value.as_slice(),
-        });
-    }
+    let key_value_ref = unsafe { std::slice::from_raw_parts(values, nkeys) };
+    let batch = convert_to_batch(key_value_ref);
+
+    // Propose the batch of operations.
     let proposal = db.propose_sync(batch).map_err(|e| e.to_string())?;
     let proposal_id = next_id(); // Guaranteed to be non-zero
     db.proposals
@@ -393,21 +382,8 @@ fn propose_on_proposal(
     let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
 
     // Create a batch of operations to perform.
-    let mut batch: Vec<DbBatchOp<&[u8], &[u8]>> = Vec::with_capacity(nkeys);
-    for i in 0..nkeys {
-        let kv = unsafe { values.add(i).as_ref() }
-            .ok_or_else(|| String::from("couldn't get key-value pair"))?;
-        if kv.value.len == 0 {
-            batch.push(DbBatchOp::DeleteRange {
-                prefix: kv.key.as_slice(),
-            });
-            continue;
-        }
-        batch.push(DbBatchOp::Put {
-            key: kv.key.as_slice(),
-            value: kv.value.as_slice(),
-        });
-    }
+    let key_value_ref = unsafe { std::slice::from_raw_parts(values, nkeys) };
+    let batch = convert_to_batch(key_value_ref);
 
     // Get proposal from ID.
     // We need write access to add the proposal after we create it.
