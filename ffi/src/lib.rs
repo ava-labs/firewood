@@ -252,7 +252,7 @@ fn batch(
     let hash_val = proposal
         .root_hash_sync()
         .map_err(|e| e.to_string())?
-        .ok_or(String::from("Proposed revision is empty"))?
+        .ok_or_else(|| String::from("Proposed revision is empty"))?
         .as_slice()
         .into();
 
