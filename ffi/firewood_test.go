@@ -654,7 +654,7 @@ func TestRevision(t *testing.T) {
 
 	// Create a revision from this root.
 	revision, err := db.Revision(root)
-	require.NoError(t, err, "NewRevision")
+	require.NoError(t, err, "Revision")
 	// Check that all keys can be retrieved from the revision.
 	for i := range keys {
 		got, err := revision.Get(keys[i])
@@ -677,7 +677,7 @@ func TestRevision(t *testing.T) {
 
 	// Create a "new" revision from the first old root.
 	revision, err = db.Revision(root)
-	require.NoError(t, err, "NewRevision")
+	require.NoError(t, err, "Revision")
 	// Check that all keys can be retrieved from the revision.
 	for i := range keys {
 		got, err := revision.Get(keys[i])
@@ -691,16 +691,16 @@ func TestFakeRevision(t *testing.T) {
 
 	// Create a nil revision.
 	_, err := db.Revision(nil)
-	require.ErrorIs(t, err, errInvalidRootLength, "NewRevision(nil)")
+	require.ErrorIs(t, err, errInvalidRootLength, "Revision(nil)")
 
 	// Create a fake revision with an invalid root.
 	invalidRoot := []byte("not a valid root")
 	_, err = db.Revision(invalidRoot)
-	require.ErrorIs(t, err, errInvalidRootLength, "NewRevision(invalid root)")
+	require.ErrorIs(t, err, errInvalidRootLength, "Revision(invalid root)")
 
 	// Create a fake revision with an valid root.
 	validRoot := []byte("counting 32 bytes to make a hash")
 	assert.Len(t, validRoot, 32, "valid root")
 	_, err = db.Revision(validRoot)
-	require.ErrorIs(t, err, errRevisionInaccessible, "NewRevision(valid root)")
+	require.ErrorIs(t, err, errRevisionInaccessible, "Revision(valid root)")
 }
