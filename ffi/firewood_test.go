@@ -691,27 +691,18 @@ func TestFakeRevision(t *testing.T) {
 
 	// Create a nil revision.
 	revision, err := db.Revision(nil)
-	require.ErrorIs(t, err, errInvalidRoot, "NewRevision(nil)")
+	require.ErrorIs(t, err, errInvalidRootLength, "NewRevision(nil)")
 	assert.Nil(t, revision, "NewRevision(nil)")
 
 	// Create a fake revision with an invalid root.
 	invalidRoot := []byte("not a valid root")
 	revision, err = db.Revision(invalidRoot)
-	require.ErrorIs(t, err, errInvalidRoot, "NewRevision(invalid root)")
+	require.ErrorIs(t, err, errInvalidRootLength, "NewRevision(invalid root)")
 	require.Nil(t, revision, "NewRevision(invalid root)")
 
 	// Create a fake revision with an valid root.
 	validRoot := []byte("counting 32 bytes to make a hash")
 	assert.Len(t, validRoot, 32, "valid root")
-	revision, err = db.Revision(validRoot)
-	require.NoError(t, err, "NewRevision(valid root)")
-	require.NotNil(t, revision, "NewRevision(valid root)")
-
-	// Attempt to get a value from the fake revision.
-	_, err = revision.Get([]byte("non-existent"))
-	require.Contains(t, err.Error(), "Revision not found", "Get(non-existent)")
-
-	// Attempt to get from the now invalid revision.
-	_, err = revision.Get([]byte("non-existent"))
-	require.ErrorIs(t, err, errRevisionClosed, "Get(non-existent)")
+	_, err = db.Revision(validRoot)
+	require.ErrorIs(t, err, errRevisionInaccessible, "NewRevision(valid root)")
 }

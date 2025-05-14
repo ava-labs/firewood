@@ -14,8 +14,8 @@ import (
 )
 
 var (
-	errRevisionClosed = errors.New("firewood revision already closed")
-	errInvalidRoot    = fmt.Errorf("firewood error: root hash must be %d bytes", RootLength)
+	errRevisionInaccessible = errors.New("firewood revision inaccessible")
+	errInvalidRootLength    = fmt.Errorf("firewood error: root hash must be %d bytes", RootLength)
 )
 
 type Revision struct {
@@ -34,7 +34,19 @@ func NewRevision(handle *C.DatabaseHandle, root []byte) (*Revision, error) {
 
 	// Check that the root is the correct length.
 	if root == nil || len(root) != RootLength {
-		return nil, errInvalidRoot
+		return nil, errInvalidRootLength
+	}
+
+	// Attempt to get any value from the root.
+	// This will verify that the root is valid and accessible.
+	// If the root is not valid, this will return an error.
+	values, cleanup := newValueFactory()
+	defer cleanup()
+	val := C.fwd_get_from_root(handle, values.from(root), values.from([]byte{}))
+	_, err := extractBytesThenFree(&val)
+	if err != nil {
+		// Any error from this function indicates that the root is inaccessible.
+		return nil, errRevisionInaccessible
 	}
 
 	// All other verification of the root is done during use.
@@ -49,7 +61,7 @@ func (r *Revision) Get(key []byte) ([]byte, error) {
 		return nil, errDbClosed
 	}
 	if r.root == nil {
-		return nil, errRevisionClosed
+		return nil, errRevisionInaccessible
 	}
 
 	values, cleanup := newValueFactory()
