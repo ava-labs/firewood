@@ -500,8 +500,7 @@ fn commit(db: *const DatabaseHandle, proposal_id: u32) -> Result<(), String> {
 ///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_drop_proposal(db: *const DatabaseHandle, proposal_id: u32) -> Value {
-    drop_proposal(db, proposal_id)
-        .map_or_else(Into::into, Into::into)
+    drop_proposal(db, proposal_id).map_or_else(Into::into, Into::into)
 }
 
 /// Internal call for `fwd_drop_proposal` to remove error handling from the C API
@@ -593,7 +592,8 @@ impl Display for Value {
 }
 
 impl Value {
-    #[must_use] pub const fn as_slice(&self) -> &[u8] {
+    #[must_use]
+    pub const fn as_slice(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.data, self.len) }
     }
 }
