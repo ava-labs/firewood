@@ -324,6 +324,13 @@ pub struct Proposal<'p> {
     db: &'p Db,
 }
 
+impl Proposal<'_> {
+    /// Get the root hash of the proposal synchronously
+    pub fn root_hash_sync(&self) -> Result<Option<api::HashKey>, api::Error> {
+        Ok(self.nodestore.root_hash()?)
+    }
+}
+
 #[async_trait]
 impl api::DbView for Proposal<'_> {
     type Stream<'b>
@@ -371,6 +378,50 @@ impl<'a> api::Proposal for Proposal<'a> {
         self: Arc<Self>,
         batch: api::Batch<K, V>,
     ) -> Result<Arc<Self::Proposal>, api::Error> {
+        Ok(self.create_proposal(batch)?.into())
+    }
+
+    async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
+        match Arc::into_inner(self) {
+            Some(proposal) => {
+                let mut manager = proposal.db.manager.write().expect("poisoned lock");
+                Ok(manager.commit(proposal.nodestore)?)
+            }
+            None => Err(api::Error::CannotCommitClonedProposal),
+        }
+    }
+}
+
+impl Proposal<'_> {
+    /// Commit a proposal synchronously
+    pub fn commit_sync(self: Arc<Self>) -> Result<(), api::Error> {
+        match Arc::into_inner(self) {
+            Some(proposal) => {
+                let mut manager = proposal.db.manager.write().expect("poisoned lock");
+                Ok(manager.commit(proposal.nodestore)?)
+            }
+            None => Err(api::Error::CannotCommitClonedProposal),
+        }
+    }
+
+    /// Get a value from the proposal synchronously
+    pub fn val_sync<K: KeyType>(&self, key: K) -> Result<Option<Box<[u8]>>, api::Error> {
+        let merkle = Merkle::from(self.nodestore.clone());
+        merkle.get_value(key.as_ref()).map_err(api::Error::from)
+    }
+
+    /// Create a new proposal from the current one synchronously
+    pub fn propose_sync<K: KeyType, V: ValueType>(
+        &self,
+        batch: api::Batch<K, V>,
+    ) -> Result<Arc<Self>, api::Error> {
+        Ok(self.create_proposal(batch)?.into())
+    }
+
+    fn create_proposal<K: KeyType, V: ValueType>(
+        &self,
+        batch: api::Batch<K, V>,
+    ) -> Result<Self, api::Error> {
         let parent = self.nodestore.clone();
         let proposal = NodeStore::new(parent)?;
         let mut merkle = Merkle::from(proposal);
@@ -396,36 +447,13 @@ impl<'a> api::Proposal for Proposal<'a> {
             .expect("poisoned lock")
             .add_proposal(immutable.clone());
 
-        Ok(Self::Proposal {
+        Ok(Self {
             nodestore: immutable,
             db: self.db,
-        }
-        .into())
-    }
-
-    async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
-        match Arc::into_inner(self) {
-            Some(proposal) => {
-                let mut manager = proposal.db.manager.write().expect("poisoned lock");
-                Ok(manager.commit(proposal.nodestore)?)
-            }
-            None => Err(api::Error::CannotCommitClonedProposal),
-        }
+        })
     }
 }
 
-impl Proposal<'_> {
-    /// Commit a proposal synchronously
-    pub fn commit_sync(self: Arc<Self>) -> Result<(), api::Error> {
-        match Arc::into_inner(self) {
-            Some(proposal) => {
-                let mut manager = proposal.db.manager.write().expect("poisoned lock");
-                Ok(manager.commit(proposal.nodestore)?)
-            }
-            None => Err(api::Error::CannotCommitClonedProposal),
-        }
-    }
-}
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod test {
