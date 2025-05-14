@@ -216,6 +216,30 @@ pub unsafe extern "C" fn fwd_batch(
     batch(db, nkeys, values).unwrap_or_else(|e| e.into())
 }
 
+/// Converts a slice of `KeyValue` structs to a vector of `DbBatchOp` structs.
+///
+/// # Arguments
+///
+/// * `values` - A slice of `KeyValue` structs
+///
+/// # Returns
+fn convert_to_batch(values: &[KeyValue]) -> Vec<DbBatchOp<&[u8], &[u8]>> {
+    let mut batch = Vec::with_capacity(values.len());
+    for kv in values {
+        if kv.value.len == 0 {
+            batch.push(DbBatchOp::DeleteRange {
+                prefix: kv.key.as_slice(),
+            });
+        } else {
+            batch.push(DbBatchOp::Put {
+                key: kv.key.as_slice(),
+                value: kv.value.as_slice(),
+            });
+        }
+    }
+    batch
+}
+
 /// Internal call for `fwd_batch` to remove error handling from the C API
 #[doc(hidden)]
 fn batch(
@@ -228,21 +252,8 @@ fn batch(
     let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
 
     // Create a batch of operations to perform.
-    let mut batch = Vec::with_capacity(nkeys);
-    for i in 0..nkeys {
-        let kv = unsafe { values.add(i).as_ref() }
-            .ok_or_else(|| String::from("key-value pair is null"))?;
-        if kv.value.len == 0 {
-            batch.push(DbBatchOp::DeleteRange {
-                prefix: kv.key.as_slice(),
-            });
-            continue;
-        }
-        batch.push(DbBatchOp::Put {
-            key: kv.key.as_slice(),
-            value: kv.value.as_slice(),
-        });
-    }
+    let key_value_ref = unsafe { std::slice::from_raw_parts(values, nkeys) };
+    let batch = convert_to_batch(key_value_ref);
 
     // Propose the batch of operations.
     let proposal = db.propose_sync(batch).map_err(|e| e.to_string())?;
