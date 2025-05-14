@@ -66,30 +66,10 @@ jobs:
   # the previous static libs that will not be on our branch.
   push-firewood-ffi-libs:
     needs: build-firewood-ffi-libs
-    permissions:
-      # Give the GITHUB_TOKEN write permission to commit and push the
-      # static libs to the repository.
-      contents: write
     runs-on: ubuntu-latest
     outputs:
       target_branch: ${{ steps.determine_branch.outputs.target_branch }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Download all binaries
-        uses: actions/download-artifact@v4
-        with:
-          path: ffi/libs
-
-      - name: List downloaded target directory
-        run: find ffi/libs -type f | sort
-
-      - name: Upload organized binaries
-        uses: actions/upload-artifact@v4
-        with:
-          name: firewood-ffi-static-libs
-          path: ffi/libs
-          if-no-files-found: error
-
       - name: Determine branch name
         id: determine_branch
         run: |
@@ -110,7 +90,31 @@ jobs:
             exit 1
           fi
 
+      - uses: actions/checkout@v4
+        with:
+          path: firewood
+
+      - uses: actions/checkout@v4
+        with:
+          repository: aaronbuchwald/firewood-go
+          token: ${{ secrets.FORK_FIREWOOD_GO_GITHUB_TOKEN }}
+          path: firewood-go
+
+      - name: Copy FFI Source Code
+        run: cp -r firewood/ffi firewood-go
+
+      - name: Download binaries into libs directory
+        uses: actions/download-artifact@v4
+        with:
+          path: firewood-go/ffi/libs
+
+      - name: List downloaded target directory
+        run: find firewood-go -type f | sort
+
       - name: Push static libs to branch
+        working-directory: firewood-go
+        # GITHUB_TOKEN is configured in the last actions/checkout step
+        # to have read/write permissions to the firewood-go repo.
         run: |
           git config --global user.name "FirewoodCI"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -134,6 +138,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          repository: aaronbuchwald/firewood-go
+          token: ${{ secrets.FORK_FIREWOOD_GO_GITHUB_TOKEN }}
           ref: ${{ needs.push-firewood-ffi-libs.outputs.target_branch }}
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -154,9 +160,10 @@ jobs:
       # branch created by the previous job if it is a pull request.
       contents: write
     steps:
-      - name: Check out the branch created in the previous job
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
+          repository: aaronbuchwald/firewood-go
+          token: ${{ secrets.FORK_FIREWOOD_GO_GITHUB_TOKEN }}
           ref: ${{ needs.push-firewood-ffi-libs.outputs.target_branch }}
       - name: Delete branch
         run: |
