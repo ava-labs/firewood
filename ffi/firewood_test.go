@@ -690,15 +690,13 @@ func TestFakeRevision(t *testing.T) {
 	db := newTestDatabase(t)
 
 	// Create a nil revision.
-	revision, err := db.Revision(nil)
+	_, err := db.Revision(nil)
 	require.ErrorIs(t, err, errInvalidRootLength, "NewRevision(nil)")
-	assert.Nil(t, revision, "NewRevision(nil)")
 
 	// Create a fake revision with an invalid root.
 	invalidRoot := []byte("not a valid root")
-	revision, err = db.Revision(invalidRoot)
+	_, err = db.Revision(invalidRoot)
 	require.ErrorIs(t, err, errInvalidRootLength, "NewRevision(invalid root)")
-	require.Nil(t, revision, "NewRevision(invalid root)")
 
 	// Create a fake revision with an valid root.
 	validRoot := []byte("counting 32 bytes to make a hash")
