@@ -217,6 +217,9 @@ func TestRangeDelete(t *testing.T) {
 }
 
 // Tests that the database is empty after creation and doesn't panic.
+//
+// If env var TEST_FIREWOOD_ETHHASH=true, use ethhash expected hash instead of
+// firewood default expected hash.
 func TestInvariants(t *testing.T) {
 	db := newTestDatabase(t)
 	hash, err := db.Root()
@@ -312,6 +315,9 @@ func TestParallelProposals(t *testing.T) {
 }
 
 // Tests that a proposal that deletes all keys can be committed.
+//
+// If env var TEST_FIREWOOD_ETHHASH=true, use ethhash expected hash instead of
+// firewood default expected hash.
 func TestDeleteAll(t *testing.T) {
 	db := newTestDatabase(t)
 
@@ -656,7 +662,6 @@ func TestProposeSameRoot(t *testing.T) {
 
 // Tests that an empty revision can be retrieved.
 func TestRevision(t *testing.T) {
-	t.Skip()
 	db := newTestDatabase(t)
 
 	keys := make([][]byte, 10)
