@@ -2,6 +2,7 @@ package firewood
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -118,6 +119,9 @@ func kvForTest(i int) KeyValue {
 // This happens in two ways:
 // 1. By calling [Database.Propose] and then [Proposal.Commit].
 // 2. By calling [Database.Update] directly - no proposal storage is needed.
+//
+// If env var TEST_FIREWOOD_ETHHASH=true, use ethhash expected hash instead of
+// firewood default expected hash.
 func TestInsert100(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -168,9 +172,17 @@ func TestInsert100(t *testing.T) {
 
 			hash, err := db.Root()
 			assert.NoError(t, err, "%T.Root()", db)
-			assert.Lenf(t, hash, 32, "%T.Root()", db)
-			// we know the hash starts with 0xf8
-			assert.Equalf(t, byte(0xf8), hash[0], "First byte of %T.Root()", db)
+
+			// Assert the hash is exactly as expected. Test failure indicates a
+			// non-hash compatible change has been made since the string was set.
+			// If that's expected, update the string to fix the test.
+			expectedHashHex := "f858b51ada79c4abeb6566ef1204a453030dba1cca3526d174e2cb3ce2aadc57"
+			if os.Getenv("TEST_FIREWOOD_ETHHASH") == "true" {
+				expectedHashHex = "c25a0076e0337d7c982c3c9dfa445c8088242a0a607f9d9def3762765bcb0fde"
+			}
+			expectedHash, err := hex.DecodeString(expectedHashHex)
+			require.NoError(t, err, "failed to decode expected hash")
+			assert.Equal(t, expectedHash, hash, "Root hash mismatch.\nExpected (hex): %x\nActual (hex): %x", expectedHash, hash)
 			assert.Equalf(t, rootFromInsert, hash, "%T.Root() matches value returned by insertion", db)
 		})
 	}
