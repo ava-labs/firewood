@@ -704,3 +704,50 @@ func TestFakeRevision(t *testing.T) {
 	_, err = db.Revision(validRoot)
 	require.ErrorIs(t, err, errRevisionNotFound, "Revision(valid root)")
 }
+
+// Tests that edge case `Get` calls are handled correctly.
+func TestGetNilCases(t *testing.T) {
+	db := newTestDatabase(t)
+
+	// Create a proposal with 10 key-value pairs.
+	keys := make([][]byte, 10)
+	vals := make([][]byte, 10)
+	for i := range keys {
+		keys[i] = keyForTest(i)
+		vals[i] = valForTest(i)
+	}
+	proposal, err := db.Propose(keys, vals)
+	require.NoError(t, err, "Propose")
+
+	// Check that no keys panic.
+	got, err := proposal.Get(nil)
+	require.NoError(t, err, "Get(nil)")
+	require.Empty(t, got, "Get(nil)")
+	got, err = proposal.Get([]byte{})
+	require.NoError(t, err, "Get(nil)")
+	require.Empty(t, got, "Get(nil)")
+
+	// Commit the proposal.
+	err = proposal.Commit()
+	require.NoError(t, err, "Commit")
+
+	// Attempt to get a nil keys for db
+	got, err = db.Get(nil)
+	require.NoError(t, err, "Get(nil)")
+	require.Empty(t, got, "Get(nil)")
+	got, err = db.Get([]byte{})
+	require.NoError(t, err, "Get([]byte{})")
+	require.Empty(t, got, "Get([]byte{})")
+
+	// Attempt to get nil keys for revision
+	root, err := db.Root()
+	require.NoError(t, err, "%T.Root()", db)
+	revision, err := db.Revision(root)
+	require.NoError(t, err, "Revision")
+	got, err = revision.Get(nil)
+	require.NoError(t, err, "Get(nil)")
+	require.Empty(t, got, "Get(nil)")
+	got, err = revision.Get([]byte{})
+	require.NoError(t, err, "Get([]byte{})")
+	require.Empty(t, got, "Get([]byte{})")
+}
