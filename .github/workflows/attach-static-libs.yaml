@@ -49,9 +49,6 @@ jobs:
       - name: Build for ${{ matrix.target }}
       # TODO: add ethhash feature flag after updating FFI tests
         run: cargo build --profile maxperf --features logger --target ${{ matrix.target }} -p firewood-ffi
-
-      - name: List compiled target directory
-        run: find target -type f | sort
         
       - name: Upload binary
         uses: actions/upload-artifact@v4
@@ -120,7 +117,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b ${{ steps.determine_branch.outputs.target_branch }}
           git add .
-          git commit -m "ci: attach firewood static libs"
+          git commit -m "firewood ci ${{ github.sha }}: attach firewood static libs"
           git push -u origin ${{ steps.determine_branch.outputs.target_branch }} --force
 
   # Check out the branch created in the previous job on a matrix of
@@ -151,7 +148,7 @@ jobs:
         # cgocheck2 is expensive but provides complete pointer checks
         run: GOEXPERIMENT=cgocheck2 go test ./...
 
-  garbage-collect-branch:
+  remove-if-pr-only:
     runs-on: ubuntu-latest
     needs: [push-firewood-ffi-libs, test-firewood-ffi-libs]
     if: needs.push-firewood-ffi-libs.result == 'success' && github.event_name == 'pull_request'
