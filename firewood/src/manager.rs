@@ -6,6 +6,8 @@ use std::io::Error;
 use std::num::NonZero;
 use std::path::PathBuf;
 use std::sync::Arc;
+#[cfg(feature = "ethhash")]
+use std::sync::OnceLock;
 
 use storage::logger::{trace, trace_enabled, warn};
 use typed_builder::TypedBuilder;
@@ -15,7 +17,6 @@ use crate::v2::api::HashKey;
 
 pub use storage::CacheReadStrategy;
 use storage::{Committed, FileBacked, ImmutableProposal, NodeStore, Parentable, TrieHash};
-
 #[derive(Clone, Debug, TypedBuilder)]
 /// Revision manager configuratoin
 pub struct RevisionManagerConfig {
@@ -48,6 +49,9 @@ pub(crate) struct RevisionManager {
     proposals: Vec<ProposedRevision>,
     // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
     by_hash: HashMap<TrieHash, CommittedRevision>,
+
+    #[cfg(feature = "ethhash")]
+    empty_hash: OnceLock<TrieHash>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -83,12 +87,16 @@ impl RevisionManager {
             by_hash: Default::default(),
             proposals: Default::default(),
             // committing_proposals: Default::default(),
+            #[cfg(feature = "ethhash")]
+            empty_hash: OnceLock::new(),
         };
-        if nodestore.kind.root_hash().is_some() {
-            manager.by_hash.insert(
-                nodestore.kind.root_hash().expect("root hash is present"),
-                nodestore.clone(),
-            );
+
+        if let Some(hash) = nodestore
+            .kind
+            .root_hash()
+            .or_else(|| manager.empty_trie_hash())
+        {
+            manager.by_hash.insert(hash, nodestore.clone());
         }
 
         if truncate {
@@ -101,15 +109,19 @@ impl RevisionManager {
     pub fn all_hashes(&self) -> Vec<TrieHash> {
         self.historical
             .iter()
-            .filter_map(|r| r.kind.root_hash())
-            .chain(self.proposals.iter().filter_map(|p| p.kind.root_hash()))
+            .filter_map(|r| r.kind.root_hash().or_else(|| self.empty_trie_hash()))
+            .chain(
+                self.proposals
+                    .iter()
+                    .filter_map(|p| p.kind.root_hash().or_else(|| self.empty_trie_hash())),
+            )
             .collect()
     }
 
     /// Commit a proposal
     /// To commit a proposal involves a few steps:
     /// 1. Commit check.
-    ///    The proposal’s parent must be the last committed revision, otherwise the commit fails.
+    ///    The proposal's parent must be the last committed revision, otherwise the commit fails.
     /// 2. Persist delete list.
     ///    The list of all nodes that were to be deleted for this proposal must be fully flushed to disk.
     ///    The address of the root node and the root hash is also persisted.
@@ -153,7 +165,7 @@ impl RevisionManager {
         // TODO: Handle the case where we get something off the free list that is not free
         while self.historical.len() >= self.max_revisions {
             let oldest = self.historical.pop_front().expect("must be present");
-            if let Some(oldest_hash) = oldest.kind.root_hash() {
+            if let Some(oldest_hash) = oldest.kind.root_hash().or_else(|| self.empty_trie_hash()) {
                 self.by_hash.remove(&oldest_hash);
             }
 
@@ -175,7 +187,11 @@ impl RevisionManager {
         // 4. Set last committed revision
         let committed: CommittedRevision = committed.into();
         self.historical.push_back(committed.clone());
-        if let Some(hash) = committed.kind.root_hash() {
+        if let Some(hash) = committed
+            .kind
+            .root_hash()
+            .or_else(|| self.empty_trie_hash())
+        {
             self.by_hash.insert(hash, committed.clone());
         }
         // TODO: We could allow other commits to start here using the pending list
@@ -190,8 +206,10 @@ impl RevisionManager {
         proposal.flush_header()?;
 
         // 8. Proposal Cleanup
-        // first remove the committing proposal from the list of outstanding proposals
-        self.proposals.retain(|p| !Arc::ptr_eq(&proposal, p));
+        // Free proposal that is being committed as well as any proposals no longer
+        // referenced by anyone else.
+        self.proposals
+            .retain(|p| !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) > 1);
 
         // then reparent any proposals that have this proposal as a parent
         for p in self.proposals.iter() {
@@ -226,6 +244,7 @@ impl RevisionManager {
         self.current_revision()
             .kind
             .root_hash()
+            .or_else(|| self.empty_trie_hash())
             .map(Option::Some)
             .ok_or(RevisionManagerError::IO(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -238,6 +257,24 @@ impl RevisionManager {
             .back()
             .expect("there is always one revision")
             .clone()
+    }
+    #[cfg(not(feature = "ethhash"))]
+    #[inline]
+    pub const fn empty_trie_hash(&self) -> Option<TrieHash> {
+        None
+    }
+
+    #[cfg(feature = "ethhash")]
+    #[inline]
+    pub fn empty_trie_hash(&self) -> Option<TrieHash> {
+        // clippy is wrong here. we need to keep the closure since empty_trie_hash
+        // is an instance method that needs self.
+        #[allow(clippy::redundant_closure)]
+        Some(
+            self.empty_hash
+                .get_or_init(|| storage::empty_trie_hash())
+                .clone(),
+        )
     }
 }
 
