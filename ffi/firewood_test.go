@@ -726,11 +726,11 @@ func TestGetNilCases(t *testing.T) {
 	require.NoError(t, err, "Revision")
 
 	// Create edge case keys.
-	badKeys := [][]byte{
+	specialKeys := [][]byte{
 		nil,
 		{}, // empty slice
 	}
-	for _, k := range badKeys {
+	for _, k := range specialKeys {
 		got, err := db.Get(k)
 		require.NoError(t, err, "db.Get(%q)", k)
 		assert.Empty(t, got, "db.Get(%q)", k)
