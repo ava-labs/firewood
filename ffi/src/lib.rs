@@ -296,7 +296,6 @@ fn batch(
     values: *const KeyValue,
 ) -> Result<Value, String> {
     let start = coarsetime::Instant::now();
-    // Check input is valid.
     let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
     if values.is_null() {
         return Err(String::from("key-value list is null"));
@@ -368,7 +367,6 @@ fn propose_on_db(
     nkeys: usize,
     values: *const KeyValue,
 ) -> Result<ProposalId, String> {
-    // Check input is valid.
     let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
     if values.is_null() {
         return Err(String::from("key-value list is null"));
@@ -430,7 +428,6 @@ fn propose_on_proposal(
     nkeys: usize,
     values: *const KeyValue,
 ) -> Result<ProposalId, String> {
-    // Check input is valid.
     let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
     if values.is_null() {
         return Err(String::from("key-value list is null"));
