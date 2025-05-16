@@ -736,14 +736,14 @@ func TestGetNilCases(t *testing.T) {
 	for _, k := range specialKeys {
 		got, err := db.Get(k)
 		require.NoError(t, err, "db.Get(%q)", k)
-		assert.Empty(t, got, "db.Get(%q)", k)
+		require.Empty(t, got, "db.Get(%q)", k)
 
 		got, err = revision.Get(k)
 		require.NoError(t, err, "Revision.Get(%q)", k)
-		assert.Empty(t, got, "Revision.Get(%q)", k)
+		require.Empty(t, got, "Revision.Get(%q)", k)
 
 		got, err = proposal.Get(k)
 		require.NoError(t, err, "Proposal.Get(%q)", k)
-		assert.Empty(t, got, "Proposal.Get(%q)", k)
+		require.Empty(t, got, "Proposal.Get(%q)", k)
 	}
 }
