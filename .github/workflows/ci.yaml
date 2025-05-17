@@ -1,3 +1,4 @@
+# vim: set foldmethod=marker foldmarker=\#region,\#endregion:
 name: ci
 
 on:
@@ -8,8 +9,42 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# Region tags below will fold blocks into functional areas
+# in vscode, # click to the left of the region tag to close the region.
+# more info: https://code.visualstudio.com/docs/editing/codebasics#_folding
+#
+# in vim, Use zR to open everything, zo=open one, zc=close one
+# For more information, type :help folding 
+
+#region Build Matrix
+# The build/test matrix is as follows:
+#
+#            ----------------------Profile & features-------------------------------- 
+#           +---------------------+------------------------+-------------------------+
+#           | debug & no features | debug & ethhash+logger | maxperfb ethhash+logger |
+#           +---------------------+------------------------+-------------------------+
+# CacheKey  | debug-no-features   | debug-ethhash          | maxperf-ethhash         |
+# license   | Yes (A)             | No                     | No                      |
+# cargo fmt | No                  | Yes (I)                | No                      |
+# clippy    | Yes (B)             | Yes (J)                | No                      |
+# tests     | Yes (C)             | Yes (K)                | Yes (N)                 |
+# docs      | Yes (D)             | No                     | No                      |
+# examples  | Yes (E)             | Yes (L)                | Yes (O)                 |
+# benchmark | very short one (F)  | No                     | Yes (P)                 |
+# go lint   | Yes (G)             | No                     | No                      |
+# go tests  | Yes (H)             | Yes (M)                | No                      |
+#           +---------------------+------------------------+-------------------------+
+#
+# We only run the formatter and license checks in one configuration since they are
+# configuration agnostic.
+#
+# We currently do not test branch-factor-256 as it didn't perform very well and
+# may go away
+#endregion
+
 jobs:
-  build:
+  #region Debug build jobs with no features enabled
+  build-debug-no-features:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,13 +53,15 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "debug-no-features"
       - name: Check
         run: cargo check --workspace --tests --examples --benches
-      - name: Build
+      - name: Build Debug (no features)
         run: cargo build --workspace --tests --examples --benches
 
-  lint:
-    needs: build
+  lint-debug-no-features:
+    needs: build-debug-no-features
     runs-on: ubuntu-latest
 
     steps:
@@ -36,20 +73,20 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: "false"
-          shared-key: "build"
+          shared-key: "debug-no-features"
+      # (A)
       - name: Check license headers
         uses: viperproject/check-license-header@v2
         with:
           path: .
           config: .github/check-license-headers.yaml
           strict: true
-      - name: Format
-        run: cargo fmt -- --check
+      # (B)
       - name: Clippy
         run: cargo clippy --tests --examples --benches -- -D warnings
 
-  test:
-    needs: build
+  test-debug-no-features:
+    needs: build-debug-no-features
     runs-on: ubuntu-latest
 
     steps:
@@ -61,35 +98,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: "false"
-          shared-key: "build"
-      - name: Run tests with ethhash disabled
+          shared-key: "debug-no-features"
+      # (C)
+      - name: Run tests (debug, no features)
         run: cargo test --verbose
-      - name: Run tests with features enabled
-        run: cargo test --verbose --features logger,ethhash
-      # TODO: Enable testing with branch_factor_256
-      # - name: Run tests with branch_factor_256
-      #   run: cargo test --verbose --features branch_factor_256
-
-  examples:
-    needs: ethhash
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: "false"
-          shared-key: "ethhash"
-      - name: Run benchmark example
-        run: RUST_BACKTRACE=1 cargo run --features ethhash --release --bin benchmark -- --number-of-batches 100 --batch-size 1000 create
-      - name: Run insert example
-        run: RUST_BACKTRACE=1 cargo run --features ethhash --release --example insert
 
   docs:
-    needs: build
+    needs: build-debug-no-features
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -100,11 +115,32 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: "false"
-          shared-key: "build"
+          shared-key: "debug-no-features"
+      # (D)
       - run: RUSTDOCFLAGS="-D warnings" cargo doc --document-private-items --no-deps
 
-  ffi:
-    needs: build
+  examples-debug-no-features:
+    needs: build-debug-no-features
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: "false"
+          shared-key: "debug-no-features"
+      # (E)
+      - name: Run insert example
+        run: RUST_BACKTRACE=1 cargo run --features ethhash --example insert
+      # (F)
+      - name: Run benchmark example (short)
+        run: RUST_BACKTRACE=1 cargo run --features ethhash --bin benchmark -- --number-of-batches 2 --batch-size 20 create
+
+  go-tests-debug-no-features:
+    needs: build-debug-no-features
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -118,26 +154,31 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: "false"
-          shared-key: "build"
+          shared-key: "debug-no-features"
       - name: Build Firewood FFI
         working-directory: ffi
-        run: cargo build --release
+        run: cargo build
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: "ffi/go.mod"
           cache-dependency-path: "ffi/go.sum"
+      # (G)
       - name: Run golanci-lint
         uses: golangci/golangci-lint-action@v3
         with:
           version: latest
           working-directory: ffi
+      # (H)
       - name: Test Go FFI bindings
         working-directory: ffi
         # cgocheck2 is expensive but provides complete pointer checks
         run: GOEXPERIMENT=cgocheck2 go test ./...
-      
-  ethhash:
+
+  #endregion
+  
+  #region Debug build jobs with features ethhash and logger enabled
+  build-debug-ethhash:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -146,13 +187,147 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "debug-ethhash"
+      - name: Check
+        run: cargo check --workspace --tests --examples --benches
+      - name: Build Debug (no features)
+        run: cargo build --workspace --tests --examples --benches
+
+  lint-debug-ethhash:
+    needs: build-debug-ethhash
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: "false"
+          shared-key: "debug-ethhash"
+      # (I)
+      - name: Format
+        run: cargo fmt -- --check
+      # (J)
+      - name: Clippy
+        run: cargo clippy --features ethhash,logger --tests --examples --benches -- -D warnings
+
+  test-debug-ethhash:
+    needs: build-debug-ethhash
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: "false"
+          shared-key: "debug-ethhash"
+      # (K)
+      - name: Run tests
+        run: cargo test --verbose --features logger,ethhash
+
+  examples-debug-ethhash:
+    needs: build-debug-ethhash
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: "false"
+          shared-key: "debug-ethhash"
+      # (L)
+      - name: Run insert example
+        run: RUST_BACKTRACE=1 cargo run --features ethhash --example insert
+
+  test-go-debug-ethhash:
+    needs: build-debug-ethhash
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: "false"
+          shared-key: "debug-ethhash"
       - name: Build Firewood FFI (with ethhash)
-        run: cargo build --release --features ethhash
+        run: cargo build --features ethhash,logger
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: "ffi/tests/go.mod"
           cache-dependency-path: "ffi/tests/go.sum"
+      # (M)
       - name: Test Ethereum hash compatability
         working-directory: ffi/tests
         run: go test ./...
+  #endregion
+  
+  #region Maxperf builds with features ethhash and logger enabled
+  build-maxperf-ethhash:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "maxperf-ethhash"
+      - name: Check
+        run: cargo check --workspace --tests --examples --benches --features ethhash,logger --profile maxperf
+      - name: Build
+        run: cargo build --workspace --tests --examples --benches --features ethhash,logger --profile maxperf
+
+  test-maxperf-ethhash:
+    needs: build-maxperf-ethhash
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: "false"
+          shared-key: "maxperf-ethhash"
+      # (N)
+      - name: Run tests
+        run: cargo test --verbose --verbose --features logger,ethhash --profile maxperf
+
+  examples-maxperf-ethhash:
+    needs: build-maxperf-ethhash
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: "false"
+          shared-key: "maxperf-ethhash"
+      # (O)
+      - name: Run insert example
+        run: RUST_BACKTRACE=1 cargo run --features ethhash --profile maxperf --example insert
+      # (P)
+      - name: Run benchmark example
+        run: RUST_BACKTRACE=1 cargo run --features ethhash --profile maxperf --bin benchmark -- --number-of-batches 100 --batch-size 1000 create
+  #endregion

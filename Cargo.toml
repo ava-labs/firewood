@@ -17,5 +17,4 @@ debug = true
 panic = "abort"
 codegen-units = 1
 lto = "fat"
-debug = false
 inherits = "release"
