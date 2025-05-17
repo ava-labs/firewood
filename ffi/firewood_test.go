@@ -31,7 +31,7 @@ const (
 // TEST_FIREWOOD_HASH_MODE=ethhash or TEST_FIREWOOD_HASH_MODE=firewood
 // This will skip the inference step and enforce we use the expected roots for the specified mode.
 var (
-	// expectedRoots contains a mapping of expected root hashes for different different test
+	// expectedRoots contains a mapping of expected root hashes for different test
 	// vectors.
 	expectedRootModes = map[string]map[string]string{
 		ethhashKey: {
@@ -52,12 +52,12 @@ var (
 
 func inferHashingMode() (string, error) {
 	dbFile := filepath.Join(os.TempDir(), "test.db")
-	db, close, err := newDatabase(dbFile)
+	db, closeDB, err := newDatabase(dbFile)
 	if err != nil {
 		return "", err
 	}
 	defer func() {
-		_ = close()
+		_ = closeDB()
 		_ = os.Remove(dbFile)
 	}()
 
@@ -123,10 +123,10 @@ func newTestDatabase(t *testing.T) *Database {
 	t.Helper()
 
 	dbFile := filepath.Join(t.TempDir(), "test.db")
-	db, close, err := newDatabase(dbFile)
+	db, closeDB, err := newDatabase(dbFile)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		require.NoError(t, close())
+		require.NoError(t, closeDB())
 	})
 	return db
 }
@@ -427,7 +427,7 @@ func TestDeleteAll(t *testing.T) {
 	expectedHashHex := expectedRoots[emptyKey]
 	expectedHash, err := hex.DecodeString(expectedHashHex)
 	require.NoError(t, err)
-	require.Equalf(t, expectedHash, hash, "%T.Root() of empty trie")
+	require.Equalf(t, expectedHash, hash, "%T.Root() of empty trie", db)
 }
 
 // Tests that a proposal with an invalid ID cannot be committed.
