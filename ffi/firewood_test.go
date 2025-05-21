@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -463,7 +464,10 @@ func TestDropProposal(t *testing.T) {
 	proposalID := proposal.id
 
 	// The proposal is now out of scope. Block to force cleanup
+	proposal = nil
 	runtime.GC()
+	// Finalizer runs asynchronously, so we need to wait a bit for it to finish.
+	time.Sleep(50 * time.Millisecond)
 
 	// Attempt to "emulate" the proposal to ensure it isn't internally available still.
 	newProposal := &Proposal{
