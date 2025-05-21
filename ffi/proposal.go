@@ -15,7 +15,7 @@ import (
 	"unsafe"
 )
 
-var errDroppedProposal = errors.New("proposal already dropped")
+var errCommittedProposal = errors.New("proposal already committed")
 
 type Proposal struct {
 	// handle is returned and accepted by cgo functions. It MUST be treated as
@@ -57,7 +57,7 @@ func (p *Proposal) Get(key []byte) ([]byte, error) {
 	}
 
 	if p.id == 0 {
-		return nil, errDroppedProposal
+		return nil, errCommittedProposal
 	}
 	values, cleanup := newValueFactory()
 	defer cleanup()
@@ -75,7 +75,7 @@ func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
 	}
 
 	if p.id == 0 {
-		return nil, errDroppedProposal
+		return nil, errCommittedProposal
 	}
 
 	ops := make([]KeyValue, len(keys))
@@ -114,7 +114,13 @@ func (p *Proposal) Commit() error {
 		return errDBClosed
 	}
 
+	if p.id == 0 {
+		return errCommittedProposal
+	}
+
 	// Commit the proposal and return the hash.
 	errVal := C.fwd_commit(p.handle, C.uint32_t(p.id))
+	// Even if there was an error, it is now impossible to attempt to recommit the proposal.
+	p.id = 0
 	return extractErrorThenFree(&errVal)
 }

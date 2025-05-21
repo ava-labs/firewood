@@ -380,14 +380,14 @@ func TestParallelProposals(t *testing.T) {
 	// After attempting to commit the other proposals, they should be completely invalid.
 	for i := 1; i < numProposals; i++ {
 		err := proposals[i].Commit()
-		require.ErrorIs(t, err, errDroppedProposal, "Commit(%d)", i)
+		require.ErrorIs(t, err, errCommittedProposal, "Commit(%d)", i)
 	}
 
 	// Because they're invalid, we should not be able to get values from them.
 	for i := 1; i < numProposals; i++ {
 		for j := 0; j < numKeys; j++ {
 			got, err := proposals[i].Get(keyForTest(i*numKeys + j))
-			require.ErrorIs(t, err, errDroppedProposal, "Get(%d)", i*numKeys+j)
+			require.ErrorIs(t, err, errCommittedProposal, "Get(%d)", i*numKeys+j)
 			require.Empty(t, got, "Get(%d)", i*numKeys+j)
 		}
 	}
