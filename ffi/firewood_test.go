@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -458,32 +459,26 @@ func TestDropProposal(t *testing.T) {
 	proposal, err := db.Propose(keys, vals)
 	require.NoError(t, err, "Propose")
 
-	// Drop the proposal.
-	err = proposal.Drop()
-	require.NoError(t, err, "Drop")
+	// ensure we use the correct proposal ID
+	proposalID := proposal.id
 
-	// Attempt to commit the dropped proposal.
-	err = proposal.Commit()
-	require.ErrorIs(t, err, errDroppedProposal, "Commit(dropped proposal)")
-
-	// Attempt to get a value from the dropped proposal.
-	_, err = proposal.Get([]byte("non-existent"))
-	require.ErrorIs(t, err, errDroppedProposal, "Get(dropped proposal)")
+	// The proposal is now out of scope. Block to force cleanup
+	runtime.GC()
 
 	// Attempt to "emulate" the proposal to ensure it isn't internally available still.
-	proposal = &Proposal{
+	newProposal := &Proposal{
 		handle: db.handle,
-		id:     1,
+		id:     proposalID,
 	}
-	_, err = proposal.Get([]byte("non-existent"))
+	_, err = newProposal.Get([]byte("non-existent"))
 	require.Contains(t, err.Error(), "proposal not found", "Get(fake proposal)")
 
 	// Attempt to create a new proposal from the fake proposal.
-	_, err = proposal.Propose([][]byte{[]byte("key")}, [][]byte{[]byte("value")})
+	_, err = newProposal.Propose([][]byte{[]byte("key")}, [][]byte{[]byte("value")})
 	require.Contains(t, err.Error(), "proposal not found", "Propose(fake proposal)")
 
 	// Attempt to commit the fake proposal.
-	err = proposal.Commit()
+	err = newProposal.Commit()
 	require.Contains(t, err.Error(), "proposal not found", "Commit(fake proposal)")
 }
 
@@ -607,55 +602,6 @@ func TestDeepPropose(t *testing.T) {
 			require.NoError(t, err, "Get(%d)", j)
 			require.Equal(t, vals[j], got, "Get(%d)", j)
 		}
-	}
-}
-
-// Tests that dropping a proposal and committing another one still allows
-// access to the data of children proposals
-func TestDropProposalAndCommit(t *testing.T) {
-	db := newTestDatabase(t)
-
-	// Create a chain of three proposals, each with 10 keys.
-	const numKeys = 10
-	const numProposals = 3
-	proposals := make([]*Proposal, numProposals)
-	keys := make([][]byte, numKeys*numProposals)
-	vals := make([][]byte, numKeys*numProposals)
-	for i := range keys {
-		keys[i] = keyForTest(i)
-		vals[i] = valForTest(i)
-	}
-	for i := range proposals {
-		var (
-			p   *Proposal
-			err error
-		)
-		if i == 0 {
-			p, err = db.Propose(keys[i:(i+1)*numKeys], vals[i:(i+1)*numKeys])
-			require.NoError(t, err, "Propose(%d)", i)
-		} else {
-			p, err = proposals[i-1].Propose(keys[i:(i+1)*numKeys], vals[i:(i+1)*numKeys])
-			require.NoError(t, err, "Propose(%d)", i)
-		}
-		proposals[i] = p
-	}
-
-	// drop the second proposal
-	err := proposals[1].Drop()
-	require.NoError(t, err, "Drop(%d)", 1)
-	// Commit the first proposal
-	err = proposals[0].Commit()
-	require.NoError(t, err, "Commit(%d)", 0)
-
-	// Check that the second proposal is dropped
-	_, err = proposals[1].Get(keys[0])
-	require.ErrorIs(t, err, errDroppedProposal, "Get(%d)", 0)
-
-	// Check that all keys can be accessed from the final proposal
-	for i := range keys {
-		got, err := proposals[numProposals-1].Get(keys[i])
-		require.NoError(t, err, "Get(%d)", i)
-		require.Equal(t, vals[i], got, "Get(%d)", i)
 	}
 }
 

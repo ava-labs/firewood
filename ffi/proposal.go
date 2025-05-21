@@ -11,6 +11,7 @@ import "C"
 
 import (
 	"errors"
+	"runtime"
 	"unsafe"
 )
 
@@ -25,6 +26,27 @@ type Proposal struct {
 	// The proposal ID.
 	// id = 0 is reserved for a dropped proposal.
 	id uint32
+}
+
+func newProposal(handle *C.DatabaseHandle, id uint32) *Proposal {
+	if handle == nil {
+		return nil
+	}
+
+	p := &Proposal{
+		handle: handle,
+		id:     id,
+	}
+
+	// To avoid require the consumer to explicitly deallocate the proposal,
+	// we will use a cleanup function to free the proposal when it is no longer needed.
+	// Note that runtime.AddCleanup isn't available in this version of Go, but should be replaced eventually.
+	runtime.SetFinalizer(p, func(p *Proposal) {
+		if p.handle != nil {
+			C.fwd_drop_proposal(p.handle, C.uint32_t(p.id))
+		}
+	})
+	return p
 }
 
 // Get retrieves the value for the given key.
@@ -82,10 +104,7 @@ func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
 		return nil, err
 	}
 
-	return &Proposal{
-		handle: p.handle,
-		id:     id,
-	}, nil
+	return newProposal(p.handle, id), nil
 }
 
 // Commit commits the proposal and returns any errors.
@@ -95,35 +114,7 @@ func (p *Proposal) Commit() error {
 		return errDBClosed
 	}
 
-	if p.id == 0 {
-		return errDroppedProposal
-	}
-
 	// Commit the proposal and return the hash.
 	errVal := C.fwd_commit(p.handle, C.uint32_t(p.id))
-	err := extractErrorThenFree(&errVal)
-	if err != nil {
-		// this is unrecoverable due to Rust's ownership model
-		// The underlying proposal is no longer valid.
-		p.id = 0
-	}
-	return err
-}
-
-// Drop removes the proposal from memory in Firewood.
-// In the case of an error, the proposal can assumed to be dropped.
-// An error is returned if the proposal was already dropped.
-func (p *Proposal) Drop() error {
-	if p.handle == nil {
-		return errDBClosed
-	}
-
-	if p.id == 0 {
-		return errDroppedProposal
-	}
-
-	// Drop the proposal.
-	val := C.fwd_drop_proposal(p.handle, C.uint32_t(p.id))
-	p.id = 0
-	return extractErrorThenFree(&val)
+	return extractErrorThenFree(&errVal)
 }

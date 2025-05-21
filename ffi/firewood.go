@@ -169,10 +169,7 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 	}
 
 	// The C function will never create an id of 0, unless it is an error.
-	return &Proposal{
-		handle: db.handle,
-		id:     id,
-	}, nil
+	return newProposal(db.handle, id), nil
 }
 
 // Get retrieves the value for the given key. It always returns a nil error.
