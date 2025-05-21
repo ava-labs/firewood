@@ -113,6 +113,11 @@ func TestInsert(t *testing.T) {
 			fwKeys = append(fwKeys, append(accHash[:], keyHash[:]...))
 			fwVals = append(fwVals, []byte{})
 
+			// We must also update the account (not for hash, but to be accurate)
+			fwKeys = append(fwKeys, accHash[:])
+			encodedVal, err := rlp.EncodeToBytes(acc)
+			require.NoError(t, err)
+			fwVals = append(fwVals, encodedVal)
 		case i%4 == 0: // add acc
 			addr := common.BytesToAddress(hashData(binary.BigEndian.AppendUint64(nil, i)).Bytes())
 			accHash := hashData(addr[:])
@@ -178,6 +183,12 @@ func TestInsert(t *testing.T) {
 			encodedVal, err := rlp.EncodeToBytes(val[:])
 			require.NoError(t, err)
 			fwVals = append(fwVals, encodedVal)
+
+			// We must also update the account (not for hash, but to be accurate)
+			fwKeys = append(fwKeys, accHash[:])
+			encodedVal, err = rlp.EncodeToBytes(acc)
+			require.NoError(t, err)
+			fwVals = append(fwVals, encodedVal)
 		case i%4 == 3: // update storage
 			storageKey := chooseStorage()
 			accHash := hashData(storageKey.addr[:])
@@ -206,6 +217,12 @@ func TestInsert(t *testing.T) {
 			// UpdateStorage automatically encodes the value to rlp,
 			// so we need to encode prior to sending to firewood
 			encodedVal, err := rlp.EncodeToBytes(val[:])
+			require.NoError(t, err)
+			fwVals = append(fwVals, encodedVal)
+
+			// We must also update the account (not for hash, but to be accurate)
+			fwKeys = append(fwKeys, accHash[:])
+			encodedVal, err = rlp.EncodeToBytes(acc)
 			require.NoError(t, err)
 			fwVals = append(fwVals, encodedVal)
 		}
