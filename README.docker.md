@@ -37,7 +37,7 @@ Open a terminal in vscode OR exec into the container directly as follows
 docker exec -it --privileged -u root firewood-app-1 zsh
 ```
 
-Once you're in the terminal you'll want to install the Rust toolset. You can find instructions [here](https://rustup.rs/)
+Once you're in the terminal you'll want to install the Rust toolset. You can [find instructions here](https://rustup.rs/)
 
 **!!! IMPORTANT !!!**
 
