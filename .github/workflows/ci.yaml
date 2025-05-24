@@ -50,7 +50,10 @@ jobs:
       - name: md files
         uses: DavidAnson/markdownlint-cli2-action@v20
         with:
-          globs: '**/*.md'
+          globs: |
+            *.md
+            **/*.md
+            !target/**
 
   test:
     needs: build
