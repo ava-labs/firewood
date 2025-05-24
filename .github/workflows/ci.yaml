@@ -2,7 +2,6 @@ name: ci
 
 on:
   pull_request:
-    branches: ['*']
   push:
     branches: [main]
 
@@ -106,7 +105,10 @@ jobs:
 
   ffi:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -125,10 +127,15 @@ jobs:
         with:
           go-version-file: "ffi/go.mod"
           cache-dependency-path: "ffi/go.sum"
+      - name: Run golanci-lint
+        uses: golangci/golangci-lint-action@v3
+        with:
+          version: latest
+          working-directory: ffi
       - name: Test Go FFI bindings
         working-directory: ffi
         # cgocheck2 is expensive but provides complete pointer checks
-        run: GOEXPERIMENT=cgocheck2 go test ./...
+        run: GOEXPERIMENT=cgocheck2 TEST_FIREWOOD_HASH_MODE=firewood go test ./...
       
   ethhash:
     runs-on: ubuntu-latest
@@ -146,6 +153,10 @@ jobs:
         with:
           go-version-file: "ffi/tests/go.mod"
           cache-dependency-path: "ffi/tests/go.sum"
+      - name: Test Go FFI bindings
+        working-directory: ffi
+        # cgocheck2 is expensive but provides complete pointer checks
+        run: GOEXPERIMENT=cgocheck2 TEST_FIREWOOD_HASH_MODE=ethhash go test ./...
       - name: Test Ethereum hash compatability
         working-directory: ffi/tests
         run: go test ./...

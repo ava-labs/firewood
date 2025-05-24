@@ -4,7 +4,16 @@
 package firewood
 
 // // Note that -lm is required on Linux but not on Mac.
-// #cgo LDFLAGS: -L${SRCDIR}/../target/release -L/usr/local/lib -lfirewood_ffi -lm
+// #cgo linux,amd64 LDFLAGS: -L${SRCDIR}/libs/x86_64-unknown-linux-gnu -lm
+// #cgo linux,arm64 LDFLAGS: -L${SRCDIR}/libs/aarch64-unknown-linux-gnu -lm
+// #cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/libs/x86_64-apple-darwin
+// #cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/libs/aarch64-apple-darwin
+// // XXX: last search path takes precedence, which means we prioritize
+// // local builds over pre-built and maxperf over release build
+// #cgo LDFLAGS: -L${SRCDIR}/../target/debug
+// #cgo LDFLAGS: -L${SRCDIR}/../target/release
+// #cgo LDFLAGS: -L${SRCDIR}/../target/maxperf
+// #cgo LDFLAGS: -L/usr/local/lib -lfirewood_ffi
 // #include <stdlib.h>
 // #include "firewood.h"
 import "C"
@@ -19,11 +28,12 @@ import (
 // These constants are used to identify errors returned by the Firewood Rust FFI.
 // These must be changed if the Rust FFI changes - should be reported by tests.
 const (
+	RootLength       = 32
 	rootHashNotFound = "IO error: Root hash not found"
 	keyNotFound      = "key not found"
 )
 
-var errDbClosed = errors.New("firewood database already closed")
+var errDBClosed = errors.New("firewood database already closed")
 
 // A Database is a handle to a Firewood database.
 // It is not safe to call these methods with a nil handle.
@@ -128,14 +138,14 @@ func (db *Database) Batch(ops []KeyValue) ([]byte, error) {
 	hash := C.fwd_batch(
 		db.handle,
 		C.size_t(len(ffiOps)),
-		(*C.struct_KeyValue)(unsafe.SliceData(ffiOps)), // implicitly pinned
+		unsafe.SliceData(ffiOps), // implicitly pinned
 	)
 	return extractBytesThenFree(&hash)
 }
 
 func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 	if db.handle == nil {
-		return nil, errDbClosed
+		return nil, errDBClosed
 	}
 
 	values, cleanup := newValueFactory()
@@ -148,13 +158,12 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 			value: values.from(vals[i]),
 		}
 	}
-	id_or_err := C.fwd_propose_on_db(
+	idOrErr := C.fwd_propose_on_db(
 		db.handle,
 		C.size_t(len(ffiOps)),
-		(*C.struct_KeyValue)(unsafe.SliceData(ffiOps)), // implicitly pinned
+		unsafe.SliceData(ffiOps), // implicitly pinned
 	)
-	id, err := extractIdThenFree(&id_or_err)
-
+	id, err := extractUintThenFree(&idOrErr)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +179,7 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 // If the key is not found, the return value will be (nil, nil).
 func (db *Database) Get(key []byte) ([]byte, error) {
 	if db.handle == nil {
-		return nil, errDbClosed
+		return nil, errDBClosed
 	}
 
 	values, cleanup := newValueFactory()
@@ -190,24 +199,29 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 // Empty trie must return common.Hash{}.
 func (db *Database) Root() ([]byte, error) {
 	if db.handle == nil {
-		return nil, errDbClosed
+		return nil, errDBClosed
 	}
 	hash := C.fwd_root_hash(db.handle)
 	bytes, err := extractBytesThenFree(&hash)
 
 	// If the root hash is not found, return a zeroed slice.
 	if err != nil && strings.Contains(err.Error(), rootHashNotFound) {
-		bytes = make([]byte, 32)
+		bytes = make([]byte, RootLength)
 		err = nil
 	}
 	return bytes, err
+}
+
+// Revision returns a historical revision of the database.
+func (db *Database) Revision(root []byte) (*Revision, error) {
+	return newRevision(db.handle, root)
 }
 
 // Close closes the database and releases all held resources.
 // Returns an error if already closed.
 func (db *Database) Close() error {
 	if db.handle == nil {
-		return errDbClosed
+		return errDBClosed
 	}
 	C.fwd_close_db(db.handle)
 	db.handle = nil
