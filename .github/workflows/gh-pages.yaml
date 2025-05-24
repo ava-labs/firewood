@@ -1,5 +1,12 @@
 name: gh-pages
 
+# Build the documentation, which gets pushed to
+# github pages. The final documentation is available
+# at https://ava-labs.github.io/firewood/firewood/
+
+# documentation is only uploaded when we push to main
+# or if you push to rkuris/gh-pages, for debugging.
+
 on:
   push:
     branches:
@@ -18,10 +25,12 @@ jobs:
       - uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      # caution: this is the same restore as in ci.yaml
+      # this is the same restore as in ci.yaml, which
+      # saves having to rerun build steps
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: "false"
+          shared-key: "debug-no-features"
       - name: Build
         run: cargo doc --document-private-items --no-deps
       - name: Set up _site redirect to firewood
@@ -40,6 +49,7 @@ jobs:
           if-no-files-found: error
           overwrite: true
           include-hidden-files: true
+
   deploy:
     needs: build
     permissions:
