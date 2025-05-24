@@ -4,22 +4,44 @@
 package firewood
 
 // // Note that -lm is required on Linux but not on Mac.
-// #cgo LDFLAGS: -L${SRCDIR}/../target/release -L/usr/local/lib -lfirewood_ffi -lm
+// #cgo linux,amd64 LDFLAGS: -L${SRCDIR}/libs/x86_64-unknown-linux-gnu -lm
+// #cgo linux,arm64 LDFLAGS: -L${SRCDIR}/libs/aarch64-unknown-linux-gnu -lm
+// #cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/libs/x86_64-apple-darwin
+// #cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/libs/aarch64-apple-darwin
+// // XXX: last search path takes precedence, which means we prioritize
+// // local builds over pre-built and maxperf over release build
+// #cgo LDFLAGS: -L${SRCDIR}/../target/debug
+// #cgo LDFLAGS: -L${SRCDIR}/../target/release
+// #cgo LDFLAGS: -L${SRCDIR}/../target/maxperf
+// #cgo LDFLAGS: -L/usr/local/lib -lfirewood_ffi
+// #include <stdlib.h>
 // #include "firewood.h"
 import "C"
 
 import (
+	"errors"
 	"fmt"
-	"runtime"
+	"strings"
 	"unsafe"
 )
 
+// These constants are used to identify errors returned by the Firewood Rust FFI.
+// These must be changed if the Rust FFI changes - should be reported by tests.
+const (
+	RootLength       = 32
+	rootHashNotFound = "IO error: Root hash not found"
+	keyNotFound      = "key not found"
+)
+
+var errDBClosed = errors.New("firewood database already closed")
+
 // A Database is a handle to a Firewood database.
+// It is not safe to call these methods with a nil handle.
 type Database struct {
 	// handle is returned and accepted by cgo functions. It MUST be treated as
 	// an opaque value without special meaning.
 	// https://en.wikipedia.org/wiki/Blinkenlights
-	handle unsafe.Pointer
+	handle *C.DatabaseHandle
 }
 
 // Config configures the opening of a [Database].
@@ -78,19 +100,16 @@ func New(filePath string, conf *Config) (*Database, error) {
 		metrics_port: C.uint16_t(conf.MetricsPort),
 	}
 
-	var db unsafe.Pointer
+	var db *C.DatabaseHandle
 	if conf.Create {
 		db = C.fwd_create_db(args)
 	} else {
 		db = C.fwd_open_db(args)
 	}
-	return &Database{handle: db}, nil
-}
 
-// KeyValue is a key-value pair.
-type KeyValue struct {
-	Key   []byte
-	Value []byte
+	// After creating the db, we can safely free the path string.
+	C.free(unsafe.Pointer(args.path))
+	return &Database{handle: db}, nil
 }
 
 // Batch applies a batch of updates to the database, returning the hash of the
@@ -101,7 +120,7 @@ type KeyValue struct {
 //
 // WARNING: a consequence of prefix deletion is that calling Batch with an empty
 // key and value will delete the entire database.
-func (db *Database) Batch(ops []KeyValue) []byte {
+func (db *Database) Batch(ops []KeyValue) ([]byte, error) {
 	// TODO(arr4n) refactor this to require explicit signalling from the caller
 	// that they want prefix deletion, similar to `rm --no-preserve-root`.
 
@@ -119,64 +138,92 @@ func (db *Database) Batch(ops []KeyValue) []byte {
 	hash := C.fwd_batch(
 		db.handle,
 		C.size_t(len(ffiOps)),
-		(*C.struct_KeyValue)(unsafe.SliceData(ffiOps)), // implicitly pinned
+		unsafe.SliceData(ffiOps), // implicitly pinned
 	)
 	return extractBytesThenFree(&hash)
 }
 
-// extractBytesThenFree converts the cgo `Value` payload to a byte slice, frees
-// the `Value`, and returns the extracted slice.
-func extractBytesThenFree(v *C.struct_Value) []byte {
-	buf := C.GoBytes(unsafe.Pointer(v.data), C.int(v.len))
-	C.fwd_free_value(v)
-	return buf
+func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
+	if db.handle == nil {
+		return nil, errDBClosed
+	}
+
+	values, cleanup := newValueFactory()
+	defer cleanup()
+
+	ffiOps := make([]C.struct_KeyValue, len(keys))
+	for i := range keys {
+		ffiOps[i] = C.struct_KeyValue{
+			key:   values.from(keys[i]),
+			value: values.from(vals[i]),
+		}
+	}
+	idOrErr := C.fwd_propose_on_db(
+		db.handle,
+		C.size_t(len(ffiOps)),
+		unsafe.SliceData(ffiOps), // implicitly pinned
+	)
+	id, err := extractUintThenFree(&idOrErr)
+	if err != nil {
+		return nil, err
+	}
+
+	// The C function will never create an id of 0, unless it is an error.
+	return &Proposal{
+		handle: db.handle,
+		id:     id,
+	}, nil
 }
 
 // Get retrieves the value for the given key. It always returns a nil error.
 // If the key is not found, the return value will be (nil, nil).
 func (db *Database) Get(key []byte) ([]byte, error) {
+	if db.handle == nil {
+		return nil, errDBClosed
+	}
+
 	values, cleanup := newValueFactory()
 	defer cleanup()
-	val := C.fwd_get(db.handle, values.from(key))
-	bytes := extractBytesThenFree(&val)
-	if len(bytes) == 0 {
+	val := C.fwd_get_latest(db.handle, values.from(key))
+	bytes, err := extractBytesThenFree(&val)
+
+	// If the root hash is not found, return nil.
+	if err != nil && strings.Contains(err.Error(), rootHashNotFound) {
 		return nil, nil
 	}
-	return bytes, nil
+
+	return bytes, err
 }
 
 // Root returns the current root hash of the trie.
-func (db *Database) Root() []byte {
+// Empty trie must return common.Hash{}.
+func (db *Database) Root() ([]byte, error) {
+	if db.handle == nil {
+		return nil, errDBClosed
+	}
 	hash := C.fwd_root_hash(db.handle)
-	return extractBytesThenFree(&hash)
+	bytes, err := extractBytesThenFree(&hash)
+
+	// If the root hash is not found, return a zeroed slice.
+	if err != nil && strings.Contains(err.Error(), rootHashNotFound) {
+		bytes = make([]byte, RootLength)
+		err = nil
+	}
+	return bytes, err
 }
 
-// Close closes the database and releases all held resources. It always returns
-// nil.
+// Revision returns a historical revision of the database.
+func (db *Database) Revision(root []byte) (*Revision, error) {
+	return newRevision(db.handle, root)
+}
+
+// Close closes the database and releases all held resources.
+// Returns an error if already closed.
 func (db *Database) Close() error {
+	if db.handle == nil {
+		return errDBClosed
+	}
 	C.fwd_close_db(db.handle)
 	db.handle = nil
 	return nil
-}
-
-// newValueFactory returns a factory for converting byte slices into cgo `Value`
-// structs that can be passed as arguments to cgo functions. The returned
-// cleanup function MUST be called when the constructed values are no longer
-// required, after which they can no longer be used as cgo arguments.
-func newValueFactory() (*valueFactory, func()) {
-	f := new(valueFactory)
-	return f, func() { f.pin.Unpin() }
-}
-
-type valueFactory struct {
-	pin runtime.Pinner
-}
-
-func (f *valueFactory) from(data []byte) C.struct_Value {
-	if len(data) == 0 {
-		return C.struct_Value{0, nil}
-	}
-	ptr := (*C.uchar)(unsafe.SliceData(data))
-	f.pin.Pin(ptr)
-	return C.struct_Value{C.size_t(len(data)), ptr}
 }

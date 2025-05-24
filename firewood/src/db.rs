@@ -339,6 +339,13 @@ pub struct Proposal<'p> {
     db: &'p Db,
 }
 
+impl Proposal<'_> {
+    /// Get the root hash of the proposal synchronously
+    pub fn root_hash_sync(&self) -> Result<Option<api::HashKey>, api::Error> {
+        Ok(self.nodestore.root_hash()?)
+    }
+}
+
 #[async_trait]
 impl api::DbView for Proposal<'_> {
     type Stream<'b>
@@ -386,6 +393,50 @@ impl<'a> api::Proposal for Proposal<'a> {
         self: Arc<Self>,
         batch: api::Batch<K, V>,
     ) -> Result<Arc<Self::Proposal>, api::Error> {
+        Ok(self.create_proposal(batch)?.into())
+    }
+
+    async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
+        match Arc::into_inner(self) {
+            Some(proposal) => {
+                let mut manager = proposal.db.manager.write().expect("poisoned lock");
+                Ok(manager.commit(proposal.nodestore)?)
+            }
+            None => Err(api::Error::CannotCommitClonedProposal),
+        }
+    }
+}
+
+impl Proposal<'_> {
+    /// Commit a proposal synchronously
+    pub fn commit_sync(self: Arc<Self>) -> Result<(), api::Error> {
+        match Arc::into_inner(self) {
+            Some(proposal) => {
+                let mut manager = proposal.db.manager.write().expect("poisoned lock");
+                Ok(manager.commit(proposal.nodestore)?)
+            }
+            None => Err(api::Error::CannotCommitClonedProposal),
+        }
+    }
+
+    /// Get a value from the proposal synchronously
+    pub fn val_sync<K: KeyType>(&self, key: K) -> Result<Option<Box<[u8]>>, api::Error> {
+        let merkle = Merkle::from(self.nodestore.clone());
+        merkle.get_value(key.as_ref()).map_err(api::Error::from)
+    }
+
+    /// Create a new proposal from the current one synchronously
+    pub fn propose_sync<K: KeyType, V: ValueType>(
+        &self,
+        batch: api::Batch<K, V>,
+    ) -> Result<Arc<Self>, api::Error> {
+        Ok(self.create_proposal(batch)?.into())
+    }
+
+    fn create_proposal<K: KeyType, V: ValueType>(
+        &self,
+        batch: api::Batch<K, V>,
+    ) -> Result<Self, api::Error> {
         let parent = self.nodestore.clone();
         let proposal = NodeStore::new(parent)?;
         let mut merkle = Merkle::from(proposal);
@@ -411,36 +462,13 @@ impl<'a> api::Proposal for Proposal<'a> {
             .expect("poisoned lock")
             .add_proposal(immutable.clone());
 
-        Ok(Self::Proposal {
+        Ok(Self {
             nodestore: immutable,
             db: self.db,
-        }
-        .into())
-    }
-
-    async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
-        match Arc::into_inner(self) {
-            Some(proposal) => {
-                let mut manager = proposal.db.manager.write().expect("poisoned lock");
-                Ok(manager.commit(proposal.nodestore)?)
-            }
-            None => Err(api::Error::CannotCommitClonedProposal),
-        }
+        })
     }
 }
 
-impl Proposal<'_> {
-    /// Commit a proposal synchronously
-    pub fn commit_sync(self: Arc<Self>) -> Result<(), api::Error> {
-        match Arc::into_inner(self) {
-            Some(proposal) => {
-                let mut manager = proposal.db.manager.write().expect("poisoned lock");
-                Ok(manager.commit(proposal.nodestore)?)
-            }
-            None => Err(api::Error::CannotCommitClonedProposal),
-        }
-    }
-}
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod test {
@@ -521,6 +549,113 @@ mod test {
         let committed = db.root_hash().await.unwrap().unwrap();
         let historical = db.revision(committed).await.unwrap();
         assert_eq!(&*historical.val(b"a").await.unwrap().unwrap(), b"1");
+    }
+
+    #[tokio::test]
+    // test that dropping a proposal removes it from the list of known proposals
+    //    /-> P1 - will get committed
+    // R1 --> P2 - will get dropped
+    //    \-> P3 - will get orphaned, but it's still known
+    async fn test_proposal_scope_historic() {
+        let db = testdb().await;
+        let batch1 = vec![BatchOp::Put {
+            key: b"k1",
+            value: b"v1",
+        }];
+        let proposal1 = db.propose(batch1).await.unwrap();
+        assert_eq!(&*proposal1.val(b"k1").await.unwrap().unwrap(), b"v1");
+
+        let batch2 = vec![BatchOp::Put {
+            key: b"k2",
+            value: b"v2",
+        }];
+        let proposal2 = db.propose(batch2).await.unwrap();
+        assert_eq!(&*proposal2.val(b"k2").await.unwrap().unwrap(), b"v2");
+
+        let batch3 = vec![BatchOp::Put {
+            key: b"k3",
+            value: b"v3",
+        }];
+        let proposal3 = db.propose(batch3).await.unwrap();
+        assert_eq!(&*proposal3.val(b"k3").await.unwrap().unwrap(), b"v3");
+
+        // the proposal is dropped here, but the underlying
+        // nodestore is still accessible because it's referenced by the revision manager
+        // The third proposal remains referenced
+        let p2hash = proposal2.root_hash().await.unwrap().unwrap();
+        assert!(db.all_hashes().await.unwrap().contains(&p2hash));
+        drop(proposal2);
+
+        // commit the first proposal
+        proposal1.commit().await.unwrap();
+        // Ensure we committed the first proposal's data
+        let committed = db.root_hash().await.unwrap().unwrap();
+        let historical = db.revision(committed).await.unwrap();
+        assert_eq!(&*historical.val(b"k1").await.unwrap().unwrap(), b"v1");
+
+        // the second proposal shouldn't be available to commit anymore
+        assert!(!db.all_hashes().await.unwrap().contains(&p2hash));
+
+        // the third proposal should still be contained within the all_hashes list
+        // would be deleted if another proposal was committed and proposal3 was dropped here
+        let hash3 = proposal3.root_hash().await.unwrap().unwrap();
+        assert!(db.manager.read().unwrap().all_hashes().contains(&hash3));
+    }
+
+    #[tokio::test]
+    // test that dropping a proposal removes it from the list of known proposals
+    // R1 - base revision
+    //  \-> P1 - will get committed
+    //   \-> P2 - will get dropped
+    //    \-> P3 - will get orphaned, but it's still known
+    async fn test_proposal_scope_orphan() {
+        let db = testdb().await;
+        let batch1 = vec![BatchOp::Put {
+            key: b"k1",
+            value: b"v1",
+        }];
+        let proposal1 = db.propose(batch1).await.unwrap();
+        assert_eq!(&*proposal1.val(b"k1").await.unwrap().unwrap(), b"v1");
+
+        let batch2 = vec![BatchOp::Put {
+            key: b"k2",
+            value: b"v2",
+        }];
+        let proposal2 = proposal1.clone().propose(batch2).await.unwrap();
+        assert_eq!(&*proposal2.val(b"k2").await.unwrap().unwrap(), b"v2");
+
+        let batch3 = vec![BatchOp::Put {
+            key: b"k3",
+            value: b"v3",
+        }];
+        let proposal3 = proposal2.clone().propose(batch3).await.unwrap();
+        assert_eq!(&*proposal3.val(b"k3").await.unwrap().unwrap(), b"v3");
+
+        // the proposal is dropped here, but the underlying
+        // nodestore is still accessible because it's referenced by the revision manager
+        // The third proposal remains referenced
+        let p2hash = proposal2.root_hash().await.unwrap().unwrap();
+        assert!(db.all_hashes().await.unwrap().contains(&p2hash));
+        drop(proposal2);
+
+        // commit the first proposal
+        proposal1.commit().await.unwrap();
+        // Ensure we committed the first proposal's data
+        let committed = db.root_hash().await.unwrap().unwrap();
+        let historical = db.revision(committed).await.unwrap();
+        assert_eq!(&*historical.val(b"k1").await.unwrap().unwrap(), b"v1");
+
+        // the second proposal shouldn't be available to commit anymore
+        assert!(!db.all_hashes().await.unwrap().contains(&p2hash));
+
+        // the third proposal should still be contained within the all_hashes list
+        let hash3 = proposal3.root_hash().await.unwrap().unwrap();
+        assert!(db.manager.read().unwrap().all_hashes().contains(&hash3));
+
+        // moreover, the data from the second and third proposals should still be available
+        // through proposal3
+        assert_eq!(&*proposal3.val(b"k2").await.unwrap().unwrap(), b"v2");
+        assert_eq!(&*proposal3.val(b"k3").await.unwrap().unwrap(), b"v3");
     }
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
