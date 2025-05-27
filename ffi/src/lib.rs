@@ -617,7 +617,7 @@ fn proposal_root_hash(db: *const DatabaseHandle, proposal_id: ProposalId) -> Res
     proposal
         .root_hash_sync()
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| String::new())
+        .ok_or_else(String::new)
         .map(|root| Value::from(root.as_slice()))
 }
 
