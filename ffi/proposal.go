@@ -28,6 +28,8 @@ type Proposal struct {
 }
 
 // Root retrieves the root hash of the proposal.
+// If the proposal is empty (i.e. no keys in database),
+// it returns nil, nil.
 func (p *Proposal) Root() ([]byte, error) {
 	if p.handle == nil {
 		return nil, errDBClosed
@@ -39,13 +41,7 @@ func (p *Proposal) Root() ([]byte, error) {
 
 	// Get the root hash of the proposal.
 	val := C.fwd_proposal_root_hash(p.handle, C.uint32_t(p.id))
-	bytes, err := extractBytesThenFree(&val)
-
-	// If the root hash is not found, return a zeroed slice.
-	if err == nil && len(bytes) == 0 {
-		return make([]byte, RootLength), nil
-	}
-	return bytes, err
+	return extractBytesThenFree(&val)
 }
 
 // Get retrieves the value for the given key.

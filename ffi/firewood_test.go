@@ -444,11 +444,7 @@ func TestDeleteAll(t *testing.T) {
 	// Check proposal root
 	hash, err := proposal.Root()
 	require.NoError(t, err, "%T.Root() after commit", proposal)
-
-	emptyRootStr := expectedRoots[emptyKey]
-	expectedHash, err := hex.DecodeString(emptyRootStr)
-	require.NoError(t, err)
-	require.Equalf(t, expectedHash, hash, "expected %x, got %x", expectedHash, hash)
+	require.Empty(t, hash, "%T.Root() after commit should be empty", proposal)
 
 	// Commit the proposal.
 	err = proposal.Commit()
@@ -457,6 +453,8 @@ func TestDeleteAll(t *testing.T) {
 	// Check that the database is empty.
 	hash, err = db.Root()
 	require.NoError(t, err, "%T.Root()", db)
+	emptyRootStr := expectedRoots[emptyKey]
+	expectedHash, err := hex.DecodeString(emptyRootStr)
 	require.NoError(t, err)
 	require.Equalf(t, expectedHash, hash, "%T.Root() of empty trie", db)
 }
