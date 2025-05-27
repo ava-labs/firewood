@@ -11,6 +11,7 @@ import "C"
 
 import (
 	"errors"
+	"fmt"
 	"unsafe"
 )
 
@@ -25,6 +26,29 @@ type Proposal struct {
 	// The proposal ID.
 	// id = 0 is reserved for a dropped proposal.
 	id uint32
+}
+
+// Root retrieves the root hash of the proposal.
+func (p *Proposal) Root() ([]byte, error) {
+	if p.handle == nil {
+		return nil, errDBClosed
+	}
+
+	if p.id == 0 {
+		return nil, errDroppedProposal
+	}
+
+	// Get the root hash of the proposal.
+	val := C.fwd_proposal_root_hash(p.handle, C.uint32_t(p.id))
+	bytes, err := extractBytesThenFree(&val)
+	fmt.Printf("bytes: %v\n, error: %v", bytes, err)
+
+	// If the root hash is not found, return a zeroed slice.
+	if err == nil && len(bytes) == 0 {
+		bytes = make([]byte, RootLength)
+		err = nil
+	}
+	return bytes, err
 }
 
 // Get retrieves the value for the given key.
