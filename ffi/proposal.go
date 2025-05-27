@@ -11,7 +11,6 @@ import "C"
 
 import (
 	"errors"
-	"fmt"
 	"unsafe"
 )
 
@@ -41,12 +40,10 @@ func (p *Proposal) Root() ([]byte, error) {
 	// Get the root hash of the proposal.
 	val := C.fwd_proposal_root_hash(p.handle, C.uint32_t(p.id))
 	bytes, err := extractBytesThenFree(&val)
-	fmt.Printf("bytes: %v\n, error: %v", bytes, err)
 
 	// If the root hash is not found, return a zeroed slice.
 	if err == nil && len(bytes) == 0 {
-		bytes = make([]byte, RootLength)
-		err = nil
+		return make([]byte, RootLength), nil
 	}
 	return bytes, err
 }
