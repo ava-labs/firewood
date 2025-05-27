@@ -15,10 +15,10 @@ jobs:
         include:
           - profile-key: debug-no-features
             profile-args: ""
-          - profile-key: debug-ethhash
-            profile-args: "--features ethhash"
           - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
+          - profile-key: maxperf-ethhash-logger
+            profile-args: "--profile maxperf --features ethhash,logger"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,7 +37,6 @@ jobs:
 
   no-rust-cache-lint:
     runs-on: ubuntu-latest
-
     steps:
       - name: Check license headers
         uses: viperproject/check-license-header@v2
@@ -80,10 +79,10 @@ jobs:
         include:
           - profile-key: debug-no-features
             profile-args: ""
-          - profile-key: debug-ethhash
-            profile-args: "--features ethhash"
           - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
+          - profile-key: maxperf-ethhash-logger
+            profile-args: "--profile maxperf --features ethhash,logger"
           # TODO: enable testing with branch_factor_256
     steps:
       - uses: actions/checkout@v4
@@ -105,10 +104,10 @@ jobs:
         include:
           - profile-key: debug-no-features
             profile-args: ""
-          - profile-key: debug-ethhash
-            profile-args: "--features ethhash"
           - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
+          - profile-key: maxperf-ethhash-logger
+            profile-args: "--profile maxperf --features ethhash,logger"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -120,9 +119,9 @@ jobs:
           save-if: "false"
           shared-key: ${{ matrix.profile-key}}
       - name: Run benchmark example
-        run: RUST_BACKTRACE=1 cargo run ${{ matrix.profile-args }} --release --bin benchmark -- --number-of-batches 100 --batch-size 1000 create
+        run: RUST_BACKTRACE=1 cargo run ${{ matrix.profile-args }} --bin benchmark -- --number-of-batches 100 --batch-size 1000 create
       - name: Run insert example
-        run: RUST_BACKTRACE=1 cargo run ${{ matrix.profile-args }} --release --example insert
+        run: RUST_BACKTRACE=1 cargo run ${{ matrix.profile-args }} --example insert
 
   docs:
     needs: build
@@ -184,9 +183,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: "false"
-          shared-key: "debug-ethhash"
+          shared-key: "debug-ethhash-logger"
       - name: Build Firewood FFI (with ethhash)
-        run: cargo build --release --features ethhash
+        run: cargo build --features ethhash
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
