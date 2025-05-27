@@ -13,14 +13,11 @@ jobs:
     strategy:
       matrix:
         include:
-          - profile-name: debug with no features
-            profile-key: debug-no-features
+          - profile-key: debug-no-features
             profile-args: ""
-          - profile-name: debug with ethhash
-            profile-key: debug-ethhash
+          - profile-key: debug-ethhash
             profile-args: "--features ethhash"
-          - profile-name: debug with ethhash and logger
-            profile-key: debug-ethhash-logger
+          - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
     runs-on: ubuntu-latest
     steps:
@@ -48,9 +45,6 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: "false"
-          shared-key: "build"
       - name: Check license headers
         uses: viperproject/check-license-header@v2
         with:
@@ -59,8 +53,10 @@ jobs:
           strict: true
       - name: Format
         run: cargo fmt -- --check
-      - name: Clippy
+      - name: Clippy (no features)
         run: cargo clippy --tests --examples --benches -- -D warnings
+      - name: Clippy (all features)
+        run: cargo clippy --tests --examples --benches --all-features -- -D warnings
 
   test:
     needs: build
