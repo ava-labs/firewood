@@ -27,6 +27,7 @@ jobs:
   # them as artifacts to collect and attach in the next job.
   build-firewood-ffi-libs:
     runs-on: ${{ matrix.os }}
+    if: secrets.FIREWOOD_GO_GITHUB_TOKEN != ''
     strategy:
       matrix:
         include:
