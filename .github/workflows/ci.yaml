@@ -10,6 +10,18 @@ env:
 
 jobs:
   build:
+    strategy:
+      matrix:
+        include:
+          - profile-name: debug with no features
+            profile-key: debug-no-features
+            profile-args: ""
+          - profile-name: debug with ethhash
+            profile-key: debug-ethhash
+            profile-args: "--features ethhash"
+          - profile-name: debug with ethhash and logger
+            profile-key: debug-ethhash-logger
+            profile-args: "--features ethhash,logger"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,10 +30,12 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.profile-key }}
       - name: Check
-        run: cargo check --workspace --tests --examples --benches
+        run: cargo check ${{ matrix.profile-args }} --workspace --tests --examples --benches
       - name: Build
-        run: cargo build --workspace --tests --examples --benches
+        run: cargo build ${{ matrix.profile-args }} --workspace --tests --examples --benches
 
   lint:
     needs: build
