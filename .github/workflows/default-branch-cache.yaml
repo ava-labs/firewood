@@ -21,9 +21,6 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: "false"
-          shared-key: "debug-no-features"
       - name: Check
         run: cargo check --workspace --tests --examples --benches
       - name: Build

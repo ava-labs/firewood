@@ -20,8 +20,6 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       # caution: this is the same restore as in ci.yaml
       - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: "false"
       - name: Build
         run: cargo doc --document-private-items --no-deps
       - name: Set up _site redirect to firewood

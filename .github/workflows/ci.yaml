@@ -37,8 +37,6 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ${{ matrix.profile-key }}
       - name: Check
         run: cargo check ${{ matrix.profile-args }} --workspace --tests --examples --benches
       - name: Build
@@ -76,9 +74,6 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: "false"
-          shared-key: ${{ matrix.profile-key }}
       - name: Clippy
         run: cargo clippy ${{ matrix.profile-args }} --tests --examples --benches -- -D warnings
 
@@ -102,9 +97,6 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: "false"
-          shared-key: ${{ matrix.profile-key }}
       - name: Run tests with features enabled
         run: cargo test --verbose ${{ matrix.profile-args }}
 
@@ -126,9 +118,6 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: "false"
-          shared-key: ${{ matrix.profile-key}}
       - name: Run benchmark example
         run: RUST_BACKTRACE=1 cargo run ${{ matrix.profile-args }} --bin benchmark -- --number-of-batches 100 --batch-size 1000 create
       - name: Run insert example
@@ -144,9 +133,6 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: "false"
-          shared-key: "debug-no-features"
       - run: RUSTDOCFLAGS="-D warnings" cargo doc --document-private-items --no-deps
 
   ffi:
@@ -162,9 +148,6 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: "false"
-          shared-key: "debug-no-features"
       - name: Build Firewood FFI
         working-directory: ffi
         run: cargo build --release
@@ -192,9 +175,6 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: "false"
-          shared-key: "debug-ethhash-logger"
       - name: Build Firewood FFI (with ethhash)
         run: cargo build --features ethhash,logger
       - name: Set up Go
