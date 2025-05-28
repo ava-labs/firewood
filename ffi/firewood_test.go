@@ -441,10 +441,14 @@ func TestDeleteAll(t *testing.T) {
 		require.Empty(t, got, "Get(%d)", i)
 	}
 
+	emptyRootStr := expectedRoots[emptyKey]
+	expectedHash, err := hex.DecodeString(emptyRootStr)
+	require.NoError(t, err, "Decode expected empty root hash")
+
 	// Check proposal root
 	hash, err := proposal.Root()
 	require.NoError(t, err, "%T.Root() after commit", proposal)
-	require.Empty(t, hash, "%T.Root() after commit should be empty", proposal)
+	require.Equalf(t, expectedHash, hash, "%T.Root() of empty trie", db)
 
 	// Commit the proposal.
 	err = proposal.Commit()
@@ -453,9 +457,6 @@ func TestDeleteAll(t *testing.T) {
 	// Check that the database is empty.
 	hash, err = db.Root()
 	require.NoError(t, err, "%T.Root()", db)
-	emptyRootStr := expectedRoots[emptyKey]
-	expectedHash, err := hex.DecodeString(emptyRootStr)
-	require.NoError(t, err)
 	require.Equalf(t, expectedHash, hash, "%T.Root() of empty trie", db)
 }
 
@@ -472,8 +473,6 @@ func TestFakeProposalPreCommit(t *testing.T) {
 	// Check all operations on the fake proposal.
 	_, err := proposal.Get([]byte("non-existent"))
 	require.Contains(t, err.Error(), "proposal not found", "Get(fake proposal)")
-	_, err = proposal.Root()
-	require.Contains(t, err.Error(), "proposal not found", "Root(fake proposal)")
 	_, err = proposal.Propose([][]byte{[]byte("key")}, [][]byte{[]byte("value")})
 	require.Contains(t, err.Error(), "proposal not found", "Propose(fake proposal)")
 	err = proposal.Commit()
@@ -516,8 +515,6 @@ func TestDropProposal(t *testing.T) {
 	require.Contains(t, err.Error(), "proposal not found", "Get(fake proposal)")
 	_, err = proposal.Propose([][]byte{[]byte("key")}, [][]byte{[]byte("value")})
 	require.Contains(t, err.Error(), "proposal not found", "Propose(fake proposal)")
-	_, err = proposal.Root()
-	require.Contains(t, err.Error(), "proposal not found", "Root(fake proposal)")
 	err = proposal.Commit()
 	require.Contains(t, err.Error(), "proposal not found", "Commit(fake proposal)")
 }

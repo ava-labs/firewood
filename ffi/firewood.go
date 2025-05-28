@@ -158,12 +158,12 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 			value: values.from(vals[i]),
 		}
 	}
-	idOrErr := C.fwd_propose_on_db(
+	val := C.fwd_propose_on_db(
 		db.handle,
 		C.size_t(len(ffiOps)),
 		unsafe.SliceData(ffiOps), // implicitly pinned
 	)
-	id, err := extractUintThenFree(&idOrErr)
+	bytes, id, err := extractBytesAndErrorThenFree(&val)
 	if err != nil {
 		return nil, err
 	}
@@ -172,6 +172,7 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 	return &Proposal{
 		handle: db.handle,
 		id:     id,
+		root:   bytes,
 	}, nil
 }
 

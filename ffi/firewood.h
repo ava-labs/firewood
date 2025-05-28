@@ -313,7 +313,8 @@ struct Value fwd_proposal_root_hash(const struct DatabaseHandle *db, ProposalId 
  *
  * # Returns
  *
- * A `Value` containing {id, null} if creating the proposal succeeded.
+ * A `Value` containing {id, root} if creating the proposal succeeded.
+ * The root will always be 32 bytes, and the id will be non-zero.
  * A `Value` containing {0, "error message"} if creating the proposal failed.
  *
  * # Safety
@@ -341,7 +342,8 @@ struct Value fwd_propose_on_db(const struct DatabaseHandle *db,
  *
  * # Returns
  *
- * A `Value` containing {id, nil} if creating the proposal succeeded.
+ * A `Value` containing {id, root} if creating the proposal succeeded.
+ * The root will always be 32 bytes, and the id will be non-zero.
  * A `Value` containing {0, "error message"} if creating the proposal failed.
  *
  * # Safety

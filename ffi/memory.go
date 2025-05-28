@@ -27,6 +27,39 @@ type KeyValue struct {
 	Value []byte
 }
 
+// extractBytesAndErrorThenFree converts the cgo `Value` payload into either:
+// 1. a 32 byte slice, an id and nil error
+// 2. a nil byte slice, 0 id, and a non-nil error
+// This should only be called when the `Value` is expected to only contain an error or
+// an ID and a hash, otherwise the behavior is undefined.
+func extractBytesAndErrorThenFree(v *C.struct_Value) ([]byte, uint32, error) {
+	// Pin the returned value to prevent it from being garbage collected.
+	defer runtime.KeepAlive(v)
+
+	if v == nil {
+		return nil, 0, errNilBuffer
+	}
+
+	// Expected empty case for Rust's `()`
+	// Ignores the length.
+	if v.data == nil {
+		return nil, uint32(v.len), nil
+	}
+
+	// If the value is an error string, it should be freed and an error
+	// returned.
+	if v.len == 0 {
+		errStr := C.GoString((*C.char)(unsafe.Pointer(v.data)))
+		C.fwd_free_value(v)
+		return nil, 0, fmt.Errorf("firewood error: %s", errStr)
+	}
+
+	// We must assume that the byte slice is a valid 32 byte slice
+	buf := C.GoBytes(unsafe.Pointer(v.data), RootLength)
+	C.fwd_free_value(v)
+	return buf, uint32(v.len), nil
+}
+
 // extractErrorThenFree converts the cgo `Value` payload to either:
 // 1. a nil value, indicating no error, or
 // 2. a non-nil error, indicating an error occurred.

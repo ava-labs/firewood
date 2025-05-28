@@ -25,6 +25,9 @@ type Proposal struct {
 	// The proposal ID.
 	// id = 0 is reserved for a dropped proposal.
 	id uint32
+
+	// The proposal root hash.
+	root []byte
 }
 
 // Root retrieves the root hash of the proposal.
@@ -39,9 +42,13 @@ func (p *Proposal) Root() ([]byte, error) {
 		return nil, errDroppedProposal
 	}
 
+	// If the hash is empty, return the empty root hash.
+	if p.root == nil {
+		return make([]byte, RootLength), nil
+	}
+
 	// Get the root hash of the proposal.
-	val := C.fwd_proposal_root_hash(p.handle, C.uint32_t(p.id))
-	return extractBytesThenFree(&val)
+	return p.root, nil
 }
 
 // Get retrieves the value for the given key.
@@ -94,7 +101,7 @@ func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
 		C.size_t(len(ffiOps)),
 		unsafe.SliceData(ffiOps),
 	)
-	id, err := extractUintThenFree(&val)
+	bytes, id, err := extractBytesAndErrorThenFree(&val)
 	if err != nil {
 		return nil, err
 	}
@@ -102,6 +109,7 @@ func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
 	return &Proposal{
 		handle: p.handle,
 		id:     id,
+		root:   bytes,
 	}, nil
 }
 

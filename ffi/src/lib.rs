@@ -338,7 +338,8 @@ fn batch(
 ///
 /// # Returns
 ///
-/// A `Value` containing {id, null} if creating the proposal succeeded.
+/// A `Value` containing {id, root} if creating the proposal succeeded.
+/// The root will always be 32 bytes, and the id will be non-zero.
 /// A `Value` containing {0, "error message"} if creating the proposal failed.
 ///
 /// # Safety
@@ -357,7 +358,7 @@ pub unsafe extern "C" fn fwd_propose_on_db(
 ) -> Value {
     // Note: the id is guaranteed to be non-zero
     // because we use an atomic counter that starts at 1.
-    propose_on_db(db, nkeys, values).map_or_else(Into::into, Into::into)
+    propose_on_db(db, nkeys, values).unwrap_or_else(Into::into)
 }
 
 /// Internal call for `fwd_propose_on_db` to remove error handling from the C API
@@ -366,7 +367,7 @@ fn propose_on_db(
     db: *const DatabaseHandle,
     nkeys: usize,
     values: *const KeyValue,
-) -> Result<ProposalId, String> {
+) -> Result<Value, String> {
     let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
     if values.is_null() {
         return Err(String::from("key-value list is null"));
@@ -378,12 +379,21 @@ fn propose_on_db(
 
     // Propose the batch of operations.
     let proposal = db.propose_sync(batch).map_err(|e| e.to_string())?;
-    let proposal_id = next_id(); // Guaranteed to be non-zero
+
+    // Get the root hash of the new proposal.
+    let mut root_hash: Value = match proposal.root_hash_sync().map_err(|e| e.to_string())? {
+        Some(root) => Value::from(root.as_slice()),
+        None => String::new().into(),
+    };
+
+    // Store the proposal in the map. We need the write lock instead.
+    let new_id = next_id(); // Guaranteed to be non-zero
     db.proposals
         .write()
         .map_err(|_| "proposal lock is poisoned")?
-        .insert(proposal_id, proposal);
-    Ok(proposal_id)
+        .insert(new_id, proposal);
+    root_hash.len = new_id as usize; // Set the length to the proposal ID
+    Ok(root_hash)
 }
 
 /// Proposes a batch of operations to the database on top of an existing proposal.
@@ -397,7 +407,8 @@ fn propose_on_db(
 ///
 /// # Returns
 ///
-/// A `Value` containing {id, nil} if creating the proposal succeeded.
+/// A `Value` containing {id, root} if creating the proposal succeeded.
+/// The root will always be 32 bytes, and the id will be non-zero.
 /// A `Value` containing {0, "error message"} if creating the proposal failed.
 ///
 /// # Safety
@@ -417,7 +428,7 @@ pub unsafe extern "C" fn fwd_propose_on_proposal(
 ) -> Value {
     // Note: the id is guaranteed to be non-zero
     // because we use an atomic counter that starts at 1.
-    propose_on_proposal(db, proposal_id, nkeys, values).map_or_else(Into::into, Into::into)
+    propose_on_proposal(db, proposal_id, nkeys, values).unwrap_or_else(Into::into)
 }
 
 /// Internal call for `fwd_propose_on_proposal` to remove error handling from the C API
@@ -427,7 +438,7 @@ fn propose_on_proposal(
     proposal_id: ProposalId,
     nkeys: usize,
     values: *const KeyValue,
-) -> Result<ProposalId, String> {
+) -> Result<Value, String> {
     let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
     if values.is_null() {
         return Err(String::from("key-value list is null"));
@@ -449,13 +460,20 @@ fn propose_on_proposal(
     let new_proposal = proposal.propose_sync(batch).map_err(|e| e.to_string())?;
     drop(guard); // Drop the read lock before we get the write lock.
 
+    // Get the root hash of the new proposal.
+    let mut root_hash: Value = match new_proposal.root_hash_sync().map_err(|e| e.to_string())? {
+        Some(root) => Value::from(root.as_slice()),
+        None => String::new().into(),
+    };
+
     // Store the proposal in the map. We need the write lock instead.
     let new_id = next_id(); // Guaranteed to be non-zero
     db.proposals
         .write()
         .map_err(|_| "proposal lock is poisoned")?
         .insert(new_id, new_proposal);
-    Ok(new_id)
+    root_hash.len = new_id as usize; // Set the length to the proposal ID
+    Ok(root_hash)
 }
 
 /// Commits a proposal to the database.
