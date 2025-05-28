@@ -280,29 +280,6 @@ struct Value fwd_get_latest(const struct DatabaseHandle *db, struct Value key);
 const struct DatabaseHandle *fwd_open_db(struct CreateOrOpenArgs args);
 
 /**
- * Get the root hash of a proposal by its ID.
- *
- * # Arguments
- *
- * * `db` - The database handle returned by `open_db`
- * * `proposal_id` - The ID of the proposal to get the root hash from
- *
- * # Returns
- *
- * A `Value` containing the root hash of the proposal.
- * A `Value` containing {0, "error message"} if the root hash could not be retrieved.
- * One expected error is "IO error: Root hash not found" if the database is empty.
- * This should be handled by the caller.
- *
- * # Safety
- *
- * This function is unsafe because it dereferences raw pointers.
- * The caller must ensure that `db` is a valid pointer returned by `open_db`
- *
- */
-struct Value fwd_proposal_root_hash(const struct DatabaseHandle *db, ProposalId proposal_id);
-
-/**
  * Proposes a batch of operations to the database.
  *
  * # Arguments

@@ -588,57 +588,6 @@ fn hash(db: &Db) -> Result<Value, String> {
         .map(|root| Value::from(root.as_slice()))
 }
 
-/// Get the root hash of a proposal by its ID.
-///
-/// # Arguments
-///
-/// * `db` - The database handle returned by `open_db`
-/// * `proposal_id` - The ID of the proposal to get the root hash from
-///
-/// # Returns
-///
-/// A `Value` containing the root hash of the proposal.
-/// A `Value` containing {0, "error message"} if the root hash could not be retrieved.
-/// One expected error is "IO error: Root hash not found" if the database is empty.
-/// This should be handled by the caller.
-///
-/// # Safety
-///
-/// This function is unsafe because it dereferences raw pointers.
-/// The caller must ensure that `db` is a valid pointer returned by `open_db`
-///
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_proposal_root_hash(
-    db: *const DatabaseHandle,
-    proposal_id: ProposalId,
-) -> Value {
-    // Check db is valid.
-    proposal_root_hash(db, proposal_id).unwrap_or_else(Into::into)
-}
-
-/// This function is not exposed to the C API.
-/// Internal call for `fwd_proposal_root_hash` to remove error handling from the C API
-#[doc(hidden)]
-fn proposal_root_hash(db: *const DatabaseHandle, proposal_id: ProposalId) -> Result<Value, String> {
-    let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
-
-    // Get proposal from ID.
-    let proposals = db
-        .proposals
-        .read()
-        .map_err(|_| "proposal lock is poisoned")?;
-    let proposal = proposals
-        .get(&proposal_id)
-        .ok_or_else(|| String::from("proposal not found"))?;
-
-    // Get the root hash of the proposal.
-    proposal
-        .root_hash_sync()
-        .map_err(|e| e.to_string())?
-        .ok_or_else(String::new)
-        .map(|root| Value::from(root.as_slice()))
-}
-
 /// A value returned by the FFI.
 ///
 /// This is used in several different ways:
