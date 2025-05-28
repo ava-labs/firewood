@@ -39,7 +39,6 @@ jobs:
           overwrite: true
           include-hidden-files: true
   deploy:
-    needs: build
     permissions:
       pages: write
       id-token: write
