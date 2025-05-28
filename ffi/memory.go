@@ -54,10 +54,12 @@ func extractBytesAndErrorThenFree(v *C.struct_Value) ([]byte, uint32, error) {
 		return nil, 0, fmt.Errorf("firewood error: %s", errStr)
 	}
 
-	// We must assume that the byte slice is a valid 32 byte slice
+	// We must assume that the byte slice is a valid root slice.
+	id := uint32(v.len)
 	buf := C.GoBytes(unsafe.Pointer(v.data), RootLength)
+	v.len = C.size_t(RootLength) // set the length to clean
 	C.fwd_free_value(v)
-	return buf, uint32(v.len), nil
+	return buf, id, nil
 }
 
 // extractErrorThenFree converts the cgo `Value` payload to either:
