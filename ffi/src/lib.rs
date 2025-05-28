@@ -708,13 +708,16 @@ pub unsafe extern "C" fn fwd_free_value(value: *const Value) {
 ///   otherwise should exist if passed to `fwd_open_db()`.
 /// * `cache_size` - The size of the node cache, panics if <= 0
 /// * `revisions` - The maximum number of revisions to keep; firewood currently requires this to be at least 2
+/// * `metrics_port` - The port to use for the metrics server.
+///    0 selects a random, available port.
+///    -1 disables the metrics server.
 #[repr(C)]
 pub struct CreateOrOpenArgs {
     path: *const std::ffi::c_char,
     cache_size: usize,
     revisions: usize,
     strategy: u8,
-    metrics_port: u16,
+    metrics_port: i16,
 }
 
 /// Create a database with the given cache size and maximum number of revisions, as well
@@ -782,7 +785,7 @@ pub unsafe extern "C" fn fwd_open_db(args: CreateOrOpenArgs) -> *const DatabaseH
 #[doc(hidden)]
 unsafe fn common_create(
     path: *const std::ffi::c_char,
-    metrics_port: u16,
+    metrics_port: i16,
     cfg: DbConfig,
 ) -> *const DatabaseHandle<'static> {
     #[cfg(feature = "logger")]
@@ -791,8 +794,8 @@ unsafe fn common_create(
 
     let path = unsafe { CStr::from_ptr(path) };
     let path: &Path = OsStr::from_bytes(path.to_bytes()).as_ref();
-    if metrics_port > 0 {
-        metrics_setup::setup_metrics(metrics_port);
+    if metrics_port >= 0 {
+        metrics_setup::setup_metrics(metrics_port as u16);
     }
     let db = Db::new_sync(path, cfg).expect("db initialization should succeed");
     Box::into_raw(Box::new(db.into()))

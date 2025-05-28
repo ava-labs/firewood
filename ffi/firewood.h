@@ -44,13 +44,16 @@ typedef struct KeyValue {
  *   otherwise should exist if passed to `fwd_open_db()`.
  * * `cache_size` - The size of the node cache, panics if <= 0
  * * `revisions` - The maximum number of revisions to keep; firewood currently requires this to be at least 2
+ * * `metrics_port` - The port to use for the metrics server.
+ *    0 selects a random, available port.
+ *    -1 disables the metrics server.
  */
 typedef struct CreateOrOpenArgs {
   const char *path;
   size_t cache_size;
   size_t revisions;
   uint8_t strategy;
-  uint16_t metrics_port;
+  int16_t metrics_port;
 } CreateOrOpenArgs;
 
 typedef uint32_t ProposalId;

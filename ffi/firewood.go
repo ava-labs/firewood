@@ -15,6 +15,7 @@ package firewood
 // #cgo LDFLAGS: -L${SRCDIR}/../target/maxperf
 // #cgo LDFLAGS: -L/usr/local/lib -lfirewood_ffi
 // #include <stdlib.h>
+// #include <stdint.h>
 // #include "firewood.h"
 import "C"
 
@@ -50,7 +51,7 @@ type Config struct {
 	NodeCacheEntries  uint
 	Revisions         uint
 	ReadCacheStrategy CacheStrategy
-	MetricsPort       uint16
+	MetricsPort       int16
 }
 
 // DefaultConfig returns a sensible default Config.
@@ -97,7 +98,7 @@ func New(filePath string, conf *Config) (*Database, error) {
 		cache_size:   C.size_t(conf.NodeCacheEntries),
 		revisions:    C.size_t(conf.Revisions),
 		strategy:     C.uint8_t(conf.ReadCacheStrategy),
-		metrics_port: C.uint16_t(conf.MetricsPort),
+		metrics_port: C.int16_t(conf.MetricsPort),
 	}
 
 	var db *C.DatabaseHandle
