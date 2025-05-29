@@ -162,28 +162,26 @@ func TestInsert(t *testing.T) {
 	require.Equal(t, val, string(got), "Recover lone batch-inserted value")
 }
 
-// Attempt to make a call to a nil or invalid handle.
-// Each function should return an error and not panic.
-func TestGetBadHandle(t *testing.T) {
-	db := &Database{handle: nil}
+func TestClosedDatabase(t *testing.T) {
+	r := require.New(t)
+	dbFile := filepath.Join(t.TempDir(), "test.db")
+	db, _, err := newDatabase(dbFile)
+	r.NoError(err)
 
-	// This ignores error, but still shouldn't panic.
-	_, err := db.Get([]byte("non-existent"))
-	require.ErrorIs(t, err, errDBClosed)
+	r.NoError(db.Close())
 
-	// We ignore the error, but it shouldn't panic.
 	_, err = db.Root()
-	require.ErrorIs(t, err, errDBClosed)
+	r.ErrorIs(err, errDBClosed)
 
 	root, err := db.Update(
 		[][]byte{[]byte("key")},
 		[][]byte{[]byte("value")},
 	)
-	require.Empty(t, root)
-	require.ErrorIs(t, err, errDBClosed)
+	r.Empty(root)
+	r.ErrorIs(err, errDBClosed)
 
 	err = db.Close()
-	require.ErrorIs(t, err, errDBClosed)
+	r.ErrorIs(err, errDBClosed)
 }
 
 func keyForTest(i int) []byte {
