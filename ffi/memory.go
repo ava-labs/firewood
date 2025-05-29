@@ -95,38 +95,6 @@ func extractErrorThenFree(v *C.struct_Value) error {
 	return errBadValue
 }
 
-// extractUintThenFree converts the cgo `Value` payload to either:
-// 1. a nonzero uint32 and nil error, indicating a valid int
-// 2. a zero uint32 and a non-nil error, indicating an error occurred.
-// This should only be called when the `Value` is expected to only contain an error or an ID.
-// Otherwise, an error is returned.
-func extractUintThenFree(v *C.struct_Value) (uint32, error) {
-	// Pin the returned value to prevent it from being garbage collected.
-	defer runtime.KeepAlive(v)
-
-	if v == nil {
-		return 0, errNilBuffer
-	}
-
-	// Normal case, length is non-zero and data is nil.
-	if v.len != 0 && v.data == nil {
-		return uint32(v.len), nil
-	}
-
-	// If the value is an error string, it should be freed and an error
-	// returned.
-	if v.len == 0 && v.data != nil {
-		errStr := C.GoString((*C.char)(unsafe.Pointer(v.data)))
-		C.fwd_free_value(v)
-		return 0, fmt.Errorf("firewood error: %s", errStr)
-	}
-
-	// The value is formatted incorrectly.
-	// We should still attempt to free the value.
-	C.fwd_free_value(v)
-	return 0, errBadValue
-}
-
 // extractBytesThenFree converts the cgo `Value` payload to either:
 // 1. a non-nil byte slice and nil error, indicating a valid byte slice
 // 2. a nil byte slice and nil error, indicating an empty byte slice
