@@ -290,9 +290,9 @@ const struct DatabaseHandle *fwd_open_db(struct CreateOrOpenArgs args);
  *
  * # Returns
  *
- * A `Value` containing {id, root} if creating the proposal succeeded.
- * The root will always be 32 bytes, and the id will be non-zero.
- * A `Value` containing {0, "error message"} if creating the proposal failed.
+ * On success, a `Value` containing {len=id, data=hash}. In this case, the
+ * hash will always be 32 bytes, and the id will be non-zero.
+ * On failure, a `Value` containing {0, "error message"}.
  *
  * # Safety
  *
@@ -319,9 +319,9 @@ struct Value fwd_propose_on_db(const struct DatabaseHandle *db,
  *
  * # Returns
  *
- * A `Value` containing {id, root} if creating the proposal succeeded.
- * The root will always be 32 bytes, and the id will be non-zero.
- * A `Value` containing {0, "error message"} if creating the proposal failed.
+ * On success, a `Value` containing {len=id, data=hash}. In this case, the
+ * hash will always be 32 bytes, and the id will be non-zero.
+ * On failure, a `Value` containing {0, "error message"}.
  *
  * # Safety
  *
