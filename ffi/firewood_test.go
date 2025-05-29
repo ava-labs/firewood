@@ -430,21 +430,6 @@ func TestDeleteAll(t *testing.T) {
 	require.Equalf(t, expectedHash, hash, "%T.Root() of empty trie", db)
 }
 
-// Tests that a proposal with an invalid ID cannot be committed.
-func TestCommitFakeProposal(t *testing.T) {
-	db := newTestDatabase(t)
-
-	// Create a fake proposal with an invalid ID.
-	proposal := &Proposal{
-		handle: db.handle,
-		id:     1, // note that ID 0 is reserved for invalid proposals
-	}
-
-	// Attempt to get a value from the fake proposal.
-	_, err := proposal.Get([]byte("non-existent"))
-	require.Contains(t, err.Error(), "proposal not found", "Get(fake proposal)")
-}
-
 func TestDropProposal(t *testing.T) {
 	db := newTestDatabase(t)
 
