@@ -66,7 +66,7 @@ func (p *Proposal) Get(key []byte) ([]byte, error) {
 
 	// Get the value for the given key.
 	val := C.fwd_get_from_proposal(p.handle, C.uint32_t(p.id), values.from(key))
-	return extractBytesThenFree(&val)
+	return (&Value{V: &val}).intoBytes()
 }
 
 // Propose creates a new proposal with the given keys and values.
@@ -101,7 +101,7 @@ func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
 		C.size_t(len(ffiOps)),
 		unsafe.SliceData(ffiOps),
 	)
-	bytes, id, err := extractBytesAndErrorThenFree(&val)
+	bytes, id, err := (&Value{V: &val}).intoHashAndId()
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +126,7 @@ func (p *Proposal) Commit() error {
 
 	// Commit the proposal and return the hash.
 	errVal := C.fwd_commit(p.handle, C.uint32_t(p.id))
-	err := extractErrorThenFree(&errVal)
+	err := (&Value{V: &errVal}).intoError()
 	if err != nil {
 		// this is unrecoverable due to Rust's ownership model
 		// The underlying proposal is no longer valid.
@@ -150,5 +150,5 @@ func (p *Proposal) Drop() error {
 	// Drop the proposal.
 	val := C.fwd_drop_proposal(p.handle, C.uint32_t(p.id))
 	p.id = 0
-	return extractErrorThenFree(&val)
+	return (&Value{V: &val}).intoError()
 }
