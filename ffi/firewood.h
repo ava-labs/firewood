@@ -16,13 +16,9 @@ typedef struct DatabaseHandle DatabaseHandle;
 /**
  * A value returned by the FFI.
  *
- * This is used in several different ways:
+ * This is used in several different ways, and should be interpreted based on the
+ * function that returned it.
  *
- * - When returning data, the length is the length of the data and the data is a pointer to the data.
- * - When returning an error, the length is 0 and the data is a null-terminated C-style string.
- * - When returning an ID, the length is the ID and the data is null.
- *
- * A `Value` with length 0 and a null data pointer indicates that the data was not found.
  */
 typedef struct Value {
   size_t len;
