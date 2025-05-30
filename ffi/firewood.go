@@ -141,7 +141,7 @@ func (db *Database) Batch(ops []KeyValue) ([]byte, error) {
 		C.size_t(len(ffiOps)),
 		unsafe.SliceData(ffiOps), // implicitly pinned
 	)
-	return extractBytesThenFree(&hash)
+	return bytesFromValue(&hash)
 }
 
 func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
@@ -159,12 +159,12 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 			value: values.from(vals[i]),
 		}
 	}
-	idOrErr := C.fwd_propose_on_db(
+	val := C.fwd_propose_on_db(
 		db.handle,
 		C.size_t(len(ffiOps)),
 		unsafe.SliceData(ffiOps), // implicitly pinned
 	)
-	id, err := extractUintThenFree(&idOrErr)
+	bytes, id, err := hashAndIDFromValue(&val)
 	if err != nil {
 		return nil, err
 	}
@@ -173,6 +173,7 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 	return &Proposal{
 		handle: db.handle,
 		id:     id,
+		root:   bytes,
 	}, nil
 }
 
@@ -186,7 +187,7 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 	values, cleanup := newValueFactory()
 	defer cleanup()
 	val := C.fwd_get_latest(db.handle, values.from(key))
-	bytes, err := extractBytesThenFree(&val)
+	bytes, err := bytesFromValue(&val)
 
 	// If the root hash is not found, return nil.
 	if err != nil && strings.Contains(err.Error(), rootHashNotFound) {
@@ -203,7 +204,7 @@ func (db *Database) Root() ([]byte, error) {
 		return nil, errDBClosed
 	}
 	hash := C.fwd_root_hash(db.handle)
-	bytes, err := extractBytesThenFree(&hash)
+	bytes, err := bytesFromValue(&hash)
 
 	// If the root hash is not found, return a zeroed slice.
 	if err != nil && strings.Contains(err.Error(), rootHashNotFound) {
