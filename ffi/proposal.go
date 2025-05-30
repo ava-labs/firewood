@@ -25,6 +25,30 @@ type Proposal struct {
 	// The proposal ID.
 	// id = 0 is reserved for a dropped proposal.
 	id uint32
+
+	// The proposal root hash.
+	root []byte
+}
+
+// Root retrieves the root hash of the proposal.
+// If the proposal is empty (i.e. no keys in database),
+// it returns nil, nil.
+func (p *Proposal) Root() ([]byte, error) {
+	if p.handle == nil {
+		return nil, errDBClosed
+	}
+
+	if p.id == 0 {
+		return nil, errDroppedProposal
+	}
+
+	// If the hash is empty, return the empty root hash.
+	if p.root == nil {
+		return make([]byte, RootLength), nil
+	}
+
+	// Get the root hash of the proposal.
+	return p.root, nil
 }
 
 // Get retrieves the value for the given key.
@@ -42,7 +66,7 @@ func (p *Proposal) Get(key []byte) ([]byte, error) {
 
 	// Get the value for the given key.
 	val := C.fwd_get_from_proposal(p.handle, C.uint32_t(p.id), values.from(key))
-	return extractBytesThenFree(&val)
+	return (&Value{V: &val}).intoBytes()
 }
 
 // Propose creates a new proposal with the given keys and values.
@@ -77,7 +101,7 @@ func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
 		C.size_t(len(ffiOps)),
 		unsafe.SliceData(ffiOps),
 	)
-	id, err := extractUintThenFree(&val)
+	bytes, id, err := (&Value{V: &val}).intoHashAndID()
 	if err != nil {
 		return nil, err
 	}
@@ -85,6 +109,7 @@ func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
 	return &Proposal{
 		handle: p.handle,
 		id:     id,
+		root:   bytes,
 	}, nil
 }
 
@@ -101,7 +126,7 @@ func (p *Proposal) Commit() error {
 
 	// Commit the proposal and return the hash.
 	errVal := C.fwd_commit(p.handle, C.uint32_t(p.id))
-	err := extractErrorThenFree(&errVal)
+	err := (&Value{V: &errVal}).intoError()
 	if err != nil {
 		// this is unrecoverable due to Rust's ownership model
 		// The underlying proposal is no longer valid.
@@ -125,5 +150,5 @@ func (p *Proposal) Drop() error {
 	// Drop the proposal.
 	val := C.fwd_drop_proposal(p.handle, C.uint32_t(p.id))
 	p.id = 0
-	return extractErrorThenFree(&val)
+	return (&Value{V: &val}).intoError()
 }
