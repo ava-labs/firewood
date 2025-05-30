@@ -164,7 +164,7 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 		C.size_t(len(ffiOps)),
 		unsafe.SliceData(ffiOps), // implicitly pinned
 	)
-	bytes, id, err := (&Value{V: &val}).intoHashAndId()
+	bytes, id, err := (&Value{V: &val}).intoHashAndID()
 	if err != nil {
 		return nil, err
 	}

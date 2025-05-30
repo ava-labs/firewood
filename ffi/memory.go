@@ -27,7 +27,7 @@ type KeyValue struct {
 	Value []byte
 }
 
-// intoHashAndId converts a Value to a 32 byte slice and an id.
+// intoHashAndID converts a Value to a 32 byte slice and an id.
 // This should only be called when the `Value` is expected to only contain an error or
 // an ID and a hash, otherwise the behavior is undefined.
 //         data    | len   | meaning
@@ -38,7 +38,7 @@ type KeyValue struct {
 // TODO: case 2 should be invalid as well, since the proposal should be returning
 // the nil hash, not None.
 
-func (v *Value) intoHashAndId() ([]byte, uint32, error) {
+func (v *Value) intoHashAndID() ([]byte, uint32, error) {
 	defer runtime.KeepAlive(v)
 
 	if v.V == nil {
