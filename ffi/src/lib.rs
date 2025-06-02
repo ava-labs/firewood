@@ -100,10 +100,12 @@ fn get_latest(db: *const DatabaseHandle, key: &Value) -> Result<Value, String> {
 
     // Find root hash.
     // Matches `hash` function but we use the TrieHash type here
-    let root = db
-        .root_hash_sync()
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| String::from("unexpected None from db.root_hash_sync"))?;
+    let Some(root) = db.root_hash_sync().map_err(|e| e.to_string())? else {
+        return Ok(Value {
+            len: 0,
+            data: std::ptr::null(),
+        });
+    };
 
     // Find revision assoicated with root.
     let rev = db.revision_sync(root).map_err(|e| e.to_string())?;
@@ -586,8 +588,16 @@ fn root_hash(db: *const DatabaseHandle) -> Result<Value, String> {
 fn hash(db: &Db) -> Result<Value, String> {
     db.root_hash_sync()
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| String::from("unexpected None from db.root_hash_sync"))
         .map(|root| Value::from(root.as_slice()))
+        .map_or_else(
+            || {
+                Ok(Value {
+                    len: 0,
+                    data: std::ptr::null(),
+                })
+            },
+            Ok,
+        )
 }
 
 /// A value returned by the FFI.
