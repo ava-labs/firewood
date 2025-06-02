@@ -16,8 +16,16 @@ typedef struct DatabaseHandle DatabaseHandle;
 /**
  * A value returned by the FFI.
  *
- * This is used in several different ways, and should be interpreted based on the
- * function that returned it.
+ * This is used in several different ways, including:
+ * * An C-style string.
+ * * An ID for a proposal.
+ * * A byte slice containing data.
+ *
+ * For more details on how the data may be stored, refer to the function signature
+ * that returned it or the `From` implementations.
+ *
+ * The data stored in this struct (if `data` is not null) must be manually freed
+ * by the caller using `fwd_free_value`.
  *
  */
 typedef struct Value {

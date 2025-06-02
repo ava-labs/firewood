@@ -35,6 +35,8 @@ type KeyValue struct {
 // 2.    | nil     | non-0 | proposal deleted everything
 // 3.    | non-nil | 0     | error string
 // 4.    | non-nil | non-0 | hash and id
+//
+// The value should never be nil.
 func hashAndIDFromValue(v *C.struct_Value) ([]byte, uint32, error) {
 	// Pin the returned value to prevent it from being garbage collected.
 	defer runtime.KeepAlive(v)
@@ -76,6 +78,8 @@ func hashAndIDFromValue(v *C.struct_Value) ([]byte, uint32, error) {
 // 2.    | nil     | non-0 | invalid
 // 3.    | non-nil | 0     | error string
 // 4.    | non-nil | non-0 | invalid
+//
+// The value should never be nil.
 func errorFromValue(v *C.struct_Value) error {
 	// Pin the returned value to prevent it from being garbage collected.
 	defer runtime.KeepAlive(v)
@@ -109,6 +113,8 @@ func errorFromValue(v *C.struct_Value) error {
 // 2.    | nil     | non-0 | invalid
 // 3.    | non-nil | 0     | error string
 // 4.    | non-nil | non-0 | bytes (most common)
+//
+// The value should never be nil.
 func bytesFromValue(v *C.struct_Value) ([]byte, error) {
 	// Pin the returned value to prevent it from being garbage collected.
 	defer runtime.KeepAlive(v)
