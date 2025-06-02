@@ -349,7 +349,11 @@ impl Proposal<'_> {
         #[cfg(not(feature = "ethhash"))]
         return Ok(self.nodestore.root_hash()?);
         #[cfg(feature = "ethhash")]
-        return Ok(Some(self.nodestore.root_hash()?.unwrap_or_else(storage::empty_trie_hash)));
+        return Ok(Some(
+            self.nodestore
+                .root_hash()?
+                .unwrap_or_else(storage::empty_trie_hash),
+        ));
     }
 }
 

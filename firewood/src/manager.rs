@@ -244,9 +244,7 @@ impl RevisionManager {
     }
 
     pub fn root_hash(&self) -> Result<Option<HashKey>, RevisionManagerError> {
-        Ok(self.current_revision()
-            .kind
-            .root_hash())
+        Ok(self.current_revision().kind.root_hash())
     }
 
     pub fn current_revision(&self) -> CommittedRevision {
