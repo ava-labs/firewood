@@ -164,17 +164,7 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 		C.size_t(len(ffiOps)),
 		unsafe.SliceData(ffiOps), // implicitly pinned
 	)
-	bytes, id, err := hashAndIDFromValue(&val)
-	if err != nil {
-		return nil, err
-	}
-
-	// The C function will never create an id of 0, unless it is an error.
-	return &Proposal{
-		handle: db.handle,
-		id:     id,
-		root:   bytes,
-	}, nil
+	return newProposal(db.handle, &val)
 }
 
 // Get retrieves the value for the given key. It always returns a nil error.

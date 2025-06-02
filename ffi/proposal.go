@@ -30,6 +30,27 @@ type Proposal struct {
 	root []byte
 }
 
+// newProposal creates a new Proposal from the given DatabaseHandle and Value.
+// The Value must be returned from a Firewood FFI function.
+// An error can only occur from parsing the Value.
+func newProposal(handle *C.DatabaseHandle, val *C.struct_Value) (*Proposal, error) {
+	bytes, id, err := hashAndIDFromValue(val)
+	if err != nil {
+		return nil, err
+	}
+
+	// If the proposal root is nil, it means the proposal is empty.
+	if bytes == nil {
+		bytes = make([]byte, RootLength)
+	}
+
+	return &Proposal{
+		handle: handle,
+		id:     id,
+		root:   bytes,
+	}, nil
+}
+
 // Root retrieves the root hash of the proposal.
 // If the proposal is empty (i.e. no keys in database),
 // it returns nil, nil.
@@ -101,16 +122,8 @@ func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
 		C.size_t(len(ffiOps)),
 		unsafe.SliceData(ffiOps),
 	)
-	bytes, id, err := hashAndIDFromValue(&val)
-	if err != nil {
-		return nil, err
-	}
 
-	return &Proposal{
-		handle: p.handle,
-		id:     id,
-		root:   bytes,
-	}, nil
+	return newProposal(p.handle, &val)
 }
 
 // Commit commits the proposal and returns any errors.
