@@ -147,19 +147,17 @@ func newDatabase(dbFile string) (*Database, func() error, error) {
 // This doesn't require storing a proposal across the FFI boundary.
 func TestInsert(t *testing.T) {
 	db := newTestDatabase(t)
-	const (
-		key = "abc"
-		val = "def"
+	var (
+		key = []byte("abc")
+		val = []byte("def")
 	)
 
-	_, err := db.Batch([]KeyValue{
-		{[]byte(key), []byte(val)},
-	})
+	_, err := db.Batch([][]byte{key}, [][]byte{val})
 	require.NoError(t, err, "Batch(%q)", key)
 
-	got, err := db.Get([]byte(key))
+	got, err := db.Get(key)
 	require.NoErrorf(t, err, "%T.Get(%q)", db, key)
-	require.Equal(t, val, string(got), "Recover lone batch-inserted value")
+	require.Equal(t, val, got, "Recover lone batch-inserted value")
 }
 
 func TestClosedDatabase(t *testing.T) {
@@ -173,7 +171,7 @@ func TestClosedDatabase(t *testing.T) {
 	_, err = db.Root()
 	r.ErrorIs(err, errDBClosed)
 
-	root, err := db.Update(
+	root, err := db.Batch(
 		[][]byte{[]byte("key")},
 		[][]byte{[]byte("value")},
 	)
@@ -192,17 +190,21 @@ func valForTest(i int) []byte {
 	return []byte("value" + strconv.Itoa(i))
 }
 
-func kvForTest(i int) KeyValue {
-	return KeyValue{
-		Key:   keyForTest(i),
-		Value: valForTest(i),
+func kvForTest(num int) ([][]byte, [][]byte) {
+	keys := make([][]byte, num)
+	vals := make([][]byte, num)
+	for i := range keys {
+		keys[i] = keyForTest(i)
+		vals[i] = valForTest(i)
 	}
+	return keys, vals
 }
 
 // Tests that 100 key-value pairs can be inserted and retrieved.
-// This happens in two ways:
+// This happens in three ways:
 // 1. By calling [Database.Propose] and then [Proposal.Commit].
-// 2. By calling [Database.Update] directly - no proposal storage is needed.
+// 2. By calling [Database.Batch] directly - no proposal storage is needed.
+// 3. By calling [Database.Propose] and not committing, which returns a proposal.
 func TestInsert100(t *testing.T) {
 	type dbView interface {
 		Get(key []byte) ([]byte, error)
@@ -229,13 +231,13 @@ func TestInsert100(t *testing.T) {
 			},
 		},
 		{
-			name: "Update",
+			name: "Batch",
 			insert: func(db dbView, keys, vals [][]byte) (dbView, error) {
 				actualDB, ok := db.(*Database)
 				if !ok {
 					return nil, fmt.Errorf("expected *Database, got %T", db)
 				}
-				_, err := actualDB.Update(keys, vals)
+				_, err := actualDB.Batch(keys, vals)
 				return db, err
 			},
 		},
@@ -252,15 +254,10 @@ func TestInsert100(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		keys, vals := kvForTest(100)
 		t.Run(tt.name, func(t *testing.T) {
 			db := newTestDatabase(t)
 
-			keys := make([][]byte, 100)
-			vals := make([][]byte, 100)
-			for i := range keys {
-				keys[i] = keyForTest(i)
-				vals[i] = valForTest(i)
-			}
 			newDB, err := tt.insert(db, keys, vals)
 			require.NoError(t, err, "inserting")
 
@@ -294,29 +291,22 @@ func TestInsert100(t *testing.T) {
 // Tests that a range of keys can be deleted.
 func TestRangeDelete(t *testing.T) {
 	db := newTestDatabase(t)
-	ops := make([]KeyValue, 100)
-	for i := range ops {
-		ops[i] = kvForTest(i)
-	}
-	_, err := db.Batch(ops)
+	keys, vals := kvForTest(100)
+	_, err := db.Batch(keys, vals)
 	require.NoError(t, err, "Batch")
 
 	const deletePrefix = 1
-	_, err = db.Batch([]KeyValue{{
-		Key: keyForTest(deletePrefix),
-		// delete all keys that start with "key1"
-		Value: nil,
-	}})
+	_, err = db.Batch([][]byte{keyForTest(deletePrefix)}, [][]byte{{}})
 	require.NoError(t, err, "Batch")
 
-	for _, op := range ops {
-		got, err := db.Get(op.Key)
+	for i := range keys {
+		got, err := db.Get(keys[i])
 		require.NoError(t, err)
 
-		if deleted := bytes.HasPrefix(op.Key, keyForTest(deletePrefix)); deleted {
+		if deleted := bytes.HasPrefix(keys[i], keyForTest(deletePrefix)); deleted {
 			require.NoError(t, err, got)
 		} else {
-			require.Equal(t, op.Value, got)
+			require.Equal(t, vals[i], got)
 		}
 	}
 }
@@ -418,15 +408,10 @@ func TestParallelProposals(t *testing.T) {
 func TestDeleteAll(t *testing.T) {
 	db := newTestDatabase(t)
 
-	keys := make([][]byte, 10)
-	vals := make([][]byte, 10)
-	for i := range keys {
-		keys[i] = keyForTest(i)
-		vals[i] = valForTest(i)
-	}
+	keys, vals := kvForTest(10)
 	// Insert 10 key-value pairs.
-	_, err := db.Update(keys, vals)
-	require.NoError(t, err, "Update")
+	_, err := db.Batch(keys, vals)
+	require.NoError(t, err, "Batch")
 
 	// Create a proposal that deletes all keys.
 	proposal, err := db.Propose([][]byte{[]byte("key")}, [][]byte{nil})
@@ -461,12 +446,7 @@ func TestDropProposal(t *testing.T) {
 	db := newTestDatabase(t)
 
 	// Create a proposal with 10 keys.
-	keys := make([][]byte, 10)
-	vals := make([][]byte, 10)
-	for i := range keys {
-		keys[i] = keyForTest(i)
-		vals[i] = valForTest(i)
-	}
+	keys, vals := kvForTest(10)
 	proposal, err := db.Propose(keys, vals)
 	require.NoError(t, err, "Propose")
 
@@ -577,12 +557,7 @@ func TestDeepPropose(t *testing.T) {
 	const numKeys = 10
 	const numProposals = 10
 	proposals := make([]*Proposal, numProposals)
-	keys := make([][]byte, numKeys*numProposals)
-	vals := make([][]byte, numKeys*numProposals)
-	for i := range keys {
-		keys[i] = keyForTest(i)
-		vals[i] = valForTest(i)
-	}
+	keys, vals := kvForTest(numKeys * numProposals)
 
 	for i := range proposals {
 		var (
@@ -680,12 +655,7 @@ func TestProposeSameRoot(t *testing.T) {
 	db := newTestDatabase(t)
 
 	// Create two chains of proposals, resulting in the same root.
-	keys := make([][]byte, 10)
-	vals := make([][]byte, 10)
-	for i := range keys {
-		keys[i] = keyForTest(i)
-		vals[i] = valForTest(i)
-	}
+	keys, vals := kvForTest(10)
 
 	// Create the first proposal chain.
 	proposal1, err := db.Propose(keys[0:5], vals[0:5])
@@ -747,12 +717,7 @@ func TestProposeSameRoot(t *testing.T) {
 func TestRevision(t *testing.T) {
 	db := newTestDatabase(t)
 
-	keys := make([][]byte, 10)
-	vals := make([][]byte, 10)
-	for i := range keys {
-		keys[i] = keyForTest(i)
-		vals[i] = valForTest(i)
-	}
+	keys, vals := kvForTest(10)
 
 	// Create a proposal with 10 key-value pairs.
 	proposal, err := db.Propose(keys, vals)
@@ -823,14 +788,9 @@ func TestGetNilCases(t *testing.T) {
 	db := newTestDatabase(t)
 
 	// Commit 10 key-value pairs.
-	keys := make([][]byte, 20)
-	vals := make([][]byte, 20)
-	for i := range keys {
-		keys[i] = keyForTest(i)
-		vals[i] = valForTest(i)
-	}
-	root, err := db.Update(keys[:10], vals[:10])
-	require.NoError(t, err, "Update")
+	keys, vals := kvForTest(20)
+	root, err := db.Batch(keys[:10], vals[:10])
+	require.NoError(t, err, "Batch")
 
 	// Create the other views
 	proposal, err := db.Propose(keys[10:], vals[10:])
