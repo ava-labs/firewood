@@ -586,10 +586,7 @@ fn hash(db: &Db) -> Result<Value, String> {
     db.root_hash_sync()
         .map_err(|e| e.to_string())?
         .map(|root| Value::from(root.as_slice()))
-        .map_or_else(
-            || Ok(Value::default()),
-            Ok,
-        )
+        .map_or_else(|| Ok(Value::default()), Ok)
 }
 
 /// A value returned by the FFI.
