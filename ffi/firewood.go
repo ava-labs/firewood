@@ -199,7 +199,6 @@ func (db *Database) Root() ([]byte, error) {
 	// If the root hash is not found, return a zeroed slice.
 	if err == nil && bytes == nil {
 		bytes = make([]byte, RootLength)
-		err = nil
 	}
 	return bytes, err
 }
