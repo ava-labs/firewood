@@ -162,28 +162,26 @@ func TestInsert(t *testing.T) {
 	require.Equal(t, val, string(got), "Recover lone batch-inserted value")
 }
 
-// Attempt to make a call to a nil or invalid handle.
-// Each function should return an error and not panic.
-func TestGetBadHandle(t *testing.T) {
-	db := &Database{handle: nil}
+func TestClosedDatabase(t *testing.T) {
+	r := require.New(t)
+	dbFile := filepath.Join(t.TempDir(), "test.db")
+	db, _, err := newDatabase(dbFile)
+	r.NoError(err)
 
-	// This ignores error, but still shouldn't panic.
-	_, err := db.Get([]byte("non-existent"))
-	require.ErrorIs(t, err, errDBClosed)
+	r.NoError(db.Close())
 
-	// We ignore the error, but it shouldn't panic.
 	_, err = db.Root()
-	require.ErrorIs(t, err, errDBClosed)
+	r.ErrorIs(err, errDBClosed)
 
 	root, err := db.Update(
 		[][]byte{[]byte("key")},
 		[][]byte{[]byte("value")},
 	)
-	require.Empty(t, root)
-	require.ErrorIs(t, err, errDBClosed)
+	r.Empty(root)
+	r.ErrorIs(err, errDBClosed)
 
 	err = db.Close()
-	require.ErrorIs(t, err, errDBClosed)
+	r.ErrorIs(err, errDBClosed)
 }
 
 func keyForTest(i int) []byte {
@@ -206,13 +204,19 @@ func kvForTest(i int) KeyValue {
 // 1. By calling [Database.Propose] and then [Proposal.Commit].
 // 2. By calling [Database.Update] directly - no proposal storage is needed.
 func TestInsert100(t *testing.T) {
+	type dbView interface {
+		Get(key []byte) ([]byte, error)
+		Propose(keys, vals [][]byte) (*Proposal, error)
+		Root() ([]byte, error)
+	}
+
 	tests := []struct {
 		name   string
-		insert func(*Database, [][]byte, [][]byte) (root []byte, _ error)
+		insert func(dbView, [][]byte, [][]byte) (dbView, error)
 	}{
 		{
-			name: "Propose",
-			insert: func(db *Database, keys, vals [][]byte) ([]byte, error) {
+			name: "Propose and Commit",
+			insert: func(db dbView, keys, vals [][]byte) (dbView, error) {
 				proposal, err := db.Propose(keys, vals)
 				if err != nil {
 					return nil, err
@@ -221,13 +225,28 @@ func TestInsert100(t *testing.T) {
 				if err != nil {
 					return nil, err
 				}
-				return db.Root()
+				return db, nil
 			},
 		},
 		{
 			name: "Update",
-			insert: func(db *Database, keys, vals [][]byte) ([]byte, error) {
-				return db.Update(keys, vals)
+			insert: func(db dbView, keys, vals [][]byte) (dbView, error) {
+				actualDB, ok := db.(*Database)
+				if !ok {
+					return nil, fmt.Errorf("expected *Database, got %T", db)
+				}
+				_, err := actualDB.Update(keys, vals)
+				return db, err
+			},
+		},
+		{
+			name: "Propose",
+			insert: func(db dbView, keys, vals [][]byte) (dbView, error) {
+				proposal, err := db.Propose(keys, vals)
+				if err != nil {
+					return nil, err
+				}
+				return proposal, nil
 			},
 		},
 	}
@@ -242,19 +261,22 @@ func TestInsert100(t *testing.T) {
 				keys[i] = keyForTest(i)
 				vals[i] = valForTest(i)
 			}
-			rootFromInsert, err := tt.insert(db, keys, vals)
+			newDB, err := tt.insert(db, keys, vals)
 			require.NoError(t, err, "inserting")
 
 			for i := range keys {
-				got, err := db.Get(keys[i])
+				got, err := newDB.Get(keys[i])
 				require.NoErrorf(t, err, "%T.Get(%q)", db, keys[i])
 				// Cast as strings to improve debug messages.
 				want := string(vals[i])
 				require.Equal(t, want, string(got), "Recover nth batch-inserted value")
 			}
 
-			hash, err := db.Root()
+			hash, err := newDB.Root()
 			require.NoError(t, err, "%T.Root()", db)
+
+			rootFromInsert, err := newDB.Root()
+			require.NoError(t, err, "%T.Root() after insertion", db)
 
 			// Assert the hash is exactly as expected. Test failure indicates a
 			// non-hash compatible change has been made since the string was set.
@@ -417,32 +439,22 @@ func TestDeleteAll(t *testing.T) {
 		require.Empty(t, got, "Get(%d)", i)
 	}
 
+	emptyRootStr := expectedRoots[emptyKey]
+	expectedHash, err := hex.DecodeString(emptyRootStr)
+	require.NoError(t, err, "Decode expected empty root hash")
+
+	hash, err := proposal.Root()
+	require.NoError(t, err, "%T.Root() after commit", proposal)
+	require.Equalf(t, expectedHash, hash, "%T.Root() of empty trie", db)
+
 	// Commit the proposal.
 	err = proposal.Commit()
 	require.NoError(t, err, "Commit")
 
 	// Check that the database is empty.
-	hash, err := db.Root()
+	hash, err = db.Root()
 	require.NoError(t, err, "%T.Root()", db)
-	expectedHashHex := expectedRoots[emptyKey]
-	expectedHash, err := hex.DecodeString(expectedHashHex)
-	require.NoError(t, err)
 	require.Equalf(t, expectedHash, hash, "%T.Root() of empty trie", db)
-}
-
-// Tests that a proposal with an invalid ID cannot be committed.
-func TestCommitFakeProposal(t *testing.T) {
-	db := newTestDatabase(t)
-
-	// Create a fake proposal with an invalid ID.
-	proposal := &Proposal{
-		handle: db.handle,
-		id:     1, // note that ID 0 is reserved for invalid proposals
-	}
-
-	// Attempt to get a value from the fake proposal.
-	_, err := proposal.Get([]byte("non-existent"))
-	require.Contains(t, err.Error(), "proposal not found", "Get(fake proposal)")
 }
 
 func TestDropProposal(t *testing.T) {
@@ -462,27 +474,25 @@ func TestDropProposal(t *testing.T) {
 	err = proposal.Drop()
 	require.NoError(t, err, "Drop")
 
-	// Attempt to commit the dropped proposal.
+	// Check all operations on the dropped proposal.
 	err = proposal.Commit()
 	require.ErrorIs(t, err, errDroppedProposal, "Commit(dropped proposal)")
-
-	// Attempt to get a value from the dropped proposal.
 	_, err = proposal.Get([]byte("non-existent"))
 	require.ErrorIs(t, err, errDroppedProposal, "Get(dropped proposal)")
+	_, err = proposal.Root()
+	require.ErrorIs(t, err, errDroppedProposal, "Root(dropped proposal)")
 
 	// Attempt to "emulate" the proposal to ensure it isn't internally available still.
 	proposal = &Proposal{
 		handle: db.handle,
 		id:     1,
 	}
+
+	// Check all operations on the fake proposal.
 	_, err = proposal.Get([]byte("non-existent"))
 	require.Contains(t, err.Error(), "proposal not found", "Get(fake proposal)")
-
-	// Attempt to create a new proposal from the fake proposal.
 	_, err = proposal.Propose([][]byte{[]byte("key")}, [][]byte{[]byte("value")})
 	require.Contains(t, err.Error(), "proposal not found", "Propose(fake proposal)")
-
-	// Attempt to commit the fake proposal.
 	err = proposal.Commit()
 	require.Contains(t, err.Error(), "proposal not found", "Commit(fake proposal)")
 }

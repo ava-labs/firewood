@@ -9,6 +9,7 @@ use std::sync::Arc;
 #[cfg(feature = "ethhash")]
 use std::sync::OnceLock;
 
+use metrics::gauge;
 use storage::logger::{trace, trace_enabled, warn};
 use typed_builder::TypedBuilder;
 
@@ -182,6 +183,8 @@ impl RevisionManager {
                     break;
                 }
             }
+            gauge!("firewood.active_revisions").set(self.historical.len() as f64);
+            gauge!("firewood.max_revisions").set(self.max_revisions as f64);
         }
 
         // 4. Set last committed revision
@@ -241,15 +244,7 @@ impl RevisionManager {
     }
 
     pub fn root_hash(&self) -> Result<Option<HashKey>, RevisionManagerError> {
-        self.current_revision()
-            .kind
-            .root_hash()
-            .or_else(|| self.empty_trie_hash())
-            .map(Option::Some)
-            .ok_or(RevisionManagerError::IO(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "Root hash not found",
-            )))
+        Ok(self.current_revision().kind.root_hash())
     }
 
     pub fn current_revision(&self) -> CommittedRevision {

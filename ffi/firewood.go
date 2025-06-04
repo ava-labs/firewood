@@ -99,6 +99,9 @@ func New(filePath string, conf *Config) (*Database, error) {
 		strategy:     C.uint8_t(conf.ReadCacheStrategy),
 		metrics_port: C.uint16_t(conf.MetricsPort),
 	}
+	// Defer freeing the C string allocated to the heap on the other side
+	// of the FFI boundary.
+	defer C.free(unsafe.Pointer(args.path))
 
 	var db *C.DatabaseHandle
 	if conf.Create {
@@ -107,8 +110,6 @@ func New(filePath string, conf *Config) (*Database, error) {
 		db = C.fwd_open_db(args)
 	}
 
-	// After creating the db, we can safely free the path string.
-	C.free(unsafe.Pointer(args.path))
 	return &Database{handle: db}, nil
 }
 
@@ -140,7 +141,7 @@ func (db *Database) Batch(ops []KeyValue) ([]byte, error) {
 		C.size_t(len(ffiOps)),
 		unsafe.SliceData(ffiOps), // implicitly pinned
 	)
-	return extractBytesThenFree(&hash)
+	return bytesFromValue(&hash)
 }
 
 func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
@@ -158,21 +159,12 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 			value: values.from(vals[i]),
 		}
 	}
-	idOrErr := C.fwd_propose_on_db(
+	val := C.fwd_propose_on_db(
 		db.handle,
 		C.size_t(len(ffiOps)),
 		unsafe.SliceData(ffiOps), // implicitly pinned
 	)
-	id, err := extractUintThenFree(&idOrErr)
-	if err != nil {
-		return nil, err
-	}
-
-	// The C function will never create an id of 0, unless it is an error.
-	return &Proposal{
-		handle: db.handle,
-		id:     id,
-	}, nil
+	return newProposal(db.handle, &val)
 }
 
 // Get retrieves the value for the given key. It always returns a nil error.
@@ -185,7 +177,7 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 	values, cleanup := newValueFactory()
 	defer cleanup()
 	val := C.fwd_get_latest(db.handle, values.from(key))
-	bytes, err := extractBytesThenFree(&val)
+	bytes, err := bytesFromValue(&val)
 
 	// If the root hash is not found, return nil.
 	if err != nil && strings.Contains(err.Error(), rootHashNotFound) {
@@ -202,12 +194,11 @@ func (db *Database) Root() ([]byte, error) {
 		return nil, errDBClosed
 	}
 	hash := C.fwd_root_hash(db.handle)
-	bytes, err := extractBytesThenFree(&hash)
+	bytes, err := bytesFromValue(&hash)
 
 	// If the root hash is not found, return a zeroed slice.
-	if err != nil && strings.Contains(err.Error(), rootHashNotFound) {
+	if err == nil && bytes == nil {
 		bytes = make([]byte, RootLength)
-		err = nil
 	}
 	return bytes, err
 }
