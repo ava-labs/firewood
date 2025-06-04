@@ -152,8 +152,8 @@ func TestInsert(t *testing.T) {
 		val = []byte("def")
 	)
 
-	_, err := db.Batch([][]byte{key}, [][]byte{val})
-	require.NoError(t, err, "Batch(%q)", key)
+	_, err := db.Update([][]byte{key}, [][]byte{val})
+	require.NoError(t, err, "Update(%q)", key)
 
 	got, err := db.Get(key)
 	require.NoErrorf(t, err, "%T.Get(%q)", db, key)
@@ -171,7 +171,7 @@ func TestClosedDatabase(t *testing.T) {
 	_, err = db.Root()
 	r.ErrorIs(err, errDBClosed)
 
-	root, err := db.Batch(
+	root, err := db.Update(
 		[][]byte{[]byte("key")},
 		[][]byte{[]byte("value")},
 	)
@@ -203,7 +203,7 @@ func kvForTest(num int) ([][]byte, [][]byte) {
 // Tests that 100 key-value pairs can be inserted and retrieved.
 // This happens in three ways:
 // 1. By calling [Database.Propose] and then [Proposal.Commit].
-// 2. By calling [Database.Batch] directly - no proposal storage is needed.
+// 2. By calling [Database.Update] directly - no proposal storage is needed.
 // 3. By calling [Database.Propose] and not committing, which returns a proposal.
 func TestInsert100(t *testing.T) {
 	type dbView interface {
@@ -231,13 +231,13 @@ func TestInsert100(t *testing.T) {
 			},
 		},
 		{
-			name: "Batch",
+			name: "Update",
 			insert: func(db dbView, keys, vals [][]byte) (dbView, error) {
 				actualDB, ok := db.(*Database)
 				if !ok {
 					return nil, fmt.Errorf("expected *Database, got %T", db)
 				}
-				_, err := actualDB.Batch(keys, vals)
+				_, err := actualDB.Update(keys, vals)
 				return db, err
 			},
 		},
@@ -292,12 +292,12 @@ func TestInsert100(t *testing.T) {
 func TestRangeDelete(t *testing.T) {
 	db := newTestDatabase(t)
 	keys, vals := kvForTest(100)
-	_, err := db.Batch(keys, vals)
-	require.NoError(t, err, "Batch")
+	_, err := db.Update(keys, vals)
+	require.NoError(t, err, "Update")
 
 	const deletePrefix = 1
-	_, err = db.Batch([][]byte{keyForTest(deletePrefix)}, [][]byte{{}})
-	require.NoError(t, err, "Batch")
+	_, err = db.Update([][]byte{keyForTest(deletePrefix)}, [][]byte{{}})
+	require.NoError(t, err, "Update")
 
 	for i := range keys {
 		got, err := db.Get(keys[i])
@@ -410,8 +410,8 @@ func TestDeleteAll(t *testing.T) {
 
 	keys, vals := kvForTest(10)
 	// Insert 10 key-value pairs.
-	_, err := db.Batch(keys, vals)
-	require.NoError(t, err, "Batch")
+	_, err := db.Update(keys, vals)
+	require.NoError(t, err, "Update")
 
 	// Create a proposal that deletes all keys.
 	proposal, err := db.Propose([][]byte{[]byte("key")}, [][]byte{nil})
@@ -789,8 +789,8 @@ func TestGetNilCases(t *testing.T) {
 
 	// Commit 10 key-value pairs.
 	keys, vals := kvForTest(20)
-	root, err := db.Batch(keys[:10], vals[:10])
-	require.NoError(t, err, "Batch")
+	root, err := db.Update(keys[:10], vals[:10])
+	require.NoError(t, err, "Update")
 
 	// Create the other views
 	proposal, err := db.Propose(keys[10:], vals[10:])

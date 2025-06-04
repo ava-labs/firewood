@@ -235,7 +235,7 @@ func TestInsert(t *testing.T) {
 		require.NoError(t, err)
 
 		// update firewood db
-		got, err := db.Batch(fwKeys, fwVals)
+		got, err := db.Update(fwKeys, fwVals)
 		require.NoError(t, err)
 		require.Equal(t, next[:], got)
 
