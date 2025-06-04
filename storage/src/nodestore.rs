@@ -36,7 +36,6 @@ use std::fmt::Debug;
 /// I --> |commit|N("New commit NodeStore&lt;Committed, S&gt;")
 /// style E color:#FFFFFF, fill:#AA00FF, stroke:#AA00FF
 /// ```
-
 use std::io::{Error, ErrorKind, Write};
 use std::mem::{offset_of, take};
 use std::num::NonZeroU64;
