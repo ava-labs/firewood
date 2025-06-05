@@ -4,6 +4,7 @@
 use anyhow::{Result, anyhow};
 use assert_cmd::Command;
 use predicates::prelude::*;
+use rand::prelude::*;
 use serial_test::serial;
 use std::fs::{self, remove_file};
 use std::path::PathBuf;
@@ -541,7 +542,7 @@ fn fwdctl_dump_with_hex() -> Result<()> {
 
 #[test]
 #[serial]
-fn fwdctl_check() -> Result<()> {
+fn fwdctl_check_empty_db() -> Result<()> {
     Command::cargo_bin(PRG)?
         .arg("create")
         .arg(tmpdb::path())
@@ -556,6 +557,40 @@ fn fwdctl_check() -> Result<()> {
         .success();
 
     fwdctl_delete_db().map_err(|e| anyhow!(e))?;
+
+    Ok(())
+}
+
+#[test]
+#[serial]
+fn fwdctl_check_db_with_data() -> Result<()> {
+    Command::cargo_bin(PRG)?
+        .arg("create")
+        .arg(tmpdb::path())
+        .assert()
+        .success();
+
+    let mut rng = rand::rng();
+    for _ in 0..100 {
+        let key = format!("key_{}", rng.random::<u64>());
+        let value = format!("value_{}", rng.random::<u64>());
+        Command::cargo_bin(PRG)?
+            .arg("insert")
+            .args([key.clone()])
+            .args([value])
+            .args(["--db"])
+            .args([tmpdb::path()])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(&key));
+    }
+
+    Command::cargo_bin(PRG)?
+        .arg("check")
+        .arg("--db")
+        .arg(tmpdb::path())
+        .assert()
+        .success();
 
     Ok(())
 }

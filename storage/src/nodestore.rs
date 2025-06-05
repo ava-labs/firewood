@@ -620,7 +620,7 @@ pub type FreeLists = [Option<LinearAddress>; NUM_AREA_SIZES];
 /// The [NodeStoreHeader] is at the start of the ReadableStorage.
 #[derive(Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Clone, NoUninit, AnyBitPattern)]
 #[repr(C)]
-struct NodeStoreHeader {
+pub(crate) struct NodeStoreHeader {
     /// Identifies the version of firewood used to create this [NodeStore].
     version: Version,
     /// always "1"; verifies endianness
@@ -640,7 +640,7 @@ impl NodeStoreHeader {
     /// The first SIZE bytes of the ReadableStorage are reserved for the
     /// [NodeStoreHeader].
     /// We also want it aligned to a disk block
-    const SIZE: u64 = 2048;
+    pub(crate) const SIZE: u64 = 2048;
 
     /// Number of extra bytes to write on the first creation of the NodeStoreHeader
     /// (zero-padded)
