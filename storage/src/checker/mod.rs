@@ -74,20 +74,20 @@ async fn traverse_trie(
 
 async fn check_freelist(
     node_store: &NodeStore<Committed, FileBacked>,
-    area_size: u64,
+    freelist_area_size: u64,
     head_addr: Option<LinearAddress>,
     visited: &mut LinearAddressRangeSet,
 ) -> Result<(), CheckerError> {
     let mut cur_free_area = head_addr;
     while let Some(free_area) = cur_free_area {
-        visited.insert_area(free_area, area_size)?;
+        visited.insert_area(free_area, freelist_area_size)?;
         let (free_area_size, next_free_area_addr) =
             node_store.read_free_area_size_and_next_addr(free_area)?;
-        if free_area_size != area_size {
+        if free_area_size != freelist_area_size {
             return Err(CheckerError::FreelistAreaSizeMismatch {
                 address: free_area,
                 size: free_area_size,
-                freelist_size: area_size,
+                freelist_size: freelist_area_size,
             });
         }
         cur_free_area = next_free_area_addr;
