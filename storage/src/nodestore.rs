@@ -182,7 +182,7 @@ struct StoredArea<T> {
     area: T,
 }
 
-impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
+impl<T, S: ReadableStorage> NodeStore<T, S> {
     /// Returns (index, area_size) for the [StoredArea] at `addr`.
     /// `index` is the index of `area_size` in [AREA_SIZES].
     pub(crate) fn area_index_and_size(
@@ -234,6 +234,30 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
             CacheReadStrategy::WritesOnly => {}
         }
         Ok(node)
+    }
+
+    /// Read the address of the next free area from the given address.
+    fn read_next_free_area_from_disk(
+        storage: &S,
+        address: LinearAddress,
+    ) -> Result<(FreeArea, AreaIndex), Error> {
+        let free_area_addr = address.get();
+        let free_head_stream = storage.stream_from(free_area_addr)?;
+        let free_head: StoredArea<Area<Node, FreeArea>> = serializer()
+            .deserialize_from(free_head_stream)
+            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+        let StoredArea {
+            area: Area::Free(free_head),
+            area_size_index: read_index,
+        } = free_head
+        else {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "Attempted to read a non-free area",
+            ));
+        };
+
+        Ok((free_head, read_index))
     }
 }
 
@@ -463,25 +487,11 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 trace!("free_head@{address}(cached): {free_head:?} size:{index}");
                 *free_stored_area_addr = free_head;
             } else {
-                let free_area_addr = address.get();
-                let free_head_stream = self.storage.stream_from(free_area_addr)?;
-                let free_head: StoredArea<Area<Node, FreeArea>> = serializer()
-                    .deserialize_from(free_head_stream)
-                    .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-                let StoredArea {
-                    area: Area::Free(free_head),
-                    area_size_index: read_index,
-                } = free_head
-                else {
-                    return Err(Error::new(
-                        ErrorKind::InvalidData,
-                        "Attempted to read a non-free area",
-                    ));
-                };
-                debug_assert_eq!(read_index as usize, index);
-
+                let (next_free_area, read_index) =
+                    Self::read_next_free_area_from_disk(&self.storage, address)?;
+                debug_assert_eq!(read_index, index as AreaIndex);
                 // Update the free list to point to the next free block.
-                *free_stored_area_addr = free_head.next_free_block;
+                *free_stored_area_addr = next_free_area.next_free_block;
             }
 
             counter!("firewood.space.reused", "index" => index_name(index as u8))
@@ -614,7 +624,7 @@ impl Version {
     }
 }
 
-pub type FreeLists = [Option<LinearAddress>; NUM_AREA_SIZES];
+type FreeLists = [Option<LinearAddress>; NUM_AREA_SIZES];
 
 /// Persisted metadata for a [NodeStore].
 /// The [NodeStoreHeader] is at the start of the ReadableStorage.
@@ -1319,6 +1329,25 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 /// Functionalities required by the checker
 impl NodeStore<Committed, FileBacked> {
     pub(crate) const HEADER_SIZE: u64 = NodeStoreHeader::SIZE;
+
+    /// Returns a map of area size to the head address of the free list for that area size.
+    pub(crate) fn get_freelists(&self) -> HashMap<u64, Option<LinearAddress>> {
+        self.header
+            .free_lists
+            .iter()
+            .enumerate()
+            .map(|(i, addr)| (AREA_SIZES[i], *addr))
+            .collect()
+    }
+
+    /// Reads the free area from the given address.
+    pub(crate) fn read_free_area_size_and_next_addr(
+        &self,
+        addr: LinearAddress,
+    ) -> Result<(u64, Option<LinearAddress>), Error> {
+        let (free_area, area_index) = Self::read_next_free_area_from_disk(&self.storage, addr)?;
+        Ok((AREA_SIZES[area_index as usize], free_area.next_free_block))
+    }
 }
 
 #[cfg(test)]

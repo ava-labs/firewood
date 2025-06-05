@@ -26,6 +26,10 @@ pub async fn check_node_store(
     traverse_trie(node_store, root_address, &mut visited).await?;
 
     // 2. check the free list - this can happen in parallel with the trie traversal
+    let freelists = node_store.get_freelists();
+    for (size, head_addr) in freelists {
+        check_freelist(node_store, size, head_addr, &mut visited).await?;
+    }
 
     // 3. check any bubbles - what are the spaces between trie nodes and free lists?
 
@@ -63,6 +67,30 @@ async fn traverse_trie(
         Node::Leaf(_) => {
             // Don't need to traverse further since we are already at the leaf
         }
+    }
+
+    Ok(())
+}
+
+async fn check_freelist(
+    node_store: &NodeStore<Committed, FileBacked>,
+    area_size: u64,
+    head_addr: Option<LinearAddress>,
+    visited: &mut LinearAddressRangeSet,
+) -> Result<(), CheckerError> {
+    let mut cur_free_area = head_addr;
+    while let Some(free_area) = cur_free_area {
+        visited.insert_area(free_area, area_size)?;
+        let (free_area_size, next_free_area_addr) =
+            node_store.read_free_area_size_and_next_addr(free_area)?;
+        if free_area_size != area_size {
+            return Err(CheckerError::FreelistAreaSizeMismatch {
+                address: free_area,
+                size: free_area_size,
+                freelist_size: area_size,
+            });
+        }
+        cur_free_area = next_free_area_addr;
     }
 
     Ok(())
