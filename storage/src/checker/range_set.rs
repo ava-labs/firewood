@@ -52,7 +52,6 @@ impl IntoIterator for LinearAddressRangeSet {
 
     fn into_iter(self) -> Self::IntoIter {
         self.range_set.into_iter().map(|range| {
-            // TODO: this is a hack to get the start and end of the range
             let Bound::Included(start) = range.start() else {
                 panic!("start of range is not included, this should not happen");
             };
