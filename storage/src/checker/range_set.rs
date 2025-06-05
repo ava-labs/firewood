@@ -118,7 +118,6 @@ mod tests {
 
     #[test]
     fn test_intersecting_areas_will_fail() {
-        let mut visited = LinearAddressRangeSet::new(0x1000).expect("this will not panic");
         let start1 = 2048;
         let size1 = 1024;
         let start2 = start1 + size1 - 1;
@@ -127,6 +126,7 @@ mod tests {
         let start1_addr = LinearAddress::new(start1).expect("this will not panic");
         let start2_addr = LinearAddress::new(start2).expect("this will not panic");
 
+        let mut visited = LinearAddressRangeSet::new(0x1000).expect("this will not panic");
         visited
             .insert_area(start1_addr, size1)
             .expect("the given area should be within bounds");
@@ -145,5 +145,26 @@ mod tests {
 
         assert_eq!(err_start2_addr, start2_addr);
         assert_eq!(err_size2, size2);
+
+        // try inserting in opposite order
+        let mut visited2 = LinearAddressRangeSet::new(0x1000).expect("this will not panic");
+        visited2
+            .insert_area(start2_addr, size2)
+            .expect("the given area should be within bounds");
+
+        let error = visited2
+            .insert_area(start1_addr, size1)
+            .expect_err("the given area should intersect with the first area");
+
+        let CheckerError::AreaIntersects {
+            start: err_start1_addr,
+            size: err_size1,
+        } = error
+        else {
+            panic!("the error should be an AreaIntersects error");
+        };
+
+        assert_eq!(err_start1_addr, start1_addr);
+        assert_eq!(err_size1, size1);
     }
 }

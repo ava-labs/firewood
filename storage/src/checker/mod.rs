@@ -19,12 +19,10 @@ pub use error::CheckerError;
 pub async fn check_node_store(
     node_store: &NodeStore<Committed, FileBacked>,
 ) -> Result<(), CheckerError> {
-    println!("File size: {}", node_store.storage.get_file_size()?);
     let mut visited = LinearAddressRangeSet::new(node_store.storage.get_file_size()?)?;
 
     // 1. traverse the trie and check the nodes
     let root_address = node_store.root_address_and_hash()?.map(|(addr, _)| addr);
-    println!("Root addr: {:?}", root_address);
     traverse_trie(node_store, root_address, &mut visited).await?;
 
     // 2. check the free list - this can happen in parallel with the trie traversal
