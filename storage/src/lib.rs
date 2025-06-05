@@ -11,12 +11,14 @@
 //!
 //! A [NodeStore] is backed by a [ReadableStorage] which is persisted storage.
 
-mod checker;
+use thiserror::Error;
+
 mod hashednode;
 mod hashers;
 mod linear;
 mod node;
 mod nodestore;
+mod range_set;
 mod trie_hash;
 
 /// Logger module for handling logging functionality
@@ -36,8 +38,6 @@ pub use linear::filebacked::FileBacked;
 pub use linear::memory::MemStore;
 
 pub use trie_hash::TrieHash;
-
-pub use checker::{CheckerError, check_node_store};
 
 /// A shared node, which is just a triophe Arc of a node
 pub type SharedNode = triomphe::Arc<Node>;
@@ -75,4 +75,39 @@ pub fn empty_trie_hash() -> TrieHash {
         .as_slice()
         .try_into()
         .expect("empty trie hash is 32 bytes")
+}
+
+/// Errors returned by the checker
+#[derive(Error, Debug)]
+#[non_exhaustive]
+pub enum CheckerError {
+    /// The root node was not found
+    #[error("root node not found")]
+    RootNodeNotFound,
+
+    /// The file size is not valid
+    #[error("the db size ({0}) is invalid")]
+    InvalidDBSize(u64),
+
+    /// The address is out of bounds
+    #[error("stored area at {start} with size {size} is out of bounds")]
+    AreaOutOfBounds {
+        /// Start of the StoredArea
+        start: LinearAddress,
+        /// Size of the StoredArea
+        size: u64,
+    },
+
+    /// Stored areas intersect
+    #[error("stored area at {start} with size {size} intersects with another stored area")]
+    AreaIntersects {
+        /// Start of the StoredArea
+        start: LinearAddress,
+        /// Size of the StoredArea
+        size: u64,
+    },
+
+    /// IO error
+    #[error("IO error")]
+    IO(#[from] std::io::Error),
 }
