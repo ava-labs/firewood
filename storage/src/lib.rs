@@ -11,6 +11,7 @@
 //!
 //! A [NodeStore] is backed by a [ReadableStorage] which is persisted storage.
 
+mod checker;
 mod hashednode;
 mod hashers;
 mod linear;
@@ -35,6 +36,8 @@ pub use linear::filebacked::FileBacked;
 pub use linear::memory::MemStore;
 
 pub use trie_hash::TrieHash;
+
+pub use checker::{CheckerError, check_node_store};
 
 /// A shared node, which is just a triophe Arc of a node
 pub type SharedNode = triomphe::Arc<Node>;

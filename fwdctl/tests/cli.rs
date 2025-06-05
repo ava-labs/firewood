@@ -539,6 +539,27 @@ fn fwdctl_dump_with_hex() -> Result<()> {
     Ok(())
 }
 
+#[test]
+#[serial]
+fn fwdctl_check() -> Result<()> {
+    Command::cargo_bin(PRG)?
+        .arg("create")
+        .arg(tmpdb::path())
+        .assert()
+        .success();
+
+    Command::cargo_bin(PRG)?
+        .arg("check")
+        .arg("--db")
+        .arg(tmpdb::path())
+        .assert()
+        .success();
+
+    fwdctl_delete_db().map_err(|e| anyhow!(e))?;
+
+    Ok(())
+}
+
 // A module to create a temporary database name for use in
 // tests. The directory will be one of:
 // - cargo's compile-time CARGO_TARGET_TMPDIR, if that exists
