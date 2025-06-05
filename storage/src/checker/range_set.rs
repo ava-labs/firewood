@@ -5,7 +5,7 @@ use btree_range_map::{AnyRange, AsRange, RangeSet};
 use std::num::NonZeroU64;
 use std::ops::Bound;
 
-use crate::nodestore::NodeStoreHeader;
+use crate::nodestore::NodeStore;
 use crate::{CheckerError, LinearAddress};
 
 pub(super) struct LinearAddressRangeSet {
@@ -15,7 +15,7 @@ pub(super) struct LinearAddressRangeSet {
 
 impl LinearAddressRangeSet {
     pub(super) fn new(file_size: u64) -> Result<Self, CheckerError> {
-        if file_size < NodeStoreHeader::SIZE {
+        if file_size < NodeStore::HEADER_SIZE {
             return Err(CheckerError::InvalidFileSize(file_size));
         }
 
@@ -32,7 +32,7 @@ impl LinearAddressRangeSet {
     ) -> Result<(), CheckerError> {
         let start = addr.get();
         // end can be larger than the file size: only the node in the stored area is written to disk
-        if start < NodeStoreHeader::SIZE || start > self.size {
+        if start < NodeStore::HEADER_SIZE || start > self.size {
             return Err(CheckerError::AreaOutOfBounds { start: addr, size });
         }
         if self.range_set.intersects(start..start + size) {
