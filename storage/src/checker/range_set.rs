@@ -1,3 +1,6 @@
+// Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
+// See the file LICENSE.md for licensing terms.
+
 use btree_range_map::{AnyRange, AsRange, RangeSet};
 use std::num::NonZeroU64;
 use std::ops::Bound;

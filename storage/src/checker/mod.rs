@@ -1,3 +1,6 @@
+// Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
+// See the file LICENSE.md for licensing terms.
+
 mod error;
 mod range_set;
 
@@ -52,7 +55,7 @@ async fn traverse_trie(
                     let Child::AddressWithHash(address, _) = c else {
                         panic!("the children is not persisted yet, this should not happen");
                     };
-                    address.clone()
+                    *address
                 });
                 Box::pin(traverse_trie(node_store, child_address, visited)).await?;
             }

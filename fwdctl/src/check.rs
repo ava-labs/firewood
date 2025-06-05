@@ -1,3 +1,6 @@
+// Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
+// See the file LICENSE.md for licensing terms.
+
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
@@ -22,8 +25,8 @@ pub struct Options {
 
 pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     let db_path = Path::new(&opts.db);
-    let node_cache_size = NonZeroUsize::new(1).unwrap();
-    let free_list_cache_size = NonZeroUsize::new(1).unwrap();
+    let node_cache_size = NonZeroUsize::new(1).expect("this will never crash");
+    let free_list_cache_size = NonZeroUsize::new(1).expect("this will never crash");
 
     let storage = Arc::new(FileBacked::new(
         db_path.to_path_buf(),
