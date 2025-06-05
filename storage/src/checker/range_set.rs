@@ -74,14 +74,14 @@ mod tests {
 
     #[test]
     fn test_empty() {
-        let visited = LinearAddressRangeSet::new(0x1000).expect("this will not panic");
+        let visited = LinearAddressRangeSet::new(0x1000).unwrap();
         assert_eq!(visited.into_iter().collect::<Vec<_>>(), vec![]);
     }
 
     #[test]
     fn test_insert_area() {
-        let mut visited = LinearAddressRangeSet::new(0x1000).expect("this will not panic");
-        let start = LinearAddress::new(2048).expect("this will not panic");
+        let mut visited = LinearAddressRangeSet::new(0x1000).unwrap();
+        let start = LinearAddress::new(2048).unwrap();
         let size = 1024;
 
         visited
@@ -93,14 +93,14 @@ mod tests {
 
     #[test]
     fn test_consecutive_areas_merge() {
-        let mut visited = LinearAddressRangeSet::new(0x1000).expect("this will not panic");
+        let mut visited = LinearAddressRangeSet::new(0x1000).unwrap();
         let start1 = 2048;
         let size1 = 1024;
         let start2 = start1 + size1;
         let size2 = 1024;
 
-        let start1_addr = LinearAddress::new(start1).expect("this will not panic");
-        let start2_addr = LinearAddress::new(start2).expect("this will not panic");
+        let start1_addr = LinearAddress::new(start1).unwrap();
+        let start2_addr = LinearAddress::new(start2).unwrap();
 
         visited
             .insert_area(start1_addr, size1)
@@ -123,10 +123,10 @@ mod tests {
         let start2 = start1 + size1 - 1;
         let size2 = 1024;
 
-        let start1_addr = LinearAddress::new(start1).expect("this will not panic");
-        let start2_addr = LinearAddress::new(start2).expect("this will not panic");
+        let start1_addr = LinearAddress::new(start1).unwrap();
+        let start2_addr = LinearAddress::new(start2).unwrap();
 
-        let mut visited = LinearAddressRangeSet::new(0x1000).expect("this will not panic");
+        let mut visited = LinearAddressRangeSet::new(0x1000).unwrap();
         visited
             .insert_area(start1_addr, size1)
             .expect("the given area should be within bounds");
@@ -147,7 +147,7 @@ mod tests {
         assert_eq!(err_size2, size2);
 
         // try inserting in opposite order
-        let mut visited2 = LinearAddressRangeSet::new(0x1000).expect("this will not panic");
+        let mut visited2 = LinearAddressRangeSet::new(0x1000).unwrap();
         visited2
             .insert_area(start2_addr, size2)
             .expect("the given area should be within bounds");
