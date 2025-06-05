@@ -2,6 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::logger::trace;
+use crate::range_set::LinearAddressRangeSet;
 use arc_swap::ArcSwap;
 use arc_swap::access::DynAccess;
 use bincode::{DefaultOptions, Options as _};
@@ -45,7 +46,8 @@ use std::sync::Arc;
 use crate::hashednode::hash_node;
 use crate::node::{ByteCounter, Node};
 use crate::{
-    CacheReadStrategy, Child, FileBacked, HashType, Path, ReadableStorage, SharedNode, TrieHash,
+    CacheReadStrategy, CheckerError, Child, FileBacked, HashType, Path, ReadableStorage,
+    SharedNode, TrieHash,
 };
 
 use super::linear::WritableStorage;
@@ -1316,9 +1318,70 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     }
 }
 
-/// Functionalities required by the checker
+/// NodeStore checker
 impl NodeStore<Committed, FileBacked> {
     pub(crate) const HEADER_SIZE: u64 = NodeStoreHeader::SIZE;
+
+    /// Go through the filebacked storage and check for any inconsistencies. It proceeds in the following steps:
+    /// 1. Check the header
+    /// 2. traverse the trie and check the nodes
+    /// 3. check the free list
+    /// 4. check any bubbles - what are the spaces between trie nodes and free lists?
+    // TODO: add merkle hash checks as well
+    pub async fn check(&self) -> Result<(), CheckerError> {
+        // 1. Check the header
+        if self.header.size < self.storage.get_file_size()? {
+            return Err(CheckerError::InvalidDBSize(self.header.size));
+        }
+
+        let mut visited = LinearAddressRangeSet::new(self.header.size)?;
+
+        // 2. traverse the trie and check the nodes
+        let root_address = self.header.root_address;
+        self.traverse_trie(root_address, &mut visited).await?;
+
+        // 3. check the free list - this can happen in parallel with the trie traversal
+
+        // 4. check any bubbles - what are the spaces between trie nodes and free lists?
+
+        Ok(())
+    }
+
+    /// Recursively traverse the trie from the given root address.
+    async fn traverse_trie(
+        &self,
+        subtree_root_address: Option<LinearAddress>,
+        visited: &mut LinearAddressRangeSet,
+    ) -> Result<(), CheckerError> {
+        let Some(root_address) = subtree_root_address else {
+            // empty subtree, do nothing
+            return Ok(());
+        };
+
+        let (_, area_size) = self.area_index_and_size(root_address)?;
+        visited.insert_area(root_address, area_size)?;
+
+        let node = self.read_node(root_address)?;
+
+        match &*node {
+            Node::Branch(branch) => {
+                for child in &branch.children {
+                    let child_address = child.as_ref().map(|c| {
+                        let Child::AddressWithHash(address, _) = c else {
+                            panic!("the children is not persisted yet, this should not happen");
+                        };
+                        *address
+                    });
+                    Box::pin(self.traverse_trie(child_address, visited)).await?;
+                }
+            }
+            Node::Leaf(_) => {
+                // Don't need to traverse further since we are already at the leaf
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

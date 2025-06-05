@@ -14,14 +14,14 @@ pub(super) struct LinearAddressRangeSet {
 }
 
 impl LinearAddressRangeSet {
-    pub(super) fn new(file_size: u64) -> Result<Self, CheckerError> {
-        if file_size < NodeStore::HEADER_SIZE {
-            return Err(CheckerError::InvalidFileSize(file_size));
+    pub(super) fn new(db_size: u64) -> Result<Self, CheckerError> {
+        if db_size < NodeStore::HEADER_SIZE {
+            return Err(CheckerError::InvalidDBSize(db_size));
         }
 
         Ok(Self {
             range_set: RangeSet::new(),
-            size: file_size,
+            size: db_size,
         })
     }
 
