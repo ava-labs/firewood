@@ -42,26 +42,15 @@ impl LinearAddressRangeSet {
     }
 
     #[expect(clippy::unwrap_used)]
-    pub(super) fn complement(self) -> Vec<Range<LinearAddress>> {
-        let mut complement = Vec::new();
+    pub(super) fn complement(&self) -> Self {
+        let mut complement_set = self.range_set.complement();
+        complement_set.remove(..NodeStore::HEADER_SIZE);
+        complement_set.remove(self.size..);
 
-        let mut cur_start = LinearAddress::new(NodeStore::HEADER_SIZE).unwrap();
-        let db_end = LinearAddress::new(self.size).unwrap();
-
-        for Range { start, end } in self.into_iter() {
-            // skip empty ranges - this may happen for the first range
-            debug_assert!(cur_start <= start);
-            if cur_start < start {
-                complement.push(cur_start..start);
-            }
-            cur_start = end;
+        Self {
+            range_set: complement_set,
+            size: self.size,
         }
-
-        if cur_start != db_end {
-            complement.push(cur_start..db_end);
-        }
-
-        complement
     }
 }
 
@@ -221,7 +210,7 @@ mod tests {
         visited.insert_area(start1_addr, size1).unwrap();
         visited.insert_area(start2_addr, size2).unwrap();
 
-        let complement = visited.complement();
+        let complement = visited.complement().into_iter().collect::<Vec<_>>();
         assert_eq!(
             complement,
             vec![
@@ -242,7 +231,15 @@ mod tests {
         visited
             .insert_area(LinearAddress::new(start).unwrap(), size)
             .unwrap();
-        let complement = visited.complement();
+        let complement = visited.complement().into_iter().collect::<Vec<_>>();
+        assert_eq!(complement, vec![]);
+    }
+
+    #[test]
+    fn test_complement_with_empty() {
+        let db_size = NodeStore::HEADER_SIZE;
+        let visited = LinearAddressRangeSet::new(db_size).unwrap();
+        let complement = visited.complement().into_iter().collect::<Vec<_>>();
         assert_eq!(complement, vec![]);
     }
 }
