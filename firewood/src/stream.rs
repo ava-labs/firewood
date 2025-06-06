@@ -623,7 +623,9 @@ where
 
 /// Returns an iterator that returns (`pos`,`child`) for each non-empty child of `branch`,
 /// where `pos` is the position of the child in `branch`'s children array.
-fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (u8, Child)> + use<> {
+pub(crate) fn as_enumerated_children_iter(
+    branch: &BranchNode,
+) -> impl Iterator<Item = (u8, Child)> + use<> {
     branch
         .children
         .clone()
@@ -633,12 +635,12 @@ fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (u8,
 }
 
 #[cfg(feature = "branch_factor_256")]
-fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(nibbles: Iter) -> Key {
+pub(crate) fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(nibbles: Iter) -> Key {
     nibbles.collect()
 }
 
 #[cfg(not(feature = "branch_factor_256"))]
-fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
+pub(crate) fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
     let mut data = Vec::with_capacity(nibbles.size_hint().0 / 2);
 
     while let (Some(hi), Some(lo)) = (nibbles.next(), nibbles.next()) {
