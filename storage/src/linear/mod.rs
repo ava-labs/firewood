@@ -36,6 +36,46 @@ pub struct FileIoError {
     context: Option<String>,
 }
 
+impl FileIoError {
+    /// Create a new [FileIoError] from a generic error
+    ///
+    /// Only use this constructor if you do not have any file or line information.
+    ///
+    /// # Arguments
+    ///
+    /// * `error` - The error to wrap
+    pub fn from_generic_no_file<T: std::error::Error>(error: T, context: &str) -> Self {
+        Self {
+            inner: std::io::Error::other(error.to_string()),
+            filename: None,
+            offset: 0,
+            context: Some(context.into()),
+        }
+    }
+
+    /// Create a new [FileIoError]
+    ///
+    /// # Arguments
+    ///
+    /// * `inner` - The inner error
+    /// * `filename` - The filename of the file that caused the error
+    /// * `offset` - The offset of the file that caused the error
+    /// * `context` - The context of this error
+    pub fn new(
+        inner: std::io::Error,
+        filename: Option<PathBuf>,
+        offset: u64,
+        context: Option<String>,
+    ) -> Self {
+        Self {
+            inner,
+            filename,
+            offset,
+            context,
+        }
+    }
+}
+
 impl std::error::Error for FileIoError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(&self.inner)

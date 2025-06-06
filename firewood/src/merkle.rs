@@ -54,19 +54,24 @@ macro_rules! write_attributes {
                 " pp={}",
                 nibbles_formatter($node.partial_path.0.clone())
             )
-            .map_err(|e| Error::other(e))?;
+            .map_err(|e| FileIoError::from_generic_no_file(e, "write attributes"))?;
         }
         if !$value.is_empty() {
             match std::str::from_utf8($value) {
                 Ok(string) if string.chars().all(char::is_alphanumeric) => {
-                    write!($writer, " val={}", string).map_err(|e| Error::other(e))?
+                    write!($writer, " val={}", string)
+                        .map_err(|e| FileIoError::from_generic_no_file(e, "write attributes"))?;
                 }
                 _ => {
                     let hex = hex::encode($value);
                     if hex.len() > 6 {
-                        write!($writer, " val={:.6}...", hex).map_err(|e| Error::other(e))?;
+                        write!($writer, " val={:.6}...", hex).map_err(|e| {
+                            FileIoError::from_generic_no_file(e, "write attributes")
+                        })?;
                     } else {
-                        write!($writer, " val={}", hex).map_err(|e| Error::other(e))?;
+                        write!($writer, " val={}", hex).map_err(|e| {
+                            FileIoError::from_generic_no_file(e, "write attributes")
+                        })?;
                     }
                 }
             }
@@ -341,16 +346,21 @@ impl<T: HashedNodeReader> Merkle<T> {
         hash: Option<&HashType>,
         seen: &mut HashSet<LinearAddress>,
         writer: &mut dyn Write,
-    ) -> Result<(), Error> {
-        write!(writer, "  {addr}[label=\"addr:{addr:?}").map_err(Error::other)?;
+    ) -> Result<(), FileIoError> {
+        write!(writer, "  {addr}[label=\"addr:{addr:?}")
+            .map_err(Error::other)
+            .map_err(|e| FileIoError::new(e, None, 0, None))?;
         if let Some(hash) = hash {
-            write!(writer, " hash:{hash:.6?}...").map_err(Error::other)?;
+            write!(writer, " hash:{hash:.6?}...")
+                .map_err(Error::other)
+                .map_err(|e| FileIoError::new(e, None, 0, None))?;
         }
 
-        match &*self.read_node(addr).expect("failed to read node") {
+        match &*self.read_node(addr)? {
             Node::Branch(b) => {
                 write_attributes!(writer, b, &b.value.clone().unwrap_or(Box::from([])));
-                writeln!(writer, "\"]").map_err(Error::other)?;
+                writeln!(writer, "\"]")
+                    .map_err(|e| FileIoError::from_generic_no_file(e, "write branch"))?;
                 for (childidx, child) in b.children.iter().enumerate() {
                     let (child_addr, child_hash) = match child {
                         None => continue,
@@ -366,17 +376,18 @@ impl<T: HashedNodeReader> Merkle<T> {
                             writer,
                             "  {addr} -> {child_addr}[label=\"{childidx} (dup)\" color=red]"
                         )
-                        .map_err(Error::other)?;
+                        .map_err(|e| FileIoError::from_generic_no_file(e, "write branch"))?;
                     } else {
                         writeln!(writer, "  {addr} -> {child_addr}[label=\"{childidx}\"]")
-                            .map_err(Error::other)?;
+                            .map_err(|e| FileIoError::from_generic_no_file(e, "write branch"))?;
                         self.dump_node(child_addr, child_hash, seen, writer)?;
                     }
                 }
             }
             Node::Leaf(l) => {
                 write_attributes!(writer, l, &l.value);
-                writeln!(writer, "\" shape=rect]").map_err(Error::other)?;
+                writeln!(writer, "\" shape=rect]")
+                    .map_err(|e| FileIoError::from_generic_no_file(e, "write leaf"))?;
             }
         };
         Ok(())
@@ -390,14 +401,21 @@ impl<T: HashedNodeReader> Merkle<T> {
             .root_address_and_hash()
             .expect("failed to get root address and hash")
         {
-            writeln!(result, " root -> {root_addr}").map_err(Error::other)?;
+            writeln!(result, " root -> {root_addr}")
+                .map_err(Error::other)
+                .map_err(|e| FileIoError::new(e, None, 0, None))
+                .map_err(Error::other)?;
             let mut seen = HashSet::new();
             // If ethhash is off, root_hash.into() is already the correct type
             // so we disable the warning here
             #[allow(clippy::useless_conversion)]
-            self.dump_node(root_addr, Some(&root_hash.into()), &mut seen, &mut result)?;
+            self.dump_node(root_addr, Some(&root_hash.into()), &mut seen, &mut result)
+                .map_err(Error::other)?;
         }
-        write!(result, "}}").map_err(Error::other)?;
+        write!(result, "}}")
+            .map_err(Error::other)
+            .map_err(|e| FileIoError::new(e, None, 0, None))
+            .map_err(Error::other)?;
 
         Ok(result)
     }
