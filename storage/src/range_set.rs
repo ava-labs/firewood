@@ -158,16 +158,9 @@ mod tests {
             .insert_area(start2_addr, size2)
             .expect_err("the given area should intersect with the first area");
 
-        let CheckerError::AreaIntersects {
-            start: err_start2_addr,
-            size: err_size2,
-        } = error
-        else {
-            panic!("the error should be an AreaIntersects error");
-        };
-
-        assert_eq!(err_start2_addr, start2_addr);
-        assert_eq!(err_size2, size2);
+        assert!(
+            matches!(error, CheckerError::AreaIntersects { start, size } if start == start2_addr && size == size2)
+        );
 
         // try inserting in opposite order
         let mut visited2 = LinearAddressRangeSet::new(0x1000).unwrap();
@@ -179,16 +172,9 @@ mod tests {
             .insert_area(start1_addr, size1)
             .expect_err("the given area should intersect with the first area");
 
-        let CheckerError::AreaIntersects {
-            start: err_start1_addr,
-            size: err_size1,
-        } = error
-        else {
-            panic!("the error should be an AreaIntersects error");
-        };
-
-        assert_eq!(err_start1_addr, start1_addr);
-        assert_eq!(err_size1, size1);
+        assert!(
+            matches!(error, CheckerError::AreaIntersects { start, size } if start == start1_addr && size == size1)
+        );
     }
 
     #[test]
