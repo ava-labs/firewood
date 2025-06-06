@@ -138,7 +138,7 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     let mut stream = MerkleKeyValueStream::from_key(&latest_rev, start_key);
     let mut output_handler = create_output_handler(opts).expect("Error creating output handler");
 
-    while let Some(item) = stream.next().await {
+    while let Some(item) = StreamExt::next(&mut stream).await {
         match item {
             Ok((key, value)) => {
                 output_handler.handle_record(&key, &value)?;
@@ -148,7 +148,7 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
                 if (stop_key.as_ref().is_some_and(|stop_key| key >= *stop_key))
                     || key_count_exceeded(opts.max_key_count, key_count)
                 {
-                    handle_next_key(stream.next().await).await;
+                    handle_next_key(StreamExt::next(&mut stream).await).await;
                     break;
                 }
             }

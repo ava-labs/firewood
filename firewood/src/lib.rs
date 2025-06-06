@@ -127,6 +127,9 @@ pub mod proof;
 /// Range proof module
 pub mod range_proof;
 
+/// Change proof module
+pub mod diff;
+
 /// Stream module, for both node and key-value streams
 pub mod stream;
 
