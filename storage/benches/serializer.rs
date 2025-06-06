@@ -6,7 +6,6 @@ use std::fs::File;
 use std::num::NonZeroU64;
 use std::os::raw::c_int;
 
-use bincode::Options;
 use criterion::profiler::Profiler;
 use criterion::{Criterion, criterion_group, criterion_main};
 use pprof::ProfilerGuard;
@@ -61,10 +60,10 @@ fn leaf(c: &mut Criterion) {
         partial_path: Path(SmallVec::from_slice(&[0, 1])),
         value: Box::new([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
     });
-    let serializer = bincode::DefaultOptions::new().with_varint_encoding();
+    let serializer = bincode::config::legacy().with_variable_int_encoding();
     group.bench_with_input("serde", &input, |b, input| {
         b.iter(|| {
-            serializer.serialize(input).unwrap();
+            bincode::serde::encode_to_vec(input, serializer).unwrap();
         })
     });
 
@@ -93,10 +92,10 @@ fn branch(c: &mut Criterion) {
             }
         }),
     }));
-    let serializer = bincode::DefaultOptions::new().with_varint_encoding();
+    let serializer = bincode::config::legacy().with_variable_int_encoding();
     let serde_serializer = |b: &mut criterion::Bencher, input: &storage::Node| {
         b.iter(|| {
-            serializer.serialize(input).unwrap();
+            bincode::serde::encode_to_vec(input, serializer).unwrap();
         })
     };
 
