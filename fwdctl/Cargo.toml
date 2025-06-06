@@ -6,6 +6,7 @@ rust-version = "1.85.0"
 
 [dependencies]
 firewood = { version = "0.0.5", path = "../firewood" }
+storage = { version = "0.0.5", path = "../storage" }
 clap = { version = "4.5.0", features = ["cargo", "derive"] }
 env_logger = "0.11.2"
 log = "0.4.20"
@@ -13,6 +14,7 @@ tokio = { version = "1.36.0", features = ["full"] }
 futures-util = "0.3.30"
 hex = "0.4.3"
 csv = "1.3.1"
+rand = "0.9.1"
 
 [dev-dependencies]
 anyhow = "1.0.79"

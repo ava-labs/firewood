@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use futures::Stream;
 use std::fmt::Debug;
 use std::sync::Arc;
+use storage::CheckerError;
 use storage::TrieHash;
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
@@ -142,6 +143,10 @@ pub enum Error {
     /// Proof error
     #[error("proof error")]
     ProofError(#[from] ProofError),
+
+    /// Checker error
+    #[error("checker error")]
+    CheckerError(#[from] CheckerError),
 }
 
 impl From<RevisionManagerError> for Error {
