@@ -1343,6 +1343,7 @@ impl NodeStore<Committed, FileBacked> {
         // 3. check the free list - this can happen in parallel with the trie traversal
 
         // 4. check any bubbles - what are the spaces between trie nodes and free lists?
+        let _ = visited.complement(); // TODO
 
         Ok(())
     }
