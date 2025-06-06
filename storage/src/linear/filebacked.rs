@@ -102,7 +102,13 @@ impl FileBacked {
                 .setup_cqsize(FileBacked::RINGSIZE * 2)
                 // start a kernel thread to do the IO
                 .setup_sqpoll(IDLETIME_MS)
-                .build(FileBacked::RINGSIZE)?
+                .build(FileBacked::RINGSIZE)
+                .map_err(|e| FileIoError {
+                    inner: e,
+                    filename: Some(path.clone()),
+                    offset: 0,
+                    context: Some("IO-uring setup".to_string()),
+                })?
         };
 
         Ok(Self {

@@ -1185,7 +1185,7 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
     /// Persist all the nodes of a proposal to storage.
     #[fastrace::trace(short_name = true)]
     #[cfg(feature = "io-uring")]
-    pub fn flush_nodes(&self) -> Result<(), Error> {
+    pub fn flush_nodes(&self) -> Result<(), FileIoError> {
         const RINGSIZE: usize = FileBacked::RINGSIZE as usize;
 
         let flush_start = Instant::now();
@@ -1217,7 +1217,13 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
                     // and not marking it !busy until the kernel has said it's done below.
                     #[expect(unsafe_code)]
                     while unsafe { ring.submission().push(&submission_queue_entry) }.is_err() {
-                        ring.submitter().squeue_wait()?;
+                        ring.submitter().squeue_wait().map_err(|e| {
+                            self.storage.file_io_error(
+                                e,
+                                addr.get(),
+                                Some("io-uring squeue_wait".to_string()),
+                            )
+                        })?;
                         trace!("submission queue is full");
                         counter!("ring.full").increment(1);
                     }
@@ -1226,7 +1232,10 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
                 // if we get here, that means we couldn't find a place to queue the request, so wait for at least one operation
                 // to complete, then handle the completion queue
                 counter!("ring.full").increment(1);
-                ring.submit_and_wait(1)?;
+                ring.submit_and_wait(1).map_err(|e| {
+                    self.storage
+                        .file_io_error(e, 0, Some("io-uring submit_and_wait".to_string()))
+                })?;
                 let completion_queue = ring.completion();
                 trace!("competion queue length: {}", completion_queue.len());
                 for entry in completion_queue {
@@ -1242,7 +1251,10 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
             .iter()
             .filter(|(busy, _)| *busy)
             .count();
-        ring.submit_and_wait(pending)?;
+        ring.submit_and_wait(pending).map_err(|e| {
+            self.storage
+                .file_io_error(e, 0, Some("io-uring final submit_and_wait".to_string()))
+        })?;
 
         for entry in ring.completion() {
             let item = entry.user_data() as usize;
