@@ -255,7 +255,7 @@ impl<T: TrieReader> Merkle<T> {
         };
 
         // fetch the first key from the stream
-        let first_result = stream.next().await;
+        let first_result = StreamExt::next(&mut stream).await;
 
         // transpose the Option<Result<T, E>> to Result<Option<T>, E>
         // If this is an error, the ? operator will return it
@@ -287,25 +287,23 @@ impl<T: TrieReader> Merkle<T> {
         // we stop streaming if either we hit the limit or the key returned was larger
         // than the largest key requested
         key_values.extend(
-            stream
-                .take(limit.unwrap_or(usize::MAX))
-                .take_while(|kv| {
-                    // no last key asked for, so keep going
-                    let Some(last_key) = end_key else {
-                        return ready(true);
-                    };
+            StreamExt::take_while(StreamExt::take(stream, limit.unwrap_or(usize::MAX)), |kv| {
+                // no last key asked for, so keep going
+                let Some(last_key) = end_key else {
+                    return ready(true);
+                };
 
-                    // return the error if there was one
-                    let Ok(kv) = kv else {
-                        return ready(true);
-                    };
+                // return the error if there was one
+                let Ok(kv) = kv else {
+                    return ready(true);
+                };
 
-                    // keep going if the key returned is less than the last key requested
-                    ready(&*kv.0 <= last_key)
-                })
-                .map(|kv| kv.map(|(k, v)| (k, v.into())))
-                .try_collect::<Vec<(Box<[u8]>, Box<[u8]>)>>()
-                .await?,
+                // keep going if the key returned is less than the last key requested
+                ready(&*kv.0 <= last_key)
+            })
+            .map(|kv| kv.map(|(k, v)| (k, v.into())))
+            .try_collect::<Vec<(Box<[u8]>, Box<[u8]>)>>()
+            .await?,
         );
 
         let end_proof = key_values

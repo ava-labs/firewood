@@ -83,6 +83,14 @@ impl<T: TrieReader> FusedStream for MerkleNodeStream<'_, T> {
     }
 }
 
+impl<T: TrieReader> Iterator for MerkleNodeStream<'_, T> {
+    type Item = Result<(Key, SharedNode), FileIoError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next_internal()
+    }
+}
+
 impl<'a, T: TrieReader> MerkleNodeStream<'a, T> {
     /// Returns a new iterator that will iterate over all the nodes in `merkle`
     /// with keys greater than or equal to `key`.
@@ -184,14 +192,6 @@ impl<T: TrieReader> Stream for MerkleNodeStream<'_, T> {
             Some(result) => Poll::Ready(Some(result)),
             None => Poll::Ready(None),
         }
-    }
-}
-
-impl<T: TrieReader> Iterator for MerkleNodeStream<'_, T> {
-    type Item = Result<(Key, SharedNode), FileIoError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.next_internal()
     }
 }
 
@@ -337,6 +337,43 @@ impl<'a, T: TrieReader> MerkleKeyValueStream<'a, T> {
             merkle,
         }
     }
+
+    /// Internal function that handles the core iteration logic shared between Iterator and Stream implementations.
+    /// Returns None when iteration is complete, or Some(Result) with either a key-value pair or an error.
+    fn next_internal(&mut self) -> Option<Result<(Key, Value), api::Error>> {
+        loop {
+            let Self { state, merkle } = &mut *self;
+
+            match state {
+                MerkleKeyValueStreamState::_Uninitialized(key) => {
+                    let iter = MerkleNodeStream::new(*merkle, key.clone());
+                    self.state = MerkleKeyValueStreamState::Initialized { node_iter: iter };
+                }
+                MerkleKeyValueStreamState::Initialized { node_iter: iter } => {
+                    match Iterator::next(iter) {
+                        Some(Ok((key, node))) => match &*node {
+                            Node::Branch(branch) => {
+                                let Some(value) = branch.value.as_ref() else {
+                                    // This node doesn't have a value to return.
+                                    // Continue to the next node.
+                                    continue;
+                                };
+
+                                let value = value.to_vec();
+                                return Some(Ok((key, value)));
+                            }
+                            Node::Leaf(leaf) => {
+                                let value = leaf.value.to_vec();
+                                return Some(Ok((key, value)));
+                            }
+                        },
+                        Some(Err(e)) => return Some(Err(e.into())),
+                        None => return None,
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl<T: TrieReader> Stream for MerkleKeyValueStream<'_, T> {
@@ -382,6 +419,14 @@ impl<T: TrieReader> Stream for MerkleKeyValueStream<'_, T> {
                 }
             }
         }
+    }
+}
+
+impl<T: TrieReader> Iterator for MerkleKeyValueStream<'_, T> {
+    type Item = Result<(Key, Value), api::Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next_internal()
     }
 }
 
@@ -1132,7 +1177,10 @@ mod tests {
 
         let mut stream = merkle.key_value_iter();
 
-        assert_eq!(stream.next().await.unwrap().unwrap(), (key, value.into()));
+        assert_eq!(
+            StreamExt::next(&mut stream).await.unwrap().unwrap(),
+            (key, value.into())
+        );
     }
 
     #[tokio::test]
@@ -1153,17 +1201,17 @@ mod tests {
         println!("{}", merkle.dump().unwrap());
 
         assert_eq!(
-            stream.next().await.unwrap().unwrap(),
+            StreamExt::next(&mut stream).await.unwrap().unwrap(),
             (branch.to_vec().into_boxed_slice(), branch.to_vec())
         );
 
         assert_eq!(
-            stream.next().await.unwrap().unwrap(),
+            StreamExt::next(&mut stream).await.unwrap().unwrap(),
             (first_leaf.to_vec().into_boxed_slice(), first_leaf.to_vec())
         );
 
         assert_eq!(
-            stream.next().await.unwrap().unwrap(),
+            StreamExt::next(&mut stream).await.unwrap().unwrap(),
             (
                 second_leaf.to_vec().into_boxed_slice(),
                 second_leaf.to_vec()
@@ -1195,13 +1243,13 @@ mod tests {
         let mut stream = merkle.key_value_iter_from_key(vec![intermediate].into_boxed_slice());
 
         let first_expected = key_values[1].as_slice();
-        let first = stream.next().await.unwrap().unwrap();
+        let first = StreamExt::next(&mut stream).await.unwrap().unwrap();
 
         assert_eq!(&*first.0, &*first.1);
         assert_eq!(first.1, first_expected);
 
         let second_expected = key_values[2].as_slice();
-        let second = stream.next().await.unwrap().unwrap();
+        let second = StreamExt::next(&mut stream).await.unwrap().unwrap();
 
         assert_eq!(&*second.0, &*second.1);
         assert_eq!(second.1, second_expected);
@@ -1241,7 +1289,7 @@ mod tests {
         let mut stream = merkle.key_value_iter_from_key(vec![branch_path].into_boxed_slice());
 
         for key in keys {
-            let next = stream.next().await.unwrap().unwrap();
+            let next = StreamExt::next(&mut stream).await.unwrap().unwrap();
 
             assert_eq!(&*next.0, &*next.1);
             assert_eq!(&*next.0, key);
@@ -1289,7 +1337,7 @@ mod tests {
         let mut stream = merkle.key_value_iter_from_key(branch_key.into_boxed_slice());
 
         for key in keys {
-            let next = stream.next().await.unwrap().unwrap();
+            let next = StreamExt::next(&mut stream).await.unwrap().unwrap();
 
             assert_eq!(&*next.0, &*next.1);
             assert_eq!(&*next.0, key);
@@ -1319,7 +1367,7 @@ mod tests {
         let mut stream = merkle.key_value_iter_from_key(vec![missing].into_boxed_slice());
 
         for key in keys {
-            let next = stream.next().await.unwrap().unwrap();
+            let next = StreamExt::next(&mut stream).await.unwrap().unwrap();
 
             assert_eq!(&*next.0, &*next.1);
             assert_eq!(&*next.0, key);
@@ -1366,7 +1414,7 @@ mod tests {
         let mut stream = merkle.key_value_iter_from_key(vec![start_key].into_boxed_slice());
 
         for key in keys {
-            let next = stream.next().await.unwrap().unwrap();
+            let next = StreamExt::next(&mut stream).await.unwrap().unwrap();
 
             assert_eq!(&*next.0, &*next.1);
             assert_eq!(&*next.0, key);
@@ -1398,7 +1446,7 @@ mod tests {
         let mut stream = merkle.key_value_iter_from_key(vec![missing].into_boxed_slice());
 
         for key in keys {
-            let next = stream.next().await.unwrap().unwrap();
+            let next = StreamExt::next(&mut stream).await.unwrap().unwrap();
 
             assert_eq!(&*next.0, &*next.1);
             assert_eq!(&*next.0, key);
@@ -1442,7 +1490,7 @@ mod tests {
         let mut stream = merkle.key_value_iter_from_key(vec![greatest].into_boxed_slice());
 
         for key in keys {
-            let next = stream.next().await.unwrap().unwrap();
+            let next = StreamExt::next(&mut stream).await.unwrap().unwrap();
 
             assert_eq!(&*next.0, &*next.1);
             assert_eq!(&*next.0, key);
@@ -1455,7 +1503,7 @@ mod tests {
     where
         S: FusedStream + Unpin,
     {
-        assert!(stream.next().await.is_none());
+        assert!(StreamExt::next(&mut stream).await.is_none());
         assert!(stream.is_terminated());
     }
 }
