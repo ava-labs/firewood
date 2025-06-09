@@ -29,7 +29,7 @@ pub(crate) fn setup_metrics(metrics_port: u16) -> Result<(), String> {
             };
 
             metrics::set_global_recorder(recorder.clone())
-                .map_err(|e| format!("failed to set recorder: {}", e))?;
+                .map_err(|e| format!("failed to set recorder: {e}"))?;
 
             Server::new(move |request| {
                 if request.method() == "GET" {
@@ -50,7 +50,7 @@ pub(crate) fn setup_metrics(metrics_port: u16) -> Result<(), String> {
             .with_global_timeout(Duration::from_secs(60 * 60))
             .with_max_concurrent_connections(2)
             .spawn()
-            .map_err(|e| format!("failed to spawn server: {}", e))?;
+            .map_err(|e| format!("failed to spawn server: {e}"))?;
             Ok(())
         })
         .clone()

@@ -819,7 +819,7 @@ pub struct CreateOrOpenArgs {
 ///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_create_db(args: CreateOrOpenArgs) -> DatabaseCreationResult {
-    unsafe { common_create(args, true) }.into()
+    unsafe { common_create(&args, true) }.into()
 }
 
 /// Open a database with the given cache size and maximum number of revisions
@@ -841,13 +841,13 @@ pub unsafe extern "C" fn fwd_create_db(args: CreateOrOpenArgs) -> DatabaseCreati
 ///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_open_db(args: CreateOrOpenArgs) -> DatabaseCreationResult {
-    unsafe { common_create(args, false) }.into()
+    unsafe { common_create(&args, false) }.into()
 }
 
 /// Internal call for `fwd_create_db` and `fwd_open_db` to remove error handling from the C API
 #[doc(hidden)]
 unsafe fn common_create(
-    args: CreateOrOpenArgs,
+    args: &CreateOrOpenArgs,
     truncate: bool,
 ) -> Result<*const DatabaseHandle<'static>, String> {
     let cfg = DbConfig::builder()
