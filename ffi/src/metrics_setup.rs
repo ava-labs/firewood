@@ -3,7 +3,7 @@ use std::io::Write;
 use std::net::Ipv6Addr;
 use std::ops::Deref;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Once};
+use std::sync::{Arc, OnceLock};
 use std::time::SystemTime;
 
 use oxhttp::Server;
@@ -16,39 +16,44 @@ use chrono::{DateTime, Utc};
 use metrics::Key;
 use metrics_util::registry::{AtomicStorage, Registry};
 
-static INIT: Once = Once::new();
+static INIT_RESULT: OnceLock<Result<(), String>> = OnceLock::new();
 
-pub(crate) fn setup_metrics(metrics_port: u16) {
-    INIT.call_once(|| {
-        let inner: TextRecorderInner = TextRecorderInner {
-            registry: Registry::atomic(),
-        };
-        let recorder = TextRecorder {
-            inner: Arc::new(inner),
-        };
-        metrics::set_global_recorder(recorder.clone()).expect("failed to set recorder");
+pub(crate) fn setup_metrics(metrics_port: u16) -> Result<(), String> {
+    INIT_RESULT
+        .get_or_init(|| {
+            let inner: TextRecorderInner = TextRecorderInner {
+                registry: Registry::atomic(),
+            };
+            let recorder = TextRecorder {
+                inner: Arc::new(inner),
+            };
 
-        Server::new(move |request| {
-            if request.method() == "GET" {
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .header("Content-Type", "text/plain")
-                    .body(Body::from(recorder.stats()))
-                    .expect("failed to build response")
-            } else {
-                Response::builder()
-                    .status(StatusCode::METHOD_NOT_ALLOWED)
-                    .body(Body::from("Method not allowed"))
-                    .expect("failed to build response")
-            }
+            metrics::set_global_recorder(recorder.clone())
+                .map_err(|e| format!("failed to set recorder: {}", e))?;
+
+            Server::new(move |request| {
+                if request.method() == "GET" {
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", "text/plain")
+                        .body(Body::from(recorder.stats()))
+                        .expect("failed to build response")
+                } else {
+                    Response::builder()
+                        .status(StatusCode::METHOD_NOT_ALLOWED)
+                        .body(Body::from("Method not allowed"))
+                        .expect("failed to build response")
+                }
+            })
+            .bind((Ipv4Addr::LOCALHOST, metrics_port))
+            .bind((Ipv6Addr::LOCALHOST, metrics_port))
+            .with_global_timeout(Duration::from_secs(60 * 60))
+            .with_max_concurrent_connections(2)
+            .spawn()
+            .map_err(|e| format!("failed to spawn server: {}", e))?;
+            Ok(())
         })
-        .bind((Ipv4Addr::LOCALHOST, metrics_port))
-        .bind((Ipv6Addr::LOCALHOST, metrics_port))
-        .with_global_timeout(Duration::from_secs(60 * 60))
-        .with_max_concurrent_connections(2)
-        .spawn()
-        .expect("failed to spawn server");
-    });
+        .clone()
 }
 
 #[derive(Debug)]

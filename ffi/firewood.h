@@ -42,6 +42,14 @@ typedef struct KeyValue {
 } KeyValue;
 
 /**
+ * Struct returned by `fwd_create_db` and `fwd_open_db`
+ */
+typedef struct DatabaseCreationResult {
+  const struct DatabaseHandle *db;
+  const uint8_t *error;
+} DatabaseCreationResult;
+
+/**
  * Common arguments, accepted by both `fwd_create_db()` and `fwd_open_db()`.
  *
  * * `path` - The path to the database file, which will be truncated if passed to `fwd_create_db()`
@@ -149,7 +157,7 @@ struct Value fwd_commit(const struct DatabaseHandle *db, uint32_t proposal_id);
  * The caller must call `close` to free the memory associated with the returned database handle.
  *
  */
-const struct DatabaseHandle *fwd_create_db(struct CreateOrOpenArgs args);
+struct DatabaseCreationResult fwd_create_db(struct CreateOrOpenArgs args);
 
 /**
  * Drops a proposal from the database.
@@ -281,7 +289,7 @@ struct Value fwd_get_latest(const struct DatabaseHandle *db, struct Value key);
  * The caller must call `close` to free the memory associated with the returned database handle.
  *
  */
-const struct DatabaseHandle *fwd_open_db(struct CreateOrOpenArgs args);
+struct DatabaseCreationResult fwd_open_db(struct CreateOrOpenArgs args);
 
 /**
  * Proposes a batch of operations to the database.

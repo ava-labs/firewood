@@ -146,6 +146,19 @@ func bytesFromValue(v *C.struct_Value) ([]byte, error) {
 	return nil, errBadValue
 }
 
+func databaseFromResult(result C.struct_DatabaseCreationResult) (*C.DatabaseHandle, error) {
+	if result.error != nil {
+		errStr := C.GoString((*C.char)(unsafe.Pointer(result.error)))
+		// Free the error pointer if not nil.
+		C.fwd_free_value(&C.struct_Value{
+			len:  0,
+			data: result.error,
+		})
+		return nil, fmt.Errorf("firewood error: %s", errStr)
+	}
+	return result.db, nil
+}
+
 // newValueFactory returns a factory for converting byte slices into cgo `Value`
 // structs that can be passed as arguments to cgo functions. The returned
 // cleanup function MUST be called when the constructed values are no longer

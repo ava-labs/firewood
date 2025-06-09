@@ -730,6 +730,32 @@ pub unsafe extern "C" fn fwd_free_value(value: *const Value) {
     }
 }
 
+/// Struct returned by `fwd_create_db` and `fwd_open_db`
+#[derive(Debug)]
+#[repr(C)]
+pub struct DatabaseCreationResult {
+    pub db: *const DatabaseHandle<'static>,
+    pub error: *const u8,
+}
+
+impl From<Result<*const DatabaseHandle<'static>, String>> for DatabaseCreationResult {
+    fn from(result: Result<*const DatabaseHandle<'static>, String>) -> Self {
+        match result {
+            Ok(db) => DatabaseCreationResult {
+                db,
+                error: std::ptr::null(),
+            },
+            Err(error_msg) => {
+                let error_cstring = CString::new(error_msg).unwrap_or_default().into_raw();
+                DatabaseCreationResult {
+                    db: std::ptr::null(),
+                    error: error_cstring.cast::<u8>(),
+                }
+            }
+        }
+    }
+}
+
 /// Common arguments, accepted by both `fwd_create_db()` and `fwd_open_db()`.
 ///
 /// * `path` - The path to the database file, which will be truncated if passed to `fwd_create_db()`
@@ -764,16 +790,8 @@ pub struct CreateOrOpenArgs {
 /// The caller must call `close` to free the memory associated with the returned database handle.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_create_db(args: CreateOrOpenArgs) -> *const DatabaseHandle<'static> {
-    let cfg = DbConfig::builder()
-        .truncate(true)
-        .manager(manager_config(
-            args.cache_size,
-            args.revisions,
-            args.strategy,
-        ))
-        .build();
-    unsafe { common_create(args.path, args.metrics_port, cfg) }
+pub unsafe extern "C" fn fwd_create_db(args: CreateOrOpenArgs) -> DatabaseCreationResult {
+    unsafe { common_create(args, true) }.into()
 }
 
 /// Open a database with the given cache size and maximum number of revisions
@@ -794,50 +812,53 @@ pub unsafe extern "C" fn fwd_create_db(args: CreateOrOpenArgs) -> *const Databas
 /// The caller must call `close` to free the memory associated with the returned database handle.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_open_db(args: CreateOrOpenArgs) -> *const DatabaseHandle<'static> {
-    let cfg = DbConfig::builder()
-        .truncate(false)
-        .manager(manager_config(
-            args.cache_size,
-            args.revisions,
-            args.strategy,
-        ))
-        .build();
-    unsafe { common_create(args.path, args.metrics_port, cfg) }
+pub unsafe extern "C" fn fwd_open_db(args: CreateOrOpenArgs) -> DatabaseCreationResult {
+    unsafe { common_create(args, false) }.into()
 }
 
 /// Internal call for `fwd_create_db` and `fwd_open_db` to remove error handling from the C API
 #[doc(hidden)]
 unsafe fn common_create(
-    path: *const std::ffi::c_char,
-    metrics_port: u16,
-    cfg: DbConfig,
-) -> *const DatabaseHandle<'static> {
+    args: CreateOrOpenArgs,
+    truncate: bool,
+) -> Result<*const DatabaseHandle<'static>, String> {
+    let cfg = DbConfig::builder()
+        .truncate(truncate)
+        .manager(manager_config(
+            args.cache_size,
+            args.revisions,
+            args.strategy,
+        )?)
+        .build();
     #[cfg(feature = "logger")]
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .try_init();
 
-    let path = unsafe { CStr::from_ptr(path) };
+    let path = unsafe { CStr::from_ptr(args.path) };
     #[cfg(unix)]
     let path: &Path = OsStr::from_bytes(path.to_bytes()).as_ref();
     #[cfg(windows)]
     let path: &Path = OsStr::new(path.to_str().expect("path should be valid UTF-8")).as_ref();
-    if metrics_port > 0 {
-        metrics_setup::setup_metrics(metrics_port);
+    if args.metrics_port > 0 {
+        metrics_setup::setup_metrics(args.metrics_port)?;
     }
-    let db = Db::new_sync(path, cfg).expect("db initialization should succeed");
-    Box::into_raw(Box::new(db.into()))
+    let db = Db::new_sync(path, cfg).map_err(|e| e.to_string())?;
+    Ok(Box::into_raw(Box::new(db.into())))
 }
 
 #[doc(hidden)]
-fn manager_config(cache_size: usize, revisions: usize, strategy: u8) -> RevisionManagerConfig {
+fn manager_config(
+    cache_size: usize,
+    revisions: usize,
+    strategy: u8,
+) -> Result<RevisionManagerConfig, String> {
     let cache_read_strategy = match strategy {
         0 => CacheReadStrategy::WritesOnly,
         1 => CacheReadStrategy::BranchReads,
         2 => CacheReadStrategy::All,
-        _ => panic!("invalid cache strategy"),
+        _ => return Err("invalid cache strategy".to_string()),
     };
-    RevisionManagerConfig::builder()
+    let config = RevisionManagerConfig::builder()
         .node_cache_size(
             cache_size
                 .try_into()
@@ -845,7 +866,8 @@ fn manager_config(cache_size: usize, revisions: usize, strategy: u8) -> Revision
         )
         .max_revisions(revisions)
         .cache_read_strategy(cache_read_strategy)
-        .build()
+        .build();
+    Ok(config)
 }
 
 /// Close and free the memory for a database handle
