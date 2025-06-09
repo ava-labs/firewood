@@ -890,7 +890,7 @@ fn manager_config(
         .node_cache_size(
             cache_size
                 .try_into()
-                .expect("cache size should always be non-zero"),
+                .map_err(|_| "cache size should be non-zero")?,
         )
         .max_revisions(revisions)
         .cache_read_strategy(cache_read_strategy)
