@@ -730,6 +730,32 @@ pub unsafe extern "C" fn fwd_free_value(value: *const Value) {
     }
 }
 
+/// Struct returned by `fwd_create_db` and `fwd_open_db`
+#[derive(Debug)]
+#[repr(C)]
+pub struct DatabaseCreationResult {
+    pub db: *const DatabaseHandle<'static>,
+    pub error_str: *const u8,
+}
+
+impl From<Result<*const DatabaseHandle<'static>, String>> for DatabaseCreationResult {
+    fn from(result: Result<*const DatabaseHandle<'static>, String>) -> Self {
+        match result {
+            Ok(db) => DatabaseCreationResult {
+                db,
+                error_str: std::ptr::null(),
+            },
+            Err(error_msg) => {
+                let error_cstring = CString::new(error_msg).unwrap_or_default().into_raw();
+                DatabaseCreationResult {
+                    db: std::ptr::null(),
+                    error_str: error_cstring.cast::<u8>(),
+                }
+            }
+        }
+    }
+}
+
 /// Frees the memory associated with a `DatabaseCreationResult`.
 ///
 /// # Arguments
@@ -750,38 +776,12 @@ pub unsafe extern "C" fn fwd_free_database_result(result: *const DatabaseCreatio
     let result = unsafe { result.as_ref() }.expect("result should be non-null");
 
     // Free the error string if it exists
-    if !result.error.is_null() {
-        let raw_str = result.error as *mut c_char;
+    if !result.error_str.is_null() {
+        let raw_str = result.error_str as *mut c_char;
         let cstr = unsafe { CString::from_raw(raw_str) };
         drop(cstr);
     }
     // Note: we don't free the db pointer as it's managed by the caller
-}
-
-/// Struct returned by `fwd_create_db` and `fwd_open_db`
-#[derive(Debug)]
-#[repr(C)]
-pub struct DatabaseCreationResult {
-    pub db: *const DatabaseHandle<'static>,
-    pub error: *const u8,
-}
-
-impl From<Result<*const DatabaseHandle<'static>, String>> for DatabaseCreationResult {
-    fn from(result: Result<*const DatabaseHandle<'static>, String>) -> Self {
-        match result {
-            Ok(db) => DatabaseCreationResult {
-                db,
-                error: std::ptr::null(),
-            },
-            Err(error_msg) => {
-                let error_cstring = CString::new(error_msg).unwrap_or_default().into_raw();
-                DatabaseCreationResult {
-                    db: std::ptr::null(),
-                    error: error_cstring.cast::<u8>(),
-                }
-            }
-        }
-    }
 }
 
 /// Common arguments, accepted by both `fwd_create_db()` and `fwd_open_db()`.
@@ -848,10 +848,10 @@ pub unsafe extern "C" fn fwd_open_db(args: CreateOrOpenArgs) -> DatabaseCreation
 #[doc(hidden)]
 unsafe fn common_create(
     args: &CreateOrOpenArgs,
-    truncate: bool,
+    create_file: bool,
 ) -> Result<*const DatabaseHandle<'static>, String> {
     let cfg = DbConfig::builder()
-        .truncate(truncate)
+        .truncate(create_file)
         .manager(manager_config(
             args.cache_size,
             args.revisions,

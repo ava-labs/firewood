@@ -46,7 +46,7 @@ typedef struct KeyValue {
  */
 typedef struct DatabaseCreationResult {
   const struct DatabaseHandle *db;
-  const uint8_t *error;
+  const uint8_t *error_str;
 } DatabaseCreationResult;
 
 /**
