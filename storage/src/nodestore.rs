@@ -1347,6 +1347,7 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
 impl<S: ReadableStorage> NodeReader for NodeStore<MutableProposal, S> {
     fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, FileIoError> {
         if let Some(node) = self.kind.read_in_memory_node(addr) {
+            counter!("firewood.read_node", "from" => "proposal").increment(1);
             return Ok(node);
         }
 
@@ -1357,6 +1358,7 @@ impl<S: ReadableStorage> NodeReader for NodeStore<MutableProposal, S> {
 impl<T: Parentable + ReadInMemoryNode, S: ReadableStorage> NodeReader for NodeStore<T, S> {
     fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, FileIoError> {
         if let Some(node) = self.kind.read_in_memory_node(addr) {
+            counter!("firewood.read_node", "from" => "proposal").increment(1);
             return Ok(node);
         }
         self.read_node_from_disk(addr, "read")

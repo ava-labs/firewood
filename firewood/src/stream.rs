@@ -14,7 +14,7 @@ use storage::{
 };
 
 /// Represents an ongoing iteration over a node and its children.
-enum IterationNode {
+pub(crate) enum IterationNode {
     /// This node has not been returned yet.
     Unvisited {
         /// The key (as nibbles) of this node.
@@ -48,7 +48,7 @@ impl std::fmt::Debug for IterationNode {
 }
 
 #[derive(Debug)]
-enum NodeStreamState {
+pub(crate) enum NodeStreamState {
     /// The iterator state is lazily initialized when poll_next is called
     /// for the first time. The iteration start key is stored here.
     StartFromKey(Key),
@@ -72,6 +72,107 @@ pub struct MerkleNodeStream<'a, T> {
 impl From<Key> for NodeStreamState {
     fn from(key: Key) -> Self {
         Self::StartFromKey(key)
+    }
+}
+
+impl NodeStreamState {
+    /// Returns the initial state for an iterator over the given `merkle` which starts at `key`.
+    /// This method always returns [NodeStreamState::Iterating] or an error, never [NodeStreamState::StartFromKey].
+    pub(crate) fn get_iterator_initial_state<T: TrieReader>(
+        merkle: &T,
+        key: &[u8],
+    ) -> Result<Self, FileIoError> {
+        let iter_stack = Self::iterator_stack_from_key(merkle, key)?;
+        Ok(NodeStreamState::Iterating { iter_stack })
+    }
+
+    /// Returns the initial iterator stack for traversing the given `merkle` starting at `key`.
+    /// The returned stack contains the nodes that should be visited during iteration.
+    fn iterator_stack_from_key<T: TrieReader>(
+        merkle: &T,
+        key: &[u8],
+    ) -> Result<Vec<IterationNode>, FileIoError> {
+        let Some(root) = merkle.root_node() else {
+            // This merkle is empty.
+            return Ok(vec![]);
+        };
+        let mut node = root;
+
+        // Invariant: `matched_key_nibbles` is the path before `node`'s
+        // partial path at the start of each loop iteration.
+        let mut matched_key_nibbles = vec![];
+
+        let mut unmatched_key_nibbles = NibblesIterator::new(key);
+
+        let mut iter_stack: Vec<IterationNode> = vec![];
+
+        loop {
+            // See if `node`'s key is a prefix of `key`.
+            let partial_path = node.partial_path();
+
+            let (comparison, new_unmatched_key_nibbles) =
+                compare_partial_path(partial_path.iter(), unmatched_key_nibbles);
+            unmatched_key_nibbles = new_unmatched_key_nibbles;
+
+            matched_key_nibbles.extend(partial_path.iter());
+
+            match comparison {
+                Ordering::Less => {
+                    // `node` is before `key`. It shouldn't be visited
+                    // and neither should its descendants.
+                    return Ok(iter_stack);
+                }
+                Ordering::Greater => {
+                    // `node` is after `key`. Visit it first.
+                    iter_stack.push(IterationNode::Unvisited {
+                        key: Box::from(matched_key_nibbles),
+                        node,
+                    });
+                    return Ok(iter_stack);
+                }
+                Ordering::Equal => match &*node {
+                    Node::Leaf(_) => {
+                        iter_stack.push(IterationNode::Unvisited {
+                            key: matched_key_nibbles.clone().into_boxed_slice(),
+                            node,
+                        });
+                        return Ok(iter_stack);
+                    }
+                    Node::Branch(branch) => {
+                        let Some(next_unmatched_key_nibble) = unmatched_key_nibbles.next() else {
+                            // There is no more key to traverse.
+                            iter_stack.push(IterationNode::Unvisited {
+                                key: matched_key_nibbles.clone().into_boxed_slice(),
+                                node,
+                            });
+
+                            return Ok(iter_stack);
+                        };
+
+                        // There is no child at `next_unmatched_key_nibble`.
+                        // We'll visit `node`'s first child at index > `next_unmatched_key_nibble`
+                        // first (if it exists).
+                        iter_stack.push(IterationNode::Visited {
+                            key: matched_key_nibbles.clone().into_boxed_slice(),
+                            children_iter: Box::new(
+                                as_enumerated_children_iter(branch)
+                                    .filter(move |(pos, _)| *pos > next_unmatched_key_nibble),
+                            ),
+                        });
+
+                        #[expect(clippy::indexing_slicing)]
+                        let child = &branch.children[next_unmatched_key_nibble as usize];
+                        node = match child {
+                            None => return Ok(iter_stack),
+                            Some(Child::AddressWithHash(addr, _)) => merkle.read_node(*addr)?,
+                            Some(Child::Node(node)) => (*node).clone().into(), // TODO can we avoid cloning this?
+                        };
+
+                        matched_key_nibbles.push(next_unmatched_key_nibble);
+                    }
+                },
+            }
+        }
     }
 }
 
@@ -108,7 +209,7 @@ impl<'a, T: TrieReader> MerkleNodeStream<'a, T> {
 
         match state {
             NodeStreamState::StartFromKey(key) => {
-                match get_iterator_intial_state(*merkle, key) {
+                match NodeStreamState::get_iterator_initial_state(*merkle, key) {
                     Ok(state) => self.state = state,
                     Err(e) => return Some(Err(e)),
                 }
@@ -195,94 +296,6 @@ impl<T: TrieReader> Stream for MerkleNodeStream<'_, T> {
     }
 }
 
-/// Returns the initial state for an iterator over the given `merkle` which starts at `key`.
-fn get_iterator_intial_state<T: TrieReader>(
-    merkle: &T,
-    key: &[u8],
-) -> Result<NodeStreamState, FileIoError> {
-    let Some(root) = merkle.root_node() else {
-        // This merkle is empty.
-        return Ok(NodeStreamState::Iterating { iter_stack: vec![] });
-    };
-    let mut node = root;
-
-    // Invariant: `matched_key_nibbles` is the path before `node`'s
-    // partial path at the start of each loop iteration.
-    let mut matched_key_nibbles = vec![];
-
-    let mut unmatched_key_nibbles = NibblesIterator::new(key);
-
-    let mut iter_stack: Vec<IterationNode> = vec![];
-
-    loop {
-        // See if `node`'s key is a prefix of `key`.
-        let partial_path = node.partial_path();
-
-        let (comparison, new_unmatched_key_nibbles) =
-            compare_partial_path(partial_path.iter(), unmatched_key_nibbles);
-        unmatched_key_nibbles = new_unmatched_key_nibbles;
-
-        matched_key_nibbles.extend(partial_path.iter());
-
-        match comparison {
-            Ordering::Less => {
-                // `node` is before `key`. It shouldn't be visited
-                // and neither should its descendants.
-                return Ok(NodeStreamState::Iterating { iter_stack });
-            }
-            Ordering::Greater => {
-                // `node` is after `key`. Visit it first.
-                iter_stack.push(IterationNode::Unvisited {
-                    key: Box::from(matched_key_nibbles),
-                    node,
-                });
-                return Ok(NodeStreamState::Iterating { iter_stack });
-            }
-            Ordering::Equal => match &*node {
-                Node::Leaf(_) => {
-                    iter_stack.push(IterationNode::Unvisited {
-                        key: matched_key_nibbles.clone().into_boxed_slice(),
-                        node,
-                    });
-                    return Ok(NodeStreamState::Iterating { iter_stack });
-                }
-                Node::Branch(branch) => {
-                    let Some(next_unmatched_key_nibble) = unmatched_key_nibbles.next() else {
-                        // There is no more key to traverse.
-                        iter_stack.push(IterationNode::Unvisited {
-                            key: matched_key_nibbles.clone().into_boxed_slice(),
-                            node,
-                        });
-
-                        return Ok(NodeStreamState::Iterating { iter_stack });
-                    };
-
-                    // There is no child at `next_unmatched_key_nibble`.
-                    // We'll visit `node`'s first child at index > `next_unmatched_key_nibble`
-                    // first (if it exists).
-                    iter_stack.push(IterationNode::Visited {
-                        key: matched_key_nibbles.clone().into_boxed_slice(),
-                        children_iter: Box::new(
-                            as_enumerated_children_iter(branch)
-                                .filter(move |(pos, _)| *pos > next_unmatched_key_nibble),
-                        ),
-                    });
-
-                    #[expect(clippy::indexing_slicing)]
-                    let child = &branch.children[next_unmatched_key_nibble as usize];
-                    node = match child {
-                        None => return Ok(NodeStreamState::Iterating { iter_stack }),
-                        Some(Child::AddressWithHash(addr, _)) => merkle.read_node(*addr)?,
-                        Some(Child::Node(node)) => (*node).clone().into(), // TODO can we avoid cloning this?
-                    };
-
-                    matched_key_nibbles.push(next_unmatched_key_nibble);
-                }
-            },
-        }
-    }
-}
-
 #[derive(Debug)]
 enum MerkleKeyValueStreamState<'a, T> {
     /// The iterator state is lazily initialized when poll_next is called
@@ -338,9 +351,9 @@ impl<'a, T: TrieReader> MerkleKeyValueStream<'a, T> {
         }
     }
 
-    /// Internal function that handles the core iteration logic shared between Iterator and Stream implementations.
+    /// Internal function that handles the core iteration logic.
     /// Returns None when iteration is complete, or Some(Result) with either a key-value pair or an error.
-    fn next_internal(&mut self) -> Option<Result<(Key, Value), api::Error>> {
+    pub(crate) fn next_internal(&mut self) -> Option<Result<(Key, Value), FileIoError>> {
         loop {
             let Self { state, merkle } = &mut *self;
 
@@ -367,7 +380,7 @@ impl<'a, T: TrieReader> MerkleKeyValueStream<'a, T> {
                                 return Some(Ok((key, value)));
                             }
                         },
-                        Some(Err(e)) => return Some(Err(e.into())),
+                        Some(Err(e)) => return Some(Err(e)),
                         None => return None,
                     }
                 }
@@ -426,7 +439,11 @@ impl<T: TrieReader> Iterator for MerkleKeyValueStream<'_, T> {
     type Item = Result<(Key, Value), api::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.next_internal()
+        match self.next_internal() {
+            Some(Ok(result)) => Some(Ok(result)),
+            Some(Err(e)) => Some(Err(e.into())),
+            None => None,
+        }
     }
 }
 

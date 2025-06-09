@@ -218,13 +218,11 @@ impl<T: TrieReader> Merkle<T> {
         PathIterator::new(&self.nodestore, key)
     }
 
-    #[allow(dead_code)]
-    pub(super) fn key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
+    pub(crate) fn key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
         MerkleKeyValueStream::from(&self.nodestore)
     }
 
-    #[allow(dead_code)]
-    pub(super) fn key_value_iter_from_key<K: AsRef<[u8]>>(
+    pub(crate) fn key_value_iter_from_key<K: AsRef<[u8]>>(
         &self,
         key: K,
     ) -> MerkleKeyValueStream<'_, T> {
