@@ -129,6 +129,7 @@ jobs:
           git config --global user.name "FirewoodCI"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b ${{ steps.determine_branch.outputs.target_branch }}
+          awk 'NR==1{$0="module github.com/ava-labs/firewood-go/ffi"}1' ffi/go.mod > ffi/go.mod.tmp && mv ffi/go.mod.tmp ffi/go.mod
           git add .
           git commit -m "firewood ci ${{ github.sha }}: attach firewood static libs"
           git push -u origin ${{ steps.determine_branch.outputs.target_branch }} --force
