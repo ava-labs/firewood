@@ -146,14 +146,15 @@ func bytesFromValue(v *C.struct_Value) ([]byte, error) {
 	return nil, errBadValue
 }
 
-func databaseFromResult(result C.struct_DatabaseCreationResult) (*C.DatabaseHandle, error) {
+func databaseFromResult(result *C.struct_DatabaseCreationResult) (*C.DatabaseHandle, error) {
+	if result == nil {
+		return nil, errNilBuffer
+	}
+
 	if result.error != nil {
 		errStr := C.GoString((*C.char)(unsafe.Pointer(result.error)))
-		// Free the error pointer if not nil.
-		C.fwd_free_value(&C.struct_Value{
-			len:  0,
-			data: result.error,
-		})
+		C.fwd_free_database_result(result)
+		runtime.KeepAlive(result)
 		return nil, fmt.Errorf("firewood error: %s", errStr)
 	}
 	return result.db, nil

@@ -177,6 +177,24 @@ struct DatabaseCreationResult fwd_create_db(struct CreateOrOpenArgs args);
 struct Value fwd_drop_proposal(const struct DatabaseHandle *db, uint32_t proposal_id);
 
 /**
+ * Frees the memory associated with a `DatabaseCreationResult`.
+ *
+ * # Arguments
+ *
+ * * `result` - The `DatabaseCreationResult` to free, previously returned from `fwd_create_db` or `fwd_open_db`.
+ *
+ * # Safety
+ *
+ * This function is unsafe because it dereferences raw pointers.
+ * The caller must ensure that `result` is a valid pointer.
+ *
+ * # Panics
+ *
+ * This function panics if `result` is `null`.
+ */
+void fwd_free_database_result(const struct DatabaseCreationResult *result);
+
+/**
  * Frees the memory associated with a `Value`.
  *
  * # Arguments

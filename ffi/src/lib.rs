@@ -730,6 +730,34 @@ pub unsafe extern "C" fn fwd_free_value(value: *const Value) {
     }
 }
 
+/// Frees the memory associated with a `DatabaseCreationResult`.
+///
+/// # Arguments
+///
+/// * `result` - The `DatabaseCreationResult` to free, previously returned from `fwd_create_db` or `fwd_open_db`.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers.
+/// The caller must ensure that `result` is a valid pointer.
+///
+/// # Panics
+///
+/// This function panics if `result` is `null`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_free_database_result(result: *const DatabaseCreationResult) {
+    // Check result is valid.
+    let result = unsafe { result.as_ref() }.expect("result should be non-null");
+
+    // Free the error string if it exists
+    if !result.error.is_null() {
+        let raw_str = result.error as *mut c_char;
+        let cstr = unsafe { CString::from_raw(raw_str) };
+        drop(cstr);
+    }
+    // Note: we don't free the db pointer as it's managed by the caller
+}
+
 /// Struct returned by `fwd_create_db` and `fwd_open_db`
 #[derive(Debug)]
 #[repr(C)]

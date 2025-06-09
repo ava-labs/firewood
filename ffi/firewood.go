@@ -110,7 +110,7 @@ func New(filePath string, conf *Config) (*Database, error) {
 		dbResult = C.fwd_open_db(args)
 	}
 
-	db, err := databaseFromResult(dbResult)
+	db, err := databaseFromResult(&dbResult)
 	if err != nil {
 		return nil, err
 	}
