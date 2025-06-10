@@ -17,7 +17,7 @@ import (
 )
 
 var (
-	errNilBuffer = errors.New("firewood error: nil value returned from cgo")
+	errNilStruct = errors.New("firewood error: nil struct pointer cannot be freed")
 	errBadValue  = errors.New("firewood error: value from cgo formatted incorrectly")
 )
 
@@ -42,7 +42,7 @@ func hashAndIDFromValue(v *C.struct_Value) ([]byte, uint32, error) {
 	defer runtime.KeepAlive(v)
 
 	if v == nil {
-		return nil, 0, errNilBuffer
+		return nil, 0, errNilStruct
 	}
 
 	if v.data == nil {
@@ -85,7 +85,7 @@ func errorFromValue(v *C.struct_Value) error {
 	defer runtime.KeepAlive(v)
 
 	if v == nil {
-		return errNilBuffer
+		return errNilStruct
 	}
 
 	// Case 1
@@ -120,7 +120,7 @@ func bytesFromValue(v *C.struct_Value) ([]byte, error) {
 	defer runtime.KeepAlive(v)
 
 	if v == nil {
-		return nil, errNilBuffer
+		return nil, errNilStruct
 	}
 
 	// Case 4
@@ -148,7 +148,7 @@ func bytesFromValue(v *C.struct_Value) ([]byte, error) {
 
 func databaseFromResult(result *C.struct_DatabaseCreationResult) (*C.DatabaseHandle, error) {
 	if result == nil {
-		return nil, errNilBuffer
+		return nil, errNilStruct
 	}
 
 	if result.error_str != nil {

@@ -149,7 +149,7 @@ func TestOpenNonexistentDatabase(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Create = false
 	db, err := New(filepath.Join(t.TempDir(), "test.db"), cfg)
-	r.Error(err)
+	r.ErrorContains(err, "File IO error")
 	r.Nil(db)
 }
 
