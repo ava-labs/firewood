@@ -738,11 +738,11 @@ pub struct DatabaseCreationResult {
     pub error_str: *const u8,
 }
 
-impl From<Result<*const DatabaseHandle<'static>, String>> for DatabaseCreationResult {
-    fn from(result: Result<*const DatabaseHandle<'static>, String>) -> Self {
+impl From<Result<Db, String>> for DatabaseCreationResult {
+    fn from(result: Result<Db, String>) -> Self {
         match result {
             Ok(db) => DatabaseCreationResult {
-                db,
+                db: Box::into_raw(Box::new(db.into())),
                 error_str: std::ptr::null(),
             },
             Err(error_msg) => {
@@ -846,10 +846,7 @@ pub unsafe extern "C" fn fwd_open_db(args: CreateOrOpenArgs) -> DatabaseCreation
 
 /// Internal call for `fwd_create_db` and `fwd_open_db` to remove error handling from the C API
 #[doc(hidden)]
-unsafe fn common_create(
-    args: &CreateOrOpenArgs,
-    create_file: bool,
-) -> Result<*const DatabaseHandle<'static>, String> {
+unsafe fn common_create(args: &CreateOrOpenArgs, create_file: bool) -> Result<Db, String> {
     let cfg = DbConfig::builder()
         .truncate(create_file)
         .manager(manager_config(
@@ -870,8 +867,7 @@ unsafe fn common_create(
     if args.metrics_port > 0 {
         metrics_setup::setup_metrics(args.metrics_port)?;
     }
-    let db = Db::new_sync(path, cfg).map_err(|e| e.to_string())?;
-    Ok(Box::into_raw(Box::new(db.into())))
+    Db::new_sync(path, cfg).map_err(|e| e.to_string())
 }
 
 #[doc(hidden)]
