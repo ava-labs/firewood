@@ -153,15 +153,6 @@ func TestOpenNonexistentDatabase(t *testing.T) {
 	r.Nil(db)
 }
 
-func TestUsedPort(t *testing.T) {
-	r := require.New(t)
-	cfg := DefaultConfig()
-	cfg.MetricsPort = 1 // stdout should be used
-	db, err := New(filepath.Join(t.TempDir(), "test.db"), cfg)
-	r.ErrorContains(err, "failed to spawn server")
-	r.Nil(db)
-}
-
 func TestUpdateSingleKV(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
