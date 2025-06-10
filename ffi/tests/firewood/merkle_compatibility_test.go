@@ -46,11 +46,11 @@ var stepMap = map[byte]string{
 	commitProposal:           "commitProposal",
 }
 
-func newTestDatabase(t *testing.T) *firewood.Database {
+func newTestFirewoodDatabase(t *testing.T) *firewood.Database {
 	t.Helper()
 
 	dbFile := filepath.Join(t.TempDir(), "test.db")
-	db, closeDB, err := newDatabase(dbFile)
+	db, closeDB, err := newFirewoodDatabase(dbFile)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, closeDB())
@@ -58,7 +58,7 @@ func newTestDatabase(t *testing.T) *firewood.Database {
 	return db
 }
 
-func newDatabase(dbFile string) (*firewood.Database, func() error, error) {
+func newFirewoodDatabase(dbFile string) (*firewood.Database, func() error, error) {
 	conf := firewood.DefaultConfig()
 	conf.MetricsPort = 0
 	conf.Create = true
@@ -103,7 +103,7 @@ func newTestTree(t *testing.T, rand *rand.Rand) *tree {
 
 	tr := &tree{
 		merkleDB:  merkleDB,
-		fwdDB:     newTestDatabase(t),
+		fwdDB:     newTestFirewoodDatabase(t),
 		proposals: make(map[int]*proposal),
 		children:  make([]*proposal, 0),
 		require:   r,
@@ -169,29 +169,30 @@ func (tr *tree) dbGet() {
 	for _, key := range keys {
 		fwdVal, fwdErr := tr.fwdDB.Get(key)
 		merkleVal, merkleErr := tr.merkleDB.GetValue(context.Background(), key)
-
-		// XXX: handling of non-existent keys diverges between merkleDB and firewood
-		if merkleErr == database.ErrNotFound {
-			tr.require.Nil(merkleVal)
-			tr.require.NoError(fwdErr)
-			tr.require.Nil(fwdVal)
-			continue
-		}
-		tr.require.NoError(merkleErr)
-		tr.require.NoError(fwdErr)
-		tr.require.Equal(fwdVal, merkleVal)
+		tr.testGetResult(merkleVal, merkleErr, fwdVal, fwdErr)
 	}
+}
+
+func (tr *tree) testGetResult(merkleVal []byte, merkleErr error, fwdVal []byte, fwdErr error) {
+	if merkleErr == database.ErrNotFound {
+		tr.require.Nil(merkleVal)
+		tr.require.NoError(fwdErr)
+		tr.require.Nil(fwdVal)
+		return
+	}
+	tr.require.NoError(merkleErr)
+	tr.require.NoError(fwdErr)
+	tr.require.Equal(fwdVal, merkleVal)
 }
 
 func (tr *tree) dbBatch() {
 	batchSize := tr.rand.Intn(maxBatchSize) + 1 // ensure at least one key-value pair
 	keys, vals := tr.createRandomBatch(batchSize)
-	// Insert the batch of key-value pairs into both databases.
+
 	batch := tr.merkleDB.NewBatch()
 	for i := range len(keys) {
 		tr.require.NoError(batch.Put(keys[i], vals[i]))
 	}
-	// Commit the batch to the merkleDB.
 	tr.require.NoError(batch.Write())
 
 	_, err := tr.fwdDB.Update(keys, vals)
@@ -322,16 +323,7 @@ func (tr *tree) proposalGet() {
 		fwdVal, fwdErr := pr.fwdView.Get(key)
 		merkleVal, merkleErr := pr.merkleView.GetValue(context.Background(), key)
 
-		// XXX: handling of non-existent keys diverges between merkleDB and firewood
-		if merkleErr == database.ErrNotFound {
-			tr.require.Nil(merkleVal)
-			tr.require.NoError(fwdErr)
-			tr.require.Nil(fwdVal)
-			continue
-		}
-		tr.require.NoError(merkleErr)
-		tr.require.NoError(fwdErr)
-		tr.require.Equal(fwdVal, merkleVal)
+		tr.testGetResult(merkleVal, merkleErr, fwdVal, fwdErr)
 	}
 }
 
