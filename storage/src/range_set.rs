@@ -1,26 +1,170 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use btree_range_map::{AnyRange, RangeSet};
-use std::ops::{Bound, Range};
+use btree_slab::BTreeMap;
+use btree_slab::generic::map::BTreeExt;
+use btree_slab::generic::node::Address;
+use std::ops::Range;
 
 use crate::nodestore::NodeStore;
 use crate::{CheckerError, LinearAddress};
 
+pub(super) struct RangeSet<T> {
+    index: BTreeMap<T, T>, // start --> end
+}
+
+impl<T: Clone + Ord + std::fmt::Debug> RangeSet<T> {
+    fn new() -> Self {
+        Self {
+            index: BTreeMap::new(),
+        }
+    }
+
+    fn find_prev_and_next_addr(&self, key: &T) -> (Option<Address>, Option<Address>) {
+        // btree_slab::BTreeMap::address_of returns:
+        // - Err(nowhere) if the tree is empty
+        // - Some(addr) where addr is the address of the key if it is present
+        // - Err(addr) where addr is the address following the nearest key smaller than the given key if the key is not present
+        // e.g.: If the key is 10 and the tree has 5 @ address 1 and 15 @ address 2, it will return Err(2) - we should return (Some(1), Some(2))
+        let my_addr = self.index.address_of(key);
+        match my_addr {
+            Ok(addr) => (Some(addr), self.index.next_item_address(addr)), // if the key is present, merge with this range
+            Err(addr) => {
+                // tree is empty - this check is necessary since item(addr) will unwrap on none if the address is nowhere
+                if addr.is_nowhere() {
+                    return (None, None);
+                }
+
+                let prev_addr = self.index.previous_item_address(addr);
+                let next_addr = match self.index.item(addr) {
+                    Some(_) => Some(addr),
+                    None => self.index.next_item_address(addr),
+                };
+                (prev_addr, next_addr)
+            }
+        }
+    }
+
+    fn intersects(&self, range: Range<T>) -> bool {
+        let (prev_addr, next_addr) = self.find_prev_and_next_addr(&range.start);
+
+        // check if the given range intersects with the previous range
+        if let Some(prev_addr) = prev_addr {
+            let prev_range = self.index.item(prev_addr).expect("prev item should exist");
+            // if the end of previous range and the start of the current range are equal, they are not intersecting since end is exclusive
+            if *prev_range.value() > range.start {
+                return true;
+            }
+        }
+
+        // check if the given range intersects with the next range
+        if let Some(next_addr) = next_addr {
+            let next_range = self.index.item(next_addr).expect("next item should exist");
+            // if the end of current range and the start of the next range are equal, they are not intersecting since end is exclusive
+            if range.end > *next_range.key() {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn insert_range(&mut self, range: Range<T>) {
+        let (prev_addr, mut next_addr) = self.find_prev_and_next_addr(&range.start);
+        // this will be the final range after merging
+        let (range_start, mut range_end) = match prev_addr {
+            Some(addr) => {
+                let prev_item = self.index.item(addr).expect("prev item should exist");
+                if *prev_item.value() < range.start {
+                    // previous range does not intersect with the new range
+                    (range.start, range.end)
+                } else if *prev_item.value() < range.end {
+                    // previous range intersects with the new range partially
+                    (prev_item.key().clone(), range.end)
+                } else {
+                    // previous range contains the new range
+                    (prev_item.key().clone(), prev_item.value().clone())
+                }
+            }
+            // this range starts before all ranges in the set
+            None => (range.start, range.end),
+        };
+
+        // try merge with the next range
+        let mut remove_keys = Vec::new();
+        while let Some(curr_addr) = next_addr {
+            let curr_item = self.index.item(curr_addr).expect("curr item should exist");
+            if range_end < *curr_item.key() {
+                // the next range does not intersect with the new range - we are done
+                break;
+            }
+            // the next range intersects with the new range - remove the next range and update the end of the new range
+            remove_keys.push(curr_item.key().clone());
+            if range_end < *curr_item.value() {
+                range_end = curr_item.value().clone();
+            }
+            // get the next range
+            next_addr = self.index.next_item_address(curr_addr);
+        }
+
+        for key in remove_keys {
+            self.index.remove(&key);
+        }
+        self.index.insert(range_start, range_end);
+    }
+
+    fn complement(&self, min: &T, max: &T) -> Self {
+        let mut complement_tree = BTreeMap::new();
+        // first range will start from min
+        let mut start = min;
+        for (cur_start, cur_end) in self.index.iter() {
+            // insert the range from the previous end to the current start
+            if cur_start > start {
+                complement_tree.insert(start.clone(), cur_start.clone());
+            }
+            start = cur_end;
+        }
+
+        // insert the last range before the max
+        if start < max {
+            complement_tree.insert(start.clone(), max.clone());
+        }
+
+        Self {
+            index: complement_tree,
+        }
+    }
+}
+
+impl IntoIterator for RangeSet<LinearAddress> {
+    type Item = Range<LinearAddress>;
+    type IntoIter = std::iter::Map<
+        <BTreeMap<LinearAddress, LinearAddress> as IntoIterator>::IntoIter,
+        fn((LinearAddress, LinearAddress)) -> Self::Item,
+    >;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.index
+            .into_iter()
+            .map(|(start, end)| Range { start, end })
+    }
+}
+
 pub(super) struct LinearAddressRangeSet {
-    range_set: RangeSet<u64>,
-    size: u64,
+    range_set: RangeSet<LinearAddress>,
+    max_addr: LinearAddress,
 }
 
 impl LinearAddressRangeSet {
     pub(super) fn new(db_size: u64) -> Result<Self, CheckerError> {
-        if db_size < NodeStore::HEADER_SIZE {
+        let max_addr = LinearAddress::new(db_size).ok_or(CheckerError::InvalidDBSize(db_size))?;
+        if max_addr < NodeStore::STORAGE_AREA_START {
             return Err(CheckerError::InvalidDBSize(db_size));
         }
 
         Ok(Self {
             range_set: RangeSet::new(),
-            size: db_size,
+            max_addr,
         })
     }
 
@@ -29,50 +173,41 @@ impl LinearAddressRangeSet {
         addr: LinearAddress,
         size: u64,
     ) -> Result<(), CheckerError> {
-        let start = addr.get();
-        // end can be larger than the file size: only the node in the stored area is written to disk
-        if start < NodeStore::HEADER_SIZE || start + size > self.size {
+        let start = addr;
+        let end = start
+            .checked_add(size)
+            .ok_or(CheckerError::AreaOutOfBounds { start, size })?; // This can only happen due to overflow
+        if addr < NodeStore::STORAGE_AREA_START || end > self.max_addr {
             return Err(CheckerError::AreaOutOfBounds { start: addr, size });
         }
-        if self.range_set.intersects(start..start + size) {
+
+        if self.range_set.intersects(start..end) {
             return Err(CheckerError::AreaIntersects { start: addr, size });
         }
-        self.range_set.insert(start..start + size);
+        self.range_set.insert_range(start..end);
         Ok(())
     }
 
     #[expect(clippy::unwrap_used)]
     pub(super) fn complement(&self) -> Self {
-        let mut complement_set = self.range_set.complement();
-        complement_set.remove(..NodeStore::HEADER_SIZE);
-        complement_set.remove(self.size..);
+        let complement_set = self
+            .range_set
+            .complement(&NodeStore::STORAGE_AREA_START, &self.max_addr);
 
         Self {
             range_set: complement_set,
-            size: self.size,
+            max_addr: self.max_addr,
         }
     }
 }
 
 impl IntoIterator for LinearAddressRangeSet {
     type Item = Range<LinearAddress>;
-    type IntoIter =
-        std::iter::Map<<RangeSet<u64> as IntoIterator>::IntoIter, fn(AnyRange<u64>) -> Self::Item>;
+    type IntoIter = <RangeSet<LinearAddress> as IntoIterator>::IntoIter;
 
     #[expect(clippy::unwrap_used)]
     fn into_iter(self) -> Self::IntoIter {
-        self.range_set.into_iter().map(|AnyRange { start, end }| {
-            let Bound::Included(start) = start else {
-                panic!("start of range is not included, this should not happen");
-            };
-            let Bound::Excluded(end) = end else {
-                panic!("end of range is not excluded, this should not happen");
-            };
-            Range {
-                start: LinearAddress::new(start).unwrap(),
-                end: LinearAddress::new(end).unwrap(),
-            }
-        })
+        self.range_set.into_iter()
     }
 }
 
@@ -185,7 +320,7 @@ mod tests {
         let size2 = 1024;
         let db_size = 0x2000;
 
-        let db_begin = LinearAddress::new(NodeStore::HEADER_SIZE).unwrap();
+        let db_begin = NodeStore::STORAGE_AREA_START;
         let start1_addr = LinearAddress::new(start1).unwrap();
         let end1_addr = LinearAddress::new(start1 + size1).unwrap();
         let start2_addr = LinearAddress::new(start2).unwrap();
@@ -223,8 +358,8 @@ mod tests {
 
     #[test]
     fn test_complement_with_empty() {
-        let db_size = NodeStore::HEADER_SIZE;
-        let visited = LinearAddressRangeSet::new(db_size).unwrap();
+        let db_size = NodeStore::STORAGE_AREA_START;
+        let visited = LinearAddressRangeSet::new(db_size.get()).unwrap();
         let complement = visited.complement().into_iter().collect::<Vec<_>>();
         assert_eq!(complement, vec![]);
     }

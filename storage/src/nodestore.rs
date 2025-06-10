@@ -1320,7 +1320,8 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
 /// NodeStore checker
 impl NodeStore<Committed, FileBacked> {
-    pub(crate) const HEADER_SIZE: u64 = NodeStoreHeader::SIZE;
+    pub(crate) const STORAGE_AREA_START: LinearAddress =
+        LinearAddress::new(NodeStoreHeader::SIZE).unwrap();
 
     /// Go through the filebacked storage and check for any inconsistencies. It proceeds in the following steps:
     /// 1. Check the header
