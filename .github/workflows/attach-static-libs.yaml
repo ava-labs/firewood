@@ -71,6 +71,7 @@ jobs:
 
       - name: Check if FIREWOOD_GO_GITHUB_TOKEN is set
         id: check_secrets
+        shell: bash
         run: |
           if [ -z "${{ secrets.FIREWOOD_GO_GITHUB_TOKEN }}" ]; then
             echo "FIREWOOD_GO_GITHUB_TOKEN is not set"
@@ -93,6 +94,7 @@ jobs:
     steps:
       - name: Determine branch name
         id: determine_branch
+        shell: bash
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.create_branch_name }}" ]]; then
             export target_branch="${{ github.event.inputs.create_branch_name }}"
@@ -134,6 +136,7 @@ jobs:
 
       - name: Push static libs to branch
         working-directory: firewood-go
+        shell: bash
         # GITHUB_TOKEN is configured in the last actions/checkout step
         # to have read/write permissions to the firewood-go repo.
         run: |
