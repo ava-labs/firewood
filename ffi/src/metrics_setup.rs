@@ -17,23 +17,25 @@ use chrono::{DateTime, Utc};
 use metrics::Key;
 use metrics_util::registry::{AtomicStorage, Registry};
 
+/// Sets up a metrics server over a specified port.
+/// If `metrics_port` is set to 0, it will not initialize the metrics system.
+/// This happens on a per-process basis, meaning that the metrics system
+/// cannot be initialized if it has already been set up in the same process.
+/// Any caller should ensure that the metrics system is not already initialized
+/// by explicitly calling with metrics_port == 0..
 pub(crate) fn setup_metrics(metrics_port: u16) -> Result<(), Box<dyn Error>> {
+    if metrics_port == 0 {
+        // If the port is 0, we do not initialize the metrics system.
+        return Ok(());
+    }
+
     let inner: TextRecorderInner = TextRecorderInner {
         registry: Registry::atomic(),
     };
     let recorder = TextRecorder {
         inner: Arc::new(inner),
     };
-
-    // Any caller should ensure that the metrics system is not already initialized
-    // by explicitly calling with metrics_port == 0.
-    // If multiple databases are running, they should use the same port.
-    if let Err(e) = metrics::set_global_recorder(recorder.clone()) {
-        if metrics_port == 0 {
-            return Ok(());
-        }
-        return Err(Box::new(e));
-    }
+    metrics::set_global_recorder(recorder.clone())?;
 
     Server::new(move |request| {
         if request.method() == "GET" {

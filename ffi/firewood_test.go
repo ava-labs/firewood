@@ -153,6 +153,22 @@ func TestOpenNonexistentDatabase(t *testing.T) {
 	r.Nil(db)
 }
 
+func TestOpenDuplicateMetricPort(t *testing.T) {
+	r := require.New(t)
+
+	dbFile := filepath.Join(t.TempDir(), "test.db")
+	cfg := DefaultConfig()
+	cfg.MetricsPort = 22 // reserved for ssh
+	cfg.Create = true
+	db, err := New(dbFile, cfg)
+	t.Cleanup(func() {
+		if db != nil {
+			r.NoError(db.Close())
+		}
+	})
+	r.ErrorContains(err, "Permission denied")
+}
+
 func TestUpdateSingleKV(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
