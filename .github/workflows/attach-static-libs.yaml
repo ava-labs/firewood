@@ -38,6 +38,8 @@ jobs:
             target: aarch64-apple-darwin
           - os: macos-13
             target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
     outputs:
       has_secrets: ${{ steps.check_secrets.outputs.has_secrets }}
     steps:
@@ -151,7 +153,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, ubuntu-22.04-arm, macos-latest, macos-13]
+        os: [ubuntu-latest, ubuntu-22.04-arm, macos-latest, macos-13, windows-latest]
     needs: push-firewood-ffi-libs
     continue-on-error: true
     steps:
