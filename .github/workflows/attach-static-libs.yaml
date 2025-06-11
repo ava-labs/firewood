@@ -39,7 +39,7 @@ jobs:
           - os: macos-13
             target: x86_64-apple-darwin
           - os: windows-latest
-            target: x86_64-pc-windows-msvc
+            target: x86_64-pc-windows-gnu
     outputs:
       has_secrets: ${{ steps.check_secrets.outputs.has_secrets }}
     steps:
