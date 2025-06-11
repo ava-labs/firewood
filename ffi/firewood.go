@@ -8,7 +8,7 @@ package firewood
 // #cgo linux,arm64 LDFLAGS: -L${SRCDIR}/libs/aarch64-unknown-linux-gnu -lm
 // #cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/libs/x86_64-apple-darwin
 // #cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/libs/aarch64-apple-darwin
-// #cgo windows,amd64 LDFLAGS: -L${SRCDIR}/libs/x86_64-pc-windows-gnu -lws2_32 -lntdll
+// #cgo windows,amd64 LDFLAGS: -L${SRCDIR}/libs/x86_64-pc-windows-gnu -lws2_32 -lkernel32 -ladvapi32 -luserenv -lole32 -loleaut32 -lntdll -lpsapi
 // // XXX: last search path takes precedence, which means we prioritize
 // // local builds over pre-built and maxperf over release build
 // #cgo LDFLAGS: -L${SRCDIR}/../target/debug
