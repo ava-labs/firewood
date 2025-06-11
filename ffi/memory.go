@@ -153,7 +153,7 @@ func databaseFromResult(result *C.struct_DatabaseCreationResult) (*C.DatabaseHan
 
 	if result.error_str != nil {
 		errStr := C.GoString((*C.char)(unsafe.Pointer(result.error_str)))
-		C.fwd_free_database_result(result)
+		C.fwd_free_database_error_result(result)
 		runtime.KeepAlive(result)
 		return nil, fmt.Errorf("firewood error: %s", errStr)
 	}

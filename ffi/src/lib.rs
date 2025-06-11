@@ -866,7 +866,7 @@ unsafe fn common_create(args: &CreateOrOpenArgs, create_file: bool) -> Result<Db
     #[cfg(windows)]
     let path: &Path = OsStr::new(path.to_str().expect("path should be valid UTF-8")).as_ref();
     if args.metrics_port > 0 {
-        metrics_setup::setup_metrics(args.metrics_port)?;
+        metrics_setup::setup_metrics(args.metrics_port).map_err(|e| e.to_string())?;
     }
     Db::new_sync(path, cfg).map_err(|e| e.to_string())
 }
