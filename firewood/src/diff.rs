@@ -5,7 +5,7 @@
 
 use std::cmp::Ordering;
 use std::fmt;
-use storage::{Child, Node, Path, SharedNode, TrieReader};
+use storage::{Child, FileIoError, Node, Path, SharedNode, TrieReader};
 
 use crate::db::BatchOp;
 use crate::merkle::{Key, Merkle, Value};
@@ -18,6 +18,9 @@ use crate::stream::{
 /// Two nodes that need to be compared against each other.
 /// This state occurs when we have matching children in both trees that need to be processed,
 /// or when we're starting the comparison at the root level with nodes from both trees.
+///
+/// The "unvisited" part means that we haven't actually consumed the value
+/// in a branch, or we haven't consumed the value of the leaf.
 #[derive(Debug)]
 struct UnvisitedPairState {
     node_left: SharedNode,
@@ -84,6 +87,313 @@ impl fmt::Debug for VisitedRightState {
         f.debug_struct("VisitedRightState")
             .field("children_iter", &"<iterator>")
             .finish()
+    }
+}
+trait StateVisitor {
+    fn visit<L: TrieReader, R: TrieReader>(
+        self,
+        key: &Path,
+        iter_stack: &mut Vec<DiffIterationNode>,
+        readers: (&L, &R),
+    ) -> Result<(), FileIoError>;
+}
+
+impl StateVisitor for VisitedLeftState {
+    fn visit<L: TrieReader, R: TrieReader>(
+        mut self,
+        key: &Path,
+        iter_stack: &mut Vec<DiffIterationNode>,
+        readers: (&L, &R),
+    ) -> Result<(), FileIoError> {
+        if let Some((pos, child)) = self.children_iter.next() {
+            let node = match child {
+                Child::AddressWithHash(addr, _) => readers.0.read_node(addr)?,
+                Child::Node(node) => node.clone().into(),
+            };
+
+            let child_partial_path = node.partial_path().iter().copied();
+            let child_key: Path = {
+                let nibbles: Vec<u8> = key
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once(pos))
+                    .chain(child_partial_path)
+                    .collect();
+                Path::from(nibbles.as_slice())
+            };
+
+            // Continue with remaining children
+            iter_stack.push(DiffIterationNode {
+                key: key.clone(),
+                state: DiffIterationNodeState::VisitedLeft(VisitedLeftState {
+                    children_iter: self.children_iter,
+                }),
+            });
+
+            iter_stack.push(DiffIterationNode {
+                key: child_key,
+                state: DiffIterationNodeState::UnvisitedLeft(UnvisitedLeftState { node }),
+            });
+        }
+        Ok(())
+    }
+}
+
+impl StateVisitor for VisitedPairState {
+    fn visit<L: TrieReader, R: TrieReader>(
+        mut self,
+        key: &Path,
+        iter_stack: &mut Vec<DiffIterationNode>,
+        readers: (&L, &R),
+    ) -> Result<(), FileIoError> {
+        // Compare children from both trees
+        let child_left_opt = self.children_iter_left.next();
+        let child_right_opt = self.children_iter_right.next();
+
+        match (child_left_opt, child_right_opt) {
+            (Some((pos_left, child_left)), Some((pos_right, child_right))) => {
+                match pos_left.cmp(&pos_right) {
+                    Ordering::Equal => {
+                        // Same position - check if subtrees are identical
+                        if DiffMerkleNodeStream::<L, R>::child_identical(&child_left, &child_right)
+                        {
+                            // Identical subtrees, skip them and continue with remaining children
+                            iter_stack.push(DiffIterationNode {
+                                key: key.clone(),
+                                state: DiffIterationNodeState::VisitedPair(VisitedPairState {
+                                    children_iter_left: self.children_iter_left,
+                                    children_iter_right: self.children_iter_right,
+                                }),
+                            });
+                            return Ok(());
+                        }
+
+                        // Different subtrees, need to compare them
+                        let node_left = match child_left {
+                            Child::AddressWithHash(addr, _) => readers.0.read_node(addr)?,
+                            Child::Node(node) => node.clone().into(),
+                        };
+
+                        let node_right = match child_right {
+                            Child::AddressWithHash(addr, _) => readers.1.read_node(addr)?,
+                            Child::Node(node) => node.clone().into(),
+                        };
+
+                        let child_partial_path = node_left.partial_path().iter().copied();
+
+                        let child_key: Path = {
+                            let nibbles: Vec<u8> = key
+                                .iter()
+                                .copied()
+                                .chain(std::iter::once(pos_left))
+                                .chain(child_partial_path)
+                                .collect();
+                            Path::from(nibbles.as_slice())
+                        };
+
+                        // Continue with remaining children
+                        iter_stack.push(DiffIterationNode {
+                            key: key.clone(),
+                            state: DiffIterationNodeState::VisitedPair(VisitedPairState {
+                                children_iter_left: self.children_iter_left,
+                                children_iter_right: self.children_iter_right,
+                            }),
+                        });
+
+                        iter_stack.push(DiffIterationNode {
+                            key: child_key,
+                            state: DiffIterationNodeState::UnvisitedPair(UnvisitedPairState {
+                                node_left,
+                                node_right,
+                            }),
+                        });
+                    }
+                    Ordering::Less => {
+                        // pos_left < pos_right: child exists in tree_left but not tree_right
+                        let node_left = match child_left {
+                            Child::AddressWithHash(addr, _) => readers.0.read_node(addr)?,
+                            Child::Node(node) => node.clone().into(),
+                        };
+
+                        let child_partial_path = node_left.partial_path().iter().copied();
+                        let child_key: Path = {
+                            let nibbles: Vec<u8> = key
+                                .iter()
+                                .copied()
+                                .chain(std::iter::once(pos_left))
+                                .chain(child_partial_path)
+                                .collect();
+                            Path::from(nibbles.as_slice())
+                        };
+
+                        // Put back child_right for next iteration
+                        let new_iter_right = std::iter::once((pos_right, child_right))
+                            .chain(self.children_iter_right);
+                        iter_stack.push(DiffIterationNode {
+                            key: key.clone(),
+                            state: DiffIterationNodeState::VisitedPair(VisitedPairState {
+                                children_iter_left: self.children_iter_left,
+                                children_iter_right: Box::new(new_iter_right),
+                            }),
+                        });
+
+                        iter_stack.push(DiffIterationNode {
+                            key: child_key,
+                            state: DiffIterationNodeState::UnvisitedLeft(UnvisitedLeftState {
+                                node: node_left,
+                            }),
+                        });
+                    }
+                    Ordering::Greater => {
+                        // pos_left > pos_right: child exists in tree_right but not tree_left
+                        let node_right = match child_right {
+                            Child::AddressWithHash(addr, _) => readers.1.read_node(addr)?,
+                            Child::Node(node) => node.clone().into(),
+                        };
+
+                        let child_partial_path = node_right.partial_path().iter().copied();
+                        let child_key: Path = {
+                            let nibbles: Vec<u8> = key
+                                .iter()
+                                .copied()
+                                .chain(std::iter::once(pos_right))
+                                .chain(child_partial_path)
+                                .collect();
+                            Path::from(nibbles.as_slice())
+                        };
+
+                        // Put back child_left for next iteration
+                        let new_iter_left =
+                            std::iter::once((pos_left, child_left)).chain(self.children_iter_left);
+                        iter_stack.push(DiffIterationNode {
+                            key: key.clone(),
+                            state: DiffIterationNodeState::VisitedPair(VisitedPairState {
+                                children_iter_left: Box::new(new_iter_left),
+                                children_iter_right: self.children_iter_right,
+                            }),
+                        });
+
+                        iter_stack.push(DiffIterationNode {
+                            key: child_key,
+                            state: DiffIterationNodeState::UnvisitedRight(UnvisitedRightState {
+                                node: node_right,
+                            }),
+                        });
+                    }
+                }
+            }
+            (Some((pos_left, child_left)), None) => {
+                // Only tree_left has remaining children
+                let node_left = match child_left {
+                    Child::AddressWithHash(addr, _) => readers.0.read_node(addr)?,
+                    Child::Node(node) => node.clone().into(),
+                };
+
+                let child_partial_path = node_left.partial_path().iter().copied();
+                let child_key: Path = {
+                    let nibbles: Vec<u8> = key
+                        .iter()
+                        .copied()
+                        .chain(std::iter::once(pos_left))
+                        .chain(child_partial_path)
+                        .collect();
+                    Path::from(nibbles.as_slice())
+                };
+
+                // Continue with remaining children from tree_left
+                iter_stack.push(DiffIterationNode {
+                    key: key.clone(),
+                    state: DiffIterationNodeState::VisitedLeft(VisitedLeftState {
+                        children_iter: self.children_iter_left,
+                    }),
+                });
+
+                iter_stack.push(DiffIterationNode {
+                    key: child_key,
+                    state: DiffIterationNodeState::UnvisitedLeft(UnvisitedLeftState {
+                        node: node_left,
+                    }),
+                });
+            }
+            (None, Some((pos_right, child_right))) => {
+                // Only tree_right has remaining children
+                let node_right = match child_right {
+                    Child::AddressWithHash(addr, _) => readers.1.read_node(addr)?,
+                    Child::Node(node) => node.clone().into(),
+                };
+
+                let child_partial_path = node_right.partial_path().iter().copied();
+                let child_key: Path = {
+                    let nibbles: Vec<u8> = key
+                        .iter()
+                        .copied()
+                        .chain(std::iter::once(pos_right))
+                        .chain(child_partial_path)
+                        .collect();
+                    Path::from(nibbles.as_slice())
+                };
+
+                // Continue with remaining children from tree_right
+                iter_stack.push(DiffIterationNode {
+                    key: key.clone(),
+                    state: DiffIterationNodeState::VisitedRight(VisitedRightState {
+                        children_iter: self.children_iter_right,
+                    }),
+                });
+
+                iter_stack.push(DiffIterationNode {
+                    key: child_key,
+                    state: DiffIterationNodeState::UnvisitedRight(UnvisitedRightState {
+                        node: node_right,
+                    }),
+                });
+            }
+            (None, None) => {
+                // No more children in either tree, continue
+            }
+        }
+        Ok(())
+    }
+}
+
+impl StateVisitor for VisitedRightState {
+    fn visit<L: TrieReader, R: TrieReader>(
+        mut self,
+        key: &Path,
+        iter_stack: &mut Vec<DiffIterationNode>,
+        readers: (&L, &R),
+    ) -> Result<(), FileIoError> {
+        if let Some((pos, child)) = self.children_iter.next() {
+            let node = match child {
+                Child::AddressWithHash(addr, _) => readers.1.read_node(addr)?,
+                Child::Node(node) => node.clone().into(),
+            };
+
+            let child_partial_path = node.partial_path().iter().copied();
+            let child_key: Path = {
+                let nibbles: Vec<u8> = key
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once(pos))
+                    .chain(child_partial_path)
+                    .collect();
+                Path::from(nibbles.as_slice())
+            };
+
+            // Continue with remaining children
+            iter_stack.push(DiffIterationNode {
+                key: key.clone(),
+                state: DiffIterationNodeState::VisitedRight(VisitedRightState {
+                    children_iter: self.children_iter,
+                }),
+            });
+
+            iter_stack.push(DiffIterationNode {
+                key: child_key,
+                state: DiffIterationNodeState::UnvisitedRight(UnvisitedRightState { node }),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -326,6 +636,7 @@ impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
             DiffNodeStreamState::Iterating { iter_stack } => iter_stack,
         };
 
+        // We remove the most recent DiffIterationNode, but in some cases we will push it back onto the stack.
         while let Some(iter_node) = iter_stack.pop() {
             match iter_node.state {
                 DiffIterationNodeState::UnvisitedPair(ref state) => {
@@ -470,343 +781,31 @@ impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
                         }
                     }
                 }
-                DiffIterationNodeState::VisitedPair(mut state) => {
-                    // Compare children from both trees
-                    let child_left_opt = state.children_iter_left.next();
-                    let child_right_opt = state.children_iter_right.next();
-
-                    match (child_left_opt, child_right_opt) {
-                        (Some((pos_left, child_left)), Some((pos_right, child_right))) => {
-                            match pos_left.cmp(&pos_right) {
-                                Ordering::Equal => {
-                                    // Same position - check if subtrees are identical
-                                    if Self::child_identical(&child_left, &child_right) {
-                                        // Identical subtrees, skip them and continue with remaining children
-                                        iter_stack.push(DiffIterationNode {
-                                            key: iter_node.key.clone(),
-                                            state: DiffIterationNodeState::VisitedPair(
-                                                VisitedPairState {
-                                                    children_iter_left: Box::new(
-                                                        state.children_iter_left,
-                                                    ),
-                                                    children_iter_right: Box::new(
-                                                        state.children_iter_right,
-                                                    ),
-                                                },
-                                            ),
-                                        });
-                                        continue;
-                                    } else {
-                                        // Different subtrees, need to compare them
-                                        // Load the child nodes first to get their partial paths
-                                        let node_left = match child_left {
-                                            Child::AddressWithHash(addr, _) => {
-                                                match self.tree_left.read_node(addr) {
-                                                    Ok(node) => node,
-                                                    Err(e) => return Some(Err(e)),
-                                                }
-                                            }
-                                            Child::Node(node) => node.clone().into(),
-                                        };
-                                        let node_right = match child_right {
-                                            Child::AddressWithHash(addr, _) => {
-                                                match self.tree_right.read_node(addr) {
-                                                    Ok(node) => node,
-                                                    Err(e) => return Some(Err(e)),
-                                                }
-                                            }
-                                            Child::Node(node) => node.clone().into(),
-                                        };
-
-                                        // Use the partial path from either node (they should be the same for comparison)
-                                        let child_partial_path =
-                                            node_left.partial_path().iter().copied();
-                                        let child_key: Path = {
-                                            let nibbles: Vec<u8> = iter_node
-                                                .key
-                                                .iter()
-                                                .copied()
-                                                .chain(std::iter::once(pos_left))
-                                                .chain(child_partial_path)
-                                                .collect();
-                                            Path::from(nibbles.as_slice())
-                                        };
-
-                                        // Continue with remaining children
-                                        iter_stack.push(DiffIterationNode {
-                                            key: iter_node.key,
-                                            state: DiffIterationNodeState::VisitedPair(
-                                                VisitedPairState {
-                                                    children_iter_left: state.children_iter_left,
-                                                    children_iter_right: state.children_iter_right,
-                                                },
-                                            ),
-                                        });
-
-                                        iter_stack.push(DiffIterationNode {
-                                            key: child_key,
-                                            state: DiffIterationNodeState::UnvisitedPair(
-                                                UnvisitedPairState {
-                                                    node_left,
-                                                    node_right,
-                                                },
-                                            ),
-                                        });
-                                    }
-                                }
-                                Ordering::Less => {
-                                    // pos_left < pos_right: child exists in tree_left but not tree_right
-                                    let node_left = match child_left {
-                                        Child::AddressWithHash(addr, _) => {
-                                            match self.tree_left.read_node(addr) {
-                                                Ok(node) => node,
-                                                Err(e) => return Some(Err(e)),
-                                            }
-                                        }
-                                        Child::Node(node) => node.clone().into(),
-                                    };
-
-                                    let child_partial_path =
-                                        node_left.partial_path().iter().copied();
-                                    let child_key: Path = {
-                                        let nibbles: Vec<u8> = iter_node
-                                            .key
-                                            .iter()
-                                            .copied()
-                                            .chain(std::iter::once(pos_left))
-                                            .chain(child_partial_path)
-                                            .collect();
-                                        Path::from(nibbles.as_slice())
-                                    };
-
-                                    // Put back child_right for next iteration
-                                    let new_iter_right = std::iter::once((pos_right, child_right))
-                                        .chain(state.children_iter_right);
-                                    iter_stack.push(DiffIterationNode {
-                                        key: iter_node.key,
-                                        state: DiffIterationNodeState::VisitedPair(
-                                            VisitedPairState {
-                                                children_iter_left: state.children_iter_left,
-                                                children_iter_right: Box::new(new_iter_right),
-                                            },
-                                        ),
-                                    });
-
-                                    iter_stack.push(DiffIterationNode {
-                                        key: child_key,
-                                        state: DiffIterationNodeState::UnvisitedLeft(
-                                            UnvisitedLeftState { node: node_left },
-                                        ),
-                                    });
-                                }
-                                Ordering::Greater => {
-                                    // pos_left > pos_right: child exists in tree_right but not tree_left
-                                    let node_right = match child_right {
-                                        Child::AddressWithHash(addr, _) => {
-                                            match self.tree_right.read_node(addr) {
-                                                Ok(node) => node,
-                                                Err(e) => return Some(Err(e)),
-                                            }
-                                        }
-                                        Child::Node(node) => node.clone().into(),
-                                    };
-
-                                    let child_partial_path =
-                                        node_right.partial_path().iter().copied();
-                                    let child_key: Path = {
-                                        let nibbles: Vec<u8> = iter_node
-                                            .key
-                                            .iter()
-                                            .copied()
-                                            .chain(std::iter::once(pos_right))
-                                            .chain(child_partial_path)
-                                            .collect();
-                                        Path::from(nibbles.as_slice())
-                                    };
-
-                                    // Put back child_left for next iteration
-                                    let new_iter_left = std::iter::once((pos_left, child_left))
-                                        .chain(state.children_iter_left);
-                                    iter_stack.push(DiffIterationNode {
-                                        key: iter_node.key,
-                                        state: DiffIterationNodeState::VisitedPair(
-                                            VisitedPairState {
-                                                children_iter_left: Box::new(new_iter_left),
-                                                children_iter_right: state.children_iter_right,
-                                            },
-                                        ),
-                                    });
-
-                                    iter_stack.push(DiffIterationNode {
-                                        key: child_key,
-                                        state: DiffIterationNodeState::UnvisitedRight(
-                                            UnvisitedRightState { node: node_right },
-                                        ),
-                                    });
-                                }
-                            }
-                        }
-                        (Some((pos_left, child_left)), None) => {
-                            // Only tree_left has remaining children
-                            let node_left = match child_left {
-                                Child::AddressWithHash(addr, _) => {
-                                    match self.tree_left.read_node(addr) {
-                                        Ok(node) => node,
-                                        Err(e) => return Some(Err(e)),
-                                    }
-                                }
-                                Child::Node(node) => node.clone().into(),
-                            };
-
-                            let child_partial_path = node_left.partial_path().iter().copied();
-                            let child_key: Path = {
-                                let nibbles: Vec<u8> = iter_node
-                                    .key
-                                    .iter()
-                                    .copied()
-                                    .chain(std::iter::once(pos_left))
-                                    .chain(child_partial_path)
-                                    .collect();
-                                Path::from(nibbles.as_slice())
-                            };
-
-                            // Continue with remaining children from tree_left
-                            iter_stack.push(DiffIterationNode {
-                                key: iter_node.key.clone(),
-                                state: DiffIterationNodeState::VisitedLeft(VisitedLeftState {
-                                    children_iter: state.children_iter_left,
-                                }),
-                            });
-
-                            iter_stack.push(DiffIterationNode {
-                                key: child_key,
-                                state: DiffIterationNodeState::UnvisitedLeft(UnvisitedLeftState {
-                                    node: node_left,
-                                }),
-                            });
-                        }
-                        (None, Some((pos_right, child_right))) => {
-                            // Only tree_right has remaining children
-                            let node_right = match child_right {
-                                Child::AddressWithHash(addr, _) => {
-                                    match self.tree_right.read_node(addr) {
-                                        Ok(node) => node,
-                                        Err(e) => return Some(Err(e)),
-                                    }
-                                }
-                                Child::Node(node) => node.clone().into(),
-                            };
-
-                            let child_partial_path = node_right.partial_path().iter().copied();
-                            let child_key: Path = {
-                                let nibbles: Vec<u8> = iter_node
-                                    .key
-                                    .iter()
-                                    .copied()
-                                    .chain(std::iter::once(pos_right))
-                                    .chain(child_partial_path)
-                                    .collect();
-                                Path::from(nibbles.as_slice())
-                            };
-
-                            // Continue with remaining children from tree_right
-                            iter_stack.push(DiffIterationNode {
-                                key: iter_node.key.clone(),
-                                state: DiffIterationNodeState::VisitedRight(VisitedRightState {
-                                    children_iter: state.children_iter_right,
-                                }),
-                            });
-
-                            iter_stack.push(DiffIterationNode {
-                                key: child_key,
-                                state: DiffIterationNodeState::UnvisitedRight(
-                                    UnvisitedRightState { node: node_right },
-                                ),
-                            });
-                        }
-                        (None, None) => {
-                            // No more children in either tree, continue
-                            continue;
-                        }
+                DiffIterationNodeState::VisitedPair(state) => {
+                    if let Err(e) = state.visit(
+                        &iter_node.key,
+                        iter_stack,
+                        (self.tree_left, self.tree_right),
+                    ) {
+                        return Some(Err(e));
                     }
                 }
-                DiffIterationNodeState::VisitedLeft(mut state) => {
-                    if let Some((pos, child)) = state.children_iter.next() {
-                        let node = match child {
-                            Child::AddressWithHash(addr, _) => match self.tree_left.read_node(addr)
-                            {
-                                Ok(node) => node,
-                                Err(e) => return Some(Err(e)),
-                            },
-                            Child::Node(node) => node.clone().into(),
-                        };
-
-                        let child_partial_path = node.partial_path().iter().copied();
-                        let child_key: Path = {
-                            let nibbles: Vec<u8> = iter_node
-                                .key
-                                .iter()
-                                .copied()
-                                .chain(std::iter::once(pos))
-                                .chain(child_partial_path)
-                                .collect();
-                            Path::from(nibbles.as_slice())
-                        };
-
-                        // Continue with remaining children
-                        iter_stack.push(DiffIterationNode {
-                            key: iter_node.key.clone(),
-                            state: DiffIterationNodeState::VisitedLeft(VisitedLeftState {
-                                children_iter: state.children_iter,
-                            }),
-                        });
-
-                        iter_stack.push(DiffIterationNode {
-                            key: child_key,
-                            state: DiffIterationNodeState::UnvisitedLeft(UnvisitedLeftState {
-                                node,
-                            }),
-                        });
+                DiffIterationNodeState::VisitedLeft(state) => {
+                    if let Err(e) = state.visit(
+                        &iter_node.key,
+                        iter_stack,
+                        (self.tree_left, self.tree_right),
+                    ) {
+                        return Some(Err(e));
                     }
                 }
-                DiffIterationNodeState::VisitedRight(mut state) => {
-                    if let Some((pos, child)) = state.children_iter.next() {
-                        let node = match child {
-                            Child::AddressWithHash(addr, _) => {
-                                match self.tree_right.read_node(addr) {
-                                    Ok(node) => node,
-                                    Err(e) => return Some(Err(e)),
-                                }
-                            }
-                            Child::Node(node) => node.clone().into(),
-                        };
-
-                        let child_partial_path = node.partial_path().iter().copied();
-                        let child_key: Path = {
-                            let nibbles: Vec<u8> = iter_node
-                                .key
-                                .iter()
-                                .copied()
-                                .chain(std::iter::once(pos))
-                                .chain(child_partial_path)
-                                .collect();
-                            Path::from(nibbles.as_slice())
-                        };
-
-                        // Continue with remaining children
-                        iter_stack.push(DiffIterationNode {
-                            key: iter_node.key.clone(),
-                            state: DiffIterationNodeState::VisitedRight(VisitedRightState {
-                                children_iter: state.children_iter,
-                            }),
-                        });
-
-                        iter_stack.push(DiffIterationNode {
-                            key: child_key,
-                            state: DiffIterationNodeState::UnvisitedRight(UnvisitedRightState {
-                                node,
-                            }),
-                        });
+                DiffIterationNodeState::VisitedRight(state) => {
+                    if let Err(e) = state.visit(
+                        &iter_node.key,
+                        iter_stack,
+                        (self.tree_left, self.tree_right),
+                    ) {
+                        return Some(Err(e));
                     }
                 }
             }
