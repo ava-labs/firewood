@@ -1341,8 +1341,10 @@ impl NodeStore<Committed, FileBacked> {
         let mut visited = LinearAddressRangeSet::new(self.header.size)?;
 
         // 2. traverse the trie and check the nodes
-        let root_address = self.header.root_address;
-        self.traverse_trie(root_address, &mut visited).await?;
+        if let Some(root_address) = self.header.root_address {
+            // the database is not empty, traverse the trie
+            self.traverse_trie(root_address, &mut visited).await?;
+        };
 
         // 3. check the free list - this can happen in parallel with the trie traversal
 
@@ -1355,33 +1357,22 @@ impl NodeStore<Committed, FileBacked> {
     /// Recursively traverse the trie from the given root address.
     async fn traverse_trie(
         &self,
-        subtree_root_address: Option<LinearAddress>,
+        subtree_root_address: LinearAddress,
         visited: &mut LinearAddressRangeSet,
     ) -> Result<(), CheckerError> {
-        let Some(root_address) = subtree_root_address else {
-            // empty subtree, do nothing
-            return Ok(());
-        };
+        let (_, area_size) = self.area_index_and_size(subtree_root_address)?;
+        visited.insert_area(subtree_root_address, area_size)?;
 
-        let (_, area_size) = self.area_index_and_size(root_address)?;
-        visited.insert_area(root_address, area_size)?;
+        if let Node::Branch(branch) = self.read_node(subtree_root_address)?.as_ref() {
+            // this is an internal node, traverse the children
+            let child_addrs = branch.children.iter().filter_map(|child| match child {
+                None => None,
+                Some(Child::AddressWithHash(address, _)) => Some(*address),
+                _ => panic!("the child is not persisted yet, this should not happen"),
+            });
 
-        let node = self.read_node(root_address)?;
-
-        match &*node {
-            Node::Branch(branch) => {
-                for child in &branch.children {
-                    let child_address = child.as_ref().map(|c| {
-                        let Child::AddressWithHash(address, _) = c else {
-                            panic!("the children is not persisted yet, this should not happen");
-                        };
-                        *address
-                    });
-                    Box::pin(self.traverse_trie(child_address, visited)).await?;
-                }
-            }
-            Node::Leaf(_) => {
-                // Don't need to traverse further since we are already at the leaf
+            for child_addr in child_addrs {
+                Box::pin(self.traverse_trie(child_addr, visited)).await?;
             }
         }
 

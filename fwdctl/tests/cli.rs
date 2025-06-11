@@ -4,7 +4,6 @@
 use anyhow::{Result, anyhow};
 use assert_cmd::Command;
 use predicates::prelude::*;
-use rand::prelude::*;
 use serial_test::serial;
 use std::fs::{self, remove_file};
 use std::path::PathBuf;
@@ -564,13 +563,26 @@ fn fwdctl_check_empty_db() -> Result<()> {
 #[test]
 #[serial]
 fn fwdctl_check_db_with_data() -> Result<()> {
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng, rng};
+
+    let seed = std::env::var("FIREWOOD_TEST_SEED")
+        .ok()
+        .map_or_else(
+            || None,
+            |s| Some(str::parse(&s).expect("couldn't parse FIREWOOD_TEST_SEED; must be a u64")),
+        )
+        .unwrap_or_else(|| rng().random());
+
+    eprintln!("Seed {seed}: to rerun with this data, export FIREWOOD_TEST_SEED={seed}");
+    let mut rng = StdRng::seed_from_u64(seed);
+
     Command::cargo_bin(PRG)?
         .arg("create")
         .arg(tmpdb::path())
         .assert()
         .success();
 
-    let mut rng = rand::rng();
     for _ in 0..100 {
         let key = format!("key_{}", rng.random::<u64>());
         let value = format!("value_{}", rng.random::<u64>());
