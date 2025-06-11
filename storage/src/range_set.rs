@@ -7,13 +7,13 @@ use btree_slab::generic::node::Address;
 use std::ops::Range;
 
 use crate::nodestore::NodeStore;
-use crate::{CheckerError, LinearAddress};
+use crate::{CheckerError, DBSizeError, LinearAddress};
 
 pub(super) struct RangeSet<T> {
     index: BTreeMap<T, T>, // start --> end
 }
 
-impl<T: Clone + Ord + std::fmt::Debug> RangeSet<T> {
+impl<T: Clone + Ord> RangeSet<T> {
     fn new() -> Self {
         Self {
             index: BTreeMap::new(),
@@ -120,9 +120,13 @@ impl<T: Clone + Ord + std::fmt::Debug> RangeSet<T> {
         for (cur_start, cur_end) in self.index.iter() {
             // insert the range from the previous end to the current start
             if cur_start > start {
+                if cur_start >= max {
+                    // we have reached the max - we are done
+                    break;
+                }
                 complement_tree.insert(start.clone(), cur_start.clone());
             }
-            start = cur_end;
+            start = std::cmp::max(start, cur_end); // in case the entire range is smaller than min
         }
 
         // insert the last range before the max
@@ -136,12 +140,10 @@ impl<T: Clone + Ord + std::fmt::Debug> RangeSet<T> {
     }
 }
 
-impl IntoIterator for RangeSet<LinearAddress> {
-    type Item = Range<LinearAddress>;
-    type IntoIter = std::iter::Map<
-        <BTreeMap<LinearAddress, LinearAddress> as IntoIterator>::IntoIter,
-        fn((LinearAddress, LinearAddress)) -> Self::Item,
-    >;
+impl<T> IntoIterator for RangeSet<T> {
+    type Item = Range<T>;
+    type IntoIter =
+        std::iter::Map<<BTreeMap<T, T> as IntoIterator>::IntoIter, fn((T, T)) -> Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.index
@@ -157,9 +159,12 @@ pub(super) struct LinearAddressRangeSet {
 
 impl LinearAddressRangeSet {
     pub(super) fn new(db_size: u64) -> Result<Self, CheckerError> {
-        let max_addr = LinearAddress::new(db_size).ok_or(CheckerError::InvalidDBSize(db_size))?;
+        let max_addr =
+            LinearAddress::new(db_size).ok_or(CheckerError::InvalidDBSize(DBSizeError::Zero))?;
         if max_addr < NodeStore::STORAGE_AREA_START {
-            return Err(CheckerError::InvalidDBSize(db_size));
+            return Err(CheckerError::InvalidDBSize(
+                DBSizeError::SmallerThanHeaderSize(NodeStore::STORAGE_AREA_START),
+            ));
         }
 
         Ok(Self {
@@ -176,9 +181,17 @@ impl LinearAddressRangeSet {
         let start = addr;
         let end = start
             .checked_add(size)
-            .ok_or(CheckerError::AreaOutOfBounds { start, size })?; // This can only happen due to overflow
+            .ok_or(CheckerError::AreaOutOfBounds {
+                start,
+                size,
+                bounds: NodeStore::STORAGE_AREA_START..self.max_addr,
+            })?; // This can only happen due to overflow
         if addr < NodeStore::STORAGE_AREA_START || end > self.max_addr {
-            return Err(CheckerError::AreaOutOfBounds { start: addr, size });
+            return Err(CheckerError::AreaOutOfBounds {
+                start: addr,
+                size,
+                bounds: NodeStore::STORAGE_AREA_START..self.max_addr,
+            });
         }
 
         if self.range_set.intersects(start..end) {
@@ -188,7 +201,6 @@ impl LinearAddressRangeSet {
         Ok(())
     }
 
-    #[expect(clippy::unwrap_used)]
     pub(super) fn complement(&self) -> Self {
         let complement_set = self
             .range_set
@@ -212,8 +224,120 @@ impl IntoIterator for LinearAddressRangeSet {
 }
 
 #[cfg(test)]
+mod test_range_set {
+    use super::*;
+
+    #[test]
+    fn test_create() {
+        let range_set: RangeSet<u64> = RangeSet::new();
+        assert_eq!(range_set.into_iter().collect::<Vec<_>>(), vec![]);
+    }
+
+    #[test]
+    fn test_insert_range() {
+        let mut range_set = RangeSet::new();
+        range_set.insert_range(0..10);
+        range_set.insert_range(20..30);
+        assert_eq!(
+            range_set.into_iter().collect::<Vec<_>>(),
+            vec![0..10, 20..30]
+        );
+    }
+
+    #[test]
+    fn test_insert_range_coalescing() {
+        // coalesce ranges that are disjoint
+        let mut range_set = RangeSet::new();
+        range_set.insert_range(0..10);
+        range_set.insert_range(20..30);
+        range_set.insert_range(10..20);
+        assert_eq!(range_set.into_iter().collect::<Vec<_>>(), vec![0..30]);
+
+        // coalesce ranges that are partially overlapping
+        let mut range_set = RangeSet::new();
+        range_set.insert_range(0..10);
+        range_set.insert_range(20..30);
+        range_set.insert_range(5..25);
+        assert_eq!(range_set.into_iter().collect::<Vec<_>>(), vec![0..30]);
+
+        // coalesce multiple ranges
+        let mut range_set = RangeSet::new();
+        range_set.insert_range(5..10);
+        range_set.insert_range(15..20);
+        range_set.insert_range(25..30);
+        range_set.insert_range(0..25);
+        assert_eq!(range_set.into_iter().collect::<Vec<_>>(), vec![0..30]);
+    }
+
+    #[test]
+    fn test_complement_with_empty() {
+        let range_set = RangeSet::new();
+        assert_eq!(
+            range_set
+                .complement(&0, &40)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec![0..40]
+        );
+    }
+
+    #[test]
+    fn test_complement_with_different_bounds() {
+        let mut range_set = RangeSet::new();
+        range_set.insert_range(0..10);
+        range_set.insert_range(20..30);
+        range_set.insert_range(40..50);
+
+        // all ranges within bound
+        assert_eq!(
+            range_set
+                .complement(&0, &60)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec![10..20, 30..40, 50..60]
+        );
+
+        // some ranges entirely out of bound
+        assert_eq!(
+            range_set
+                .complement(&15, &35)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec![15..20, 30..35]
+        );
+
+        // some ranges are partially out of bound
+        assert_eq!(
+            range_set
+                .complement(&5, &45)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec![10..20, 30..40]
+        );
+
+        // test all ranges out of bound
+        assert_eq!(
+            range_set
+                .complement(&12, &18)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec![12..18]
+        );
+
+        // test complement empty
+        assert_eq!(
+            range_set
+                .complement(&20, &30)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec![]
+        );
+    }
+}
+
+#[cfg(test)]
 #[expect(clippy::unwrap_used)]
-mod tests {
+mod test_linear_address_range_set {
 
     use super::*;
 

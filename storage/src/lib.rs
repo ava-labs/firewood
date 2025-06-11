@@ -11,6 +11,7 @@
 //!
 //! A [NodeStore] is backed by a [ReadableStorage] which is persisted storage.
 
+use std::ops::Range;
 use thiserror::Error;
 
 mod hashednode;
@@ -81,21 +82,19 @@ pub fn empty_trie_hash() -> TrieHash {
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum CheckerError {
-    /// The root node was not found
-    #[error("root node not found")]
-    RootNodeNotFound,
-
     /// The file size is not valid
-    #[error("the db size ({0}) is invalid")]
-    InvalidDBSize(u64),
+    #[error("Invalid DB size: {0}")]
+    InvalidDBSize(#[from] DBSizeError),
 
     /// The address is out of bounds
-    #[error("stored area at {start} with size {size} is out of bounds")]
+    #[error("stored area at {start} with size {size} is out of bounds ({bounds:?})")]
     AreaOutOfBounds {
         /// Start of the StoredArea
         start: LinearAddress,
         /// Size of the StoredArea
         size: u64,
+        /// Valid range of addresses
+        bounds: Range<LinearAddress>,
     },
 
     /// Stored areas intersect
@@ -110,4 +109,19 @@ pub enum CheckerError {
     /// IO error
     #[error("IO error")]
     IO(#[from] std::io::Error),
+}
+
+/// Errors related to the size of the db
+#[derive(Error, Debug)]
+#[non_exhaustive]
+pub enum DBSizeError {
+    /// The db size cannot be 0
+    #[error("db size cannot be 0")]
+    Zero,
+    /// The db size cannot be smaller than the file size
+    #[error("db size cannot be smaller than the file size ({0})")]
+    SmallerThanFileSize(u64),
+    /// The db size cannot be smaller than the header size
+    #[error("db size cannot be smaller than the header size ({0})")]
+    SmallerThanHeaderSize(LinearAddress),
 }

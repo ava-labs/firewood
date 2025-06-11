@@ -46,8 +46,8 @@ use std::sync::Arc;
 use crate::hashednode::hash_node;
 use crate::node::{ByteCounter, Node};
 use crate::{
-    CacheReadStrategy, CheckerError, Child, FileBacked, HashType, Path, ReadableStorage,
-    SharedNode, TrieHash,
+    CacheReadStrategy, CheckerError, Child, DBSizeError, FileBacked, HashType, Path,
+    ReadableStorage, SharedNode, TrieHash,
 };
 
 use super::linear::WritableStorage;
@@ -1327,12 +1327,15 @@ impl NodeStore<Committed, FileBacked> {
     /// 1. Check the header
     /// 2. traverse the trie and check the nodes
     /// 3. check the free list
-    /// 4. check any bubbles - what are the spaces between trie nodes and free lists?
+    /// 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
     // TODO: add merkle hash checks as well
     pub async fn check(&self) -> Result<(), CheckerError> {
         // 1. Check the header
-        if self.header.size < self.storage.get_file_size()? {
-            return Err(CheckerError::InvalidDBSize(self.header.size));
+        let file_size = self.storage.get_file_size()?;
+        if self.header.size < file_size {
+            return Err(CheckerError::InvalidDBSize(
+                DBSizeError::SmallerThanFileSize(file_size),
+            ));
         }
 
         let mut visited = LinearAddressRangeSet::new(self.header.size)?;
@@ -1343,7 +1346,7 @@ impl NodeStore<Committed, FileBacked> {
 
         // 3. check the free list - this can happen in parallel with the trie traversal
 
-        // 4. check any bubbles - what are the spaces between trie nodes and free lists?
+        // 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
         let _ = visited.complement(); // TODO
 
         Ok(())
