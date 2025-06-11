@@ -1,6 +1,5 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
-#![warn(clippy::arithmetic_side_effects)]
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, OsStr, c_char};
 use std::fmt::{self, Display, Formatter};
