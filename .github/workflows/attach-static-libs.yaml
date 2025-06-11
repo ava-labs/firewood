@@ -53,11 +53,20 @@ jobs:
       - name: Build for ${{ matrix.target }}
         run: cargo build --profile maxperf --features ethhash,logger --target ${{ matrix.target }} -p firewood-ffi
         
-      - name: Upload binary
+      - name: Upload binary (Unix)
+        if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
           path: target/${{ matrix.target }}/maxperf/libfirewood_ffi.a
+          if-no-files-found: error
+          
+      - name: Upload binary (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: target/${{ matrix.target }}/maxperf/firewood_ffi.lib
           if-no-files-found: error
 
       - name: Check if FIREWOOD_GO_GITHUB_TOKEN is set
