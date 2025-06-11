@@ -9,17 +9,25 @@ use std::ops::Range;
 use crate::nodestore::NodeStore;
 use crate::{CheckerError, DBSizeError, LinearAddress};
 
-pub(super) struct RangeSet<T> {
+pub struct RangeSet<T> {
     index: BTreeMap<T, T>, // start --> end
 }
 
-impl<T: Clone + Ord> RangeSet<T> {
-    fn new() -> Self {
+struct CoalescingRanges<'a, T> {
+    prev_consecutive_range: Option<Range<&'a T>>,
+    intersecting_ranges: Vec<Range<&'a T>>,
+    next_consecutive_range: Option<Range<&'a T>>,
+}
+
+#[allow(dead_code)]
+impl<T: Clone + Ord + std::fmt::Debug> RangeSet<T> {
+    pub fn new() -> Self {
         Self {
             index: BTreeMap::new(),
         }
     }
 
+    // returns the address of the previous and next item in the tree - we need to return next as well since prev may be None
     fn find_prev_and_next_addr(&self, key: &T) -> (Option<Address>, Option<Address>) {
         // btree_slab::BTreeMap::address_of returns:
         // - Err(nowhere) if the tree is empty
@@ -45,75 +53,119 @@ impl<T: Clone + Ord> RangeSet<T> {
         }
     }
 
-    fn intersects(&self, range: Range<T>) -> bool {
-        let (prev_addr, next_addr) = self.find_prev_and_next_addr(&range.start);
+    // returns disjoint ranges that will coalesce with the given range in ascending order
+    fn get_coalescing_ranges(&self, range: &Range<T>) -> CoalescingRanges<'_, T> {
+        let (prev_addr, mut next_addr) = self.find_prev_and_next_addr(&range.start);
+        let mut prev_consecutive_range = None;
+        let mut intersecting_ranges = Vec::new();
+        let mut next_consecutive_range = None;
 
-        // check if the given range intersects with the previous range
+        // check if the previous range will coalesce with the given range
         if let Some(prev_addr) = prev_addr {
             let prev_range = self.index.item(prev_addr).expect("prev item should exist");
-            // if the end of previous range and the start of the current range are equal, they are not intersecting since end is exclusive
-            if *prev_range.value() > range.start {
-                return true;
+            if *prev_range.value() == range.start {
+                // the prevrious range does not intersect with the given range but is consecutive
+                prev_consecutive_range = Some(prev_range.key()..prev_range.value());
+            } else if *prev_range.value() > range.start {
+                // the previous range either intersects or is consecutive with the given range
+                intersecting_ranges.push(prev_range.key()..prev_range.value());
             }
         }
 
         // check if the given range intersects with the next range
-        if let Some(next_addr) = next_addr {
-            let next_range = self.index.item(next_addr).expect("next item should exist");
-            // if the end of current range and the start of the next range are equal, they are not intersecting since end is exclusive
-            if range.end > *next_range.key() {
-                return true;
-            }
-        }
-
-        false
-    }
-
-    fn insert_range(&mut self, range: Range<T>) {
-        let (prev_addr, mut next_addr) = self.find_prev_and_next_addr(&range.start);
-        // this will be the final range after merging
-        let (range_start, mut range_end) = match prev_addr {
-            Some(addr) => {
-                let prev_item = self.index.item(addr).expect("prev item should exist");
-                if *prev_item.value() < range.start {
-                    // previous range does not intersect with the new range
-                    (range.start, range.end)
-                } else if *prev_item.value() < range.end {
-                    // previous range intersects with the new range partially
-                    (prev_item.key().clone(), range.end)
-                } else {
-                    // previous range contains the new range
-                    (prev_item.key().clone(), prev_item.value().clone())
-                }
-            }
-            // this range starts before all ranges in the set
-            None => (range.start, range.end),
-        };
-
-        // try merge with the next range
-        let mut remove_keys = Vec::new();
         while let Some(curr_addr) = next_addr {
-            let curr_item = self.index.item(curr_addr).expect("curr item should exist");
-            if range_end < *curr_item.key() {
-                // the next range does not intersect with the new range - we are done
+            let curr_range = self.index.item(curr_addr).expect("next item should exist");
+            if range.end < *curr_range.key() {
+                // the current range is after the given range - we are done
                 break;
+            } else if range.end == *curr_range.key() {
+                // the current range does not intersect with the given range but is consecutive
+                next_consecutive_range = Some(curr_range.key()..curr_range.value());
+                break;
+            } else if range.end > *curr_range.key() {
+                // the current range intersects or is consecutive with the given range
+                intersecting_ranges.push(curr_range.key()..curr_range.value());
             }
-            // the next range intersects with the new range - remove the next range and update the end of the new range
-            remove_keys.push(curr_item.key().clone());
-            if range_end < *curr_item.value() {
-                range_end = curr_item.value().clone();
-            }
-            // get the next range
             next_addr = self.index.next_item_address(curr_addr);
         }
 
+        return CoalescingRanges {
+            prev_consecutive_range,
+            intersecting_ranges,
+            next_consecutive_range,
+        };
+    }
+
+    fn insert_range_helper(
+        &mut self,
+        range: Range<T>,
+        allow_intersecting: bool,
+    ) -> Result<(), Vec<Range<T>>> {
+        let CoalescingRanges {
+            prev_consecutive_range,
+            intersecting_ranges,
+            next_consecutive_range,
+        } = self.get_coalescing_ranges(&range);
+
+        // if the insert needs to be disjoint but we found intersecting ranges, return error with the intersection
+        if !allow_intersecting && !intersecting_ranges.is_empty() {
+            let intersections = intersecting_ranges
+                .into_iter()
+                .map(|intersecting_range| {
+                    let start =
+                        std::cmp::max(range.start.clone(), intersecting_range.start.clone());
+                    let end = std::cmp::min(range.end.clone(), intersecting_range.end.clone());
+                    start..end
+                })
+                .collect();
+            return Err(intersections);
+        }
+
+        // find the new start and end after the coalescing
+        let coalesced_start = match (&prev_consecutive_range, intersecting_ranges.first()) {
+            (Some(prev_range), _) => prev_range.start.clone(),
+            (None, Some(first_intersecting_range)) => {
+                std::cmp::min(range.start, first_intersecting_range.start.clone())
+            }
+            (None, None) => range.start,
+        };
+        let coalesced_end = match (&next_consecutive_range, intersecting_ranges.last()) {
+            (Some(next_range), _) => next_range.end.clone(),
+            (None, Some(last_intersecting_range)) => {
+                std::cmp::max(range.end, last_intersecting_range.end.clone())
+            }
+            (None, None) => range.end,
+        };
+
+        // remove the coalescing ranges
+        let remove_ranges_iter = prev_consecutive_range
+            .into_iter()
+            .chain(intersecting_ranges.into_iter())
+            .chain(next_consecutive_range.into_iter());
+        let remove_keys = remove_ranges_iter
+            .map(|range| range.start.clone())
+            .collect::<Vec<_>>();
         for key in remove_keys {
             self.index.remove(&key);
         }
-        self.index.insert(range_start, range_end);
+
+        // insert the new range after coalescing
+        self.index.insert(coalesced_start, coalesced_end);
+        Ok(())
     }
 
-    fn complement(&self, min: &T, max: &T) -> Self {
+    // insert the range
+    pub fn insert_range(&mut self, range: Range<T>) {
+        self.insert_range_helper(range, true)
+            .expect("insert range should always success if we allow intersecting area insert");
+    }
+
+    // insert the given range if the range is disjoint, otherwise return the intersection
+    pub fn insert_disjoint_range(&mut self, range: Range<T>) -> Result<(), Vec<Range<T>>> {
+        self.insert_range_helper(range, false)
+    }
+
+    pub fn complement(&self, min: &T, max: &T) -> Self {
         let mut complement_tree = BTreeMap::new();
         // first range will start from min
         let mut start = min;
@@ -194,10 +246,13 @@ impl LinearAddressRangeSet {
             });
         }
 
-        if self.range_set.intersects(start..end) {
-            return Err(CheckerError::AreaIntersects { start: addr, size });
+        if let Err(intersection) = self.range_set.insert_disjoint_range(start..end) {
+            return Err(CheckerError::AreaIntersects {
+                start: addr,
+                size,
+                intersection,
+            });
         }
-        self.range_set.insert_range(start..end);
         Ok(())
     }
 
@@ -267,6 +322,43 @@ mod test_range_set {
         range_set.insert_range(25..30);
         range_set.insert_range(0..25);
         assert_eq!(range_set.into_iter().collect::<Vec<_>>(), vec![0..30]);
+    }
+
+    #[test]
+    fn test_insert_disjoint_range() {
+        // insert disjoint ranges
+        let mut range_set = RangeSet::new();
+        assert!(range_set.insert_disjoint_range(0..10).is_ok());
+        assert!(range_set.insert_disjoint_range(20..30).is_ok());
+        assert!(range_set.insert_disjoint_range(10..20).is_ok());
+        assert_eq!(range_set.into_iter().collect::<Vec<_>>(), vec![0..30]);
+
+        // insert intersecting ranges
+        let mut range_set = RangeSet::new();
+        assert!(range_set.insert_disjoint_range(0..10).is_ok());
+        assert!(range_set.insert_disjoint_range(20..30).is_ok());
+        assert!(matches!(
+            range_set.insert_disjoint_range(5..25),
+            Err(intersections) if intersections == vec![5..10, 20..25]
+        ));
+        assert_eq!(
+            range_set.into_iter().collect::<Vec<_>>(),
+            vec![0..10, 20..30]
+        );
+
+        // insert with completely overlapping range
+        let mut range_set = RangeSet::new();
+        assert!(range_set.insert_disjoint_range(0..10).is_ok());
+        assert!(range_set.insert_disjoint_range(20..30).is_ok());
+        assert!(range_set.insert_disjoint_range(40..50).is_ok());
+        assert!(matches!(
+            range_set.insert_disjoint_range(5..45),
+            Err(intersections) if intersections == vec![5..10, 20..30, 40..45]
+        ));
+        assert_eq!(
+            range_set.into_iter().collect::<Vec<_>>(),
+            vec![0..10, 20..30, 40..50]
+        );
     }
 
     #[test]
@@ -406,6 +498,7 @@ mod test_linear_address_range_set {
         let size2 = 1024;
 
         let start1_addr = LinearAddress::new(start1).unwrap();
+        let end1_addr = LinearAddress::new(start1 + size1).unwrap();
         let start2_addr = LinearAddress::new(start2).unwrap();
 
         let mut visited = LinearAddressRangeSet::new(0x1000).unwrap();
@@ -418,7 +511,7 @@ mod test_linear_address_range_set {
             .expect_err("the given area should intersect with the first area");
 
         assert!(
-            matches!(error, CheckerError::AreaIntersects { start, size } if start == start2_addr && size == size2)
+            matches!(error, CheckerError::AreaIntersects { start, size, intersection } if start == start2_addr && size == size2 && intersection == vec![start2_addr..end1_addr])
         );
 
         // try inserting in opposite order
@@ -432,7 +525,7 @@ mod test_linear_address_range_set {
             .expect_err("the given area should intersect with the first area");
 
         assert!(
-            matches!(error, CheckerError::AreaIntersects { start, size } if start == start1_addr && size == size1)
+            matches!(error, CheckerError::AreaIntersects { start, size, intersection } if start == start1_addr && size == size1 && intersection == vec![start2_addr..end1_addr])
         );
     }
 

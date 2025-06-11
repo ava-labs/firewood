@@ -98,12 +98,16 @@ pub enum CheckerError {
     },
 
     /// Stored areas intersect
-    #[error("stored area at {start} with size {size} intersects with another stored area")]
+    #[error(
+        "stored area at {start} with size {size} intersects with other stored areas: {intersection:?}"
+    )]
     AreaIntersects {
         /// Start of the StoredArea
         start: LinearAddress,
         /// Size of the StoredArea
         size: u64,
+        /// The intersection
+        intersection: Vec<Range<LinearAddress>>,
     },
 
     /// IO error
