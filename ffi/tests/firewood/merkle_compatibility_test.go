@@ -1,4 +1,4 @@
-package tests
+package firewood
 
 import (
 	"context"
@@ -132,7 +132,9 @@ func (tr *tree) dropAllProposals() {
 	for _, p := range tr.proposals {
 		tr.require.NoError(p.fwdView.Drop())
 	}
-	// Free pointers at the root, no need to explicitly drop merkle views.
+	// Free pointers at the root to allow garbage collection.
+	// MerkleDB does not require explicitly dropping merkle views, so clearing the
+	// pointers at the root is sufficient.
 	tr.children = nil
 	tr.proposals = make(map[int]*proposal)
 }
@@ -186,7 +188,7 @@ func (tr *tree) testGetResult(merkleVal []byte, merkleErr error, fwdVal []byte, 
 }
 
 func (tr *tree) dbBatch() {
-	batchSize := tr.rand.Intn(maxBatchSize) + 1 // ensure at least one key-value pair
+	batchSize := tr.rand.Intn(maxBatchSize) + 1 // XXX: ensure at least one KV pair to avoid firewood empty revision errors
 	keys, vals := tr.createRandomBatch(batchSize)
 
 	batch := tr.merkleDB.NewBatch()
