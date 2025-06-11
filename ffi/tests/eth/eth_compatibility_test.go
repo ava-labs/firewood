@@ -192,15 +192,15 @@ func (tr *tree) addStorage(accountIndex int) {
 
 	accountStateRoot, set, err := str.Commit(false)
 	tr.require.NoError(err)
-	if set != nil {
-		tr.require.NoError(tr.pendingMergeSet.Merge(set))
-	}
+	tr.require.NoError(tr.pendingMergeSet.Merge(set))
 	acc.Root = accountStateRoot
 	tr.require.NoError(tr.accountTrie.UpdateAccount(addr, acc))
 
 	// Update storage key-value pair in firewood
 	tr.pendingFwdKeys = append(tr.pendingFwdKeys, append(accHash[:], keyHash[:]...))
-	tr.pendingFwdVals = append(tr.pendingFwdVals, val[:])
+	encodedVal, err := rlp.EncodeToBytes(val[:])
+	tr.require.NoError(err)
+	tr.pendingFwdVals = append(tr.pendingFwdVals, encodedVal)
 
 	// Update account in firewood
 	updatedAccountRLP, err := rlp.EncodeToBytes(acc)
@@ -301,7 +301,7 @@ func FuzzTree(f *testing.F) {
 		tr := newTestTree(t)
 		rand := rand.New(rand.NewSource(randSeed))
 
-		for _ = range 10 {
+		for range 10 {
 			tr.createAccount()
 		}
 		tr.commit()
@@ -331,232 +331,20 @@ func FuzzTree(f *testing.F) {
 				if len(tr.currentAddrs) > 0 {
 					tr.addStorage(rand.Intn(len(tr.currentAddrs)))
 				}
+				tr.commit()
 			case updateStorage:
 				if len(tr.currentAddrs) > 0 {
 					tr.updateStorage(rand.Intn(len(tr.currentAddrs)), rand.Uint64())
 				}
+				tr.commit()
 			case deleteStorage:
 				if len(tr.currentAddrs) > 0 {
 					tr.deleteStorage(rand.Intn(len(tr.currentAddrs)), rand.Uint64())
 				}
+				tr.commit()
 			default:
 				t.Fatalf("unknown step: %d", step)
 			}
 		}
 	})
-}
-
-func TestInsert(t *testing.T) {
-	t.Skip()
-	file := path.Join(t.TempDir(), "test.db")
-	cfg := firewood.DefaultConfig()
-	cfg.Create = true
-	db, err := firewood.New(file, cfg)
-	require.NoError(t, err)
-	defer db.Close()
-
-	rand := rand.New(rand.NewSource(0))
-
-	addrs := make([]common.Address, 0)
-	storages := make([]storageKey, 0)
-
-	chooseAddr := func() common.Address {
-		return addrs[rand.Intn(len(addrs))] //nolint:gosec
-	}
-
-	chooseStorage := func() storageKey {
-		return storages[rand.Intn(len(storages))] //nolint:gosec
-	}
-
-	deleteStorage := func(k storageKey) {
-		storages = slices.DeleteFunc(storages, func(s storageKey) bool {
-			return s == k
-		})
-	}
-
-	deleteAccount := func(addr common.Address) {
-		addrs = slices.DeleteFunc(addrs, func(a common.Address) bool {
-			return a == addr
-		})
-		storages = slices.DeleteFunc(storages, func(s storageKey) bool {
-			return s.addr == addr
-		})
-	}
-
-	memdb := rawdb.NewMemoryDatabase()
-	tdb := state.NewDatabaseWithConfig(memdb, triedb.HashDefaults)
-	ethRoot := types.EmptyRootHash
-
-	for i := range uint64(10_000) {
-		tr, err := tdb.OpenTrie(ethRoot)
-		require.NoError(t, err)
-		mergeSet := trienode.NewMergedNodeSet()
-
-		var fwKeys, fwVals [][]byte
-
-		switch {
-		case i%100 == 99: // delete acc
-			addr := chooseAddr()
-			accHash := crypto.Keccak256Hash(addr[:])
-
-			err = tr.DeleteAccount(addr)
-			require.NoError(t, err)
-			deleteAccount(addr)
-
-			fwKeys = append(fwKeys, accHash[:])
-			fwVals = append(fwVals, []byte{})
-		case i%10 == 9: // delete storage
-			storageKey := chooseStorage()
-			accHash := crypto.Keccak256Hash(storageKey.addr[:])
-			keyHash := crypto.Keccak256Hash(storageKey.key[:])
-
-			acc, err := tr.GetAccount(storageKey.addr)
-			require.NoError(t, err)
-
-			str, err := tdb.OpenStorageTrie(ethRoot, storageKey.addr, acc.Root, tr)
-			require.NoError(t, err)
-
-			err = str.DeleteStorage(storageKey.addr, storageKey.key[:])
-			require.NoError(t, err)
-			deleteStorage(storageKey)
-
-			strRoot, set, err := str.Commit(false)
-			require.NoError(t, err)
-			err = mergeSet.Merge(set)
-			require.NoError(t, err)
-			acc.Root = strRoot
-			err = tr.UpdateAccount(storageKey.addr, acc)
-			require.NoError(t, err)
-
-			fwKeys = append(fwKeys, append(accHash[:], keyHash[:]...))
-			fwVals = append(fwVals, []byte{})
-
-			// We must also update the account (not for hash, but to be accurate)
-			fwKeys = append(fwKeys, accHash[:])
-			encodedVal, err := rlp.EncodeToBytes(acc)
-			require.NoError(t, err)
-			fwVals = append(fwVals, encodedVal)
-		case i%4 == 0: // add acc
-			addr := common.BytesToAddress(crypto.Keccak256Hash(binary.BigEndian.AppendUint64(nil, i)).Bytes())
-			accHash := crypto.Keccak256Hash(addr[:])
-			acc := &types.StateAccount{
-				Nonce:    1,
-				Balance:  uint256.NewInt(100),
-				Root:     types.EmptyRootHash,
-				CodeHash: types.EmptyCodeHash[:],
-			}
-			enc, err := rlp.EncodeToBytes(acc)
-			require.NoError(t, err)
-
-			err = tr.UpdateAccount(addr, acc)
-			require.NoError(t, err)
-			addrs = append(addrs, addr)
-
-			fwKeys = append(fwKeys, accHash[:])
-			fwVals = append(fwVals, enc)
-		case i%4 == 1: // update acc
-			addr := chooseAddr()
-			accHash := crypto.Keccak256Hash(addr[:])
-			acc, err := tr.GetAccount(addr)
-			require.NoError(t, err)
-			acc.Nonce++
-			enc, err := rlp.EncodeToBytes(acc)
-			require.NoError(t, err)
-
-			err = tr.UpdateAccount(addr, acc)
-			require.NoError(t, err)
-
-			fwKeys = append(fwKeys, accHash[:])
-			fwVals = append(fwVals, enc)
-		case i%4 == 2: // add storage
-			addr := chooseAddr()
-			accHash := crypto.Keccak256Hash(addr[:])
-			key := crypto.Keccak256Hash(binary.BigEndian.AppendUint64(nil, i))
-			keyHash := crypto.Keccak256Hash(key[:])
-
-			val := crypto.Keccak256Hash(binary.BigEndian.AppendUint64(nil, i+1))
-			storageKey := storageKey{addr: addr, key: key}
-
-			acc, err := tr.GetAccount(addr)
-			require.NoError(t, err)
-
-			str, err := tdb.OpenStorageTrie(ethRoot, addr, acc.Root, tr)
-			require.NoError(t, err)
-
-			err = str.UpdateStorage(addr, key[:], val[:])
-			require.NoError(t, err)
-			storages = append(storages, storageKey)
-
-			strRoot, set, err := str.Commit(false)
-			require.NoError(t, err)
-			err = mergeSet.Merge(set)
-			require.NoError(t, err)
-			acc.Root = strRoot
-			err = tr.UpdateAccount(addr, acc)
-			require.NoError(t, err)
-
-			fwKeys = append(fwKeys, append(accHash[:], keyHash[:]...))
-			// UpdateStorage automatically encodes the value to rlp,
-			// so we need to encode prior to sending to firewood
-			encodedVal, err := rlp.EncodeToBytes(val[:])
-			require.NoError(t, err)
-			fwVals = append(fwVals, encodedVal)
-
-			// We must also update the account (not for hash, but to be accurate)
-			fwKeys = append(fwKeys, accHash[:])
-			encodedVal, err = rlp.EncodeToBytes(acc)
-			require.NoError(t, err)
-			fwVals = append(fwVals, encodedVal)
-		case i%4 == 3: // update storage
-			storageKey := chooseStorage()
-			accHash := crypto.Keccak256Hash(storageKey.addr[:])
-			keyHash := crypto.Keccak256Hash(storageKey.key[:])
-
-			val := crypto.Keccak256Hash(binary.BigEndian.AppendUint64(nil, i+1))
-
-			acc, err := tr.GetAccount(storageKey.addr)
-			require.NoError(t, err)
-
-			str, err := tdb.OpenStorageTrie(ethRoot, storageKey.addr, acc.Root, tr)
-			require.NoError(t, err)
-
-			err = str.UpdateStorage(storageKey.addr, storageKey.key[:], val[:])
-			require.NoError(t, err)
-
-			strRoot, set, err := str.Commit(false)
-			require.NoError(t, err)
-			err = mergeSet.Merge(set)
-			require.NoError(t, err)
-			acc.Root = strRoot
-			err = tr.UpdateAccount(storageKey.addr, acc)
-			require.NoError(t, err)
-
-			fwKeys = append(fwKeys, append(accHash[:], keyHash[:]...))
-			// UpdateStorage automatically encodes the value to rlp,
-			// so we need to encode prior to sending to firewood
-			encodedVal, err := rlp.EncodeToBytes(val[:])
-			require.NoError(t, err)
-			fwVals = append(fwVals, encodedVal)
-
-			// We must also update the account (not for hash, but to be accurate)
-			fwKeys = append(fwKeys, accHash[:])
-			encodedVal, err = rlp.EncodeToBytes(acc)
-			require.NoError(t, err)
-			fwVals = append(fwVals, encodedVal)
-		}
-		next, set, err := tr.Commit(true)
-		require.NoError(t, err)
-		err = mergeSet.Merge(set)
-		require.NoError(t, err)
-
-		err = tdb.TrieDB().Update(next, ethRoot, i, mergeSet, nil)
-		require.NoError(t, err)
-
-		// update firewood db
-		got, err := db.Update(fwKeys, fwVals)
-		require.NoError(t, err)
-		require.Equal(t, next[:], got)
-
-		ethRoot = next
-	}
 }
