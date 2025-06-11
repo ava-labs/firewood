@@ -280,8 +280,7 @@ impl<T: TrieReader> Merkle<T> {
         };
 
         let start_proof = self.prove(&first_key)?;
-        let limit =
-            limit.and_then(|old_limit| old_limit.get().checked_sub(1).and_then(NonZeroUsize::new));
+        let limit = limit.map(|old_limit| old_limit.get().saturating_sub(1));
 
         let mut key_values = vec![(first_key, first_value.into_boxed_slice())];
 
@@ -289,7 +288,7 @@ impl<T: TrieReader> Merkle<T> {
         // than the largest key requested
         key_values.extend(
             stream
-                .take(limit.map(NonZeroUsize::get).unwrap_or(usize::MAX))
+                .take(limit.unwrap_or(usize::MAX))
                 .take_while(|kv| {
                     // no last key asked for, so keep going
                     let Some(last_key) = end_key else {

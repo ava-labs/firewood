@@ -71,9 +71,8 @@ impl TextRecorder {
             .expect("system time is before Unix epoch");
         let epoch_ms = epoch_duration
             .as_secs()
-            .checked_mul(1000)
-            .and_then(|ms| ms.checked_add(u64::from(epoch_duration.subsec_millis())))
-            .unwrap_or(0);
+            .saturating_mul(1000)
+            .saturating_add(u64::from(epoch_duration.subsec_millis()));
         writeln!(output, "# {utc_now}").unwrap();
 
         let counters = self.registry.get_counter_handles();
