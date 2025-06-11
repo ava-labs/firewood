@@ -1,5 +1,9 @@
 name: attach-static-libs
 
+defaults:
+  run:
+    shell: bash
+
 on:
   workflow_dispatch:
     inputs:
@@ -53,25 +57,15 @@ jobs:
       - name: Build for ${{ matrix.target }}
         run: cargo build --profile maxperf --features ethhash,logger --target ${{ matrix.target }} -p firewood-ffi
         
-      - name: Upload binary (Unix)
-        if: runner.os != 'Windows'
+      - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
           path: target/${{ matrix.target }}/maxperf/libfirewood_ffi.a
           if-no-files-found: error
-          
-      - name: Upload binary (Windows)
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.target }}
-          path: target/${{ matrix.target }}/maxperf/firewood_ffi.lib
-          if-no-files-found: error
 
       - name: Check if FIREWOOD_GO_GITHUB_TOKEN is set
         id: check_secrets
-        shell: bash
         run: |
           if [ -z "${{ secrets.FIREWOOD_GO_GITHUB_TOKEN }}" ]; then
             echo "FIREWOOD_GO_GITHUB_TOKEN is not set"
@@ -94,7 +88,6 @@ jobs:
     steps:
       - name: Determine branch name
         id: determine_branch
-        shell: bash
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.create_branch_name }}" ]]; then
             export target_branch="${{ github.event.inputs.create_branch_name }}"
@@ -136,7 +129,6 @@ jobs:
 
       - name: Push static libs to branch
         working-directory: firewood-go
-        shell: bash
         # GITHUB_TOKEN is configured in the last actions/checkout step
         # to have read/write permissions to the firewood-go repo.
         run: |
@@ -181,7 +173,6 @@ jobs:
           cache-dependency-path: "ffi/go.sum"
       - name: Test Go FFI bindings
         working-directory: ffi
-        shell: bash
         # cgocheck2 is expensive but provides complete pointer checks
         run: GOEXPERIMENT=cgocheck2 TEST_FIREWOOD_HASH_MODE=ethhash go test ./...
 

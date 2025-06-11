@@ -1,4 +1,7 @@
 name: ci
+defaults:
+  run:
+    shell: bash
 
 on:
   pull_request:
@@ -189,7 +192,6 @@ jobs:
           working-directory: ffi
       - name: Test Go FFI bindings
         working-directory: ffi
-        shell: bash
         # cgocheck2 is expensive but provides complete pointer checks
         run: GOEXPERIMENT=cgocheck2 TEST_FIREWOOD_HASH_MODE=firewood go test ./...
       
