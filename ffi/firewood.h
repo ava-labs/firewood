@@ -178,6 +178,7 @@ struct Value fwd_drop_proposal(const struct DatabaseHandle *db, uint32_t proposa
 
 /**
  * Frees the memory associated with a `DatabaseCreationResult`.
+ * This only needs to be called if the `error_str` field is non-null.
  *
  * # Arguments
  *
@@ -192,7 +193,7 @@ struct Value fwd_drop_proposal(const struct DatabaseHandle *db, uint32_t proposa
  *
  * This function panics if `result` is `null`.
  */
-void fwd_free_database_result(const struct DatabaseCreationResult *result);
+void fwd_free_database_error_result(const struct DatabaseCreationResult *result);
 
 /**
  * Frees the memory associated with a `Value`.

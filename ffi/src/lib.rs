@@ -757,6 +757,7 @@ impl From<Result<Db, String>> for DatabaseCreationResult {
 }
 
 /// Frees the memory associated with a `DatabaseCreationResult`.
+/// This only needs to be called if the `error_str` field is non-null.
 ///
 /// # Arguments
 ///
@@ -771,7 +772,7 @@ impl From<Result<Db, String>> for DatabaseCreationResult {
 ///
 /// This function panics if `result` is `null`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_free_database_result(result: *const DatabaseCreationResult) {
+pub unsafe extern "C" fn fwd_free_database_error_result(result: *const DatabaseCreationResult) {
     // Check result is valid.
     let result = unsafe { result.as_ref() }.expect("result should be non-null");
 
