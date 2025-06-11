@@ -57,6 +57,12 @@ jobs:
       - name: Build for ${{ matrix.target }}
         run: cargo build --profile maxperf --features ethhash,logger --target ${{ matrix.target }} -p firewood-ffi
         
+      - name: Verify binary exists
+        run: |
+          echo "Checking for binary at: target/${{ matrix.target }}/maxperf/libfirewood_ffi.a"
+          ls -la target/${{ matrix.target }}/maxperf/
+          file target/${{ matrix.target }}/maxperf/libfirewood_ffi.a || echo "File does not exist"
+        
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
@@ -166,6 +172,13 @@ jobs:
           repository: ava-labs/firewood-go
           token: ${{ secrets.FIREWOOD_GO_GITHUB_TOKEN }}
           ref: ${{ needs.push-firewood-ffi-libs.outputs.target_branch }}
+      - name: Verify downloaded libraries
+        run: |
+          echo "=== Checking downloaded libraries ==="
+          find . -name "*.a" -o -name "*.lib" | head -20
+          echo "=== Contents of ffi/libs directory ==="
+          ls -la ffi/libs/ || echo "ffi/libs directory not found"
+          find ffi/libs -type f | head -20 || echo "No files in ffi/libs"
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
