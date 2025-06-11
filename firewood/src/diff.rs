@@ -105,7 +105,7 @@ trait UnvisitedStateVisitor {
         key: &Path,
         iter_stack: &mut Vec<DiffIterationNode>,
         readers: (&L, &R),
-    ) -> Result<Option<DiffIterationResult>, FileIoError>;
+    ) -> Result<Option<BatchOp<Key, Value>>, FileIoError>;
 }
 
 impl UnvisitedStateVisitor for UnvisitedNodePairState {
@@ -114,7 +114,7 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
         key: &Path,
         iter_stack: &mut Vec<DiffIterationNode>,
         _readers: (&L, &R),
-    ) -> Result<Option<DiffIterationResult>, FileIoError> {
+    ) -> Result<Option<BatchOp<Key, Value>>, FileIoError> {
         match (&*self.node_left, &*self.node_right) {
             (Node::Branch(branch_left), Node::Branch(branch_right)) => {
                 // Compare values first
@@ -122,20 +122,20 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                     (Some(v_left), Some(v_right)) if v_left == v_right => None,
                     (Some(_), Some(v_right)) => {
                         // The key already includes the complete path including partial paths
-                        Some(DiffIterationResult::Changed {
+                        Some(BatchOp::Put {
                             key: key_from_nibble_iter(key.iter().copied()),
-                            new_value: v_right.to_vec(),
+                            value: v_right.to_vec(),
                         })
                     }
                     (Some(_), None) => {
                         // The key already includes the complete path including partial paths
-                        Some(DiffIterationResult::Deleted {
+                        Some(BatchOp::Delete {
                             key: key_from_nibble_iter(key.iter().copied()),
                         })
                     }
                     (None, Some(v_right)) => {
                         // The key already includes the complete path including partial paths
-                        Some(DiffIterationResult::Added {
+                        Some(BatchOp::Put {
                             key: key_from_nibble_iter(key.iter().copied()),
                             value: v_right.to_vec(),
                         })
@@ -165,7 +165,7 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                 });
 
                 // The key already includes the complete path including partial paths
-                Ok(Some(DiffIterationResult::Added {
+                Ok(Some(BatchOp::Put {
                     key: key_from_nibble_iter(key.iter().copied()),
                     value: leaf.value.to_vec(),
                 }))
@@ -180,7 +180,7 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                 });
 
                 // The key already includes the complete path including partial paths
-                Ok(Some(DiffIterationResult::Deleted {
+                Ok(Some(BatchOp::Delete {
                     key: key_from_nibble_iter(key.iter().copied()),
                 }))
             }
@@ -188,9 +188,9 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                 // Two leaves - compare values
                 if leaf1.value != leaf2.value {
                     // The key already includes the complete path including partial paths
-                    Ok(Some(DiffIterationResult::Changed {
+                    Ok(Some(BatchOp::Put {
                         key: key_from_nibble_iter(key.iter().copied()),
-                        new_value: leaf2.value.to_vec(),
+                        value: leaf2.value.to_vec(),
                     }))
                 } else {
                     Ok(None)
@@ -206,7 +206,7 @@ impl UnvisitedStateVisitor for UnvisitedNodeLeftState {
         key: &Path,
         iter_stack: &mut Vec<DiffIterationNode>,
         _readers: (&L, &R),
-    ) -> Result<Option<DiffIterationResult>, FileIoError> {
+    ) -> Result<Option<BatchOp<Key, Value>>, FileIoError> {
         // Node exists only in tree1 - mark for deletion
         match &*self.node {
             Node::Branch(branch) => {
@@ -220,7 +220,7 @@ impl UnvisitedStateVisitor for UnvisitedNodeLeftState {
                 if branch.value.is_some() {
                     // The key already includes the complete path including partial paths
                     let key = key_from_nibble_iter(key.iter().copied());
-                    Ok(Some(DiffIterationResult::Deleted { key }))
+                    Ok(Some(BatchOp::Delete { key }))
                 } else {
                     Ok(None)
                 }
@@ -228,7 +228,7 @@ impl UnvisitedStateVisitor for UnvisitedNodeLeftState {
             Node::Leaf(_leaf) => {
                 // The key already includes the complete path including partial paths
                 let key = key_from_nibble_iter(key.iter().copied());
-                Ok(Some(DiffIterationResult::Deleted { key }))
+                Ok(Some(BatchOp::Delete { key }))
             }
         }
     }
@@ -240,7 +240,7 @@ impl UnvisitedStateVisitor for UnvisitedNodeRightState {
         key: &Path,
         iter_stack: &mut Vec<DiffIterationNode>,
         _readers: (&L, &R),
-    ) -> Result<Option<DiffIterationResult>, FileIoError> {
+    ) -> Result<Option<BatchOp<Key, Value>>, FileIoError> {
         // Node exists only in tree2 - mark for addition
         match &*self.node {
             Node::Branch(branch) => {
@@ -254,7 +254,7 @@ impl UnvisitedStateVisitor for UnvisitedNodeRightState {
                 if let Some(value) = &branch.value {
                     // The key already includes the complete path including partial paths
                     let key = key_from_nibble_iter(key.iter().copied());
-                    Ok(Some(DiffIterationResult::Added {
+                    Ok(Some(BatchOp::Put {
                         key,
                         value: value.to_vec(),
                     }))
@@ -265,7 +265,7 @@ impl UnvisitedStateVisitor for UnvisitedNodeRightState {
             Node::Leaf(_leaf) => {
                 // The key already includes the complete path including partial paths
                 let key = key_from_nibble_iter(key.iter().copied());
-                Ok(Some(DiffIterationResult::Added {
+                Ok(Some(BatchOp::Put {
                     key,
                     value: _leaf.value.to_vec(),
                 }))
@@ -799,7 +799,7 @@ impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
         }
     }
 
-    fn next_internal(&mut self) -> Option<Result<DiffIterationResult, storage::FileIoError>> {
+    fn next_internal(&mut self) -> Option<Result<BatchOp<Key, Value>, storage::FileIoError>> {
         // Handle lazy initialization
         let iter_stack = match &mut self.state {
             DiffNodeStreamState::StartFromKey(key) => {
@@ -883,13 +883,6 @@ impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
     }
 }
 
-#[derive(Debug)]
-enum DiffIterationResult {
-    Added { key: Key, value: Value },
-    Deleted { key: Key },
-    Changed { key: Key, new_value: Value },
-}
-
 /// Optimized diff stream that uses DiffMerkleNodeStream for hash-based optimizations
 struct DiffMerkleKeyValueStreams<'a, T: TrieReader, U: TrieReader> {
     node_stream: DiffMerkleNodeStream<'a, T, U>,
@@ -915,22 +908,7 @@ impl<T: TrieReader, U: TrieReader> Iterator for DiffMerkleKeyValueStreams<'_, T,
     type Item = Result<BatchOp<Key, Value>, storage::FileIoError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.node_stream.next_internal() {
-            Some(Ok(diff_result)) => {
-                // Convert DiffIterationResult to BatchOp
-                let batch_op = match diff_result {
-                    DiffIterationResult::Added { key, value } => BatchOp::Put { key, value },
-                    DiffIterationResult::Deleted { key } => BatchOp::Delete { key },
-                    DiffIterationResult::Changed { key, new_value } => BatchOp::Put {
-                        key,
-                        value: new_value,
-                    },
-                };
-                Some(Ok(batch_op))
-            }
-            Some(Err(error)) => Some(Err(error)),
-            None => None,
-        }
+        self.node_stream.next_internal()
     }
 }
 
