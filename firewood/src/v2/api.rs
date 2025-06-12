@@ -127,11 +127,11 @@ pub enum Error {
     #[error("Range too small")]
     RangeTooSmall,
 
-    /// Request RangeProof for empty trie
+    /// Request `RangeProof` for empty trie
     #[error("request RangeProof for empty trie")]
     RangeProofOnEmptyTrie,
 
-    /// Request RangeProof for empty range
+    /// Request `RangeProof` for empty range
     #[error("the latest revision is empty and has no root hash")]
     LatestIsEmpty,
 

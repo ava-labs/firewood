@@ -82,9 +82,10 @@ impl RevisionManager {
             truncate,
             config.cache_read_strategy,
         )?);
-        let nodestore = match truncate {
-            true => Arc::new(NodeStore::new_empty_committed(storage.clone())?),
-            false => Arc::new(NodeStore::open(storage.clone())?),
+        let nodestore = if truncate {
+            Arc::new(NodeStore::new_empty_committed(storage.clone())?)
+        } else {
+            Arc::new(NodeStore::open(storage.clone())?)
         };
         let mut manager = Self {
             max_revisions: config.max_revisions,
@@ -219,7 +220,7 @@ impl RevisionManager {
             .retain(|p| !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) > 1);
 
         // then reparent any proposals that have this proposal as a parent
-        for p in self.proposals.iter() {
+        for p in &self.proposals {
             proposal.commit_reparent(p);
         }
 

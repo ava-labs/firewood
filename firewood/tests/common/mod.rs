@@ -57,7 +57,7 @@ impl Deref for TestDb {
 }
 
 impl TestDb {
-    /// reopen the database, consuming the old TestDb and giving you a new one
+    /// reopen the database, consuming the old `TestDb` and giving you a new one
     pub async fn _reopen(mut self) -> Self {
         let mut creator = self.creator.clone();
         self.preserve_on_drop = true;

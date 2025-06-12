@@ -1,8 +1,8 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-//! A LinearStore provides a view of a set of bytes at
-//! a given time. A LinearStore has three different types,
+//! A `LinearStore` provides a view of a set of bytes at
+//! a given time. A `LinearStore` has three different types,
 //! which refer to another base type, as follows:
 //! ```mermaid
 //! stateDiagram-v2
@@ -24,7 +24,7 @@ use crate::{CacheReadStrategy, LinearAddress, SharedNode};
 pub(super) mod filebacked;
 pub mod memory;
 
-/// An error that occurs when reading or writing to a [ReadableStorage] or [WritableStorage]   
+/// An error that occurs when reading or writing to a [`ReadableStorage`] or [`WritableStorage`]   
 ///
 /// This error is used to wrap errors that occur when reading or writing to a file.
 /// It contains the filename, offset, and context of the error.
@@ -37,7 +37,7 @@ pub struct FileIoError {
 }
 
 impl FileIoError {
-    /// Create a new [FileIoError] from a generic error
+    /// Create a new [`FileIoError`] from a generic error
     ///
     /// Only use this constructor if you do not have any file or line information.
     ///
@@ -53,7 +53,7 @@ impl FileIoError {
         }
     }
 
-    /// Create a new [FileIoError]
+    /// Create a new [`FileIoError`]
     ///
     /// # Arguments
     ///
@@ -61,7 +61,8 @@ impl FileIoError {
     /// * `filename` - The filename of the file that caused the error
     /// * `offset` - The offset of the file that caused the error
     /// * `context` - The context of this error
-    pub fn new(
+    #[must_use]
+    pub const fn new(
         inner: std::io::Error,
         filename: Option<PathBuf>,
         offset: u64,
@@ -94,7 +95,7 @@ impl std::fmt::Display for FileIoError {
                 .as_ref()
                 .unwrap_or(&PathBuf::from("[unknown]"))
                 .display(),
-            context = self.context.as_ref().unwrap_or(&String::from(""))
+            context = self.context.as_ref().unwrap_or(&String::new())
         )
     }
 }
@@ -145,7 +146,7 @@ pub trait ReadableStorage: Debug + Sync + Send {
         None
     }
 
-    /// Convert an io::Error into a FileIoError
+    /// Convert an `io::Error` into a `FileIoError`
     fn file_io_error(
         &self,
         error: std::io::Error,

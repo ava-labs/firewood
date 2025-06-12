@@ -23,7 +23,7 @@ use crate::{CacheReadStrategy, LinearAddress, SharedNode};
 
 use super::{FileIoError, ReadableStorage, WritableStorage};
 
-/// A [ReadableStorage] and [WritableStorage] backed by a file
+/// A [`ReadableStorage`] and [`WritableStorage`] backed by a file
 pub struct FileBacked {
     fd: File,
     filename: PathBuf,

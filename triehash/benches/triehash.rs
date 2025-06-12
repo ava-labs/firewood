@@ -78,7 +78,7 @@ fn bench_insertions(c: &mut Criterion) {
         for _ in 0..1000 {
             let k = random_bytes(6, 0, &mut seed);
             let v = random_value(&mut seed);
-            d.push((k, v))
+            d.push((k, v));
         }
         b.iter(|| trie_root::<KeccakHasher, _, _, _>(d.clone()));
     });
@@ -90,7 +90,7 @@ fn bench_insertions(c: &mut Criterion) {
         for _ in 0..1000 {
             let k = random_word(alphabet, 6, 0, &mut seed);
             let v = random_value(&mut seed);
-            d.push((k, v))
+            d.push((k, v));
         }
         b.iter(|| trie_root::<KeccakHasher, _, _, _>(d.clone()));
     });
@@ -102,7 +102,7 @@ fn bench_insertions(c: &mut Criterion) {
         for _ in 0..1000 {
             let k = random_word(alphabet, 1, 5, &mut seed);
             let v = random_value(&mut seed);
-            d.push((k, v))
+            d.push((k, v));
         }
         b.iter(|| trie_root::<KeccakHasher, _, _, _>(d.clone()));
     });
@@ -114,7 +114,7 @@ fn bench_insertions(c: &mut Criterion) {
         for _ in 0..1000 {
             let k = random_word(alphabet, 6, 0, &mut seed);
             let v = random_value(&mut seed);
-            d.push((k, v))
+            d.push((k, v));
         }
         b.iter(|| trie_root::<KeccakHasher, _, _, _>(d.clone()));
     });

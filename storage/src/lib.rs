@@ -3,13 +3,13 @@
 #![warn(missing_debug_implementations, rust_2018_idioms, missing_docs)]
 #![deny(unsafe_code)]
 
-//! # storage implements the storage of a [Node] on top of a LinearStore
+//! # storage implements the storage of a [Node] on top of a `LinearStore`
 //!
-//! Nodes are stored at a [LinearAddress] within a [ReadableStorage].
+//! Nodes are stored at a [`LinearAddress`] within a [`ReadableStorage`].
 //!
-//! The [NodeStore] maintains a free list and the [LinearAddress] of a root node.
+//! The [`NodeStore`] maintains a free list and the [`LinearAddress`] of a root node.
 //!
-//! A [NodeStore] is backed by a [ReadableStorage] which is persisted storage.
+//! A [`NodeStore`] is backed by a [`ReadableStorage`] which is persisted storage.
 
 mod hashednode;
 mod hashers;

@@ -312,7 +312,7 @@ impl Db {
         let merkle = Merkle::from(latest_rev_nodestore);
         // TODO: This should be a stream
         let output = merkle.dump()?;
-        write!(w, "{}", output)
+        write!(w, "{output}")
     }
 
     /// Get a copy of the database metrics
