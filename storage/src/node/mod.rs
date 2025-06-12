@@ -246,7 +246,7 @@ impl Node {
                 );
                 #[cfg(feature = "branch_factor_256")]
                 let first_byte: BranchFirstByte =
-                    BranchFirstByte::new(b.value.is_some() as u8, pp_len);
+                    BranchFirstByte::new(u8::from(b.value.is_some()), pp_len);
 
                 // create an output stack item, which can overflow to memory for very large branch nodes
                 const OPTIMIZE_BRANCHES_FOR_SIZE: usize = 1024;
