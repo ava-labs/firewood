@@ -65,21 +65,21 @@ struct VisitedNodePairState {
 /// This state occurs when there are no remaining children on the right side to compare against,
 /// or when we have a branch node that exists only in the left tree.
 ///
-/// If excluded_node is Some, one child that matches the excluded node should be compared
+/// If included_node is Some, one child that matches the included node should be compared
 /// instead of deleted (used in Branch vs Leaf scenarios).
 ///
 /// This is always a leaf node (never a branch) because it comes from Branch vs Leaf scenarios
-/// where we're traversing a branch's children but need to exclude any child that represents
+/// where we're traversing a branch's children but need to include any child that represents
 /// the same logical key as a leaf from the other tree.
 #[derive(Derivative)]
 #[derivative(Debug)]
 struct VisitedNodeLeftState {
     #[derivative(Debug(format_with = "fmt_as_iterator"))]
     children_iter: Box<dyn Iterator<Item = (u8, Child)> + Send>,
-    /// Optional excluded node - if present, children matching this should be compared instead of deleted.
+    /// Optional included node - if present, children matching this should be compared instead of deleted.
     ///
     /// This is always a leaf node (never a branch) because it comes from Branch vs Leaf scenarios
-    /// where we're traversing a branch's children but need to exclude any child that represents
+    /// where we're traversing a branch's children but need to include any child that represents
     /// the same logical key as a leaf from the other tree.
     excluded_node: Option<(SharedNode, Path)>,
 }
@@ -88,23 +88,23 @@ struct VisitedNodeLeftState {
 /// This state occurs when there are no remaining children on the left side to compare against,
 /// or when we have a branch node that exists only in the right tree.
 ///
-/// If excluded_node is Some, one child that matches the excluded node should be compared
+/// If included_node is Some, one child that matches the included node should be compared
 /// instead of added (used in Leaf vs Branch scenarios).
 ///
 /// This is always a leaf node (never a branch) because it comes from Leaf vs Branch scenarios
-/// where we're traversing a branch's children but need to exclude any child that represents
+/// where we're traversing a branch's children but need to include any child that represents
 /// the same logical key as a leaf from the other tree.
 #[derive(Derivative)]
 #[derivative(Debug)]
 struct VisitedNodeRightState {
     #[derivative(Debug(format_with = "fmt_as_iterator"))]
     children_iter: Box<dyn Iterator<Item = (u8, Child)> + Send>,
-    /// Optional excluded node - if present, children matching this should be compared instead of added.
+    /// Optional included node - if present, children matching this should be compared instead of added.
     ///
     /// This is always a leaf node (never a branch) because it comes from Leaf vs Branch scenarios
-    /// where we're traversing a branch's children but need to exclude any child that represents
+    /// where we're traversing a branch's children but need to include any child that represents
     /// the same logical key as a leaf from the other tree.
-    excluded_node: Option<(SharedNode, Path)>,
+    included_node: Option<SharedNode>,
 }
 
 // Helper function for derivative to format iterators
@@ -197,24 +197,7 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                     key: key.clone(),
                     state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
                         children_iter: Box::new(as_enumerated_children_iter(branch)),
-                        excluded_node: Some((self.node_right.clone(), {
-                            // Calculate the actual path of the excluded leaf
-                            // Check if leaf's partial_path already starts with the key (to avoid double concatenation)
-                            let leaf_path = self.node_right.partial_path();
-                            let excluded_path = if leaf_path.len() > key.0.len()
-                                && leaf_path.iter().take(key.0.len()).eq(key.0.iter())
-                            {
-                                // Leaf's partial_path already includes the key prefix - use it directly
-                                Path::from(leaf_path.as_ref())
-                            } else {
-                                // Normal case - concatenate key + partial_path
-                                let mut excluded_path = key.clone();
-                                excluded_path.0.extend(leaf_path.iter().copied());
-                                excluded_path
-                            };
-
-                            excluded_path
-                        })),
+                        excluded_node: Some((self.node_right.clone(), key.clone())),
                     }),
                 });
 
@@ -246,23 +229,7 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                     key: key.clone(),
                     state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
                         children_iter: Box::new(as_enumerated_children_iter(branch)),
-                        excluded_node: Some((self.node_left.clone(), {
-                            // Calculate the actual path of the excluded leaf
-                            // Check if leaf's partial_path already starts with the key (to avoid double concatenation)
-                            let leaf_path = self.node_left.partial_path();
-                            let excluded_path = if leaf_path.len() > key.0.len()
-                                && leaf_path.iter().take(key.0.len()).eq(key.0.iter())
-                            {
-                                // Leaf's partial_path already includes the key prefix - use it directly
-                                Path::from(leaf_path.as_ref())
-                            } else {
-                                // Normal case - concatenate key + partial_path
-                                let mut excluded_path = key.clone();
-                                excluded_path.0.extend(leaf_path.iter().copied());
-                                excluded_path
-                            };
-                            excluded_path
-                        })),
+                        included_node: Some(self.node_left.clone()),
                     }),
                 });
 
@@ -333,7 +300,7 @@ impl UnvisitedStateVisitor for UnvisitedNodeRightState {
                     key: key.clone(),
                     state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
                         children_iter: Box::new(as_enumerated_children_iter(branch)),
-                        excluded_node: None,
+                        included_node: None,
                     }),
                 });
 
@@ -381,10 +348,36 @@ impl StateVisitor for VisitedNodeLeftState {
                 Path::from(nibbles.as_slice())
             };
 
-            // Check if this child should be excluded from deletion
+            // Check if this child should be included in comparison instead of deleted
             if let Some((excluded_node, excluded_path)) = self.excluded_node.take() {
-                if child_key == excluded_path {
-                    // Found the excluded child - use the moved value (no clone needed)
+                // Calculate the final key that the excluded leaf would represent
+                let excluded_leaf_key = match &*excluded_node {
+                    Node::Leaf(leaf) => {
+                        // Handle both root node and non-root node cases
+                        let leaf_path = &leaf.partial_path;
+                        if leaf_path.len() >= excluded_path.0.len()
+                            && leaf_path
+                                .iter()
+                                .take(excluded_path.0.len())
+                                .eq(excluded_path.0.iter())
+                        {
+                            // Root node case: leaf's partial_path contains complete path
+                            key_from_nibble_iter(leaf_path.iter().copied())
+                        } else {
+                            // Non-root case: concatenate key + partial_path
+                            let mut leaf_final_key = excluded_path.clone();
+                            leaf_final_key.0.extend(leaf_path.iter().copied());
+                            key_from_nibble_iter(leaf_final_key.iter().copied())
+                        }
+                    }
+                    _ => unreachable!("excluded_node should always be a leaf"),
+                };
+
+                // Calculate the final key that this child represents
+                let child_final_key = key_from_nibble_iter(child_key.iter().copied());
+
+                if child_final_key == excluded_leaf_key {
+                    // Found the excluded child - compare instead of deleting
                     iter_stack.push(DiffIterationNode {
                         key: key.clone(),
                         state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
@@ -634,7 +627,7 @@ impl StateVisitor for VisitedNodePairState {
                     key: key.clone(),
                     state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
                         children_iter: self.children_iter_right,
-                        excluded_node: None,
+                        included_node: None,
                     }),
                 });
 
@@ -677,15 +670,38 @@ impl StateVisitor for VisitedNodeRightState {
                 Path::from(nibbles.as_slice())
             };
 
-            // Check if this child should be excluded from addition
-            if let Some((excluded_node, excluded_path)) = self.excluded_node.take() {
-                if child_key == excluded_path {
-                    // Found the excluded child
+            // Check if this child should be included in comparison instead of added
+            if let Some(included_node) = self.included_node.take() {
+                // Calculate the final key that the included leaf would represent
+                let included_leaf_key = match &*included_node {
+                    Node::Leaf(leaf) => {
+                        // Handle both root node and non-root node cases
+                        let leaf_path = &leaf.partial_path;
+                        if leaf_path.len() >= key.0.len()
+                            && leaf_path.iter().take(key.0.len()).eq(key.0.iter())
+                        {
+                            // Root node case: leaf's partial_path contains complete path
+                            key_from_nibble_iter(leaf_path.iter().copied())
+                        } else {
+                            // Non-root case: concatenate key + partial_path
+                            let mut leaf_final_key = key.clone();
+                            leaf_final_key.0.extend(leaf_path.iter().copied());
+                            key_from_nibble_iter(leaf_final_key.iter().copied())
+                        }
+                    }
+                    _ => unreachable!("included_node should always be a leaf"),
+                };
+
+                // Calculate the final key that this child represents
+                let child_final_key = key_from_nibble_iter(child_key.iter().copied());
+
+                if child_final_key == included_leaf_key {
+                    // Found the included child - compare instead of adding
                     iter_stack.push(DiffIterationNode {
                         key: key.clone(),
                         state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
                             children_iter: self.children_iter,
-                            excluded_node: None,
+                            included_node: None,
                         }),
                     });
 
@@ -693,17 +709,17 @@ impl StateVisitor for VisitedNodeRightState {
                     iter_stack.push(DiffIterationNode {
                         key: child_key,
                         state: DiffIterationNodeState::UnvisitedPair(UnvisitedNodePairState {
-                            node_left: excluded_node, // Moved, no clone needed
+                            node_left: included_node, // Moved, no clone needed
                             node_right: node,
                         }),
                     });
                 } else {
-                    // Not the excluded child - put it back and continue looking
+                    // Not the included child - put it back and continue looking
                     iter_stack.push(DiffIterationNode {
                         key: key.clone(),
                         state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
                             children_iter: self.children_iter,
-                            excluded_node: Some((excluded_node, excluded_path)), // Put it back
+                            included_node: Some(included_node), // Put it back
                         }),
                     });
 
@@ -716,12 +732,12 @@ impl StateVisitor for VisitedNodeRightState {
                     });
                 }
             } else {
-                // No exclusion - add all children
+                // No inclusion - add all children
                 iter_stack.push(DiffIterationNode {
                     key: key.clone(),
                     state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
                         children_iter: self.children_iter,
-                        excluded_node: None,
+                        included_node: None,
                     }),
                 });
 
@@ -799,7 +815,7 @@ impl DiffIterationNode {
                     key: path,
                     state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
                         children_iter,
-                        excluded_node: None,
+                        included_node: None,
                     }),
                 }
             }
@@ -1347,9 +1363,9 @@ mod tests {
 
         // Delete different keys from each merkle
         m1.remove(deleted_key1).unwrap();
-        println!("expected put for key {:?}", deleted_key1);
+        println!("expected put for key {:x?}", deleted_key1);
         m2.remove(deleted_key2).unwrap();
-        println!("expected delete for key {:?}", deleted_key2);
+        println!("expected delete for key {:x?}", deleted_key2);
 
         // Convert to the appropriate type based on test parameters
         let ops: Vec<BatchOp<Box<[u8]>, Vec<u8>>> = if trie1_mutable && trie2_mutable {
@@ -1377,8 +1393,8 @@ mod tests {
                 m1.try_into().unwrap();
             let m2_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
                 m2.try_into().unwrap();
-            // println!("---m1\n{}", m1_immut.dump().unwrap());
-            // println!("---m2\n{}", m2_immut.dump().unwrap());
+            println!("---m1\n{}", m1_immut.dump().unwrap());
+            println!("---m2\n{}", m2_immut.dump().unwrap());
             diff_merkle_iterator(&m1_immut, &m2_immut, Box::new([]))
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap()
@@ -1394,10 +1410,10 @@ mod tests {
             for (i, op) in ops.iter().enumerate() {
                 match op {
                     BatchOp::Delete { key } => {
-                        println!("  {}: Delete key: {:?}", i, key.as_ref());
+                        println!("  {}: Delete key: {:x?}", i, key.as_ref());
                     }
                     BatchOp::Put { key, value: _ } => {
-                        println!("  {}: Put key: {:?}", i, key.as_ref());
+                        println!("  {}: Put key: {:x?}", i, key.as_ref());
                     }
                     BatchOp::DeleteRange { .. } => {
                         println!("  {}: DeleteRange", i);
