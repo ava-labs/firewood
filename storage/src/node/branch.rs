@@ -265,7 +265,7 @@ impl Debug for BranchNode {
 }
 
 impl BranchNode {
-    /// The maximum number of children in a [BranchNode]
+    /// The maximum number of children in a [`BranchNode`]
     #[cfg(feature = "branch_factor_256")]
     pub const MAX_CHILDREN: usize = 256;
 
