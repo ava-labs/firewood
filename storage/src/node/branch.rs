@@ -15,7 +15,7 @@ use std::fmt::{Debug, Formatter};
 pub type HashType = ethhash::HashOrRlp;
 
 #[cfg(not(feature = "ethhash"))]
-/// The type of a hash. For non-ethereum compatible hashes, this is always a TrieHash.
+/// The type of a hash. For non-ethereum compatible hashes, this is always a `TrieHash`.
 pub type HashType = crate::TrieHash;
 
 pub(crate) trait Serializable {
@@ -179,8 +179,8 @@ pub struct BranchNode {
 
     /// The children of this branch.
     /// Element i is the child at index i, or None if there is no child at that index.
-    /// Each element is (child_hash, child_address).
-    /// child_address is None if we don't know the child's hash.
+    /// Each element is (`child_hash`, `child_address`).
+    /// `child_address` is None if we don't know the child's hash.
     pub children: [Option<Child>; Self::MAX_CHILDREN],
 }
 
@@ -227,7 +227,7 @@ impl<'de> Deserialize<'de> for BranchNode {
 
         let mut children: [Option<Child>; BranchNode::MAX_CHILDREN] =
             [const { None }; BranchNode::MAX_CHILDREN];
-        for (offset, addr, hash) in s.children.iter() {
+        for (offset, addr, hash) in &s.children {
             children[*offset as usize] = Some(Child::AddressWithHash(*addr, hash.clone()));
         }
 
@@ -249,7 +249,7 @@ impl Debug for BranchNode {
                 None => {}
                 Some(Child::Node(_)) => {} //TODO
                 Some(Child::AddressWithHash(addr, hash)) => {
-                    write!(f, "({i:?}: address={addr:?} hash={})", hash)?
+                    write!(f, "({i:?}: address={addr:?} hash={hash})")?;
                 }
             }
         }
@@ -270,12 +270,13 @@ impl BranchNode {
     #[cfg(feature = "branch_factor_256")]
     pub const MAX_CHILDREN: usize = 256;
 
-    /// The maximum number of children in a [BranchNode]
+    /// The maximum number of children in a [`BranchNode`]
     #[cfg(not(feature = "branch_factor_256"))]
     pub const MAX_CHILDREN: usize = 16;
 
     /// Returns the address of the child at the given index.
-    /// Panics if `child_index` >= [BranchNode::MAX_CHILDREN].
+    /// Panics if `child_index` >= [`BranchNode::MAX_CHILDREN`].
+    #[must_use]
     pub fn child(&self, child_index: u8) -> &Option<Child> {
         self.children
             .get(child_index as usize)

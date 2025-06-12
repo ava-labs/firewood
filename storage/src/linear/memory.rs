@@ -7,13 +7,14 @@ use std::io::{Cursor, Read};
 use std::sync::Mutex;
 
 #[derive(Debug, Default)]
-/// An in-memory impelementation of [WritableStorage] and [ReadableStorage]
+/// An in-memory impelementation of [`WritableStorage`] and [`ReadableStorage`]
 pub struct MemStore {
     bytes: Mutex<Vec<u8>>,
 }
 
 impl MemStore {
-    /// Create a new, empty [MemStore]
+    /// Create a new, empty [`MemStore`]
+    #[must_use]
     pub const fn new(bytes: Vec<u8>) -> Self {
         Self {
             bytes: Mutex::new(bytes),

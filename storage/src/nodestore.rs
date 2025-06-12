@@ -15,15 +15,15 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt::Debug;
 
-/// The [NodeStore] handles the serialization of nodes and
+/// The [`NodeStore`] handles the serialization of nodes and
 /// free space management of nodes in the page store. It lays out the format
-/// of the [PageStore]. More specifically, it places a [FileIdentifyingMagic]
-/// and a [FreeSpaceHeader] at the beginning
+/// of the [`PageStore`]. More specifically, it places a [`FileIdentifyingMagic`]
+/// and a [`FreeSpaceHeader`] at the beginning
 ///
 /// Nodestores represent a revision of the trie. There are three types of nodestores:
 /// - Committed: A committed revision of the trie. It has no in-memory changes.
-/// - MutableProposal: A proposal that is still being modified. It has some nodes in memory.
-/// - ImmutableProposal: A proposal that has been hashed and assigned addresses. It has no in-memory changes.
+/// - `MutableProposal`: A proposal that is still being modified. It has some nodes in memory.
+/// - `ImmutableProposal`: A proposal that has been hashed and assigned addresses. It has no in-memory changes.
 ///
 /// The general lifecycle of nodestores is as follows:
 /// ```mermaid
@@ -51,8 +51,8 @@ use crate::{
 
 use super::linear::WritableStorage;
 
-/// [NodeStore] divides the linear store into blocks of different sizes.
-/// [AREA_SIZES] is every valid block size.
+/// [`NodeStore`] divides the linear store into blocks of different sizes.
+/// [`AREA_SIZES`] is every valid block size.
 const AREA_SIZES: [u64; 23] = [
     16, // Min block size
     32,
@@ -92,7 +92,7 @@ fn area_size_hash() -> TrieHash {
 }
 
 // TODO: automate this, must stay in sync with above
-fn index_name(index: AreaIndex) -> &'static str {
+const fn index_name(index: AreaIndex) -> &'static str {
     match index {
         0 => "16",
         1 => "32",
@@ -121,7 +121,7 @@ fn index_name(index: AreaIndex) -> &'static str {
     }
 }
 
-/// The type of an index into the [AREA_SIZES] array
+/// The type of an index into the [`AREA_SIZES`] array
 /// This is not usize because we can store this as a single byte
 pub type AreaIndex = u8;
 
@@ -136,7 +136,7 @@ fn area_size_to_index(n: u64) -> Result<AreaIndex, Error> {
     if n > MAX_AREA_SIZE {
         return Err(Error::new(
             ErrorKind::InvalidData,
-            format!("Node size {} is too large", n),
+            format!("Node size {n} is too large"),
         ));
     }
 
@@ -151,17 +151,17 @@ fn area_size_to_index(n: u64) -> Result<AreaIndex, Error> {
         .ok_or_else(|| {
             Error::new(
                 ErrorKind::InvalidData,
-                format!("Node size {} is too large", n),
+                format!("Node size {n} is too large"),
             )
         })
 }
 
-/// Objects cannot be stored at the zero address, so a [LinearAddress] is guaranteed not
+/// Objects cannot be stored at the zero address, so a [`LinearAddress`] is guaranteed not
 /// to be zero. This reserved zero can be used as a [None] value for some use cases. In particular,
-/// branches can use `Option<LinearAddress>` which is the same size as a [LinearAddress]
+/// branches can use `Option<LinearAddress>` which is the same size as a [`LinearAddress`]
 pub type LinearAddress = NonZeroU64;
 
-/// Each [StoredArea] contains an [Area] which is either a [Node] or a [FreeArea].
+/// Each [`StoredArea`] contains an [Area] which is either a [Node] or a [`FreeArea`].
 #[repr(u8)]
 #[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
 enum Area<T, U> {
@@ -169,8 +169,8 @@ enum Area<T, U> {
     Free(U) = 255, // this is magic: no node starts with a byte of 255
 }
 
-/// Every item stored in the [NodeStore]'s ReadableStorage  after the
-/// [NodeStoreHeader] is a [StoredArea].
+/// Every item stored in the [`NodeStore`]'s `ReadableStorage`  after the
+/// [`NodeStoreHeader`] is a [`StoredArea`].
 ///
 /// As an overview of what this looks like stored, we get something like this:
 ///  - Byte 0: The index of the area size
@@ -178,13 +178,13 @@ enum Area<T, U> {
 ///  - Bytes 2..n: The actual data
 #[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
 struct StoredArea<T> {
-    /// Index in [AREA_SIZES] of this area's size
+    /// Index in [`AREA_SIZES`] of this area's size
     area_size_index: AreaIndex,
     area: T,
 }
 
 impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
-    /// Returns (index, area_size) for the stored area at `addr`.
+    /// Returns (index, `area_size`) for the stored area at `addr`.
     /// `index` is the index of `area_size` in the array of valid block sizes.
     pub fn area_index_and_size(
         &self,
@@ -213,8 +213,8 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
         Ok((index, size))
     }
 
-    /// Read a [Node] from the provided [LinearAddress].
-    /// `addr` is the address of a StoredArea in the ReadableStorage.
+    /// Read a [Node] from the provided [`LinearAddress`].
+    /// `addr` is the address of a `StoredArea` in the `ReadableStorage`.
     pub fn read_node_from_disk(
         &self,
         addr: LinearAddress,
@@ -251,7 +251,7 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
         Ok(node)
     }
 
-    /// Read a [Node] from the provided [LinearAddress] and size.
+    /// Read a [Node] from the provided [`LinearAddress`] and size.
     /// This is an uncached read, primarily used by check utilities
     pub fn uncached_read_node_and_size(
         &self,
@@ -280,19 +280,19 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
     }
 
     /// Get a reference to the header of this nodestore
-    pub fn header(&self) -> &NodeStoreHeader {
+    pub const fn header(&self) -> &NodeStoreHeader {
         &self.header
     }
 
     /// Get the size of an area index (used by the checker)
-    pub fn size_from_area_index(&self, index: AreaIndex) -> u64 {
+    pub const fn size_from_area_index(&self, index: AreaIndex) -> u64 {
         AREA_SIZES[index as usize]
     }
 }
 
 impl<S: ReadableStorage> NodeStore<Committed, S> {
-    /// Open an existing [NodeStore]
-    /// Assumes the header is written in the [ReadableStorage].
+    /// Open an existing [`NodeStore`]
+    /// Assumes the header is written in the [`ReadableStorage`].
     pub fn open(storage: Arc<S>) -> Result<Self, FileIoError> {
         let mut stream = storage.stream_from(0)?;
         let mut header = NodeStoreHeader::new();
@@ -374,7 +374,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         Ok(nodestore)
     }
 
-    /// Create a new, empty, Committed [NodeStore] and clobber
+    /// Create a new, empty, Committed [`NodeStore`] and clobber
     /// the underlying store with an empty freelist and no root node
     pub fn new_empty_committed(storage: Arc<S>) -> Result<Self, FileIoError> {
         let header = NodeStoreHeader::new();
@@ -393,9 +393,9 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 /// Some nodestore kinds implement Parentable.
 ///
 /// This means that the nodestore can have children.
-/// Only [ImmutableProposal] and [Committed] implement this trait.
-/// [MutableProposal] does not implement this trait because it is not a valid parent.
-/// TODO: Maybe this can be renamed to ImmutableNodestore
+/// Only [`ImmutableProposal`] and [Committed] implement this trait.
+/// [`MutableProposal`] does not implement this trait because it is not a valid parent.
+/// TODO: Maybe this can be renamed to `ImmutableNodestore`
 pub trait Parentable {
     /// Returns the parent of this nodestore.
     fn as_nodestore_parent(&self) -> NodeStoreParent;
@@ -440,7 +440,7 @@ impl Parentable for Committed {
 }
 
 impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
-    /// Create a new MutableProposal [NodeStore] from a parent [NodeStore]
+    /// Create a new `MutableProposal` [`NodeStore`] from a parent [`NodeStore`]
     pub fn new<F: Parentable + ReadInMemoryNode>(
         parent: Arc<NodeStore<F, S>>,
     ) -> Result<Self, FileIoError> {
@@ -480,13 +480,13 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     }
 
     /// Returns the root of this proposal.
-    pub fn mut_root(&mut self) -> &mut Option<Node> {
+    pub const fn mut_root(&mut self) -> &mut Option<Node> {
         &mut self.kind.root
     }
 }
 
 impl<S: WritableStorage> NodeStore<MutableProposal, S> {
-    /// Creates a new, empty, [NodeStore] and clobbers the underlying `storage` with an empty header.
+    /// Creates a new, empty, [`NodeStore`] and clobbers the underlying `storage` with an empty header.
     /// This is used during testing and during the creation of an in-memory merkle for proofs
     pub fn new_empty_proposal(storage: Arc<S>) -> Self {
         let header = NodeStoreHeader::new();
@@ -683,7 +683,7 @@ impl From<Error> for UpdateError {
 }
 
 /// Can be used by filesystem tooling such as "file" to identify
-/// the version of firewood used to create this [NodeStore] file.
+/// the version of firewood used to create this [`NodeStore`] file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, NoUninit, AnyBitPattern)]
 #[repr(transparent)]
 struct Version {
@@ -699,7 +699,7 @@ impl Version {
         let version = env!("CARGO_PKG_VERSION");
         let _ = version_bytes
             .as_mut_slice()
-            .write_all(format!("firewood {}", version).as_bytes());
+            .write_all(format!("firewood {version}").as_bytes());
         Self {
             bytes: version_bytes,
         }
@@ -708,12 +708,12 @@ impl Version {
 
 pub type FreeLists = [Option<LinearAddress>; NUM_AREA_SIZES];
 
-/// Persisted metadata for a [NodeStore].
-/// The [NodeStoreHeader] is at the start of the ReadableStorage.
+/// Persisted metadata for a [`NodeStore`].
+/// The [`NodeStoreHeader`] is at the start of the `ReadableStorage`.
 #[derive(Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Clone, NoUninit, AnyBitPattern)]
 #[repr(C)]
 pub struct NodeStoreHeader {
-    /// Identifies the version of firewood used to create this [NodeStore].
+    /// Identifies the version of firewood used to create this [`NodeStore`].
     version: Version,
     /// always "1"; verifies endianness
     endian_test: u64,
@@ -729,12 +729,12 @@ pub struct NodeStoreHeader {
 }
 
 impl NodeStoreHeader {
-    /// The first SIZE bytes of the ReadableStorage are reserved for the
-    /// [NodeStoreHeader].
+    /// The first SIZE bytes of the `ReadableStorage` are reserved for the
+    /// [`NodeStoreHeader`].
     /// We also want it aligned to a disk block
     const SIZE: u64 = 2048;
 
-    /// Number of extra bytes to write on the first creation of the NodeStoreHeader
+    /// Number of extra bytes to write on the first creation of the `NodeStoreHeader`
     /// (zero-padded)
     /// also a compile time check to prevent setting SIZE too small
     const EXTRA_BYTES: usize = Self::SIZE as usize - std::mem::size_of::<NodeStoreHeader>();
@@ -756,12 +756,12 @@ impl NodeStoreHeader {
     }
 
     // return the size of this nodestore
-    pub fn size(&self) -> u64 {
+    pub const fn size(&self) -> u64 {
         self.size
     }
 }
 
-/// A [FreeArea] is stored at the start of the area that contained a node that
+/// A [`FreeArea`] is stored at the start of the area that contained a node that
 /// has been freed.
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 struct FreeArea {
@@ -862,6 +862,7 @@ pub struct ImmutableProposal {
 
 impl ImmutableProposal {
     /// Returns true if the parent of this proposal is committed and has the given hash.
+    #[must_use]
     pub fn parent_hash_is(&self, hash: Option<TrieHash>) -> bool {
         match <Arc<ArcSwap<NodeStoreParent>> as arc_swap::access::DynAccess<Arc<_>>>::load(
             &self.parent,
@@ -890,7 +891,7 @@ impl ReadInMemoryNode for ImmutableProposal {
     }
 }
 
-/// Proposed [NodeStore] types keep some nodes in memory. These nodes are new nodes that were allocated from
+/// Proposed [`NodeStore`] types keep some nodes in memory. These nodes are new nodes that were allocated from
 /// the free list, but are not yet on disk. This trait checks to see if a node is in memory and returns it if
 /// it's there. If it's not there, it will be read from disk.
 ///
@@ -917,18 +918,18 @@ where
 /// The second generic parameter is the type of the storage used, either
 /// in-memory or on-disk.
 ///
-/// The lifecycle of a [NodeStore] is as follows:
-/// 1. Create a new, empty, [Committed] [NodeStore] using [NodeStore::new_empty_committed].
-/// 2. Create a [NodeStore] from disk using [NodeStore::open].
-/// 3. Create a new mutable proposal from either a [Committed] or [ImmutableProposal] [NodeStore] using [NodeStore::new].
-/// 4. Convert a mutable proposal to an immutable proposal using [std::convert::TryInto], which hashes the nodes and assigns addresses
-/// 5. Convert an immutable proposal to a committed revision using [std::convert::TryInto], which writes the nodes to disk.
+/// The lifecycle of a [`NodeStore`] is as follows:
+/// 1. Create a new, empty, [Committed] [`NodeStore`] using [`NodeStore::new_empty_committed`].
+/// 2. Create a [`NodeStore`] from disk using [`NodeStore::open`].
+/// 3. Create a new mutable proposal from either a [Committed] or [`ImmutableProposal`] [`NodeStore`] using [`NodeStore::new`].
+/// 4. Convert a mutable proposal to an immutable proposal using [`std::convert::TryInto`], which hashes the nodes and assigns addresses
+/// 5. Convert an immutable proposal to a committed revision using [`std::convert::TryInto`], which writes the nodes to disk.
 
 #[derive(Debug)]
 pub struct NodeStore<T, S> {
     // Metadata for this revision.
     header: NodeStoreHeader,
-    /// This is one of [Committed], [ImmutableProposal], or [MutableProposal].
+    /// This is one of [Committed], [`ImmutableProposal`], or [`MutableProposal`].
     pub kind: T,
     /// Persisted storage to read nodes from.
     pub storage: Arc<S>,
@@ -956,7 +957,7 @@ impl ReadInMemoryNode for NodeStoreParent {
 }
 
 impl ReadInMemoryNode for MutableProposal {
-    /// [MutableProposal] types do not have any nodes in memory, but their parent proposal might, so we check there.
+    /// [`MutableProposal`] types do not have any nodes in memory, but their parent proposal might, so we check there.
     /// This might be recursive: a grandparent might also have that node in memory.
     fn read_in_memory_node(&self, addr: LinearAddress) -> Option<SharedNode> {
         self.parent.read_in_memory_node(addr)
@@ -1192,7 +1193,7 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
 
         let mut ring = self.storage.ring.lock().expect("poisoned lock");
         let mut saved_pinned_buffers = vec![(false, std::pin::Pin::new(Box::default())); RINGSIZE];
-        for (&addr, &(area_size_index, ref node)) in self.kind.new.iter() {
+        for (&addr, &(area_size_index, ref node)) in &self.kind.new {
             let mut serialized = Vec::with_capacity(100); // TODO: better size? we can guess branches are larger
             node.as_bytes(area_size_index, &mut serialized);
             let mut serialized = serialized.into_boxed_slice();
@@ -1280,6 +1281,7 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
 impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
     /// Return a Committed version of this proposal, which doesn't have any modified nodes.
     /// This function is used during commit.
+    #[must_use]
     pub fn as_committed(&self) -> NodeStore<Committed, FileBacked> {
         NodeStore {
             header: self.header,
@@ -1566,6 +1568,6 @@ mod tests {
         node_store.mut_root().replace(giant_leaf);
 
         let immutable = NodeStore::<Arc<ImmutableProposal>, _>::try_from(node_store).unwrap();
-        println!("{:?}", immutable); // should not be reached, but need to consume immutable to avoid optimization removal
+        println!("{immutable:?}"); // should not be reached, but need to consume immutable to avoid optimization removal
     }
 }

@@ -12,7 +12,7 @@ const BITS_PER_NIBBLE: u64 = 4;
 
 impl HasUpdate for Sha256 {
     fn update<T: AsRef<[u8]>>(&mut self, data: T) {
-        sha2::Digest::update(self, data)
+        sha2::Digest::update(self, data);
     }
 }
 

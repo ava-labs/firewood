@@ -31,9 +31,10 @@ mod noop_logger {
     pub use noop as trace;
     pub use noop as warn;
 
-    /// trace_enabled for a noop logger is always false
+    /// `trace_enabled` for a noop logger is always false
     #[inline]
-    pub fn trace_enabled() -> bool {
+    #[must_use]
+    pub const fn trace_enabled() -> bool {
         false
     }
 }

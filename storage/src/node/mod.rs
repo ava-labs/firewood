@@ -26,9 +26,9 @@ use crate::{HashType, Path, SharedNode};
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner, Serialize, Deserialize)]
 #[repr(C)]
 pub enum Node {
-    /// This node is a [BranchNode]
+    /// This node is a [`BranchNode`]
     Branch(Box<BranchNode>),
-    /// This node is a [LeafNode]
+    /// This node is a [`LeafNode`]
     Leaf(LeafNode),
 }
 
@@ -123,11 +123,11 @@ impl ExtendableBytes for Vec<u8> {
 pub struct ByteCounter(u64);
 
 impl ByteCounter {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         ByteCounter(0)
     }
 
-    pub fn count(&self) -> u64 {
+    pub const fn count(&self) -> u64 {
         self.0
     }
 }
@@ -154,6 +154,7 @@ impl ExtendableBytes for ByteCounter {
 
 impl Node {
     /// Returns the partial path of the node.
+    #[must_use]
     pub fn partial_path(&self) -> &Path {
         match self {
             Node::Branch(b) => &b.partial_path,
@@ -179,6 +180,7 @@ impl Node {
 
     /// Returns Some(value) inside the node, or None if the node is a branch
     /// with no value.
+    #[must_use]
     pub fn value(&self) -> Option<&[u8]> {
         match self {
             Node::Branch(b) => b.value.as_deref(),
@@ -193,14 +195,14 @@ impl Node {
     ///  - Byte 0:
     ///   - Bit 0: always 0
     ///   - Bit 1: indicates if the branch has a value
-    ///   - Bits 2-5: the number of children (unless branch_factor_256, which stores it in the next byte)
-    ///   - Bits 6-7: 0: empty partial_path, 1: 1 nibble, 2: 2 nibbles, 3: length is encoded in the next byte
-    ///     (for branch_factor_256, bits 2-7 are used for partial_path length, up to 63 nibbles)
+    ///   - Bits 2-5: the number of children (unless `branch_factor_256`, which stores it in the next byte)
+    ///   - Bits 6-7: 0: empty `partial_path`, 1: 1 nibble, 2: 2 nibbles, 3: length is encoded in the next byte
+    ///     (for `branch_factor_256`, bits 2-7 are used for `partial_path` length, up to 63 nibbles)
     ///
     /// The remaining bytes are in the following order:
     ///   - The partial path, possibly preceeded by the length if it is longer than 3 nibbles (varint encoded)
     ///   - The number of children, if the branch factor is 256
-    ///   - The children. If the number of children == [BranchNode::MAX_CHILDREN], then the children are just
+    ///   - The children. If the number of children == [`BranchNode::MAX_CHILDREN`], then the children are just
     ///     addresses with hashes. Otherwise, they are offset, address, hash tuples.
     ///
     /// For a leaf:
@@ -238,7 +240,7 @@ impl Node {
                 };
                 #[cfg(not(feature = "branch_factor_256"))]
                 let first_byte: BranchFirstByte = BranchFirstByte::new(
-                    b.value.is_some() as u8,
+                    u8::from(b.value.is_some()),
                     (childcount % BranchNode::MAX_CHILDREN) as u8,
                     pp_len,
                 );
@@ -391,7 +393,7 @@ impl Node {
                 let mut children = [const { None }; BranchNode::MAX_CHILDREN];
                 if childcount == 0 {
                     // branch is full of all children
-                    for child in children.iter_mut() {
+                    for child in &mut children {
                         // TODO: we can read them all at once
                         let mut address_buf = [0u8; 8];
                         serialized.read_exact(&mut address_buf)?;

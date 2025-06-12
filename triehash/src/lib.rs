@@ -28,7 +28,7 @@ mod rstd {
 
 use core::cmp;
 use core::iter::once;
-use rstd::*;
+use rstd::BTreeMap;
 
 use hash_db::Hasher;
 use rlp::RlpStream;
@@ -171,7 +171,7 @@ fn hex_prefix_encode(nibbles: &[u8], leaf: bool) -> impl Iterator<Item = u8> + '
     let oddness_factor = inlen % 2;
 
     let first_byte = {
-        let mut bits = ((inlen as u8 & 1) + (2 * leaf as u8)) << 4;
+        let mut bits = ((inlen as u8 & 1) + (2 * u8::from(leaf))) << 4;
         if oddness_factor == 1 {
             bits += nibbles[0];
         }

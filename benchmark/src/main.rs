@@ -202,9 +202,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         fastrace::set_reporter(reporter, Config::default());
     }
 
-    if args.test_name == TestName::Single && args.global_opts.batch_size > 1000 {
-        panic!("Single test is not designed to handle batch sizes > 1000");
-    }
+    assert!(
+        !(args.test_name == TestName::Single && args.global_opts.batch_size > 1000),
+        "Single test is not designed to handle batch sizes > 1000"
+    );
 
     env_logger::Builder::new()
         .filter_level(match args.global_opts.log_level.as_str() {
