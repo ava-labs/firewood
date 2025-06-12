@@ -40,9 +40,9 @@ jobs:
         with:
           shared-key: ${{ matrix.profile-key }}
       - name: Check
-        run: cargo check ${{ matrix.profile-args }} --workspace --tests --examples --benches
+        run: cargo check ${{ matrix.profile-args }} --workspace --all-targets
       - name: Build
-        run: cargo build ${{ matrix.profile-args }} --workspace --tests --examples --benches
+        run: cargo build ${{ matrix.profile-args }} --workspace --all-targets
 
 
   no-rust-cache-lint:
@@ -80,7 +80,7 @@ jobs:
           save-if: "false"
           shared-key: ${{ matrix.profile-key }}
       - name: Clippy
-        run: cargo clippy ${{ matrix.profile-args }} --tests --examples --benches -- -D warnings
+        run: cargo clippy ${{ matrix.profile-args }} --workspace --all-targets -- -D warnings
 
   test:
     needs: build
@@ -191,7 +191,7 @@ jobs:
         working-directory: ffi
         # cgocheck2 is expensive but provides complete pointer checks
         run: GOEXPERIMENT=cgocheck2 TEST_FIREWOOD_HASH_MODE=firewood go test ./...
-      
+
   firewood-ethhash-differential-fuzz:
     needs: build
     runs-on: ubuntu-latest
