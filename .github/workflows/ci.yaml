@@ -44,7 +44,6 @@ jobs:
       - name: Build
         run: cargo build ${{ matrix.profile-args }} --workspace --all-targets
 
-
   no-rust-cache-lint:
     runs-on: ubuntu-latest
     steps:
@@ -58,6 +57,35 @@ jobs:
           strict: true
       - name: Format
         run: cargo fmt -- --check
+
+  rust-lint-pr-comments:
+    # caveat emptor: actions-rs/clippy-check can only write comments on pull requests
+    # not originating from a fork.
+    if: github.event_name == 'pull_request' && github.repository == github.event.pull_request.head.repo.full_name
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - profile-key: debug-no-features
+            profile-args: ""
+          - profile-key: debug-ethhash-logger
+            profile-args: "--features ethhash,logger"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: "false"
+          shared-key: ${{ matrix.profile-key }}
+      - uses: actions-rs/clippy-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          name: ${{ matrix.profile-key }}
+          args: ${{ matrix.profile-args }} --workspace --all-targets
 
   rust-lint:
     needs: build
