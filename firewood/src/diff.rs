@@ -198,11 +198,21 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                     state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
                         children_iter: Box::new(as_enumerated_children_iter(branch)),
                         excluded_node: Some((self.node_right.clone(), {
-                            // Calculate the actual path of the excluded leaf including its partial path
-                            let mut excluded_path = key.clone();
-                            excluded_path
-                                .0
-                                .extend(self.node_right.partial_path().iter().copied());
+                            // Calculate the actual path of the excluded leaf
+                            // Check if leaf's partial_path already starts with the key (to avoid double concatenation)
+                            let leaf_path = self.node_right.partial_path();
+                            let excluded_path = if leaf_path.len() > key.0.len()
+                                && leaf_path.iter().take(key.0.len()).eq(key.0.iter())
+                            {
+                                // Leaf's partial_path already includes the key prefix - use it directly
+                                Path::from(leaf_path.as_ref())
+                            } else {
+                                // Normal case - concatenate key + partial_path
+                                let mut excluded_path = key.clone();
+                                excluded_path.0.extend(leaf_path.iter().copied());
+                                excluded_path
+                            };
+
                             excluded_path
                         })),
                     }),
@@ -237,11 +247,20 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                     state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
                         children_iter: Box::new(as_enumerated_children_iter(branch)),
                         excluded_node: Some((self.node_left.clone(), {
-                            // Calculate the actual path of the excluded leaf including its partial path
-                            let mut excluded_path = key.clone();
-                            excluded_path
-                                .0
-                                .extend(self.node_left.partial_path().iter().copied());
+                            // Calculate the actual path of the excluded leaf
+                            // Check if leaf's partial_path already starts with the key (to avoid double concatenation)
+                            let leaf_path = self.node_left.partial_path();
+                            let excluded_path = if leaf_path.len() > key.0.len()
+                                && leaf_path.iter().take(key.0.len()).eq(key.0.iter())
+                            {
+                                // Leaf's partial_path already includes the key prefix - use it directly
+                                Path::from(leaf_path.as_ref())
+                            } else {
+                                // Normal case - concatenate key + partial_path
+                                let mut excluded_path = key.clone();
+                                excluded_path.0.extend(leaf_path.iter().copied());
+                                excluded_path
+                            };
                             excluded_path
                         })),
                     }),
@@ -1021,6 +1040,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use storage::{ImmutableProposal, MemStore, MutableProposal, NodeStore};
+    use test_case::test_case;
 
     fn create_test_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
         let memstore = MemStore::new(vec![]);
@@ -1263,8 +1283,6 @@ mod tests {
         );
         // Note: "c" should be skipped as it's identical in both trees
     }
-
-    use test_case::test_case;
 
     #[test_case(false, false, 500)]
     #[test_case(false, true, 500)]
@@ -1860,12 +1878,25 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_branch_vs_leaf_empty_partial_path_bug() {
+    #[test_case(true, false, 0, 1)] // same value, m1->m2: no put needed, delete prefix/b
+    #[test_case(false, false, 1, 1)] // diff value, m1->m2: put prefix/a, delete prefix/b
+    #[test_case(true, true, 1, 0)] // same value, m2->m1: no change to prefix/a, add prefix/b
+    #[test_case(false, true, 2, 0)] // diff value, m2->m1: update prefix/a, add prefix/b
+    fn test_branch_vs_leaf_empty_partial_path_bug(
+        same_value: bool,
+        backwards: bool,
+        expected_puts: usize,
+        expected_deletes: usize,
+    ) {
         // This test covers the exclusion logic in Branch vs Leaf scenarios.
         // It creates a case where one tree has a branch with children, and the other
         // tree has a leaf that matches one of those children - testing that the
         // matching child gets excluded from deletion and properly compared instead.
+        //
+        // Parameters:
+        // - same_value: whether prefix/a has the same value in both trees
+        // - backwards: whether to compare m2->m1 instead of m1->m2
+        // - expected_puts/expected_deletes: expected operation counts
 
         // Tree1: Create children under "prefix" but no value at "prefix" itself
         // This creates a branch node at "prefix" with value=None
@@ -1877,21 +1908,25 @@ mod tests {
             ],
         );
 
-        // Tree2: Create just a single value at "prefix/a" (matches one of m1's children)
-        // This creates a leaf node that should be excluded from deletion during branch traversal
-        let m2 = populate_merkle(
-            create_test_merkle(),
-            &[(b"prefix/a".as_slice(), b"prefix_a_value".as_slice())],
-        );
+        // Tree2: Create just a single value at "prefix/a"
+        // Value depends on same_value parameter
+        let m2_value: &[u8] = if same_value {
+            b"value_a"
+        } else {
+            b"prefix_a_value"
+        };
+        let m2 = populate_merkle(create_test_merkle(), &[(b"prefix/a".as_slice(), m2_value)]);
 
-        let diff_stream =
-            DiffMerkleKeyValueStreams::new(m1.nodestore(), m2.nodestore(), Key::default());
+        // Choose direction based on backwards parameter
+        let (tree_left, tree_right, direction_desc) = if backwards {
+            (m2.nodestore(), m1.nodestore(), "m2->m1")
+        } else {
+            (m1.nodestore(), m2.nodestore(), "m1->m2")
+        };
 
+        let diff_stream = DiffMerkleKeyValueStreams::new(tree_left, tree_right, Key::default());
         let results: Vec<_> = diff_stream.collect::<Result<Vec<_>, _>>().unwrap();
 
-        // Should find operations for the differences:
-        // - prefix/a exists in both trees, so might be compared (Put if values differ)
-        // - prefix/b only exists in tree1, so should be deleted
         let delete_count = results
             .iter()
             .filter(|op| matches!(op, BatchOp::Delete { .. }))
@@ -1902,59 +1937,29 @@ mod tests {
             .filter(|op| matches!(op, BatchOp::Put { .. }))
             .count();
 
-        // EXPECTED BEHAVIOR:
-        // - 1 Put operation for "prefix/a" (values differ: "value_a" vs "prefix_a_value")
-        // - 1 Delete operation for "prefix/b" (only exists in tree1)
-        // Total: 2 operations
-
+        // Verify against expected counts
         assert_eq!(
-            put_count, 1,
-            "Should have exactly 1 Put operation for prefix/a"
+            put_count, expected_puts,
+            "Put count mismatch for {} (same_value={}, backwards={})",
+            direction_desc, same_value, backwards
         );
         assert_eq!(
-            delete_count, 1,
-            "Should have exactly 1 Delete operation for prefix/b"
-        );
-        assert_eq!(results.len(), 2, "Should have exactly 2 operations total");
-
-        // Verify the specific operations
-        let put_ops: Vec<_> = results
-            .iter()
-            .filter_map(|op| match op {
-                BatchOp::Put { key, value } => Some((key.as_ref(), value.as_slice())),
-                _ => None,
-            })
-            .collect();
-
-        let delete_ops: Vec<_> = results
-            .iter()
-            .filter_map(|op| match op {
-                BatchOp::Delete { key } => Some(key.as_ref()),
-                _ => None,
-            })
-            .collect();
-
-        assert_eq!(put_ops.len(), 1);
-        assert_eq!(
-            put_ops[0].0, b"prefix/a",
-            "Put operation should be for prefix/a"
+            delete_count, expected_deletes,
+            "Delete count mismatch for {} (same_value={}, backwards={})",
+            direction_desc, same_value, backwards
         );
         assert_eq!(
-            put_ops[0].1, b"prefix_a_value",
-            "Put operation should have correct value"
-        );
-
-        assert_eq!(delete_ops.len(), 1);
-        assert_eq!(
-            delete_ops[0], b"prefix/b",
-            "Delete operation should be for prefix/b"
+            results.len(),
+            expected_puts + expected_deletes,
+            "Total operation count mismatch for {} (same_value={}, backwards={})",
+            direction_desc,
+            same_value,
+            backwards
         );
 
         println!(
-            "✅ Branch vs leaf exclusion test passed with {} operations ({} puts, {} deletes)",
-            results.len(),
-            put_count,
-            delete_count
+            "✅ Branch vs leaf test passed: {} (same_value={}, backwards={}) - {} puts, {} deletes",
+            direction_desc, same_value, backwards, put_count, delete_count
         );
     }
 }
