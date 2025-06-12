@@ -572,10 +572,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 .increment(AREA_SIZES[index] - n);
 
             // Return the address of the newly allocated block.
-            trace!(
-                "Allocating from free list: addr: {address:?}, size: {}",
-                index
-            );
+            trace!("Allocating from free list: addr: {address:?}, size: {index}");
             return Ok(Some((address, index as AreaIndex)));
         }
 
@@ -594,7 +591,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         let addr = LinearAddress::new(self.header.size).expect("node store size can't be 0");
         self.header.size += area_size;
         debug_assert!(addr.get() % 8 == 0);
-        trace!("Allocating from end: addr: {:?}, size: {}", addr, index);
+        trace!("Allocating from end: addr: {addr:?}, size: {index}");
         Ok((addr, index))
     }
 
@@ -634,7 +631,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         debug_assert!(addr.get() % 8 == 0);
 
         let (area_size_index, _) = self.area_index_and_size(addr)?;
-        trace!("Deleting node at {addr:?} of size {}", area_size_index);
+        trace!("Deleting node at {addr:?} of size {area_size_index}");
         counter!("firewood.delete_node", "index" => index_name(area_size_index)).increment(1);
         counter!("firewood.space.freed", "index" => index_name(area_size_index))
             .increment(AREA_SIZES[area_size_index as usize]);
@@ -1030,13 +1027,13 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                     let mut hashable_node = self.read_node(*invalidated_node.1.0)?.deref().clone();
                     let original_length = path_prefix.len();
                     path_prefix.0.extend(b.partial_path.0.iter().copied());
-                    if !unhashed.is_empty() {
-                        path_prefix.0.push(invalidated_node.0 as u8);
-                    } else {
+                    if unhashed.is_empty() {
                         hashable_node.update_partial_path(Path::from_nibbles_iterator(
                             std::iter::once(invalidated_node.0 as u8)
                                 .chain(hashable_node.partial_path().0.iter().copied()),
                         ));
+                    } else {
+                        path_prefix.0.push(invalidated_node.0 as u8);
                     }
                     let hash = hash_node(&hashable_node, path_prefix);
                     path_prefix.0.truncate(original_length);
@@ -1106,11 +1103,11 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         // is a root node. This means we have to take the nibble from the parent and prefix it to the partial path
         let hash = if let Some(nibble) = fake_root_extra_nibble {
             let mut fake_root = node.clone();
-            trace!("old node: {:?}", fake_root);
+            trace!("old node: {fake_root:?}");
             fake_root.update_partial_path(Path::from_nibbles_iterator(
                 std::iter::once(nibble).chain(fake_root.partial_path().0.iter().copied()),
             ));
-            trace!("new node: {:?}", fake_root);
+            trace!("new node: {fake_root:?}");
             hash_node(&fake_root, path_prefix)
         } else {
             hash_node(&node, path_prefix)

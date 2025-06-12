@@ -65,6 +65,7 @@ impl std::fmt::Display for CacheReadStrategy {
 ///
 /// This function is slow, so callers should cache the result
 #[cfg(feature = "ethhash")]
+#[must_use]
 pub fn empty_trie_hash() -> TrieHash {
     use sha3::Digest as _;
 

@@ -10,6 +10,7 @@ pub use log::{debug, error, info, trace, warn};
 
 /// Returns true if the trace log level is enabled
 #[cfg(feature = "logger")]
+#[must_use]
 pub fn trace_enabled() -> bool {
     log::log_enabled!(log::Level::Trace)
 }

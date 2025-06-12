@@ -10,7 +10,7 @@ use std::fmt::{Debug, Formatter};
 
 /// The type of a hash. For ethereum compatible hashes, this might be a RLP encoded
 /// value if it's small enough to fit in less than 32 bytes. For merkledb compatible
-/// hashes, it's always a TrieHash.
+/// hashes, it's always a `TrieHash`.
 #[cfg(feature = "ethhash")]
 pub type HashType = ethhash::HashOrRlp;
 
@@ -45,7 +45,6 @@ mod ethhash {
     use std::{
         fmt::{Display, Formatter},
         io::Read,
-        ops::Deref as _,
     };
 
     use crate::TrieHash;
@@ -62,7 +61,7 @@ mod ethhash {
 
     impl HashOrRlp {
         pub fn as_slice(&self) -> &[u8] {
-            self.deref()
+            self
         }
 
         pub(crate) fn into_triehash(self) -> TrieHash {
@@ -144,7 +143,7 @@ mod ethhash {
         fn deref(&self) -> &Self::Target {
             match self {
                 HashOrRlp::Hash(h) => h,
-                HashOrRlp::Rlp(r) => r.deref(),
+                HashOrRlp::Rlp(r) => r,
             }
         }
     }
@@ -152,7 +151,7 @@ mod ethhash {
     impl Display for HashOrRlp {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             match self {
-                HashOrRlp::Hash(h) => write!(f, "{}", h),
+                HashOrRlp::Hash(h) => write!(f, "{h}"),
                 HashOrRlp::Rlp(r) => {
                     let width = f.precision().unwrap_or(32);
                     write!(f, "{:.*}", width, hex::encode(r))
