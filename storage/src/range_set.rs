@@ -330,6 +330,16 @@ mod test_range_set {
         let mut range_set = RangeSet::new();
         assert!(range_set.insert_disjoint_range(0..10).is_ok());
         assert!(range_set.insert_disjoint_range(20..30).is_ok());
+        assert!(range_set.insert_disjoint_range(12..18).is_ok());
+        assert_eq!(
+            range_set.into_iter().collect::<Vec<_>>(),
+            vec![0..10, 12..18, 20..30]
+        );
+
+        // insert consecutive ranges
+        let mut range_set = RangeSet::new();
+        assert!(range_set.insert_disjoint_range(0..10).is_ok());
+        assert!(range_set.insert_disjoint_range(20..30).is_ok());
         assert!(range_set.insert_disjoint_range(10..20).is_ok());
         assert_eq!(range_set.into_iter().collect::<Vec<_>>(), vec![0..30]);
 

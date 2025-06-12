@@ -1521,3 +1521,107 @@ mod tests {
         println!("{:?}", immutable); // should not be reached, but need to consume immutable to avoid optimization removal
     }
 }
+
+#[cfg(test)]
+mod test_node_store_checker {
+    use super::*;
+    use crate::linear::filebacked::FileBacked;
+    use crate::{BranchNode, LeafNode};
+
+    use std::num::NonZeroUsize;
+    use tempfile::NamedTempFile;
+
+    const NODE_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
+    const FREE_LIST_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
+
+    // Helper function to wrap the node in a StoredArea and write it to the given offset. Returns the area size on success.
+    fn write_new_node(file_backed: &FileBacked, node: &Node, offset: u64) -> Result<usize, Error> {
+        let node_size = NodeStore::<Arc<ImmutableProposal>, FileBacked>::stored_len(&node);
+        let (area_index, node_area) = AREA_SIZES
+            .iter()
+            .enumerate()
+            .find(|(_, size)| **size >= node_size)
+            .unwrap();
+        let mut stored_area_bytes = Vec::with_capacity(*node_area as usize);
+        node.as_bytes(area_index as u8, &mut stored_area_bytes);
+        file_backed.write(offset, &stored_area_bytes)?;
+        Ok(*node_area as usize)
+    }
+
+    fn write_header(
+        file_backed: &FileBacked,
+        root_addr: LinearAddress,
+        size: u64,
+    ) -> Result<(), Error> {
+        let header = NodeStoreHeader {
+            version: Version::new(),
+            endian_test: 1,
+            size,
+            free_lists: Default::default(),
+            root_address: Some(root_addr),
+            area_size_hash: area_size_hash().as_slice().try_into().unwrap(),
+            ethhash: 0,
+        };
+
+        let header_bytes = bytemuck::bytes_of(&header);
+        file_backed.write(0, &header_bytes)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_checker_traverse_correct_trie() {
+        let tf = NamedTempFile::new().unwrap();
+        let file_backed = FileBacked::new(
+            tf.path().to_path_buf(),
+            NODE_CACHE_SIZE,
+            FREE_LIST_CACHE_SIZE,
+            true,
+            CacheReadStrategy::All,
+        )
+        .unwrap();
+
+        // set up a basic trie
+        let mut offset = NodeStoreHeader::SIZE;
+        let leaf = Node::Leaf(LeafNode {
+            partial_path: Path::from([0, 1]),
+            value: Box::new([3, 4, 5]),
+        });
+        let leaf_addr = LinearAddress::new(offset).unwrap();
+        let leaf_area = write_new_node(&file_backed, &leaf, offset).unwrap();
+        offset += leaf_area as u64;
+
+        let mut branch_children: [Option<Child>; BranchNode::MAX_CHILDREN] = Default::default();
+        branch_children[1] = Some(Child::AddressWithHash(leaf_addr, HashType::default()));
+        let branch = Node::Branch(Box::new(BranchNode {
+            partial_path: Path::from([0]),
+            value: None,
+            children: branch_children,
+        }));
+        let branch_addr = LinearAddress::new(offset).unwrap();
+        let branch_area = write_new_node(&file_backed, &branch, offset).unwrap();
+        offset += branch_area as u64;
+
+        let mut root_children: [Option<Child>; BranchNode::MAX_CHILDREN] = Default::default();
+        root_children[0] = Some(Child::AddressWithHash(branch_addr, HashType::default()));
+        let root = Node::Branch(Box::new(BranchNode {
+            partial_path: Path::from([]),
+            value: None,
+            children: root_children,
+        }));
+        let root_addr = LinearAddress::new(offset).unwrap();
+        let root_area = write_new_node(&file_backed, &root, offset).unwrap();
+        offset += root_area as u64;
+
+        write_header(&file_backed, root_addr, offset).unwrap();
+
+        // test that the we traversed the entire trie
+        let node_store = NodeStore::open(Arc::new(file_backed)).unwrap();
+        let mut visited = LinearAddressRangeSet::new(offset).unwrap();
+        node_store
+            .traverse_trie(root_addr, &mut visited)
+            .await
+            .unwrap();
+        let complement = visited.complement();
+        assert_eq!(complement.into_iter().collect::<Vec<_>>(), vec![]);
+    }
+}
