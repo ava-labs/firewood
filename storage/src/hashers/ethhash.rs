@@ -20,7 +20,7 @@ use rlp::{Rlp, RlpStream};
 
 impl HasUpdate for Keccak256 {
     fn update<T: AsRef<[u8]>>(&mut self, data: T) {
-        sha3::Digest::update(self, data)
+        sha3::Digest::update(self, data);
     }
 }
 
@@ -138,7 +138,7 @@ impl<T: Hashable> Preimage for T {
                     None => {
                         rlp.append_empty_data();
                     }
-                };
+                }
             } else {
                 match self.value_digest() {
                     Some(ValueDigest::Value(bytes)) => rlp.append(&bytes),
