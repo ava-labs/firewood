@@ -53,7 +53,6 @@ type merkleTriePair struct {
 
 	// current state
 	currentAddrs               []common.Address
-	currentStorage             map[common.Address]map[common.Hash]common.Hash
 	currentStorageInputIndices map[common.Address]uint64
 	inputCounter               uint64
 
@@ -86,7 +85,6 @@ func newMerkleTriePair(t *testing.T) *merkleTriePair {
 		accountTrie:                tr,
 		ethDatabase:                tdb,
 		openStorageTries:           make(map[common.Address]state.Trie),
-		currentStorage:             make(map[common.Address]map[common.Hash]common.Hash),
 		currentStorageInputIndices: make(map[common.Address]uint64),
 		require:                    r,
 	}
@@ -181,6 +179,8 @@ func (tr *merkleTriePair) updateAccount(addrIndex int) {
 	acc, err := tr.accountTrie.GetAccount(addr)
 	tr.require.NoError(err)
 	acc.Nonce++
+	acc.CodeHash = crypto.Keccak256Hash(acc.CodeHash[:]).Bytes()
+	acc.Balance.Add(acc.Balance, uint256.NewInt(3))
 	accountRLP, err := rlp.EncodeToBytes(acc)
 	tr.require.NoError(err)
 
@@ -200,7 +200,6 @@ func (tr *merkleTriePair) deleteAccount(accountIndex int) {
 	tr.currentAddrs = slices.DeleteFunc(tr.currentAddrs, func(addr common.Address) bool {
 		return deleteAddr == addr
 	})
-	delete(tr.currentStorage, deleteAddr)
 
 	tr.pendingFwdKeys = append(tr.pendingFwdKeys, accHash[:])
 	tr.pendingFwdVals = append(tr.pendingFwdVals, []byte{})
@@ -254,23 +253,13 @@ func (tr *merkleTriePair) addStorage(accountIndex int) {
 	tr.require.NoError(err)
 	tr.pendingFwdVals = append(tr.pendingFwdVals, encodedVal)
 
-	storageMap, ok := tr.currentStorage[addr]
-	if !ok {
-		storageMap = make(map[common.Hash]common.Hash)
-		tr.currentStorage[addr] = storageMap
-	}
-	storageMap[keyHash] = val
+	tr.currentStorageInputIndices[addr]++
 }
 
 // updateStorage selects an account and updates an existing storage key-value pair
 // note: this may "update" a key-value pair that doesn't exist if it was previously deleted.
 func (tr *merkleTriePair) updateStorage(accountIndex int, storageIndexInput uint64) {
 	addr, accHash := tr.selectAccount(accountIndex)
-	storageMap, ok := tr.currentStorage[addr]
-	if !ok {
-		storageMap = make(map[common.Hash]common.Hash)
-		tr.currentStorage[addr] = storageMap
-	}
 	storageIndex := tr.currentStorageInputIndices[addr]
 	storageIndex %= storageIndexInput
 
@@ -293,11 +282,6 @@ func (tr *merkleTriePair) updateStorage(accountIndex int, storageIndexInput uint
 // note: this may "delete" a key-value pair that doesn't exist if it was previously deleted.
 func (tr *merkleTriePair) deleteStorage(accountIndex int, storageIndexInput uint64) {
 	addr, accHash := tr.selectAccount(accountIndex)
-	storageMap, ok := tr.currentStorage[addr]
-	if !ok {
-		storageMap = make(map[common.Hash]common.Hash)
-		tr.currentStorage[addr] = storageMap
-	}
 	storageIndex := tr.currentStorageInputIndices[addr]
 	storageIndex %= storageIndexInput
 	storageKey := crypto.Keccak256Hash(binary.BigEndian.AppendUint64(nil, storageIndex))
