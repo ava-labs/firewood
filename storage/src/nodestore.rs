@@ -1164,7 +1164,7 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
     pub fn flush_nodes(&self) -> Result<(), FileIoError> {
         let flush_start = Instant::now();
 
-        for (addr, (area_size_index, node)) in self.kind.new.iter() {
+        for (addr, (area_size_index, node)) in &self.kind.new {
             let mut stored_area_bytes = Vec::new();
             node.as_bytes(*area_size_index, &mut stored_area_bytes);
             self.storage
