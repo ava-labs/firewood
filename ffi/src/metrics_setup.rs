@@ -22,7 +22,7 @@ use metrics_util::registry::{AtomicStorage, Registry};
 /// This happens on a per-process basis, meaning that the metrics system
 /// cannot be initialized if it has already been set up in the same process.
 /// Any caller should ensure that the metrics system is not already initialized
-/// by explicitly calling with metrics_port == 0..
+/// by explicitly calling with `metrics_port` == 0..
 pub(crate) fn setup_metrics(metrics_port: u16) -> Result<(), Box<dyn Error>> {
     if metrics_port == 0 {
         // If the port is 0, we do not initialize the metrics system.
