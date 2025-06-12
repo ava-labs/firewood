@@ -80,7 +80,7 @@ macro_rules! write_attributes {
 }
 
 /// Returns the value mapped to by `key` in the subtrie rooted at `node`.
-fn get_helper<T: TrieReader>(
+pub(crate) fn get_helper<T: TrieReader>(
     nodestore: &T,
     node: &Node,
     key: &[u8],
