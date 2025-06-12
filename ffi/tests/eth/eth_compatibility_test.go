@@ -43,7 +43,7 @@ var (
 	}
 )
 
-type tree struct {
+type merkleTriePair struct {
 	fwdDB       *firewood.Database
 	accountTrie state.Trie
 	ethDatabase state.Database
@@ -63,7 +63,7 @@ type tree struct {
 	pendingFwdVals   [][]byte
 }
 
-func newTestTree(t *testing.T) *tree {
+func newMerkleTriePair(t *testing.T) *merkleTriePair {
 	r := require.New(t)
 
 	file := path.Join(t.TempDir(), "test.db")
@@ -81,7 +81,7 @@ func newTestTree(t *testing.T) *tree {
 		r.NoError(db.Close())
 	})
 
-	return &tree{
+	return &merkleTriePair{
 		fwdDB:                      db,
 		accountTrie:                tr,
 		ethDatabase:                tdb,
@@ -92,9 +92,9 @@ func newTestTree(t *testing.T) *tree {
 	}
 }
 
-func (tr *tree) commit() {
+// commit writes the pending changes to both tries and clears the pending changes
+func (tr *merkleTriePair) commit() {
 	mergedNodeSet := trienode.NewMergedNodeSet()
-
 	for addr, str := range tr.openStorageTries {
 		accountStateRoot, set, err := str.Commit(false)
 		tr.require.NoError(err)
@@ -144,9 +144,11 @@ func (tr *tree) commit() {
 	tr.require.NoError(err)
 }
 
-func (tr *tree) createAccount() {
-	addr := common.BytesToAddress(crypto.Keccak256Hash(binary.BigEndian.AppendUint64(nil, tr.inputCounter)).Bytes())
+// createAccount generates a new, unique account and adds it to both tries and the tracked
+// current state.
+func (tr *merkleTriePair) createAccount() {
 	tr.inputCounter++
+	addr := common.BytesToAddress(crypto.Keccak256Hash(binary.BigEndian.AppendUint64(nil, tr.inputCounter)).Bytes())
 	accHash := crypto.Keccak256Hash(addr[:])
 	acc := &types.StateAccount{
 		Nonce:    1,
@@ -165,12 +167,16 @@ func (tr *tree) createAccount() {
 	tr.pendingFwdVals = append(tr.pendingFwdVals, accountRLP)
 }
 
-func (tr *tree) selectAccount(addrIndex int) (common.Address, common.Hash) {
+// selectAccount returns a random account and account hash for the provided index
+// assumes: addrIndex < len(tr.currentAddrs)
+func (tr *merkleTriePair) selectAccount(addrIndex int) (common.Address, common.Hash) {
 	addr := tr.currentAddrs[addrIndex]
 	return addr, crypto.Keccak256Hash(addr[:])
 }
 
-func (tr *tree) updateAccount(addrIndex int) {
+// updateAccount selects a random account, increments its nonce, and adds the update
+// to the pending changes for both tries.
+func (tr *merkleTriePair) updateAccount(addrIndex int) {
 	addr, accHash := tr.selectAccount(addrIndex)
 	acc, err := tr.accountTrie.GetAccount(addr)
 	tr.require.NoError(err)
@@ -185,7 +191,9 @@ func (tr *tree) updateAccount(addrIndex int) {
 	tr.pendingFwdVals = append(tr.pendingFwdVals, accountRLP)
 }
 
-func (tr *tree) deleteAccount(accountIndex int) {
+// deleteAccount selects a random account and deletes it from both tries and the tracked
+// current state.
+func (tr *merkleTriePair) deleteAccount(accountIndex int) {
 	deleteAddr, accHash := tr.selectAccount(accountIndex)
 
 	tr.require.NoError(tr.accountTrie.DeleteAccount(deleteAddr))
@@ -198,7 +206,20 @@ func (tr *tree) deleteAccount(accountIndex int) {
 	tr.pendingFwdVals = append(tr.pendingFwdVals, []byte{})
 }
 
-func (tr *tree) openStorageTrie(addr common.Address) state.Trie {
+// openStorageTrie opens the storage trie for the provided account address.
+// Uses an already opened trie, if there's a pending update to the ethereum nested
+// storage trie.
+//
+// must maintain a map of currently open storage tries, so we can defer committing them
+// until commit as opposed to after each storage update.
+// This mimics the actual handling of state commitments in the EVM where storage tries are all committed immediately
+// before updating the account trie along with the updated storage trie roots:
+// https://github.com/ava-labs/libevm/blob/0bfe4a0380c86d7c9bf19fe84368b9695fcb96c7/core/state/statedb.go#L1155
+//
+// If we attempt to commit the storage tries after each operation, then attempting to re-open the storage trie
+// with an updated storage trie root from ethDatabase will fail since the storage trie root will not have been
+// persisted yet - leading to a missing trie node error.
+func (tr *merkleTriePair) openStorageTrie(addr common.Address) state.Trie {
 	storageTrie, ok := tr.openStorageTries[addr]
 	if ok {
 		return storageTrie
@@ -212,14 +233,16 @@ func (tr *tree) openStorageTrie(addr common.Address) state.Trie {
 	return storageTrie
 }
 
-func (tr *tree) addStorage(accountIndex int) {
+// addStorage selects an account and adds a new storage key-value pair to the account.
+func (tr *merkleTriePair) addStorage(accountIndex int) {
 	addr, accHash := tr.selectAccount(accountIndex)
-	// Derive new storage key-value pair from storage index
+	// Increment storageInputIndices for the account and take the next input to generate
+	// a new storage key-value pair for the account.
+	tr.currentStorageInputIndices[addr]++
 	storageIndex := tr.currentStorageInputIndices[addr]
 	key := crypto.Keccak256Hash(binary.BigEndian.AppendUint64(nil, storageIndex))
 	keyHash := crypto.Keccak256Hash(key[:])
 	val := crypto.Keccak256Hash(keyHash[:])
-	tr.currentStorageInputIndices[addr]++
 
 	str := tr.openStorageTrie(addr)
 	err := str.UpdateStorage(addr, key[:], val[:])
@@ -239,7 +262,9 @@ func (tr *tree) addStorage(accountIndex int) {
 	storageMap[keyHash] = val
 }
 
-func (tr *tree) updateStorage(accountIndex int, storageIndexInput uint64) {
+// updateStorage selects an account and updates an existing storage key-value pair
+// note: this may "update" a key-value pair that doesn't exist if it was previously deleted.
+func (tr *merkleTriePair) updateStorage(accountIndex int, storageIndexInput uint64) {
 	addr, accHash := tr.selectAccount(accountIndex)
 	storageMap, ok := tr.currentStorage[addr]
 	if !ok {
@@ -251,9 +276,9 @@ func (tr *tree) updateStorage(accountIndex int, storageIndexInput uint64) {
 
 	storageKey := crypto.Keccak256Hash(binary.BigEndian.AppendUint64(nil, storageIndex))
 	storageKeyHash := crypto.Keccak256Hash(storageKey[:])
+	tr.inputCounter++
 	updatedValInput := binary.BigEndian.AppendUint64(storageKeyHash[:], tr.inputCounter)
 	updatedVal := crypto.Keccak256Hash(updatedValInput[:])
-	tr.inputCounter++
 
 	str := tr.openStorageTrie(addr)
 	tr.require.NoError(str.UpdateStorage(addr, storageKey[:], updatedVal[:]))
@@ -264,7 +289,9 @@ func (tr *tree) updateStorage(accountIndex int, storageIndexInput uint64) {
 	tr.pendingFwdVals = append(tr.pendingFwdVals, updatedValRLP[:])
 }
 
-func (tr *tree) deleteStorage(accountIndex int, storageIndexInput uint64) {
+// deleteStorage selects an account and deletes an existing storage key-value pair
+// note: this may "delete" a key-value pair that doesn't exist if it was previously deleted.
+func (tr *merkleTriePair) deleteStorage(accountIndex int, storageIndexInput uint64) {
 	addr, accHash := tr.selectAccount(accountIndex)
 	storageMap, ok := tr.currentStorage[addr]
 	if !ok {
@@ -294,7 +321,7 @@ func FuzzTree(f *testing.F) {
 		f.Add(randSeed, steps)
 	}
 	f.Fuzz(func(t *testing.T, randSeed int64, byteSteps []byte) {
-		tr := newTestTree(t)
+		tr := newMerkleTriePair(t)
 		rand := rand.New(rand.NewSource(randSeed))
 
 		for range 10 {
