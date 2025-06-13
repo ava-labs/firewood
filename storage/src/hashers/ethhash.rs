@@ -233,7 +233,7 @@ impl<T: Hashable> Preimage for T {
                     bytes
                 } else {
                     // treat like non-account since it didn't have a value
-                    warn!("Account node without value");
+                    warn!("Account node {:x?} without value", self.key());
                     bytes.as_ref().into()
                 }
             } else {
