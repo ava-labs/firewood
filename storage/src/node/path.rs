@@ -113,6 +113,16 @@ impl Path {
     }
 }
 
+impl std::ops::Add<Path> for Path {
+    type Output = Path;
+
+    fn add(self, other: Path) -> Self::Output {
+        let mut new_path = self;
+        new_path.extend(other.iter().copied());
+        new_path
+    }
+}
+
 /// Returns the nibbles in `nibbles_iter` as compressed bytes.
 /// That is, each two nibbles are combined into a single byte.
 #[derive(Debug)]

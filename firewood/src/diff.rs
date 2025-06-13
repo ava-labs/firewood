@@ -10,7 +10,7 @@
 
 use std::cmp::Ordering;
 use std::fmt;
-use storage::{Child, FileIoError, Node, Path, SharedNode, TrieReader};
+use storage::{Child, FileIoError, Node, Path, SharedNode, TrieReader, logger::trace};
 
 use crate::db::BatchOp;
 use crate::merkle::{Key, Merkle, Value};
@@ -39,6 +39,7 @@ struct UnvisitedNodePairState {
 #[derive(Debug)]
 struct UnvisitedNodeLeftState {
     node: SharedNode,
+    excluded_node: Option<(SharedNode, Path)>,
 }
 
 /// A node that exists only in the right tree (tree2) and needs to be processed for addition.
@@ -47,6 +48,7 @@ struct UnvisitedNodeLeftState {
 #[derive(Debug)]
 struct UnvisitedNodeRightState {
     node: SharedNode,
+    excluded_node: Option<(SharedNode, Path)>,
 }
 
 /// Two branch nodes whose children are being compared.
@@ -77,34 +79,19 @@ struct VisitedNodeLeftState {
     #[derivative(Debug(format_with = "fmt_as_iterator"))]
     children_iter: Box<dyn Iterator<Item = (u8, Child)> + Send>,
     /// Optional included node - if present, children matching this should be compared instead of deleted.
-    ///
-    /// This is always a leaf node (never a branch) because it comes from Branch vs Leaf scenarios
-    /// where we're traversing a branch's children but need to include any child that represents
-    /// the same logical key as a leaf from the other tree.
-    excluded_node: Option<(SharedNode, Path)>,
+    excluded_leaf: Option<(SharedNode, Path)>,
 }
 
 /// A branch node from the right tree only, whose children all need to be processed as additions.
 /// This state occurs when there are no remaining children on the left side to compare against,
 /// or when we have a branch node that exists only in the right tree.
-///
-/// If included_node is Some, one child that matches the included node should be compared
-/// instead of added (used in Leaf vs Branch scenarios).
-///
-/// This is always a leaf node (never a branch) because it comes from Leaf vs Branch scenarios
-/// where we're traversing a branch's children but need to include any child that represents
-/// the same logical key as a leaf from the other tree.
 #[derive(Derivative)]
 #[derivative(Debug)]
 struct VisitedNodeRightState {
     #[derivative(Debug(format_with = "fmt_as_iterator"))]
     children_iter: Box<dyn Iterator<Item = (u8, Child)> + Send>,
-    /// Optional included node - if present, children matching this should be compared instead of added.
-    ///
-    /// This is always a leaf node (never a branch) because it comes from Leaf vs Branch scenarios
-    /// where we're traversing a branch's children but need to include any child that represents
-    /// the same logical key as a leaf from the other tree.
-    included_node: Option<SharedNode>,
+    /// Optional excluded node - if present, children matching this should be compared instead of added.
+    excluded_leaf: Option<(SharedNode, Path)>,
 }
 
 // Helper function for derivative to format iterators
@@ -116,7 +103,7 @@ trait StateVisitor {
     fn visit<L: TrieReader, R: TrieReader>(
         self,
         key: &Path,
-        iter_stack: &mut Vec<DiffIterationNode>,
+        iter_stack: &mut IterStack,
         readers: (&L, &R),
     ) -> Result<(), FileIoError>;
 }
@@ -125,26 +112,79 @@ trait UnvisitedStateVisitor {
     fn visit(
         self,
         key: &Path,
-        iter_stack: &mut Vec<DiffIterationNode>,
+        iter_stack: &mut IterStack,
     ) -> Result<Option<BatchOp<Key, Value>>, FileIoError>;
+}
+
+#[derive(Debug, Default)]
+struct IterStack {
+    stack: Vec<DiffIterationNode>,
+}
+
+impl IterStack {
+    fn push(&mut self, node: DiffIterationNode) {
+        trace!(
+            "pushing new state {{ key: {:x?}, state: {:?} }}",
+            node.key, node.state
+        );
+        self.stack.push(node);
+    }
+}
+
+impl std::ops::Deref for IterStack {
+    type Target = Vec<DiffIterationNode>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.stack
+    }
+}
+
+impl std::ops::DerefMut for IterStack {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.stack
+    }
 }
 
 impl UnvisitedStateVisitor for UnvisitedNodePairState {
     fn visit(
         self,
         key: &Path,
-        iter_stack: &mut Vec<DiffIterationNode>,
+        iter_stack: &mut IterStack,
     ) -> Result<Option<BatchOp<Key, Value>>, FileIoError> {
-        let final_key = key_from_nibble_iter(key.iter().copied());
+        // This is the initial state for comparing two nodes. They are unvisited.
+        // For branches, this means we haven't looked at the k/v pair in the branch
+        // nor have we looked at any of the children.
+        // For leaves, this means we haven't looked at the k/v pair in the leaf.
+
+        // There are 4 possibilities:
+        // 1. Both nodes are branches:
+        // .  Process the branch k/v, then transition to VisitedPairState
+        // 2. Both nodes are leaves:
+        // .  Process the leaf k/v, then pop the stack
+        // 3. Left node is a branch, right node is a leaf:
+        // .  Compare the branch k/v with the leaf k/v. If they have the same
+        // .  partial path, then everything except for this leaf is deleted,
+        // .  and we transition to VisitedLeftState with the leaf excluded
+        // 4. Left node is a leaf, right node is a branch:
+        // .  Compare the leaf k/v with the branch k/v. If they have the same
+        // .  partial path, then everything except for this leaf is added,
+        // .  and we transition to VisitedRightState with the leaf excluded
+
+        trace!(
+            "visiting Unvisited node pair at {key:x?} (depth: {})",
+            iter_stack.len()
+        );
 
         match (&*self.node_left, &*self.node_right) {
             (Node::Branch(branch_left), Node::Branch(branch_right)) => {
                 // Compare values first
                 let value_diff = match (&branch_left.value, &branch_right.value) {
                     (Some(v_left), Some(v_right)) if v_left == v_right => None,
-                    (Some(_), None) => Some(BatchOp::Delete { key: final_key }),
-                    (Some(_), Some(v_right)) | (None, Some(v_right)) => Some(BatchOp::Put {
-                        key: final_key,
+                    (Some(_), None) => Some(BatchOp::Delete {
+                        key: key_from_nibble_iter(key.iter().copied()),
+                    }),
+                    (_, Some(v_right)) => Some(BatchOp::Put {
+                        key: key_from_nibble_iter(key.iter().copied()),
                         value: v_right.to_vec(),
                     }),
                     (None, None) => None,
@@ -162,46 +202,85 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                 Ok(value_diff)
             }
             (Node::Branch(branch), Node::Leaf(leaf)) => {
-                // Branch vs Leaf - save the leaf and traverse branch children with exclusion
                 // Branch is from left tree, leaf is from right tree
+                // This means all (except possibly one) of the k/v pairs
+                // on this branch have been deleted.
 
-                // The key insight: some children of the branch might represent the same logical
-                // data as the leaf, just stored differently due to trie structure optimization.
-                // We need to check each child to see if it's equivalent to the leaf.
+                // This leaf, however, is special. If it matches some key in the branch,
+                // and contains the same value as the leaf, then no diff is needed.
+                // If it is found, but doesn't have the same value, we generate a put
+                // operation with the leaf's value. We save this leaf into the
+                // VisitedNodeLeftState structure and follow the logic there.
 
-                // Compare the branch's own value with the leaf's value
-                // Only generate operations for actual value differences, not structural changes
-                let value_diff = match &branch.value {
-                    Some(branch_val) if branch_val == &leaf.value => None, // Same value, no operation needed
-                    Some(_different_val) => Some(BatchOp::Put {
-                        // Branch has different value, update it
-                        key: final_key.clone(),
-                        value: leaf.value.to_vec(),
-                    }),
-                    None => {
-                        // Branch has no value - only generate Put if leaf has empty partial path
-                        // (meaning they represent the same logical path)
-                        if leaf.partial_path.is_empty() {
-                            Some(BatchOp::Put {
-                                key: final_key.clone(),
+                // rare case: the branch itself represents the same logical key as the leaf
+                if branch.partial_path == leaf.partial_path {
+                    trace!("branch vs leaf, same path {key:x?}");
+                    // continue with all remaining children as deletions, with no
+                    // special handling for this leaf, since it's value is in the branch
+                    iter_stack.push(DiffIterationNode {
+                        key: key.clone(),
+                        state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
+                            children_iter: Box::new(as_enumerated_children_iter(branch)),
+                            excluded_leaf: None,
+                        }),
+                    });
+                    return if let Some(branch_val) = &branch.value {
+                        // If the branch value also matches, we can just forget about this leaf
+                        if branch_val != &leaf.value {
+                            // the branch has a different value, so we need to generate a put
+                            // operation for the leaf
+                            Ok(Some(BatchOp::Put {
+                                key: key_from_nibble_iter(key.iter().copied()),
                                 value: leaf.value.to_vec(),
-                            })
+                            }))
                         } else {
-                            None // Different logical paths, branch having no value is normal
+                            Ok(None)
                         }
-                    }
-                };
+                    } else {
+                        // the branch has no value, so the leaf is new, and we need to process the
+                        // remaining items on the branch as deletes
+                        Ok(Some(BatchOp::Put {
+                            key: key_from_nibble_iter(key.iter().copied()),
+                            value: leaf.value.to_vec(),
+                        }))
+                    };
+                }
+                // TODO: maybe the leaf is down in the branch somewhere. If we never find it,
+                // then it's brand new data
 
                 // Set up to traverse branch children, but exclude any that are equivalent to the leaf
-                iter_stack.push(DiffIterationNode {
+                // key already has the branch's partial path added, we need to remove that before chaining the child
+                let leaf_key = Path::from_nibbles_iterator(
+                    key.iter()
+                        .take(key.len().saturating_sub(branch.partial_path.len()))
+                        .copied()
+                        .chain(leaf.partial_path.iter().copied()),
+                );
+                // let leaf_key = key.clone();
+                trace!("key is {key:x?}");
+                trace!("branch is {branch:?}");
+                trace!("leaf is {leaf:?}");
+                trace!("excluding leaf {leaf_key:x?} (for inserts)");
+                trace!("switching to VisitedNodeLeftState");
+
+                let din = DiffIterationNode {
                     key: key.clone(),
                     state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
                         children_iter: Box::new(as_enumerated_children_iter(branch)),
-                        excluded_node: Some((self.node_right.clone(), key.clone())),
+                        excluded_leaf: Some((self.node_right.clone(), leaf_key)),
                     }),
-                });
+                };
+                trace!("pushing {din:?}");
+                iter_stack.push(din);
 
-                Ok(value_diff)
+                // if the branch had a value, it's been deleted
+                if let Some(_branch_val) = &branch.value {
+                    Ok(Some(BatchOp::Delete {
+                        key: key_from_nibble_iter(key.iter().copied()),
+                    }))
+                } else {
+                    Ok(None)
+                }
             }
             (Node::Leaf(leaf), Node::Branch(branch)) => {
                 // Leaf vs Branch - save the leaf and traverse branch children with exclusion
@@ -213,7 +292,7 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                     Some(branch_val) if branch_val == &leaf.value => None, // Same value, no operation needed
                     Some(different_val) => Some(BatchOp::Put {
                         // Branch has different value, update it
-                        key: final_key.clone(),
+                        key: key_from_nibble_iter(key.iter().copied()),
                         value: different_val.to_vec(),
                     }),
                     None => {
@@ -225,11 +304,25 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                 };
 
                 // Set up to traverse branch children, but exclude any that are equivalent to the leaf
+                // "key" already includes the full path to the leaf
+                let leaf_key = key.clone();
+                trace!("key is {key:x?}");
+                trace!("branch is {branch:?}");
+                trace!("leaf is {leaf:?}");
+                trace!("excluding leaf {leaf_key:x?} (for deletes)");
+
+                // remove the leaf's partial path, and add the branch's partial path
+                let branch_key = Path::from_nibbles_iterator(
+                    key.iter()
+                        .take(key.len().saturating_sub(leaf.partial_path.len()))
+                        .copied()
+                        .chain(branch.partial_path.iter().copied()),
+                );
                 iter_stack.push(DiffIterationNode {
-                    key: key.clone(),
+                    key: branch_key,
                     state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
                         children_iter: Box::new(as_enumerated_children_iter(branch)),
-                        included_node: Some(self.node_left.clone()),
+                        excluded_leaf: Some((self.node_left.clone(), leaf_key)),
                     }),
                 });
 
@@ -240,7 +333,7 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                 if leaf1.value != leaf2.value {
                     // The key already includes the complete path including partial paths
                     Ok(Some(BatchOp::Put {
-                        key: final_key,
+                        key: key_from_nibble_iter(key.iter().copied()),
                         value: leaf2.value.to_vec(),
                     }))
                 } else {
@@ -255,7 +348,7 @@ impl UnvisitedStateVisitor for UnvisitedNodeLeftState {
     fn visit(
         self,
         key: &Path,
-        iter_stack: &mut Vec<DiffIterationNode>,
+        iter_stack: &mut IterStack,
     ) -> Result<Option<BatchOp<Key, Value>>, FileIoError> {
         let final_key = key_from_nibble_iter(key.iter().copied());
 
@@ -266,7 +359,7 @@ impl UnvisitedStateVisitor for UnvisitedNodeLeftState {
                     key: key.clone(),
                     state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
                         children_iter: Box::new(as_enumerated_children_iter(branch)),
-                        excluded_node: None,
+                        excluded_leaf: self.excluded_node,
                     }),
                 });
 
@@ -289,36 +382,36 @@ impl UnvisitedStateVisitor for UnvisitedNodeRightState {
     fn visit(
         self,
         key: &Path,
-        iter_stack: &mut Vec<DiffIterationNode>,
+        iter_stack: &mut IterStack,
     ) -> Result<Option<BatchOp<Key, Value>>, FileIoError> {
-        let final_key = key_from_nibble_iter(key.iter().copied());
+        let current_key = Path::from_nibbles_iterator(key.iter().copied());
 
         // Node exists only in tree2 - mark for addition
         match &*self.node {
             Node::Branch(branch) => {
                 iter_stack.push(DiffIterationNode {
-                    key: key.clone(),
+                    key: current_key.clone(),
                     state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
                         children_iter: Box::new(as_enumerated_children_iter(branch)),
-                        included_node: None,
+                        excluded_leaf: self.excluded_node,
                     }),
                 });
 
                 if let Some(value) = &branch.value {
                     // The key already includes the complete path including partial paths
                     Ok(Some(BatchOp::Put {
-                        key: final_key,
+                        key: key_from_nibble_iter(current_key.iter().copied()),
                         value: value.to_vec(),
                     }))
                 } else {
                     Ok(None)
                 }
             }
-            Node::Leaf(_leaf) => {
+            Node::Leaf(leaf) => {
                 // The key already includes the complete path including partial paths
                 Ok(Some(BatchOp::Put {
-                    key: final_key,
-                    value: _leaf.value.to_vec(),
+                    key: key_from_nibble_iter(current_key.iter().copied()),
+                    value: leaf.value.to_vec(),
                 }))
             }
         }
@@ -329,7 +422,7 @@ impl StateVisitor for VisitedNodeLeftState {
     fn visit<L: TrieReader, R: TrieReader>(
         mut self,
         key: &Path,
-        iter_stack: &mut Vec<DiffIterationNode>,
+        iter_stack: &mut IterStack,
         readers: (&L, &R),
     ) -> Result<(), FileIoError> {
         if let Some((pos, child)) = self.children_iter.next() {
@@ -338,51 +431,26 @@ impl StateVisitor for VisitedNodeLeftState {
                 Child::Node(node) => node.clone().into(),
             };
 
-            let child_key: Path = {
-                let nibbles: Vec<u8> = key
-                    .iter()
+            let child_key = Path::from_nibbles_iterator(
+                key.iter()
                     .copied()
                     .chain(std::iter::once(pos))
-                    .chain(node.partial_path().iter().copied())
-                    .collect();
-                Path::from(nibbles.as_slice())
-            };
+                    .chain(node.partial_path().iter().copied()),
+            );
 
-            // Check if this child should be included in comparison instead of deleted
-            if let Some((excluded_node, excluded_path)) = self.excluded_node.take() {
-                // Calculate the final key that the excluded leaf would represent
-                let excluded_leaf_key = match &*excluded_node {
-                    Node::Leaf(leaf) => {
-                        // Handle both root node and non-root node cases
-                        let leaf_path = &leaf.partial_path;
-                        if leaf_path.len() >= excluded_path.0.len()
-                            && leaf_path
-                                .iter()
-                                .take(excluded_path.0.len())
-                                .eq(excluded_path.0.iter())
-                        {
-                            // Root node case: leaf's partial_path contains complete path
-                            key_from_nibble_iter(leaf_path.iter().copied())
-                        } else {
-                            // Non-root case: concatenate key + partial_path
-                            let mut leaf_final_key = excluded_path.clone();
-                            leaf_final_key.0.extend(leaf_path.iter().copied());
-                            key_from_nibble_iter(leaf_final_key.iter().copied())
-                        }
-                    }
-                    _ => unreachable!("excluded_node should always be a leaf"),
-                };
+            if let Some((excluded_node, excluded_path)) = self.excluded_leaf.take() {
+                trace!("child_key is {child_key:x?}");
+                trace!("LS checking....{child_key:x?} is excluded...");
+                if excluded_path == child_key {
+                    trace!("yes");
+                    // Found the excluded child
 
-                // Calculate the final key that this child represents
-                let child_final_key = key_from_nibble_iter(child_key.iter().copied());
-
-                if child_final_key == excluded_leaf_key {
-                    // Found the excluded child - compare instead of deleting
+                    // resume after the excluded child
                     iter_stack.push(DiffIterationNode {
                         key: key.clone(),
                         state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
                             children_iter: self.children_iter,
-                            excluded_node: None, // Already taken
+                            excluded_leaf: None, // Already taken
                         }),
                     });
 
@@ -396,11 +464,12 @@ impl StateVisitor for VisitedNodeLeftState {
                     });
                 } else {
                     // Not the excluded child - put it back and continue looking
+                    trace!("no");
                     iter_stack.push(DiffIterationNode {
                         key: key.clone(),
                         state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
                             children_iter: self.children_iter,
-                            excluded_node: Some((excluded_node, excluded_path)), // Put it back
+                            excluded_leaf: Some((excluded_node.clone(), excluded_path.clone())), // Put it back
                         }),
                     });
 
@@ -409,6 +478,7 @@ impl StateVisitor for VisitedNodeLeftState {
                         key: child_key,
                         state: DiffIterationNodeState::UnvisitedLeft(UnvisitedNodeLeftState {
                             node,
+                            excluded_node: Some((excluded_node, excluded_path)),
                         }),
                     });
                 }
@@ -418,13 +488,16 @@ impl StateVisitor for VisitedNodeLeftState {
                     key: key.clone(),
                     state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
                         children_iter: self.children_iter,
-                        excluded_node: None,
+                        excluded_leaf: None,
                     }),
                 });
 
                 iter_stack.push(DiffIterationNode {
                     key: child_key,
-                    state: DiffIterationNodeState::UnvisitedLeft(UnvisitedNodeLeftState { node }),
+                    state: DiffIterationNodeState::UnvisitedLeft(UnvisitedNodeLeftState {
+                        node,
+                        excluded_node: None,
+                    }),
                 });
             }
         }
@@ -436,7 +509,7 @@ impl StateVisitor for VisitedNodePairState {
     fn visit<L: TrieReader, R: TrieReader>(
         mut self,
         key: &Path,
-        iter_stack: &mut Vec<DiffIterationNode>,
+        iter_stack: &mut IterStack,
         readers: (&L, &R),
     ) -> Result<(), FileIoError> {
         // Compare children from both trees
@@ -531,6 +604,7 @@ impl StateVisitor for VisitedNodePairState {
                             key: child_key,
                             state: DiffIterationNodeState::UnvisitedLeft(UnvisitedNodeLeftState {
                                 node: node_left,
+                                excluded_node: None,
                             }),
                         });
                     }
@@ -565,7 +639,10 @@ impl StateVisitor for VisitedNodePairState {
                         iter_stack.push(DiffIterationNode {
                             key: child_key,
                             state: DiffIterationNodeState::UnvisitedRight(
-                                UnvisitedNodeRightState { node: node_right },
+                                UnvisitedNodeRightState {
+                                    node: node_right,
+                                    excluded_node: None,
+                                },
                             ),
                         });
                     }
@@ -593,7 +670,7 @@ impl StateVisitor for VisitedNodePairState {
                     key: key.clone(),
                     state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
                         children_iter: self.children_iter_left,
-                        excluded_node: None,
+                        excluded_leaf: None,
                     }),
                 });
 
@@ -601,6 +678,7 @@ impl StateVisitor for VisitedNodePairState {
                     key: child_key,
                     state: DiffIterationNodeState::UnvisitedLeft(UnvisitedNodeLeftState {
                         node: node_left,
+                        excluded_node: None,
                     }),
                 });
             }
@@ -627,7 +705,7 @@ impl StateVisitor for VisitedNodePairState {
                     key: key.clone(),
                     state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
                         children_iter: self.children_iter_right,
-                        included_node: None,
+                        excluded_leaf: None,
                     }),
                 });
 
@@ -635,6 +713,7 @@ impl StateVisitor for VisitedNodePairState {
                     key: child_key,
                     state: DiffIterationNodeState::UnvisitedRight(UnvisitedNodeRightState {
                         node: node_right,
+                        excluded_node: None,
                     }),
                 });
             }
@@ -650,7 +729,7 @@ impl StateVisitor for VisitedNodeRightState {
     fn visit<L: TrieReader, R: TrieReader>(
         mut self,
         key: &Path,
-        iter_stack: &mut Vec<DiffIterationNode>,
+        iter_stack: &mut IterStack,
         readers: (&L, &R),
     ) -> Result<(), FileIoError> {
         if let Some((pos, child)) = self.children_iter.next() {
@@ -660,90 +739,74 @@ impl StateVisitor for VisitedNodeRightState {
             };
 
             let child_partial_path = node.partial_path().iter().copied();
-            let child_key: Path = {
-                let nibbles: Vec<u8> = key
-                    .iter()
+            let child_key = Path::from_nibbles_iterator(
+                key.iter()
                     .copied()
                     .chain(std::iter::once(pos))
-                    .chain(child_partial_path)
-                    .collect();
-                Path::from(nibbles.as_slice())
-            };
+                    .chain(child_partial_path),
+            );
+            let branch_key =
+                Path::from_nibbles_iterator(key.iter().copied().chain(std::iter::once(pos)));
 
-            // Check if this child should be included in comparison instead of added
-            if let Some(included_node) = self.included_node.take() {
-                // Calculate the final key that the included leaf would represent
-                let included_leaf_key = match &*included_node {
-                    Node::Leaf(leaf) => {
-                        // Handle both root node and non-root node cases
-                        let leaf_path = &leaf.partial_path;
-                        if leaf_path.len() >= key.0.len()
-                            && leaf_path.iter().take(key.0.len()).eq(key.0.iter())
-                        {
-                            // Root node case: leaf's partial_path contains complete path
-                            key_from_nibble_iter(leaf_path.iter().copied())
-                        } else {
-                            // Non-root case: concatenate key + partial_path
-                            let mut leaf_final_key = key.clone();
-                            leaf_final_key.0.extend(leaf_path.iter().copied());
-                            key_from_nibble_iter(leaf_final_key.iter().copied())
-                        }
+            // Check if this child should be compared instead of added
+            if let Some((excluded_node, excluded_path)) = self.excluded_leaf.take() {
+                trace!("RS checking....{child_key:x?} is excluded...");
+                if excluded_path == child_key {
+                    // Found the excluded child - compare instead of adding
+                    trace!("yes");
+                    iter_stack.push(DiffIterationNode {
+                        key: branch_key,
+                        state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
+                            children_iter: self.children_iter,
+                            excluded_leaf: None,
+                        }),
+                    });
+                    if excluded_node.value() != node.value() {
+                        // all this work, and the value was different anyway, so we still need to add it
+                        iter_stack.push(DiffIterationNode {
+                            key: child_key,
+                            state: DiffIterationNodeState::UnvisitedRight(
+                                UnvisitedNodeRightState {
+                                    node,
+                                    excluded_node: None,
+                                },
+                            ),
+                        });
                     }
-                    _ => unreachable!("included_node should always be a leaf"),
-                };
-
-                // Calculate the final key that this child represents
-                let child_final_key = key_from_nibble_iter(child_key.iter().copied());
-
-                if child_final_key == included_leaf_key {
-                    // Found the included child - compare instead of adding
-                    iter_stack.push(DiffIterationNode {
-                        key: key.clone(),
-                        state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
-                            children_iter: self.children_iter,
-                            included_node: None,
-                        }),
-                    });
-
-                    // Compare this child instead of adding
-                    iter_stack.push(DiffIterationNode {
-                        key: child_key,
-                        state: DiffIterationNodeState::UnvisitedPair(UnvisitedNodePairState {
-                            node_left: included_node, // Moved, no clone needed
-                            node_right: node,
-                        }),
-                    });
                 } else {
-                    // Not the included child - put it back and continue looking
+                    // Not the excluded child - add it
+                    trace!("no");
                     iter_stack.push(DiffIterationNode {
-                        key: key.clone(),
+                        key: branch_key,
                         state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
                             children_iter: self.children_iter,
-                            included_node: Some(included_node), // Put it back
+                            excluded_leaf: Some((excluded_node, excluded_path)),
                         }),
                     });
-
-                    // Add this child
                     iter_stack.push(DiffIterationNode {
                         key: child_key,
                         state: DiffIterationNodeState::UnvisitedRight(UnvisitedNodeRightState {
                             node,
+                            excluded_node: None,
                         }),
                     });
                 }
             } else {
                 // No inclusion - add all children
                 iter_stack.push(DiffIterationNode {
-                    key: key.clone(),
+                    key: branch_key,
                     state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
                         children_iter: self.children_iter,
-                        included_node: None,
+                        excluded_leaf: None,
                     }),
                 });
 
                 iter_stack.push(DiffIterationNode {
                     key: child_key,
-                    state: DiffIterationNodeState::UnvisitedRight(UnvisitedNodeRightState { node }),
+                    state: DiffIterationNodeState::UnvisitedRight(UnvisitedNodeRightState {
+                        node,
+                        excluded_node: None,
+                    }),
                 });
             }
         }
@@ -783,7 +846,10 @@ impl DiffIterationNode {
                 let path = Path::from(key.as_ref());
                 DiffIterationNode {
                     key: path,
-                    state: DiffIterationNodeState::UnvisitedLeft(UnvisitedNodeLeftState { node }),
+                    state: DiffIterationNodeState::UnvisitedLeft(UnvisitedNodeLeftState {
+                        node,
+                        excluded_node: None,
+                    }),
                 }
             }
             IterationNode::Visited { key, children_iter } => {
@@ -792,7 +858,7 @@ impl DiffIterationNode {
                     key: path,
                     state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
                         children_iter,
-                        excluded_node: None,
+                        excluded_leaf: None,
                     }),
                 }
             }
@@ -806,7 +872,10 @@ impl DiffIterationNode {
                 let path = Path::from(key.as_ref());
                 DiffIterationNode {
                     key: path,
-                    state: DiffIterationNodeState::UnvisitedRight(UnvisitedNodeRightState { node }),
+                    state: DiffIterationNodeState::UnvisitedRight(UnvisitedNodeRightState {
+                        node,
+                        excluded_node: None,
+                    }),
                 }
             }
             IterationNode::Visited { key, children_iter } => {
@@ -815,7 +884,7 @@ impl DiffIterationNode {
                     key: path,
                     state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
                         children_iter,
-                        included_node: None,
+                        excluded_leaf: None,
                     }),
                 }
             }
@@ -830,7 +899,7 @@ enum DiffNodeStreamState {
     /// for the first time. The iteration start key is stored here.
     StartFromKey(Key),
     /// The iterator is actively iterating over nodes
-    Iterating { iter_stack: Vec<DiffIterationNode> },
+    Iterating { iter_stack: IterStack },
 }
 
 impl From<Key> for DiffNodeStreamState {
@@ -868,12 +937,7 @@ impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
             (Child::AddressWithHash(_, hash_left), Child::AddressWithHash(_, hash_right)) => {
                 hash_left == hash_right
             }
-            (Child::Node(node_left), Child::Node(node_right)) => {
-                // For mutable trees, we can compare node addresses to detect identical subtrees
-                // This works because identical subtrees will share the same underlying Node reference
-                std::ptr::eq(node_left, node_right)
-            }
-            // Different child types so we can't know if they are the same, assume not
+            // At least one of the children is unhashed, so we can't know if they are the same, assume not
             _ => false,
         }
     }
@@ -890,7 +954,9 @@ impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
         match (root_left_opt, root_right_opt) {
             (None, None) => {
                 // Both trees are empty
-                Ok(DiffNodeStreamState::Iterating { iter_stack: vec![] })
+                Ok(DiffNodeStreamState::Iterating {
+                    iter_stack: IterStack::default(),
+                })
             }
             (Some(_root_left), None) => {
                 // Only tree_left has content - use single tree traversal for deletions
@@ -905,7 +971,9 @@ impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
                             .collect()
                     }
                 };
-                Ok(DiffNodeStreamState::Iterating { iter_stack })
+                Ok(DiffNodeStreamState::Iterating {
+                    iter_stack: IterStack { stack: iter_stack },
+                })
             }
             (None, Some(_root_right)) => {
                 // Only tree_right has content - use single tree traversal for additions
@@ -920,22 +988,25 @@ impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
                             .collect()
                     }
                 };
-                Ok(DiffNodeStreamState::Iterating { iter_stack })
+                Ok(DiffNodeStreamState::Iterating {
+                    iter_stack: IterStack { stack: iter_stack },
+                })
             }
             (Some(root_left), Some(root_right)) => {
                 // Both trees have content - need to compare them
-                // For now, just start from the roots and let the hash optimization
-                // skip identical subtrees during iteration
-                let root_left_partial = root_left.partial_path().iter().copied();
-                let root_key: Path = Path::from_nibbles_iterator(root_left_partial);
+                // Start with an empty path and let the node comparison logic handle partial paths
+                // This ensures we don't double-add partial paths from different roots
+                let root_key: Path = Path::from_nibbles_iterator(std::iter::empty());
                 Ok(DiffNodeStreamState::Iterating {
-                    iter_stack: vec![DiffIterationNode {
-                        key: root_key,
-                        state: DiffIterationNodeState::UnvisitedPair(UnvisitedNodePairState {
-                            node_left: root_left,
-                            node_right: root_right,
-                        }),
-                    }],
+                    iter_stack: IterStack {
+                        stack: vec![DiffIterationNode {
+                            key: root_key,
+                            state: DiffIterationNodeState::UnvisitedPair(UnvisitedNodePairState {
+                                node_left: root_left,
+                                node_right: root_right,
+                            }),
+                        }],
+                    },
                 })
             }
         }
@@ -1054,6 +1125,7 @@ fn diff_merkle_iterator<'a, T1: TrieReader, T2: TrieReader>(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use env_logger::WriteStyle;
     use std::sync::Arc;
     use storage::{ImmutableProposal, MemStore, MutableProposal, NodeStore};
     use test_case::test_case;
@@ -1300,6 +1372,9 @@ mod tests {
         // Note: "c" should be skipped as it's identical in both trees
     }
 
+    // example of running this test with a specific seed and maximum tracing in diff code:
+    // FIREWOOD_TEST_SEED=14805530293320947613 RUST_LOG=firewood::diff=trace \
+    //  cargo test --features logger diff::tests::diff_random_with_deletions
     #[test_case(false, false, 500)]
     #[test_case(false, true, 500)]
     #[test_case(true, false, 500)]
@@ -1309,6 +1384,12 @@ mod tests {
         use rand::rngs::StdRng;
         use rand::{Rng, SeedableRng, rng};
 
+        let _ = env_logger::builder()
+            .write_style(WriteStyle::Never)
+            .format_timestamp(None)
+            .is_test(true)
+            .try_init();
+
         // Read FIREWOOD_TEST_SEED from environment or use random seed
         let seed = std::env::var("FIREWOOD_TEST_SEED")
             .ok()
@@ -1316,7 +1397,8 @@ mod tests {
                 || None,
                 |s| Some(str::parse(&s).expect("couldn't parse FIREWOOD_TEST_SEED; must be a u64")),
             )
-            .unwrap_or_else(|| rng().random());
+            .unwrap_or(14805530293320947613);
+        //.unwrap_or_else(|| rng().random());
 
         eprintln!("Seed {seed}: to rerun with this data, export FIREWOOD_TEST_SEED={seed}");
         let mut rng = StdRng::seed_from_u64(seed);
@@ -1956,18 +2038,18 @@ mod tests {
         // Verify against expected counts
         assert_eq!(
             put_count, expected_puts,
-            "Put count mismatch for {} (same_value={}, backwards={})",
+            "Put count mismatch for {} (same_value={}, backwards={}), results={results:x?}",
             direction_desc, same_value, backwards
         );
         assert_eq!(
             delete_count, expected_deletes,
-            "Delete count mismatch for {} (same_value={}, backwards={})",
+            "Delete count mismatch for {} (same_value={}, backwards={}), results={results:x?}",
             direction_desc, same_value, backwards
         );
         assert_eq!(
             results.len(),
             expected_puts + expected_deletes,
-            "Total operation count mismatch for {} (same_value={}, backwards={})",
+            "Total operation count mismatch for {} (same_value={}, backwards={}), results={results:x?}",
             direction_desc,
             same_value,
             backwards
