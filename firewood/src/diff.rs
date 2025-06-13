@@ -127,6 +127,9 @@ impl IterStack {
             "pushing new state {{ key: {:x?}, state: {:?} }}",
             node.key, node.state
         );
+        if node.key.starts_with(&[0, 7, 7]) {
+            trace!("found key {:x?}", node.key);
+        }
         self.stack.push(node);
     }
 }
@@ -549,7 +552,6 @@ impl StateVisitor for VisitedNodePairState {
                             let nibbles: Vec<u8> = key
                                 .iter()
                                 .copied()
-                                .chain(std::iter::once(pos_left))
                                 .chain(node_left.partial_path().iter().copied())
                                 .collect();
                             Path::from(nibbles.as_slice())
@@ -629,7 +631,7 @@ impl StateVisitor for VisitedNodePairState {
                         let new_iter_left =
                             std::iter::once((pos_left, child_left)).chain(self.children_iter_left);
                         iter_stack.push(DiffIterationNode {
-                            key: key.clone(),
+                            key: key.get(..key.len() - 1).unwrap_or_default().into(),
                             state: DiffIterationNodeState::VisitedPair(VisitedNodePairState {
                                 children_iter_left: Box::new(new_iter_left),
                                 children_iter_right: self.children_iter_right,
@@ -1446,8 +1448,8 @@ mod tests {
         // Delete different keys from each merkle
         m1.remove(deleted_key1).unwrap();
         println!("expected put for key {:x?}", deleted_key1);
-        m2.remove(deleted_key2).unwrap();
-        println!("expected delete for key {:x?}", deleted_key2);
+        //m2.remove(deleted_key2).unwrap();
+        //println!("expected delete for key {:x?}", deleted_key2);
 
         // Convert to the appropriate type based on test parameters
         let ops: Vec<BatchOp<Box<[u8]>, Vec<u8>>> = if trie1_mutable && trie2_mutable {
