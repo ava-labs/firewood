@@ -15,9 +15,11 @@ use storage::{Child, FileIoError, Node, Path, SharedNode, TrieReader, logger::tr
 use crate::db::BatchOp;
 use crate::merkle::{Key, Merkle, Value};
 use crate::stream::{
-    IterationNode, NodeStreamState, as_enumerated_children_iter, key_from_nibble_iter,
+    IterationNode, NodeStreamState, OwnedMerkleKeyValueStream, as_enumerated_children_iter,
+    key_from_nibble_iter,
 };
 use derivative::Derivative;
+use std::sync::Arc;
 
 // State structs for different types of diff iteration nodes
 
@@ -49,6 +51,34 @@ struct UnvisitedNodeLeftState {
 struct UnvisitedNodeRightState {
     node: SharedNode,
     excluded_node: Option<(SharedNode, Path)>,
+}
+
+/// State for when two nodes have different partial paths and need to be processed
+/// using separate MerkleKeyValueStream objects to handle the structural differences.
+/// This occurs when comparing nodes that have diverged in their trie structure.
+///
+/// Uses OwnedMerkleKeyValueStream to maintain stream state across multiple visit() calls,
+/// enabling lazy one-at-a-time processing for large trees.
+struct OutOfSyncState {
+    node_left: SharedNode,
+    node_right: SharedNode,
+    current_key: Path,
+    // Track if streams have been initialized
+    streams_initialized: bool,
+    // Saved keys from previous iterations that need to be processed
+    saved_left: Option<(Key, Value)>,
+    saved_right: Option<(Key, Value)>,
+}
+
+impl std::fmt::Debug for OutOfSyncState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OutOfSyncState")
+            .field("node_left", &self.node_left)
+            .field("node_right", &self.node_right)
+            .field("current_key", &self.current_key)
+            .field("streams_initialized", &self.streams_initialized)
+            .finish()
+    }
 }
 
 /// Two branch nodes whose children are being compared.
@@ -116,6 +146,16 @@ trait UnvisitedStateVisitor {
     ) -> Result<Option<BatchOp<Key, Value>>, FileIoError>;
 }
 
+/// Trait for processing out-of-sync states that need separate stream processing
+trait OutOfSyncStateVisitor {
+    fn visit<L: TrieReader, R: TrieReader>(
+        self,
+        key: &Path,
+        iter_stack: &mut IterStack,
+        readers: (&L, &R),
+    ) -> Result<Option<BatchOp<Key, Value>>, FileIoError>;
+}
+
 #[derive(Debug, Default)]
 struct IterStack {
     stack: Vec<DiffIterationNode>,
@@ -180,6 +220,29 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
 
         match (&*self.node_left, &*self.node_right) {
             (Node::Branch(branch_left), Node::Branch(branch_right)) => {
+                // First compare partial paths - if they differ, push OutOfSyncState
+                if branch_left.partial_path != branch_right.partial_path {
+                    trace!(
+                        "Partial paths differ at key {:x?}: left={:x?}, right={:x?}",
+                        key, branch_left.partial_path, branch_right.partial_path
+                    );
+
+                    iter_stack.push(DiffIterationNode {
+                        key: key.clone(),
+                        state: DiffIterationNodeState::OutOfSync(OutOfSyncState {
+                            node_left: self.node_left.clone(),
+                            node_right: self.node_right.clone(),
+                            current_key: key.clone(),
+                            streams_initialized: false,
+                            saved_left: None,
+                            saved_right: None,
+                        }),
+                    });
+
+                    return Ok(None);
+                }
+
+                // Partial paths match, proceed with normal comparison
                 // Compare values first
                 let value_diff = match (&branch_left.value, &branch_right.value) {
                     (Some(v_left), Some(v_right)) if v_left == v_right => None,
@@ -332,7 +395,29 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                 Ok(value_diff)
             }
             (Node::Leaf(leaf1), Node::Leaf(leaf2)) => {
-                // Two leaves - compare values
+                // First compare partial paths - if they differ, push OutOfSyncState
+                if leaf1.partial_path != leaf2.partial_path {
+                    trace!(
+                        "Leaf partial paths differ at key {:x?}: left={:x?}, right={:x?}",
+                        key, leaf1.partial_path, leaf2.partial_path
+                    );
+
+                    iter_stack.push(DiffIterationNode {
+                        key: key.clone(),
+                        state: DiffIterationNodeState::OutOfSync(OutOfSyncState {
+                            node_left: self.node_left.clone(),
+                            node_right: self.node_right.clone(),
+                            current_key: key.clone(),
+                            streams_initialized: false,
+                            saved_left: None,
+                            saved_right: None,
+                        }),
+                    });
+
+                    return Ok(None);
+                }
+
+                // Partial paths match, compare values
                 if leaf1.value != leaf2.value {
                     // The key already includes the complete path including partial paths
                     Ok(Some(BatchOp::Put {
@@ -816,6 +901,139 @@ impl StateVisitor for VisitedNodeRightState {
     }
 }
 
+impl OutOfSyncStateVisitor for OutOfSyncState {
+    fn visit<L: TrieReader, R: TrieReader>(
+        mut self,
+        key: &Path,
+        iter_stack: &mut IterStack,
+        readers: (&L, &R),
+    ) -> Result<Option<BatchOp<Key, Value>>, FileIoError> {
+        // Create owned streams for both trees if not already initialized
+        let start_key = key_from_nibble_iter(key.iter().copied());
+        let left_reader = Arc::new(readers.0);
+        let right_reader = Arc::new(readers.1);
+
+        let mut left_stream = OwnedMerkleKeyValueStream::from_key(left_reader, &start_key);
+        let mut right_stream = OwnedMerkleKeyValueStream::from_key(right_reader, &start_key);
+
+        // Get items from saved state or streams
+        let left_item = self
+            .saved_left
+            .take()
+            .map(Ok)
+            .or_else(|| left_stream.next_internal());
+        let right_item = self
+            .saved_right
+            .take()
+            .map(Ok)
+            .or_else(|| right_stream.next_internal());
+
+        // Determine if we need to push back for continued processing
+        let mut pushback_needed = false;
+
+        // Compare and generate the appropriate operation
+        let result = match (left_item, right_item) {
+            (Some(Ok((left_key, left_value))), Some(Ok((right_key, right_value)))) => {
+                use std::cmp::Ordering;
+                match left_key.cmp(&right_key) {
+                    Ordering::Less => {
+                        // Left key is smaller - it was deleted
+                        // Save the right key/value for next iteration
+                        self.saved_right = Some((right_key, right_value));
+                        pushback_needed = true;
+                        Ok(Some(BatchOp::Delete { key: left_key }))
+                    }
+                    Ordering::Greater => {
+                        // Right key is smaller - it was added
+                        // Save the left key/value for next iteration
+                        self.saved_left = Some((left_key, left_value));
+                        pushback_needed = true;
+                        Ok(Some(BatchOp::Put {
+                            key: right_key,
+                            value: right_value,
+                        }))
+                    }
+                    Ordering::Equal => {
+                        // Keys are equal - both items consumed
+                        // Check if either stream has more items
+                        let next_left = left_stream.next_internal();
+                        let next_right = right_stream.next_internal();
+
+                        // Save any items we got for next iteration
+                        if let Some(Ok(item)) = next_left {
+                            self.saved_left = Some(item);
+                        }
+                        if let Some(Ok(item)) = next_right {
+                            self.saved_right = Some(item);
+                        }
+
+                        // Update pushback_needed based on whether we have saved items
+                        pushback_needed = self.saved_left.is_some() || self.saved_right.is_some();
+
+                        if left_value == right_value {
+                            // Values are identical, no operation needed
+                            Ok(None)
+                        } else {
+                            // Values differ, generate Put operation for the right value
+                            Ok(Some(BatchOp::Put {
+                                key: right_key,
+                                value: right_value,
+                            }))
+                        }
+                    }
+                }
+            }
+            (Some(Ok((left_key, _left_value))), None) => {
+                // Only left stream has items - they were deleted
+                // Check if left stream has more items
+                if let Some(Ok(next_item)) = left_stream.next_internal() {
+                    self.saved_left = Some(next_item);
+                    pushback_needed = true;
+                } else {
+                    pushback_needed = false;
+                }
+
+                Ok(Some(BatchOp::Delete { key: left_key }))
+            }
+            (None, Some(Ok((right_key, right_value)))) => {
+                // Only right stream has items - they were added
+                // Check if right stream has more items
+                if let Some(Ok(next_item)) = right_stream.next_internal() {
+                    self.saved_right = Some(next_item);
+                    pushback_needed = true;
+                } else {
+                    pushback_needed = false;
+                }
+
+                Ok(Some(BatchOp::Put {
+                    key: right_key,
+                    value: right_value,
+                }))
+            }
+            (Some(Err(e)), _) | (_, Some(Err(e))) => {
+                // Handle errors from either stream - don't continue processing
+                pushback_needed = false;
+                Err(e)
+            }
+            (None, None) => {
+                // Both streams are exhausted - terminate
+                pushback_needed = false;
+                Ok(None)
+            }
+        };
+
+        // Push back for continued processing if needed
+        if pushback_needed {
+            iter_stack.push(DiffIterationNode {
+                key: key.clone(),
+                state: DiffIterationNodeState::OutOfSync(self),
+            });
+        }
+
+        result
+    }
+}
+
 /// Enum containing all possible states for a diff iteration node
 #[derive(Debug)]
 enum DiffIterationNodeState {
@@ -831,6 +1049,10 @@ enum DiffIterationNodeState {
     VisitedLeft(VisitedNodeLeftState),
     /// A visited branch node from tree2 only (may have exclusions)
     VisitedRight(VisitedNodeRightState),
+    /// State for when two nodes have different partial paths and need to be processed
+    /// using separate MerkleNodeStream objects to handle the structural differences.
+    /// This occurs when comparing nodes that have diverged in their trie structure.
+    OutOfSync(OutOfSyncState),
 }
 
 /// Iteration node that tracks state for both trees simultaneously
@@ -1078,6 +1300,17 @@ impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
                         (self.tree_left, self.tree_right),
                     ) {
                         return Some(Err(e));
+                    }
+                }
+                DiffIterationNodeState::OutOfSync(state) => {
+                    match state.visit(
+                        &iter_node.key,
+                        iter_stack,
+                        (self.tree_left, self.tree_right),
+                    ) {
+                        Ok(Some(result)) => return Some(Ok(result)),
+                        Ok(None) => continue,
+                        Err(e) => return Some(Err(e)),
                     }
                 }
             }
@@ -2061,5 +2294,44 @@ mod tests {
             "✅ Branch vs leaf test passed: {} (same_value={}, backwards={}) - {} puts, {} deletes",
             direction_desc, same_value, backwards, put_count, delete_count
         );
+    }
+
+    #[test]
+    fn test_out_of_sync_value_comparison_optimization() {
+        // This test specifically verifies that OutOfSyncState correctly compares values
+        // when processing trees with different keys that force the OutOfSyncState code path
+
+        // Create two trees with different keys to trigger OutOfSyncState processing
+        let m1 = populate_merkle(create_test_merkle(), &[(b"key_a", b"value_1")]);
+        let m2 = populate_merkle(create_test_merkle(), &[(b"key_b", b"value_2")]);
+
+        let diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
+        let results: Vec<_> = diff_iter.collect::<Result<Vec<_>, _>>().unwrap();
+
+        // Debug output to see what we actually get
+        println!("Results: {:?}", results);
+
+        // Should find exactly 2 operations: Delete key_a, Put key_b
+        assert_eq!(results.len(), 2, "Expected 2 operations for different keys");
+
+        // Verify we get a Delete for key_a and Put for key_b
+        let mut found_delete = false;
+        let mut found_put = false;
+
+        for result in &results {
+            match result {
+                BatchOp::Delete { key: _ } => {
+                    found_delete = true;
+                }
+                BatchOp::Put { key: _, value } => {
+                    found_put = true;
+                    assert_eq!(&**value, b"value_2");
+                }
+                _ => panic!("Unexpected operation: {:?}", result),
+            }
+        }
+
+        assert!(found_delete, "Expected to find a Delete operation");
+        assert!(found_put, "Expected to find a Put operation");
     }
 }
