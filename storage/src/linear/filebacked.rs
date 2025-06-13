@@ -121,13 +121,6 @@ impl FileBacked {
             ring: ring.into(),
         })
     }
-
-    pub(crate) fn get_file_size(&self) -> Result<u64, FileIoError> {
-        self.fd
-            .metadata()
-            .map(|m| m.len())
-            .map_err(|e| self.file_io_error(e, 0, None))
-    }
 }
 
 impl ReadableStorage for FileBacked {

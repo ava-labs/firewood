@@ -83,8 +83,13 @@ pub fn empty_trie_hash() -> TrieHash {
 #[non_exhaustive]
 pub enum CheckerError {
     /// The file size is not valid
-    #[error("Invalid DB size: {0}")]
-    InvalidDBSize(#[from] DBSizeError),
+    #[error("Invalid DB size ({db_size}): {description}")]
+    InvalidDBSize {
+        /// The size of the db
+        db_size: u64,
+        /// The description of the error
+        description: String,
+    },
 
     /// The address is out of bounds
     #[error("stored area at {start} with size {size} is out of bounds ({bounds:?})")]
@@ -113,19 +118,4 @@ pub enum CheckerError {
     /// IO error
     #[error("IO error")]
     IO(#[from] FileIoError),
-}
-
-/// Errors related to the size of the db
-#[derive(Error, Debug)]
-#[non_exhaustive]
-pub enum DBSizeError {
-    /// The db size cannot be 0
-    #[error("db size cannot be 0")]
-    Zero,
-    /// The db size cannot be smaller than the file size
-    #[error("db size cannot be smaller than the file size ({0})")]
-    SmallerThanFileSize(u64),
-    /// The db size cannot be smaller than the header size
-    #[error("db size cannot be smaller than the header size ({0})")]
-    SmallerThanHeaderSize(LinearAddress),
 }

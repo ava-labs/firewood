@@ -47,8 +47,8 @@ use std::sync::Arc;
 use crate::hashednode::hash_node;
 use crate::node::{ByteCounter, Node};
 use crate::{
-    CacheReadStrategy, CheckerError, Child, DBSizeError, FileBacked, HashType, Path,
-    ReadableStorage, SharedNode, TrieHash,
+    CacheReadStrategy, CheckerError, Child, FileBacked, HashType, Path, ReadableStorage,
+    SharedNode, TrieHash,
 };
 
 use super::linear::WritableStorage;
@@ -1430,11 +1430,12 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     }
 }
 
-/// NodeStore checker
-impl NodeStore<Committed, FileBacked> {
-    pub(crate) const STORAGE_AREA_START: LinearAddress =
-        LinearAddress::new(NodeStoreHeader::SIZE).unwrap();
+pub(crate) const STORAGE_AREA_START: LinearAddress =
+    LinearAddress::new(NodeStoreHeader::SIZE).unwrap();
 
+/// NodeStore checker
+// TODO: S needs to be writeable if we ask checker to fix the issues
+impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// Go through the filebacked storage and check for any inconsistencies. It proceeds in the following steps:
     /// 1. Check the header
     /// 2. traverse the trie and check the nodes
@@ -1443,14 +1444,18 @@ impl NodeStore<Committed, FileBacked> {
     // TODO: add merkle hash checks as well
     pub async fn check(&self) -> Result<(), CheckerError> {
         // 1. Check the header
-        let file_size = self.storage.get_file_size()?;
-        if self.header.size < file_size {
-            return Err(CheckerError::InvalidDBSize(
-                DBSizeError::SmallerThanFileSize(file_size),
-            ));
+        let db_size = self.header.size;
+        let file_size = self.storage.size()?;
+        if db_size < file_size {
+            return Err(CheckerError::InvalidDBSize {
+                db_size,
+                description: format!(
+                    "db size should not be smaller than the file size ({file_size})"
+                ),
+            });
         }
 
-        let mut visited = LinearAddressRangeSet::new(self.header.size)?;
+        let mut visited = LinearAddressRangeSet::new(db_size)?;
 
         // 2. traverse the trie and check the nodes
         if let Some(root_address) = self.header.root_address {

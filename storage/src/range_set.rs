@@ -6,8 +6,8 @@ use btree_slab::generic::map::BTreeExt;
 use btree_slab::generic::node::Address;
 use std::ops::Range;
 
-use crate::nodestore::NodeStore;
-use crate::{CheckerError, DBSizeError, LinearAddress};
+use crate::nodestore::STORAGE_AREA_START;
+use crate::{CheckerError, LinearAddress};
 
 pub struct RangeSet<T> {
     index: BTreeMap<T, T>, // start --> end
@@ -211,12 +211,18 @@ pub(super) struct LinearAddressRangeSet {
 
 impl LinearAddressRangeSet {
     pub(super) fn new(db_size: u64) -> Result<Self, CheckerError> {
-        let max_addr =
-            LinearAddress::new(db_size).ok_or(CheckerError::InvalidDBSize(DBSizeError::Zero))?;
-        if max_addr < NodeStore::STORAGE_AREA_START {
-            return Err(CheckerError::InvalidDBSize(
-                DBSizeError::SmallerThanHeaderSize(NodeStore::STORAGE_AREA_START),
-            ));
+        let max_addr = LinearAddress::new(db_size).ok_or(CheckerError::InvalidDBSize {
+            db_size,
+            description: String::from("db size cannot be 0"),
+        })?;
+        if max_addr < STORAGE_AREA_START {
+            return Err(CheckerError::InvalidDBSize {
+                db_size,
+                description: format!(
+                    "db size should not be smaller than the header size ({})",
+                    STORAGE_AREA_START
+                ),
+            });
         }
 
         Ok(Self {
@@ -236,13 +242,13 @@ impl LinearAddressRangeSet {
             .ok_or(CheckerError::AreaOutOfBounds {
                 start,
                 size,
-                bounds: NodeStore::STORAGE_AREA_START..self.max_addr,
+                bounds: STORAGE_AREA_START..self.max_addr,
             })?; // This can only happen due to overflow
-        if addr < NodeStore::STORAGE_AREA_START || end > self.max_addr {
+        if addr < STORAGE_AREA_START || end > self.max_addr {
             return Err(CheckerError::AreaOutOfBounds {
                 start: addr,
                 size,
-                bounds: NodeStore::STORAGE_AREA_START..self.max_addr,
+                bounds: STORAGE_AREA_START..self.max_addr,
             });
         }
 
@@ -259,7 +265,7 @@ impl LinearAddressRangeSet {
     pub(super) fn complement(&self) -> Self {
         let complement_set = self
             .range_set
-            .complement(&NodeStore::STORAGE_AREA_START, &self.max_addr);
+            .complement(&STORAGE_AREA_START, &self.max_addr);
 
         Self {
             range_set: complement_set,
@@ -546,7 +552,7 @@ mod test_linear_address_range_set {
         let size2 = 1024;
         let db_size = 0x2000;
 
-        let db_begin = NodeStore::STORAGE_AREA_START;
+        let db_begin = STORAGE_AREA_START;
         let start1_addr = LinearAddress::new(start1).unwrap();
         let end1_addr = LinearAddress::new(start1 + size1).unwrap();
         let start2_addr = LinearAddress::new(start2).unwrap();
@@ -584,7 +590,7 @@ mod test_linear_address_range_set {
 
     #[test]
     fn test_complement_with_empty() {
-        let db_size = NodeStore::STORAGE_AREA_START;
+        let db_size = STORAGE_AREA_START;
         let visited = LinearAddressRangeSet::new(db_size.get()).unwrap();
         let complement = visited.complement().into_iter().collect::<Vec<_>>();
         assert_eq!(complement, vec![]);
