@@ -34,10 +34,10 @@ fastrace = { version = "0.7.4" }
 [features]
 default = []
 nightly = []
-io-uring = ["storage/io-uring"]
-logger = ["storage/logger"]
-branch_factor_256 = [ "storage/branch_factor_256" ]
-ethhash = [ "storage/ethhash" ]
+io-uring = ["firewood-storage/io-uring"]
+logger = ["firewood-storage/logger"]
+branch_factor_256 = [ "firewood-storage/branch_factor_256" ]
+ethhash = [ "firewood-storage/ethhash" ]
 
 [dev-dependencies]
 triehash = { version = "0.8.5", path = "../triehash" }
@@ -66,7 +66,7 @@ explicit_deref_methods = "warn"
 missing_const_for_fn = "warn"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-storage = { path = "../storage", features = ["io-uring"] }
+firewood-storage = { path = "../storage", features = ["io-uring"] }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
-storage = { path = "../storage" }
+firewood-storage = { path = "../storage" }
