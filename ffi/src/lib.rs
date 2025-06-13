@@ -729,7 +729,7 @@ pub unsafe extern "C" fn fwd_free_value(value: *mut Value) {
         };
         drop(recreated_box);
     } else {
-        let raw_str = value.data.cast_mut();
+        let raw_str = value.data.cast_mut().cast::<c_char>();
         let cstr = unsafe { CString::from_raw(raw_str) };
         drop(cstr);
     }
