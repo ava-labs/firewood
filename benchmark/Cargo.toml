@@ -1,8 +1,12 @@
 [package]
-name = "benchmark"
+name = "firewood-benchmark"
 version = "0.0.5"
 edition = "2024"
 rust-version = "1.85.0"
+
+[[bin]]
+name = "benchmark"
+path = "src/main.rs"
 
 [dependencies]
 firewood = { path = "../firewood" }
