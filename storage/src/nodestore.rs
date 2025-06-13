@@ -1669,6 +1669,10 @@ mod test_node_store_checker {
         root_addr: LinearAddress,
         size: u64,
     ) -> Result<(), FileIoError> {
+        #[cfg(not(feature = "ethhash"))]
+        let ethhash = 0;
+        #[cfg(feature = "ethhash")]
+        let ethhash = 1;
         let header = NodeStoreHeader {
             version: Version::new(),
             endian_test: 1,
@@ -1676,7 +1680,7 @@ mod test_node_store_checker {
             free_lists: Default::default(),
             root_address: Some(root_addr),
             area_size_hash: area_size_hash().as_slice().try_into().unwrap(),
-            ethhash: 0,
+            ethhash,
         };
 
         let header_bytes = bytemuck::bytes_of(&header);
