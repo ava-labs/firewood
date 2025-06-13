@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use futures::Stream;
 use std::fmt::Debug;
 use std::sync::Arc;
-use storage::{FileIoError, TrieHash};
+use storage::{CheckerError, FileIoError, TrieHash};
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
 /// and can be sent and shared across threads. References with
@@ -150,6 +150,10 @@ pub enum Error {
     /// Revision not found
     #[error("revision not found")]
     RevisionNotFound,
+
+    /// Checker error
+    #[error("checker error")]
+    CheckerError(#[from] CheckerError),
 }
 
 impl From<RevisionManagerError> for Error {

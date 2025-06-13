@@ -3,6 +3,7 @@
 
 use crate::linear::FileIoError;
 use crate::logger::trace;
+use crate::range_set::LinearAddressRangeSet;
 use arc_swap::ArcSwap;
 use arc_swap::access::DynAccess;
 use bincode::{DefaultOptions, Options as _};
@@ -46,7 +47,8 @@ use std::sync::Arc;
 use crate::hashednode::hash_node;
 use crate::node::{ByteCounter, Node};
 use crate::{
-    CacheReadStrategy, Child, FileBacked, HashType, Path, ReadableStorage, SharedNode, TrieHash,
+    CacheReadStrategy, CheckerError, Child, FileBacked, HashType, Path, ReadableStorage,
+    SharedNode, TrieHash,
 };
 
 use super::linear::WritableStorage;
@@ -1428,6 +1430,73 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     }
 }
 
+pub(crate) const STORAGE_AREA_START: LinearAddress =
+    LinearAddress::new(NodeStoreHeader::SIZE).unwrap();
+
+/// NodeStore checker
+// TODO: S needs to be writeable if we ask checker to fix the issues
+impl<S: ReadableStorage> NodeStore<Committed, S> {
+    /// Go through the filebacked storage and check for any inconsistencies. It proceeds in the following steps:
+    /// 1. Check the header
+    /// 2. traverse the trie and check the nodes
+    /// 3. check the free list
+    /// 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
+    // TODO: add merkle hash checks as well
+    pub async fn check(&self) -> Result<(), CheckerError> {
+        // 1. Check the header
+        let db_size = self.header.size;
+        let file_size = self.storage.size()?;
+        if db_size < file_size {
+            return Err(CheckerError::InvalidDBSize {
+                db_size,
+                description: format!(
+                    "db size should not be smaller than the file size ({file_size})"
+                ),
+            });
+        }
+
+        let mut visited = LinearAddressRangeSet::new(db_size)?;
+
+        // 2. traverse the trie and check the nodes
+        if let Some(root_address) = self.header.root_address {
+            // the database is not empty, traverse the trie
+            self.traverse_trie(root_address, &mut visited).await?;
+        };
+
+        // 3. check the free list - this can happen in parallel with the trie traversal
+
+        // 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
+        let _ = visited.complement(); // TODO
+
+        Ok(())
+    }
+
+    /// Recursively traverse the trie from the given root address.
+    async fn traverse_trie(
+        &self,
+        subtree_root_address: LinearAddress,
+        visited: &mut LinearAddressRangeSet,
+    ) -> Result<(), CheckerError> {
+        let (_, area_size) = self.area_index_and_size(subtree_root_address)?;
+        visited.insert_area(subtree_root_address, area_size)?;
+
+        if let Node::Branch(branch) = self.read_node(subtree_root_address)?.as_ref() {
+            // this is an internal node, traverse the children
+            let child_addrs = branch.children.iter().filter_map(|child| match child {
+                None => None,
+                Some(Child::AddressWithHash(address, _)) => Some(*address),
+                _ => panic!("the child is not persisted yet, this should not happen"),
+            });
+
+            for child_addr in child_addrs {
+                Box::pin(self.traverse_trie(child_addr, visited)).await?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
@@ -1567,5 +1636,117 @@ mod tests {
 
         let immutable = NodeStore::<Arc<ImmutableProposal>, _>::try_from(node_store).unwrap();
         println!("{:?}", immutable); // should not be reached, but need to consume immutable to avoid optimization removal
+    }
+}
+
+#[cfg(test)]
+mod test_node_store_checker {
+    use super::*;
+    use crate::linear::filebacked::FileBacked;
+    use crate::{BranchNode, LeafNode};
+
+    use std::num::NonZeroUsize;
+    use tempfile::NamedTempFile;
+
+    const NODE_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
+    const FREE_LIST_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
+
+    // Helper function to wrap the node in a StoredArea and write it to the given offset. Returns the area size on success.
+    fn write_new_node(
+        file_backed: &FileBacked,
+        node: &Node,
+        offset: u64,
+    ) -> Result<usize, FileIoError> {
+        let node_size = NodeStore::<Arc<ImmutableProposal>, FileBacked>::stored_len(node);
+        let (area_index, node_area) = AREA_SIZES
+            .iter()
+            .enumerate()
+            .find(|(_, size)| **size >= node_size)
+            .unwrap();
+        let mut stored_area_bytes = Vec::with_capacity(*node_area as usize);
+        node.as_bytes(area_index as u8, &mut stored_area_bytes);
+        file_backed.write(offset, &stored_area_bytes)?;
+        Ok(*node_area as usize)
+    }
+
+    fn write_header(
+        file_backed: &FileBacked,
+        root_addr: LinearAddress,
+        size: u64,
+    ) -> Result<(), FileIoError> {
+        #[cfg(not(feature = "ethhash"))]
+        let ethhash = 0;
+        #[cfg(feature = "ethhash")]
+        let ethhash = 1;
+        let header = NodeStoreHeader {
+            version: Version::new(),
+            endian_test: 1,
+            size,
+            free_lists: Default::default(),
+            root_address: Some(root_addr),
+            area_size_hash: area_size_hash().as_slice().try_into().unwrap(),
+            ethhash,
+        };
+
+        let header_bytes = bytemuck::bytes_of(&header);
+        file_backed.write(0, header_bytes)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_checker_traverse_correct_trie() {
+        let tf = NamedTempFile::new().unwrap();
+        let file_backed = FileBacked::new(
+            tf.path().to_path_buf(),
+            NODE_CACHE_SIZE,
+            FREE_LIST_CACHE_SIZE,
+            true,
+            CacheReadStrategy::All,
+        )
+        .unwrap();
+
+        // set up a basic trie
+        let mut offset = NodeStoreHeader::SIZE;
+        let leaf = Node::Leaf(LeafNode {
+            partial_path: Path::from([0, 1]),
+            value: Box::new([3, 4, 5]),
+        });
+        let leaf_addr = LinearAddress::new(offset).unwrap();
+        let leaf_area = write_new_node(&file_backed, &leaf, offset).unwrap();
+        offset += leaf_area as u64;
+
+        let mut branch_children: [Option<Child>; BranchNode::MAX_CHILDREN] = Default::default();
+        branch_children[1] = Some(Child::AddressWithHash(leaf_addr, HashType::default()));
+        let branch = Node::Branch(Box::new(BranchNode {
+            partial_path: Path::from([0]),
+            value: None,
+            children: branch_children,
+        }));
+        let branch_addr = LinearAddress::new(offset).unwrap();
+        let branch_area = write_new_node(&file_backed, &branch, offset).unwrap();
+        offset += branch_area as u64;
+
+        let mut root_children: [Option<Child>; BranchNode::MAX_CHILDREN] = Default::default();
+        root_children[0] = Some(Child::AddressWithHash(branch_addr, HashType::default()));
+        let root = Node::Branch(Box::new(BranchNode {
+            partial_path: Path::from([]),
+            value: None,
+            children: root_children,
+        }));
+        let root_addr = LinearAddress::new(offset).unwrap();
+        let root_area = write_new_node(&file_backed, &root, offset).unwrap();
+        offset += root_area as u64;
+
+        write_header(&file_backed, root_addr, offset).unwrap();
+
+        // test that the we traversed the entire trie
+        let node_store = NodeStore::open(Arc::new(file_backed)).unwrap();
+        let mut visited = LinearAddressRangeSet::new(offset).unwrap();
+        node_store
+            .traverse_trie(root_addr, &mut visited)
+            .await
+            .unwrap();
+        let complement = visited.complement();
+        assert_eq!(complement.into_iter().collect::<Vec<_>>(), vec![]);
     }
 }

@@ -6,6 +6,7 @@ rust-version = "1.85.0"
 
 [dependencies]
 firewood = { version = "0.0.5", path = "../firewood" }
+storage = { version = "0.0.5", path = "../storage" }
 clap = { version = "4.5.0", features = ["cargo", "derive"] }
 env_logger = "0.11.2"
 log = "0.4.20"
@@ -19,6 +20,7 @@ anyhow = "1.0.79"
 assert_cmd = "2.0.13"
 predicates = "3.1.0"
 serial_test = "3.0.0"
+rand = "0.9.1"
 
 [lints.rust]
 unsafe_code = "deny"
