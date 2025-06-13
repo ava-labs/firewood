@@ -60,6 +60,21 @@ pub enum BatchOp<K: KeyType, V: ValueType> {
     },
 }
 
+impl<K: KeyType + Clone, V: ValueType + Clone> Clone for BatchOp<K, V> {
+    fn clone(&self) -> Self {
+        match self {
+            BatchOp::Put { key, value } => BatchOp::Put {
+                key: key.clone(),
+                value: value.clone(),
+            },
+            BatchOp::Delete { key } => BatchOp::Delete { key: key.clone() },
+            BatchOp::DeleteRange { prefix } => BatchOp::DeleteRange {
+                prefix: prefix.clone(),
+            },
+        }
+    }
+}
+
 /// A list of operations to consist of a batch that
 /// can be proposed
 pub type Batch<K, V> = Vec<BatchOp<K, V>>;
