@@ -10,6 +10,22 @@
 //!
 //! This module should be used to generate trie root hash.
 
+#![allow(
+    clippy::arithmetic_side_effects,
+    reason = "Found 7 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::bool_to_int_with_if,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::cast_possible_truncation,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::indexing_slicing,
+    reason = "Found 13 occurrences after enabling the lint."
+)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
 #[cfg(not(feature = "std"))]

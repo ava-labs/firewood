@@ -6,6 +6,31 @@
 // object. Instead, we probably should use an IO system that can perform multiple
 // read/write operations at once
 
+#![allow(
+    clippy::arithmetic_side_effects,
+    reason = "Found 5 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::cast_possible_truncation,
+    reason = "Found 3 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::indexing_slicing,
+    reason = "Found 4 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::missing_errors_doc,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::missing_fields_in_debug,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::unwrap_used,
+    reason = "Found 18 occurrences after enabling the lint."
+)]
+
 use std::fs::{File, OpenOptions};
 use std::io::Read;
 use std::num::NonZero;

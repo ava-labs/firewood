@@ -1,6 +1,19 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#![allow(
+    clippy::doc_link_with_quotes,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::unnecessary_wraps,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::unused_async,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+
 use clap::Args;
 use firewood::db::{Db, DbConfig};
 use firewood::merkle::Key;

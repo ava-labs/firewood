@@ -1,6 +1,19 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#![allow(
+    clippy::arithmetic_side_effects,
+    reason = "Found 3 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::cast_possible_truncation,
+    reason = "Found 2 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::indexing_slicing,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+
 use super::{FileIoError, ReadableStorage, WritableStorage};
 use metrics::counter;
 use std::io::{Cursor, Read};
