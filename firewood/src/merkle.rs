@@ -1821,7 +1821,7 @@ mod tests {
     fn test_root_hash_eth_compatible<T: AsRef<[u8]> + Clone + Ord>(kvs: &[(T, T)]) {
         use ethereum_types::H256;
         use ethhasher::KeccakHasher;
-        use triehash::trie_root;
+        use firewood_triehash::trie_root;
 
         let merkle = merkle_build_test(kvs.to_vec()).unwrap().hash();
         let firewood_hash = merkle.nodestore.root_hash().unwrap().unwrap_or_default();

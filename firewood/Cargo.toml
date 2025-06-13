@@ -40,7 +40,7 @@ branch_factor_256 = [ "firewood-storage/branch_factor_256" ]
 ethhash = [ "firewood-storage/ethhash" ]
 
 [dev-dependencies]
-triehash = { version = "0.8.5", path = "../triehash" }
+firewood-triehash = { version = "0.8.5", path = "../triehash" }
 criterion = { version = "0.6.0", features = ["async_tokio"] }
 rand = "0.9.0"
 rand_distr = "0.5.0"
