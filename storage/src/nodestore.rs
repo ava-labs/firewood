@@ -1,6 +1,43 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#![allow(
+    clippy::arithmetic_side_effects,
+    reason = "Found 5 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::cast_possible_truncation,
+    reason = "Found 20 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::default_trait_access,
+    reason = "Found 6 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::indexing_slicing,
+    reason = "Found 9 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::match_wildcard_for_single_variants,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::missing_errors_doc,
+    reason = "Found 15 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::missing_panics_doc,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::needless_pass_by_value,
+    reason = "Found 3 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::unwrap_used,
+    reason = "Found 2 occurrences after enabling the lint."
+)]
+
 use crate::linear::FileIoError;
 use crate::logger::trace;
 use arc_swap::ArcSwap;

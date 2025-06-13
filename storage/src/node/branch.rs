@@ -1,6 +1,27 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#![allow(
+    clippy::cast_possible_truncation,
+    reason = "Found 2 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::indexing_slicing,
+    reason = "Found 2 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::large_stack_arrays,
+    reason = "Found 2 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::match_same_arms,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::missing_panics_doc,
+    reason = "Found 2 occurrences after enabling the lint."
+)]
+
 use serde::ser::SerializeStruct as _;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;

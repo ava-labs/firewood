@@ -1,6 +1,15 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#![allow(
+    clippy::assigning_clones,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::unwrap_used,
+    reason = "Found 7 occurrences after enabling the lint."
+)]
+
 use std::array::from_fn;
 use std::fs::File;
 use std::num::NonZeroU64;

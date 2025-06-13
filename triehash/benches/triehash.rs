@@ -6,6 +6,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#![allow(
+    clippy::arithmetic_side_effects,
+    reason = "Found 5 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::indexing_slicing,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+
 use criterion::{Criterion, criterion_group, criterion_main};
 use ethereum_types::H256;
 use firewood_triehash::trie_root;

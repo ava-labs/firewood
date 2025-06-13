@@ -1,6 +1,47 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#![allow(
+    clippy::cast_possible_truncation,
+    reason = "Found 5 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::items_after_statements,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::large_stack_arrays,
+    reason = "Found 3 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::match_same_arms,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::missing_errors_doc,
+    reason = "Found 6 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::missing_panics_doc,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::needless_pass_by_value,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::too_many_lines,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::unnecessary_wraps,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![allow(
+    unused_variables,
+    reason = "Found 2 occurrences after enabling the lint."
+)]
+
 use crate::proof::{Proof, ProofError, ProofNode};
 use crate::range_proof::RangeProof;
 use crate::stream::{MerkleKeyValueStream, PathIterator};

@@ -1,6 +1,15 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#![allow(
+    clippy::arithmetic_side_effects,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::cast_possible_truncation,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+
 use crate::hashednode::{HasUpdate, Hashable, Preimage};
 use crate::{TrieHash, ValueDigest};
 /// Merkledb compatible hashing algorithm.

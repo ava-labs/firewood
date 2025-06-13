@@ -2,6 +2,18 @@
 // See the file LICENSE.md for licensing terms.
 //
 
+#![allow(
+    clippy::arithmetic_side_effects,
+    reason = "Found 2 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::cast_possible_truncation,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::match_same_arms,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
 #![doc = include_str!("../README.md")]
 
 use clap::{Parser, Subcommand, ValueEnum};

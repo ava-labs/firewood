@@ -2,6 +2,27 @@
 // See the file LICENSE.md for licensing terms.
 
 // TODO: remove bitflags, we only use one bit
+#![allow(
+    clippy::arithmetic_side_effects,
+    reason = "Found 9 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::from_iter_instead_of_collect,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::indexing_slicing,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::inline_always,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::needless_pass_by_value,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
