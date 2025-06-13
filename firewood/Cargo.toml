@@ -3,12 +3,17 @@ name = "firewood"
 version = "0.0.5"
 edition = "2024"
 authors = [
-     "Ted Yin (@Determinant) <ted@avalabs.org>",
-     "Dan Sover (@exdx) <dan.sover@avalabs.org>",
-     "Hao Hao (@haohao-os) <hao.hao@avalabs.org>",
-     "Gyuho Lee (@gyuho) <gyuho.lee@avalabs.org>",
-     "Sam Batschelet (@hexfusion) <sam.batschelet@avalabs.org>",
-     "Ron Kuris (@rkuris) <ron.kuris@avalabs.org>",
+     "Angel Leon <gubatron@gmail.com>",
+     "Austin Larson <78000745+alarso16@users.noreply.github.com>",
+     "Cesar <137245636+nytzuga@users.noreply.github.com>",
+     "Dan Laine <daniel.laine@avalabs.org>",
+     "Dan Sover <dan.sover@avalabs.org>",
+     "Hao Hao <hao.hao@avalabs.org>",
+     "Patrick O'Grady <prohb125@gmail.com>",
+     "Richard Pringle <rpring9@gmail.com>",
+     "Ron Kuris <ron.kuris@avalabs.org>",
+     "Sam Batschelet <sam.batschelet@avalabs.org>",
+     "xinifinity <113067541+xinifinity@users.noreply.github.com>",
 ]
 description = "Firewood is an embedded key-value store, optimized to store blockchain state."
 license-file = "../LICENSE.md"
@@ -66,7 +71,7 @@ explicit_deref_methods = "warn"
 missing_const_for_fn = "warn"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-firewood-storage = { path = "../storage", features = ["io-uring"] }
+firewood-storage = { version = "0.0.5", path = "../storage", features = ["io-uring"] }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
-firewood-storage = { path = "../storage" }
+firewood-storage = { version = "0.0.5", path = "../storage" }
