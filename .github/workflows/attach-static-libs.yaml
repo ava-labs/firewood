@@ -9,6 +9,8 @@ on:
   push:
     tags:
       - "*"
+    branches:
+      - "main"
   pull_request:
 
 env:
@@ -91,6 +93,10 @@ jobs:
             export target_branch="${GITHUB_REF#refs/tags/}"
             echo "Using tag name as target_branch: $target_branch"
             echo "target_branch=$target_branch" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event_name }}" == "push" && "${{ github.ref_name }}" == "main" ]]; then
+            export target_branch="main-ci" # Avoid pushing to main branch of firewood-go repo
+            echo "Using main-ci as target branch for push to main: $target_branch"
+            echo "target_branch=$target_branch" >> "$GITHUB_OUTPUT"
           elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
             export target_branch="${{ github.event.pull_request.head.ref }}"
             echo "Using PR head name as target branch: $target_branch"
@@ -129,14 +135,17 @@ jobs:
           git config --global user.name "FirewoodCI"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b ${{ steps.determine_branch.outputs.target_branch }}
+          echo "Updating ffi module path before pushing to alternative remote"
+          pushd ffi
+          go mod edit -module github.com/ava-labs/firewood-go/ffi
+          popd
           git add .
           git commit -m "firewood ci ${{ github.sha }}: attach firewood static libs"
+          git push -u origin ${{ steps.determine_branch.outputs.target_branch }} --force
           
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
             git tag -a "${GITHUB_REF#refs/tags/}" -m "firewood ci ${{ github.sha }}: attach firewood static libs"
             git push origin "refs/tags/${GITHUB_REF#refs/tags/}"
-          else
-            git push -u origin ${{ steps.determine_branch.outputs.target_branch }} --force
           fi
 
   # Check out the branch created in the previous job on a matrix of
