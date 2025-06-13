@@ -1652,7 +1652,7 @@ mod test_node_store_checker {
         node: &Node,
         offset: u64,
     ) -> Result<usize, FileIoError> {
-        let node_size = NodeStore::<Arc<ImmutableProposal>, FileBacked>::stored_len(&node);
+        let node_size = NodeStore::<Arc<ImmutableProposal>, FileBacked>::stored_len(node);
         let (area_index, node_area) = AREA_SIZES
             .iter()
             .enumerate()
@@ -1684,7 +1684,7 @@ mod test_node_store_checker {
         };
 
         let header_bytes = bytemuck::bytes_of(&header);
-        file_backed.write(0, &header_bytes)?;
+        file_backed.write(0, header_bytes)?;
         Ok(())
     }
 

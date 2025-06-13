@@ -89,11 +89,11 @@ impl<T: Clone + Ord + std::fmt::Debug> RangeSet<T> {
             next_addr = self.index.next_item_address(curr_addr);
         }
 
-        return CoalescingRanges {
+        CoalescingRanges {
             prev_consecutive_range,
             intersecting_ranges,
             next_consecutive_range,
-        };
+        }
     }
 
     fn insert_range_helper(
@@ -140,8 +140,8 @@ impl<T: Clone + Ord + std::fmt::Debug> RangeSet<T> {
         // remove the coalescing ranges
         let remove_ranges_iter = prev_consecutive_range
             .into_iter()
-            .chain(intersecting_ranges.into_iter())
-            .chain(next_consecutive_range.into_iter());
+            .chain(intersecting_ranges)
+            .chain(next_consecutive_range);
         let remove_keys = remove_ranges_iter
             .map(|range| range.start.clone())
             .collect::<Vec<_>>();
@@ -272,7 +272,6 @@ impl IntoIterator for LinearAddressRangeSet {
     type Item = Range<LinearAddress>;
     type IntoIter = <RangeSet<LinearAddress> as IntoIterator>::IntoIter;
 
-    #[expect(clippy::unwrap_used)]
     fn into_iter(self) -> Self::IntoIter {
         self.range_set.into_iter()
     }
