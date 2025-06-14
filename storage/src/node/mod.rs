@@ -223,12 +223,7 @@ impl Node {
     pub fn as_bytes<T: ExtendableBytes>(&self, prefix: u8, encoded: &mut T) {
         match self {
             Node::Branch(b) => {
-                let child_iter = b
-                    .children
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(offset, child)| child.as_ref().map(|c| (offset, c)));
-                let childcount = child_iter.clone().count();
+                let childcount = b.children.iter().filter(|c| c.is_some()).count();
 
                 // encode the first byte
                 let pp_len = if b.partial_path.0.len() <= MAX_ENCODED_PARTIAL_PATH_LEN {
@@ -272,10 +267,10 @@ impl Node {
 
                 // encode the children
                 if childcount == BranchNode::MAX_CHILDREN {
-                    for (_, child) in child_iter {
-                        if let Child::AddressWithHash(address, hash) = child {
+                    for child in b.children.iter() {
+                        if let Some(Child::AddressWithHash(address, hash)) = child {
                             encoded.extend_from_slice(&address.get().to_ne_bytes());
-                            encoded.extend_from_slice(&hash.serialized_bytes());
+                            hash.write_to_vec(encoded);
                         } else {
                             panic!(
                                 "attempt to serialize to persist a branch with a child that is not an AddressWithHash"
@@ -283,13 +278,16 @@ impl Node {
                         }
                     }
                 } else {
-                    for (position, child) in child_iter {
+                    for (position, child) in b.children.iter().enumerate() {
+                        let Some(child) = child else {
+                            continue;
+                        };
                         encoded
                             .write_varint(position)
                             .expect("writing to vec should succeed");
                         if let Child::AddressWithHash(address, hash) = child {
                             encoded.extend_from_slice(&address.get().to_ne_bytes());
-                            encoded.extend_from_slice(&hash.serialized_bytes());
+                            hash.write_to_vec(encoded);
                         } else {
                             panic!(
                                 "attempt to serialize to persist a branch with a child that is not an AddressWithHash"
