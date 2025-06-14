@@ -3,6 +3,15 @@
 
 // Ethereum compatible hashing algorithm.
 
+#![allow(
+    clippy::indexing_slicing,
+    reason = "Found 4 occurrences after enabling the lint."
+)]
+#![allow(
+    clippy::too_many_lines,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+
 use std::iter::once;
 
 use crate::logger::warn;
@@ -20,7 +29,7 @@ use rlp::{Rlp, RlpStream};
 
 impl HasUpdate for Keccak256 {
     fn update<T: AsRef<[u8]>>(&mut self, data: T) {
-        sha3::Digest::update(self, data)
+        sha3::Digest::update(self, data);
     }
 }
 
@@ -138,7 +147,7 @@ impl<T: Hashable> Preimage for T {
                     None => {
                         rlp.append_empty_data();
                     }
-                };
+                }
             } else {
                 match self.value_digest() {
                     Some(ValueDigest::Value(bytes)) => rlp.append(&bytes),

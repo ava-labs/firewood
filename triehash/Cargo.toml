@@ -30,3 +30,6 @@ std = [
 name = "triehash"
 path = "benches/triehash.rs"
 harness = false
+
+[lints]
+workspace = true

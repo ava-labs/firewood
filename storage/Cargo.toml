@@ -46,3 +46,6 @@ ethhash = [ "dep:rlp", "dep:sha3", "dep:bytes" ]
 [[bench]]
 name = "serializer"
 harness = false
+
+[lints]
+workspace = true

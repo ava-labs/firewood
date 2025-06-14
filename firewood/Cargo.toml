@@ -59,15 +59,11 @@ hash-db = "0.16.0"
 name = "hashops"
 harness = false
 
-[lints.clippy]
-unwrap_used = "warn"
-indexing_slicing = "warn"
-explicit_deref_methods = "warn"
-missing_const_for_fn = "warn"
-arithmetic_side_effects = "warn"
-
 [target.'cfg(target_os = "linux")'.dependencies]
 storage = { path = "../storage", features = ["io-uring"] }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 storage = { path = "../storage" }
+
+[lints]
+workspace = true
