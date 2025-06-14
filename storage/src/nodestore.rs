@@ -37,7 +37,7 @@ use std::fmt::Debug;
 /// I --> |commit|N("New commit NodeStore&lt;Committed, S&gt;")
 /// style E color:#FFFFFF, fill:#AA00FF, stroke:#AA00FF
 /// ```
-use std::io::{Error, ErrorKind, Write};
+use std::io::{Error, ErrorKind};
 use std::mem::{offset_of, take};
 use std::num::NonZeroU64;
 use std::ops::Deref;
@@ -694,14 +694,34 @@ impl Version {
     const SIZE: u64 = std::mem::size_of::<Self>() as u64;
 
     /// construct a [Version] header from the firewood version
-    fn new() -> Self {
-        let mut version_bytes: [u8; Self::SIZE as usize] = Default::default();
-        let version = env!("CARGO_PKG_VERSION");
-        let _ = version_bytes
-            .as_mut_slice()
-            .write_all(format!("firewood {}", version).as_bytes());
+    const fn new() -> Self {
+        // statically construct the version string using the env variable set by build.rs
+        const VERSION_STR: &str = concat!("firewood ", env!("FIREWOOD_DB_VERSION"));
+
+        // compile-time assertion that the version string is not too long.
+        const {
+            assert!(
+                VERSION_STR.len() <= Self::SIZE as usize,
+                "Version string too long"
+            );
+        }
+
+        // statically extend the version string to the full size of the Version struct
+        const VERSION_BYTES: [u8; Version::SIZE as usize] = {
+            let mut bytes = [0u8; Version::SIZE as usize];
+            let mut i = 0;
+            loop {
+                if i >= VERSION_STR.len() {
+                    break;
+                }
+                bytes[i] = VERSION_STR.as_bytes()[i];
+                i += 1;
+            }
+            bytes
+        };
+
         Self {
-            bytes: version_bytes,
+            bytes: VERSION_BYTES,
         }
     }
 }
