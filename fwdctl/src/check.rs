@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use clap::Args;
 use firewood::v2::api;
-use storage::{CacheReadStrategy, FileBacked, NodeStore, check_node_store};
+use storage::{CacheReadStrategy, FileBacked, NodeStore};
 
 // TODO: (optionally) add a fix option
 #[derive(Args)]
@@ -37,6 +37,6 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     )?);
 
     let node_store = NodeStore::open(storage)?;
-    check_node_store(&node_store).await?;
+    node_store.check().await?;
     Ok(())
 }

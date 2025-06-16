@@ -11,12 +11,15 @@
 //!
 //! A [NodeStore] is backed by a [ReadableStorage] which is persisted storage.
 
-mod checker;
+use std::ops::Range;
+use thiserror::Error;
+
 mod hashednode;
 mod hashers;
 mod linear;
 mod node;
 mod nodestore;
+mod range_set;
 mod trie_hash;
 
 /// Logger module for handling logging functionality
@@ -24,7 +27,7 @@ pub mod logger;
 
 // re-export these so callers don't need to know where they are
 pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
-pub use linear::{ReadableStorage, WritableStorage};
+pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use node::path::{NibblesIterator, Path};
 pub use node::{BranchNode, Child, LeafNode, Node, PathIterItem, branch::HashType};
 pub use nodestore::{
@@ -36,8 +39,6 @@ pub use linear::filebacked::FileBacked;
 pub use linear::memory::MemStore;
 
 pub use trie_hash::TrieHash;
-
-pub use checker::{CheckerError, check_node_store};
 
 /// A shared node, which is just a triophe Arc of a node
 pub type SharedNode = triomphe::Arc<Node>;
@@ -75,4 +76,59 @@ pub fn empty_trie_hash() -> TrieHash {
         .as_slice()
         .try_into()
         .expect("empty trie hash is 32 bytes")
+}
+
+/// Errors returned by the checker
+#[derive(Error, Debug)]
+#[non_exhaustive]
+pub enum CheckerError {
+    /// The file size is not valid
+    #[error("Invalid DB size ({db_size}): {description}")]
+    InvalidDBSize {
+        /// The size of the db
+        db_size: u64,
+        /// The description of the error
+        description: String,
+    },
+
+    /// The address is out of bounds
+    #[error("stored area at {start} with size {size} is out of bounds ({bounds:?})")]
+    AreaOutOfBounds {
+        /// Start of the StoredArea
+        start: LinearAddress,
+        /// Size of the StoredArea
+        size: u64,
+        /// Valid range of addresses
+        bounds: Range<LinearAddress>,
+    },
+
+    /// Stored areas intersect
+    #[error(
+        "stored area at {start} with size {size} intersects with other stored areas: {intersection:?}"
+    )]
+    AreaIntersects {
+        /// Start of the StoredArea
+        start: LinearAddress,
+        /// Size of the StoredArea
+        size: u64,
+        /// The intersection
+        intersection: Vec<Range<LinearAddress>>,
+    },
+
+    /// Freelist area size does not match
+    #[error(
+        "Free area {address} has miss matching size: has {size} bytes but is in freelist {freelist_size}"
+    )]
+    FreelistAreaSizeMismatch {
+        /// Address of the free area
+        address: LinearAddress,
+        /// Actual size of the free area
+        size: u64,
+        /// Expected size corresponding to the freelist
+        freelist_size: u64,
+    },
+
+    /// IO error
+    #[error("IO error")]
+    IO(#[from] FileIoError),
 }
