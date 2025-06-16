@@ -8,6 +8,7 @@ use std::ops::Deref;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::Path;
+use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 
@@ -39,6 +40,7 @@ fn next_id() -> ProposalId {
 ///
 /// These handles are passed to the other FFI functions.
 ///
+#[derive(Debug)]
 pub struct DatabaseHandle<'p> {
     /// List of oustanding proposals, by ID
     // Keep proposals first, as they must be dropped before the database handle is dropped due to lifetime
@@ -241,7 +243,7 @@ pub struct KeyValue {
 /// The new root hash of the database, in Value form.
 /// A `Value` containing {0, "error message"} if the commit failed.
 ///
-/// # Errors    
+/// # Errors
 ///
 /// * `"key-value pair is null"` - A `KeyValue` struct is null
 /// * `"db should be non-null"` - The database handle is null
@@ -734,22 +736,22 @@ pub unsafe extern "C" fn fwd_free_value(value: *const Value) {
 #[derive(Debug)]
 #[repr(C)]
 pub struct DatabaseCreationResult {
-    pub db: *const DatabaseHandle<'static>,
-    pub error_str: *const u8,
+    pub db: Option<Box<DatabaseHandle<'static>>>,
+    pub error_str: Option<NonNull<c_char>>,
 }
 
 impl From<Result<Db, String>> for DatabaseCreationResult {
     fn from(result: Result<Db, String>) -> Self {
         match result {
             Ok(db) => DatabaseCreationResult {
-                db: Box::into_raw(Box::new(db.into())),
-                error_str: std::ptr::null(),
+                db: Some(Box::new(db.into())),
+                error_str: None,
             },
             Err(error_msg) => {
                 let error_cstring = CString::new(error_msg).unwrap_or_default().into_raw();
                 DatabaseCreationResult {
-                    db: std::ptr::null(),
-                    error_str: error_cstring.cast::<u8>(),
+                    db: None,
+                    error_str: NonNull::new(error_cstring),
                 }
             }
         }
@@ -767,19 +769,11 @@ impl From<Result<Db, String>> for DatabaseCreationResult {
 ///
 /// This function is unsafe because it dereferences raw pointers.
 /// The caller must ensure that `result` is a valid pointer.
-///
-/// # Panics
-///
-/// This function panics if `result` is `null`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_free_database_error_result(result: *const DatabaseCreationResult) {
-    // Check result is valid.
-    let result = unsafe { result.as_ref() }.expect("result should be non-null");
-
+pub unsafe extern "C" fn fwd_free_database_error_result(result: &mut DatabaseCreationResult) {
     // Free the error string if it exists
-    if !result.error_str.is_null() {
-        let raw_str = result.error_str as *mut c_char;
-        let cstr = unsafe { CString::from_raw(raw_str) };
+    if let Some(ptr) = result.error_str.take() {
+        let cstr = unsafe { CString::from_raw(ptr.as_ptr()) };
         drop(cstr);
     }
     // Note: we don't free the db pointer as it's managed by the caller
