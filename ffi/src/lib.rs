@@ -778,7 +778,7 @@ pub unsafe extern "C" fn fwd_free_database_error_result(result: *mut DatabaseCre
 
     // Free the error string if it exists
     if !result.error_str.is_null() {
-        let raw_str = result.error_str as *mut c_char;
+        let raw_str = result.error_str.cast::<c_char>();
         let cstr = unsafe { CString::from_raw(raw_str) };
         drop(cstr);
     }
