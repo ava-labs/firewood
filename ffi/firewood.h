@@ -46,7 +46,7 @@ typedef struct KeyValue {
  */
 typedef struct DatabaseCreationResult {
   const struct DatabaseHandle *db;
-  const uint8_t *error_str;
+  uint8_t *error_str;
 } DatabaseCreationResult;
 
 /**
@@ -193,7 +193,7 @@ struct Value fwd_drop_proposal(const struct DatabaseHandle *db, uint32_t proposa
  *
  * This function panics if `result` is `null`.
  */
-void fwd_free_database_error_result(const struct DatabaseCreationResult *result);
+void fwd_free_database_error_result(struct DatabaseCreationResult *result);
 
 /**
  * Frees the memory associated with a `Value`.
@@ -211,7 +211,7 @@ void fwd_free_database_error_result(const struct DatabaseCreationResult *result)
  *
  * This function panics if `value` is `null`.
  */
-void fwd_free_value(const struct Value *value);
+void fwd_free_value(struct Value *value);
 
 /**
  * Gets the value associated with the given key from the proposal provided.

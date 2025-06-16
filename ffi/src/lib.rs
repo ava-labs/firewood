@@ -706,7 +706,7 @@ impl From<()> for Value {
 ///
 /// This function panics if `value` is `null`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_free_value(value: *const Value) {
+pub unsafe extern "C" fn fwd_free_value(value: *mut Value) {
     // Check value is valid.
     let value = unsafe { value.as_ref() }.expect("value should be non-null");
 
@@ -735,7 +735,7 @@ pub unsafe extern "C" fn fwd_free_value(value: *const Value) {
 #[repr(C)]
 pub struct DatabaseCreationResult {
     pub db: *const DatabaseHandle<'static>,
-    pub error_str: *const u8,
+    pub error_str: *mut u8,
 }
 
 impl From<Result<Db, String>> for DatabaseCreationResult {
@@ -743,7 +743,7 @@ impl From<Result<Db, String>> for DatabaseCreationResult {
         match result {
             Ok(db) => DatabaseCreationResult {
                 db: Box::into_raw(Box::new(db.into())),
-                error_str: std::ptr::null(),
+                error_str: std::ptr::null_mut(),
             },
             Err(error_msg) => {
                 let error_cstring = CString::new(error_msg).unwrap_or_default().into_raw();
@@ -772,7 +772,7 @@ impl From<Result<Db, String>> for DatabaseCreationResult {
 ///
 /// This function panics if `result` is `null`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_free_database_error_result(result: *const DatabaseCreationResult) {
+pub unsafe extern "C" fn fwd_free_database_error_result(result: *mut DatabaseCreationResult) {
     // Check result is valid.
     let result = unsafe { result.as_ref() }.expect("result should be non-null");
 
