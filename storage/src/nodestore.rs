@@ -287,7 +287,7 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
     }
 
     /// Get the size of an area index (used by the checker)
-    pub fn size_from_area_index(&self, index: AreaIndex) -> u64 {
+    pub fn size_from_area_index(index: AreaIndex) -> u64 {
         AREA_SIZES[index as usize]
     }
 }
@@ -1482,14 +1482,15 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 
         if let Node::Branch(branch) = self.read_node(subtree_root_address)?.as_ref() {
             // this is an internal node, traverse the children
-            let child_addrs = branch.children.iter().filter_map(|child| match child {
-                None => None,
-                Some(Child::AddressWithHash(address, _)) => Some(*address),
-                _ => panic!("the child is not persisted yet, this should not happen"),
-            });
-
-            for child_addr in child_addrs {
-                Box::pin(self.traverse_trie(child_addr, visited)).await?;
+            for child in branch.children.iter().filter_map(|child| child.as_ref()) {
+                match child {
+                    Child::AddressWithHash(address, _) => {
+                        Box::pin(self.traverse_trie(*address, visited)).await?;
+                    }
+                    Child::Node(_) => {
+                        panic!("the child is not persisted yet, this should not happen");
+                    }
+                }
             }
         }
 
@@ -1505,6 +1506,7 @@ mod tests {
     use crate::linear::memory::MemStore;
     use crate::{BranchNode, LeafNode};
     use arc_swap::access::DynGuard;
+    use nonzero_ext::nonzero;
     use test_case::test_case;
 
     use super::*;
@@ -1590,7 +1592,7 @@ mod tests {
         value: Some(vec![9, 10, 11].into_boxed_slice()),
         children: from_fn(|i| {
             if i == 15 {
-                Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
+                Some(Child::AddressWithHash(nonzero!(1u64), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
             } else {
                 None
             }
@@ -1600,7 +1602,7 @@ mod tests {
         partial_path: Path::from([6, 7, 8]),
         value: Some(vec![9, 10, 11].into_boxed_slice()),
         children: from_fn(|_|
-            Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
+            Some(Child::AddressWithHash(nonzero!(1u64), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
         ),
     }; "branch node with all child")]
     #[test_case(
@@ -1645,52 +1647,30 @@ mod test_node_store_checker {
     use crate::linear::filebacked::FileBacked;
     use crate::{BranchNode, LeafNode};
 
+    use nonzero_ext::nonzero;
     use std::num::NonZeroUsize;
     use tempfile::NamedTempFile;
 
-    const NODE_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
-    const FREE_LIST_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
+    const NODE_CACHE_SIZE: NonZeroUsize = nonzero!(1000usize);
+    const FREE_LIST_CACHE_SIZE: NonZeroUsize = nonzero!(1000usize);
 
     // Helper function to wrap the node in a StoredArea and write it to the given offset. Returns the area size on success.
-    fn write_new_node(
-        file_backed: &FileBacked,
-        node: &Node,
-        offset: u64,
-    ) -> Result<usize, FileIoError> {
-        let node_size = NodeStore::<Arc<ImmutableProposal>, FileBacked>::stored_len(node);
-        let (area_index, node_area) = AREA_SIZES
-            .iter()
-            .enumerate()
-            .find(|(_, size)| **size >= node_size)
-            .unwrap();
-        let mut stored_area_bytes = Vec::with_capacity(*node_area as usize);
+    fn write_new_node(file_backed: &FileBacked, node: &Node, offset: u64) -> usize {
+        let node_length = NodeStore::<Arc<ImmutableProposal>, FileBacked>::stored_len(node);
+        let area_index = area_size_to_index(node_length).unwrap();
+        let area_size = AREA_SIZES[area_index as usize] as usize;
+        let mut stored_area_bytes = Vec::with_capacity(area_size);
         node.as_bytes(area_index as u8, &mut stored_area_bytes);
-        file_backed.write(offset, &stored_area_bytes)?;
-        Ok(*node_area as usize)
+        file_backed.write(offset, &stored_area_bytes).unwrap();
+        area_size
     }
 
-    fn write_header(
-        file_backed: &FileBacked,
-        root_addr: LinearAddress,
-        size: u64,
-    ) -> Result<(), FileIoError> {
-        #[cfg(not(feature = "ethhash"))]
-        let ethhash = 0;
-        #[cfg(feature = "ethhash")]
-        let ethhash = 1;
-        let header = NodeStoreHeader {
-            version: Version::new(),
-            endian_test: 1,
-            size,
-            free_lists: Default::default(),
-            root_address: Some(root_addr),
-            area_size_hash: area_size_hash().as_slice().try_into().unwrap(),
-            ethhash,
-        };
-
+    fn write_header(file_backed: &FileBacked, root_addr: LinearAddress, size: u64) {
+        let mut header = NodeStoreHeader::new();
+        header.size = size;
+        header.root_address = Some(root_addr);
         let header_bytes = bytemuck::bytes_of(&header);
-        file_backed.write(0, header_bytes)?;
-        Ok(())
+        file_backed.write(0, header_bytes).unwrap();
     }
 
     #[tokio::test]
@@ -1712,7 +1692,7 @@ mod test_node_store_checker {
             value: Box::new([3, 4, 5]),
         });
         let leaf_addr = LinearAddress::new(offset).unwrap();
-        let leaf_area = write_new_node(&file_backed, &leaf, offset).unwrap();
+        let leaf_area = write_new_node(&file_backed, &leaf, offset);
         offset += leaf_area as u64;
 
         let mut branch_children: [Option<Child>; BranchNode::MAX_CHILDREN] = Default::default();
@@ -1723,7 +1703,7 @@ mod test_node_store_checker {
             children: branch_children,
         }));
         let branch_addr = LinearAddress::new(offset).unwrap();
-        let branch_area = write_new_node(&file_backed, &branch, offset).unwrap();
+        let branch_area = write_new_node(&file_backed, &branch, offset);
         offset += branch_area as u64;
 
         let mut root_children: [Option<Child>; BranchNode::MAX_CHILDREN] = Default::default();
@@ -1734,10 +1714,10 @@ mod test_node_store_checker {
             children: root_children,
         }));
         let root_addr = LinearAddress::new(offset).unwrap();
-        let root_area = write_new_node(&file_backed, &root, offset).unwrap();
+        let root_area = write_new_node(&file_backed, &root, offset);
         offset += root_area as u64;
 
-        write_header(&file_backed, root_addr, offset).unwrap();
+        write_header(&file_backed, root_addr, offset);
 
         // test that the we traversed the entire trie
         let node_store = NodeStore::open(Arc::new(file_backed)).unwrap();

@@ -1,12 +1,12 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 
 use clap::Args;
 use firewood::v2::api;
+use nonzero_ext::nonzero;
 use storage::{CacheReadStrategy, FileBacked, NodeStore};
 
 // TODO: (optionally) add a fix option
@@ -25,8 +25,8 @@ pub struct Options {
 
 pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     let db_path = Path::new(&opts.db);
-    let node_cache_size = NonZeroUsize::new(1).expect("this will never crash");
-    let free_list_cache_size = NonZeroUsize::new(1).expect("this will never crash");
+    let node_cache_size = nonzero!(1usize);
+    let free_list_cache_size = nonzero!(1usize);
 
     let storage = Arc::new(FileBacked::new(
         db_path.to_path_buf(),
@@ -37,6 +37,5 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     )?);
 
     let node_store = NodeStore::open(storage)?;
-    node_store.check().await?;
-    Ok(())
+    node_store.check().await.map_err(Into::into)
 }
