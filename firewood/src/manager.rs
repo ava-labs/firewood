@@ -1,24 +1,14 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![cfg_attr(
-    feature = "ethhash",
-    expect(
-        clippy::unnecessary_wraps,
-        reason = "Found 2 occurrences after enabling the lint."
-    )
+#![expect(
+    clippy::unnecessary_wraps,
+    reason = "Found 2 occurrences after enabling the lint."
 )]
 #![cfg_attr(
     feature = "ethhash",
     expect(
         clippy::used_underscore_binding,
-        reason = "Found 1 occurrences after enabling the lint."
-    )
-)]
-#![cfg_attr(
-    not(feature = "ethhash"),
-    expect(
-        clippy::unnecessary_wraps,
         reason = "Found 1 occurrences after enabling the lint."
     )
 )]
