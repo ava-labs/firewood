@@ -564,7 +564,7 @@ fn root_hash(db: &DatabaseHandle<'_>) -> Result<Value, String> {
 /// The data stored in this struct (if `data` is not null) must be manually freed
 /// by the caller using `fwd_free_value`.
 ///
-#[derive(Debug)]
+#[derive(Debug, Default)]
 #[repr(C)]
 pub struct Value {
     pub len: usize,
@@ -582,12 +582,6 @@ impl Display for Value {
             (len, true) => write!(f, "[id] {len}"),
             (_, false) => write!(f, "[data] {:?}", self.as_slice()),
         }
-    }
-}
-
-impl Default for Value {
-    fn default() -> Self {
-        Self { len: 0, data: None }
     }
 }
 
