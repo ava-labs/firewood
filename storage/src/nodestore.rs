@@ -667,8 +667,7 @@ impl Version {
     /// - If the token does not start with "firewood ".
     /// - If the version is not parsable by [`semver::Version`].
     /// - If the version is not compatible with the current build of firewood.
-    ///   - currently, there are no version compatibility checks so this will always
-    ///     succeed but is a placeholder for future needs.
+    ///   - Currently, the minimum required version is 0.0.4.
     fn validate(&self) -> Result<(), Error> {
         let version = std::str::from_utf8(&self.bytes).map_err(|e| {
             Error::new(
