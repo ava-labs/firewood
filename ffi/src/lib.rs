@@ -87,14 +87,14 @@ impl Deref for DatabaseHandle<'_> {
 ///  * ensure that `key` is a valid pointer to a `Value` struct
 ///  * call `free_value` to free the memory associated with the returned `Value`
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_get_latest(db: &DatabaseHandle<'static>, key: Value) -> Value {
+pub unsafe extern "C" fn fwd_get_latest(db: &DatabaseHandle<'_>, key: Value) -> Value {
     get_latest(db, &key).unwrap_or_else(Into::into)
 }
 
 /// This function is not exposed to the C API.
 /// Internal call for `fwd_get_latest` to remove error handling from the C API
 #[doc(hidden)]
-fn get_latest(db: &DatabaseHandle<'static>, key: &Value) -> Result<Value, String> {
+fn get_latest(db: &DatabaseHandle<'_>, key: &Value) -> Result<Value, String> {
     // Find root hash.
     // Matches `hash` function but we use the TrieHash type here
     let Some(root) = db.root_hash_sync().map_err(|e| e.to_string())? else {
@@ -133,7 +133,7 @@ fn get_latest(db: &DatabaseHandle<'static>, key: &Value) -> Result<Value, String
 ///  * call `free_value` to free the memory associated with the returned `Value`
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_get_from_proposal(
-    db: &DatabaseHandle<'static>,
+    db: &DatabaseHandle<'_>,
     id: ProposalId,
     key: Value,
 ) -> Value {
@@ -144,7 +144,7 @@ pub unsafe extern "C" fn fwd_get_from_proposal(
 /// Internal call for `fwd_get_from_proposal` to remove error handling from the C API
 #[doc(hidden)]
 fn get_from_proposal(
-    db: &DatabaseHandle<'static>,
+    db: &DatabaseHandle<'_>,
     id: ProposalId,
     key: &Value,
 ) -> Result<Value, String> {
@@ -187,7 +187,7 @@ fn get_from_proposal(
 /// * call `free_value` to free the memory associated with the returned `Value`
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_get_from_root(
-    db: &DatabaseHandle<'static>,
+    db: &DatabaseHandle<'_>,
     root: Value,
     key: Value,
 ) -> Value {
@@ -196,7 +196,7 @@ pub unsafe extern "C" fn fwd_get_from_root(
 
 /// Internal call for `fwd_get_from_root` to remove error handling from the C API
 #[doc(hidden)]
-fn get_from_root(db: &DatabaseHandle<'static>, root: &Value, key: &Value) -> Result<Value, String> {
+fn get_from_root(db: &DatabaseHandle<'_>, root: &Value, key: &Value) -> Result<Value, String> {
     // Get the revision associated with the root hash.
     let rev = db
         .revision_sync(root.as_slice().try_into()?)
@@ -249,9 +249,9 @@ pub struct KeyValue {
 ///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_batch(
-    db: &DatabaseHandle<'static>,
+    db: &DatabaseHandle<'_>,
     nkeys: usize,
-    values: *const KeyValue,
+    values: &KeyValue,
 ) -> Value {
     batch(db, nkeys, values).unwrap_or_else(Into::into)
 }
@@ -282,16 +282,8 @@ fn convert_to_batch(values: &[KeyValue]) -> Vec<DbBatchOp<&[u8], &[u8]>> {
 
 /// Internal call for `fwd_batch` to remove error handling from the C API
 #[doc(hidden)]
-fn batch(
-    db: &DatabaseHandle<'static>,
-    nkeys: usize,
-    values: *const KeyValue,
-) -> Result<Value, String> {
+fn batch(db: &DatabaseHandle<'_>, nkeys: usize, values: &KeyValue) -> Result<Value, String> {
     let start = coarsetime::Instant::now();
-    // let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
-    if values.is_null() {
-        return Err(String::from("key-value list is null"));
-    }
 
     // Create a batch of operations to perform.
     let key_value_ref = unsafe { std::slice::from_raw_parts(values, nkeys) };
@@ -347,7 +339,7 @@ fn batch(
 pub unsafe extern "C" fn fwd_propose_on_db(
     db: *const DatabaseHandle,
     nkeys: usize,
-    values: *const KeyValue,
+    values: &KeyValue,
 ) -> Value {
     // Note: the id is guaranteed to be non-zero
     // because we use an atomic counter that starts at 1.
@@ -359,12 +351,9 @@ pub unsafe extern "C" fn fwd_propose_on_db(
 fn propose_on_db(
     db: *const DatabaseHandle,
     nkeys: usize,
-    values: *const KeyValue,
+    values: &KeyValue,
 ) -> Result<Value, String> {
     let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
-    if values.is_null() {
-        return Err(String::from("key-value list is null"));
-    }
 
     // Create a batch of operations to perform.
     let key_value_ref = unsafe { std::slice::from_raw_parts(values, nkeys) };
@@ -414,10 +403,10 @@ fn propose_on_db(
 ///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_propose_on_proposal(
-    db: &DatabaseHandle<'static>,
+    db: &DatabaseHandle<'_>,
     proposal_id: ProposalId,
     nkeys: usize,
-    values: *const KeyValue,
+    values: &KeyValue,
 ) -> Value {
     // Note: the id is guaranteed to be non-zero
     // because we use an atomic counter that starts at 1.
@@ -427,15 +416,11 @@ pub unsafe extern "C" fn fwd_propose_on_proposal(
 /// Internal call for `fwd_propose_on_proposal` to remove error handling from the C API
 #[doc(hidden)]
 fn propose_on_proposal(
-    db: &DatabaseHandle<'static>,
+    db: &DatabaseHandle<'_>,
     proposal_id: ProposalId,
     nkeys: usize,
-    values: *const KeyValue,
+    values: &KeyValue,
 ) -> Result<Value, String> {
-    if values.is_null() {
-        return Err(String::from("key-value list is null"));
-    }
-
     // Create a batch of operations to perform.
     let key_value_ref = unsafe { std::slice::from_raw_parts(values, nkeys) };
     let batch = convert_to_batch(key_value_ref);
@@ -486,13 +471,13 @@ fn propose_on_proposal(
 /// The caller must ensure that `db` is a valid pointer returned by `open_db`
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_commit(db: &DatabaseHandle<'static>, proposal_id: u32) -> Value {
+pub unsafe extern "C" fn fwd_commit(db: &DatabaseHandle<'_>, proposal_id: u32) -> Value {
     commit(db, proposal_id).map_or_else(Into::into, Into::into)
 }
 
 /// Internal call for `fwd_commit` to remove error handling from the C API
 #[doc(hidden)]
-fn commit(db: &DatabaseHandle<'static>, proposal_id: u32) -> Result<(), String> {
+fn commit(db: &DatabaseHandle<'_>, proposal_id: u32) -> Result<(), String> {
     let proposal = db
         .proposals
         .write()
@@ -516,16 +501,13 @@ fn commit(db: &DatabaseHandle<'static>, proposal_id: u32) -> Result<(), String> 
 /// The caller must ensure that `db` is a valid pointer returned by `open_db`
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_drop_proposal(
-    db: &DatabaseHandle<'static>,
-    proposal_id: u32,
-) -> Value {
+pub unsafe extern "C" fn fwd_drop_proposal(db: &DatabaseHandle<'_>, proposal_id: u32) -> Value {
     drop_proposal(db, proposal_id).map_or_else(Into::into, Into::into)
 }
 
 /// Internal call for `fwd_drop_proposal` to remove error handling from the C API
 #[doc(hidden)]
-fn drop_proposal(db: &DatabaseHandle<'static>, proposal_id: u32) -> Result<(), String> {
+fn drop_proposal(db: &DatabaseHandle<'_>, proposal_id: u32) -> Result<(), String> {
     let mut proposals = db
         .proposals
         .write()
@@ -555,22 +537,14 @@ fn drop_proposal(db: &DatabaseHandle<'static>, proposal_id: u32) -> Result<(), S
 /// The caller must ensure that `db` is a valid pointer returned by `open_db`
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_root_hash(db: &DatabaseHandle<'static>) -> Value {
+pub unsafe extern "C" fn fwd_root_hash(db: &DatabaseHandle<'_>) -> Value {
     root_hash(db).unwrap_or_else(Into::into)
 }
 
 /// This function is not exposed to the C API.
 /// Internal call for `fwd_root_hash` to remove error handling from the C API
 #[doc(hidden)]
-fn root_hash(db: &DatabaseHandle<'static>) -> Result<Value, String> {
-    // Get the root hash of the database.
-    hash(db)
-}
-
-/// This function is not exposed to the C API.
-/// It returns the current hash of an already-fetched database handle
-#[doc(hidden)]
-fn hash(db: &Db) -> Result<Value, String> {
+fn root_hash(db: &DatabaseHandle<'_>) -> Result<Value, String> {
     db.root_hash_sync()
         .map_err(|e| e.to_string())?
         .map(|root| Value::from(root.as_slice()))
@@ -751,10 +725,7 @@ impl From<Result<Db, String>> for DatabaseCreationResult {
 ///
 /// This function panics if `result` is `null`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_free_database_error_result(result: *mut DatabaseCreationResult) {
-    // Check result is valid.
-    let result = unsafe { result.as_ref() }.expect("result should be non-null");
-
+pub unsafe extern "C" fn fwd_free_database_error_result(result: &mut DatabaseCreationResult) {
     // Free the error string if it exists
     if let Some(nonnull) = result.error_str {
         let raw_str = nonnull.cast::<c_char>().as_ptr();
