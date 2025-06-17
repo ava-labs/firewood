@@ -1433,7 +1433,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 pub(crate) const STORAGE_AREA_START: LinearAddress =
     LinearAddress::new(NodeStoreHeader::SIZE).unwrap();
 
-/// NodeStore checker
+/// [`NodeStore`] checker
 // TODO: S needs to be writeable if we ask checker to fix the issues
 impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// Go through the filebacked storage and check for any inconsistencies. It proceeds in the following steps:
@@ -1461,7 +1461,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         if let Some(root_address) = self.header.root_address {
             // the database is not empty, traverse the trie
             self.traverse_trie(root_address, &mut visited).await?;
-        };
+        }
 
         // 3. check the free list - this can happen in parallel with the trie traversal
 
@@ -1642,6 +1642,8 @@ mod tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
+#[allow(clippy::indexing_slicing)]
 mod test_node_store_checker {
     use super::*;
     use crate::linear::filebacked::FileBacked;
@@ -1655,11 +1657,12 @@ mod test_node_store_checker {
     const FREE_LIST_CACHE_SIZE: NonZeroUsize = nonzero!(1000usize);
 
     // Helper function to wrap the node in a StoredArea and write it to the given offset. Returns the area size on success.
-    fn write_new_node(file_backed: &FileBacked, node: &Node, offset: u64) -> usize {
+    #[allow(clippy::cast_possible_truncation)]
+    fn write_new_node(file_backed: &FileBacked, node: &Node, offset: u64) -> u64 {
         let node_length = NodeStore::<Arc<ImmutableProposal>, FileBacked>::stored_len(node);
         let area_index = area_size_to_index(node_length).unwrap();
-        let area_size = AREA_SIZES[area_index as usize] as usize;
-        let mut stored_area_bytes = Vec::with_capacity(area_size);
+        let area_size = AREA_SIZES[area_index as usize];
+        let mut stored_area_bytes = Vec::with_capacity(area_size as usize);
         node.as_bytes(area_index as u8, &mut stored_area_bytes);
         file_backed.write(offset, &stored_area_bytes).unwrap();
         area_size
@@ -1693,7 +1696,7 @@ mod test_node_store_checker {
         });
         let leaf_addr = LinearAddress::new(offset).unwrap();
         let leaf_area = write_new_node(&file_backed, &leaf, offset);
-        offset += leaf_area as u64;
+        offset += leaf_area;
 
         let mut branch_children: [Option<Child>; BranchNode::MAX_CHILDREN] = Default::default();
         branch_children[1] = Some(Child::AddressWithHash(leaf_addr, HashType::default()));
@@ -1704,7 +1707,7 @@ mod test_node_store_checker {
         }));
         let branch_addr = LinearAddress::new(offset).unwrap();
         let branch_area = write_new_node(&file_backed, &branch, offset);
-        offset += branch_area as u64;
+        offset += branch_area;
 
         let mut root_children: [Option<Child>; BranchNode::MAX_CHILDREN] = Default::default();
         root_children[0] = Some(Child::AddressWithHash(branch_addr, HashType::default()));
@@ -1715,7 +1718,7 @@ mod test_node_store_checker {
         }));
         let root_addr = LinearAddress::new(offset).unwrap();
         let root_area = write_new_node(&file_backed, &root, offset);
-        offset += root_area as u64;
+        offset += root_area;
 
         write_header(&file_backed, root_addr, offset);
 
