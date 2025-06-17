@@ -676,7 +676,7 @@ pub unsafe extern "C" fn fwd_free_value(value: &mut Value) {
                 unsafe { Box::from_raw(std::slice::from_raw_parts_mut(data_ptr, value.len)) };
             drop(recreated_box);
         } else {
-            let raw_str = data_ptr as *mut c_char;
+            let raw_str = data_ptr.cast::<c_char>();
             let cstr = unsafe { CString::from_raw(raw_str) };
             drop(cstr);
         }
@@ -877,7 +877,7 @@ mod tests {
         let cstr = CString::new("test").unwrap();
         let value = Value {
             len: 0,
-            data: std::ptr::NonNull::new(cstr.as_ptr().cast::<u8>() as *mut u8),
+            data: std::ptr::NonNull::new(cstr.as_ptr().cast::<u8>().cast_mut()),
         };
         assert_eq!(format!("{value}"), "[error] test");
     }
