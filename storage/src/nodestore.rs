@@ -2,7 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::linear::FileIoError;
-use crate::logger::trace;
+use crate::logger::{debug, trace};
 use arc_swap::ArcSwap;
 use arc_swap::access::DynAccess;
 use bincode::{DefaultOptions, Options as _};
@@ -672,7 +672,10 @@ impl Version {
         let version = std::str::from_utf8(&self.bytes).map_err(|e| {
             Error::new(
                 ErrorKind::InvalidData,
-                format!("Invalid database version: invalid utf-8: {e}"),
+                format!(
+                    "Invalid database version: invalid utf-8: {e} (original: [{:032x}])",
+                    u128::from_be_bytes(self.bytes)
+                ),
             )
         })?;
 
@@ -694,7 +697,9 @@ impl Version {
         let version = semver::Version::parse(version).map_err(|e| {
             Error::new(
                 ErrorKind::InvalidData,
-                format!("Invalid version string: {version}: {e}"),
+                format!(
+                    "Invalid version string: unable to parse `{version}` as a semver string: {e}"
+                ),
             )
         })?;
 
@@ -709,7 +714,10 @@ impl Version {
             ));
         }
 
-        trace!("Database version is valid: {version}");
+        debug!(
+            "Database version is valid: {version} {}",
+            Self::BASE_VERSION
+        );
         Ok(())
     }
 
@@ -788,10 +796,18 @@ impl NodeStoreHeader {
     }
 
     fn validate(&self) -> Result<(), Error> {
+        trace!("Checking version...");
         self.version.validate()?;
+
+        trace!("Checking endianness...");
         self.validate_endian_test()?;
+
+        trace!("Checking area size hash...");
         self.validate_area_size_hash()?;
+
+        trace!("Checking if db ethhash flag matches build feature...");
         self.validate_ethhash()?;
+
         Ok(())
     }
 
