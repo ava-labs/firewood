@@ -2,27 +2,6 @@
 // See the file LICENSE.md for licensing terms.
 
 #![cfg_attr(
-    feature = "branch_factor_256",
-    expect(
-        clippy::unnecessary_wraps,
-        reason = "Found 1 occurrences after enabling the lint."
-    )
-)]
-#![cfg_attr(
-    feature = "branch_factor_256",
-    expect(
-        clippy::unused_self,
-        reason = "Found 1 occurrences after enabling the lint."
-    )
-)]
-#![cfg_attr(
-    feature = "branch_factor_256",
-    expect(
-        clippy::used_underscore_binding,
-        reason = "Found 1 occurrences after enabling the lint."
-    )
-)]
-#![cfg_attr(
     feature = "ethhash",
     expect(
         clippy::unnecessary_wraps,
@@ -37,14 +16,14 @@
     )
 )]
 #![cfg_attr(
-    not(any(feature = "ethhash", feature = "branch_factor_256")),
+    not(feature = "ethhash"),
     expect(
         clippy::unnecessary_wraps,
         reason = "Found 1 occurrences after enabling the lint."
     )
 )]
 #![cfg_attr(
-    not(any(feature = "ethhash", feature = "branch_factor_256")),
+    not(feature = "ethhash"),
     expect(
         clippy::unused_self,
         reason = "Found 1 occurrences after enabling the lint."

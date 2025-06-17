@@ -2,28 +2,14 @@
 // See the file LICENSE.md for licensing terms.
 
 #![cfg_attr(
-    feature = "branch_factor_256",
+    not(feature = "ethhash"),
     expect(
         clippy::arithmetic_side_effects,
         reason = "Found 1 occurrences after enabling the lint."
     )
 )]
 #![cfg_attr(
-    feature = "branch_factor_256",
-    expect(
-        clippy::cast_possible_truncation,
-        reason = "Found 1 occurrences after enabling the lint."
-    )
-)]
-#![cfg_attr(
-    not(any(feature = "ethhash", feature = "branch_factor_256")),
-    expect(
-        clippy::arithmetic_side_effects,
-        reason = "Found 1 occurrences after enabling the lint."
-    )
-)]
-#![cfg_attr(
-    not(any(feature = "ethhash", feature = "branch_factor_256")),
+    not(feature = "ethhash"),
     expect(
         clippy::cast_possible_truncation,
         reason = "Found 1 occurrences after enabling the lint."

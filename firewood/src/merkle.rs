@@ -1,13 +1,6 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![cfg_attr(
-    feature = "branch_factor_256",
-    expect(
-        clippy::large_stack_arrays,
-        reason = "Found 3 occurrences after enabling the lint."
-    )
-)]
 #![expect(
     clippy::cast_possible_truncation,
     reason = "Found 5 occurrences after enabling the lint."
@@ -1084,10 +1077,6 @@ mod tests {
     #![expect(
         clippy::unnecessary_wraps,
         reason = "Found 1 occurrences after enabling the lint."
-    )]
-    #![cfg_attr(
-        feature = "branch_factor_256",
-        expect(unused_variables, clippy::needless_pass_by_value)
     )]
 
     use super::*;

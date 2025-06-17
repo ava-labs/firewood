@@ -1,34 +1,9 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-// TODO: remove bitflags, we only use one bit
-#![cfg_attr(
-    feature = "branch_factor_256",
-    expect(
-        clippy::arithmetic_side_effects,
-        reason = "Found 7 occurrences after enabling the lint."
-    )
-)]
-#![cfg_attr(
-    feature = "branch_factor_256",
-    expect(
-        clippy::indexing_slicing,
-        reason = "Found 1 occurrences after enabling the lint."
-    )
-)]
-#![cfg_attr(
-    feature = "ethhash",
-    expect(
-        clippy::arithmetic_side_effects,
-        reason = "Found 8 occurrences after enabling the lint."
-    )
-)]
-#![cfg_attr(
-    not(any(feature = "ethhash", feature = "branch_factor_256")),
-    expect(
-        clippy::arithmetic_side_effects,
-        reason = "Found 8 occurrences after enabling the lint."
-    )
+#![expect(
+    clippy::arithmetic_side_effects,
+    reason = "Found 8 occurrences after enabling the lint."
 )]
 #![expect(
     clippy::from_iter_instead_of_collect,
@@ -39,6 +14,7 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
+// TODO: remove bitflags, we only use one bit
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;

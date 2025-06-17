@@ -1,13 +1,6 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![cfg_attr(
-    feature = "branch_factor_256",
-    expect(
-        clippy::large_stack_arrays,
-        reason = "Found 1 occurrences after enabling the lint."
-    )
-)]
 #![expect(
     clippy::arithmetic_side_effects,
     reason = "Found 4 occurrences after enabling the lint."
