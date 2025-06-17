@@ -1,41 +1,36 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![allow(
+#![cfg_attr(
+    feature = "branch_factor_256",
+    expect(
+        clippy::large_stack_arrays,
+        reason = "Found 1 occurrences after enabling the lint."
+    )
+)]
+#![expect(
     clippy::arithmetic_side_effects,
     reason = "Found 4 occurrences after enabling the lint."
 )]
-#![allow(
+#![expect(
     clippy::cast_possible_truncation,
-    reason = "Found 7 occurrences after enabling the lint."
+    reason = "Found 6 occurrences after enabling the lint."
 )]
-#![allow(
+#![expect(
     clippy::indexing_slicing,
     reason = "Found 1 occurrences after enabling the lint."
 )]
-#![allow(
+#![expect(
     clippy::items_after_statements,
     reason = "Found 2 occurrences after enabling the lint."
 )]
-#![allow(
-    clippy::large_stack_arrays,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-#![allow(
+#![expect(
     clippy::missing_errors_doc,
     reason = "Found 1 occurrences after enabling the lint."
 )]
-#![allow(
+#![expect(
     clippy::missing_panics_doc,
     reason = "Found 1 occurrences after enabling the lint."
-)]
-#![allow(
-    clippy::needless_pass_by_value,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-#![allow(
-    clippy::unwrap_used,
-    reason = "Found 3 occurrences after enabling the lint."
 )]
 
 use bitfield::bitfield;
@@ -490,6 +485,8 @@ pub struct PathIterItem {
 
 #[cfg(test)]
 mod test {
+    #![expect(clippy::needless_pass_by_value, clippy::unwrap_used)]
+
     use crate::node::{BranchNode, LeafNode, Node};
     use crate::{Child, LinearAddress, Path};
     use test_case::test_case;

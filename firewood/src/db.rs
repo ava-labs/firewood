@@ -1,23 +1,19 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![allow(
-    clippy::default_trait_access,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-#![allow(
+#![expect(
     clippy::missing_errors_doc,
     reason = "Found 12 occurrences after enabling the lint."
 )]
-#![allow(
+#![expect(
     clippy::missing_panics_doc,
     reason = "Found 5 occurrences after enabling the lint."
 )]
-#![allow(
+#![expect(
     clippy::needless_pass_by_value,
     reason = "Found 1 occurrences after enabling the lint."
 )]
-#![allow(
+#![expect(
     clippy::unused_async,
     reason = "Found 2 occurrences after enabling the lint."
 )]
@@ -487,8 +483,13 @@ impl Proposal<'_> {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 mod test {
+    #![expect(clippy::unwrap_used)]
+    #![expect(
+        clippy::default_trait_access,
+        reason = "Found 1 occurrences after enabling the lint."
+    )]
+
     use std::ops::{Deref, DerefMut};
     use std::path::PathBuf;
 

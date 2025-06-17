@@ -1,28 +1,65 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![allow(
+#![cfg_attr(
+    feature = "branch_factor_256",
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "Found 1 occurrences after enabling the lint."
+    )
+)]
+#![cfg_attr(
+    feature = "branch_factor_256",
+    expect(
+        clippy::unused_self,
+        reason = "Found 1 occurrences after enabling the lint."
+    )
+)]
+#![cfg_attr(
+    feature = "branch_factor_256",
+    expect(
+        clippy::used_underscore_binding,
+        reason = "Found 1 occurrences after enabling the lint."
+    )
+)]
+#![cfg_attr(
+    feature = "ethhash",
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "Found 2 occurrences after enabling the lint."
+    )
+)]
+#![cfg_attr(
+    feature = "ethhash",
+    expect(
+        clippy::used_underscore_binding,
+        reason = "Found 1 occurrences after enabling the lint."
+    )
+)]
+#![cfg_attr(
+    not(any(feature = "ethhash", feature = "branch_factor_256")),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "Found 1 occurrences after enabling the lint."
+    )
+)]
+#![cfg_attr(
+    not(any(feature = "ethhash", feature = "branch_factor_256")),
+    expect(
+        clippy::unused_self,
+        reason = "Found 1 occurrences after enabling the lint."
+    )
+)]
+#![expect(
     clippy::cast_precision_loss,
     reason = "Found 2 occurrences after enabling the lint."
 )]
-#![allow(
+#![expect(
     clippy::default_trait_access,
     reason = "Found 3 occurrences after enabling the lint."
 )]
-#![allow(
+#![expect(
     clippy::needless_pass_by_value,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-#![allow(
-    clippy::unnecessary_wraps,
-    reason = "Found 2 occurrences after enabling the lint."
-)]
-#![allow(
-    clippy::unused_self,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-#![allow(
-    clippy::used_underscore_binding,
     reason = "Found 1 occurrences after enabling the lint."
 )]
 

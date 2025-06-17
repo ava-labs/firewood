@@ -1,11 +1,11 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![allow(
+#![expect(
     clippy::iter_not_returning_iterator,
     reason = "Found 1 occurrences after enabling the lint."
 )]
-#![allow(
+#![expect(
     clippy::missing_errors_doc,
     reason = "Found 3 occurrences after enabling the lint."
 )]

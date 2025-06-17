@@ -3,13 +3,19 @@
 
 // Ethereum compatible hashing algorithm.
 
-#![allow(
-    clippy::indexing_slicing,
-    reason = "Found 4 occurrences after enabling the lint."
+#![cfg_attr(
+    feature = "ethhash",
+    expect(
+        clippy::indexing_slicing,
+        reason = "Found 4 occurrences after enabling the lint."
+    )
 )]
-#![allow(
-    clippy::too_many_lines,
-    reason = "Found 1 occurrences after enabling the lint."
+#![cfg_attr(
+    feature = "ethhash",
+    expect(
+        clippy::too_many_lines,
+        reason = "Found 1 occurrences after enabling the lint."
+    )
 )]
 
 use std::iter::once;

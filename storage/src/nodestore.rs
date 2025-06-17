@@ -1,39 +1,73 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![allow(
-    clippy::arithmetic_side_effects,
-    reason = "Found 5 occurrences after enabling the lint."
+#![cfg_attr(
+    feature = "branch_factor_256",
+    expect(
+        clippy::arithmetic_side_effects,
+        reason = "Found 4 occurrences after enabling the lint."
+    )
 )]
-#![allow(
-    clippy::cast_possible_truncation,
-    reason = "Found 20 occurrences after enabling the lint."
+#![cfg_attr(
+    feature = "branch_factor_256",
+    expect(
+        clippy::cast_possible_truncation,
+        reason = "Found 13 occurrences after enabling the lint."
+    )
 )]
-#![allow(
+#![cfg_attr(
+    feature = "ethhash",
+    expect(
+        clippy::arithmetic_side_effects,
+        reason = "Found 5 occurrences after enabling the lint."
+    )
+)]
+#![cfg_attr(
+    feature = "ethhash",
+    expect(
+        clippy::cast_possible_truncation,
+        reason = "Found 16 occurrences after enabling the lint."
+    )
+)]
+#![cfg_attr(
+    not(any(feature = "ethhash", feature = "branch_factor_256")),
+    expect(
+        clippy::arithmetic_side_effects,
+        reason = "Found 4 occurrences after enabling the lint."
+    )
+)]
+#![cfg_attr(
+    not(any(feature = "ethhash", feature = "branch_factor_256")),
+    expect(
+        clippy::cast_possible_truncation,
+        reason = "Found 13 occurrences after enabling the lint."
+    )
+)]
+#![expect(
     clippy::default_trait_access,
     reason = "Found 6 occurrences after enabling the lint."
 )]
-#![allow(
+#![expect(
     clippy::indexing_slicing,
-    reason = "Found 9 occurrences after enabling the lint."
+    reason = "Found 10 occurrences after enabling the lint."
 )]
-#![allow(
+#![expect(
     clippy::match_wildcard_for_single_variants,
     reason = "Found 1 occurrences after enabling the lint."
 )]
-#![allow(
+#![expect(
     clippy::missing_errors_doc,
     reason = "Found 15 occurrences after enabling the lint."
 )]
-#![allow(
+#![expect(
     clippy::missing_panics_doc,
     reason = "Found 1 occurrences after enabling the lint."
 )]
-#![allow(
+#![expect(
     clippy::needless_pass_by_value,
     reason = "Found 3 occurrences after enabling the lint."
 )]
-#![allow(
+#![expect(
     clippy::unwrap_used,
     reason = "Found 2 occurrences after enabling the lint."
 )]

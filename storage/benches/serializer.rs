@@ -1,11 +1,11 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![allow(
+#![expect(
     clippy::assigning_clones,
     reason = "Found 1 occurrences after enabling the lint."
 )]
-#![allow(
+#![expect(
     clippy::unwrap_used,
     reason = "Found 7 occurrences after enabling the lint."
 )]

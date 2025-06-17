@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![allow(
+#![expect(
     clippy::arithmetic_side_effects,
     reason = "Found 7 occurrences after enabling the lint."
 )]

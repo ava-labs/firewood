@@ -6,11 +6,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![allow(
+#![expect(
     clippy::arithmetic_side_effects,
     reason = "Found 5 occurrences after enabling the lint."
 )]
-#![allow(
+#![expect(
     clippy::indexing_slicing,
     reason = "Found 1 occurrences after enabling the lint."
 )]

@@ -1,17 +1,17 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![allow(
+#![expect(
     clippy::cast_possible_truncation,
     reason = "Found 1 occurrences after enabling the lint."
 )]
-#![allow(
+#![expect(
     clippy::unnecessary_wraps,
     reason = "Found 1 occurrences after enabling the lint."
 )]
-#![allow(
+#![expect(
     clippy::used_underscore_binding,
-    reason = "Found 4 occurrences after enabling the lint."
+    reason = "Found 3 occurrences after enabling the lint."
 )]
 
 use crate::merkle::{Key, Value};

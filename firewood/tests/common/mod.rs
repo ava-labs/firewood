@@ -1,15 +1,11 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![allow(
-    clippy::missing_panics_doc,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-#![allow(
+#![expect(
     clippy::used_underscore_binding,
     reason = "Found 3 occurrences after enabling the lint."
 )]
-#![allow(
+#![expect(
     clippy::used_underscore_items,
     reason = "Found 1 occurrences after enabling the lint."
 )]
@@ -40,6 +36,10 @@ pub struct TestDb {
 
 impl TestDbCreator {
     #[expect(clippy::unwrap_used)]
+    #[allow(
+        clippy::missing_panics_doc,
+        reason = "Found 1 occurrences after enabling the lint."
+    )]
     pub async fn _create(self) -> TestDb {
         let path = self.path.clone().unwrap_or_else(|| {
             let mut path: PathBuf = std::env::var_os("CARGO_TARGET_DIR")

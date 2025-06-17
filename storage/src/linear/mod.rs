@@ -14,7 +14,7 @@
 //!
 //! Each type is described in more detail below.
 
-#![allow(
+#![expect(
     clippy::missing_errors_doc,
     reason = "Found 4 occurrences after enabling the lint."
 )]

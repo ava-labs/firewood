@@ -1,8 +1,11 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
-#![allow(
-    clippy::missing_panics_doc,
-    reason = "Found 1 occurrences after enabling the lint."
+#![cfg_attr(
+    feature = "ethhash",
+    expect(
+        clippy::missing_panics_doc,
+        reason = "Found 1 occurrences after enabling the lint."
+    )
 )]
 #![warn(missing_debug_implementations, rust_2018_idioms, missing_docs)]
 #![deny(unsafe_code)]
