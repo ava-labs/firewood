@@ -725,7 +725,7 @@ impl Version {
                 concat!(
                     "Database version string `firewood ",
                     env!("CARGO_PKG_VERSION"),
-                    "` is too long for the Version struct! This can happen if pre-release version information is appended to the version string. Modify the Cargo.toml and remove the pre-release identifier to fix this issue.",
+                    "` is too long for the Version struct! Update Cargo.toml or modify this code.",
                 ),
             );
         }
