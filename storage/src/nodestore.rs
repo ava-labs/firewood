@@ -1587,7 +1587,7 @@ pub(crate) const STORAGE_AREA_START: LinearAddress =
 
 /// [`NodeStore`] checker
 // TODO: S needs to be writeable if we ask checker to fix the issues
-impl<S: ReadableStorage> NodeStore<Committed, S> {
+impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Go through the filebacked storage and check for any inconsistencies. It proceeds in the following steps:
     /// 1. Check the header
     /// 2. traverse the trie and check the nodes
@@ -1619,8 +1619,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         let freelists = self.header.free_lists;
         for (area_idx, head_addr) in freelists.iter().enumerate() {
             let area_size = AREA_SIZES[area_idx];
-            self.check_freelist(area_size, *head_addr, &mut visited)
-                .await?;
+            self.check_freelist(area_size, *head_addr, &mut visited)?;
         }
         // 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
         let _ = visited.complement(); // TODO
@@ -1647,7 +1646,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         Ok(())
     }
 
-    async fn check_freelist(
+    fn check_freelist(
         &self,
         freelist_area_size: u64,
         head_addr: Option<LinearAddress>,
@@ -1938,8 +1937,8 @@ mod test_node_store_checker {
         assert_eq!(complement.into_iter().collect::<Vec<_>>(), vec![]);
     }
 
-    #[tokio::test]
-    async fn test_traverse_correct_freelist() {
+    #[test]
+    fn test_traverse_correct_freelist() {
         use rand::rngs::StdRng;
         use rand::{Rng, SeedableRng, rng};
 
@@ -2000,7 +1999,6 @@ mod test_node_store_checker {
             let prev_free_area_addr = free_list[area_size_to_index(area_size).unwrap() as usize];
             node_store
                 .check_freelist(area_size, prev_free_area_addr, &mut visited)
-                .await
                 .unwrap();
             let complement = visited.complement();
             let expected_complement = if area_end == max_area_end {
