@@ -1859,10 +1859,27 @@ mod test_node_store_checker {
         area_size
     }
 
-    fn write_header(file_backed: &FileBacked, root_addr: LinearAddress, size: u64) {
+    fn write_free_area(file_backed: &FileBacked, free_area: FreeArea, area: u64, offset: u64) {
+        let area_size_index = area_size_to_index(area).unwrap();
+        let area: Area<Node, FreeArea> = Area::Free(free_area);
+        let stored_area = StoredArea {
+            area_size_index,
+            area,
+        };
+        let stored_area_bytes = serializer().serialize(&stored_area).unwrap();
+        file_backed.write(offset, &stored_area_bytes).unwrap();
+    }
+
+    fn write_header(
+        file_backed: &FileBacked,
+        size: u64,
+        root_addr: Option<LinearAddress>,
+        free_lists: FreeLists,
+    ) {
         let mut header = NodeStoreHeader::new();
         header.size = size;
-        header.root_address = Some(root_addr);
+        header.root_address = root_addr;
+        header.free_lists = free_lists;
         let header_bytes = bytemuck::bytes_of(&header);
         file_backed.write(0, header_bytes).unwrap();
     }
@@ -1911,7 +1928,7 @@ mod test_node_store_checker {
         let root_area = write_new_node(&file_backed, &root, offset);
         offset += root_area;
 
-        write_header(&file_backed, root_addr, offset);
+        write_header(&file_backed, offset, Some(root_addr), Default::default());
 
         // test that the we traversed the entire trie
         let node_store = NodeStore::open(Arc::new(file_backed)).unwrap();
@@ -1922,5 +1939,82 @@ mod test_node_store_checker {
             .unwrap();
         let complement = visited.complement();
         assert_eq!(complement.into_iter().collect::<Vec<_>>(), vec![]);
+    }
+
+    #[tokio::test]
+    async fn test_traverse_correct_freelist() {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng, rng};
+
+        let seed = std::env::var("FIREWOOD_STORAGE_TEST_SEED")
+            .ok()
+            .map_or_else(
+                || None,
+                |s| {
+                    Some(
+                        str::parse(&s)
+                            .expect("couldn't parse FIREWOOD_STORAGE_TEST_SEED; must be a u64"),
+                    )
+                },
+            )
+            .unwrap_or_else(|| rng().random());
+
+        eprintln!("Seed {seed}: to rerun with this data, export FIREWOOD_STORAGE_TEST_SEED={seed}");
+        let mut rng = StdRng::seed_from_u64(seed);
+
+        let tf = NamedTempFile::new().unwrap();
+        let file_backed = FileBacked::new(
+            tf.path().to_path_buf(),
+            NODE_CACHE_SIZE,
+            FREE_LIST_CACHE_SIZE,
+            true,
+            CacheReadStrategy::All,
+        )
+        .unwrap();
+
+        // write free areas
+        let area_sizes = AREA_SIZES;
+        let mut offset = NodeStoreHeader::SIZE;
+        let mut free_list: FreeLists = [None; NUM_AREA_SIZES];
+        let mut area_ends = HashMap::new();
+        for (area_index, area_size) in area_sizes.iter().enumerate() {
+            let mut next_free_block = None;
+            let num_free_areas = rng.random_range(0..10);
+            for _ in 0..num_free_areas {
+                let free_area = FreeArea { next_free_block };
+                write_free_area(&file_backed, free_area, *area_size, offset);
+                next_free_block = Some(LinearAddress::new(offset).unwrap());
+                offset += area_size;
+            }
+
+            area_ends.insert(area_size, LinearAddress::new(offset).unwrap());
+            free_list[area_index as usize] = next_free_block;
+        }
+        let max_area_end = LinearAddress::new(offset).unwrap();
+
+        // write header
+        write_header(&file_backed, offset, None, free_list);
+
+        // test that the we traversed all the free areas
+        let node_store = NodeStore::open(Arc::new(file_backed)).unwrap();
+        let mut visited = LinearAddressRangeSet::new(offset).unwrap();
+        for area_size in area_sizes {
+            let area_end = area_ends[&area_size];
+            let prev_free_area_addr = free_list[area_size_to_index(area_size).unwrap() as usize];
+            node_store
+                .check_freelist(area_size, prev_free_area_addr, &mut visited)
+                .await
+                .unwrap();
+            let complement = visited.complement();
+            let expected_complement = if area_end == max_area_end {
+                vec![]
+            } else {
+                vec![(area_end..max_area_end)]
+            };
+            assert_eq!(
+                complement.into_iter().collect::<Vec<_>>(),
+                expected_complement
+            );
+        }
     }
 }
