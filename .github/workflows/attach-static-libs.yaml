@@ -127,7 +127,7 @@ jobs:
 
       - name: Switch to Static Libs CGO Mode
         working-directory: firewood-go/ffi
-        run: FIREWOOD_LD_MODE=STATIC_LIBS go run generate_cgo.go
+        run: FIREWOOD_LD_MODE=STATIC_LIBS go generate
 
       - name: Download binaries into libs directory
         uses: actions/download-artifact@v4
