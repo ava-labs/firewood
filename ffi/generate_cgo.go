@@ -14,6 +14,33 @@ const (
 	defaultMode = "LOCAL_LIBS"
 )
 
+// run via go generate to parse $GOFILE and scan for blocks of CGO directives (including cgo comments, which require a "// //" prefix)
+// Uses delimiters set by:
+// FIREWOOD_CGO_BEGIN_<FIREWOOD_LD_MODE>
+// cgo line 1
+// .
+// .
+// .
+// cgo line n
+// FIREWOOD_CGO_END_<FIREWOOD_LD_MODE>
+//
+// $GOFILE may contain multiple such blocks, where only one should be active at once.
+// Discovers the set FIREWOOD_LD_MODE via env var or defaults to "LOCAL_LIBS", which is
+// specific to the firewood.go file.
+// Activates the block set by FIREWOOD_LD_MODE by uncommenting any commented out cgo directives
+// and deactivates all other blocks' cgo directives.
+func main() {
+	mode := os.Getenv("FIREWOOD_LD_MODE")
+	if mode == "" {
+		mode = defaultMode
+	}
+
+	if err := switchCGOMode(mode); err != nil {
+		log.Fatalf("Error switching CGO mode to %s: %v", mode, err)
+	}
+	fmt.Printf("Successfully switched CGO directives to %s mode\n", mode)
+}
+
 func getTargetFile() (string, error) {
 	targetFile, ok := os.LookupEnv("GOFILE")
 	if !ok {
@@ -27,18 +54,6 @@ type CGOBlock struct {
 	StartLine int      // Line number where block starts
 	EndLine   int      // Line number where block ends
 	Lines     []string // All lines in the block (including begin/end markers)
-}
-
-func main() {
-	mode := os.Getenv("FIREWOOD_LD_MODE")
-	if mode == "" {
-		mode = defaultMode
-	}
-
-	if err := switchCGOMode(mode); err != nil {
-		log.Fatalf("Error switching CGO mode to %s: %v", mode, err)
-	}
-	fmt.Printf("Successfully switched CGO directives to %s mode\n", mode)
 }
 
 func switchCGOMode(targetMode string) error {
