@@ -94,9 +94,9 @@ pub enum CheckerError {
     /// The address is out of bounds
     #[error("stored area at {start} with size {size} is out of bounds ({bounds:?})")]
     AreaOutOfBounds {
-        /// Start of the StoredArea
+        /// Start of the `StoredArea`
         start: LinearAddress,
-        /// Size of the StoredArea
+        /// Size of the `StoredArea`
         size: u64,
         /// Valid range of addresses
         bounds: Range<LinearAddress>,
@@ -107,9 +107,9 @@ pub enum CheckerError {
         "stored area at {start} with size {size} intersects with other stored areas: {intersection:?}"
     )]
     AreaIntersects {
-        /// Start of the StoredArea
+        /// Start of the `StoredArea`
         start: LinearAddress,
-        /// Size of the StoredArea
+        /// Size of the `StoredArea`
         size: u64,
         /// The intersection
         intersection: Vec<Range<LinearAddress>>,

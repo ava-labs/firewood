@@ -1,9 +1,12 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#![warn(clippy::pedantic)]
+
 use btree_slab::BTreeMap;
 use btree_slab::generic::map::BTreeExt;
 use btree_slab::generic::node::Address;
+use std::cmp::Ordering;
 use std::ops::Range;
 
 use crate::nodestore::STORAGE_AREA_START;
@@ -63,28 +66,33 @@ impl<T: Clone + Ord + std::fmt::Debug> RangeSet<T> {
         // check if the previous range will coalesce with the given range
         if let Some(prev_addr) = prev_addr {
             let prev_range = self.index.item(prev_addr).expect("prev item should exist");
-            if *prev_range.value() == range.start {
-                // the prevrious range does not intersect with the given range but is consecutive
-                prev_consecutive_range = Some(prev_range.key()..prev_range.value());
-            } else if *prev_range.value() > range.start {
-                // the previous range either intersects or is consecutive with the given range
-                intersecting_ranges.push(prev_range.key()..prev_range.value());
+            match prev_range.value().cmp(&range.start) {
+                Ordering::Less => {} // the previous range is does not intersect or is consecutive with the given range - it will not be coalesced
+                Ordering::Equal => {
+                    // the previous range does not intersect with the given range but is consecutive
+                    prev_consecutive_range = Some(prev_range.key()..prev_range.value());
+                }
+                Ordering::Greater => {
+                    // the previous range either intersects or is consecutive with the given range
+                    intersecting_ranges.push(prev_range.key()..prev_range.value());
+                }
             }
         }
 
         // check if the given range intersects with the next range
         while let Some(curr_addr) = next_addr {
             let curr_range = self.index.item(curr_addr).expect("next item should exist");
-            if range.end < *curr_range.key() {
-                // the current range is after the given range - we are done
-                break;
-            } else if range.end == *curr_range.key() {
-                // the current range does not intersect with the given range but is consecutive
-                next_consecutive_range = Some(curr_range.key()..curr_range.value());
-                break;
-            } else if range.end > *curr_range.key() {
-                // the current range intersects or is consecutive with the given range
-                intersecting_ranges.push(curr_range.key()..curr_range.value());
+            match range.end.cmp(curr_range.key()) {
+                Ordering::Less => break, // the current range is after the given range - we are done
+                Ordering::Equal => {
+                    // the current range does not intersect with the given range but is consecutive
+                    next_consecutive_range = Some(curr_range.key()..curr_range.value());
+                    break;
+                }
+                Ordering::Greater => {
+                    // the current range intersects or is consecutive with the given range
+                    intersecting_ranges.push(curr_range.key()..curr_range.value());
+                }
             }
             next_addr = self.index.next_item_address(curr_addr);
         }
@@ -101,6 +109,11 @@ impl<T: Clone + Ord + std::fmt::Debug> RangeSet<T> {
         range: Range<T>,
         allow_intersecting: bool,
     ) -> Result<(), Vec<Range<T>>> {
+        // if the range is empty, do nothing
+        if range.is_empty() {
+            return Ok(());
+        }
+
         let CoalescingRanges {
             prev_consecutive_range,
             intersecting_ranges,
@@ -169,7 +182,7 @@ impl<T: Clone + Ord + std::fmt::Debug> RangeSet<T> {
         let mut complement_tree = BTreeMap::new();
         // first range will start from min
         let mut start = min;
-        for (cur_start, cur_end) in self.index.iter() {
+        for (cur_start, cur_end) in &self.index {
             // insert the range from the previous end to the current start
             if cur_start > start {
                 if cur_start >= max {
@@ -219,8 +232,7 @@ impl LinearAddressRangeSet {
             return Err(CheckerError::InvalidDBSize {
                 db_size,
                 description: format!(
-                    "db size should not be smaller than the header size ({})",
-                    STORAGE_AREA_START
+                    "db size should not be smaller than the header size ({STORAGE_AREA_START})"
                 ),
             });
         }
@@ -302,6 +314,17 @@ mod test_range_set {
             range_set.into_iter().collect::<Vec<_>>(),
             vec![0..10, 20..30]
         );
+    }
+
+    #[test]
+    #[allow(clippy::reversed_empty_ranges)]
+    fn test_insert_empty_range() {
+        let mut range_set = RangeSet::new();
+        range_set.insert_range(0..0);
+        range_set.insert_range(10..10);
+        range_set.insert_range(20..10);
+        range_set.insert_range(30..0);
+        assert_eq!(range_set.into_iter().collect::<Vec<_>>(), vec![]);
     }
 
     #[test]
@@ -439,6 +462,56 @@ mod test_range_set {
                 .collect::<Vec<_>>(),
             vec![]
         );
+
+        // test boundaries at range start and end
+        assert_eq!(
+            range_set
+                .complement(&0, &30)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec![10..20]
+        );
+
+        // test with equal bounds
+        assert_eq!(
+            range_set
+                .complement(&35, &35)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec![]
+        );
+
+        // test with reversed bounds
+        assert_eq!(
+            range_set
+                .complement(&30, &0)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn test_many_small_ranges() {
+        let mut range_set = RangeSet::new();
+        // Insert many small ranges that will coalesce
+        for i in 0..1000 {
+            range_set.insert_range(i * 10..(i * 10 + 5));
+        }
+        // Should result in 1000 separate single-element ranges
+        assert_eq!(range_set.into_iter().count(), 1000);
+    }
+
+    #[test]
+    fn test_large_range_coalescing() {
+        let mut range_set = RangeSet::new();
+        // Insert ranges that will eventually all coalesce into one
+        for i in 0..1000 {
+            range_set.insert_range(i * 10..(i * 10 + 5));
+        }
+        // Fill the gaps
+        range_set.insert_range(0..10000);
+        assert_eq!(range_set.into_iter().collect::<Vec<_>>(), vec![0..10000]);
     }
 }
 
