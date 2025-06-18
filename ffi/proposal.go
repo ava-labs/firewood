@@ -4,7 +4,11 @@
 package ffi
 
 // // Note that -lm is required on Linux but not on Mac.
-// #cgo LDFLAGS: -L${SRCDIR}/../target/release -L/usr/local/lib -lfirewood_ffi -lm
+// // ignore LDFLAGS: -L${SRCDIR}/../target/debug
+// // ignore LDFLAGS: -L${SRCDIR}/../target/release
+// // ignore LDFLAGS: -L${SRCDIR}/../target/maxperf
+// #cgo LDFLAGS: -L/usr/local/lib
+// #cgo LDFLAGS: -lfirewood_ffi -lm
 // #include <stdlib.h>
 // #include "firewood.h"
 import "C"

@@ -19,6 +19,9 @@ lto = "fat"
 debug = false
 inherits = "release"
 
+[profile.ffi]
+inherits = "maxperf"
+
 [workspace.lints.rust]
 unsafe_code = "deny"
 

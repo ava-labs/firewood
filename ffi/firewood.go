@@ -10,10 +10,10 @@ package ffi
 // #cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/libs/aarch64-apple-darwin
 // // XXX: last search path takes precedence, which means we prioritize
 // // local builds over pre-built and maxperf over release build
-// #cgo LDFLAGS: -L${SRCDIR}/../target/debug
-// #cgo LDFLAGS: -L${SRCDIR}/../target/release
-// #cgo LDFLAGS: -L${SRCDIR}/../target/maxperf
-// #cgo LDFLAGS: -L/usr/local/lib -lfirewood_ffi
+// // ignore LDFLAGS: -L${SRCDIR}/../target/debug
+// // ignore LDFLAGS: -L${SRCDIR}/../target/release
+// // ignore LDFLAGS: -L${SRCDIR}/../target/maxperf
+// #cgo LDFLAGS: -lfirewood_ffi
 // #include <stdlib.h>
 // #include "firewood.h"
 import "C"
