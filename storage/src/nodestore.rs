@@ -324,6 +324,7 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
     }
 
     /// Get the size of an area index (used by the checker)
+    #[must_use]
     pub const fn size_from_area_index(index: AreaIndex) -> u64 {
         AREA_SIZES[index as usize]
     }
@@ -1620,15 +1621,8 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 
         if let Node::Branch(branch) = self.read_node(subtree_root_address)?.as_ref() {
             // this is an internal node, traverse the children
-            for child in branch.children.iter().filter_map(|child| child.as_ref()) {
-                match child {
-                    Child::AddressWithHash(address, _) => {
-                        Box::pin(self.traverse_trie(*address, visited)).await?;
-                    }
-                    Child::Node(_) => {
-                        panic!("the child is not persisted yet, this should not happen");
-                    }
-                }
+            for (_, address) in branch.children_addresses() {
+                Box::pin(self.traverse_trie(*address, visited)).await?;
             }
         }
 
@@ -1811,11 +1805,12 @@ mod test_node_store_checker {
     // Helper function to wrap the node in a StoredArea and write it to the given offset. Returns the area size on success.
     #[allow(clippy::cast_possible_truncation)]
     fn write_new_node(file_backed: &FileBacked, node: &Node, offset: u64) -> u64 {
-        let node_length = NodeStore::<Arc<ImmutableProposal>, FileBacked>::stored_len(node);
+        let mut stored_area_bytes = Vec::new();
+        node.as_bytes(0u8, &mut stored_area_bytes);
+        let node_length = stored_area_bytes.len() as u64;
         let area_index = area_size_to_index(node_length).unwrap();
         let area_size = AREA_SIZES[area_index as usize];
-        let mut stored_area_bytes = Vec::with_capacity(area_size as usize);
-        node.as_bytes(area_index as u8, &mut stored_area_bytes);
+        stored_area_bytes[0] = area_index;
         file_backed.write(offset, &stored_area_bytes).unwrap();
         area_size
     }

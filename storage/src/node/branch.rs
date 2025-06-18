@@ -314,7 +314,7 @@ impl BranchNode {
     }
 
     /// Returns (index, hash) for each child that has a hash set.
-    pub fn children_iter(&self) -> impl Iterator<Item = (usize, &HashType)> + Clone {
+    pub fn children_hashes(&self) -> impl Iterator<Item = (usize, &HashType)> + Clone {
         self.children
             .iter()
             .enumerate()
@@ -322,6 +322,18 @@ impl BranchNode {
                 None => None,
                 Some(Child::Node(_)) => unreachable!("TODO make unreachable"),
                 Some(Child::AddressWithHash(_, hash)) => Some((i, hash)),
+            })
+    }
+
+    /// Returns (index, address) for each child that has a hash set.
+    pub fn children_addresses(&self) -> impl Iterator<Item = (usize, &LinearAddress)> + Clone {
+        self.children
+            .iter()
+            .enumerate()
+            .filter_map(|(i, child)| match child {
+                None => None,
+                Some(Child::Node(_)) => unreachable!("TODO make unreachable"),
+                Some(Child::AddressWithHash(address, _)) => Some((i, address)),
             })
     }
 }
