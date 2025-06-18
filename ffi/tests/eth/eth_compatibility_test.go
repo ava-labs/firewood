@@ -7,7 +7,7 @@ import (
 	"slices"
 	"testing"
 
-	firewood "github.com/ava-labs/firewood-go/ffi"
+	"github.com/ava-labs/firewood-go-ethhash/ffi"
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/core/rawdb"
 	"github.com/ava-labs/libevm/core/state"
@@ -44,7 +44,7 @@ var (
 )
 
 type merkleTriePair struct {
-	fwdDB       *firewood.Database
+	fwdDB       *ffi.Database
 	accountTrie state.Trie
 	ethDatabase state.Database
 
@@ -66,10 +66,10 @@ func newMerkleTriePair(t *testing.T) *merkleTriePair {
 	r := require.New(t)
 
 	file := path.Join(t.TempDir(), "test.db")
-	cfg := firewood.DefaultConfig()
+	cfg := ffi.DefaultConfig()
 	cfg.Create = true
 	cfg.MetricsPort = 0
-	db, err := firewood.New(file, cfg)
+	db, err := ffi.New(file, cfg)
 	r.NoError(err)
 
 	tdb := state.NewDatabaseWithConfig(rawdb.NewMemoryDatabase(), triedb.HashDefaults)

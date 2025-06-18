@@ -8,7 +8,7 @@ import (
 	"slices"
 	"testing"
 
-	firewood "github.com/ava-labs/firewood-go/ffi"
+	"github.com/ava-labs/firewood-go-merklehash/ffi"
 
 	"github.com/ava-labs/avalanchego/database"
 	"github.com/ava-labs/avalanchego/database/memdb"
@@ -46,7 +46,7 @@ var stepMap = map[byte]string{
 	commitProposal:           "commitProposal",
 }
 
-func newTestFirewoodDatabase(t *testing.T) *firewood.Database {
+func newTestFirewoodDatabase(t *testing.T) *ffi.Database {
 	t.Helper()
 
 	dbFile := filepath.Join(t.TempDir(), "test.db")
@@ -58,12 +58,12 @@ func newTestFirewoodDatabase(t *testing.T) *firewood.Database {
 	return db
 }
 
-func newFirewoodDatabase(dbFile string) (*firewood.Database, func() error, error) {
-	conf := firewood.DefaultConfig()
+func newFirewoodDatabase(dbFile string) (*ffi.Database, func() error, error) {
+	conf := ffi.DefaultConfig()
 	conf.MetricsPort = 0
 	conf.Create = true
 
-	f, err := firewood.New(dbFile, conf)
+	f, err := ffi.New(dbFile, conf)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create new database at filepath %q: %w", dbFile, err)
 	}
@@ -77,7 +77,7 @@ type tree struct {
 	id       int
 	nextID   int
 	merkleDB merkledb.MerkleDB
-	fwdDB    *firewood.Database
+	fwdDB    *ffi.Database
 
 	children []*proposal
 
@@ -89,7 +89,7 @@ type proposal struct {
 	parentID   int
 	id         int
 	merkleView merkledb.View
-	fwdView    *firewood.Proposal
+	fwdView    *ffi.Proposal
 
 	children []*proposal
 }
