@@ -45,9 +45,7 @@ fn fwdctl_creates_database() -> Result<()> {
         .assert()
         .success();
 
-    fwdctl_delete_db()?;
-
-    Ok(())
+    fwdctl_delete_db()
 }
 
 #[test]
@@ -71,9 +69,7 @@ fn fwdctl_insert_successful() -> Result<()> {
         .success()
         .stdout(predicate::str::contains("year"));
 
-    fwdctl_delete_db()?;
-
-    Ok(())
+    fwdctl_delete_db()
 }
 
 #[test]
@@ -106,9 +102,7 @@ fn fwdctl_get_successful() -> Result<()> {
         .success()
         .stdout(predicate::str::contains("2023"));
 
-    fwdctl_delete_db()?;
-
-    Ok(())
+    fwdctl_delete_db()
 }
 
 #[test]
@@ -140,9 +134,7 @@ fn fwdctl_delete_successful() -> Result<()> {
         .success()
         .stdout(predicate::str::contains("key year deleted successfully"));
 
-    fwdctl_delete_db()?;
-
-    Ok(())
+    fwdctl_delete_db()
 }
 
 #[test]
@@ -173,9 +165,7 @@ fn fwdctl_root_hash() -> Result<()> {
         .success()
         .stdout(predicate::str::is_empty().not());
 
-    fwdctl_delete_db()?;
-
-    Ok(())
+    fwdctl_delete_db()
 }
 
 #[test]
@@ -205,8 +195,7 @@ fn fwdctl_dump() -> Result<()> {
         .success()
         .stdout(predicate::str::contains("2023"));
 
-    fwdctl_delete_db()?;
-    Ok(())
+    fwdctl_delete_db()
 }
 
 #[test]
@@ -312,9 +301,7 @@ fn fwdctl_dump_with_start_stop_and_max() -> Result<()> {
             "Next key is c, resume with \"--start-key=c\"",
         ));
 
-    fwdctl_delete_db()?;
-
-    Ok(())
+    fwdctl_delete_db()
 }
 
 #[test]
@@ -387,9 +374,7 @@ fn fwdctl_dump_with_csv_and_json() -> Result<()> {
     );
     fs::remove_file("dump.json").expect("Should remove dump.json file");
 
-    fwdctl_delete_db()?;
-
-    Ok(())
+    fwdctl_delete_db()
 }
 
 #[test]
@@ -453,9 +438,7 @@ fn fwdctl_dump_with_file_name() -> Result<()> {
     assert_eq!(contents, "{\n  \"a\": \"1\"\n}\n");
     fs::remove_file("test.json").expect("Should remove test.json file");
 
-    fwdctl_delete_db()?;
-
-    Ok(())
+    fwdctl_delete_db()
 }
 
 #[test]
@@ -533,9 +516,7 @@ fn fwdctl_dump_with_hex() -> Result<()> {
         .stdout(predicate::str::contains("--start-key=c"))
         .stdout(predicate::str::contains("--start-key-hex=63"));
 
-    fwdctl_delete_db()?;
-
-    Ok(())
+    fwdctl_delete_db()
 }
 
 #[test]
@@ -554,9 +535,7 @@ fn fwdctl_check_empty_db() -> Result<()> {
         .assert()
         .success();
 
-    fwdctl_delete_db()?;
-
-    Ok(())
+    fwdctl_delete_db()
 }
 
 #[test]
@@ -604,7 +583,7 @@ fn fwdctl_check_db_with_data() -> Result<()> {
         .assert()
         .success();
 
-    Ok(())
+    fwdctl_delete_db()
 }
 
 // A module to create a temporary database name for use in

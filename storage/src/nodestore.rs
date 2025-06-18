@@ -1594,7 +1594,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// 3. check the free list
     /// 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
     // TODO: add merkle hash checks as well
-    pub async fn check(&self) -> Result<(), CheckerError> {
+    pub fn check(&self) -> Result<(), CheckerError> {
         // 1. Check the header
         let db_size = self.header.size;
         let file_size = self.storage.size()?;
@@ -1612,7 +1612,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         // 2. traverse the trie and check the nodes
         if let Some(root_address) = self.header.root_address {
             // the database is not empty, traverse the trie
-            self.traverse_trie(root_address, &mut visited).await?;
+            self.traverse_trie(root_address, &mut visited)?;
         }
 
         // 3. check the free list - this can happen in parallel with the trie traversal
@@ -1629,7 +1629,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     }
 
     /// Recursively traverse the trie from the given root address.
-    async fn traverse_trie(
+    fn traverse_trie(
         &self,
         subtree_root_address: LinearAddress,
         visited: &mut LinearAddressRangeSet,
@@ -1640,7 +1640,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         if let Node::Branch(branch) = self.read_node(subtree_root_address)?.as_ref() {
             // this is an internal node, traverse the children
             for (_, address) in branch.children_addresses() {
-                Box::pin(self.traverse_trie(*address, visited)).await?;
+                self.traverse_trie(*address, visited)?;
             }
         }
 
@@ -1884,8 +1884,8 @@ mod test_node_store_checker {
         file_backed.write(0, header_bytes).unwrap();
     }
 
-    #[tokio::test]
-    async fn test_checker_traverse_correct_trie() {
+    #[test]
+    fn test_checker_traverse_correct_trie() {
         let tf = NamedTempFile::new().unwrap();
         let file_backed = FileBacked::new(
             tf.path().to_path_buf(),
@@ -1933,10 +1933,7 @@ mod test_node_store_checker {
         // test that the we traversed the entire trie
         let node_store = NodeStore::open(Arc::new(file_backed)).unwrap();
         let mut visited = LinearAddressRangeSet::new(offset).unwrap();
-        node_store
-            .traverse_trie(root_addr, &mut visited)
-            .await
-            .unwrap();
+        node_store.traverse_trie(root_addr, &mut visited).unwrap();
         let complement = visited.complement();
         assert_eq!(complement.into_iter().collect::<Vec<_>>(), vec![]);
     }

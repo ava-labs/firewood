@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::Args;
@@ -23,19 +23,19 @@ pub struct Options {
     pub db: String,
 }
 
+#[allow(clippy::unused_async)]
 pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
-    let db_path = Path::new(&opts.db);
+    let db_path = PathBuf::from(&opts.db);
     let node_cache_size = nonzero!(1usize);
     let free_list_cache_size = nonzero!(1usize);
 
     let storage = Arc::new(FileBacked::new(
-        db_path.to_path_buf(),
+        db_path,
         node_cache_size,
         free_list_cache_size,
         false,
-        CacheReadStrategy::WritesOnly, // cache none since this is a read-only workload - we don't want to cache any nodes since we won't read a node more than once
+        CacheReadStrategy::WritesOnly, // we scan the database once - no need to cache anything
     )?);
 
-    let node_store = NodeStore::open(storage)?;
-    node_store.check().await.map_err(Into::into)
+    NodeStore::open(storage)?.check().map_err(Into::into)
 }
