@@ -1,12 +1,30 @@
 [package]
-name = "fwdctl"
+name = "firewood-fwdctl"
 version = "0.0.5"
 edition = "2024"
 rust-version = "1.85.0"
+authors = [
+     "Dan Laine <daniel.laine@avalabs.org>",
+     "Dan Sover <dan.sover@avalabs.org>",
+     "Hao Hao <hao.hao@avalabs.org>",
+     "Richard Pringle <rpring9@gmail.com>",
+     "Ron Kuris <ron.kuris@avalabs.org>",
+     "Sam Batschelet <sam.batschelet@avalabs.org>",
+     "xinifinity <113067541+xinifinity@users.noreply.github.com>",
+     "zdf <orientzh1230@gmail.com>",
+]
+description = "Command-line tool for Firewood, an embedded key-value store optimized for blockchain state."
+license-file = "../LICENSE.md"
+homepage = "https://avalabs.org"
+repository = "https://github.com/ava-labs/firewood"
+
+[[bin]]
+name = "fwdctl"
+path = "src/main.rs"
 
 [dependencies]
 firewood = { version = "0.0.5", path = "../firewood" }
-storage = { version = "0.0.5", path = "../storage" }
+firewood-storage = { version = "0.0.5", path = "../storage" }
 clap = { version = "4.5.0", features = ["cargo", "derive"] }
 env_logger = "0.11.2"
 log = "0.4.20"
@@ -23,11 +41,5 @@ predicates = "3.1.0"
 serial_test = "3.0.0"
 rand = "0.9.1"
 
-[lints.rust]
-unsafe_code = "deny"
-
-[lints.clippy]
-unwrap_used = "warn"
-indexing_slicing = "warn"
-explicit_deref_methods = "warn"
-missing_const_for_fn = "warn"
+[lints]
+workspace = true

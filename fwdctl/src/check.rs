@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use clap::Args;
 use firewood::v2::api;
+use firewood_storage::{CacheReadStrategy, FileBacked, NodeStore};
 use nonzero_ext::nonzero;
-use storage::{CacheReadStrategy, FileBacked, NodeStore};
 
 // TODO: (optionally) add a fix option
 #[derive(Args)]

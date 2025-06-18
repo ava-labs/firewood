@@ -1,11 +1,20 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use sha2::{Digest, Sha256};
-use storage::{
+#![expect(
+    clippy::missing_errors_doc,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![expect(
+    clippy::needless_continue,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+
+use firewood_storage::{
     BranchNode, FileIoError, HashType, Hashable, NibblesIterator, PathIterItem, Preimage, TrieHash,
     ValueDigest,
 };
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -119,7 +128,10 @@ impl From<PathIterItem> for ProofNode {
         }
 
         #[cfg(feature = "ethhash")]
-        let partial_len = item.key_nibbles.len() - item.node.partial_path().0.len();
+        let partial_len = item
+            .key_nibbles
+            .len()
+            .saturating_sub(item.node.partial_path().0.len());
 
         Self {
             key: item.key_nibbles,
