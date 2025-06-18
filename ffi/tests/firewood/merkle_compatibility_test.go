@@ -8,7 +8,7 @@ import (
 	"slices"
 	"testing"
 
-	firewood "github.com/ava-labs/firewood-go-merklehash/ffi"
+	firewood "github.com/ava-labs/firewood-go/ffi"
 
 	"github.com/ava-labs/avalanchego/database"
 	"github.com/ava-labs/avalanchego/database/memdb"
