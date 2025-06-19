@@ -184,7 +184,7 @@ jobs:
       - name: Test Go FFI bindings
         working-directory: ffi
         # cgocheck2 is expensive but provides complete pointer checks
-        run: GOEXPERIMENT=cgocheck2 FIREWOOD_LD_MODE=STATIC_LIBS TEST_FIREWOOD_HASH_MODE=ethhash go test ./...
+        run: GOEXPERIMENT=cgocheck2 TEST_FIREWOOD_HASH_MODE=ethhash go test ./...
 
   remove-if-pr-only:
     runs-on: ubuntu-latest

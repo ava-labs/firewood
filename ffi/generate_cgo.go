@@ -29,6 +29,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"path/filepath"
 )
 
 const (
@@ -36,9 +37,18 @@ const (
 )
 
 func main() {
-	mode := os.Getenv("FIREWOOD_LD_MODE")
-	if mode == "" {
-		mode = defaultMode
+	mode, ok := os.LookupEnv("FIREWOOD_LD_MODE")
+	if !ok {
+		// do we have any local libs? If so, use them
+		mode = "STATIC_LIBS"
+		for _, profile := range []string{"debug", "release", "maxperf"} {
+			path := filepath.Join("../target/", profile, "libfirewood_ffi.a")
+			if _, err := os.Stat(path); err == nil {
+				// found a local lib
+				mode = "LOCAL_LIBS"
+				break
+			}
+		}
 	}
 
 	if err := switchCGOMode(mode); err != nil {
