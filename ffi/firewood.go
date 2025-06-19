@@ -16,7 +16,7 @@ package ffi
 // #cgo LDFLAGS: -L${SRCDIR}/../target/debug
 // #cgo LDFLAGS: -L${SRCDIR}/../target/release
 // #cgo LDFLAGS: -L${SRCDIR}/../target/maxperf
-// #cgo LDFLAGS: -L/usr/local/lib -lfirewood_ffi
+// #cgo LDFLAGS: -L/usr/local/lib -lfirewood_ffi -lm
 // // FIREWOOD_CGO_END_LOCAL_LIBS
 // #include <stdlib.h>
 // #include "firewood.h"
