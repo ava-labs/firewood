@@ -300,30 +300,45 @@ impl Read for PredictiveReader<'_> {
 }
 
 #[cfg(test)]
+pub(crate) mod test_utils {
+    #![expect(clippy::unwrap_used)]
+
+    use super::*;
+    use nonzero_ext::nonzero;
+    use tempfile::NamedTempFile;
+
+    // Create a file backed storage on a temporary file. Returns the created `FileBacked` and the handle to the temporary file.
+    pub(crate) fn create_file_backed() -> (FileBacked, NamedTempFile) {
+        let tf = NamedTempFile::new().unwrap();
+        let path = tf.path().to_path_buf();
+
+        (
+            FileBacked::new(
+                path,
+                nonzero!(10usize),
+                nonzero!(10usize),
+                false,
+                CacheReadStrategy::WritesOnly,
+            )
+            .unwrap(),
+            tf,
+        )
+    }
+}
+
+#[cfg(test)]
 mod test {
     #![expect(clippy::unwrap_used)]
 
     use super::*;
     use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
     fn basic_reader_test() {
-        let mut tf = NamedTempFile::new().unwrap();
-        let path = tf.path().to_path_buf();
+        let (fb, mut tf) = test_utils::create_file_backed();
         let output = tf.as_file_mut();
         write!(output, "hello world").unwrap();
 
-        // whole thing at once, this is always less than 1K so it should
-        // read the whole thing in
-        let fb = FileBacked::new(
-            path,
-            NonZero::new(10).unwrap(),
-            NonZero::new(10).unwrap(),
-            false,
-            CacheReadStrategy::WritesOnly,
-        )
-        .unwrap();
         let mut reader = fb.stream_from(0).unwrap();
         let mut buf: String = String::new();
         assert_eq!(reader.read_to_string(&mut buf).unwrap(), 11);
@@ -349,21 +364,12 @@ mod test {
 
     #[test]
     fn big_file() {
-        let mut tf = NamedTempFile::new().unwrap();
-        let path = tf.path().to_path_buf();
+        let (fb, mut tf) = test_utils::create_file_backed();
         let output = tf.as_file_mut();
         for _ in 0..1000 {
             write!(output, "hello world").unwrap();
         }
 
-        let fb = FileBacked::new(
-            path,
-            NonZero::new(10).unwrap(),
-            NonZero::new(10).unwrap(),
-            false,
-            CacheReadStrategy::WritesOnly,
-        )
-        .unwrap();
         let mut reader = fb.stream_from(0).unwrap();
         let mut buf: String = String::new();
         assert_eq!(reader.read_to_string(&mut buf).unwrap(), 11000);

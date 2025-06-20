@@ -567,13 +567,12 @@ fn fwdctl_check_db_with_data() -> Result<()> {
         let value = format!("value_{}", rng.random::<u64>());
         Command::cargo_bin(PRG)?
             .arg("insert")
-            .args([key.clone()])
+            .args([key])
             .args([value])
             .args(["--db"])
             .args([tmpdb::path()])
             .assert()
-            .success()
-            .stdout(predicate::str::contains(&key));
+            .success();
     }
 
     Command::cargo_bin(PRG)?

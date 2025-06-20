@@ -39,7 +39,6 @@ rlp = { version = "0.6.1", optional = true }
 sha3 = { version = "0.10.8", optional = true }
 bytes = { version = "1.10.1", optional = true }
 thiserror = "2.0.3"
-btree-slab = "0.6.1"
 semver = "1.0.26"
 
 [dev-dependencies]
