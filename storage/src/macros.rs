@@ -11,9 +11,7 @@ macro_rules! firewood_metric {
     // With labels
     ($name:expr, $desc:expr, $inc:expr, $($labels:tt)+) => {
         {
-            use std::sync::Once;
-            static ONCE: Once = Once::new();
-            ONCE.call_once(|| {
+            static METRIC: std::sync::LazyLock<()> = std::sync::LazyLock::new(|| {
                 metrics::describe_counter!($name, $desc);
             });
             metrics::counter!($name, $($labels)+).increment($inc);
@@ -22,9 +20,7 @@ macro_rules! firewood_metric {
     // No labels
     ($name:expr, $desc:expr, $inc:expr) => {
         {
-            use std::sync::Once;
-            static ONCE: Once = Once::new();
-            ONCE.call_once(|| {
+            static METRIC: std::sync::LazyLock<()> = std::sync::LazyLock::new(|| {
                 metrics::describe_counter!($name, $desc);
             });
             metrics::counter!($name).increment($inc);
