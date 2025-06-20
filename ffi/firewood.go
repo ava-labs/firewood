@@ -1,19 +1,23 @@
-// Package firewood provides a Go wrapper around the [Firewood] database.
+// Package ffi provides a Go wrapper around the [Firewood] database.
 //
 // [Firewood]: https://github.com/ava-labs/firewood
-package firewood
+package ffi
+
+//go:generate go run generate_cgo.go
 
 // // Note that -lm is required on Linux but not on Mac.
-// #cgo linux,amd64 LDFLAGS: -L${SRCDIR}/libs/x86_64-unknown-linux-gnu -lm
-// #cgo linux,arm64 LDFLAGS: -L${SRCDIR}/libs/aarch64-unknown-linux-gnu -lm
-// #cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/libs/x86_64-apple-darwin
-// #cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/libs/aarch64-apple-darwin
-// // XXX: last search path takes precedence, which means we prioritize
-// // local builds over pre-built and maxperf over release build
+// // FIREWOOD_CGO_BEGIN_STATIC_LIBS
+// // #cgo linux,amd64 LDFLAGS: -L${SRCDIR}/libs/x86_64-unknown-linux-gnu -lm
+// // #cgo linux,arm64 LDFLAGS: -L${SRCDIR}/libs/aarch64-unknown-linux-gnu -lm
+// // #cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/libs/x86_64-apple-darwin
+// // #cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/libs/aarch64-apple-darwin
+// // FIREWOOD_CGO_END_STATIC_LIBS
+// // FIREWOOD_CGO_BEGIN_LOCAL_LIBS
 // #cgo LDFLAGS: -L${SRCDIR}/../target/debug
 // #cgo LDFLAGS: -L${SRCDIR}/../target/release
 // #cgo LDFLAGS: -L${SRCDIR}/../target/maxperf
 // #cgo LDFLAGS: -L/usr/local/lib -lfirewood_ffi
+// // FIREWOOD_CGO_END_LOCAL_LIBS
 // #include <stdlib.h>
 // #include "firewood.h"
 import "C"
@@ -103,11 +107,16 @@ func New(filePath string, conf *Config) (*Database, error) {
 	// of the FFI boundary.
 	defer C.free(unsafe.Pointer(args.path))
 
-	var db *C.DatabaseHandle
+	var dbResult C.struct_DatabaseCreationResult
 	if conf.Create {
-		db = C.fwd_create_db(args)
+		dbResult = C.fwd_create_db(args)
 	} else {
-		db = C.fwd_open_db(args)
+		dbResult = C.fwd_open_db(args)
+	}
+
+	db, err := databaseFromResult(&dbResult)
+	if err != nil {
+		return nil, err
 	}
 
 	return &Database{handle: db}, nil

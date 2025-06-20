@@ -1,6 +1,23 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#![expect(
+    clippy::missing_errors_doc,
+    reason = "Found 12 occurrences after enabling the lint."
+)]
+#![expect(
+    clippy::missing_panics_doc,
+    reason = "Found 5 occurrences after enabling the lint."
+)]
+#![expect(
+    clippy::needless_pass_by_value,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![expect(
+    clippy::unused_async,
+    reason = "Found 2 occurrences after enabling the lint."
+)]
+
 use crate::merkle::Merkle;
 use crate::proof::{Proof, ProofNode};
 use crate::range_proof::RangeProof;
@@ -10,13 +27,13 @@ pub use crate::v2::api::{Batch, BatchOp};
 
 use crate::manager::{RevisionManager, RevisionManagerConfig};
 use async_trait::async_trait;
+use firewood_storage::{
+    Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore, TrieHash,
+};
 use metrics::{counter, describe_counter};
 use std::io::Write;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
-use storage::{
-    Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore, TrieHash,
-};
 use thiserror::Error;
 use typed_builder::TypedBuilder;
 
@@ -243,7 +260,7 @@ impl Db {
         #[cfg(not(feature = "ethhash"))]
         return Ok(hash);
         #[cfg(feature = "ethhash")]
-        return Ok(Some(hash.unwrap_or_else(storage::empty_trie_hash)));
+        return Ok(Some(hash.unwrap_or_else(firewood_storage::empty_trie_hash)));
     }
 
     /// Synchronously get a revision from a root hash
@@ -312,7 +329,7 @@ impl Db {
         let merkle = Merkle::from(latest_rev_nodestore);
         // TODO: This should be a stream
         let output = merkle.dump()?;
-        write!(w, "{}", output)
+        write!(w, "{output}")
     }
 
     /// Get a copy of the database metrics
@@ -337,7 +354,7 @@ impl Proposal<'_> {
         return Ok(Some(
             self.nodestore
                 .root_hash()?
-                .unwrap_or_else(storage::empty_trie_hash),
+                .unwrap_or_else(firewood_storage::empty_trie_hash),
         ));
     }
 }
@@ -466,8 +483,13 @@ impl Proposal<'_> {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 mod test {
+    #![expect(clippy::unwrap_used)]
+    #![expect(
+        clippy::default_trait_access,
+        reason = "Found 1 occurrences after enabling the lint."
+    )]
+
     use std::ops::{Deref, DerefMut};
     use std::path::PathBuf;
 

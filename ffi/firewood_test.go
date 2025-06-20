@@ -1,4 +1,4 @@
-package firewood
+package ffi
 
 import (
 	"bytes"
@@ -142,6 +142,15 @@ func newDatabase(dbFile string) (*Database, func() error, error) {
 		return nil, nil, fmt.Errorf("failed to create new database at filepath %q: %w", dbFile, err)
 	}
 	return f, f.Close, nil
+}
+
+func TestOpenNonexistentDatabase(t *testing.T) {
+	r := require.New(t)
+	cfg := DefaultConfig()
+	cfg.Create = false
+	db, err := New(filepath.Join(t.TempDir(), "test.db"), cfg)
+	r.ErrorContains(err, "File IO error")
+	r.Nil(db)
 }
 
 func TestUpdateSingleKV(t *testing.T) {
