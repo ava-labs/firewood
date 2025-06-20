@@ -36,6 +36,8 @@ use crate::nodestore::AreaIndex;
 /// Logger module for handling logging functionality
 pub mod logger;
 
+#[macro_use] 
+pub mod macros;
 // re-export these so callers don't need to know where they are
 pub use checker::CheckOpt;
 pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
