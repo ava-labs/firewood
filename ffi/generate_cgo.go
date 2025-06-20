@@ -28,8 +28,8 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strings"
 	"path/filepath"
+	"strings"
 )
 
 const (
@@ -37,24 +37,35 @@ const (
 )
 
 func main() {
+	mode := localOrStaticLibs()
+
+	targetFile, err := getTargetFile()
+	if err != nil {
+		log.Fatalf("Error switching CGO mode to %s:\n%v", mode, err)
+	}
+
+	if err := changeCgoDirectivesForFile(mode, targetFile); err != nil {
+		log.Fatalf("Error switching CGO mode to %s:\n%v", mode, err)
+	}
+
+	fmt.Printf("Successfully switched CGO directives to %s mode\n", mode)
+}
+
+// Get the FIREWOOD_LD_MODE environment variable. If it's not set, look for local libs,
+// and if found, set it to "LOCAL_LIBS". Otherwise, set it to "STATIC_LIBS".
+func localOrStaticLibs() string {
 	mode, ok := os.LookupEnv("FIREWOOD_LD_MODE")
 	if !ok {
-		// do we have any local libs? If so, use them
 		mode = "STATIC_LIBS"
 		for _, profile := range []string{"debug", "release", "maxperf"} {
 			path := filepath.Join("../target/", profile, "libfirewood_ffi.a")
 			if _, err := os.Stat(path); err == nil {
-				// found a local lib
 				mode = "LOCAL_LIBS"
 				break
 			}
 		}
 	}
-
-	if err := switchCGOMode(mode); err != nil {
-		log.Fatalf("Error switching CGO mode to %s:\n%v", mode, err)
-	}
-	fmt.Printf("Successfully switched CGO directives to %s mode\n", mode)
+	return mode
 }
 
 func getTargetFile() (string, error) {
@@ -65,12 +76,7 @@ func getTargetFile() (string, error) {
 	return targetFile, nil
 }
 
-func switchCGOMode(targetMode string) error {
-	targetFile, err := getTargetFile()
-	if err != nil {
-		return err
-	}
-
+func changeCgoDirectivesForFile(targetMode string, targetFile string) error {
 	originalFileContent, err := os.ReadFile(targetFile)
 	if err != nil {
 		return fmt.Errorf("failed to read %s: %w", targetFile, err)
@@ -123,11 +129,7 @@ func isCGODirective(line string) bool {
 
 func activateCGOLine(line string) string {
 	// Convert "// // #cgo" to "// #cgo"
-	if strings.Contains(line, "// // #cgo") {
-		return strings.Replace(line, "// // #cgo", "// #cgo", 1)
-	}
-	// Already active
-	return line
+	return strings.Replace(line, "// // #cgo", "// #cgo", 1)
 }
 
 func deactivateCGOLine(line string) string {
