@@ -541,13 +541,13 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 *free_stored_area_addr = free_head.next_free_block;
             }
             firewood_metric!(
-                "firewood_space_reused",
+                "firewood.space.reused",
                 "Bytes reused from free list by index",
                 AREA_SIZES[index],
                 "index" => index_name(index as u8)
             );
             firewood_metric!(
-                "firewood_space_wasted",
+                "firewood.space.wasted",
                 "Bytes wasted from free list by index",
                 AREA_SIZES[index] - n,
                 "index" => index_name(index as u8)
@@ -560,7 +560,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
 
         trace!("No free blocks of sufficient size {index_wanted} found");
         firewood_metric!(
-                "firewood_space_from_end",
+                "firewood.space.from_end",
                 "Space allocated from end of nodestore",
                 AREA_SIZES[index_wanted as usize],
                 "index" => index_name(index_wanted as u8)
@@ -629,13 +629,13 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         let (area_size_index, _) = self.area_index_and_size(addr)?;
         trace!("Deleting node at {addr:?} of size {area_size_index}");
         firewood_metric!(
-                "firewood_delete_node",
+                "firewood.delete_node",
                 "Node deleted from nodestore",
                 1,
                 "index" => index_name(area_size_index)
             );
         firewood_metric!(
-                "firewood_space_freed",
+                "firewood.space.freed",
                 "Space freed in nodestore",
                 AREA_SIZES[area_size_index as usize],
                 "index" => index_name(area_size_index)
