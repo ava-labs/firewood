@@ -543,16 +543,14 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
             firewood_metric!(
                 "firewood_space_reused",
                 "Bytes reused from free list by index",
-                ["index"],
-                [index_name(index as u8)],
-                AREA_SIZES[index]
+                AREA_SIZES[index],
+                "index" => index_name(index as u8)
             );
             firewood_metric!(
                 "firewood_space_wasted",
                 "Bytes wasted from free list by index",
-                ["index"],
-                [index_name(index as u8)],
-                AREA_SIZES[index] - n
+                AREA_SIZES[index] - n,
+                "index" => index_name(index as u8)
             );
 
             // Return the address of the newly allocated block.
@@ -564,9 +562,8 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         firewood_metric!(
                 "firewood_space_from_end",
                 "Space allocated from end of nodestore",
-                ["index"],
-                [index_name(index_wanted as u8)],
-                AREA_SIZES[index_wanted as usize]
+                AREA_SIZES[index_wanted as usize],
+                "index" => index_name(index_wanted as u8)
             );
         Ok(None)
     }
@@ -634,16 +631,14 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         firewood_metric!(
                 "firewood_delete_node",
                 "Node deleted from nodestore",
-                ["index"],
-                [index_name(area_size_index)],
-                1
+                1,
+                "index" => index_name(area_size_index)
             );
         firewood_metric!(
                 "firewood_space_freed",
                 "Space freed in nodestore",
-                ["index"],
-                [index_name(area_size_index)],
-                AREA_SIZES[area_size_index as usize]
+                AREA_SIZES[area_size_index as usize],
+                "index" => index_name(area_size_index)
             );
 
         // The area that contained the node is now free.

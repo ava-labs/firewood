@@ -1,22 +1,33 @@
 
-/// Registers and increments a Prometheus counter with description and labels.
+/// Macro to register and use a metric with description and labels.
+/// This macro is a wrapper around the `metrics` crate's `counter!` and `describe_counter!`
+/// macros. It ensures that the description is registered only once.
+///
 /// Usage:
-///   firewood_metric!(NAME, DESC, LABELS, [label_values], inc_value)
-///   firewood_metric!(NAME, DESC, [], [], inc_value) for no labels
+///   firewood_metric!("metric_name", "description", value_to_increment_by)
+///   firewood_metric!("metric_name", "description", value_to_increment_by, "label" => "value")
 #[macro_export]
 macro_rules! firewood_metric {
     // With labels
-    ($name:expr, $desc:expr, [$($label:expr),*], [$($value:expr),*], $inc:expr) => {{
-        static METRIC: std::sync::LazyLock<prometheus::IntCounterVec> = std::sync::LazyLock::new(|| {
-            prometheus::register_int_counter_vec!($name, $desc, &[$($label),*]).expect("metric registration failure")
-        });
-        METRIC.with_label_values(&[$($value),*]).inc_by($inc);
-    }};
+    ($name:expr, $desc:expr, $inc:expr, $($labels:tt)+) => {
+        {
+            use std::sync::Once;
+            static ONCE: Once = Once::new();
+            ONCE.call_once(|| {
+                metrics::describe_counter!($name, $desc);
+            });
+            metrics::counter!($name, $($labels)+).increment($inc);
+        }
+    };
     // No labels
-    ($name:expr, $desc:expr, [], [], $inc:expr) => {{
-        static METRIC: std::sync::LazyLock<prometheus::IntCounter> = std::sync::LazyLock::new(|| {
-            prometheus::register_int_counter!($name, $desc).expect("metric registration failure")
-        });
-        METRIC.inc_by($inc);
-    }};
+    ($name:expr, $desc:expr, $inc:expr) => {
+        {
+            use std::sync::Once;
+            static ONCE: Once = Once::new();
+            ONCE.call_once(|| {
+                metrics::describe_counter!($name, $desc);
+            });
+            metrics::counter!($name).increment($inc);
+        }
+    };
 }
