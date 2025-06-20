@@ -342,8 +342,8 @@ fn batch(db: &DatabaseHandle<'_>, nkeys: usize, values: &KeyValue) -> Result<Val
 ///  * ensure that the `Value` fields of the `KeyValue` structs are valid pointers.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_propose_on_db(
-    db: *const DatabaseHandle,
+pub unsafe extern "C" fn fwd_propose_on_db<'p>(
+    db: &'p DatabaseHandle<'p>,
     nkeys: usize,
     values: &KeyValue,
 ) -> Value {
@@ -354,13 +354,11 @@ pub unsafe extern "C" fn fwd_propose_on_db(
 
 /// Internal call for `fwd_propose_on_db` to remove error handling from the C API
 #[doc(hidden)]
-fn propose_on_db(
-    db: *const DatabaseHandle,
+fn propose_on_db<'p>(
+    db: &'p DatabaseHandle<'p>,
     nkeys: usize,
     values: &KeyValue,
 ) -> Result<Value, String> {
-    let db = unsafe { db.as_ref() }.ok_or_else(|| String::from("db should be non-null"))?;
-
     // Create a batch of operations to perform.
     let key_value_ref = unsafe { std::slice::from_raw_parts(values, nkeys) };
     let batch = convert_to_batch(key_value_ref);
