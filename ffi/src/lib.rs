@@ -1,5 +1,11 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
+
+#![allow(
+    unsafe_code,
+    reason = "This is an FFI library, so unsafe code is expected."
+)]
+
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, OsStr, c_char};
 use std::fmt::{self, Display, Formatter};
@@ -232,7 +238,7 @@ pub struct KeyValue {
 /// The new root hash of the database, in Value form.
 /// A `Value` containing {0, "error message"} if the commit failed.
 ///
-/// # Errors    
+/// # Errors
 ///
 /// * `"key-value pair is null"` - A `KeyValue` struct is null
 /// * `"db should be non-null"` - The database handle is null
