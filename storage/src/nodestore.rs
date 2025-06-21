@@ -84,6 +84,7 @@ use crate::hashednode::hash_node;
 use crate::node::{ByteCounter, Node};
 use crate::{
     CacheReadStrategy, Child, FileBacked, HashType, Path, ReadableStorage, SharedNode, TrieHash,
+    firewood_metric,
 };
 
 use super::linear::WritableStorage;
@@ -553,11 +554,18 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 // Update the free list to point to the next free block.
                 *free_stored_area_addr = free_head.next_free_block;
             }
-
-            counter!("firewood.space.reused", "index" => index_name(index as u8))
-                .increment(AREA_SIZES[index]);
-            counter!("firewood.space.wasted", "index" => index_name(index as u8))
-                .increment(AREA_SIZES[index] - n);
+            firewood_metric!(
+                "firewood.space.reused",
+                "Bytes reused from free list by index",
+                AREA_SIZES[index],
+                "index" => index_name(index as u8)
+            );
+            firewood_metric!(
+                "firewood.space.wasted",
+                "Bytes wasted from free list by index",
+                AREA_SIZES[index] - n,
+                "index" => index_name(index as u8)
+            );
 
             // Return the address of the newly allocated block.
             trace!("Allocating from free list: addr: {address:?}, size: {index}");
@@ -565,8 +573,12 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         }
 
         trace!("No free blocks of sufficient size {index_wanted} found");
-        counter!("firewood.space.from_end", "index" => index_name(index_wanted as u8))
-            .increment(AREA_SIZES[index_wanted as usize]);
+        firewood_metric!(
+                "firewood.space.from_end",
+                "Space allocated from end of nodestore",
+                AREA_SIZES[index_wanted as usize],
+                "index" => index_name(index_wanted as u8)
+            );
         Ok(None)
     }
 
@@ -619,10 +631,19 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         debug_assert!(addr.get() % 8 == 0);
 
         let (area_size_index, _) = self.area_index_and_size(addr)?;
-        trace!("Deleting node at {addr:?} of size {area_size_index}");
-        counter!("firewood.delete_node", "index" => index_name(area_size_index)).increment(1);
-        counter!("firewood.space.freed", "index" => index_name(area_size_index))
-            .increment(AREA_SIZES[area_size_index as usize]);
+        trace!("Deleting node at {addr:?} of size {}", area_size_index);
+        firewood_metric!(
+                "firewood.delete_node",
+                "Node deleted from nodestore",
+                1,
+                "index" => index_name(area_size_index)
+            );
+        firewood_metric!(
+                "firewood.space.freed",
+                "Space freed in nodestore",
+                AREA_SIZES[area_size_index as usize],
+                "index" => index_name(area_size_index)
+            );
 
         // The area that contained the node is now free.
         let area: Area<Node, FreeArea> = Area::Free(FreeArea {

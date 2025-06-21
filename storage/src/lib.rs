@@ -22,6 +22,8 @@ mod trie_hash;
 /// Logger module for handling logging functionality
 pub mod logger;
 
+#[macro_use] 
+pub mod macros;
 // re-export these so callers don't need to know where they are
 pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
