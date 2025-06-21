@@ -30,7 +30,7 @@ typedef struct DatabaseHandle DatabaseHandle;
  */
 typedef struct Value {
   size_t len;
-  const uint8_t *data;
+  uint8_t *data;
 } Value;
 
 /**
@@ -45,7 +45,7 @@ typedef struct KeyValue {
  * Struct returned by `fwd_create_db` and `fwd_open_db`
  */
 typedef struct DatabaseCreationResult {
-  const struct DatabaseHandle *db;
+  struct DatabaseHandle *db;
   uint8_t *error_str;
 } DatabaseCreationResult;
 
