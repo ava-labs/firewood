@@ -17,8 +17,14 @@
 // When building production static libraries, FIREWOOD_LD_MODE is set to "STATIC_LIBS"
 // in the github actions workflow.
 //
-// The script removes comments from lines within with a matching FIREWOOD_LD_MODE block
-// and comments out lines within blocks that do not match.
+// The script enables CGO directives for the target mode and comments out CGO directives
+// that do not match.
+//
+// CGO directives are already comments and CGO does not allow interleaving regular
+// comments with CGO directives. To disable, we must double escape the CGO directives
+// with:
+//
+// // #cgo ...
 //
 // The go file may contain multiple such blocks, but nesting is not allowed.
 
