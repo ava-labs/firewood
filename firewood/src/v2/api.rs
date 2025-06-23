@@ -1,14 +1,23 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#![expect(
+    clippy::iter_not_returning_iterator,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![expect(
+    clippy::missing_errors_doc,
+    reason = "Found 3 occurrences after enabling the lint."
+)]
+
 use crate::manager::RevisionManagerError;
 use crate::proof::{Proof, ProofError, ProofNode};
 pub use crate::range_proof::RangeProof;
 use async_trait::async_trait;
+use firewood_storage::{FileIoError, TrieHash};
 use futures::Stream;
 use std::fmt::Debug;
 use std::sync::Arc;
-use storage::{FileIoError, TrieHash};
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
 /// and can be sent and shared across threads. References with
@@ -33,7 +42,7 @@ impl<T> ValueType for T where T: AsRef<[u8]> + Send + Sync + Debug {}
 ///    in time
 ///  - They are used to provide integrity at different points in a
 ///    proof
-pub type HashKey = storage::TrieHash;
+pub type HashKey = firewood_storage::TrieHash;
 
 /// A key/value pair operation. Only put (upsert) and delete are
 /// supported
@@ -142,11 +151,11 @@ pub enum Error {
     #[error("Range too small")]
     RangeTooSmall,
 
-    /// Request RangeProof for empty trie
+    /// Request `RangeProof` for empty trie
     #[error("request RangeProof for empty trie")]
     RangeProofOnEmptyTrie,
 
-    /// Request RangeProof for empty range
+    /// Request `RangeProof` for empty range
     #[error("the latest revision is empty and has no root hash")]
     LatestIsEmpty,
 

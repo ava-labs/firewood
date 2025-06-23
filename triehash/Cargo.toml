@@ -1,6 +1,6 @@
 [package]
-name = "triehash"
-version = "0.8.5"
+name = "firewood-triehash"
+version = "0.0.6"
 authors = ["Parity Technologies <admin@parity.io>", "Ron Kuris <swcafe@gmail.com>"]
 description = "In-memory patricia trie operations"
 repository = "https://github.com/paritytech/parity-common"
@@ -8,8 +8,8 @@ license = "MIT OR Apache-2.0"
 edition = "2024"
 
 [dependencies]
-hash-db = { version = "0.16.0", default-features = false }
-rlp = { version = "0.6", default-features = false }
+hash-db = "0.16.0"
+rlp = "0.6"
 
 [dev-dependencies]
 criterion = "0.6.0"
@@ -19,14 +19,10 @@ tiny-keccak = { version = "2.0", features = ["keccak"] }
 trie-standardmap = "0.16.0"
 hex-literal = "1.0.0"
 
-[features]
-default = ["std"]
-std = [
-	"hash-db/std",
-	"rlp/std",
-]
-
 [[bench]]
 name = "triehash"
 path = "benches/triehash.rs"
 harness = false
+
+[lints]
+workspace = true

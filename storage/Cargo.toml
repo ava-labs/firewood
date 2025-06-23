@@ -1,8 +1,17 @@
 [package]
-name = "storage"
-version = "0.0.5"
+name = "firewood-storage"
+version = "0.0.6"
 edition = "2024"
 rust-version = "1.85.0"
+authors = [
+     "Aaron Buchwald <aaron.buchwald56@gmail.com>",
+     "Ron Kuris <ron.kuris@avalabs.org>",
+     "Suyan Qu <36519575+qusuyan@users.noreply.github.com>",
+]
+description = "Storage layer for Firewood, an embedded key-value store optimized for blockchain state."
+license-file = "../LICENSE.md"
+homepage = "https://avalabs.org"
+repository = "https://github.com/ava-labs/firewood"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -29,6 +38,7 @@ coarsetime = "0.1.35"
 rlp = { version = "0.6.1", optional = true }
 sha3 = { version = "0.10.8", optional = true }
 bytes = { version = "1.10.1", optional = true }
+semver = "1.0.26"
 
 [dev-dependencies]
 rand = "0.9.0"
@@ -46,3 +56,6 @@ ethhash = [ "dep:rlp", "dep:sha3", "dep:bytes" ]
 [[bench]]
 name = "serializer"
 harness = false
+
+[lints]
+workspace = true

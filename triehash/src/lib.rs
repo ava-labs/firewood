@@ -10,25 +10,26 @@
 //!
 //! This module should be used to generate trie root hash.
 
-#![cfg_attr(not(feature = "std"), no_std)]
+#![expect(
+    clippy::arithmetic_side_effects,
+    reason = "Found 7 occurrences after enabling the lint."
+)]
+#![expect(
+    clippy::bool_to_int_with_if,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![expect(
+    clippy::cast_possible_truncation,
+    reason = "Found 1 occurrences after enabling the lint."
+)]
+#![expect(
+    clippy::indexing_slicing,
+    reason = "Found 13 occurrences after enabling the lint."
+)]
 
-#[cfg(not(feature = "std"))]
-extern crate alloc;
-
-#[cfg(feature = "std")]
-mod rstd {
-    pub use std::collections::BTreeMap;
-}
-
-#[cfg(not(feature = "std"))]
-mod rstd {
-    pub use alloc::collections::BTreeMap;
-    pub use alloc::vec::Vec;
-}
-
-use core::cmp;
-use core::iter::once;
-use rstd::*;
+use std::cmp;
+use std::collections::BTreeMap;
+use std::iter::once;
 
 use hash_db::Hasher;
 use rlp::RlpStream;
@@ -46,7 +47,7 @@ fn shared_prefix_len<T: Eq>(first: &[T], second: &[T]) -> usize {
 /// ```
 /// use hex_literal::hex;
 /// use ethereum_types::H256;
-/// use triehash::ordered_trie_root;
+/// use firewood_triehash::ordered_trie_root;
 /// use keccak_hasher::KeccakHasher;
 ///
 /// let v = &["doe", "reindeer"];
@@ -72,7 +73,7 @@ where
 ///
 /// ```
 /// use hex_literal::hex;
-/// use triehash::trie_root;
+/// use firewood_triehash::trie_root;
 /// use ethereum_types::H256;
 /// use keccak_hasher::KeccakHasher;
 ///
@@ -124,7 +125,7 @@ where
 /// ```
 /// use hex_literal::hex;
 /// use ethereum_types::H256;
-/// use triehash::sec_trie_root;
+/// use firewood_triehash::sec_trie_root;
 /// use keccak_hasher::KeccakHasher;
 ///
 /// let v = vec![
@@ -171,7 +172,7 @@ fn hex_prefix_encode(nibbles: &[u8], leaf: bool) -> impl Iterator<Item = u8> + '
     let oddness_factor = inlen % 2;
 
     let first_byte = {
-        let mut bits = ((inlen as u8 & 1) + (2 * leaf as u8)) << 4;
+        let mut bits = ((inlen as u8 & 1) + (2 * u8::from(leaf))) << 4;
         if oddness_factor == 1 {
             bits += nibbles[0];
         }

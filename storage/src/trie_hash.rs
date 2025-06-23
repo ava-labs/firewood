@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use sha2::digest::generic_array::GenericArray;
 use sha2::digest::typenum;
 
+use crate::node::ExtendableBytes;
 use crate::node::branch::Serializable;
 
 /// A hash value inside a merkle trie
@@ -70,21 +71,22 @@ impl From<GenericArray<u8, typenum::U32>> for TrieHash {
 }
 
 impl TrieHash {
-    /// Return the length of a TrieHash
+    /// Return the length of a `TrieHash`
     pub(crate) const fn len() -> usize {
         std::mem::size_of::<TrieHash>()
     }
 
-    /// Some code needs a TrieHash even though it only has a HashType.
-    /// This function is a no-op, as HashType is a TrieHash in this context.
+    /// Some code needs a `TrieHash` even though it only has a `HashType`.
+    /// This function is a no-op, as `HashType` is a `TrieHash` in this context.
+    #[must_use]
     pub const fn into_triehash(self) -> Self {
         self
     }
 }
 
 impl Serializable for TrieHash {
-    fn serialized_bytes(&self) -> Vec<u8> {
-        self.0.to_vec()
+    fn write_to<W: ExtendableBytes>(&self, vec: &mut W) {
+        vec.extend_from_slice(&self.0);
     }
 
     fn from_reader<R: std::io::Read>(mut reader: R) -> Result<Self, std::io::Error>
