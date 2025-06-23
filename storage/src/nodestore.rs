@@ -1252,12 +1252,8 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         Ok((addr, hash))
     }
 
-    /// Re-export the root_hash function of ImmutableProposal.
-    // pub fn root_hash(&self) -> Option<TrieHash> {
-    //     self.kind.root_hash()
-    // }
-
-    /// Re-export the parent_hash_is function of ImmutableProposal.
+    /// Re-export the `parent_hash_is` function of [`ImmutableProposal`].
+    #[must_use]
     pub fn parent_hash_is(&self, hash: Option<TrieHash>) -> bool {
         self.kind.parent_hash_is(hash)
     }
