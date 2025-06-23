@@ -316,9 +316,14 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
         Ok((node, size[0]))
     }
 
-    /// Get a reference to the header of this nodestore
-    pub const fn header(&self) -> &NodeStoreHeader {
-        &self.header
+    /// Get the root address of this nodestore
+    pub(crate) const fn root_address(&self) -> Option<LinearAddress> {
+        self.header.root_address
+    }
+
+    /// Get the size of this nodestore
+    pub(crate) const fn size(&self) -> u64 {
+        self.header.size
     }
 
     /// Get the size of an area index (used by the checker)
@@ -890,16 +895,6 @@ impl NodeStoreHeader {
                 "Database cannot be opened as it was created without ethhash enabled",
             ))
         }
-    }
-
-    // return the size of this nodestore
-    pub const fn size(&self) -> u64 {
-        self.size
-    }
-
-    // return the root address of this nodestore
-    pub const fn root_address(&self) -> Option<LinearAddress> {
-        self.root_address
     }
 }
 

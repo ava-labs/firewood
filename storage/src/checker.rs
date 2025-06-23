@@ -9,11 +9,13 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// 2. traverse the trie and check the nodes
     /// 3. check the free list
     /// 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
+    /// # Errors
+    /// Returns a [`CheckerError`] if the database is inconsistent.
     // TODO: report all errors, not just the first one
     // TODO: add merkle hash checks as well
     pub fn check(&self) -> Result<(), CheckerError> {
         // 1. Check the header
-        let db_size = self.header().size();
+        let db_size = self.size();
         let file_size = self.storage.size()?;
         if db_size < file_size {
             return Err(CheckerError::InvalidDBSize {
@@ -27,7 +29,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         let mut visited = LinearAddressRangeSet::new(db_size)?;
 
         // 2. traverse the trie and check the nodes
-        if let Some(root_address) = self.header().root_address() {
+        if let Some(root_address) = self.root_address() {
             // the database is not empty, traverse the trie
             self.traverse_trie(root_address, &mut visited)?;
         }
@@ -63,7 +65,6 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 #[cfg(test)]
 mod test {
     #![expect(clippy::unwrap_used)]
-    #![expect(clippy::indexing_slicing)]
 
     use super::*;
     use crate::linear::memory::MemStore;
