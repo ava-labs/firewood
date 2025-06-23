@@ -25,10 +25,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -36,8 +36,10 @@ const (
 	defaultMode = "LOCAL_LIBS"
 )
 
+var errGoFileNotSet = errors.New("GOFILE is not set")
+
 func main() {
-	mode := localOrStaticLibs()
+	mode := getFirewoodLdMode()
 
 	targetFile, err := getTargetFile()
 	if err != nil {
@@ -51,19 +53,12 @@ func main() {
 	fmt.Printf("Successfully switched CGO directives to %s mode\n", mode)
 }
 
-// Get the FIREWOOD_LD_MODE environment variable. If it's not set, look for local libs,
-// and if found, set it to "LOCAL_LIBS". Otherwise, set it to "STATIC_LIBS".
-func localOrStaticLibs() string {
+// getFirewoodLdMode returns the FIREWOOD_LD_MODE environment variable.
+// Defaults to "LOCAL_LIBS".
+func getFirewoodLdMode() string {
 	mode, ok := os.LookupEnv("FIREWOOD_LD_MODE")
 	if !ok {
-		mode = "STATIC_LIBS"
-		for _, profile := range []string{"debug", "release", "maxperf"} {
-			path := filepath.Join("../target/", profile, "libfirewood_ffi.a")
-			if _, err := os.Stat(path); err == nil {
-				mode = "LOCAL_LIBS"
-				break
-			}
-		}
+		mode = "LOCAL_LIBS"
 	}
 	return mode
 }
@@ -71,7 +66,7 @@ func localOrStaticLibs() string {
 func getTargetFile() (string, error) {
 	targetFile, ok := os.LookupEnv("GOFILE")
 	if !ok {
-		return "", fmt.Errorf("GOFILE is not set")
+		return "", errGoFileNotSet
 	}
 	return targetFile, nil
 }
@@ -95,7 +90,7 @@ func changeCgoDirectivesForFile(targetMode string, targetFile string) error {
 			}
 			currentBlockName = newBlockName
 			continue
-		} else if strings.HasPrefix(line, "// // FIREWOOD_CGO_END_") {
+		} else if line == fmt.Sprintf("// // FIREWOOD_CGO_END_%s", currentBlockName) {
 			currentBlockName = "None"
 			continue
 		}
@@ -111,6 +106,10 @@ func changeCgoDirectivesForFile(targetMode string, targetFile string) error {
 				fileLines[i] = deactivateCGOLine(fileLines[i])
 			}
 		}
+	}
+
+	if currentBlockName != "None" {
+		return fmt.Errorf("[ERROR] %s: unterminated CGO block ended in %s", targetFile, currentBlockName)
 	}
 
 	// If the contents changed, write it back to the file
@@ -131,7 +130,6 @@ func activateCGOLine(line string) string {
 	// Convert "// // #cgo" to "// #cgo"
 	return strings.Replace(line, "// // #cgo", "// #cgo", 1)
 }
-
 func deactivateCGOLine(line string) string {
 	// Convert "// #cgo" to "// // #cgo" (but not "// // #cgo" to "// // // #cgo")
 	if strings.Contains(line, "// #cgo") && !strings.Contains(line, "// // #cgo") {
