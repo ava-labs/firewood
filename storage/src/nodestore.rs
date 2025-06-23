@@ -40,7 +40,6 @@
 
 use crate::linear::FileIoError;
 use crate::logger::{debug, trace};
-use crate::range_set::LinearAddressRangeSet;
 use arc_swap::ArcSwap;
 use arc_swap::access::DynAccess;
 use bincode::{DefaultOptions, Options as _};
@@ -84,8 +83,7 @@ use std::sync::Arc;
 use crate::hashednode::hash_node;
 use crate::node::{ByteCounter, Node};
 use crate::{
-    CacheReadStrategy, CheckerError, Child, FileBacked, HashType, Path, ReadableStorage,
-    SharedNode, TrieHash,
+    CacheReadStrategy, Child, FileBacked, HashType, Path, ReadableStorage, SharedNode, TrieHash,
 };
 
 use super::linear::WritableStorage;
@@ -898,6 +896,11 @@ impl NodeStoreHeader {
     pub const fn size(&self) -> u64 {
         self.size
     }
+
+    // return the root address of this nodestore
+    pub const fn root_address(&self) -> Option<LinearAddress> {
+        self.root_address
+    }
 }
 
 /// A [`FreeArea`] is stored at the start of the area that contained a node that
@@ -1269,13 +1272,8 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
 impl<T, S: WritableStorage> NodeStore<T, S> {
     /// Persist the header from this proposal to storage.
     pub fn flush_header(&self) -> Result<(), FileIoError> {
-        Self::flush_header_inner(&self.storage, &self.header)
-    }
-
-    // helper function to be used by the flush_header_inner function and in tests
-    fn flush_header_inner(storage: &S, header: &NodeStoreHeader) -> Result<(), FileIoError> {
-        let header_bytes = bytemuck::bytes_of(header);
-        storage.write(0, header_bytes)?;
+        let header_bytes = bytemuck::bytes_of(&self.header);
+        self.storage.write(0, header_bytes)?;
         Ok(())
     }
 
@@ -1312,7 +1310,10 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
         let flush_start = Instant::now();
 
         for (addr, (area_size_index, node)) in &self.kind.new {
-            Self::flush_nodes_helper(&self.storage, addr.get(), *area_size_index, node)?;
+            let mut stored_area_bytes = Vec::new();
+            node.as_bytes(*area_size_index, &mut stored_area_bytes);
+            self.storage
+                .write(addr.get(), stored_area_bytes.as_slice())?;
         }
 
         self.storage
@@ -1322,18 +1323,6 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
         counter!("firewood.flush_nodes").increment(flush_time);
 
         Ok(())
-    }
-
-    // helper function to be used by the flush_nodes function and in tests
-    fn flush_nodes_helper(
-        storage: &FileBacked,
-        offset: u64,
-        area_size_index: AreaIndex,
-        node: &Node,
-    ) -> Result<usize, FileIoError> {
-        let mut stored_area_bytes = Vec::new();
-        node.as_bytes(area_size_index, &mut stored_area_bytes);
-        storage.write(offset, stored_area_bytes.as_slice())
     }
 
     /// Persist all the nodes of a proposal to storage.
@@ -1583,62 +1572,38 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     }
 }
 
-/// [`NodeStore`] checker
-// TODO: S needs to be writeable if we ask checker to fix the issues
-impl<S: ReadableStorage> NodeStore<Committed, S> {
-    /// Go through the filebacked storage and check for any inconsistencies. It proceeds in the following steps:
-    /// 1. Check the header
-    /// 2. traverse the trie and check the nodes
-    /// 3. check the free list
-    /// 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
-    // TODO: report all errors, not just the first one
-    // TODO: add merkle hash checks as well
-    pub fn check(&self) -> Result<(), CheckerError> {
-        // 1. Check the header
-        let db_size = self.header.size;
-        let file_size = self.storage.size()?;
-        if db_size < file_size {
-            return Err(CheckerError::InvalidDBSize {
-                db_size,
-                description: format!(
-                    "db size should not be smaller than the file size ({file_size})"
-                ),
-            });
-        }
+#[cfg(test)]
+pub(crate) mod nodestore_test_utils {
+    use super::*;
 
-        let mut visited = LinearAddressRangeSet::new(db_size)?;
-
-        // 2. traverse the trie and check the nodes
-        if let Some(root_address) = self.header.root_address {
-            // the database is not empty, traverse the trie
-            self.traverse_trie(root_address, &mut visited)?;
-        }
-
-        // 3. check the free list - this can happen in parallel with the trie traversal
-
-        // 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
-        let _ = visited.complement(); // TODO
-
-        Ok(())
+    // Helper function to wrap the node in a StoredArea and write it to the given offset. Returns the size of the area on success.
+    #[allow(clippy::cast_possible_truncation)]
+    pub(crate) fn write_new_node<S: WritableStorage>(
+        nodestore: &NodeStore<Committed, S>,
+        node: &Node,
+        offset: u64,
+    ) -> u64 {
+        let node_length = NodeStore::<Arc<ImmutableProposal>, FileBacked>::stored_len(node);
+        let area_size_index = area_size_to_index(node_length).unwrap();
+        let mut stored_area_bytes = Vec::new();
+        node.as_bytes(area_size_index, &mut stored_area_bytes);
+        nodestore
+            .storage
+            .write(offset, stored_area_bytes.as_slice())
+            .unwrap();
+        AREA_SIZES[area_size_index as usize]
     }
 
-    /// Recursively traverse the trie from the given root address.
-    fn traverse_trie(
-        &self,
-        subtree_root_address: LinearAddress,
-        visited: &mut LinearAddressRangeSet,
-    ) -> Result<(), CheckerError> {
-        let (_, area_size) = self.area_index_and_size(subtree_root_address)?;
-        visited.insert_area(subtree_root_address, area_size)?;
-
-        if let Node::Branch(branch) = self.read_node(subtree_root_address)?.as_ref() {
-            // this is an internal node, traverse the children
-            for (_, address) in branch.children_addresses() {
-                self.traverse_trie(*address, visited)?;
-            }
-        }
-
-        Ok(())
+    pub(crate) fn write_header<S: WritableStorage>(
+        nodestore: &NodeStore<Committed, S>,
+        root_addr: LinearAddress,
+        size: u64,
+    ) {
+        let mut header = NodeStoreHeader::new();
+        header.size = size;
+        header.root_address = Some(root_addr);
+        let header_bytes = bytemuck::bytes_of(&header);
+        nodestore.storage.write(0, header_bytes).unwrap();
     }
 }
 
@@ -1796,101 +1761,5 @@ mod tests {
 
         let immutable = NodeStore::<Arc<ImmutableProposal>, _>::try_from(node_store).unwrap();
         println!("{immutable:?}"); // should not be reached, but need to consume immutable to avoid optimization removal
-    }
-}
-
-#[cfg(test)]
-mod test_node_store_checker {
-    #![expect(clippy::unwrap_used)]
-    #![expect(clippy::indexing_slicing)]
-
-    use super::*;
-    use crate::linear::filebacked::FileBacked;
-    use crate::linear::filebacked::test_utils;
-    use crate::{BranchNode, LeafNode};
-
-    // Helper function to wrap the node in a StoredArea and write it to the given offset. Returns the size of the area on success.
-    #[allow(clippy::cast_possible_truncation)]
-    fn write_new_node(file_backed: &FileBacked, node: &Node, offset: u64) -> u64 {
-        let node_length = NodeStore::<Arc<ImmutableProposal>, FileBacked>::stored_len(node);
-        let area_size_index = area_size_to_index(node_length).unwrap();
-        NodeStore::<Arc<ImmutableProposal>, FileBacked>::flush_nodes_helper(
-            file_backed,
-            offset,
-            area_size_index,
-            node,
-        )
-        .unwrap();
-        AREA_SIZES[area_size_index as usize]
-    }
-
-    fn write_header(file_backed: &FileBacked, root_addr: LinearAddress, size: u64) {
-        let mut header = NodeStoreHeader::new();
-        header.size = size;
-        header.root_address = Some(root_addr);
-        NodeStore::<Committed, FileBacked>::flush_header_inner(file_backed, &header).unwrap();
-    }
-
-    #[test]
-    // This test creates a simple trie and checks that the checker traverses it correctly.
-    // We use primitive calls here to do a low-level check.
-    // TODO: add a high-level test in the firewood crate
-    fn test_checker_traverse_correct_trie() {
-        let (file_backed, _) = test_utils::create_file_backed();
-
-        // set up a basic trie:
-        // -------------------------
-        // |     |  X  |  X  | ... |    Root node
-        // -------------------------
-        //    |
-        //    V
-        // -------------------------
-        // |  X  |     |  X  | ... |    Branch node
-        // -------------------------
-        //          |
-        //          V
-        // -------------------------
-        // |   [0,1] -> [3,4,5]    |    Leaf node
-        // -------------------------
-        let mut high_watermark = NodeStoreHeader::SIZE;
-        let leaf = Node::Leaf(LeafNode {
-            partial_path: Path::from([0, 1]),
-            value: Box::new([3, 4, 5]),
-        });
-        let leaf_addr = LinearAddress::new(high_watermark).unwrap();
-        let leaf_area = write_new_node(&file_backed, &leaf, high_watermark);
-        high_watermark += leaf_area;
-
-        let mut branch_children: [Option<Child>; BranchNode::MAX_CHILDREN] = Default::default();
-        branch_children[1] = Some(Child::AddressWithHash(leaf_addr, HashType::default()));
-        let branch = Node::Branch(Box::new(BranchNode {
-            partial_path: Path::from([0]),
-            value: None,
-            children: branch_children,
-        }));
-        let branch_addr = LinearAddress::new(high_watermark).unwrap();
-        let branch_area = write_new_node(&file_backed, &branch, high_watermark);
-        high_watermark += branch_area;
-
-        let mut root_children: [Option<Child>; BranchNode::MAX_CHILDREN] = Default::default();
-        root_children[0] = Some(Child::AddressWithHash(branch_addr, HashType::default()));
-        let root = Node::Branch(Box::new(BranchNode {
-            partial_path: Path::from([]),
-            value: None,
-            children: root_children,
-        }));
-        let root_addr = LinearAddress::new(high_watermark).unwrap();
-        let root_area = write_new_node(&file_backed, &root, high_watermark);
-        high_watermark += root_area;
-
-        // write the header
-        write_header(&file_backed, root_addr, high_watermark);
-
-        // verify that all of the space is accounted for - since there is no free area
-        let node_store = NodeStore::open(Arc::new(file_backed)).unwrap();
-        let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
-        node_store.traverse_trie(root_addr, &mut visited).unwrap();
-        let complement = visited.complement();
-        assert_eq!(complement.into_iter().collect::<Vec<_>>(), vec![]);
     }
 }

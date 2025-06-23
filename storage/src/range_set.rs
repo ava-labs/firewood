@@ -3,7 +3,6 @@
 
 #![warn(clippy::pedantic)]
 
-use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::ops::Range;
@@ -12,12 +11,12 @@ use crate::nodestore::NodeStoreHeader;
 use crate::{CheckerError, LinearAddress};
 
 #[derive(Debug)]
-pub struct RangeSet<T>(BTreeMap<T, T>); // start --> end
+pub struct RangeSet<T>(BTreeMap<T, T>); // end --> start so that we can look up ranges by its start
 
 struct CoalescingRanges<'a, T> {
-    prev_consecutive_range: Option<Range<&'a T>>,
+    prev_adjacent_range: Option<Range<&'a T>>,
     intersecting_ranges: Vec<Range<&'a T>>,
-    next_consecutive_range: Option<Range<&'a T>>,
+    next_adjacent_range: Option<Range<&'a T>>,
 }
 
 #[allow(dead_code)]
@@ -27,37 +26,71 @@ impl<T: Clone + Ord + Debug> RangeSet<T> {
     }
 
     // returns disjoint ranges that will coalesce with the given range in ascending order
+    // We look at all ranges whose end is greater than or equal to the given range's start
+    // For each range, there are 5 cases:
+    // Case 1: The range is before the given range
+    //      Range x in RangeSet: |----|
+    //      Given Range:                  |--------|
+    //      Result: this will not happen since the end of x is less than the start of the given range
+    // Case 2: The end of the range is equal to the start of the given range
+    //      Range x in RangeSet: |--------|
+    //      Given Range:                  |--------|
+    //      Result: prev_adjacent_range = Some(x)
+    // Case 3: The range intersects with the given range
+    //      Range x in RangeSet: |----------|
+    //      Given Range:               |-----------|
+    //      Result: intersecting_ranges = [x, ...]
+    //     or:
+    //      Range x in RangeSet: |----------------|
+    //      Given Range:             |--------|
+    //     or:
+    //      Range x in RangeSet:     |--------|
+    //      Given Range:         |-----------------|
+    //     or:
+    //      Range x in RangeSet:      |------------|
+    //      Given Range:         |--------|
+    //      Result: intersecting_ranges = [.., x, ..]
+    // Case 4: The start of the range is equal to the end of the given range
+    //      Range x in RangeSet:          |--------|
+    //      Given Range:         |--------|
+    //      Result: next_adjacent_range = Some(x), and we are done iterating through the ranges
+    // Case 5: The range is after the given range
+    //      Range x in RangeSet:              |--------|
+    //      Given Range:         |--------|
+    //      Result: We are done iterating through the ranges
     fn get_coalescing_ranges(&self, range: &Range<T>) -> CoalescingRanges<'_, T> {
-        let mut prev_consecutive_range = None;
+        let mut prev_adjacent_range = None;
         let mut intersecting_ranges = Vec::new();
-        let mut next_consecutive_range = None;
+        let mut next_adjacent_range = None;
 
-        let prev_item = self.0.range(..range.start.clone()).next_back();
         let next_items = self.0.range(range.start.clone()..);
-
-        if let Some((prev_range_start, prev_range_end)) = prev_item {
-            match prev_range_end.cmp(&range.start) {
-                Ordering::Less => {} // the previous range is does not intersect or is consecutive with the given range - it will not be coalesced
-                Ordering::Equal => prev_consecutive_range = Some(prev_range_start..prev_range_end), // the previous range does not intersect with the given range but is consecutive
-                Ordering::Greater => intersecting_ranges.push(prev_range_start..prev_range_end), // the previous range intersects with the given range
-            }
-        }
-
-        for (next_range_start, next_range_end) in next_items {
-            match range.end.cmp(next_range_start) {
-                Ordering::Less => break, // the next range is after the given range - we are done
-                Ordering::Equal => next_consecutive_range = Some(next_range_start..next_range_end), // the current range does not intersect with the given range but is consecutive
-                Ordering::Greater => intersecting_ranges.push(next_range_start..next_range_end), // the current range intersects the given range
+        // all ranges will have next_range_end >= range.start and next_range_end >= next_range_start
+        for (next_range_end, next_range_start) in next_items {
+            if next_range_end == &range.start {
+                // Case 2: The end of the range is equal to the start of the given range - this can only happen to the first item
+                prev_adjacent_range = Some(next_range_start..next_range_end);
+            } else if next_range_start < &range.end {
+                // Case 3: The range intersects with the given range
+                intersecting_ranges.push(next_range_start..next_range_end);
+            } else if next_range_start == &range.end {
+                // Case 4: The start of the range is equal to the end of the given range
+                next_adjacent_range = Some(next_range_start..next_range_end);
+                break;
+            } else {
+                // Case 5: the range is after the given range
+                break;
             }
         }
 
         CoalescingRanges {
-            prev_consecutive_range,
+            prev_adjacent_range,
             intersecting_ranges,
-            next_consecutive_range,
+            next_adjacent_range,
         }
     }
 
+    // Try inserting the range
+    // if allow_intersecting is false and the range intersects with existing ranges, return error with the intersection
     fn insert_range_helper(
         &mut self,
         range: Range<T>,
@@ -69,9 +102,9 @@ impl<T: Clone + Ord + Debug> RangeSet<T> {
         }
 
         let CoalescingRanges {
-            prev_consecutive_range,
+            prev_adjacent_range: prev_consecutive_range,
             intersecting_ranges,
-            next_consecutive_range,
+            next_adjacent_range: next_consecutive_range,
         } = self.get_coalescing_ranges(&range);
 
         // if the insert needs to be disjoint but we found intersecting ranges, return error with the intersection
@@ -110,48 +143,48 @@ impl<T: Clone + Ord + Debug> RangeSet<T> {
             .chain(intersecting_ranges)
             .chain(next_consecutive_range);
         let remove_keys = remove_ranges_iter
-            .map(|range| range.start.clone())
+            .map(|range| range.end.clone())
             .collect::<Vec<_>>();
         for key in remove_keys {
             self.0.remove(&key);
         }
 
         // insert the new range after coalescing
-        self.0.insert(coalesced_start, coalesced_end);
+        self.0.insert(coalesced_end, coalesced_start);
         Ok(())
     }
 
-    // insert the range
+    /// Insert the range into the range set.
     pub fn insert_range(&mut self, range: Range<T>) {
         self.insert_range_helper(range, true)
             .expect("insert range should always success if we allow intersecting area insert");
     }
 
-    // insert the given range if the range is disjoint, otherwise return the intersection
+    /// Insert the given range into the range set if the range does not intersect with existing ranges, otherwise return the error with the intersection
     pub fn insert_disjoint_range(&mut self, range: Range<T>) -> Result<(), Vec<Range<T>>> {
         self.insert_range_helper(range, false)
     }
 
-    // comment how it works
+    /// Returns the complement of the range set in the given range.
     pub fn complement(&self, min: &T, max: &T) -> Self {
         let mut complement_tree = BTreeMap::new();
         // first range will start from min
         let mut start = min;
-        for (cur_start, cur_end) in &self.0 {
+        for (next_range_end, next_range_start) in &self.0 {
             // insert the range from the previous end to the current start
-            if cur_start > start {
-                if cur_start >= max {
+            if next_range_start > start {
+                if next_range_start >= max {
                     // we have reached the max - we are done
                     break;
                 }
-                complement_tree.insert(start.clone(), cur_start.clone());
+                complement_tree.insert(next_range_start.clone(), start.clone());
             }
-            start = std::cmp::max(start, cur_end); // in case the entire range is smaller than min
+            start = std::cmp::max(start, next_range_end); // in case the entire range is smaller than min
         }
 
         // insert the last range before the max
         if start < max {
-            complement_tree.insert(start.clone(), max.clone());
+            complement_tree.insert(max.clone(), start.clone());
         }
 
         Self(complement_tree)
@@ -164,7 +197,7 @@ impl<T: Debug> IntoIterator for RangeSet<T> {
         std::iter::Map<<BTreeMap<T, T> as IntoIterator>::IntoIter, fn((T, T)) -> Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter().map(|(start, end)| Range { start, end })
+        self.0.into_iter().map(|(end, start)| Range { start, end })
     }
 }
 
