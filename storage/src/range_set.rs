@@ -3,18 +3,16 @@
 
 #![warn(clippy::pedantic)]
 
-use btree_slab::BTreeMap;
-use btree_slab::generic::map::BTreeExt;
-use btree_slab::generic::node::Address;
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
+use std::fmt::Debug;
 use std::ops::Range;
 
-use crate::nodestore::STORAGE_AREA_START;
+use crate::nodestore::NodeStoreHeader;
 use crate::{CheckerError, LinearAddress};
 
-pub struct RangeSet<T> {
-    index: BTreeMap<T, T>, // start --> end
-}
+#[derive(Debug)]
+pub struct RangeSet<T>(BTreeMap<T, T>); // start --> end
 
 struct CoalescingRanges<'a, T> {
     prev_consecutive_range: Option<Range<&'a T>>,
@@ -23,78 +21,34 @@ struct CoalescingRanges<'a, T> {
 }
 
 #[allow(dead_code)]
-impl<T: Clone + Ord + std::fmt::Debug> RangeSet<T> {
-    pub fn new() -> Self {
-        Self {
-            index: BTreeMap::new(),
-        }
-    }
-
-    // returns the address of the previous and next item in the tree - we need to return next as well since prev may be None
-    fn find_prev_and_next_addr(&self, key: &T) -> (Option<Address>, Option<Address>) {
-        // btree_slab::BTreeMap::address_of returns:
-        // - Err(nowhere) if the tree is empty
-        // - Some(addr) where addr is the address of the key if it is present
-        // - Err(addr) where addr is the address following the nearest key smaller than the given key if the key is not present
-        // e.g.: If the key is 10 and the tree has 5 @ address 1 and 15 @ address 2, it will return Err(2) - we should return (Some(1), Some(2))
-        let my_addr = self.index.address_of(key);
-        match my_addr {
-            Ok(addr) => (Some(addr), self.index.next_item_address(addr)), // if the key is present, merge with this range
-            Err(addr) => {
-                // tree is empty - this check is necessary since item(addr) will unwrap on none if the address is nowhere
-                if addr.is_nowhere() {
-                    return (None, None);
-                }
-
-                let prev_addr = self.index.previous_item_address(addr);
-                let next_addr = match self.index.item(addr) {
-                    Some(_) => Some(addr),
-                    None => self.index.next_item_address(addr),
-                };
-                (prev_addr, next_addr)
-            }
-        }
+impl<T: Clone + Ord + Debug> RangeSet<T> {
+    pub const fn new() -> Self {
+        Self(BTreeMap::new())
     }
 
     // returns disjoint ranges that will coalesce with the given range in ascending order
     fn get_coalescing_ranges(&self, range: &Range<T>) -> CoalescingRanges<'_, T> {
-        let (prev_addr, mut next_addr) = self.find_prev_and_next_addr(&range.start);
         let mut prev_consecutive_range = None;
         let mut intersecting_ranges = Vec::new();
         let mut next_consecutive_range = None;
 
-        // check if the previous range will coalesce with the given range
-        if let Some(prev_addr) = prev_addr {
-            let prev_range = self.index.item(prev_addr).expect("prev item should exist");
-            match prev_range.value().cmp(&range.start) {
+        let prev_item = self.0.range(..range.start.clone()).next_back();
+        let next_items = self.0.range(range.start.clone()..);
+
+        if let Some((prev_range_start, prev_range_end)) = prev_item {
+            match prev_range_end.cmp(&range.start) {
                 Ordering::Less => {} // the previous range is does not intersect or is consecutive with the given range - it will not be coalesced
-                Ordering::Equal => {
-                    // the previous range does not intersect with the given range but is consecutive
-                    prev_consecutive_range = Some(prev_range.key()..prev_range.value());
-                }
-                Ordering::Greater => {
-                    // the previous range either intersects or is consecutive with the given range
-                    intersecting_ranges.push(prev_range.key()..prev_range.value());
-                }
+                Ordering::Equal => prev_consecutive_range = Some(prev_range_start..prev_range_end), // the previous range does not intersect with the given range but is consecutive
+                Ordering::Greater => intersecting_ranges.push(prev_range_start..prev_range_end), // the previous range intersects with the given range
             }
         }
 
-        // check if the given range intersects with the next range
-        while let Some(curr_addr) = next_addr {
-            let curr_range = self.index.item(curr_addr).expect("next item should exist");
-            match range.end.cmp(curr_range.key()) {
-                Ordering::Less => break, // the current range is after the given range - we are done
-                Ordering::Equal => {
-                    // the current range does not intersect with the given range but is consecutive
-                    next_consecutive_range = Some(curr_range.key()..curr_range.value());
-                    break;
-                }
-                Ordering::Greater => {
-                    // the current range intersects or is consecutive with the given range
-                    intersecting_ranges.push(curr_range.key()..curr_range.value());
-                }
+        for (next_range_start, next_range_end) in next_items {
+            match range.end.cmp(next_range_start) {
+                Ordering::Less => break, // the next range is after the given range - we are done
+                Ordering::Equal => next_consecutive_range = Some(next_range_start..next_range_end), // the current range does not intersect with the given range but is consecutive
+                Ordering::Greater => intersecting_ranges.push(next_range_start..next_range_end), // the current range intersects the given range
             }
-            next_addr = self.index.next_item_address(curr_addr);
         }
 
         CoalescingRanges {
@@ -159,11 +113,11 @@ impl<T: Clone + Ord + std::fmt::Debug> RangeSet<T> {
             .map(|range| range.start.clone())
             .collect::<Vec<_>>();
         for key in remove_keys {
-            self.index.remove(&key);
+            self.0.remove(&key);
         }
 
         // insert the new range after coalescing
-        self.index.insert(coalesced_start, coalesced_end);
+        self.0.insert(coalesced_start, coalesced_end);
         Ok(())
     }
 
@@ -178,11 +132,12 @@ impl<T: Clone + Ord + std::fmt::Debug> RangeSet<T> {
         self.insert_range_helper(range, false)
     }
 
+    // comment how it works
     pub fn complement(&self, min: &T, max: &T) -> Self {
         let mut complement_tree = BTreeMap::new();
         // first range will start from min
         let mut start = min;
-        for (cur_start, cur_end) in &self.index {
+        for (cur_start, cur_end) in &self.0 {
             // insert the range from the previous end to the current start
             if cur_start > start {
                 if cur_start >= max {
@@ -199,21 +154,17 @@ impl<T: Clone + Ord + std::fmt::Debug> RangeSet<T> {
             complement_tree.insert(start.clone(), max.clone());
         }
 
-        Self {
-            index: complement_tree,
-        }
+        Self(complement_tree)
     }
 }
 
-impl<T> IntoIterator for RangeSet<T> {
+impl<T: Debug> IntoIterator for RangeSet<T> {
     type Item = Range<T>;
     type IntoIter =
         std::iter::Map<<BTreeMap<T, T> as IntoIterator>::IntoIter, fn((T, T)) -> Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.index
-            .into_iter()
-            .map(|(start, end)| Range { start, end })
+        self.0.into_iter().map(|(start, end)| Range { start, end })
     }
 }
 
@@ -223,23 +174,25 @@ pub(super) struct LinearAddressRangeSet {
 }
 
 impl LinearAddressRangeSet {
+    const NODE_STORE_ADDR_START: LinearAddress = LinearAddress::new(NodeStoreHeader::SIZE).unwrap();
+
     pub(super) fn new(db_size: u64) -> Result<Self, CheckerError> {
-        let max_addr = LinearAddress::new(db_size).ok_or(CheckerError::InvalidDBSize {
-            db_size,
-            description: String::from("db size cannot be 0"),
-        })?;
-        if max_addr < STORAGE_AREA_START {
+        if db_size < NodeStoreHeader::SIZE {
             return Err(CheckerError::InvalidDBSize {
                 db_size,
                 description: format!(
-                    "db size should not be smaller than the header size ({STORAGE_AREA_START})"
+                    "db size should not be smaller than the header size ({})",
+                    NodeStoreHeader::SIZE
                 ),
             });
         }
 
+        let max_addr =
+            LinearAddress::new(db_size).expect("db size will be valid due to previous check");
+
         Ok(Self {
             range_set: RangeSet::new(),
-            max_addr,
+            max_addr, // STORAGE_AREA_START..U64::MAX
         })
     }
 
@@ -254,13 +207,13 @@ impl LinearAddressRangeSet {
             .ok_or(CheckerError::AreaOutOfBounds {
                 start,
                 size,
-                bounds: STORAGE_AREA_START..self.max_addr,
+                bounds: Self::NODE_STORE_ADDR_START..self.max_addr,
             })?; // This can only happen due to overflow
-        if addr < STORAGE_AREA_START || end > self.max_addr {
+        if addr < Self::NODE_STORE_ADDR_START || end > self.max_addr {
             return Err(CheckerError::AreaOutOfBounds {
                 start: addr,
                 size,
-                bounds: STORAGE_AREA_START..self.max_addr,
+                bounds: Self::NODE_STORE_ADDR_START..self.max_addr,
             });
         }
 
@@ -277,7 +230,7 @@ impl LinearAddressRangeSet {
     pub(super) fn complement(&self) -> Self {
         let complement_set = self
             .range_set
-            .complement(&STORAGE_AREA_START, &self.max_addr);
+            .complement(&Self::NODE_STORE_ADDR_START, &self.max_addr);
 
         Self {
             range_set: complement_set,
@@ -625,7 +578,7 @@ mod test_linear_address_range_set {
         let size2 = 1024;
         let db_size = 0x2000;
 
-        let db_begin = STORAGE_AREA_START;
+        let db_begin = LinearAddressRangeSet::NODE_STORE_ADDR_START;
         let start1_addr = LinearAddress::new(start1).unwrap();
         let end1_addr = LinearAddress::new(start1 + size1).unwrap();
         let start2_addr = LinearAddress::new(start2).unwrap();
@@ -663,7 +616,7 @@ mod test_linear_address_range_set {
 
     #[test]
     fn test_complement_with_empty() {
-        let db_size = STORAGE_AREA_START;
+        let db_size = LinearAddressRangeSet::NODE_STORE_ADDR_START;
         let visited = LinearAddressRangeSet::new(db_size.get()).unwrap();
         let complement = visited.complement().into_iter().collect::<Vec<_>>();
         assert_eq!(complement, vec![]);
