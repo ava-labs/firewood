@@ -316,11 +316,6 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
         Ok((node, size[0]))
     }
 
-    /// Get a reference to the header of this nodestore
-    pub const fn header(&self) -> &NodeStoreHeader {
-        &self.header
-    }
-
     /// Get the size of an area index (used by the checker)
     pub const fn size_from_area_index(&self, index: AreaIndex) -> u64 {
         AREA_SIZES[index as usize]
@@ -890,11 +885,6 @@ impl NodeStoreHeader {
             ))
         }
     }
-
-    // return the size of this nodestore
-    pub const fn size(&self) -> u64 {
-        self.size
-    }
 }
 
 /// A [`FreeArea`] is stored at the start of the area that contained a node that
@@ -907,11 +897,11 @@ struct FreeArea {
 /// Reads from an immutable (i.e. already hashed) merkle trie.
 pub trait HashedNodeReader: TrieReader {
     /// Gets the address and hash of the root node of an immutable merkle trie.
-    fn root_address_and_hash(&self) -> Result<Option<(LinearAddress, TrieHash)>, FileIoError>;
+    fn root_address_and_hash(&self) -> Option<(LinearAddress, TrieHash)>;
 
     /// Gets the hash of the root node of an immutable merkle trie.
-    fn root_hash(&self) -> Result<Option<TrieHash>, FileIoError> {
-        Ok(self.root_address_and_hash()?.map(|(_, hash)| hash))
+    fn root_hash(&self) -> Option<TrieHash> {
+        self.root_address_and_hash().map(|(_, hash)| hash)
     }
 }
 
@@ -1066,9 +1056,9 @@ pub struct NodeStore<T, S> {
     // Metadata for this revision.
     header: NodeStoreHeader,
     /// This is one of [Committed], [`ImmutableProposal`], or [`MutableProposal`].
-    pub kind: T,
+    kind: T,
     /// Persisted storage to read nodes from.
-    pub storage: Arc<S>,
+    storage: Arc<S>,
 }
 
 /// Contains the state of a proposal that is still being modified.
@@ -1260,6 +1250,16 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         new_nodes.insert(addr, (size, node.into()));
 
         Ok((addr, hash))
+    }
+
+    /// Re-export the root_hash function of ImmutableProposal.
+    // pub fn root_hash(&self) -> Option<TrieHash> {
+    //     self.kind.root_hash()
+    // }
+
+    /// Re-export the parent_hash_is function of ImmutableProposal.
+    pub fn parent_hash_is(&self, hash: Option<TrieHash>) -> bool {
+        self.kind.parent_hash_is(hash)
     }
 }
 
@@ -1516,37 +1516,58 @@ impl<T: ReadInMemoryNode + Parentable, S: ReadableStorage> RootReader for NodeSt
     }
 }
 
-impl<T, S> HashedNodeReader for NodeStore<T, S>
+impl<S> HashedNodeReader for NodeStore<Arc<ImmutableProposal>, S>
 where
-    NodeStore<T, S>: TrieReader,
-    T: ReadInMemoryNode,
+    NodeStore<Arc<ImmutableProposal>, S>: TrieReader,
     S: ReadableStorage,
 {
-    fn root_address_and_hash(&self) -> Result<Option<(LinearAddress, TrieHash)>, FileIoError> {
+    fn root_address_and_hash(&self) -> Option<(LinearAddress, TrieHash)> {
+        self.header.root_address.map(|addr| {
+            (
+                addr,
+                self.kind.root_hash().expect("root hash should be present"),
+            )
+        })
+    }
+}
+
+impl<S> HashedNodeReader for NodeStore<Committed, S>
+where
+    NodeStore<Committed, S>: TrieReader,
+    S: ReadableStorage,
+{
+    fn root_address_and_hash(&self) -> Option<(LinearAddress, TrieHash)> {
+        self.header.root_address.map(|addr| {
+            (
+                addr,
+                self.kind.root_hash().expect("root hash should be present"),
+            )
+        })
+    }
+}
+
+impl<S> HashedNodeReader for NodeStore<MutableProposal, S>
+where
+    NodeStore<MutableProposal, S>: TrieReader,
+    S: ReadableStorage,
+{
+    fn root_address_and_hash(&self) -> Option<(LinearAddress, TrieHash)> {
         if let Some(root_addr) = self.header.root_address {
-            let root_node = self.read_node(root_addr)?;
+            let root_node = self.root_node().expect("root node should be present");
             let root_hash = hash_node(&root_node, &Path::new());
-            Ok(Some((root_addr, root_hash.into_triehash())))
+            Some((root_addr, root_hash.into_triehash()))
         } else {
-            Ok(None)
+            None
         }
     }
 }
 
-impl<T, S> HashedNodeReader for Arc<NodeStore<T, S>>
+impl<N> HashedNodeReader for Arc<N>
 where
-    NodeStore<T, S>: TrieReader,
-    T: ReadInMemoryNode,
-    S: ReadableStorage,
+    N: HashedNodeReader,
 {
-    fn root_address_and_hash(&self) -> Result<Option<(LinearAddress, TrieHash)>, FileIoError> {
-        if let Some(root_addr) = self.header.root_address {
-            let root_node = self.read_node(root_addr)?;
-            let root_hash = hash_node(&root_node, &Path::new());
-            Ok(Some((root_addr, root_hash.into_triehash())))
-        } else {
-            Ok(None)
-        }
+    fn root_address_and_hash(&self) -> Option<(LinearAddress, TrieHash)> {
+        self.as_ref().root_address_and_hash()
     }
 }
 
@@ -1632,7 +1653,7 @@ mod tests {
         // now check r2's parent, should match the hash of r1 (which is still None)
         let parent: DynGuard<Arc<NodeStoreParent>> = r2.kind.parent.load();
         if let NodeStoreParent::Committed(hash) = &**parent {
-            assert_eq!(*hash, r1.root_hash().unwrap());
+            assert_eq!(*hash, r1.root_hash());
             assert_eq!(*hash, None);
         } else {
             panic!("expected committed parent");

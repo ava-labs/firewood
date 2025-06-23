@@ -417,11 +417,7 @@ impl<T: HashedNodeReader> Merkle<T> {
     pub(crate) fn dump(&self) -> Result<String, Error> {
         let mut result = String::new();
         writeln!(result, "digraph Merkle {{\n  rankdir=LR;").map_err(Error::other)?;
-        if let Some((root_addr, root_hash)) = self
-            .nodestore
-            .root_address_and_hash()
-            .expect("failed to get root address and hash")
-        {
+        if let Some((root_addr, root_hash)) = self.nodestore.root_address_and_hash() {
             writeln!(result, " root -> {root_addr}")
                 .map_err(Error::other)
                 .map_err(|e| FileIoError::new(e, None, 0, None))
@@ -1365,7 +1361,7 @@ mod tests {
 
         let merkle = merkle.hash();
 
-        let root_hash = merkle.nodestore.root_hash().unwrap().unwrap();
+        let root_hash = merkle.nodestore.root_hash().unwrap();
 
         for (key, value) in kvs {
             let proof = merkle.prove(&key).unwrap();
@@ -1805,7 +1801,7 @@ mod tests {
         #[cfg(not(feature = "branch_factor_256"))]
         {
             let merkle = merkle_build_test(kvs).unwrap().hash();
-            let Some(got_hash) = merkle.nodestore.root_hash().unwrap() else {
+            let Some(got_hash) = merkle.nodestore.root_hash() else {
                 assert!(expected_hash.is_none());
                 return;
             };
@@ -2043,7 +2039,7 @@ mod tests {
             for (k, v) in &items {
                 let root_hash = merkle
                     .nodestore
-                    .root_address_and_hash()?
+                    .root_address_and_hash()
                     .map(|(_, hash)| hash);
                 hashes.push((root_hash, merkle.dump().unwrap()));
                 merkle.insert(k, v.clone())?;
@@ -2056,7 +2052,7 @@ mod tests {
                 merkle.remove(k)?;
                 let root_hash = merkle
                     .nodestore
-                    .root_address_and_hash()?
+                    .root_address_and_hash()
                     .map(|(_, hash)| hash);
                 new_hashes.push((root_hash, k, before, merkle.dump().unwrap()));
             }
