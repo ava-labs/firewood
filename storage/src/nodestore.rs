@@ -1833,7 +1833,8 @@ mod test_node_store_checker {
 
     #[test]
     // This test creates a simple trie and checks that the checker traverses it correctly.
-    // TODO: add a large test in the firewood crate - it is hard to set up a large trie in the storage crate
+    // We use primitive calls here to do a low-level check.
+    // TODO: add a high-level test in the firewood crate
     fn test_checker_traverse_correct_trie() {
         let (file_backed, _) = test_utils::create_file_backed();
 
@@ -1849,7 +1850,7 @@ mod test_node_store_checker {
         //          |
         //          V
         // -------------------------
-        // |   (0,1) -> (3,4,5)    |    Leaf node
+        // |   [0,1] -> [3,4,5]    |    Leaf node
         // -------------------------
         let mut high_watermark = NodeStoreHeader::SIZE;
         let leaf = Node::Leaf(LeafNode {
@@ -1885,7 +1886,7 @@ mod test_node_store_checker {
         // write the header
         write_header(&file_backed, root_addr, high_watermark);
 
-        // make sure that the checker traverses the entire trie - there should be no unvisited areas
+        // verify that all of the space is accounted for - since there is no free area
         let node_store = NodeStore::open(Arc::new(file_backed)).unwrap();
         let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
         node_store.traverse_trie(root_addr, &mut visited).unwrap();
