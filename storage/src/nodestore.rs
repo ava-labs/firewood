@@ -896,13 +896,11 @@ struct FreeArea {
 
 /// Reads from an immutable (i.e. already hashed) merkle trie.
 pub trait HashedNodeReader: TrieReader {
-    /// Gets the address and hash of the root node of an immutable merkle trie.
-    fn root_address_and_hash(&self) -> Option<(LinearAddress, TrieHash)>;
+    /// Gets the address of the root node of an immutable merkle trie.
+    fn root_address(&self) -> Option<LinearAddress>;
 
     /// Gets the hash of the root node of an immutable merkle trie.
-    fn root_hash(&self) -> Option<TrieHash> {
-        self.root_address_and_hash().map(|(_, hash)| hash)
-    }
+    fn root_hash(&self) -> Option<TrieHash>;
 }
 
 /// Reads nodes and the root address from a merkle trie.
@@ -1517,13 +1515,12 @@ where
     NodeStore<Arc<ImmutableProposal>, S>: TrieReader,
     S: ReadableStorage,
 {
-    fn root_address_and_hash(&self) -> Option<(LinearAddress, TrieHash)> {
-        self.header.root_address.map(|addr| {
-            (
-                addr,
-                self.kind.root_hash().expect("root hash should be present"),
-            )
-        })
+    fn root_address(&self) -> Option<LinearAddress> {
+        self.header.root_address
+    }
+
+    fn root_hash(&self) -> Option<TrieHash> {
+        self.kind.root_hash()
     }
 }
 
@@ -1532,13 +1529,12 @@ where
     NodeStore<Committed, S>: TrieReader,
     S: ReadableStorage,
 {
-    fn root_address_and_hash(&self) -> Option<(LinearAddress, TrieHash)> {
-        self.header.root_address.map(|addr| {
-            (
-                addr,
-                self.kind.root_hash().expect("root hash should be present"),
-            )
-        })
+    fn root_address(&self) -> Option<LinearAddress> {
+        self.header.root_address
+    }
+
+    fn root_hash(&self) -> Option<TrieHash> {
+        self.kind.root_hash()
     }
 }
 
@@ -1547,14 +1543,13 @@ where
     NodeStore<MutableProposal, S>: TrieReader,
     S: ReadableStorage,
 {
-    fn root_address_and_hash(&self) -> Option<(LinearAddress, TrieHash)> {
-        if let Some(root_addr) = self.header.root_address {
-            let root_node = self.root_node().expect("root node should be present");
-            let root_hash = hash_node(&root_node, &Path::new());
-            Some((root_addr, root_hash.into_triehash()))
-        } else {
-            None
-        }
+    fn root_address(&self) -> Option<LinearAddress> {
+        self.header.root_address
+    }
+
+    fn root_hash(&self) -> Option<TrieHash> {
+        self.root_node()
+            .map(|root_node| hash_node(&root_node, &Path::new()).into_triehash())
     }
 }
 
@@ -1562,8 +1557,12 @@ impl<N> HashedNodeReader for Arc<N>
 where
     N: HashedNodeReader,
 {
-    fn root_address_and_hash(&self) -> Option<(LinearAddress, TrieHash)> {
-        self.as_ref().root_address_and_hash()
+    fn root_address(&self) -> Option<LinearAddress> {
+        self.as_ref().root_address()
+    }
+
+    fn root_hash(&self) -> Option<TrieHash> {
+        self.as_ref().root_hash()
     }
 }
 

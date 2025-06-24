@@ -417,7 +417,11 @@ impl<T: HashedNodeReader> Merkle<T> {
     pub(crate) fn dump(&self) -> Result<String, Error> {
         let mut result = String::new();
         writeln!(result, "digraph Merkle {{\n  rankdir=LR;").map_err(Error::other)?;
-        if let Some((root_addr, root_hash)) = self.nodestore.root_address_and_hash() {
+        if let Some(root_addr) = self.nodestore.root_address() {
+            let root_hash = self
+                .nodestore
+                .root_hash()
+                .expect("root hash should be present");
             writeln!(result, " root -> {root_addr}")
                 .map_err(Error::other)
                 .map_err(|e| FileIoError::new(e, None, 0, None))
@@ -2037,10 +2041,7 @@ mod tests {
             let mut hashes = Vec::new();
 
             for (k, v) in &items {
-                let root_hash = merkle
-                    .nodestore
-                    .root_address_and_hash()
-                    .map(|(_, hash)| hash);
+                let root_hash = merkle.nodestore.root_hash();
                 hashes.push((root_hash, merkle.dump().unwrap()));
                 merkle.insert(k, v.clone())?;
             }
@@ -2050,10 +2051,7 @@ mod tests {
             for (k, _) in items.iter().rev() {
                 let before = merkle.dump().unwrap();
                 merkle.remove(k)?;
-                let root_hash = merkle
-                    .nodestore
-                    .root_address_and_hash()
-                    .map(|(_, hash)| hash);
+                let root_hash = merkle.nodestore.root_hash();
                 new_hashes.push((root_hash, k, before, merkle.dump().unwrap()));
             }
 
