@@ -278,10 +278,10 @@ jobs:
       - name: Test Firewood <> MerkleDB Differential fuzz
         working-directory: ffi/tests/firewood
         run: go test -fuzz=. -fuzztime=1m
-        - name: Upload Fuzz testdata
-          if: failure()
-          uses: actions/upload-artifact@v4
-          with:
-            name: firewood-merkle-differential-fuzz-testdata
-            path: ffi/tests/firewood/testdata
-            retention-days: 30
+      - name: Upload Fuzz testdata
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firewood-merkle-differential-fuzz-testdata
+          path: ffi/tests/firewood/testdata
+          retention-days: 30
