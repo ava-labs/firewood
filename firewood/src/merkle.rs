@@ -1851,7 +1851,7 @@ mod tests {
         use firewood_triehash::trie_root;
 
         let merkle = merkle_build_test(kvs.to_vec()).unwrap().hash();
-        let firewood_hash = merkle.nodestore.root_hash().unwrap().unwrap_or_default();
+        let firewood_hash = merkle.nodestore.root_hash().unwrap_or_default();
         let eth_hash = trie_root::<KeccakHasher, _, _, _>(kvs.to_vec());
         let firewood_hash = H256::from_slice(firewood_hash.as_ref());
 
@@ -1915,7 +1915,7 @@ mod tests {
         .collect::<Vec<(Box<_>, Box<_>)>>();
 
         let merkle = merkle_build_test(items).unwrap().hash();
-        let firewood_hash = merkle.nodestore.root_hash().unwrap();
+        let firewood_hash = merkle.nodestore.root_hash();
 
         assert_eq!(
             firewood_hash,

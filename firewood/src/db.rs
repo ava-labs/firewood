@@ -353,7 +353,7 @@ impl Proposal<'_> {
         #[cfg(feature = "ethhash")]
         return Ok(Some(
             self.nodestore
-                .root_hash()?
+                .root_hash()
                 .unwrap_or_else(firewood_storage::empty_trie_hash),
         ));
     }
