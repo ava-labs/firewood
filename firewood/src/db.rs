@@ -24,6 +24,7 @@ use crate::range_proof::RangeProof;
 use crate::stream::MerkleKeyValueStream;
 use crate::v2::api::{self, KeyType, ValueType};
 pub use crate::v2::api::{Batch, BatchOp};
+use crate::{finish_metrics, start_metrics};
 
 use crate::manager::{RevisionManager, RevisionManagerConfig};
 use async_trait::async_trait;
@@ -447,6 +448,15 @@ impl Proposal<'_> {
     }
 
     fn create_proposal<K: KeyType, V: ValueType>(
+        &self,
+        batch: api::Batch<K, V>,
+    ) -> Result<Self, api::Error> {
+        let start = start_metrics!();
+        let rval = self.create_proposal_timed(batch);
+        finish_metrics!("firewood.proposal.create", rval, start)
+    }
+
+    fn create_proposal_timed<K: KeyType, V: ValueType>(
         &self,
         batch: api::Batch<K, V>,
     ) -> Result<Self, api::Error> {

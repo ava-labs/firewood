@@ -45,6 +45,7 @@ use typed_builder::TypedBuilder;
 
 use crate::merkle::Merkle;
 use crate::v2::api::HashKey;
+use crate::{finish_metrics, start_metrics};
 
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
@@ -184,6 +185,12 @@ impl RevisionManager {
     ///    Any other proposals that have this proposal as a parent should be reparented to the committed version.
     #[fastrace::trace(short_name = true)]
     pub fn commit(&mut self, proposal: ProposedRevision) -> Result<(), RevisionManagerError> {
+        let start = start_metrics!();
+        let rval = self.commit_internal(proposal);
+        finish_metrics!("firewood.proposal.commit", rval, start)
+    }
+
+    fn commit_internal(&mut self, proposal: ProposedRevision) -> Result<(), RevisionManagerError> {
         // 1. Commit check
         let current_revision = self.current_revision();
         if !proposal
@@ -255,6 +262,7 @@ impl RevisionManager {
             proposal.commit_reparent(p);
         }
 
+        #[allow(clippy::used_underscore_binding)]
         if trace_enabled() {
             let _merkle = Merkle::from(committed);
             trace!("{}", _merkle.dump().expect("failed to dump merkle"));
