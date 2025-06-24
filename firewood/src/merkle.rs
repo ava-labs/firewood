@@ -2084,8 +2084,6 @@ mod tests {
                 },
             );
 
-            // hashes.reverse();
-
             for (expected, actual) in hashes.into_iter().rev().zip(new_hashes) {
                 let (new_hash, key, before_removal, after_removal) = actual;
                 let expected_hash = expected;
