@@ -2007,7 +2007,18 @@ mod tests {
     fn test_root_hash_reversed_deletions() -> Result<(), FileIoError> {
         use rand::rngs::StdRng;
         use rand::{Rng, SeedableRng};
-        let rng = std::cell::RefCell::new(StdRng::seed_from_u64(42));
+
+        let seed = std::env::var("FIREWOOD_TEST_SEED")
+            .ok()
+            .map_or_else(
+                || None,
+                |s| Some(str::parse(&s).expect("couldn't parse FIREWOOD_TEST_SEED; must be a u64")),
+            )
+            .unwrap_or_else(|| rng().random());
+
+        eprintln!("Seed {seed}: to rerun with this data, export FIREWOOD_TEST_SEED={seed}");
+        let rng = std::cell::RefCell::new(StdRng::seed_from_u64(seed));
+
         let max_len0 = 8;
         let max_len1 = 4;
         let keygen = || {
