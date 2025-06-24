@@ -2093,8 +2093,7 @@ mod tests {
                 });
                 assert_eq!(
                     actual_hash, expected_hash,
-                    "\n\nkey: {key}\nbefore:\n{before_removal}\nafter:\n{after_removal}\n\nexpected:\n{:?}\n",
-                    expected_hash
+                    "\n\nkey: {key}\nbefore:\n{before_removal}\nafter:\n{after_removal}\n\nexpected:\n{expected_hash:?}\nactual:\n{actual_hash:?}\n",
                 );
             }
         }
