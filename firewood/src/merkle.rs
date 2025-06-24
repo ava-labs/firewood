@@ -2041,7 +2041,7 @@ mod tests {
             let init_immutable_merkle: Merkle<NodeStore<Arc<ImmutableProposal>, _>> =
                 init_merkle.try_into().unwrap();
 
-            let (mut hashes, complete_immutable_merkle) = items.iter().fold(
+            let (hashes, complete_immutable_merkle) = items.iter().fold(
                 (vec![], init_immutable_merkle),
                 |(mut hashes, immutable_merkle), (k, v)| {
                     let root_hash = immutable_merkle.nodestore.root_hash();
@@ -2052,8 +2052,6 @@ mod tests {
                     (hashes, merkle.try_into().unwrap())
                 },
             );
-
-            // let mut new_hashes = Vec::new();
 
             let (new_hashes, _) = items.iter().rev().fold(
                 (vec![], complete_immutable_merkle),
@@ -2077,13 +2075,11 @@ mod tests {
                 },
             );
 
-            hashes.reverse();
+            // hashes.reverse();
 
-            for i in 0..hashes.len() {
-                #[allow(clippy::indexing_slicing)]
-                let (new_hash, key, before_removal, after_removal) = &new_hashes[i];
-                #[allow(clippy::indexing_slicing)]
-                let expected_hash = &hashes[i];
+            for (expected, actual) in hashes.into_iter().rev().zip(new_hashes) {
+                let (new_hash, key, before_removal, after_removal) = actual;
+                let expected_hash = expected;
                 let key = key.iter().fold(String::new(), |mut s, b| {
                     let _ = write!(s, "{b:02x}");
                     s
