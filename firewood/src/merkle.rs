@@ -417,11 +417,9 @@ impl<T: HashedNodeReader> Merkle<T> {
     pub(crate) fn dump(&self) -> Result<String, Error> {
         let mut result = String::new();
         writeln!(result, "digraph Merkle {{\n  rankdir=LR;").map_err(Error::other)?;
-        if let Some(root_addr) = self.nodestore.root_address() {
-            let root_hash = self
-                .nodestore
-                .root_hash()
-                .expect("root hash should be present");
+        if let (Some(root_addr), Some(root_hash)) =
+            (self.nodestore.root_address(), self.nodestore.root_hash())
+        {
             writeln!(result, " root -> {root_addr}")
                 .map_err(Error::other)
                 .map_err(|e| FileIoError::new(e, None, 0, None))
