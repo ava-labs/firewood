@@ -2036,23 +2036,30 @@ mod tests {
 
             items.sort();
 
-            let mut merkle = merkle_build_test(items.clone())?;
+            let mut merkle = merkle_build_test::<Vec<u8>, Box<[u8]>>(vec![])?;
+            let mut immutable_merkle: Merkle<NodeStore<Arc<ImmutableProposal>, _>> =
+                merkle.try_into().unwrap();
 
             let mut hashes = Vec::new();
 
             for (k, v) in &items {
-                let root_hash = merkle.nodestore.root_hash();
-                hashes.push((root_hash, merkle.dump().unwrap()));
+                let root_hash = immutable_merkle.nodestore.root_hash();
+                hashes.push((root_hash, immutable_merkle.dump().unwrap()));
+                let new_nodestore = NodeStore::new(Arc::new(immutable_merkle.nodestore))?;
+                merkle = Merkle::from(new_nodestore);
                 merkle.insert(k, v.clone())?;
+                immutable_merkle = merkle.try_into().unwrap();
             }
 
             let mut new_hashes = Vec::new();
 
             for (k, _) in items.iter().rev() {
-                let before = merkle.dump().unwrap();
+                let before = immutable_merkle.dump().unwrap();
+                merkle = Merkle::from(NodeStore::new(Arc::new(immutable_merkle.nodestore))?);
                 merkle.remove(k)?;
-                let root_hash = merkle.nodestore.root_hash();
-                new_hashes.push((root_hash, k, before, merkle.dump().unwrap()));
+                immutable_merkle = merkle.try_into().unwrap();
+                let root_hash = immutable_merkle.nodestore.root_hash();
+                new_hashes.push((root_hash, k, before, immutable_merkle.dump().unwrap()));
             }
 
             hashes.reverse();

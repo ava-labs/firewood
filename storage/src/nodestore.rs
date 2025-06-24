@@ -1510,9 +1510,10 @@ impl<T: ReadInMemoryNode + Parentable, S: ReadableStorage> RootReader for NodeSt
     }
 }
 
-impl<S> HashedNodeReader for NodeStore<Arc<ImmutableProposal>, S>
+impl<T, S> HashedNodeReader for NodeStore<T, S>
 where
-    NodeStore<Arc<ImmutableProposal>, S>: TrieReader,
+    NodeStore<T, S>: TrieReader,
+    T: Parentable,
     S: ReadableStorage,
 {
     fn root_address(&self) -> Option<LinearAddress> {
@@ -1521,35 +1522,6 @@ where
 
     fn root_hash(&self) -> Option<TrieHash> {
         self.kind.root_hash()
-    }
-}
-
-impl<S> HashedNodeReader for NodeStore<Committed, S>
-where
-    NodeStore<Committed, S>: TrieReader,
-    S: ReadableStorage,
-{
-    fn root_address(&self) -> Option<LinearAddress> {
-        self.header.root_address
-    }
-
-    fn root_hash(&self) -> Option<TrieHash> {
-        self.kind.root_hash()
-    }
-}
-
-impl<S> HashedNodeReader for NodeStore<MutableProposal, S>
-where
-    NodeStore<MutableProposal, S>: TrieReader,
-    S: ReadableStorage,
-{
-    fn root_address(&self) -> Option<LinearAddress> {
-        self.header.root_address
-    }
-
-    fn root_hash(&self) -> Option<TrieHash> {
-        self.root_node()
-            .map(|root_node| hash_node(&root_node, &Path::new()).into_triehash())
     }
 }
 
