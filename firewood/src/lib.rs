@@ -121,11 +121,11 @@ pub mod manager;
 /// Merkle module, containing merkle operations
 pub mod merkle;
 
-/// Metrics macros for timing operations
-pub mod metrics_macros;
-
 /// Proof module
 pub mod proof;
+
+// Re-export the proc macro from firewood-macros
+pub use firewood_macros::metrics;
 
 /// Range proof module
 pub mod range_proof;
