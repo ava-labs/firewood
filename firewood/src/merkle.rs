@@ -2054,7 +2054,7 @@ mod tests {
                 (vec![], init_immutable_merkle),
                 |(mut hashes, immutable_merkle), (k, v)| {
                     let root_hash = immutable_merkle.nodestore.root_hash();
-                    hashes.push((root_hash, immutable_merkle.dump().unwrap()));
+                    hashes.push(root_hash);
                     let mut merkle =
                         Merkle::from(NodeStore::new(Arc::new(immutable_merkle.nodestore)).unwrap());
                     merkle.insert(k, v.clone()).unwrap();
@@ -2084,18 +2084,17 @@ mod tests {
                 },
             );
 
-            for (expected, actual) in hashes.into_iter().rev().zip(new_hashes) {
-                let (new_hash, key, before_removal, after_removal) = actual;
-                let expected_hash = expected;
+            for (expected_hash, (actual_hash, key, before_removal, after_removal)) in
+                hashes.into_iter().rev().zip(new_hashes)
+            {
                 let key = key.iter().fold(String::new(), |mut s, b| {
                     let _ = write!(s, "{b:02x}");
                     s
                 });
                 assert_eq!(
-                    new_hash.clone(),
-                    expected_hash.0,
+                    actual_hash, expected_hash,
                     "\n\nkey: {key}\nbefore:\n{before_removal}\nafter:\n{after_removal}\n\nexpected:\n{:?}\n",
-                    expected_hash.0
+                    expected_hash
                 );
             }
         }
