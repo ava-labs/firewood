@@ -2036,31 +2036,46 @@ mod tests {
 
             items.sort();
 
-            let mut merkle = merkle_build_test::<Vec<u8>, Box<[u8]>>(vec![])?;
-            let mut immutable_merkle: Merkle<NodeStore<Arc<ImmutableProposal>, _>> =
-                merkle.try_into().unwrap();
+            let init_merkle: Merkle<NodeStore<MutableProposal, MemStore>> =
+                merkle_build_test::<Vec<u8>, Box<[u8]>>(vec![])?;
+            let init_immutable_merkle: Merkle<NodeStore<Arc<ImmutableProposal>, _>> =
+                init_merkle.try_into().unwrap();
 
-            let mut hashes = Vec::new();
+            let (mut hashes, complete_immutable_merkle) = items.iter().fold(
+                (vec![], init_immutable_merkle),
+                |(mut hashes, immutable_merkle), (k, v)| {
+                    let root_hash = immutable_merkle.nodestore.root_hash();
+                    hashes.push((root_hash, immutable_merkle.dump().unwrap()));
+                    let mut merkle =
+                        Merkle::from(NodeStore::new(Arc::new(immutable_merkle.nodestore)).unwrap());
+                    merkle.insert(k, v.clone()).unwrap();
+                    (hashes, merkle.try_into().unwrap())
+                },
+            );
 
-            for (k, v) in &items {
-                let root_hash = immutable_merkle.nodestore.root_hash();
-                hashes.push((root_hash, immutable_merkle.dump().unwrap()));
-                let new_nodestore = NodeStore::new(Arc::new(immutable_merkle.nodestore))?;
-                merkle = Merkle::from(new_nodestore);
-                merkle.insert(k, v.clone())?;
-                immutable_merkle = merkle.try_into().unwrap();
-            }
+            // let mut new_hashes = Vec::new();
 
-            let mut new_hashes = Vec::new();
-
-            for (k, _) in items.iter().rev() {
-                let before = immutable_merkle.dump().unwrap();
-                merkle = Merkle::from(NodeStore::new(Arc::new(immutable_merkle.nodestore))?);
-                merkle.remove(k)?;
-                immutable_merkle = merkle.try_into().unwrap();
-                let root_hash = immutable_merkle.nodestore.root_hash();
-                new_hashes.push((root_hash, k, before, immutable_merkle.dump().unwrap()));
-            }
+            let (new_hashes, _) = items.iter().rev().fold(
+                (vec![], complete_immutable_merkle),
+                |(mut new_hashes, immutable_merkle_before_removal), (k, _)| {
+                    let before = immutable_merkle_before_removal.dump().unwrap();
+                    let mut merkle = Merkle::from(
+                        NodeStore::new(Arc::new(immutable_merkle_before_removal.nodestore))
+                            .unwrap(),
+                    );
+                    merkle.remove(k).unwrap();
+                    let immutable_merkle_after_removal: Merkle<
+                        NodeStore<Arc<ImmutableProposal>, _>,
+                    > = merkle.try_into().unwrap();
+                    new_hashes.push((
+                        immutable_merkle_after_removal.nodestore.root_hash(),
+                        k,
+                        before,
+                        immutable_merkle_after_removal.dump().unwrap(),
+                    ));
+                    (new_hashes, immutable_merkle_after_removal)
+                },
+            );
 
             hashes.reverse();
 
