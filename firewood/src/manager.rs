@@ -255,6 +255,7 @@ impl RevisionManager {
             proposal.commit_reparent(p);
         }
 
+        #[allow(clippy::used_underscore_binding)]
         if trace_enabled() {
             let _merkle = Merkle::from(committed);
             trace!("{}", _merkle.dump().expect("failed to dump merkle"));

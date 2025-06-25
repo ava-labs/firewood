@@ -111,7 +111,7 @@ pub(crate) fn get_helper<T: TrieReader>(
     // 2. The key is above the node (i.e. its ancestor)
     // 3. The key is below the node (i.e. its descendant)
     // 4. Neither is an ancestor of the other
-    let path_overlap = PrefixOverlap::from(key, node.partial_path());
+    let path_overlap = PrefixOverlap::new(key, node.partial_path());
     let unique_key = path_overlap.unique_a;
     let unique_node = path_overlap.unique_b;
 
@@ -494,7 +494,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         // 2. The key is above the node (i.e. its ancestor)
         // 3. The key is below the node (i.e. its descendant)
         // 4. Neither is an ancestor of the other
-        let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
+        let path_overlap = PrefixOverlap::new(key, node.partial_path().as_ref());
 
         let unique_key = path_overlap.unique_a;
         let unique_node = path_overlap.unique_b;
@@ -656,7 +656,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         // 2. The key is above the node (i.e. its ancestor)
         // 3. The key is below the node (i.e. its descendant)
         // 4. Neither is an ancestor of the other
-        let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
+        let path_overlap = PrefixOverlap::new(key, node.partial_path().as_ref());
 
         let unique_key = path_overlap.unique_a;
         let unique_node = path_overlap.unique_b;
@@ -874,7 +874,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         // 2. The key is above the node (i.e. its ancestor), so the parent needs to be restructured (TODO).
         // 3. The key is below the node (i.e. its descendant), so continue traversing the trie.
         // 4. Neither is an ancestor of the other, in which case there's no work to do.
-        let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
+        let path_overlap = PrefixOverlap::new(key, node.partial_path().as_ref());
 
         let unique_key = path_overlap.unique_a;
         let unique_node = path_overlap.unique_b;
@@ -1037,14 +1037,14 @@ pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> {
 /// The `unique_*` properties, [`unique_a`][`PrefixOverlap::unique_a`] and [`unique_b`][`PrefixOverlap::unique_b`]
 /// are set based on the argument order passed into the [`from`][`PrefixOverlap::from`] constructor.
 #[derive(Debug)]
-struct PrefixOverlap<'a, T> {
-    shared: &'a [T],
-    unique_a: &'a [T],
-    unique_b: &'a [T],
+pub(crate) struct PrefixOverlap<'a, T> {
+    pub shared: &'a [T],
+    pub unique_a: &'a [T],
+    pub unique_b: &'a [T],
 }
 
 impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
-    fn from(a: &'a [T], b: &'a [T]) -> Self {
+    pub(crate) fn new(a: &'a [T], b: &'a [T]) -> Self {
         let split_index = a
             .iter()
             .zip(b)

@@ -62,7 +62,7 @@ impl std::fmt::Debug for IterationNode {
 }
 
 #[derive(Debug)]
-enum NodeStreamState {
+pub(crate) enum NodeStreamState {
     /// The iterator state is lazily initialized when `poll_next` is called
     /// for the first time. The iteration start key is stored here.
     StartFromKey(Key),
@@ -91,7 +91,7 @@ impl From<Key> for NodeStreamState {
 
 impl NodeStreamState {
     /// Returns the initial state for an iterator over the given `merkle` which starts at `key`.
-    /// This method always returns [NodeStreamState::Iterating] or an error, never [NodeStreamState::StartFromKey].
+    /// This method always returns [`NodeStreamState::Iterating`] or an error, never [`NodeStreamState::StartFromKey`].
     pub(crate) fn get_iterator_initial_state<T: TrieReader>(
         merkle: &T,
         key: &[u8],
@@ -461,8 +461,8 @@ impl<T: TrieReader> Iterator for MerkleKeyValueStream<'_, T> {
     }
 }
 
-/// An owned version of MerkleKeyValueStream that can be stored in structs without lifetime constraints.
-/// This uses Arc<T> to own a reference to the TrieReader, allowing it to be stored across function calls.
+/// An owned version of `MerkleKeyValueStream` that can be stored in structs without lifetime constraints.
+/// This uses Arc<T> to own a reference to the `TrieReader`, allowing it to be stored across function calls.
 #[derive(Debug)]
 pub struct OwnedMerkleKeyValueStream<T> {
     state: OwnedMerkleKeyValueStreamState<T>,
@@ -480,7 +480,7 @@ enum OwnedMerkleKeyValueStreamState<T> {
 }
 
 impl<T: TrieReader> OwnedMerkleKeyValueStream<T> {
-    /// Construct an [OwnedMerkleKeyValueStream] that will iterate over all the key-value pairs in `merkle`
+    /// Construct an [`OwnedMerkleKeyValueStream`] that will iterate over all the key-value pairs in `merkle`
     pub fn new(merkle: Arc<T>) -> Self {
         Self {
             state: OwnedMerkleKeyValueStreamState::Uninitialized(vec![].into_boxed_slice()),
@@ -488,7 +488,7 @@ impl<T: TrieReader> OwnedMerkleKeyValueStream<T> {
         }
     }
 
-    /// Construct an [OwnedMerkleKeyValueStream] that will iterate over all the key-value pairs in `merkle`
+    /// Construct an [`OwnedMerkleKeyValueStream`] that will iterate over all the key-value pairs in `merkle`
     /// starting from a particular key
     pub fn from_key<K: AsRef<[u8]>>(merkle: Arc<T>, key: K) -> Self {
         Self {
@@ -549,8 +549,8 @@ impl<T: TrieReader> Iterator for OwnedMerkleKeyValueStream<T> {
     }
 }
 
-/// An owned version of MerkleNodeStream that can be stored in structs without lifetime constraints.
-/// This uses Arc<T> to own a reference to the TrieReader, allowing it to be stored across function calls.
+/// An owned version of `MerkleNodeStream` that can be stored in structs without lifetime constraints.
+/// This uses Arc<T> to own a reference to the `TrieReader`, allowing it to be stored across function calls.
 #[derive(Debug)]
 pub struct OwnedMerkleNodeStream<T> {
     state: NodeStreamState,

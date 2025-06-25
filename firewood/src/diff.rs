@@ -8,18 +8,16 @@
 #![allow(clippy::borrowed_box)] // Derivative generates &Box<T> patterns
 #![allow(clippy::needless_lifetimes)] // Derivative generates explicit lifetimes that clippy thinks are unnecessary
 
+use firewood_storage::{Child, FileIoError, Node, Path, SharedNode, TrieReader, logger::trace};
 use std::cmp::Ordering;
 use std::fmt;
-use storage::{Child, FileIoError, Node, Path, SharedNode, TrieReader, logger::trace};
 
 use crate::db::BatchOp;
-use crate::merkle::{Key, Merkle, Value};
+use crate::merkle::{Key, PrefixOverlap, Value};
 use crate::stream::{
-    IterationNode, NodeStreamState, OwnedMerkleKeyValueStream, as_enumerated_children_iter,
-    key_from_nibble_iter,
+    IterationNode, NodeStreamState, as_enumerated_children_iter, key_from_nibble_iter,
 };
-use derivative::Derivative;
-use std::sync::Arc;
+use derive_more::derive::Debug;
 
 // State structs for different types of diff iteration nodes
 
@@ -53,43 +51,14 @@ struct UnvisitedNodeRightState {
     excluded_node: Option<(SharedNode, Path)>,
 }
 
-/// State for when two nodes have different partial paths and need to be processed
-/// using separate MerkleKeyValueStream objects to handle the structural differences.
-/// This occurs when comparing nodes that have diverged in their trie structure.
-///
-/// Uses OwnedMerkleKeyValueStream to maintain stream state across multiple visit() calls,
-/// enabling lazy one-at-a-time processing for large trees.
-struct OutOfSyncState {
-    node_left: SharedNode,
-    node_right: SharedNode,
-    current_key: Path,
-    // Track if streams have been initialized
-    streams_initialized: bool,
-    // Saved keys from previous iterations that need to be processed
-    saved_left: Option<(Key, Value)>,
-    saved_right: Option<(Key, Value)>,
-}
-
-impl std::fmt::Debug for OutOfSyncState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("OutOfSyncState")
-            .field("node_left", &self.node_left)
-            .field("node_right", &self.node_right)
-            .field("current_key", &self.current_key)
-            .field("streams_initialized", &self.streams_initialized)
-            .finish()
-    }
-}
-
 /// Two branch nodes whose children are being compared.
 /// This state occurs when we have branch nodes from both trees and we need to iterate
 /// through their children to find differences between the subtrees.
-#[derive(Derivative)]
-#[derivative(Debug)]
+#[derive(Debug)]
 struct VisitedNodePairState {
-    #[derivative(Debug(format_with = "fmt_as_iterator"))]
+    #[debug("<iterator>")]
     children_iter_left: Box<dyn Iterator<Item = (u8, Child)> + Send>,
-    #[derivative(Debug(format_with = "fmt_as_iterator"))]
+    #[debug("<iterator>")]
     children_iter_right: Box<dyn Iterator<Item = (u8, Child)> + Send>,
 }
 
@@ -97,31 +66,29 @@ struct VisitedNodePairState {
 /// This state occurs when there are no remaining children on the right side to compare against,
 /// or when we have a branch node that exists only in the left tree.
 ///
-/// If included_node is Some, one child that matches the included node should be compared
+/// If `included_node` is Some, one child that matches the included node should be compared
 /// instead of deleted (used in Branch vs Leaf scenarios).
 ///
 /// This is always a leaf node (never a branch) because it comes from Branch vs Leaf scenarios
 /// where we're traversing a branch's children but need to include any child that represents
 /// the same logical key as a leaf from the other tree.
-#[derive(Derivative)]
-#[derivative(Debug)]
+#[derive(Debug)]
 struct VisitedNodeLeftState {
-    #[derivative(Debug(format_with = "fmt_as_iterator"))]
+    #[debug("<iterator>")]
     children_iter: Box<dyn Iterator<Item = (u8, Child)> + Send>,
     /// Optional included node - if present, children matching this should be compared instead of deleted.
-    excluded_leaf: Option<(SharedNode, Path)>,
+    excluded: Option<(SharedNode, Path)>,
 }
 
 /// A branch node from the right tree only, whose children all need to be processed as additions.
 /// This state occurs when there are no remaining children on the left side to compare against,
 /// or when we have a branch node that exists only in the right tree.
-#[derive(Derivative)]
-#[derivative(Debug)]
+#[derive(Debug)]
 struct VisitedNodeRightState {
-    #[derivative(Debug(format_with = "fmt_as_iterator"))]
+    #[debug("<iterator>")]
     children_iter: Box<dyn Iterator<Item = (u8, Child)> + Send>,
     /// Optional excluded node - if present, children matching this should be compared instead of added.
-    excluded_leaf: Option<(SharedNode, Path)>,
+    excluded: Option<(SharedNode, Path)>,
 }
 
 // Helper function for derivative to format iterators
@@ -220,29 +187,100 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
 
         match (&*self.node_left, &*self.node_right) {
             (Node::Branch(branch_left), Node::Branch(branch_right)) => {
-                // First compare partial paths - if they differ, push OutOfSyncState
+                // Possibilities are:
+                // (A) The right partial path extends the left partial path
+                // (B) The left partial path extends the right partial path
+                // (C) Neither extend each other, but left < right
+                // (D) Neither extend each other, but left > right
+                // (E) The partial paths are the same
+                //
+                // Case (A):
+                // x and y (and any value in branch1) have been deleted
+                //
+                //   left          right
+                //    ...          ...
+                //     |            |
+                //   branch1       branch2
+                //   / | \          ...
+                //  x  y  branch2
+                //           ...
+                // If branch2 is not present on the left, it must be marked added
+                // at the appropriate point while traversing left
+                //
+                // Case (B)
+                // x and y (and any value in branch1) have been added
+                //
+                //  left          right
+                //   ...          ...
+                //    |            |
+                //  branch2       branch1
+                //   ...           / | \
+                //                x  y  branch2
+                //                       ...
+                //
+                // If branch2 is not present on the right, it must be marked deleted
+                // at the appropriate point while traversing right.
+                //
+                // In both (C) and (D), all the keys on either side do not overlap, but since
+                // we must iterate in order:
+                // Case (C) deletes all the keys on the left then adds all the keys on the right
+                // If present, a value in the left branch was deleted, and added for the right branch
+                // Case (D) adds all the keys on the right then deletes all the keys on the left
+                // If present, a value in the right branch was added, and deleted for the right branch
+                //
                 if branch_left.partial_path != branch_right.partial_path {
+                    // Cases (A)-(D)
                     trace!(
                         "Partial paths differ at key {:x?}: left={:x?}, right={:x?}",
                         key, branch_left.partial_path, branch_right.partial_path
                     );
+                    let overlap = PrefixOverlap::new(
+                        &branch_left.partial_path.0,
+                        &branch_right.partial_path.0,
+                    );
+                    if overlap.unique_a.is_empty() {
+                        // Case (A)
+                        todo!()
+                        //return Ok(None);
+                    }
+                    if overlap.unique_b.is_empty() {
+                        // case (B)
+                        todo!()
+                        // return Ok(None);
+                    }
+                    if branch_left.partial_path < branch_right.partial_path {
+                        // case (C)
+                        // Add everything on the right
+                        iter_stack.push(DiffIterationNode {
+                            key: key.clone(),
+                            state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
+                                children_iter: Box::new(as_enumerated_children_iter(branch_right)),
+                                excluded: None,
+                            }),
+                        });
 
-                    iter_stack.push(DiffIterationNode {
-                        key: key.clone(),
-                        state: DiffIterationNodeState::OutOfSync(OutOfSyncState {
-                            node_left: self.node_left.clone(),
-                            node_right: self.node_right.clone(),
-                            current_key: key.clone(),
-                            streams_initialized: false,
-                            saved_left: None,
-                            saved_right: None,
-                        }),
-                    });
-
+                        // Delete everything on the left
+                        iter_stack.push(DiffIterationNode {
+                            key: key.clone(),
+                            state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
+                                children_iter: Box::new(as_enumerated_children_iter(branch_left)),
+                                excluded: None,
+                            }),
+                        });
+                        // If left had a value, it's been deleted, and it's first
+                        if let Some(_value) = &branch_left.value {
+                            return Ok(Some(BatchOp::Delete {
+                                key: key_from_nibble_iter(key.iter().copied()),
+                            }));
+                        }
+                        // no value, so we'll get the next one from the deleted items on the left
+                        return Ok(None);
+                    }
+                    // case (D)
                     return Ok(None);
                 }
 
-                // Partial paths match, proceed with normal comparison
+                // Case (E) -- Partial paths match, proceed with normal comparison
                 // Compare values first
                 let value_diff = match (&branch_left.value, &branch_right.value) {
                     (Some(v_left), Some(v_right)) if v_left == v_right => None,
@@ -287,20 +325,20 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                         key: key.clone(),
                         state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
                             children_iter: Box::new(as_enumerated_children_iter(branch)),
-                            excluded_leaf: None,
+                            excluded: None,
                         }),
                     });
                     return if let Some(branch_val) = &branch.value {
                         // If the branch value also matches, we can just forget about this leaf
-                        if branch_val != &leaf.value {
+                        if branch_val == &leaf.value {
+                            Ok(None)
+                        } else {
                             // the branch has a different value, so we need to generate a put
                             // operation for the leaf
                             Ok(Some(BatchOp::Put {
                                 key: key_from_nibble_iter(key.iter().copied()),
                                 value: leaf.value.to_vec(),
                             }))
-                        } else {
-                            Ok(None)
                         }
                     } else {
                         // the branch has no value, so the leaf is new, and we need to process the
@@ -333,7 +371,7 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                     key: key.clone(),
                     state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
                         children_iter: Box::new(as_enumerated_children_iter(branch)),
-                        excluded_leaf: Some((self.node_right.clone(), leaf_key)),
+                        excluded: Some((self.node_right.clone(), leaf_key)),
                     }),
                 };
                 trace!("pushing {din:?}");
@@ -388,44 +426,53 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                     key: branch_key,
                     state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
                         children_iter: Box::new(as_enumerated_children_iter(branch)),
-                        excluded_leaf: Some((self.node_left.clone(), leaf_key)),
+                        excluded: Some((self.node_left.clone(), leaf_key)),
                     }),
                 });
 
                 Ok(value_diff)
             }
             (Node::Leaf(leaf1), Node::Leaf(leaf2)) => {
-                // First compare partial paths - if they differ, push OutOfSyncState
-                if leaf1.partial_path != leaf2.partial_path {
-                    trace!(
-                        "Leaf partial paths differ at key {:x?}: left={:x?}, right={:x?}",
-                        key, leaf1.partial_path, leaf2.partial_path
-                    );
+                match leaf1.partial_path.cmp(&leaf2.partial_path) {
+                    Ordering::Less => {
+                        //    left      right
+                        //      A         B
+                        // A was deleted, B was added, in that order
+                        trace!(
+                            "Left leaf is prefix of right leaf at key {:x?}: left={:x?}, right={:x?}",
+                            key, leaf1.partial_path, leaf2.partial_path
+                        );
+                        // push right leaf to process as add later
 
-                    iter_stack.push(DiffIterationNode {
-                        key: key.clone(),
-                        state: DiffIterationNodeState::OutOfSync(OutOfSyncState {
-                            node_left: self.node_left.clone(),
-                            node_right: self.node_right.clone(),
-                            current_key: key.clone(),
-                            streams_initialized: false,
-                            saved_left: None,
-                            saved_right: None,
-                        }),
-                    });
-
-                    return Ok(None);
-                }
-
-                // Partial paths match, compare values
-                if leaf1.value != leaf2.value {
-                    // The key already includes the complete path including partial paths
-                    Ok(Some(BatchOp::Put {
-                        key: key_from_nibble_iter(key.iter().copied()),
-                        value: leaf2.value.to_vec(),
-                    }))
-                } else {
-                    Ok(None)
+                        // adjust the key to include left1.partial_path
+                        Ok(Some(BatchOp::Delete {
+                            key: key_from_nibble_iter(
+                                (key.iter().copied()).chain(leaf1.partial_path.iter().copied()),
+                            ),
+                        }))
+                    }
+                    Ordering::Greater => {
+                        // Right leaf has shorter partial path - it's a prefix of left leaf
+                        // This means the right leaf represents a key that is a prefix of the left leaf's key
+                        // We need to handle this by treating it as an out-of-sync state
+                        trace!(
+                            "Right leaf is prefix of left leaf at key {:x?}: left={:x?}, right={:x?}",
+                            key, leaf1.partial_path, leaf2.partial_path
+                        );
+                        todo!()
+                    }
+                    Ordering::Equal => {
+                        // Partial paths are equal - this is the normal case
+                        if leaf1.value == leaf2.value {
+                            Ok(None)
+                        } else {
+                            // The key already includes the complete path including partial paths
+                            Ok(Some(BatchOp::Put {
+                                key: key_from_nibble_iter(key.iter().copied()),
+                                value: leaf2.value.to_vec(),
+                            }))
+                        }
+                    }
                 }
             }
         }
@@ -447,7 +494,7 @@ impl UnvisitedStateVisitor for UnvisitedNodeLeftState {
                     key: key.clone(),
                     state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
                         children_iter: Box::new(as_enumerated_children_iter(branch)),
-                        excluded_leaf: self.excluded_node,
+                        excluded: self.excluded_node,
                     }),
                 });
 
@@ -481,7 +528,7 @@ impl UnvisitedStateVisitor for UnvisitedNodeRightState {
                     key: current_key.clone(),
                     state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
                         children_iter: Box::new(as_enumerated_children_iter(branch)),
-                        excluded_leaf: self.excluded_node,
+                        excluded: self.excluded_node,
                     }),
                 });
 
@@ -526,7 +573,7 @@ impl StateVisitor for VisitedNodeLeftState {
                     .chain(node.partial_path().iter().copied()),
             );
 
-            if let Some((excluded_node, excluded_path)) = self.excluded_leaf.take() {
+            if let Some((excluded_node, excluded_path)) = self.excluded.take() {
                 trace!("child_key is {child_key:x?}");
                 trace!("LS checking....{child_key:x?} is excluded...");
                 if excluded_path == child_key {
@@ -538,7 +585,7 @@ impl StateVisitor for VisitedNodeLeftState {
                         key: key.clone(),
                         state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
                             children_iter: self.children_iter,
-                            excluded_leaf: None, // Already taken
+                            excluded: None, // Already taken
                         }),
                     });
 
@@ -557,7 +604,7 @@ impl StateVisitor for VisitedNodeLeftState {
                         key: key.clone(),
                         state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
                             children_iter: self.children_iter,
-                            excluded_leaf: Some((excluded_node.clone(), excluded_path.clone())), // Put it back
+                            excluded: Some((excluded_node.clone(), excluded_path.clone())), // Put it back
                         }),
                     });
 
@@ -576,7 +623,7 @@ impl StateVisitor for VisitedNodeLeftState {
                     key: key.clone(),
                     state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
                         children_iter: self.children_iter,
-                        excluded_leaf: None,
+                        excluded: None,
                     }),
                 });
 
@@ -757,7 +804,7 @@ impl StateVisitor for VisitedNodePairState {
                     key: key.clone(),
                     state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
                         children_iter: self.children_iter_left,
-                        excluded_leaf: None,
+                        excluded: None,
                     }),
                 });
 
@@ -792,7 +839,7 @@ impl StateVisitor for VisitedNodePairState {
                     key: key.clone(),
                     state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
                         children_iter: self.children_iter_right,
-                        excluded_leaf: None,
+                        excluded: None,
                     }),
                 });
 
@@ -836,7 +883,7 @@ impl StateVisitor for VisitedNodeRightState {
                 Path::from_nibbles_iterator(key.iter().copied().chain(std::iter::once(pos)));
 
             // Check if this child should be compared instead of added
-            if let Some((excluded_node, excluded_path)) = self.excluded_leaf.take() {
+            if let Some((excluded_node, excluded_path)) = self.excluded.take() {
                 trace!("RS checking....{child_key:x?} is excluded...");
                 if excluded_path == child_key {
                     // Found the excluded child - compare instead of adding
@@ -845,7 +892,7 @@ impl StateVisitor for VisitedNodeRightState {
                         key: branch_key,
                         state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
                             children_iter: self.children_iter,
-                            excluded_leaf: None,
+                            excluded: None,
                         }),
                     });
                     if excluded_node.value() != node.value() {
@@ -867,7 +914,7 @@ impl StateVisitor for VisitedNodeRightState {
                         key: branch_key,
                         state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
                             children_iter: self.children_iter,
-                            excluded_leaf: Some((excluded_node, excluded_path)),
+                            excluded: Some((excluded_node, excluded_path)),
                         }),
                     });
                     iter_stack.push(DiffIterationNode {
@@ -884,7 +931,7 @@ impl StateVisitor for VisitedNodeRightState {
                     key: branch_key,
                     state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
                         children_iter: self.children_iter,
-                        excluded_leaf: None,
+                        excluded: None,
                     }),
                 });
 
@@ -898,139 +945,6 @@ impl StateVisitor for VisitedNodeRightState {
             }
         }
         Ok(())
-    }
-}
-
-impl OutOfSyncStateVisitor for OutOfSyncState {
-    fn visit<L: TrieReader, R: TrieReader>(
-        mut self,
-        key: &Path,
-        iter_stack: &mut IterStack,
-        readers: (&L, &R),
-    ) -> Result<Option<BatchOp<Key, Value>>, FileIoError> {
-        // Create owned streams for both trees if not already initialized
-        let start_key = key_from_nibble_iter(key.iter().copied());
-        let left_reader = Arc::new(readers.0);
-        let right_reader = Arc::new(readers.1);
-
-        let mut left_stream = OwnedMerkleKeyValueStream::from_key(left_reader, &start_key);
-        let mut right_stream = OwnedMerkleKeyValueStream::from_key(right_reader, &start_key);
-
-        // Get items from saved state or streams
-        let left_item = self
-            .saved_left
-            .take()
-            .map(Ok)
-            .or_else(|| left_stream.next_internal());
-        let right_item = self
-            .saved_right
-            .take()
-            .map(Ok)
-            .or_else(|| right_stream.next_internal());
-
-        // Determine if we need to push back for continued processing
-        let mut pushback_needed = false;
-
-        // Compare and generate the appropriate operation
-        let result = match (left_item, right_item) {
-            (Some(Ok((left_key, left_value))), Some(Ok((right_key, right_value)))) => {
-                use std::cmp::Ordering;
-                match left_key.cmp(&right_key) {
-                    Ordering::Less => {
-                        // Left key is smaller - it was deleted
-                        // Save the right key/value for next iteration
-                        self.saved_right = Some((right_key, right_value));
-                        pushback_needed = true;
-                        Ok(Some(BatchOp::Delete { key: left_key }))
-                    }
-                    Ordering::Greater => {
-                        // Right key is smaller - it was added
-                        // Save the left key/value for next iteration
-                        self.saved_left = Some((left_key, left_value));
-                        pushback_needed = true;
-                        Ok(Some(BatchOp::Put {
-                            key: right_key,
-                            value: right_value,
-                        }))
-                    }
-                    Ordering::Equal => {
-                        // Keys are equal - both items consumed
-                        // Check if either stream has more items
-                        let next_left = left_stream.next_internal();
-                        let next_right = right_stream.next_internal();
-
-                        // Save any items we got for next iteration
-                        if let Some(Ok(item)) = next_left {
-                            self.saved_left = Some(item);
-                        }
-                        if let Some(Ok(item)) = next_right {
-                            self.saved_right = Some(item);
-                        }
-
-                        // Update pushback_needed based on whether we have saved items
-                        pushback_needed = self.saved_left.is_some() || self.saved_right.is_some();
-
-                        if left_value == right_value {
-                            // Values are identical, no operation needed
-                            Ok(None)
-                        } else {
-                            // Values differ, generate Put operation for the right value
-                            Ok(Some(BatchOp::Put {
-                                key: right_key,
-                                value: right_value,
-                            }))
-                        }
-                    }
-                }
-            }
-            (Some(Ok((left_key, _left_value))), None) => {
-                // Only left stream has items - they were deleted
-                // Check if left stream has more items
-                if let Some(Ok(next_item)) = left_stream.next_internal() {
-                    self.saved_left = Some(next_item);
-                    pushback_needed = true;
-                } else {
-                    pushback_needed = false;
-                }
-
-                Ok(Some(BatchOp::Delete { key: left_key }))
-            }
-            (None, Some(Ok((right_key, right_value)))) => {
-                // Only right stream has items - they were added
-                // Check if right stream has more items
-                if let Some(Ok(next_item)) = right_stream.next_internal() {
-                    self.saved_right = Some(next_item);
-                    pushback_needed = true;
-                } else {
-                    pushback_needed = false;
-                }
-
-                Ok(Some(BatchOp::Put {
-                    key: right_key,
-                    value: right_value,
-                }))
-            }
-            (Some(Err(e)), _) | (_, Some(Err(e))) => {
-                // Handle errors from either stream - don't continue processing
-                pushback_needed = false;
-                Err(e)
-            }
-            (None, None) => {
-                // Both streams are exhausted - terminate
-                pushback_needed = false;
-                Ok(None)
-            }
-        };
-
-        // Push back for continued processing if needed
-        if pushback_needed {
-            iter_stack.push(DiffIterationNode {
-                key: key.clone(),
-                state: DiffIterationNodeState::OutOfSync(self),
-            });
-        }
-
-        result
     }
 }
 
@@ -1049,10 +963,6 @@ enum DiffIterationNodeState {
     VisitedLeft(VisitedNodeLeftState),
     /// A visited branch node from tree2 only (may have exclusions)
     VisitedRight(VisitedNodeRightState),
-    /// State for when two nodes have different partial paths and need to be processed
-    /// using separate MerkleNodeStream objects to handle the structural differences.
-    /// This occurs when comparing nodes that have diverged in their trie structure.
-    OutOfSync(OutOfSyncState),
 }
 
 /// Iteration node that tracks state for both trees simultaneously
@@ -1082,7 +992,7 @@ impl DiffIterationNode {
                     key: path,
                     state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
                         children_iter,
-                        excluded_leaf: None,
+                        excluded: None,
                     }),
                 }
             }
@@ -1108,7 +1018,7 @@ impl DiffIterationNode {
                     key: path,
                     state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
                         children_iter,
-                        excluded_leaf: None,
+                        excluded: None,
                     }),
                 }
             }
@@ -1119,7 +1029,7 @@ impl DiffIterationNode {
 /// State for the diff iterator that tracks lazy initialization
 #[derive(Debug)]
 enum DiffNodeStreamState {
-    /// The iterator state is lazily initialized when next_internal is called
+    /// The iterator state is lazily initialized when `next_internal` is called
     /// for the first time. The iteration start key is stored here.
     StartFromKey(Key),
     /// The iterator is actively iterating over nodes
@@ -1171,7 +1081,7 @@ impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
         tree_left: &T,
         tree_right: &U,
         key: &[u8],
-    ) -> Result<DiffNodeStreamState, storage::FileIoError> {
+    ) -> Result<DiffNodeStreamState, firewood_storage::FileIoError> {
         let root_left_opt = tree_left.root_node();
         let root_right_opt = tree_right.root_node();
 
@@ -1236,7 +1146,9 @@ impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
         }
     }
 
-    fn next_internal(&mut self) -> Option<Result<BatchOp<Key, Value>, storage::FileIoError>> {
+    fn next_internal(
+        &mut self,
+    ) -> Option<Result<BatchOp<Key, Value>, firewood_storage::FileIoError>> {
         // Handle lazy initialization
         let iter_stack = match &mut self.state {
             DiffNodeStreamState::StartFromKey(key) => {
@@ -1257,21 +1169,21 @@ impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
                 DiffIterationNodeState::UnvisitedPair(state) => {
                     match state.visit(&iter_node.key, iter_stack) {
                         Ok(Some(result)) => return Some(Ok(result)),
-                        Ok(None) => continue,
+                        Ok(None) => {}
                         Err(e) => return Some(Err(e)),
                     }
                 }
                 DiffIterationNodeState::UnvisitedLeft(state) => {
                     match state.visit(&iter_node.key, iter_stack) {
                         Ok(Some(result)) => return Some(Ok(result)),
-                        Ok(None) => continue,
+                        Ok(None) => {}
                         Err(e) => return Some(Err(e)),
                     }
                 }
                 DiffIterationNodeState::UnvisitedRight(state) => {
                     match state.visit(&iter_node.key, iter_stack) {
                         Ok(Some(result)) => return Some(Ok(result)),
-                        Ok(None) => continue,
+                        Ok(None) => {}
                         Err(e) => return Some(Err(e)),
                     }
                 }
@@ -1302,34 +1214,25 @@ impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
                         return Some(Err(e));
                     }
                 }
-                DiffIterationNodeState::OutOfSync(state) => {
-                    match state.visit(
-                        &iter_node.key,
-                        iter_stack,
-                        (self.tree_left, self.tree_right),
-                    ) {
-                        Ok(Some(result)) => return Some(Ok(result)),
-                        Ok(None) => continue,
-                        Err(e) => return Some(Err(e)),
-                    }
-                }
             }
         }
         None
     }
 }
 
-/// Optimized diff stream that uses DiffMerkleNodeStream for hash-based optimizations
-#[derive(Derivative)]
-#[derivative(Debug)]
-struct DiffMerkleKeyValueStreams<'a, T: TrieReader, U: TrieReader> {
-    #[derivative(Debug(format_with = "fmt_as_node_stream"))]
-    node_stream: DiffMerkleNodeStream<'a, T, U>,
+impl<T: TrieReader, U: TrieReader> Iterator for DiffMerkleNodeStream<'_, T, U> {
+    type Item = Result<BatchOp<Key, Value>, firewood_storage::FileIoError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next_internal()
+    }
 }
 
-// Helper function for derivative to format node stream
-fn fmt_as_node_stream<T>(_: &T, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    f.write_str("\"<DiffMerkleNodeStream>\"")
+/// Optimized diff stream that uses `DiffMerkleNodeStream` for hash-based optimizations
+#[derive(derive_more::Debug)]
+struct DiffMerkleKeyValueStreams<'a, T: TrieReader, U: TrieReader> {
+    #[debug("<stream>")]
+    node_stream: DiffMerkleNodeStream<'a, T, U>,
 }
 
 impl<'a, T: TrieReader, U: TrieReader> DiffMerkleKeyValueStreams<'a, T, U> {
@@ -1341,29 +1244,35 @@ impl<'a, T: TrieReader, U: TrieReader> DiffMerkleKeyValueStreams<'a, T, U> {
 }
 
 impl<T: TrieReader, U: TrieReader> Iterator for DiffMerkleKeyValueStreams<'_, T, U> {
-    type Item = Result<BatchOp<Key, Value>, storage::FileIoError>;
+    type Item = Result<BatchOp<Key, Value>, firewood_storage::FileIoError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.node_stream.next_internal()
     }
 }
 
-fn diff_merkle_iterator<'a, T1: TrieReader, T2: TrieReader>(
-    m1: &'a Merkle<T1>,
-    m2: &'a Merkle<T2>,
-    start_key: Key,
-) -> DiffMerkleKeyValueStreams<'a, T1, T2> {
-    DiffMerkleKeyValueStreams::new(m1.nodestore(), m2.nodestore(), start_key)
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use crate::merkle::Merkle;
+
     use super::*;
     use env_logger::WriteStyle;
+    use firewood_storage::{ImmutableProposal, MemStore, MutableProposal, NodeStore};
     use std::sync::Arc;
-    use storage::{ImmutableProposal, MemStore, MutableProposal, NodeStore};
     use test_case::test_case;
+
+    fn diff_merkle_iterator<'a, T, U>(
+        tree_left: &'a Merkle<T>,
+        tree_right: &'a Merkle<U>,
+        start_key: Key,
+    ) -> DiffMerkleNodeStream<'a, T, U>
+    where
+        T: firewood_storage::TrieReader,
+        U: firewood_storage::TrieReader,
+    {
+        DiffMerkleNodeStream::new(tree_left.nodestore(), tree_right.nodestore(), start_key)
+    }
 
     fn create_test_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
         let memstore = MemStore::new(vec![]);
@@ -1617,7 +1526,7 @@ mod tests {
     #[allow(clippy::indexing_slicing)]
     fn diff_random_with_deletions(trie1_mutable: bool, trie2_mutable: bool, num_items: usize) {
         use rand::rngs::StdRng;
-        use rand::{Rng, SeedableRng, rng};
+        use rand::{Rng, SeedableRng};
 
         let _ = env_logger::builder()
             .write_style(WriteStyle::Never)
@@ -1680,7 +1589,7 @@ mod tests {
 
         // Delete different keys from each merkle
         m1.remove(deleted_key1).unwrap();
-        println!("expected put for key {:x?}", deleted_key1);
+        println!("expected put for key {deleted_key1:x?}");
         //m2.remove(deleted_key2).unwrap();
         //println!("expected delete for key {:x?}", deleted_key2);
 
@@ -1733,7 +1642,7 @@ mod tests {
                         println!("  {}: Put key: {:x?}", i, key.as_ref());
                     }
                     BatchOp::DeleteRange { .. } => {
-                        println!("  {}: DeleteRange", i);
+                        println!("  {i}: DeleteRange");
                     }
                 }
             }
@@ -1752,7 +1661,7 @@ mod tests {
         use std::sync::atomic::Ordering;
 
         /// Test metrics recorder that captures counter values for testing
-        #[derive(Debug, Clone)]
+        #[derive(derive_more::Debug, Clone)]
         struct TestRecorder {
             registry: Arc<Registry<Key, AtomicStorage>>,
         }
@@ -1781,8 +1690,7 @@ mod tests {
                     .get_counter_handles()
                     .into_iter()
                     .find(|(k, _)| k == &key)
-                    .map(|(_, counter)| counter.load(Ordering::Relaxed))
-                    .unwrap_or(0)
+                    .map_or(0, |(_, counter)| counter.load(Ordering::Relaxed))
             }
         }
 
@@ -1918,14 +1826,8 @@ mod tests {
             recorder.get_counter_value("firewood.read_node", &[("from", "proposal")]);
         let baseline_reads = baseline_reads_after - baseline_reads_before;
 
-        println!(
-            "Baseline - Tree1 items: {}, Tree2 items: {}",
-            tree1_count, tree2_count
-        );
-        println!(
-            "Baseline total reads (both trees fully traversed): {}",
-            baseline_reads
-        );
+        println!("Baseline - Tree1 items: {tree1_count}, Tree2 items: {tree2_count}");
+        println!("Baseline total reads (both trees fully traversed): {baseline_reads}");
 
         // DIFF TEST: Measure reads from hash-optimized diff operation
         let diff_reads_before =
@@ -1939,8 +1841,8 @@ mod tests {
             recorder.get_counter_value("firewood.read_node", &[("from", "proposal")]);
         let diff_reads = diff_reads_after - diff_reads_before;
 
-        println!("Diff operation reads: {}", diff_reads);
-        println!("Diff results count: {}", diff_results_count);
+        println!("Diff operation reads: {diff_reads}");
+        println!("Diff results count: {diff_results_count}");
 
         // Both should have some reads since we're using immutable proposals
         assert!(
@@ -1952,15 +1854,10 @@ mod tests {
         // Verify hash optimization is working - should read FEWER nodes than full traversal
         assert!(
             diff_reads < baseline_reads,
-            "Hash optimization failed: diff reads ({}) should be less than baseline ({}) for trees with shared content",
-            diff_reads,
-            baseline_reads
+            "Hash optimization failed: diff reads ({diff_reads}) should be less than baseline ({baseline_reads}) for trees with shared content"
         );
 
-        println!(
-            "✅ Node read optimization verified: {} vs {} reads",
-            diff_reads, baseline_reads
-        );
+        println!("✅ Node read optimization verified: {diff_reads} vs {baseline_reads} reads");
 
         // Verify we found some diff operations (exact count and content validated by other tests)
         assert!(
@@ -1968,7 +1865,7 @@ mod tests {
             "Expected to find diff operations for trees with different content"
         );
 
-        println!("   - Baseline reads: {}", baseline_reads);
+        println!("   - Baseline reads: {baseline_reads}");
         println!(
             "   - Diff reads: {} ({:.1}% of baseline)",
             diff_reads,
@@ -1979,7 +1876,7 @@ mod tests {
             baseline_reads - diff_reads,
             ((baseline_reads - diff_reads) as f64 / baseline_reads as f64) * 100.0
         );
-        println!("   - Diff operations found: {}", diff_results_count);
+        println!("   - Diff operations found: {diff_results_count}");
     }
 
     #[test]
@@ -2161,8 +2058,8 @@ mod tests {
         );
 
         println!("✅ All 6 diff states coverage test passed:");
-        println!("   - Deletions: {}", deletions);
-        println!("   - Additions (includes modifications): {}", additions);
+        println!("   - Deletions: {deletions}");
+        println!("   - Additions (includes modifications): {additions}");
         println!("   - This test exercises scenarios that should trigger:");
         println!("     1. UnvisitedNodePairState (comparing modified nodes)");
         println!("     2. UnvisitedNodeLeftState (simple left-only nodes)");
@@ -2273,65 +2170,20 @@ mod tests {
         // Verify against expected counts
         assert_eq!(
             put_count, expected_puts,
-            "Put count mismatch for {} (same_value={}, backwards={}), results={results:x?}",
-            direction_desc, same_value, backwards
+            "Put count mismatch for {direction_desc} (same_value={same_value}, backwards={backwards}), results={results:x?}"
         );
         assert_eq!(
             delete_count, expected_deletes,
-            "Delete count mismatch for {} (same_value={}, backwards={}), results={results:x?}",
-            direction_desc, same_value, backwards
+            "Delete count mismatch for {direction_desc} (same_value={same_value}, backwards={backwards}), results={results:x?}"
         );
         assert_eq!(
             results.len(),
             expected_puts + expected_deletes,
-            "Total operation count mismatch for {} (same_value={}, backwards={}), results={results:x?}",
-            direction_desc,
-            same_value,
-            backwards
+            "Total operation count mismatch for {direction_desc} (same_value={same_value}, backwards={backwards}), results={results:x?}"
         );
 
         println!(
-            "✅ Branch vs leaf test passed: {} (same_value={}, backwards={}) - {} puts, {} deletes",
-            direction_desc, same_value, backwards, put_count, delete_count
+            "✅ Branch vs leaf test passed: {direction_desc} (same_value={same_value}, backwards={backwards}) - {put_count} puts, {delete_count} deletes"
         );
-    }
-
-    #[test]
-    fn test_out_of_sync_value_comparison_optimization() {
-        // This test specifically verifies that OutOfSyncState correctly compares values
-        // when processing trees with different keys that force the OutOfSyncState code path
-
-        // Create two trees with different keys to trigger OutOfSyncState processing
-        let m1 = populate_merkle(create_test_merkle(), &[(b"key_a", b"value_1")]);
-        let m2 = populate_merkle(create_test_merkle(), &[(b"key_b", b"value_2")]);
-
-        let diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
-        let results: Vec<_> = diff_iter.collect::<Result<Vec<_>, _>>().unwrap();
-
-        // Debug output to see what we actually get
-        println!("Results: {:?}", results);
-
-        // Should find exactly 2 operations: Delete key_a, Put key_b
-        assert_eq!(results.len(), 2, "Expected 2 operations for different keys");
-
-        // Verify we get a Delete for key_a and Put for key_b
-        let mut found_delete = false;
-        let mut found_put = false;
-
-        for result in &results {
-            match result {
-                BatchOp::Delete { key: _ } => {
-                    found_delete = true;
-                }
-                BatchOp::Put { key: _, value } => {
-                    found_put = true;
-                    assert_eq!(&**value, b"value_2");
-                }
-                _ => panic!("Unexpected operation: {:?}", result),
-            }
-        }
-
-        assert!(found_delete, "Expected to find a Delete operation");
-        assert!(found_put, "Expected to find a Put operation");
     }
 }

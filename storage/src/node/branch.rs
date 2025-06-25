@@ -10,10 +10,6 @@
     reason = "Found 2 occurrences after enabling the lint."
 )]
 #![expect(
-    clippy::match_same_arms,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-#![expect(
     clippy::missing_panics_doc,
     reason = "Found 2 occurrences after enabling the lint."
 )]
