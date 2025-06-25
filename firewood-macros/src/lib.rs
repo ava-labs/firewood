@@ -189,7 +189,7 @@ fn generate_metrics_wrapper(input_fn: &ItemFn, args: &MetricsArgs) -> proc_macro
 
             let __metrics_start = coarsetime::Instant::now();
 
-            let __metrics_result = (|| #fn_block)();
+            let __metrics_result = { #fn_block };
 
             // Use static label arrays to avoid runtime allocation
             static __METRICS_LABELS_SUCCESS: &[(&str, &str)] = &[("success", "true")];
