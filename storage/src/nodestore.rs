@@ -40,7 +40,6 @@
 
 use crate::linear::FileIoError;
 use crate::logger::{debug, trace};
-use crate::range_set::LinearAddressRangeSet;
 use arc_swap::ArcSwap;
 use arc_swap::access::DynAccess;
 use bincode::{DefaultOptions, Options as _};
@@ -84,8 +83,7 @@ use std::sync::Arc;
 use crate::hashednode::hash_node;
 use crate::node::{ByteCounter, Node};
 use crate::{
-    CacheReadStrategy, CheckerError, Child, FileBacked, HashType, Path, ReadableStorage,
-    SharedNode, TrieHash,
+    CacheReadStrategy, Child, FileBacked, HashType, Path, ReadableStorage, SharedNode, TrieHash,
 };
 
 use super::linear::WritableStorage;
@@ -171,7 +169,7 @@ const MIN_AREA_SIZE: u64 = AREA_SIZES[0];
 const MAX_AREA_SIZE: u64 = AREA_SIZES[NUM_AREA_SIZES - 1];
 
 /// Returns the index in `BLOCK_SIZES` of the smallest block size >= `n`.
-fn area_size_to_index(n: u64) -> Result<AreaIndex, Error> {
+pub(crate) fn area_size_to_index(n: u64) -> Result<AreaIndex, Error> {
     if n > MAX_AREA_SIZE {
         return Err(Error::new(
             ErrorKind::InvalidData,
@@ -318,11 +316,6 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
         Ok((node, size[0]))
     }
 
-    /// Get a reference to the header of this nodestore
-    pub const fn header(&self) -> &NodeStoreHeader {
-        &self.header
-    }
-
     /// Get the size of an area index (used by the checker)
     #[must_use]
     pub const fn size_from_area_index(index: AreaIndex) -> u64 {
@@ -333,16 +326,16 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
 impl<T, S: ReadableStorage> NodeStore<T, S> {
     // Read a [FreeArea] from the provided [LinearAddress]
     // `addr` is the address of a StoredArea in the ReadableStorage.
-    fn read_free_area_with_area_index_from_disk(
-        storage: &S,
+    pub(crate) fn read_free_area_with_area_index_from_disk(
+        &self,
         addr: LinearAddress,
     ) -> Result<(FreeArea, AreaIndex), FileIoError> {
         let free_area_addr = addr.get();
-        let free_head_stream = storage.stream_from(free_area_addr)?;
+        let free_head_stream = self.storage.stream_from(free_area_addr)?;
         let free_head: StoredArea<Area<Node, FreeArea>> = serializer()
             .deserialize_from(free_head_stream)
             .map_err(|e| {
-                storage.file_io_error(
+                self.storage.file_io_error(
                     Error::new(ErrorKind::InvalidData, e),
                     free_area_addr,
                     Some("allocate_from_freed".to_string()),
@@ -353,7 +346,7 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
             area_size_index: read_index,
         } = free_head
         else {
-            return Err(storage.file_io_error(
+            return Err(self.storage.file_io_error(
                 Error::new(ErrorKind::InvalidData, "Attempted to read a non-free area"),
                 free_area_addr,
                 Some("allocate_from_freed".to_string()),
@@ -546,29 +539,31 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 .file_io_error(e, 0, Some("allocate_from_freed".to_string()))
         })?;
 
-        if let Some((index, free_stored_area_addr)) = self
+        if let Some(index) = self
             .header
             .free_lists
-            .iter_mut()
+            .iter()
             .enumerate()
             .skip(index_wanted as usize)
             .find(|item| item.1.is_some())
+            .map(|(index, _)| index)
         {
-            let address = free_stored_area_addr
-                .take()
-                .expect("impossible due to find earlier");
+            let address = self.header.free_lists[index].expect("impossible due to find earlier");
+
             // Get the first free block of sufficient size.
-            if let Some(free_head) = self.storage.free_list_cache(address) {
+            let free_head = if let Some(free_head) = self.storage.free_list_cache(address) {
                 trace!("free_head@{address}(cached): {free_head:?} size:{index}");
-                *free_stored_area_addr = free_head;
+                free_head
             } else {
                 let (free_head, read_index) =
-                    Self::read_free_area_with_area_index_from_disk(&self.storage, address)?;
+                    self.read_free_area_with_area_index_from_disk(address)?;
                 debug_assert_eq!(read_index as usize, index);
 
                 // Update the free list to point to the next free block.
-                *free_stored_area_addr = free_head.next_free_block;
-            }
+                free_head.next_free_block
+            };
+
+            self.header.free_lists[index] = free_head;
 
             counter!("firewood.space.reused", "index" => index_name(index as u8))
                 .increment(AREA_SIZES[index]);
@@ -796,7 +791,7 @@ impl Version {
     }
 }
 
-type FreeLists = [Option<LinearAddress>; NUM_AREA_SIZES];
+pub(crate) type FreeLists = [Option<LinearAddress>; NUM_AREA_SIZES];
 
 /// Persisted metadata for a [`NodeStore`].
 /// The [`NodeStoreHeader`] is at the start of the `ReadableStorage`.
@@ -906,29 +901,22 @@ impl NodeStoreHeader {
             ))
         }
     }
-
-    // return the size of this nodestore
-    pub const fn size(&self) -> u64 {
-        self.size
-    }
 }
 
 /// A [`FreeArea`] is stored at the start of the area that contained a node that
 /// has been freed.
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
-struct FreeArea {
-    next_free_block: Option<LinearAddress>,
+pub(crate) struct FreeArea {
+    pub(crate) next_free_block: Option<LinearAddress>,
 }
 
 /// Reads from an immutable (i.e. already hashed) merkle trie.
 pub trait HashedNodeReader: TrieReader {
-    /// Gets the address and hash of the root node of an immutable merkle trie.
-    fn root_address_and_hash(&self) -> Result<Option<(LinearAddress, TrieHash)>, FileIoError>;
+    /// Gets the address of the root node of an immutable merkle trie.
+    fn root_address(&self) -> Option<LinearAddress>;
 
     /// Gets the hash of the root node of an immutable merkle trie.
-    fn root_hash(&self) -> Result<Option<TrieHash>, FileIoError> {
-        Ok(self.root_address_and_hash()?.map(|(_, hash)| hash))
-    }
+    fn root_hash(&self) -> Option<TrieHash>;
 }
 
 /// Reads nodes and the root address from a merkle trie.
@@ -1015,7 +1003,7 @@ pub struct ImmutableProposal {
 impl ImmutableProposal {
     /// Returns true if the parent of this proposal is committed and has the given hash.
     #[must_use]
-    pub fn parent_hash_is(&self, hash: Option<TrieHash>) -> bool {
+    fn parent_hash_is(&self, hash: Option<TrieHash>) -> bool {
         match <Arc<ArcSwap<NodeStoreParent>> as arc_swap::access::DynAccess<Arc<_>>>::load(
             &self.parent,
         )
@@ -1082,9 +1070,9 @@ pub struct NodeStore<T, S> {
     // Metadata for this revision.
     header: NodeStoreHeader,
     /// This is one of [Committed], [`ImmutableProposal`], or [`MutableProposal`].
-    pub kind: T,
+    kind: T,
     /// Persisted storage to read nodes from.
-    pub storage: Arc<S>,
+    storage: Arc<S>,
 }
 
 /// Contains the state of a proposal that is still being modified.
@@ -1277,18 +1265,19 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
 
         Ok((addr, hash))
     }
+
+    /// Re-export the `parent_hash_is` function of [`ImmutableProposal`].
+    #[must_use]
+    pub fn parent_hash_is(&self, hash: Option<TrieHash>) -> bool {
+        self.kind.parent_hash_is(hash)
+    }
 }
 
 impl<T, S: WritableStorage> NodeStore<T, S> {
     /// Persist the header from this proposal to storage.
     pub fn flush_header(&self) -> Result<(), FileIoError> {
-        Self::flush_header_inner(&self.storage, &self.header)
-    }
-
-    // helper function to be used by the flush_header_inner function and in tests
-    fn flush_header_inner(storage: &S, header: &NodeStoreHeader) -> Result<(), FileIoError> {
-        let header_bytes = bytemuck::bytes_of(header);
-        storage.write(0, header_bytes)?;
+        let header_bytes = bytemuck::bytes_of(&self.header);
+        self.storage.write(0, header_bytes)?;
         Ok(())
     }
 
@@ -1325,7 +1314,10 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
         let flush_start = Instant::now();
 
         for (addr, (area_size_index, node)) in &self.kind.new {
-            Self::flush_nodes_helper(&self.storage, addr.get(), *area_size_index, node)?;
+            let mut stored_area_bytes = Vec::new();
+            node.as_bytes(*area_size_index, &mut stored_area_bytes);
+            self.storage
+                .write(addr.get(), stored_area_bytes.as_slice())?;
         }
 
         self.storage
@@ -1335,18 +1327,6 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
         counter!("firewood.flush_nodes").increment(flush_time);
 
         Ok(())
-    }
-
-    // helper function to be used by the flush_nodes function and in tests
-    fn flush_nodes_helper(
-        storage: &FileBacked,
-        offset: u64,
-        area_size_index: AreaIndex,
-        node: &Node,
-    ) -> Result<usize, FileIoError> {
-        let mut stored_area_bytes = Vec::new();
-        node.as_bytes(area_size_index, &mut stored_area_bytes);
-        storage.write(offset, stored_area_bytes.as_slice())
     }
 
     /// Persist all the nodes of a proposal to storage.
@@ -1549,34 +1529,28 @@ impl<T: ReadInMemoryNode + Parentable, S: ReadableStorage> RootReader for NodeSt
 impl<T, S> HashedNodeReader for NodeStore<T, S>
 where
     NodeStore<T, S>: TrieReader,
-    T: ReadInMemoryNode,
+    T: Parentable,
     S: ReadableStorage,
 {
-    fn root_address_and_hash(&self) -> Result<Option<(LinearAddress, TrieHash)>, FileIoError> {
-        if let Some(root_addr) = self.header.root_address {
-            let root_node = self.read_node(root_addr)?;
-            let root_hash = hash_node(&root_node, &Path::new());
-            Ok(Some((root_addr, root_hash.into_triehash())))
-        } else {
-            Ok(None)
-        }
+    fn root_address(&self) -> Option<LinearAddress> {
+        self.header.root_address
+    }
+
+    fn root_hash(&self) -> Option<TrieHash> {
+        self.kind.root_hash()
     }
 }
 
-impl<T, S> HashedNodeReader for Arc<NodeStore<T, S>>
+impl<N> HashedNodeReader for Arc<N>
 where
-    NodeStore<T, S>: TrieReader,
-    T: ReadInMemoryNode,
-    S: ReadableStorage,
+    N: HashedNodeReader,
 {
-    fn root_address_and_hash(&self) -> Result<Option<(LinearAddress, TrieHash)>, FileIoError> {
-        if let Some(root_addr) = self.header.root_address {
-            let root_node = self.read_node(root_addr)?;
-            let root_hash = hash_node(&root_node, &Path::new());
-            Ok(Some((root_addr, root_hash.into_triehash())))
-        } else {
-            Ok(None)
-        }
+    fn root_address(&self) -> Option<LinearAddress> {
+        self.as_ref().root_address()
+    }
+
+    fn root_hash(&self) -> Option<TrieHash> {
+        self.as_ref().root_hash()
     }
 }
 
@@ -1596,92 +1570,75 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     }
 }
 
-/// [`NodeStore`] checker
-// TODO: S needs to be writeable if we ask checker to fix the issues
-impl<S: WritableStorage> NodeStore<Committed, S> {
-    /// Go through the filebacked storage and check for any inconsistencies. It proceeds in the following steps:
-    /// 1. Check the header
-    /// 2. traverse the trie and check the nodes
-    /// 3. check the free list
-    /// 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
-    // TODO: report all errors, not just the first one
-    // TODO: add merkle hash checks as well
-    pub fn check(&self) -> Result<(), CheckerError> {
-        // 1. Check the header
-        let db_size = self.header.size;
-        let file_size = self.storage.size()?;
-        if db_size < file_size {
-            return Err(CheckerError::InvalidDBSize {
-                db_size,
-                description: format!(
-                    "db size should not be smaller than the file size ({file_size})"
-                ),
-            });
-        }
-
-        let mut visited = LinearAddressRangeSet::new(db_size)?;
-
-        // 2. traverse the trie and check the nodes
-        if let Some(root_address) = self.header.root_address {
-            // the database is not empty, traverse the trie
-            self.traverse_trie(root_address, &mut visited)?;
-        }
-
-        // 3. check the free list - this can happen in parallel with the trie traversal
-        let freelists = self.header.free_lists;
-        for (area_idx, head_addr) in freelists.iter().enumerate() {
-            let area_size = AREA_SIZES[area_idx];
-            self.check_freelist(area_size, *head_addr, &mut visited)?;
-        }
-        // 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
-        let _ = visited.complement(); // TODO
-
-        Ok(())
+// Helper functions for the checker
+impl<S: ReadableStorage> NodeStore<Committed, S> {
+    pub(crate) const fn size(&self) -> u64 {
+        self.header.size
     }
 
-    /// Recursively traverse the trie from the given root address.
-    fn traverse_trie(
-        &self,
-        subtree_root_address: LinearAddress,
-        visited: &mut LinearAddressRangeSet,
-    ) -> Result<(), CheckerError> {
-        let (_, area_size) = self.area_index_and_size(subtree_root_address)?;
-        visited.insert_area(subtree_root_address, area_size)?;
-
-        if let Node::Branch(branch) = self.read_node(subtree_root_address)?.as_ref() {
-            // this is an internal node, traverse the children
-            for (_, address) in branch.children_addresses() {
-                self.traverse_trie(*address, visited)?;
-            }
-        }
-
-        Ok(())
+    pub(crate) fn get_physical_size(&self) -> Result<u64, FileIoError> {
+        self.storage.size()
     }
 
-    fn check_freelist(
-        &self,
-        freelist_area_size: u64,
-        head_addr: Option<LinearAddress>,
-        visited: &mut LinearAddressRangeSet,
-    ) -> Result<(), CheckerError> {
-        let mut cur_free_area_addr = head_addr;
-        while let Some(free_area_addr) = cur_free_area_addr {
-            visited.insert_area(free_area_addr, freelist_area_size)?;
-            let (free_head, read_index) =
-                Self::read_free_area_with_area_index_from_disk(&self.storage, free_area_addr)?;
-            let free_area_size = AREA_SIZES[read_index as usize];
-            let next_free_area_addr = free_head.next_free_block;
-            if free_area_size != freelist_area_size {
-                return Err(CheckerError::FreelistAreaSizeMismatch {
-                    address: free_area_addr,
-                    size: free_area_size,
-                    freelist_size: freelist_area_size,
-                });
-            }
-            cur_free_area_addr = next_free_area_addr;
-        }
+    pub(crate) const fn get_free_lists(&self) -> &FreeLists {
+        &self.header.free_lists
+    }
+}
 
-        Ok(())
+#[cfg(test)]
+pub(crate) mod nodestore_test_utils {
+    use super::*;
+
+    pub(crate) const AREA_SIZES: [u64; crate::nodestore::NUM_AREA_SIZES] =
+        crate::nodestore::AREA_SIZES;
+    pub(crate) const NUM_AREA_SIZES: usize = crate::nodestore::NUM_AREA_SIZES;
+
+    // Helper function to wrap the node in a StoredArea and write it to the given offset. Returns the size of the area on success.
+    #[allow(clippy::cast_possible_truncation)]
+    pub(crate) fn write_new_node<S: WritableStorage>(
+        nodestore: &NodeStore<Committed, S>,
+        node: &Node,
+        offset: u64,
+    ) -> u64 {
+        let node_length = NodeStore::<Arc<ImmutableProposal>, FileBacked>::stored_len(node);
+        let area_size_index = area_size_to_index(node_length).unwrap();
+        let mut stored_area_bytes = Vec::new();
+        node.as_bytes(area_size_index, &mut stored_area_bytes);
+        nodestore
+            .storage
+            .write(offset, stored_area_bytes.as_slice())
+            .unwrap();
+        AREA_SIZES[area_size_index as usize]
+    }
+
+    pub(crate) fn write_header<S: WritableStorage>(
+        nodestore: &NodeStore<Committed, S>,
+        root_addr: Option<LinearAddress>,
+        size: u64,
+        free_lists: FreeLists,
+    ) {
+        let mut header = NodeStoreHeader::new();
+        header.size = size;
+        header.root_address = root_addr;
+        header.free_lists = free_lists;
+        let header_bytes = bytemuck::bytes_of(&header);
+        nodestore.storage.write(0, header_bytes).unwrap();
+    }
+
+    pub(crate) fn write_free_area<S: WritableStorage>(
+        nodestore: &NodeStore<Committed, S>,
+        free_area: FreeArea,
+        area: u64,
+        offset: u64,
+    ) {
+        let area_size_index = area_size_to_index(area).unwrap();
+        let area: Area<Node, FreeArea> = Area::Free(free_area);
+        let stored_area = StoredArea {
+            area_size_index,
+            area,
+        };
+        let stored_area_bytes = serializer().serialize(&stored_area).unwrap();
+        nodestore.storage.write(offset, &stored_area_bytes).unwrap();
     }
 }
 
@@ -1752,7 +1709,7 @@ mod tests {
         // now check r2's parent, should match the hash of r1 (which is still None)
         let parent: DynGuard<Arc<NodeStoreParent>> = r2.kind.parent.load();
         if let NodeStoreParent::Committed(hash) = &**parent {
-            assert_eq!(*hash, r1.root_hash().unwrap());
+            assert_eq!(*hash, r1.root_hash());
             assert_eq!(*hash, None);
         } else {
             panic!("expected committed parent");
@@ -1839,190 +1796,5 @@ mod tests {
 
         let immutable = NodeStore::<Arc<ImmutableProposal>, _>::try_from(node_store).unwrap();
         println!("{immutable:?}"); // should not be reached, but need to consume immutable to avoid optimization removal
-    }
-}
-
-#[cfg(test)]
-mod test_node_store_checker {
-    #![expect(clippy::unwrap_used)]
-    #![expect(clippy::indexing_slicing)]
-
-    use super::*;
-    use crate::linear::filebacked::FileBacked;
-    use crate::linear::filebacked::test_utils;
-    use crate::{BranchNode, LeafNode};
-
-    // Helper function to wrap the node in a StoredArea and write it to the given offset. Returns the size of the area on success.
-    #[allow(clippy::cast_possible_truncation)]
-    fn write_new_node(file_backed: &FileBacked, node: &Node, offset: u64) -> u64 {
-        let node_length = NodeStore::<Arc<ImmutableProposal>, FileBacked>::stored_len(node);
-        let area_size_index = area_size_to_index(node_length).unwrap();
-        NodeStore::<Arc<ImmutableProposal>, FileBacked>::flush_nodes_helper(
-            file_backed,
-            offset,
-            area_size_index,
-            node,
-        )
-        .unwrap();
-        AREA_SIZES[area_size_index as usize]
-    }
-
-    fn write_free_area(file_backed: &FileBacked, free_area: FreeArea, area: u64, offset: u64) {
-        let area_size_index = area_size_to_index(area).unwrap();
-        let area: Area<Node, FreeArea> = Area::Free(free_area);
-        let stored_area = StoredArea {
-            area_size_index,
-            area,
-        };
-        let stored_area_bytes = serializer().serialize(&stored_area).unwrap();
-        file_backed.write(offset, &stored_area_bytes).unwrap();
-    }
-
-    fn write_header(
-        file_backed: &FileBacked,
-        size: u64,
-        root_addr: Option<LinearAddress>,
-        free_lists: FreeLists,
-    ) {
-        let mut header = NodeStoreHeader::new();
-        header.size = size;
-        header.root_address = root_addr;
-        header.free_lists = free_lists;
-        NodeStore::<Committed, FileBacked>::flush_header_inner(file_backed, &header).unwrap();
-    }
-
-    #[test]
-    // This test creates a simple trie and checks that the checker traverses it correctly.
-    // We use primitive calls here to do a low-level check.
-    // TODO: add a high-level test in the firewood crate
-    fn test_checker_traverse_correct_trie() {
-        let (file_backed, _) = test_utils::create_file_backed();
-
-        // set up a basic trie:
-        // -------------------------
-        // |     |  X  |  X  | ... |    Root node
-        // -------------------------
-        //    |
-        //    V
-        // -------------------------
-        // |  X  |     |  X  | ... |    Branch node
-        // -------------------------
-        //          |
-        //          V
-        // -------------------------
-        // |   [0,1] -> [3,4,5]    |    Leaf node
-        // -------------------------
-        let mut high_watermark = NodeStoreHeader::SIZE;
-        let leaf = Node::Leaf(LeafNode {
-            partial_path: Path::from([0, 1]),
-            value: Box::new([3, 4, 5]),
-        });
-        let leaf_addr = LinearAddress::new(high_watermark).unwrap();
-        let leaf_area = write_new_node(&file_backed, &leaf, high_watermark);
-        high_watermark += leaf_area;
-
-        let mut branch_children: [Option<Child>; BranchNode::MAX_CHILDREN] = Default::default();
-        branch_children[1] = Some(Child::AddressWithHash(leaf_addr, HashType::default()));
-        let branch = Node::Branch(Box::new(BranchNode {
-            partial_path: Path::from([0]),
-            value: None,
-            children: branch_children,
-        }));
-        let branch_addr = LinearAddress::new(high_watermark).unwrap();
-        let branch_area = write_new_node(&file_backed, &branch, high_watermark);
-        high_watermark += branch_area;
-
-        let mut root_children: [Option<Child>; BranchNode::MAX_CHILDREN] = Default::default();
-        root_children[0] = Some(Child::AddressWithHash(branch_addr, HashType::default()));
-        let root = Node::Branch(Box::new(BranchNode {
-            partial_path: Path::from([]),
-            value: None,
-            children: root_children,
-        }));
-        let root_addr = LinearAddress::new(high_watermark).unwrap();
-        let root_area = write_new_node(&file_backed, &root, high_watermark);
-        high_watermark += root_area;
-
-        write_header(
-            &file_backed,
-            high_watermark,
-            Some(root_addr),
-            Default::default(),
-        );
-
-        // verify that all of the space is accounted for - since there is no free area
-        let node_store = NodeStore::open(Arc::new(file_backed)).unwrap();
-        let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
-        node_store.traverse_trie(root_addr, &mut visited).unwrap();
-        let complement = visited.complement();
-        assert_eq!(complement.into_iter().collect::<Vec<_>>(), vec![]);
-    }
-
-    #[test]
-    fn test_traverse_correct_freelist() {
-        use rand::rngs::StdRng;
-        use rand::{Rng, SeedableRng, rng};
-
-        let seed = std::env::var("FIREWOOD_STORAGE_TEST_SEED")
-            .ok()
-            .map_or_else(
-                || None,
-                |s| {
-                    Some(
-                        str::parse(&s)
-                            .expect("couldn't parse FIREWOOD_STORAGE_TEST_SEED; must be a u64"),
-                    )
-                },
-            )
-            .unwrap_or_else(|| rng().random());
-
-        eprintln!("Seed {seed}: to rerun with this data, export FIREWOOD_STORAGE_TEST_SEED={seed}");
-        let mut rng = StdRng::seed_from_u64(seed);
-
-        let (file_backed, _) = test_utils::create_file_backed();
-
-        // write free areas
-        let area_sizes = AREA_SIZES;
-        let mut offset = NodeStoreHeader::SIZE;
-        let mut free_list: FreeLists = [None; NUM_AREA_SIZES];
-        let mut area_ends = HashMap::new();
-        for (area_index, area_size) in area_sizes.iter().enumerate() {
-            let mut next_free_block = None;
-            let num_free_areas = rng.random_range(0..10);
-            for _ in 0..num_free_areas {
-                let free_area = FreeArea { next_free_block };
-                write_free_area(&file_backed, free_area, *area_size, offset);
-                next_free_block = Some(LinearAddress::new(offset).unwrap());
-                offset += area_size;
-            }
-
-            area_ends.insert(area_size, LinearAddress::new(offset).unwrap());
-            free_list[area_index] = next_free_block;
-        }
-        let max_area_end = LinearAddress::new(offset).unwrap();
-
-        // write header
-        write_header(&file_backed, offset, None, free_list);
-
-        // test that the we traversed all the free areas
-        let node_store = NodeStore::open(Arc::new(file_backed)).unwrap();
-        let mut visited = LinearAddressRangeSet::new(offset).unwrap();
-        for area_size in area_sizes {
-            let area_end = area_ends[&area_size];
-            let prev_free_area_addr = free_list[area_size_to_index(area_size).unwrap() as usize];
-            node_store
-                .check_freelist(area_size, prev_free_area_addr, &mut visited)
-                .unwrap();
-            let complement = visited.complement();
-            let expected_complement = if area_end == max_area_end {
-                vec![]
-            } else {
-                vec![(area_end..max_area_end)]
-            };
-            assert_eq!(
-                complement.into_iter().collect::<Vec<_>>(),
-                expected_complement
-            );
-        }
     }
 }

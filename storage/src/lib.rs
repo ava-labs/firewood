@@ -15,6 +15,7 @@
 use std::ops::Range;
 use thiserror::Error;
 
+mod checker;
 mod hashednode;
 mod hashers;
 mod linear;
