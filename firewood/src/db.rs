@@ -526,7 +526,7 @@ mod test {
     use std::ops::{Deref, DerefMut};
     use std::path::PathBuf;
 
-    use crate::db::{Db, DbViewSyncBytes as _};
+    use crate::db::Db;
     use crate::v2::api::{Db as _, DbView as _, Error, Proposal as _};
 
     use super::{BatchOp, DbConfig};
@@ -745,9 +745,6 @@ mod test {
             .unwrap()
             .unwrap();
         assert_eq!(&*value, b"proposal_value");
-
-        // Clean up - commit the proposal to avoid it being dropped
-        proposal.commit().await.unwrap();
     }
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
