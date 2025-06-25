@@ -737,6 +737,10 @@ impl From<Result<Db, String>> for DatabaseCreationResult {
 /// This function is unsafe because it dereferences raw pointers.
 /// The caller must ensure that `result` is a valid nonnull pointer.
 ///
+/// # Panics
+///
+/// This function panics if `result` is `null`.
+///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_free_database_error_result(
     result: Option<&mut DatabaseCreationResult>,

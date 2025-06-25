@@ -189,6 +189,10 @@ struct Value fwd_drop_proposal(const struct DatabaseHandle *db, uint32_t proposa
  * This function is unsafe because it dereferences raw pointers.
  * The caller must ensure that `result` is a valid nonnull pointer.
  *
+ * # Panics
+ *
+ * This function panics if `result` is `null`.
+ *
  */
 void fwd_free_database_error_result(struct DatabaseCreationResult *result);
 
