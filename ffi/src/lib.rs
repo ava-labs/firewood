@@ -262,7 +262,7 @@ pub struct KeyValue {
 pub unsafe extern "C" fn fwd_batch(
     db: Option<&DatabaseHandle<'_>>,
     nkeys: usize,
-    values: &KeyValue,
+    values: Option<&KeyValue>,
 ) -> Value {
     batch(db, nkeys, values).unwrap_or_else(Into::into)
 }
@@ -296,9 +296,10 @@ fn convert_to_batch(values: &[KeyValue]) -> Vec<DbBatchOp<&[u8], &[u8]>> {
 fn batch(
     db: Option<&DatabaseHandle<'_>>,
     nkeys: usize,
-    values: &KeyValue,
+    values: Option<&KeyValue>,
 ) -> Result<Value, String> {
     let db = db.ok_or("db should be non-null")?;
+    let values = values.ok_or("key-value slice is null")?;
     let start = coarsetime::Instant::now();
 
     // Create a batch of operations to perform.
@@ -355,7 +356,7 @@ fn batch(
 pub unsafe extern "C" fn fwd_propose_on_db<'p>(
     db: Option<&'p DatabaseHandle<'p>>,
     nkeys: usize,
-    values: &KeyValue,
+    values: Option<&KeyValue>,
 ) -> Value {
     // Note: the id is guaranteed to be non-zero
     // because we use an atomic counter that starts at 1.
@@ -367,9 +368,10 @@ pub unsafe extern "C" fn fwd_propose_on_db<'p>(
 fn propose_on_db<'p>(
     db: Option<&'p DatabaseHandle<'p>>,
     nkeys: usize,
-    values: &KeyValue,
+    values: Option<&KeyValue>,
 ) -> Result<Value, String> {
     let db = db.ok_or("db should be non-null")?;
+    let values = values.ok_or("key-value slice is null")?;
     // Create a batch of operations to perform.
     let key_value_ref = unsafe { std::slice::from_raw_parts(values, nkeys) };
     let batch = convert_to_batch(key_value_ref);
@@ -421,7 +423,7 @@ pub unsafe extern "C" fn fwd_propose_on_proposal(
     db: Option<&DatabaseHandle<'_>>,
     proposal_id: ProposalId,
     nkeys: usize,
-    values: &KeyValue,
+    values: Option<&KeyValue>,
 ) -> Value {
     // Note: the id is guaranteed to be non-zero
     // because we use an atomic counter that starts at 1.
@@ -434,9 +436,10 @@ fn propose_on_proposal(
     db: Option<&DatabaseHandle<'_>>,
     proposal_id: ProposalId,
     nkeys: usize,
-    values: &KeyValue,
+    values: Option<&KeyValue>,
 ) -> Result<Value, String> {
     let db = db.ok_or("db should be non-null")?;
+    let values = values.ok_or("key-value slice is null")?;
     // Create a batch of operations to perform.
     let key_value_ref = unsafe { std::slice::from_raw_parts(values, nkeys) };
     let batch = convert_to_batch(key_value_ref);
@@ -679,7 +682,8 @@ impl From<()> for Value {
 ///
 /// This function panics if `value` is `null`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_free_value(value: &mut Value) {
+pub unsafe extern "C" fn fwd_free_value(value: Option<&mut Value>) {
+    let value = value.expect("value should be non-null");
     if let Some(data) = value.data {
         let data_ptr = data.as_ptr();
         // We assume that if the length is 0, then the data is a null-terminated string.
@@ -734,7 +738,10 @@ impl From<Result<Db, String>> for DatabaseCreationResult {
 /// The caller must ensure that `result` is a valid nonnull pointer.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_free_database_error_result(result: &mut DatabaseCreationResult) {
+pub unsafe extern "C" fn fwd_free_database_error_result(
+    result: Option<&mut DatabaseCreationResult>,
+) {
+    let result = result.expect("result should be non-null");
     // Free the error string if it exists
     if let Some(nonnull) = result.error_str {
         let raw_str = nonnull.cast::<c_char>().as_ptr();
