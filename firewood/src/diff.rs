@@ -155,30 +155,31 @@ impl std::ops::DerefMut for IterStack {
     }
 }
 
+// This is the initial state for comparing two nodes. They are unvisited.
+// For branches, this means we haven't looked at the k/v pair in the branch
+// nor have we looked at any of the children.
+// For leaves, this means we haven't looked at the k/v pair in the leaf.
+
+// There are 4 possibilities:
+// 1. Both nodes are branches:
+// .  Process the branch k/v, then transition to VisitedPairState
+// 2. Both nodes are leaves:
+// .  Process the leaf k/v, then pop the stack
+// 3. Left node is a branch, right node is a leaf:
+// .  Compare the branch k/v with the leaf k/v. If they have the same
+// .  partial path, then everything except for this leaf is deleted,
+// .  and we transition to VisitedLeftState with the leaf excluded
+// 4. Left node is a leaf, right node is a branch:
+// .  Compare the leaf k/v with the branch k/v. If they have the same
+// .  partial path, then everything except for this leaf is added,
+// .  and we transition to VisitedRightState with the leaf excluded
+#[allow(clippy::too_many_lines)] // for now
 impl UnvisitedStateVisitor for UnvisitedNodePairState {
     fn visit(
         self,
         key: &Path,
         iter_stack: &mut IterStack,
     ) -> Result<Option<BatchOp<Key, Value>>, FileIoError> {
-        // This is the initial state for comparing two nodes. They are unvisited.
-        // For branches, this means we haven't looked at the k/v pair in the branch
-        // nor have we looked at any of the children.
-        // For leaves, this means we haven't looked at the k/v pair in the leaf.
-
-        // There are 4 possibilities:
-        // 1. Both nodes are branches:
-        // .  Process the branch k/v, then transition to VisitedPairState
-        // 2. Both nodes are leaves:
-        // .  Process the leaf k/v, then pop the stack
-        // 3. Left node is a branch, right node is a leaf:
-        // .  Compare the branch k/v with the leaf k/v. If they have the same
-        // .  partial path, then everything except for this leaf is deleted,
-        // .  and we transition to VisitedLeftState with the leaf excluded
-        // 4. Left node is a leaf, right node is a branch:
-        // .  Compare the leaf k/v with the branch k/v. If they have the same
-        // .  partial path, then everything except for this leaf is added,
-        // .  and we transition to VisitedRightState with the leaf excluded
 
         trace!(
             "visiting Unvisited node pair at {key:x?} (depth: {})",
@@ -640,6 +641,7 @@ impl StateVisitor for VisitedNodeLeftState {
     }
 }
 
+#[allow(clippy::pedantic, clippy::arithmetic_side_effects)]
 impl StateVisitor for VisitedNodePairState {
     fn visit<L: TrieReader, R: TrieReader>(
         mut self,
@@ -1523,7 +1525,7 @@ mod tests {
     #[test_case(false, true, 500)]
     #[test_case(true, false, 500)]
     #[test_case(true, true, 500)]
-    #[allow(clippy::indexing_slicing)]
+    #[allow(clippy::indexing_slicing, clippy::cast_precision_loss)]
     fn diff_random_with_deletions(trie1_mutable: bool, trie2_mutable: bool, num_items: usize) {
         use rand::rngs::StdRng;
         use rand::{Rng, SeedableRng};
@@ -1651,6 +1653,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::pedantic)]
     fn test_hash_optimization_reduces_node_reads() {
         // This test focuses specifically on validating that hash optimization reduces node reads
         // by comparing baseline full-traversal reads vs optimized diff operation reads.
@@ -2112,6 +2115,7 @@ mod tests {
     #[test_case(false, false, 1, 1)] // diff value, m1->m2: put prefix/a, delete prefix/b
     #[test_case(true, true, 1, 0)] // same value, m2->m1: no change to prefix/a, add prefix/b
     #[test_case(false, true, 2, 0)] // diff value, m2->m1: update prefix/a, add prefix/b
+    #[allow(clippy::arithmetic_side_effects)]
     fn test_branch_vs_leaf_empty_partial_path_bug(
         same_value: bool,
         backwards: bool,
