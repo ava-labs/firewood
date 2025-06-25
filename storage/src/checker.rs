@@ -1,5 +1,8 @@
 use crate::range_set::LinearAddressRangeSet;
-use crate::{CheckerError, Committed, LinearAddress, Node, NodeReader, NodeStore, WritableStorage};
+use crate::{
+    CheckerError, Committed, HashedNodeReader, LinearAddress, Node, NodeReader, NodeStore,
+    WritableStorage,
+};
 
 /// [`NodeStore`] checker
 // TODO: S needs to be writeable if we ask checker to fix the issues
@@ -16,7 +19,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     pub fn check(&self) -> Result<(), CheckerError> {
         // 1. Check the header
         let db_size = self.size();
-        let file_size = self.storage.size()?;
+        let file_size = self.get_physical_size()?;
         if db_size < file_size {
             return Err(CheckerError::InvalidDBSize {
                 db_size,
