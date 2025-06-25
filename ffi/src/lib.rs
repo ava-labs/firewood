@@ -735,7 +735,7 @@ impl From<Result<Db, String>> for DatabaseCreationResult {
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers.
-/// The caller must ensure that `result` is a valid nonnull pointer.
+/// The caller must ensure that `result` is a valid pointer.
 ///
 /// # Panics
 ///
