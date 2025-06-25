@@ -92,6 +92,7 @@ impl Deref for DatabaseHandle<'_> {
 ///  * ensure that `db` is a valid pointer returned by `open_db`
 ///  * ensure that `key` is a valid pointer to a `Value` struct
 ///  * call `free_value` to free the memory associated with the returned `Value`
+///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_get_latest(db: Option<&DatabaseHandle<'_>>, key: Value) -> Value {
     get_latest(db, &key).unwrap_or_else(Into::into)
@@ -138,6 +139,7 @@ fn get_latest(db: Option<&DatabaseHandle<'_>>, key: &Value) -> Result<Value, Str
 ///  * ensure that `db` is a valid pointer returned by `open_db`
 ///  * ensure that `key` is a valid pointer to a `Value` struct
 ///  * call `free_value` to free the memory associated with the returned `Value`
+///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_get_from_proposal(
     db: Option<&DatabaseHandle<'_>>,
@@ -191,6 +193,7 @@ fn get_from_proposal(
 /// * ensure that `key` is a valid pointer to a `Value` struct
 /// * ensure that `root` is a valid pointer to a `Value` struct
 /// * call `free_value` to free the memory associated with the returned `Value`
+///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_get_from_root(
     db: Option<&DatabaseHandle<'_>>,
@@ -681,6 +684,7 @@ impl From<()> for Value {
 /// # Panics
 ///
 /// This function panics if `value` is `null`.
+///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_free_value(value: Option<&mut Value>) {
     let value = value.expect("value should be non-null");
