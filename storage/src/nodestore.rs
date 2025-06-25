@@ -1589,9 +1589,13 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 pub(crate) mod nodestore_test_utils {
     use super::*;
 
-    pub(crate) const AREA_SIZES: [u64; crate::nodestore::NUM_AREA_SIZES] =
-        crate::nodestore::AREA_SIZES;
-    pub(crate) const NUM_AREA_SIZES: usize = crate::nodestore::NUM_AREA_SIZES;
+    pub(crate) const fn area_sizes() -> &'static [u64] {
+        &AREA_SIZES
+    }
+
+    pub(crate) const fn num_area_sizes() -> usize {
+        NUM_AREA_SIZES
+    }
 
     // Helper function to wrap the node in a StoredArea and write it to the given offset. Returns the size of the area on success.
     #[allow(clippy::cast_possible_truncation)]

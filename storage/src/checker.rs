@@ -168,7 +168,7 @@ mod test {
             &nodestore,
             Some(root_addr),
             high_watermark,
-            [None; NUM_AREA_SIZES],
+            Default::default(),
         );
 
         // verify that all of the space is accounted for - since there is no free area
@@ -203,11 +203,10 @@ mod test {
         let nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
 
         // write free areas
-        let area_sizes = AREA_SIZES;
         let mut high_watermark = NodeStoreHeader::SIZE;
-        let mut free_list: FreeLists = [None; NUM_AREA_SIZES];
+        let mut free_list: FreeLists = [None; num_area_sizes()];
         let mut area_ends = HashMap::new();
-        for (area_index, area_size) in area_sizes.iter().enumerate() {
+        for (area_index, area_size) in area_sizes().iter().enumerate() {
             let mut next_free_block = None;
             let num_free_areas = rng.random_range(0..10);
             for _ in 0..num_free_areas {
@@ -227,11 +226,11 @@ mod test {
 
         // test that the we traversed all the free areas
         let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
-        for area_size in area_sizes {
+        for area_size in area_sizes() {
             let area_end = area_ends[&area_size];
-            let prev_free_area_addr = free_list[area_size_to_index(area_size).unwrap() as usize];
+            let prev_free_area_addr = free_list[area_size_to_index(*area_size).unwrap() as usize];
             nodestore
-                .check_freelist(area_size, prev_free_area_addr, &mut visited)
+                .check_freelist(*area_size, prev_free_area_addr, &mut visited)
                 .unwrap();
             let complement = visited.complement();
             let expected_complement = if area_end == max_area_end {
