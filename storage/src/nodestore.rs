@@ -49,7 +49,7 @@ use crate::hashednode::hash_node;
 use crate::node::{ByteCounter, Node};
 use crate::{
     CacheReadStrategy, Child, FileBacked, HashType, Path, ReadableStorage, SharedNode, TrieHash,
-    firewood_metric,
+    firewood_counter,
 };
 
 use super::linear::WritableStorage;
@@ -540,12 +540,12 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 // Update the free list to point to the next free block.
                 *free_stored_area_addr = free_head.next_free_block;
             }
-            firewood_metric!(
+            firewood_counter!(
                 "firewood.space.reused",
                 "Bytes reused from free list by index",
                 "index" => index_name(index as u8)
             ).increment(AREA_SIZES[index]);
-            firewood_metric!(
+            firewood_counter!(
                 "firewood.space.wasted",
                 "Bytes wasted from free list by index",
                 "index" => index_name(index as u8)
@@ -557,7 +557,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         }
 
         trace!("No free blocks of sufficient size {index_wanted} found");
-        firewood_metric!(
+        firewood_counter!(
                 "firewood.space.from_end",
                 "Space allocated from end of nodestore",
                 "index" => index_name(index_wanted as u8)
@@ -624,13 +624,13 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         debug_assert!(addr.get() % 8 == 0);
 
         let (area_size_index, _) = self.area_index_and_size(addr)?;
-        trace!("Deleting node at {addr:?} of size {area_size_index}");
-        firewood_metric!(
+        trace!("Deleting node at {addr:?} of size {}", area_size_index);
+        firewood_counter!(
                 "firewood.delete_node",
                 "Node deleted from nodestore",
                 "index" => index_name(area_size_index)
             ).increment(1);
-        firewood_metric!(
+        firewood_counter!(
                 "firewood.space.freed",
                 "Space freed in nodestore",
                 "index" => index_name(area_size_index)
