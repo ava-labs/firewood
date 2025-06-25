@@ -597,14 +597,13 @@ pub struct Value {
 
 impl Display for Value {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match (self.len, self.data.is_none()) {
-            (0, true) => write!(f, "[not found]"),
-            (0, false) => write!(f, "[error] {}", unsafe {
-                CStr::from_ptr(self.data.expect("checked is some").as_ptr() as *const c_char)
-                    .to_string_lossy()
+        match (self.len, self.data) {
+            (0, None) => write!(f, "[not found]"),
+            (0, Some(data)) => write!(f, "[error] {}", unsafe {
+                CStr::from_ptr(data.as_ptr() as *const c_char).to_string_lossy()
             }),
-            (len, true) => write!(f, "[id] {len}"),
-            (_, false) => write!(f, "[data] {:?}", self.as_slice()),
+            (len, None) => write!(f, "[id] {len}"),
+            (_, Some(data)) => write!(f, "[data] {data:?}"),
         }
     }
 }
