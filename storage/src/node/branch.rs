@@ -10,10 +10,6 @@
     reason = "Found 2 occurrences after enabling the lint."
 )]
 #![expect(
-    clippy::match_same_arms,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-#![expect(
     clippy::missing_panics_doc,
     reason = "Found 2 occurrences after enabling the lint."
 )]
@@ -261,12 +257,12 @@ impl<'de> Deserialize<'de> for BranchNode {
 impl Debug for BranchNode {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "[BranchNode")?;
-        write!(f, r#" path="{:?}""#, self.partial_path)?;
+        write!(f, r#" path="{:x?}""#, self.partial_path)?;
 
         for (i, c) in self.children.iter().enumerate() {
             match c {
                 None => {}
-                Some(Child::Node(_)) => {} //TODO
+                Some(Child::Node(node)) => write!(f, "({i:?}: node={node:?})")?,
                 Some(Child::AddressWithHash(addr, hash)) => {
                     write!(f, "({i:?}: address={addr:?} hash={hash})")?;
                 }

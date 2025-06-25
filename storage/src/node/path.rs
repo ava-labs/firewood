@@ -25,7 +25,7 @@ static NIBBLES: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
 
 /// Path is part or all of a node's path in the trie.
 /// Each element is a nibble.
-#[derive(PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Clone, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct Path(pub SmallVec<[u8; 64]>);
 
 impl Debug for Path {
@@ -126,6 +126,16 @@ impl Path {
     #[must_use]
     pub fn bytes(&self) -> Box<[u8]> {
         self.bytes_iter().collect()
+    }
+}
+
+impl std::ops::Add<Path> for Path {
+    type Output = Path;
+
+    fn add(self, other: Path) -> Self::Output {
+        let mut new_path = self;
+        new_path.extend(other.iter().copied());
+        new_path
     }
 }
 
