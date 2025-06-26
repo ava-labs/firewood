@@ -607,7 +607,7 @@ impl Display for Value {
                 CStr::from_ptr(data.as_ptr() as *const c_char).to_string_lossy()
             }),
             (len, None) => write!(f, "[id] {len}"),
-            (_, Some(data)) => write!(f, "[data] {data:?}"),
+            (_, Some(_)) => write!(f, "[data] {:?}", self.as_slice()),
         }
     }
 }
