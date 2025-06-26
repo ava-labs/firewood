@@ -11,7 +11,9 @@ use crate::nodestore::NodeStoreHeader;
 use crate::{CheckerError, LinearAddress};
 
 #[derive(Debug)]
-pub struct RangeSet<T>(BTreeMap<T, T>); // end --> start so that we can look up ranges by its start
+// BTreeMap: range end --> range start
+// To check if a value is in the range set, we will find the range with the smallest end that is greater than or equal to the given value
+pub struct RangeSet<T>(BTreeMap<T, T>);
 
 struct CoalescingRanges<'a, T> {
     prev_adjacent_range: Option<Range<&'a T>>,
