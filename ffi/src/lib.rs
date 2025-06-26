@@ -16,7 +16,9 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 
-use firewood::db::{BatchOp as DbBatchOp, Db, DbConfig, DbViewSync as _, Proposal};
+use firewood::db::{
+    BatchOp as DbBatchOp, Db, DbConfig, DbViewSync as _, DbViewSyncBytes as _, Proposal,
+};
 use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
 
 use metrics::counter;
@@ -114,7 +116,7 @@ fn get_latest(db: Option<&DatabaseHandle<'_>>, key: &Value) -> Result<Value, Str
 
     // Get value associated with key.
     let value = rev
-        .val_sync(key.as_slice())
+        .val_sync_bytes(key.as_slice())
         .map_err(|e| e.to_string())?
         .ok_or("")?;
     Ok(value.into())
@@ -173,7 +175,9 @@ fn get_from_proposal(
     Ok(value.into())
 }
 
-/// Gets a value assoicated with the given historical root hash and key.
+/// Gets a value assoicated with the given root hash and key.
+///
+/// The hash may refer to a historical revision or an existing proposal.
 ///
 /// # Arguments
 ///
@@ -213,12 +217,12 @@ fn get_from_root(
     let db = db.ok_or("db should be non-null")?;
     // Get the revision associated with the root hash.
     let rev = db
-        .revision_sync(root.as_slice().try_into()?)
+        .view_sync(root.as_slice().try_into()?)
         .map_err(|e| e.to_string())?;
 
     // Get value associated with key.
     let value = rev
-        .val_sync(key.as_slice())
+        .val_sync_bytes(key.as_slice())
         .map_err(|e| e.to_string())?
         .ok_or("")?;
     Ok(value.into())
