@@ -623,18 +623,12 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
 }
 
 impl<S: WritableStorage> NodeStore<Committed, S> {
-    /// Deletes the [Node] at the given address, updating the next pointer at
-    /// the given addr, and changing the header of this committed nodestore to
-    /// have the address on the freelist
-    pub fn delete_node(&mut self, addr: LinearAddress) -> Result<(), FileIoError> {
-        debug_assert!(addr.get() % 8 == 0);
-
-        let (area_size_index, _) = self.area_index_and_size(addr)?;
-        trace!("Deleting node at {addr:?} of size {area_size_index}");
-        counter!("firewood.delete_node", "index" => index_name(area_size_index)).increment(1);
-        counter!("firewood.space.freed", "index" => index_name(area_size_index))
-            .increment(AREA_SIZES[area_size_index as usize]);
-
+    // Free the area at the given address and update the freelist
+    pub(crate) fn free_area(
+        &mut self,
+        addr: LinearAddress,
+        area_size_index: u8,
+    ) -> Result<(), FileIoError> {
         // The area that contained the node is now free.
         let area: Area<Node, FreeArea> = Area::Free(FreeArea {
             next_free_block: self.header.free_lists[area_size_index as usize],
@@ -661,6 +655,22 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         // The newly freed block is now the head of the free list.
         self.header.free_lists[area_size_index as usize] = Some(addr);
 
+        Ok(())
+    }
+
+    /// Deletes the [Node] at the given address, updating the next pointer at
+    /// the given addr, and changing the header of this committed nodestore to
+    /// have the address on the freelist
+    pub fn delete_node(&mut self, addr: LinearAddress) -> Result<(), FileIoError> {
+        debug_assert!(addr.get() % 8 == 0);
+
+        let (area_size_index, _) = self.area_index_and_size(addr)?;
+        trace!("Deleting node at {addr:?} of size {area_size_index}");
+        counter!("firewood.delete_node", "index" => index_name(area_size_index)).increment(1);
+        counter!("firewood.space.freed", "index" => index_name(area_size_index))
+            .increment(AREA_SIZES[area_size_index as usize]);
+
+        self.free_area(addr, area_size_index)?;
         Ok(())
     }
 }

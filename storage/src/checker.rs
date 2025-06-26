@@ -4,6 +4,8 @@ use crate::{
     WritableStorage,
 };
 
+use std::ops::Range;
+
 /// [`NodeStore`] checker
 // TODO: S needs to be writeable if we ask checker to fix the issues
 impl<S: WritableStorage> NodeStore<Committed, S> {
@@ -16,7 +18,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Returns a [`CheckerError`] if the database is inconsistent.
     // TODO: report all errors, not just the first one
     // TODO: add merkle hash checks as well
-    pub fn check(&self) -> Result<(), CheckerError> {
+    pub fn check(&mut self) -> Result<(), CheckerError> {
         // 1. Check the header
         let db_size = self.size();
         let file_size = self.get_physical_size()?;
@@ -46,7 +48,9 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         }
 
         // 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
-        let _ = visited.complement(); // TODO
+        for leaked in visited.complement() {
+            self.free_leaked(leaked)?;
+        }
 
         Ok(())
     }
@@ -91,6 +95,35 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                 });
             }
             cur_free_area_addr = next_free_area_addr;
+        }
+
+        Ok(())
+    }
+
+    /// Go through the leaked areas and put them onto the free list
+    fn free_leaked(&mut self, leaked: Range<LinearAddress>) -> Result<(), CheckerError> {
+        let mut current_addr = leaked.start;
+        loop {
+            let (area_size_index, area_size) = self.area_index_and_size(current_addr)?;
+            self.free_area(current_addr, area_size_index)?;
+            let Some(next_addr) = current_addr.checked_add(area_size) else {
+                return Err(CheckerError::AreaOutOfBounds {
+                    start: current_addr,
+                    size: area_size,
+                    bounds: leaked,
+                });
+            };
+            if next_addr == leaked.end {
+                break;
+            } else if next_addr > leaked.end {
+                // the last area extends beyond the leaked area - this means the leaked area overlaps with an area we have visited
+                return Err(CheckerError::AreaIntersects {
+                    start: current_addr,
+                    size: area_size,
+                    intersection: vec![(leaked.end..next_addr)],
+                });
+            }
+            current_addr = next_addr;
         }
 
         Ok(())
