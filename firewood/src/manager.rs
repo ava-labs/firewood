@@ -179,6 +179,7 @@ impl RevisionManager {
     /// 8. Proposal Cleanup.
     ///    Any other proposals that have this proposal as a parent should be reparented to the committed version.
     #[fastrace::trace(short_name = true)]
+    #[crate::metrics("firewood.proposal.commit", "proposal commit to storage")]
     pub fn commit(&mut self, proposal: ProposedRevision) -> Result<(), RevisionManagerError> {
         // 1. Commit check
         let current_revision = self.current_revision();
@@ -256,6 +257,26 @@ impl RevisionManager {
 impl RevisionManager {
     pub fn add_proposal(&mut self, proposal: ProposedRevision) {
         self.proposals.push(proposal);
+    }
+
+    pub fn view(
+        &self,
+        root_hash: HashKey,
+    ) -> Result<Box<dyn crate::db::DbViewSyncBytes>, RevisionManagerError> {
+        // First try to find it in committed revisions
+        if let Ok(committed) = self.revision(root_hash.clone()) {
+            return Ok(Box::new(committed));
+        }
+
+        // If not found in committed revisions, try proposals
+        let proposal = self
+            .proposals
+            .iter()
+            .find(|p| p.root_hash().as_ref() == Some(&root_hash))
+            .cloned()
+            .ok_or(RevisionManagerError::RevisionNotFound)?;
+
+        Ok(Box::new(proposal))
     }
 
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
