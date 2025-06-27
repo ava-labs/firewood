@@ -49,17 +49,17 @@ ethhash = [ "firewood-storage/ethhash" ]
 
 [dev-dependencies]
 firewood-triehash = { version = "0.0.7", path = "../triehash" }
-criterion = { version = "0.6.0", features = ["async_tokio"] }
-rand = "0.9.0"
+criterion = { workspace = true, features = ["async_tokio"] }
+rand = { workspace = true }
 rand_distr = "0.5.0"
 clap = { version = "4.5.0", features = ['derive'] }
-pprof = { version = "0.15.0", features = ["flamegraph"] }
-tempfile = "3.12.0"
+pprof = { workspace = true, features = ["flamegraph"] }
+tempfile = { workspace = true }
 tokio = { version = "1.36.0", features = ["rt", "sync", "macros", "rt-multi-thread"] }
-ethereum-types = "0.15.1"
+ethereum-types = { workspace = true }
 sha3 = "0.10.8"
 plain_hasher = "0.2.3"
-hex-literal = "1.0.0"
+hex-literal = { workspace = true }
 env_logger = "0.11.7"
 hash-db = "0.16.0"
 
