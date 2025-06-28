@@ -14,13 +14,14 @@ use std::ops::Deref;
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use firewood::db::{
-    BatchOp as DbBatchOp, Db, DbConfig, DbViewSync as _, DbViewSyncBytes as _, Proposal,
+    BatchOp as DbBatchOp, Db, DbConfig, DbViewSync as _, DbViewSyncBytes, Proposal,
 };
 use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
 
+use firewood::v2::api::HashKey;
 use metrics::counter;
 
 #[doc(hidden)]
@@ -54,6 +55,7 @@ pub struct DatabaseHandle<'p> {
     proposals: RwLock<HashMap<ProposalId, Arc<Proposal<'p>>>>,
     /// The database
     db: Db,
+    cached_view: Mutex<Option<(HashKey, Box<dyn DbViewSyncBytes>)>>,
 }
 
 impl From<Db> for DatabaseHandle<'_> {
@@ -61,6 +63,7 @@ impl From<Db> for DatabaseHandle<'_> {
         Self {
             db,
             proposals: RwLock::new(HashMap::new()),
+            cached_view: Mutex::new(None),
         }
     }
 }
@@ -215,17 +218,42 @@ fn get_from_root(
     key: &Value,
 ) -> Result<Value, String> {
     let db = db.ok_or("db should be non-null")?;
-    // Get the revision associated with the root hash.
+    let requested_root = root.as_slice().try_into()?;
+    let mut cached_view = db.cached_view.lock().expect("cached_view lock is poisoned");
+    let value = match cached_view.as_ref() {
+        // found the cached view, use it
+        Some((root_hash, view)) if root_hash == &requested_root => {
+            view.val_sync_bytes(key.as_slice())
+        }
+        // found a cached view, but it's for a different root, so we need to get a new view
+        Some(_) => {
+            let rev = view_sync_from_root(db, root)?;
+            let result = rev.val_sync_bytes(key.as_slice());
+            *cached_view = Some((requested_root.clone(), rev));
+            result
+        }
+        // there was no cached view, so either we're just starting up or we just
+        // committed a new proposal. Either way, we need to get a new view.
+        None => {
+            let rev = view_sync_from_root(db, root)?;
+            let result = rev.val_sync_bytes(key.as_slice());
+            *cached_view = Some((requested_root.clone(), rev));
+            result
+        }
+    }
+    .map_err(|e| e.to_string())?
+    .ok_or("")?;
+
+    Ok(value.into())
+}
+fn view_sync_from_root(
+    db: &DatabaseHandle<'_>,
+    root: &Value,
+) -> Result<Box<dyn DbViewSyncBytes>, String> {
     let rev = db
         .view_sync(root.as_slice().try_into()?)
         .map_err(|e| e.to_string())?;
-
-    // Get value associated with key.
-    let value = rev
-        .val_sync_bytes(key.as_slice())
-        .map_err(|e| e.to_string())?
-        .ok_or("")?;
-    Ok(value.into())
+    Ok(rev)
 }
 
 /// A `KeyValue` represents a key-value pair, passed to the FFI.
@@ -509,7 +537,30 @@ fn commit(db: Option<&DatabaseHandle<'_>>, proposal_id: u32) -> Result<(), Strin
         .map_err(|_| "proposal lock is poisoned")?
         .remove(&proposal_id)
         .ok_or("proposal not found")?;
-    proposal.commit_sync().map_err(|e| e.to_string())
+
+    // Get the proposal hash and cache the view
+    let proposal_hash = proposal
+        .root_hash_sync()
+        .map_err(|e| e.to_string())?
+        .ok_or("proposal root hash not found")?;
+
+    let mut guard = db.cached_view.lock().expect("cached_view lock is poisoned");
+    match db.view_sync(proposal_hash.clone()) {
+        Ok(view) => *guard = Some((proposal_hash, view)),
+        Err(_) => *guard = None, // Clear cache on error
+    }
+    drop(guard);
+
+    // Commit the proposal
+    let result = proposal.commit_sync().map_err(|e| e.to_string());
+
+    // Clear the cache, which will force readers after this point to find the committed root hash
+    db.cached_view
+        .lock()
+        .expect("cached_view lock is poisoned")
+        .take();
+
+    result
 }
 
 /// Drops a proposal from the database.
