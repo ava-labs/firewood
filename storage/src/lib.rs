@@ -122,6 +122,19 @@ pub enum CheckerError {
         intersection: Vec<Range<LinearAddress>>,
     },
 
+    /// Freelist area size does not match
+    #[error(
+        "Free area {address} has miss matching size: has {size} bytes but is in freelist {freelist_size}"
+    )]
+    FreelistAreaSizeMismatch {
+        /// Address of the free area
+        address: LinearAddress,
+        /// Actual size of the free area
+        size: u64,
+        /// Expected size corresponding to the freelist
+        freelist_size: u64,
+    },
+
     /// IO error
     #[error("IO error")]
     IO(#[from] FileIoError),

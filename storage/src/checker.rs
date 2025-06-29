@@ -41,6 +41,12 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         }
 
         // 3. check the free list - this can happen in parallel with the trie traversal
+        let freelists = self.get_free_lists();
+        for (area_idx, head_addr) in freelists.iter().enumerate() {
+            #[allow(clippy::cast_possible_truncation)]
+            let area_size = Self::size_from_area_index(area_idx as u8);
+            self.check_freelist(area_size, *head_addr, &mut visited)?;
+        }
 
         // 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
         let _ = visited.complement(); // TODO
@@ -66,16 +72,46 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
         Ok(())
     }
+
+    /// Traverse all the free areas in the freelist
+    fn check_freelist(
+        &self,
+        freelist_area_size: u64,
+        head_addr: Option<LinearAddress>,
+        visited: &mut LinearAddressRangeSet,
+    ) -> Result<(), CheckerError> {
+        let mut cur_free_area_addr = head_addr;
+        while let Some(free_area_addr) = cur_free_area_addr {
+            visited.insert_area(free_area_addr, freelist_area_size)?;
+            let (free_head, read_index) =
+                self.read_free_area_with_area_index_from_disk(free_area_addr)?;
+            let free_area_size = Self::size_from_area_index(read_index);
+            let next_free_area_addr = free_head.get_next_free_block();
+            if free_area_size != freelist_area_size {
+                return Err(CheckerError::FreelistAreaSizeMismatch {
+                    address: free_area_addr,
+                    size: free_area_size,
+                    freelist_size: freelist_area_size,
+                });
+            }
+            cur_free_area_addr = next_free_area_addr;
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod test {
     #![expect(clippy::unwrap_used)]
+    #![expect(clippy::indexing_slicing)]
+
+    use std::collections::HashMap;
 
     use super::*;
     use crate::linear::memory::MemStore;
-    use crate::nodestore::NodeStoreHeader;
-    use crate::nodestore::nodestore_test_utils::{write_header, write_new_node};
+    use crate::nodestore::nodestore_test_utils::*;
+    use crate::nodestore::{FreeLists, NodeStoreHeader};
     use crate::{BranchNode, Child, HashType, LeafNode, NodeStore, Path};
 
     #[test]
@@ -132,12 +168,83 @@ mod test {
         high_watermark += root_area;
 
         // write the header
-        write_header(&nodestore, root_addr, high_watermark);
+        write_header(
+            &nodestore,
+            high_watermark,
+            Some(root_addr),
+            Default::default(),
+        );
 
         // verify that all of the space is accounted for - since there is no free area
         let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
         nodestore.traverse_trie(root_addr, &mut visited).unwrap();
         let complement = visited.complement();
         assert_eq!(complement.into_iter().collect::<Vec<_>>(), vec![]);
+    }
+
+    #[test]
+    fn test_traverse_correct_freelist() {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng, rng};
+
+        let seed = std::env::var("FIREWOOD_STORAGE_TEST_SEED")
+            .ok()
+            .map_or_else(
+                || None,
+                |s| {
+                    Some(
+                        str::parse(&s)
+                            .expect("couldn't parse FIREWOOD_STORAGE_TEST_SEED; must be a u64"),
+                    )
+                },
+            )
+            .unwrap_or_else(|| rng().random());
+
+        eprintln!("Seed {seed}: to rerun with this data, export FIREWOOD_STORAGE_TEST_SEED={seed}");
+        let mut rng = StdRng::seed_from_u64(seed);
+
+        let memstore = MemStore::new(vec![]);
+        let nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+
+        // write free areas
+        let mut high_watermark = NodeStoreHeader::SIZE;
+        let mut free_list: FreeLists = Default::default();
+        let mut area_ends = HashMap::new();
+        for (area_index, area_size) in area_sizes().iter().enumerate() {
+            let mut next_free_block = None;
+            let num_free_areas = rng.random_range(0..10);
+            for _ in 0..num_free_areas {
+                write_free_area(&nodestore, next_free_block, *area_size, high_watermark);
+                next_free_block = Some(LinearAddress::new(high_watermark).unwrap());
+                high_watermark += area_size;
+            }
+
+            area_ends.insert(area_size, LinearAddress::new(high_watermark).unwrap());
+            free_list[area_index] = next_free_block;
+        }
+        let max_area_end = LinearAddress::new(high_watermark).unwrap();
+
+        // write header
+        write_header(&nodestore, high_watermark, None, free_list);
+
+        // test that the we traversed all the free areas
+        let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
+        for area_size in area_sizes() {
+            let area_end = area_ends[&area_size];
+            let prev_free_area_addr = free_list[area_size_to_index(*area_size).unwrap() as usize];
+            nodestore
+                .check_freelist(*area_size, prev_free_area_addr, &mut visited)
+                .unwrap();
+            let complement = visited.complement();
+            let expected_complement = if area_end == max_area_end {
+                vec![]
+            } else {
+                vec![(area_end..max_area_end)]
+            };
+            assert_eq!(
+                complement.into_iter().collect::<Vec<_>>(),
+                expected_complement
+            );
+        }
     }
 }
