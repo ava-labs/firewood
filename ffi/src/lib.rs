@@ -53,9 +53,12 @@ pub struct DatabaseHandle<'p> {
     // Keep proposals first, as they must be dropped before the database handle is dropped due to lifetime
     // issues.
     proposals: RwLock<HashMap<ProposalId, Arc<Proposal<'p>>>>,
+
+    /// A single cached view to improve performance of reads while committing
+    cached_view: Mutex<Option<(HashKey, Box<dyn DbViewSyncBytes>)>>,
+
     /// The database
     db: Db,
-    cached_view: Mutex<Option<(HashKey, Box<dyn DbViewSyncBytes>)>>,
 }
 
 impl From<Db> for DatabaseHandle<'_> {
@@ -65,6 +68,15 @@ impl From<Db> for DatabaseHandle<'_> {
             proposals: RwLock::new(HashMap::new()),
             cached_view: Mutex::new(None),
         }
+    }
+}
+
+impl DatabaseHandle<'_> {
+    fn clear_cached_view(&self) {
+        self.cached_view
+            .lock()
+            .expect("cached_view lock is poisoned")
+            .take();
     }
 }
 
@@ -554,10 +566,7 @@ fn commit(db: Option<&DatabaseHandle<'_>>, proposal_id: u32) -> Result<(), Strin
     let result = proposal.commit_sync().map_err(|e| e.to_string());
 
     // Clear the cache, which will force readers after this point to find the committed root hash
-    db.cached_view
-        .lock()
-        .expect("cached_view lock is poisoned")
-        .take();
+    db.clear_cached_view();
 
     result
 }
@@ -933,9 +942,26 @@ fn manager_config(
 /// # Arguments
 ///
 /// * `db` - The database handle to close, previously returned from a call to `open_db()`
+///
+/// # Panics
+///
+/// This function panics if:
+/// * `db` is `None` (null pointer)
+/// * A lock is poisoned
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_close_db(db: *mut DatabaseHandle) {
-    let _ = unsafe { Box::from_raw(db) };
+pub unsafe extern "C" fn fwd_close_db(db: Option<&mut DatabaseHandle>) {
+    let db_handle = db.expect("db should be non-null");
+
+    // Explicitly clear the downstream items. Drop will do these in order, so this
+    // code is defensive in case someone reorders the struct memebers of DatabaseHandle.
+    db_handle
+        .proposals
+        .write()
+        .expect("proposals lock is poisoned")
+        .clear();
+    db_handle.clear_cached_view();
+
+    // The database handle will be dropped automatically when db_handle goes out of scope
 }
 
 #[cfg(test)]
