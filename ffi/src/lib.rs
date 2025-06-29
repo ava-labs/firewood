@@ -538,18 +538,17 @@ fn commit(db: Option<&DatabaseHandle<'_>>, proposal_id: u32) -> Result<(), Strin
         .remove(&proposal_id)
         .ok_or("proposal not found")?;
 
-    // Get the proposal hash and cache the view
-    let proposal_hash = proposal
-        .root_hash_sync()
-        .map_err(|e| e.to_string())?
-        .ok_or("proposal root hash not found")?;
+    // Get the proposal hash and cache the view. We never cache an empty proposal.
+    let proposal_hash = proposal.root_hash_sync();
 
-    let mut guard = db.cached_view.lock().expect("cached_view lock is poisoned");
-    match db.view_sync(proposal_hash.clone()) {
-        Ok(view) => *guard = Some((proposal_hash, view)),
-        Err(_) => *guard = None, // Clear cache on error
+    if let Ok(Some(proposal_hash)) = proposal_hash {
+        let mut guard = db.cached_view.lock().expect("cached_view lock is poisoned");
+        match db.view_sync(proposal_hash.clone()) {
+            Ok(view) => *guard = Some((proposal_hash, view)),
+            Err(_) => *guard = None, // Clear cache on error
+        }
+        drop(guard);
     }
-    drop(guard);
 
     // Commit the proposal
     let result = proposal.commit_sync().map_err(|e| e.to_string());
