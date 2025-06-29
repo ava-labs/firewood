@@ -1326,6 +1326,41 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
             offset: Option<u64>,
         }
 
+        /// Helper function to handle completion queue entries and check for errors
+        fn handle_completion_queue(
+            storage: &FileBacked,
+            completion_queue: io_uring::cqueue::CompletionQueue<'_>,
+            saved_pinned_buffers: &mut [PinnedBufferEntry],
+        ) -> Result<(), FileIoError> {
+            for entry in completion_queue {
+                let item = entry.user_data() as usize;
+                let pbe = saved_pinned_buffers
+                    .get_mut(item)
+                    .expect("should be an index into the array");
+
+                if entry.result()
+                    != pbe
+                        .pinned_buffer
+                        .len()
+                        .try_into()
+                        .expect("buffer should be small enough")
+                {
+                    let error = if entry.result() >= 0 {
+                        std::io::Error::other("Partial write")
+                    } else {
+                        std::io::Error::from_raw_os_error(0 - entry.result())
+                    };
+                    return Err(storage.file_io_error(
+                        error,
+                        pbe.offset.expect("offset should be Some"),
+                        Some("write failure".to_string()),
+                    ));
+                }
+                pbe.offset = None;
+            }
+            Ok(())
+        }
+
         const RINGSIZE: usize = FileBacked::RINGSIZE as usize;
 
         let flush_start = Instant::now();
@@ -1385,31 +1420,11 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
                 })?;
                 let completion_queue = ring.completion();
                 trace!("competion queue length: {}", completion_queue.len());
-                for entry in completion_queue {
-                    let item = entry.user_data() as usize;
-                    let pbe = saved_pinned_buffers
-                        .get_mut(item)
-                        .expect("should be an index into the array");
-                    if entry.result()
-                        != pbe
-                            .pinned_buffer
-                            .len()
-                            .try_into()
-                            .expect("buffer should be small enough")
-                    {
-                        let error = if entry.result() >= 0 {
-                            std::io::Error::other("Partial write")
-                        } else {
-                            std::io::Error::from_raw_os_error(0 - entry.result())
-                        };
-                        return Err(self.storage.file_io_error(
-                            error,
-                            pbe.offset.expect("offset should be Some"),
-                            Some("write failure".to_string()),
-                        ));
-                    }
-                    pbe.offset = None;
-                }
+                handle_completion_queue(
+                    &self.storage,
+                    completion_queue,
+                    &mut saved_pinned_buffers,
+                )?;
             }
         }
         let pending = saved_pinned_buffers
@@ -1421,31 +1436,7 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
                 .file_io_error(e, 0, Some("io-uring final submit_and_wait".to_string()))
         })?;
 
-        for entry in ring.completion() {
-            let item = entry.user_data() as usize;
-            let pbe = saved_pinned_buffers
-                .get_mut(item)
-                .expect("should be an index into the array");
-            if entry.result()
-                != pbe
-                    .pinned_buffer
-                    .len()
-                    .try_into()
-                    .expect("buffer should be small enough")
-            {
-                let error = if entry.result() >= 0 {
-                    std::io::Error::other("Partial write")
-                } else {
-                    std::io::Error::from_raw_os_error(0 - entry.result())
-                };
-                return Err(self.storage.file_io_error(
-                    error,
-                    pbe.offset.expect("offset should be Some"),
-                    Some("write failure".to_string()),
-                ));
-            }
-            pbe.offset = None;
-        }
+        handle_completion_queue(&self.storage, ring.completion(), &mut saved_pinned_buffers)?;
 
         debug_assert!(
             !saved_pinned_buffers.iter().any(|pbe| pbe.offset.is_some()),
