@@ -323,39 +323,6 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
     }
 }
 
-impl<T, S: ReadableStorage> NodeStore<T, S> {
-    // Read a [FreeArea] from the provided [LinearAddress]
-    // `addr` is the address of a StoredArea in the ReadableStorage.
-    pub(crate) fn read_free_area_with_area_index_from_disk(
-        &self,
-        addr: LinearAddress,
-    ) -> Result<(FreeArea, AreaIndex), FileIoError> {
-        let free_area_addr = addr.get();
-        let free_head_stream = self.storage.stream_from(free_area_addr)?;
-        let free_head: StoredArea<Area<Node, FreeArea>> = serializer()
-            .deserialize_from(free_head_stream)
-            .map_err(|e| {
-                self.storage.file_io_error(
-                    Error::new(ErrorKind::InvalidData, e),
-                    free_area_addr,
-                    Some("read_free_area_with_area_index_from_disk".to_string()),
-                )
-            })?;
-        let StoredArea {
-            area: Area::Free(free_head),
-            area_size_index: read_index,
-        } = free_head
-        else {
-            return Err(self.storage.file_io_error(
-                Error::new(ErrorKind::InvalidData, "Attempted to read a non-free area"),
-                free_area_addr,
-                Some("read_free_area_with_area_index_from_disk".to_string()),
-            ));
-        };
-        Ok((free_head, read_index))
-    }
-}
-
 impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// Open an existing [`NodeStore`]
     /// Assumes the header is written in the [`ReadableStorage`].
@@ -539,30 +506,28 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 .file_io_error(e, 0, Some("allocate_from_freed".to_string()))
         })?;
 
-        if let Some(index) = self
+        if let Some((index, free_stored_area_addr)) = self
             .header
             .free_lists
-            .iter()
+            .iter_mut()
             .enumerate()
             .skip(index_wanted as usize)
             .find(|item| item.1.is_some())
-            .map(|(index, _)| index)
         {
-            let address = self.header.free_lists[index].expect("impossible due to find earlier");
-            // Get the first free block of sufficient size.
-            let free_head = if let Some(free_head) = self.storage.free_list_cache(address) {
+            let address = free_stored_area_addr
+                .take()
+                .expect("impossible due to find earlier"); // Get the first free block of sufficient size.
+            if let Some(free_head) = self.storage.free_list_cache(address) {
                 trace!("free_head@{address}(cached): {free_head:?} size:{index}");
-                free_head
+                *free_stored_area_addr = free_head;
             } else {
                 let (free_head, read_index) =
-                    self.read_free_area_with_area_index_from_disk(address)?;
+                    FreeArea::from_storage(self.storage.as_ref(), address)?;
                 debug_assert_eq!(read_index as usize, index);
 
                 // Update the free list to point to the next free block.
-                free_head.next_free_block
-            };
-
-            self.header.free_lists[index] = free_head;
+                *free_stored_area_addr = free_head.next_free_block;
+            }
 
             counter!("firewood.space.reused", "index" => index_name(index as u8))
                 .increment(AREA_SIZES[index]);
@@ -912,6 +877,35 @@ pub(crate) struct FreeArea {
 impl FreeArea {
     pub(crate) const fn get_next_free_block(self) -> Option<LinearAddress> {
         self.next_free_block
+    }
+
+    pub(crate) fn from_storage<S: ReadableStorage>(
+        storage: &S,
+        addr: LinearAddress,
+    ) -> Result<(FreeArea, AreaIndex), FileIoError> {
+        let free_area_addr = addr.get();
+        let free_head_stream = storage.stream_from(free_area_addr)?;
+        let free_head: StoredArea<Area<Node, FreeArea>> = serializer()
+            .deserialize_from(free_head_stream)
+            .map_err(|e| {
+                storage.file_io_error(
+                    Error::new(ErrorKind::InvalidData, e),
+                    free_area_addr,
+                    Some("FreeArea::from_storage".to_string()),
+                )
+            })?;
+        let StoredArea {
+            area: Area::Free(free_head),
+            area_size_index: read_index,
+        } = free_head
+        else {
+            return Err(storage.file_io_error(
+                Error::new(ErrorKind::InvalidData, "Attempted to read a non-free area"),
+                free_area_addr,
+                Some("FreeArea::from_storage".to_string()),
+            ));
+        };
+        Ok((free_head, read_index))
     }
 }
 
@@ -1587,6 +1581,13 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 
     pub(crate) const fn get_free_lists(&self) -> &FreeLists {
         &self.header.free_lists
+    }
+
+    pub(crate) fn read_free_area(
+        &self,
+        addr: LinearAddress,
+    ) -> Result<(FreeArea, AreaIndex), FileIoError> {
+        FreeArea::from_storage(self.storage.as_ref(), addr)
     }
 }
 

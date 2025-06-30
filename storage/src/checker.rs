@@ -17,6 +17,8 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
     /// # Errors
     /// Returns a [`CheckerError`] if the database is inconsistent.
+    /// # Panics
+    /// Panics if the header has too many free lists, which can never happen since [`FreeLists`] has a fixed size.
     // TODO: report all errors, not just the first one
     // TODO: add merkle hash checks as well
     pub fn check(&self) -> Result<(), CheckerError> {
@@ -42,9 +44,9 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
         // 3. check the free list - this can happen in parallel with the trie traversal
         let freelists = self.get_free_lists();
-        for (area_idx, head_addr) in freelists.iter().enumerate() {
-            #[allow(clippy::cast_possible_truncation)]
-            let area_size = Self::size_from_area_index(area_idx as u8);
+        for (idx, head_addr) in freelists.iter().enumerate() {
+            let area_idx = u8::try_from(idx).expect("area index should always fit in u8");
+            let area_size = Self::size_from_area_index(area_idx);
             self.check_freelist(area_size, *head_addr, &mut visited)?;
         }
 
@@ -83,8 +85,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         let mut cur_free_area_addr = head_addr;
         while let Some(free_area_addr) = cur_free_area_addr {
             visited.insert_area(free_area_addr, freelist_area_size)?;
-            let (free_head, read_index) =
-                self.read_free_area_with_area_index_from_disk(free_area_addr)?;
+            let (free_head, read_index) = self.read_free_area(free_area_addr)?;
             let free_area_size = Self::size_from_area_index(read_index);
             let next_free_area_addr = free_head.get_next_free_block();
             if free_area_size != freelist_area_size {
@@ -184,24 +185,9 @@ mod test {
 
     #[test]
     fn test_traverse_correct_freelist() {
-        use rand::rngs::StdRng;
-        use rand::{Rng, SeedableRng, rng};
+        use rand::Rng;
 
-        let seed = std::env::var("FIREWOOD_STORAGE_TEST_SEED")
-            .ok()
-            .map_or_else(
-                || None,
-                |s| {
-                    Some(
-                        str::parse(&s)
-                            .expect("couldn't parse FIREWOOD_STORAGE_TEST_SEED; must be a u64"),
-                    )
-                },
-            )
-            .unwrap_or_else(|| rng().random());
-
-        eprintln!("Seed {seed}: to rerun with this data, export FIREWOOD_STORAGE_TEST_SEED={seed}");
-        let mut rng = StdRng::seed_from_u64(seed);
+        let mut rng = crate::test_utils::seeded_rng();
 
         let memstore = MemStore::new(vec![]);
         let nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
