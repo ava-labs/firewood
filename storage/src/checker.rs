@@ -18,7 +18,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// # Errors
     /// Returns a [`CheckerError`] if the database is inconsistent.
     /// # Panics
-    /// Panics if the header has too many free lists, which can never happen since [`FreeLists`] has a fixed size.
+    /// Panics if the header has too many free lists, which can never happen since [`crate::nodestore::FreeLists`] has a fixed size.
     // TODO: report all errors, not just the first one
     // TODO: add merkle hash checks as well
     pub fn check(&self) -> Result<(), CheckerError> {
