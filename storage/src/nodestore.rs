@@ -516,7 +516,8 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         {
             let address = free_stored_area_addr
                 .take()
-                .expect("impossible due to find earlier"); // Get the first free block of sufficient size.
+                .expect("impossible due to find earlier");
+            // Get the first free block of sufficient size.
             if let Some(free_head) = self.storage.free_list_cache(address) {
                 trace!("free_head@{address}(cached): {free_head:?} size:{index}");
                 *free_stored_area_addr = free_head;
