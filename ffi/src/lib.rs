@@ -237,16 +237,9 @@ fn get_from_root(
         Some((root_hash, view)) if root_hash == &requested_root => {
             view.val_sync_bytes(key.as_slice())
         }
-        // found a cached view, but it's for a different root, so we need to get a new view
-        Some(_) => {
-            let rev = view_sync_from_root(db, root)?;
-            let result = rev.val_sync_bytes(key.as_slice());
-            *cached_view = Some((requested_root.clone(), rev));
-            result
-        }
-        // there was no cached view, so either we're just starting up or we just
-        // committed a new proposal. Either way, we need to get a new view.
-        None => {
+        // If what was there didn't match the requested root, we need a new view, so we
+        // update the cache
+        _ => {
             let rev = view_sync_from_root(db, root)?;
             let result = rev.val_sync_bytes(key.as_slice());
             *cached_view = Some((requested_root.clone(), rev));
