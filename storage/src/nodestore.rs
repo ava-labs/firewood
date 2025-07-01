@@ -1591,7 +1591,7 @@ impl<'a, S: ReadableStorage> FreeListIterator<'a, S> {
 }
 
 impl<S: ReadableStorage> Iterator for FreeListIterator<'_, S> {
-    type Item = Result<(LinearAddress, AreaIndex), FileIoError>;
+    type Item = Result<LinearAddress, FileIoError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let next_addr = self.next_addr?;
@@ -1619,7 +1619,7 @@ impl<S: ReadableStorage> Iterator for FreeListIterator<'_, S> {
 
         // update the next address to the next free block
         self.next_addr = free_head.next_free_block();
-        Some(Ok((next_addr, stored_area_index)))
+        Some(Ok(next_addr))
     }
 }
 
@@ -1629,7 +1629,7 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
     pub(crate) fn freelist_iter(
         &self,
         area_index: AreaIndex,
-    ) -> impl Iterator<Item = Result<(LinearAddress, AreaIndex), FileIoError>> {
+    ) -> impl Iterator<Item = Result<LinearAddress, FileIoError>> {
         FreeListIterator::new(
             self.storage.as_ref(),
             self.header.free_lists[area_index as usize],
@@ -1647,6 +1647,7 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
             .enumerate()
             .flat_map(|(area_index, head)| {
                 FreeListIterator::new(self.storage.as_ref(), *head, area_index as AreaIndex)
+                    .map(move |result| result.map(|addr| (addr, area_index as AreaIndex)))
             })
     }
 }
@@ -1883,7 +1884,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod test_freelists_iterator {
+mod test_freelist_iterator {
     use super::nodestore_test_utils::*;
     use super::*;
     use crate::linear::memory::MemStore;
@@ -1893,7 +1894,7 @@ mod test_freelists_iterator {
     use rand::seq::IteratorRandom;
 
     #[test]
-    fn freelists_iterator() {
+    fn freelist_iterator() {
         let mut rng = seeded_rng();
         let memstore = MemStore::new(vec![]);
         let nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
@@ -1926,12 +1927,12 @@ mod test_freelists_iterator {
         );
         assert_eq!(
             freelist_iter.next().unwrap().unwrap(),
-            (LinearAddress::new(start).unwrap(), area_index)
+            LinearAddress::new(start).unwrap()
         );
 
         for offset in iterator {
             let next_item = freelist_iter.next().unwrap().unwrap();
-            assert_eq!(next_item, (LinearAddress::new(offset).unwrap(), area_index));
+            assert_eq!(next_item, LinearAddress::new(offset).unwrap());
         }
 
         assert!(freelist_iter.next().is_none());
