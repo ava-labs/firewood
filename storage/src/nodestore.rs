@@ -1572,41 +1572,20 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
 pub struct FreeListIterator<'a, S: ReadableStorage> {
     storage: &'a S,
-    freelist: std::iter::Enumerate<std::slice::Iter<'a, Option<LinearAddress>>>,
-    current_area_index: Option<AreaIndex>,
+    area_index: AreaIndex,
     next_addr: Option<LinearAddress>,
 }
 
-#[allow(dead_code)]
 impl<'a, S: ReadableStorage> FreeListIterator<'a, S> {
-    pub(crate) fn new(storage: &'a S, freelist: &'a FreeLists) -> Self {
-        Self {
-            storage,
-            freelist: freelist.iter().enumerate(),
-            current_area_index: None,
-            next_addr: None,
-        }
-    }
-
-    pub(crate) fn start_from(storage: &'a S, next_addr: LinearAddress) -> Self {
-        Self {
-            storage,
-            freelist: [].iter().enumerate(),
-            current_area_index: None,
-            next_addr: Some(next_addr),
-        }
-    }
-
-    pub(crate) fn start_from_with_area_index(
+    pub(crate) const fn new(
         storage: &'a S,
-        next_addr: LinearAddress,
+        next_addr: Option<LinearAddress>,
         area_index: AreaIndex,
     ) -> Self {
         Self {
             storage,
-            freelist: [].iter().enumerate(),
-            current_area_index: Some(area_index),
-            next_addr: Some(next_addr),
+            area_index,
+            next_addr,
         }
     }
 }
@@ -1615,47 +1594,60 @@ impl<S: ReadableStorage> Iterator for FreeListIterator<'_, S> {
     type Item = Result<(LinearAddress, AreaIndex), FileIoError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // find the next address to read from
-        let next_addr = match self.next_addr {
-            // if set, then we are in the middle of a freelist, use the set address directly
-            Some(next_addr) => next_addr,
-            // if not set, then we are at the end of the current freelist, find the next free list head
-            None => loop {
-                if let Some((area_index, free_list_head)) = self.freelist.next() {
-                    if let Some(head) = free_list_head {
-                        self.current_area_index = Some(area_index as AreaIndex);
-                        break *head;
-                    }
-                } else {
-                    // all remaining freelists are empty, we are done
-                    return None;
-                }
-            },
-        };
+        let next_addr = self.next_addr?;
 
-        match FreeArea::from_storage(self.storage, next_addr) {
-            Ok((free_head, stored_area_index)) => {
-                self.next_addr = free_head.next_free_block();
-                // if the area index does not match the expected area index, return an error
-                if let Some(free_list_area_index) = self.current_area_index {
-                    if free_list_area_index != stored_area_index {
-                        // area index mismatch, throw an error and move on to the next freelist
-                        self.next_addr = None;
-                        return Some(Err(self.storage.file_io_error(
-                            Error::new(ErrorKind::InvalidData, "free list area index mismatch"),
-                            next_addr.get(),
-                            Some("FreeListIterator::next".to_string()),
-                        )));
-                    }
-                }
-                Some(Ok((next_addr, stored_area_index)))
-            }
+        // read the free area, propagate any IO error if it occurs
+        let (free_head, stored_area_index) = match FreeArea::from_storage(self.storage, next_addr) {
+            Ok(free_area) => free_area,
             Err(e) => {
                 // if the read fails, we cannot proceed with the current freelist
                 self.next_addr = None;
-                Some(Err(e))
+                return Some(Err(e));
             }
+        };
+
+        // if the area index does not match the expected area index, return an error
+        if self.area_index != stored_area_index {
+            // area index mismatch, throw an error and stop iterating
+            self.next_addr = None;
+            return Some(Err(self.storage.file_io_error(
+                Error::new(ErrorKind::InvalidData, "free list area index mismatch"),
+                next_addr.get(),
+                Some("FreeListIterator::next".to_string()),
+            )));
         }
+
+        // update the next address to the next free block
+        self.next_addr = free_head.next_free_block();
+        Some(Ok((next_addr, stored_area_index)))
+    }
+}
+
+impl<T, S: ReadableStorage> NodeStore<T, S> {
+    #[allow(dead_code)]
+    /// Iterate over the free list for a given area index.
+    pub(crate) fn freelist_iter(
+        &self,
+        area_index: AreaIndex,
+    ) -> impl Iterator<Item = Result<(LinearAddress, AreaIndex), FileIoError>> {
+        FreeListIterator::new(
+            self.storage.as_ref(),
+            self.header.free_lists[area_index as usize],
+            area_index,
+        )
+    }
+
+    /// Iterate over all the free lists.
+    pub(crate) fn freelists_iter(
+        &self,
+    ) -> impl Iterator<Item = Result<(LinearAddress, AreaIndex), FileIoError>> {
+        self.header
+            .free_lists
+            .iter()
+            .enumerate()
+            .flat_map(|(area_index, head)| {
+                FreeListIterator::new(self.storage.as_ref(), *head, area_index as AreaIndex)
+            })
     }
 }
 
@@ -1667,10 +1659,6 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 
     pub(crate) fn physical_size(&self) -> Result<u64, FileIoError> {
         self.storage.size()
-    }
-
-    pub(crate) fn freelist_iter(&self) -> FreeListIterator<'_, S> {
-        FreeListIterator::new(self.storage.as_ref(), &self.header.free_lists)
     }
 }
 
@@ -1905,7 +1893,7 @@ mod test_freelists_iterator {
     use rand::seq::IteratorRandom;
 
     #[test]
-    fn test_freelists_iterator() {
+    fn freelists_iterator() {
         let mut rng = seeded_rng();
         let memstore = MemStore::new(vec![]);
         let nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
@@ -1931,9 +1919,9 @@ mod test_freelists_iterator {
         let skip = rng.random_range(0..offsets.len());
         let mut iterator = offsets.into_iter().skip(skip);
         let start = iterator.next().unwrap();
-        let mut freelist_iter = FreeListIterator::start_from_with_area_index(
+        let mut freelist_iter = FreeListIterator::new(
             nodestore.storage.as_ref(),
-            LinearAddress::new(start).unwrap(),
+            LinearAddress::new(start),
             area_index,
         );
         assert_eq!(
@@ -1949,9 +1937,9 @@ mod test_freelists_iterator {
         assert!(freelist_iter.next().is_none());
 
         // test iterator with mismatching area index
-        let mut freelist_iter = FreeListIterator::start_from_with_area_index(
+        let mut freelist_iter = FreeListIterator::new(
             nodestore.storage.as_ref(),
-            LinearAddress::new(start).unwrap(),
+            LinearAddress::new(start),
             area_index + 1,
         );
         assert!(matches!(

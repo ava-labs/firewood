@@ -72,7 +72,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
     /// Traverse all the free areas in the freelist
     fn visit_freelist(&self, visited: &mut LinearAddressRangeSet) -> Result<(), CheckerError> {
-        for free_area in self.freelist_iter() {
+        for free_area in self.freelists_iter() {
             let (addr, area_index) = free_area?;
             let area_size = Self::size_from_area_index(area_index);
             visited.insert_area(addr, area_size)?;
@@ -85,6 +85,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 mod test {
     #![expect(clippy::unwrap_used)]
     #![expect(clippy::indexing_slicing)]
+    #![expect(clippy::cast_possible_truncation)]
 
     use super::*;
     use crate::linear::memory::MemStore;
