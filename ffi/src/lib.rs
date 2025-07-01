@@ -235,11 +235,13 @@ fn get_from_root(
     let value = match cached_view.as_ref() {
         // found the cached view, use it
         Some((root_hash, view)) if root_hash == &requested_root => {
+            counter!("firewood.ffi.cached_view.hit").increment(1);
             view.val_sync_bytes(key.as_slice())
         }
         // If what was there didn't match the requested root, we need a new view, so we
         // update the cache
         _ => {
+            counter!("firewood.ffi.cached_view.miss").increment(1);
             let rev = view_sync_from_root(db, root)?;
             let result = rev.val_sync_bytes(key.as_slice());
             *cached_view = Some((requested_root.clone(), rev));
