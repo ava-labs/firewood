@@ -876,7 +876,7 @@ pub(crate) struct FreeArea {
 }
 
 impl FreeArea {
-    pub(crate) const fn get_next_free_block(self) -> Option<LinearAddress> {
+    pub(crate) const fn next_free_block(self) -> Option<LinearAddress> {
         self.next_free_block
     }
 
@@ -1570,25 +1570,105 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     }
 }
 
+pub struct FreeListIterator<'a, S: ReadableStorage> {
+    storage: &'a S,
+    freelist: std::iter::Enumerate<std::slice::Iter<'a, Option<LinearAddress>>>,
+    current_area_index: Option<AreaIndex>,
+    next_addr: Option<LinearAddress>,
+}
+
+#[allow(dead_code)]
+impl<'a, S: ReadableStorage> FreeListIterator<'a, S> {
+    pub(crate) fn new(storage: &'a S, freelist: &'a FreeLists) -> Self {
+        Self {
+            storage,
+            freelist: freelist.iter().enumerate(),
+            current_area_index: None,
+            next_addr: None,
+        }
+    }
+
+    pub(crate) fn start_from(storage: &'a S, next_addr: LinearAddress) -> Self {
+        Self {
+            storage,
+            freelist: [].iter().enumerate(),
+            current_area_index: None,
+            next_addr: Some(next_addr),
+        }
+    }
+
+    pub(crate) fn start_from_with_area_index(
+        storage: &'a S,
+        next_addr: LinearAddress,
+        area_index: AreaIndex,
+    ) -> Self {
+        Self {
+            storage,
+            freelist: [].iter().enumerate(),
+            current_area_index: Some(area_index),
+            next_addr: Some(next_addr),
+        }
+    }
+}
+
+impl<S: ReadableStorage> Iterator for FreeListIterator<'_, S> {
+    type Item = Result<(LinearAddress, AreaIndex), FileIoError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // find the next address to read from
+        let next_addr = match self.next_addr {
+            // if set, then we are in the middle of a freelist, use the set address directly
+            Some(next_addr) => next_addr,
+            // if not set, then we are at the end of the current freelist, find the next free list head
+            None => loop {
+                if let Some((area_index, free_list_head)) = self.freelist.next() {
+                    if let Some(head) = free_list_head {
+                        self.current_area_index = Some(area_index as AreaIndex);
+                        break *head;
+                    }
+                } else {
+                    // all remaining freelists are empty, we are done
+                    return None;
+                }
+            },
+        };
+
+        match FreeArea::from_storage(self.storage, next_addr) {
+            Ok((free_head, stored_area_index)) => {
+                self.next_addr = free_head.next_free_block();
+                // if the area index does not match the expected area index, return an error
+                if let Some(area_index) = self.current_area_index {
+                    if area_index != stored_area_index {
+                        return Some(Err(self.storage.file_io_error(
+                            Error::new(ErrorKind::InvalidData, "free list area index mismatch"),
+                            next_addr.get(),
+                            Some("FreeListIterator::next".to_string()),
+                        )));
+                    }
+                }
+                Some(Ok((next_addr, stored_area_index)))
+            }
+            Err(e) => {
+                // if the read fails, we cannot proceed with the current freelist
+                self.next_addr = None;
+                Some(Err(e))
+            }
+        }
+    }
+}
+
 // Helper functions for the checker
 impl<S: ReadableStorage> NodeStore<Committed, S> {
     pub(crate) const fn size(&self) -> u64 {
         self.header.size
     }
 
-    pub(crate) fn get_physical_size(&self) -> Result<u64, FileIoError> {
+    pub(crate) fn physical_size(&self) -> Result<u64, FileIoError> {
         self.storage.size()
     }
 
-    pub(crate) const fn get_free_lists(&self) -> &FreeLists {
-        &self.header.free_lists
-    }
-
-    pub(crate) fn read_free_area(
-        &self,
-        addr: LinearAddress,
-    ) -> Result<(FreeArea, AreaIndex), FileIoError> {
-        FreeArea::from_storage(self.storage.as_ref(), addr)
+    pub(crate) fn freelist_iter(&self) -> FreeListIterator<'_, S> {
+        FreeListIterator::new(self.storage.as_ref(), &self.header.free_lists)
     }
 }
 
@@ -1624,7 +1704,7 @@ pub(crate) mod nodestore_test_utils {
 
     // Helper function to write the NodeStoreHeader
     pub(crate) fn write_header<S: WritableStorage>(
-        nodestore: &NodeStore<Committed, S>,
+        nodestore: &mut NodeStore<Committed, S>,
         size: u64,
         root_addr: Option<LinearAddress>,
         free_lists: FreeLists,
@@ -1634,6 +1714,7 @@ pub(crate) mod nodestore_test_utils {
         header.root_address = root_addr;
         header.free_lists = free_lists;
         let header_bytes = bytemuck::bytes_of(&header);
+        nodestore.header = header;
         nodestore.storage.write(0, header_bytes).unwrap();
     }
 

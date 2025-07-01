@@ -24,7 +24,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     pub fn check(&self) -> Result<(), CheckerError> {
         // 1. Check the header
         let db_size = self.size();
-        let file_size = self.get_physical_size()?;
+        let file_size = self.physical_size()?;
         if db_size < file_size {
             return Err(CheckerError::InvalidDBSize {
                 db_size,
@@ -43,12 +43,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         }
 
         // 3. check the free list - this can happen in parallel with the trie traversal
-        let freelists = self.get_free_lists();
-        for (idx, head_addr) in freelists.iter().enumerate() {
-            let area_idx = u8::try_from(idx).expect("area index should always fit in u8");
-            let area_size = Self::size_from_area_index(area_idx);
-            self.check_freelist(area_size, *head_addr, &mut visited)?;
-        }
+        self.traverse_freelist(&mut visited)?;
 
         // 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
         let _ = visited.complement(); // TODO
@@ -76,28 +71,12 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     }
 
     /// Traverse all the free areas in the freelist
-    fn check_freelist(
-        &self,
-        freelist_area_size: u64,
-        head_addr: Option<LinearAddress>,
-        visited: &mut LinearAddressRangeSet,
-    ) -> Result<(), CheckerError> {
-        let mut cur_free_area_addr = head_addr;
-        while let Some(free_area_addr) = cur_free_area_addr {
-            visited.insert_area(free_area_addr, freelist_area_size)?;
-            let (free_head, read_index) = self.read_free_area(free_area_addr)?;
-            let free_area_size = Self::size_from_area_index(read_index);
-            let next_free_area_addr = free_head.get_next_free_block();
-            if free_area_size != freelist_area_size {
-                return Err(CheckerError::FreelistAreaSizeMismatch {
-                    address: free_area_addr,
-                    size: free_area_size,
-                    freelist_size: freelist_area_size,
-                });
-            }
-            cur_free_area_addr = next_free_area_addr;
+    fn traverse_freelist(&self, visited: &mut LinearAddressRangeSet) -> Result<(), CheckerError> {
+        for free_area in self.freelist_iter() {
+            let (addr, area_size) = free_area?;
+            let area_size = Self::size_from_area_index(area_size);
+            visited.insert_area(addr, area_size)?;
         }
-
         Ok(())
     }
 }
@@ -106,8 +85,6 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 mod test {
     #![expect(clippy::unwrap_used)]
     #![expect(clippy::indexing_slicing)]
-
-    use std::collections::HashMap;
 
     use super::*;
     use crate::linear::memory::MemStore;
@@ -121,7 +98,7 @@ mod test {
     // TODO: add a high-level test in the firewood crate
     fn test_checker_traverse_correct_trie() {
         let memstore = MemStore::new(vec![]);
-        let nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+        let mut nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
 
         // set up a basic trie:
         // -------------------------
@@ -170,7 +147,7 @@ mod test {
 
         // write the header
         write_header(
-            &nodestore,
+            &mut nodestore,
             high_watermark,
             Some(root_addr),
             Default::default(),
@@ -190,47 +167,30 @@ mod test {
         let mut rng = crate::test_utils::seeded_rng();
 
         let memstore = MemStore::new(vec![]);
-        let nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+        let mut nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
 
         // write free areas
         let mut high_watermark = NodeStoreHeader::SIZE;
         let mut free_list: FreeLists = Default::default();
-        let mut area_ends = HashMap::new();
         for (area_index, area_size) in area_sizes().iter().enumerate() {
             let mut next_free_block = None;
-            let num_free_areas = rng.random_range(0..10);
+            let num_free_areas = rng.random_range(0..4);
             for _ in 0..num_free_areas {
                 write_free_area(&nodestore, next_free_block, *area_size, high_watermark);
                 next_free_block = Some(LinearAddress::new(high_watermark).unwrap());
                 high_watermark += area_size;
             }
 
-            area_ends.insert(area_size, LinearAddress::new(high_watermark).unwrap());
             free_list[area_index] = next_free_block;
         }
-        let max_area_end = LinearAddress::new(high_watermark).unwrap();
 
         // write header
-        write_header(&nodestore, high_watermark, None, free_list);
+        write_header(&mut nodestore, high_watermark, None, free_list);
 
         // test that the we traversed all the free areas
         let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
-        for area_size in area_sizes() {
-            let area_end = area_ends[&area_size];
-            let prev_free_area_addr = free_list[area_size_to_index(*area_size).unwrap() as usize];
-            nodestore
-                .check_freelist(*area_size, prev_free_area_addr, &mut visited)
-                .unwrap();
-            let complement = visited.complement();
-            let expected_complement = if area_end == max_area_end {
-                vec![]
-            } else {
-                vec![(area_end..max_area_end)]
-            };
-            assert_eq!(
-                complement.into_iter().collect::<Vec<_>>(),
-                expected_complement
-            );
-        }
+        nodestore.traverse_freelist(&mut visited).unwrap();
+        let complement = visited.complement();
+        assert_eq!(complement.into_iter().collect::<Vec<_>>(), vec![]);
     }
 }
