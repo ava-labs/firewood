@@ -1637,8 +1637,8 @@ impl<S: ReadableStorage> Iterator for FreeListIterator<'_, S> {
             Ok((free_head, stored_area_index)) => {
                 self.next_addr = free_head.next_free_block();
                 // if the area index does not match the expected area index, return an error
-                if let Some(area_index) = self.current_area_index {
-                    if area_index != stored_area_index {
+                if let Some(free_list_area_index) = self.current_area_index {
+                    if free_list_area_index != stored_area_index {
                         // area index mismatch, throw an error and move on to the next freelist
                         self.next_addr = None;
                         return Some(Err(self.storage.file_io_error(
@@ -1688,7 +1688,7 @@ pub(crate) mod nodestore_test_utils {
 
     // Helper function to wrap the node in a StoredArea and write it to the given offset. Returns the size of the area on success.
     #[allow(clippy::cast_possible_truncation)]
-    pub(crate) fn write_new_node<S: WritableStorage>(
+    pub(crate) fn test_write_new_node<S: WritableStorage>(
         nodestore: &NodeStore<Committed, S>,
         node: &Node,
         offset: u64,
@@ -1705,7 +1705,7 @@ pub(crate) mod nodestore_test_utils {
     }
 
     // Helper function to write the NodeStoreHeader
-    pub(crate) fn write_header<S: WritableStorage>(
+    pub(crate) fn test_write_header<S: WritableStorage>(
         nodestore: &mut NodeStore<Committed, S>,
         size: u64,
         root_addr: Option<LinearAddress>,
@@ -1721,7 +1721,7 @@ pub(crate) mod nodestore_test_utils {
     }
 
     // Helper function to write a free area to the given offset.
-    pub(crate) fn write_free_area<S: WritableStorage>(
+    pub(crate) fn test_write_free_area<S: WritableStorage>(
         nodestore: &NodeStore<Committed, S>,
         next_free_block: Option<LinearAddress>,
         area_size_index: AreaIndex,
@@ -1918,14 +1918,14 @@ mod test_freelists_iterator {
             .map(|i| i * area_size)
             .choose_multiple(&mut rng, 10);
         for (cur, next) in offsets.iter().zip(offsets.iter().skip(1)) {
-            write_free_area(
+            test_write_free_area(
                 &nodestore,
                 Some(LinearAddress::new(*next).unwrap()),
                 area_index,
                 *cur,
             );
         }
-        write_free_area(&nodestore, None, area_index, *offsets.last().unwrap());
+        test_write_free_area(&nodestore, None, area_index, *offsets.last().unwrap());
 
         // test iterator from a random starting point
         let skip = rng.random_range(0..offsets.len());

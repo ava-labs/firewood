@@ -39,11 +39,11 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         // 2. traverse the trie and check the nodes
         if let Some(root_address) = self.root_address() {
             // the database is not empty, traverse the trie
-            self.traverse_trie(root_address, &mut visited)?;
+            self.visit_trie(root_address, &mut visited)?;
         }
 
         // 3. check the free list - this can happen in parallel with the trie traversal
-        self.traverse_freelist(&mut visited)?;
+        self.visit_freelist(&mut visited)?;
 
         // 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
         let _ = visited.complement(); // TODO
@@ -52,7 +52,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     }
 
     /// Recursively traverse the trie from the given root address.
-    fn traverse_trie(
+    fn visit_trie(
         &self,
         subtree_root_address: LinearAddress,
         visited: &mut LinearAddressRangeSet,
@@ -63,7 +63,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         if let Node::Branch(branch) = self.read_node(subtree_root_address)?.as_ref() {
             // this is an internal node, traverse the children
             for (_, address) in branch.children_addresses() {
-                self.traverse_trie(*address, visited)?;
+                self.visit_trie(*address, visited)?;
             }
         }
 
@@ -71,10 +71,10 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     }
 
     /// Traverse all the free areas in the freelist
-    fn traverse_freelist(&self, visited: &mut LinearAddressRangeSet) -> Result<(), CheckerError> {
+    fn visit_freelist(&self, visited: &mut LinearAddressRangeSet) -> Result<(), CheckerError> {
         for free_area in self.freelist_iter() {
-            let (addr, area_size) = free_area?;
-            let area_size = Self::size_from_area_index(area_size);
+            let (addr, area_index) = free_area?;
+            let area_size = Self::size_from_area_index(area_index);
             visited.insert_area(addr, area_size)?;
         }
         Ok(())
@@ -96,7 +96,7 @@ mod test {
     // This test creates a simple trie and checks that the checker traverses it correctly.
     // We use primitive calls here to do a low-level check.
     // TODO: add a high-level test in the firewood crate
-    fn test_checker_traverse_correct_trie() {
+    fn checker_traverse_correct_trie() {
         let memstore = MemStore::new(vec![]);
         let mut nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
 
@@ -120,7 +120,7 @@ mod test {
             value: Box::new([3, 4, 5]),
         });
         let leaf_addr = LinearAddress::new(high_watermark).unwrap();
-        let leaf_area = write_new_node(&nodestore, &leaf, high_watermark);
+        let leaf_area = test_write_new_node(&nodestore, &leaf, high_watermark);
         high_watermark += leaf_area;
 
         let mut branch_children: [Option<Child>; BranchNode::MAX_CHILDREN] = Default::default();
@@ -131,7 +131,7 @@ mod test {
             children: branch_children,
         }));
         let branch_addr = LinearAddress::new(high_watermark).unwrap();
-        let branch_area = write_new_node(&nodestore, &branch, high_watermark);
+        let branch_area = test_write_new_node(&nodestore, &branch, high_watermark);
         high_watermark += branch_area;
 
         let mut root_children: [Option<Child>; BranchNode::MAX_CHILDREN] = Default::default();
@@ -142,26 +142,26 @@ mod test {
             children: root_children,
         }));
         let root_addr = LinearAddress::new(high_watermark).unwrap();
-        let root_area = write_new_node(&nodestore, &root, high_watermark);
+        let root_area = test_write_new_node(&nodestore, &root, high_watermark);
         high_watermark += root_area;
 
         // write the header
-        write_header(
+        test_write_header(
             &mut nodestore,
             high_watermark,
             Some(root_addr),
-            Default::default(),
+            FreeLists::default(),
         );
 
         // verify that all of the space is accounted for - since there is no free area
         let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
-        nodestore.traverse_trie(root_addr, &mut visited).unwrap();
+        nodestore.visit_trie(root_addr, &mut visited).unwrap();
         let complement = visited.complement();
         assert_eq!(complement.into_iter().collect::<Vec<_>>(), vec![]);
     }
 
     #[test]
-    fn test_traverse_correct_freelist() {
+    fn traverse_correct_freelist() {
         use rand::Rng;
 
         let mut rng = crate::test_utils::seeded_rng();
@@ -171,12 +171,12 @@ mod test {
 
         // write free areas
         let mut high_watermark = NodeStoreHeader::SIZE;
-        let mut free_list: FreeLists = Default::default();
+        let mut freelist = FreeLists::default();
         for (area_index, area_size) in area_sizes().iter().enumerate() {
             let mut next_free_block = None;
             let num_free_areas = rng.random_range(0..4);
             for _ in 0..num_free_areas {
-                write_free_area(
+                test_write_free_area(
                     &nodestore,
                     next_free_block,
                     area_index as u8,
@@ -186,15 +186,15 @@ mod test {
                 high_watermark += area_size;
             }
 
-            free_list[area_index] = next_free_block;
+            freelist[area_index] = next_free_block;
         }
 
         // write header
-        write_header(&mut nodestore, high_watermark, None, free_list);
+        test_write_header(&mut nodestore, high_watermark, None, freelist);
 
         // test that the we traversed all the free areas
         let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
-        nodestore.traverse_freelist(&mut visited).unwrap();
+        nodestore.visit_freelist(&mut visited).unwrap();
         let complement = visited.complement();
         assert_eq!(complement.into_iter().collect::<Vec<_>>(), vec![]);
     }

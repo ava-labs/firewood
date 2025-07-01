@@ -124,15 +124,17 @@ pub enum CheckerError {
 
     /// Freelist area size does not match
     #[error(
-        "Free area {address} has miss matching size: has {size} bytes but is in freelist {freelist_size}"
+        "Free area {address} of size {size} is found in free list {free_list} but it should be in freelist {expected_free_list}"
     )]
     FreelistAreaSizeMismatch {
         /// Address of the free area
         address: LinearAddress,
         /// Actual size of the free area
         size: u64,
-        /// Expected size corresponding to the freelist
-        freelist_size: u64,
+        /// Free list on which the area is stored
+        free_list: u8,
+        /// Expected size of the area
+        expected_free_list: u8,
     },
 
     /// IO error
