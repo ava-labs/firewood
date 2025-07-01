@@ -176,7 +176,12 @@ mod test {
             let mut next_free_block = None;
             let num_free_areas = rng.random_range(0..4);
             for _ in 0..num_free_areas {
-                write_free_area(&nodestore, next_free_block, *area_size, high_watermark);
+                write_free_area(
+                    &nodestore,
+                    next_free_block,
+                    area_index as u8,
+                    high_watermark,
+                );
                 next_free_block = Some(LinearAddress::new(high_watermark).unwrap());
                 high_watermark += area_size;
             }

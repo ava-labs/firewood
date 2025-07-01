@@ -1639,6 +1639,8 @@ impl<S: ReadableStorage> Iterator for FreeListIterator<'_, S> {
                 // if the area index does not match the expected area index, return an error
                 if let Some(area_index) = self.current_area_index {
                     if area_index != stored_area_index {
+                        // area index mismatch, throw an error and move on to the next freelist
+                        self.next_addr = None;
                         return Some(Err(self.storage.file_io_error(
                             Error::new(ErrorKind::InvalidData, "free list area index mismatch"),
                             next_addr.get(),
@@ -1722,10 +1724,9 @@ pub(crate) mod nodestore_test_utils {
     pub(crate) fn write_free_area<S: WritableStorage>(
         nodestore: &NodeStore<Committed, S>,
         next_free_block: Option<LinearAddress>,
-        area: u64,
+        area_size_index: AreaIndex,
         offset: u64,
     ) {
-        let area_size_index = area_size_to_index(area).unwrap();
         let area: Area<Node, FreeArea> = Area::Free(FreeArea { next_free_block });
         let stored_area = StoredArea {
             area_size_index,
@@ -1890,5 +1891,74 @@ mod tests {
 
         let immutable = NodeStore::<Arc<ImmutableProposal>, _>::try_from(node_store).unwrap();
         println!("{immutable:?}"); // should not be reached, but need to consume immutable to avoid optimization removal
+    }
+}
+
+#[cfg(test)]
+mod test_freelists_iterator {
+    use super::nodestore_test_utils::*;
+    use super::*;
+    use crate::linear::memory::MemStore;
+    use crate::test_utils::seeded_rng;
+
+    use rand::Rng;
+    use rand::seq::IteratorRandom;
+
+    #[test]
+    fn test_freelists_iterator() {
+        let mut rng = seeded_rng();
+        let memstore = MemStore::new(vec![]);
+        let nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+
+        let area_index = rng.random_range(0..NUM_AREA_SIZES as u8);
+        let area_size = AREA_SIZES[area_index as usize];
+
+        // create a random freelist scattered across the storage
+        let offsets = (1..100u64)
+            .map(|i| i * area_size)
+            .choose_multiple(&mut rng, 10);
+        for (cur, next) in offsets.iter().zip(offsets.iter().skip(1)) {
+            write_free_area(
+                &nodestore,
+                Some(LinearAddress::new(*next).unwrap()),
+                area_index,
+                *cur,
+            );
+        }
+        write_free_area(&nodestore, None, area_index, *offsets.last().unwrap());
+
+        // test iterator from a random starting point
+        let skip = rng.random_range(0..offsets.len());
+        let mut iterator = offsets.into_iter().skip(skip);
+        let start = iterator.next().unwrap();
+        let mut freelist_iter = FreeListIterator::start_from_with_area_index(
+            nodestore.storage.as_ref(),
+            LinearAddress::new(start).unwrap(),
+            area_index,
+        );
+        assert_eq!(
+            freelist_iter.next().unwrap().unwrap(),
+            (LinearAddress::new(start).unwrap(), area_index)
+        );
+
+        for offset in iterator {
+            let next_item = freelist_iter.next().unwrap().unwrap();
+            assert_eq!(next_item, (LinearAddress::new(offset).unwrap(), area_index));
+        }
+
+        assert!(freelist_iter.next().is_none());
+
+        // test iterator with mismatching area index
+        let mut freelist_iter = FreeListIterator::start_from_with_area_index(
+            nodestore.storage.as_ref(),
+            LinearAddress::new(start).unwrap(),
+            area_index + 1,
+        );
+        assert!(matches!(
+            freelist_iter.next(),
+            Some(Err(e))
+            if e.kind() == ErrorKind::InvalidData && e.to_string().contains("area index mismatch")
+        ));
+        assert!(freelist_iter.next().is_none());
     }
 }
