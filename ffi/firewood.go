@@ -54,20 +54,22 @@ type Database struct {
 
 // Config configures the opening of a [Database].
 type Config struct {
-	Create            bool
-	NodeCacheEntries  uint
-	Revisions         uint
-	ReadCacheStrategy CacheStrategy
-	MetricsPort       uint16
+	Create               bool
+	NodeCacheEntries     uint
+	FreeListCacheEntries uint
+	Revisions            uint
+	ReadCacheStrategy    CacheStrategy
+	MetricsPort          uint16
 }
 
 // DefaultConfig returns a sensible default Config.
 func DefaultConfig() *Config {
 	return &Config{
-		NodeCacheEntries:  1_000_000,
-		Revisions:         100,
-		ReadCacheStrategy: OnlyCacheWrites,
-		MetricsPort:       3000,
+		NodeCacheEntries:     1_000_000,
+		FreeListCacheEntries: 40_000,
+		Revisions:            100,
+		ReadCacheStrategy:    OnlyCacheWrites,
+		MetricsPort:          3000,
 	}
 }
 
@@ -98,6 +100,9 @@ func New(filePath string, conf *Config) (*Database, error) {
 	}
 	if conf.NodeCacheEntries < 1 {
 		return nil, fmt.Errorf("%T.NodeCacheEntries must be >= 1", conf)
+	}
+	if conf.FreeListCacheEntries < 1 {
+		return nil, fmt.Errorf("%T.FreeListCacheEntries must be >= 1", conf)
 	}
 
 	args := C.struct_CreateOrOpenArgs{
