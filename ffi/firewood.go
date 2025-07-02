@@ -106,11 +106,12 @@ func New(filePath string, conf *Config) (*Database, error) {
 	}
 
 	args := C.struct_CreateOrOpenArgs{
-		path:         C.CString(filePath),
-		cache_size:   C.size_t(conf.NodeCacheEntries),
-		revisions:    C.size_t(conf.Revisions),
-		strategy:     C.uint8_t(conf.ReadCacheStrategy),
-		metrics_port: C.uint16_t(conf.MetricsPort),
+		path:                 C.CString(filePath),
+		cache_size:           C.size_t(conf.NodeCacheEntries),
+		free_list_cache_size: C.size_t(conf.FreeListCacheEntries),
+		revisions:            C.size_t(conf.Revisions),
+		strategy:             C.uint8_t(conf.ReadCacheStrategy),
+		metrics_port:         C.uint16_t(conf.MetricsPort),
 	}
 	// Defer freeing the C string allocated to the heap on the other side
 	// of the FFI boundary.
