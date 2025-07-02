@@ -13,21 +13,22 @@ jobs:
     steps:
       - uses: actions/checkout@v1
       - uses: dtolnay/rust-toolchain@stable
-      - name: publish firewood-storage crate
+      ## NOTE: keep these packages sorted in reverse topological order!
+      - name: publish firewood-macros crate
         continue-on-error: false
         run: |
           cargo login ${{ secrets.CARGO_TOKEN }}
-          cargo publish -p firewood-storage
+          cargo publish -p firewood-macros
       - name: publish firewood-triehash crate
         continue-on-error: false
         run: |
           cargo login ${{ secrets.CARGO_TOKEN }}
           cargo publish -p firewood-triehash
-      - name: publish firewood crate
+      - name: publish firewood-storage crate
         continue-on-error: false
         run: |
           cargo login ${{ secrets.CARGO_TOKEN }}
-          cargo publish -p firewood
+          cargo publish -p firewood-storage
       - name: publish firewood-ffi crate
         continue-on-error: false
         run: |
@@ -43,3 +44,8 @@ jobs:
         run: |
           cargo login ${{ secrets.CARGO_TOKEN }}
           cargo publish -p firewood-benchmark
+      - name: publish firewood crate
+        continue-on-error: false
+        run: |
+          cargo login ${{ secrets.CARGO_TOKEN }}
+          cargo publish -p firewood
