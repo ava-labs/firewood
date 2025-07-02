@@ -907,9 +907,9 @@ impl FreeArea {
         address: LinearAddress,
     ) -> Result<(Self, AreaIndex), FileIoError> {
         let free_area_addr = address.get();
-        let free_head_stream = storage.stream_from(free_area_addr)?;
-        let free_head: StoredArea<Area<Node, FreeArea>> = serializer()
-            .deserialize_from(free_head_stream)
+        let stored_area_stream = storage.stream_from(free_area_addr)?;
+        let stored_area: StoredArea<Area<Node, FreeArea>> = serializer()
+            .deserialize_from(stored_area_stream)
             .map_err(|e| {
                 storage.file_io_error(
                     Error::new(ErrorKind::InvalidData, e),
@@ -918,9 +918,9 @@ impl FreeArea {
                 )
             })?;
         let StoredArea {
-            area: Area::Free(free_head),
-            area_size_index: read_index,
-        } = free_head
+            area: Area::Free(free_area),
+            area_size_index: stored_area_index,
+        } = stored_area
         else {
             return Err(storage.file_io_error(
                 Error::new(ErrorKind::InvalidData, "Attempted to read a non-free area"),
@@ -929,7 +929,7 @@ impl FreeArea {
             ));
         };
 
-        Ok((free_head, read_index as AreaIndex))
+        Ok((free_area, stored_area_index as AreaIndex))
     }
 }
 
@@ -1674,7 +1674,7 @@ pub(crate) struct FreeListIterator<'a, S: ReadableStorage> {
 }
 
 impl<'a, S: ReadableStorage> FreeListIterator<'a, S> {
-    pub(crate) const fn new(storage: &'a S, next_addr: Option<(LinearAddress)>) -> Self {
+    pub(crate) const fn new(storage: &'a S, next_addr: Option<LinearAddress>) -> Self {
         Self { storage, next_addr }
     }
 }
@@ -1686,7 +1686,7 @@ impl<S: ReadableStorage> Iterator for FreeListIterator<'_, S> {
         let next_addr = self.next_addr?;
 
         // read the free area, propagate any IO error if it occurs
-        let (free_head, stored_area_index) = match FreeArea::from_storage(self.storage, next_addr) {
+        let (free_area, stored_area_index) = match FreeArea::from_storage(self.storage, next_addr) {
             Ok(free_area) => free_area,
             Err(e) => {
                 // if the read fails, we cannot proceed with the current freelist
@@ -1696,14 +1696,14 @@ impl<S: ReadableStorage> Iterator for FreeListIterator<'_, S> {
         };
 
         // update the next address to the next free block
-        self.next_addr = free_head.next_free_block;
+        self.next_addr = free_area.next_free_block;
         Some(Ok((next_addr, stored_area_index)))
     }
 }
 
 #[allow(dead_code)] // TODO: free list iterators will be used in the checker
 impl<T, S: ReadableStorage> NodeStore<T, S> {
-    // Returns an iterator over the free list of size no smaller than the size corresponding to `start_area_index`.
+    // Returns an iterator over the free lists of size no smaller than the size corresponding to `start_area_index`.
     // The iterator returns a tuple of the address and the area index of the free area.
     pub(crate) fn free_list_iter(
         &self,
@@ -1942,7 +1942,7 @@ mod tests {
 
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::indexing_slicing)]
-mod test_freelist_iterator {
+mod test_free_list_iterator {
     use super::nodestore_test_utils::*;
     use super::*;
     use crate::linear::memory::MemStore;
@@ -1952,7 +1952,7 @@ mod test_freelist_iterator {
     use rand::seq::IteratorRandom;
 
     #[test]
-    fn freelist_iterator() {
+    fn free_list_iterator() {
         let mut rng = seeded_rng();
         let memstore = MemStore::new(vec![]);
         let nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
@@ -1960,7 +1960,7 @@ mod test_freelist_iterator {
         let area_index = rng.random_range(0..NUM_AREA_SIZES as u8);
         let area_size = AREA_SIZES[area_index as usize];
 
-        // create a random freelist scattered across the storage
+        // create a random free list scattered across the storage
         let offsets = (1..100u64)
             .map(|i| i * area_size)
             .choose_multiple(&mut rng, 10);
@@ -1978,18 +1978,18 @@ mod test_freelist_iterator {
         let skip = rng.random_range(0..offsets.len());
         let mut iterator = offsets.into_iter().skip(skip);
         let start = iterator.next().unwrap();
-        let mut freelist_iter =
+        let mut free_list_iter =
             FreeListIterator::new(nodestore.storage.as_ref(), LinearAddress::new(start));
         assert_eq!(
-            freelist_iter.next().unwrap().unwrap(),
+            free_list_iter.next().unwrap().unwrap(),
             (LinearAddress::new(start).unwrap(), area_index)
         );
 
         for offset in iterator {
-            let next_item = freelist_iter.next().unwrap().unwrap();
+            let next_item = free_list_iter.next().unwrap().unwrap();
             assert_eq!(next_item, (LinearAddress::new(offset).unwrap(), area_index));
         }
 
-        assert!(freelist_iter.next().is_none());
+        assert!(free_list_iter.next().is_none());
     }
 }
