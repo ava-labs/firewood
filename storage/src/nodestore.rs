@@ -39,6 +39,7 @@ use std::fmt::Debug;
 /// style E color:#FFFFFF, fill:#AA00FF, stroke:#AA00FF
 /// ```
 use std::io::{Error, ErrorKind};
+use std::iter::FusedIterator;
 use std::mem::{offset_of, take};
 use std::num::NonZeroU64;
 use std::ops::Deref;
@@ -1699,6 +1700,8 @@ impl<S: ReadableStorage> Iterator for FreeListIterator<'_, S> {
         Some(Ok((next_addr, stored_area_index)))
     }
 }
+
+impl<S: ReadableStorage> FusedIterator for FreeListIterator<'_, S> {}
 
 #[allow(dead_code)] // TODO: free list iterators will be used in the checker
 impl<T, S: ReadableStorage> NodeStore<T, S> {
