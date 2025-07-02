@@ -1,8 +1,6 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![allow(clippy::cast_possible_truncation)]
-
 use crate::linear::FileIoError;
 use crate::logger::{debug, trace};
 use arc_swap::ArcSwap;
@@ -1664,7 +1662,6 @@ pub(crate) mod nodestore_test_utils {
     use super::*;
 
     // Helper function to wrap the node in a StoredArea and write it to the given offset. Returns the size of the area on success.
-    #[allow(clippy::cast_possible_truncation)]
     pub(crate) fn write_new_node<S: WritableStorage>(
         nodestore: &NodeStore<Committed, S>,
         node: &Node,
