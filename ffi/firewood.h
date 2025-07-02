@@ -62,7 +62,6 @@ typedef struct CreateOrOpenArgs {
   size_t cache_size;
   size_t revisions;
   uint8_t strategy;
-  uint16_t metrics_port;
 } CreateOrOpenArgs;
 
 typedef uint32_t ProposalId;
@@ -402,3 +401,12 @@ struct Value fwd_propose_on_proposal(const struct DatabaseHandle *db,
  *
  */
 struct Value fwd_root_hash(const struct DatabaseHandle *db);
+
+/**
+ * Start metrics exporter for this process
+ *
+ * # Arguments
+ *
+ * * `metrics_port` - the port where metrics will be exposed at
+ */
+struct Value fwd_start_metrics(uint16_t metrics_port);

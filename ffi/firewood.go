@@ -58,7 +58,6 @@ type Config struct {
 	NodeCacheEntries  uint
 	Revisions         uint
 	ReadCacheStrategy CacheStrategy
-	MetricsPort       uint16
 }
 
 // DefaultConfig returns a sensible default Config.
@@ -67,7 +66,6 @@ func DefaultConfig() *Config {
 		NodeCacheEntries:  1_000_000,
 		Revisions:         100,
 		ReadCacheStrategy: OnlyCacheWrites,
-		MetricsPort:       3000,
 	}
 }
 
@@ -101,11 +99,10 @@ func New(filePath string, conf *Config) (*Database, error) {
 	}
 
 	args := C.struct_CreateOrOpenArgs{
-		path:         C.CString(filePath),
-		cache_size:   C.size_t(conf.NodeCacheEntries),
-		revisions:    C.size_t(conf.Revisions),
-		strategy:     C.uint8_t(conf.ReadCacheStrategy),
-		metrics_port: C.uint16_t(conf.MetricsPort),
+		path:       C.CString(filePath),
+		cache_size: C.size_t(conf.NodeCacheEntries),
+		revisions:  C.size_t(conf.Revisions),
+		strategy:   C.uint8_t(conf.ReadCacheStrategy),
 	}
 	// Defer freeing the C string allocated to the heap on the other side
 	// of the FFI boundary.
@@ -124,6 +121,13 @@ func New(filePath string, conf *Config) (*Database, error) {
 	}
 
 	return &Database{handle: db}, nil
+}
+
+// Starts metrics exporter for this process.
+// Returns an error if the metrics exporter was unable to start.
+func StartMetrics(metricsPort uint16) error {
+	result := C.fwd_start_metrics(C.uint16_t(metricsPort))
+	return errorFromValue(&result)
 }
 
 // Update applies a batch of updates to the database, returning the hash of the
