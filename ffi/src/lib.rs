@@ -828,6 +828,11 @@ pub unsafe extern "C" fn fwd_free_database_error_result(
 /// # Arguments
 ///
 /// * `metrics_port` - the port where metrics will be exposed at
+///
+/// # Returns
+///
+/// A `Value` containing {0, null} if the metrics exporter successfully started.
+/// A `Value` containing {0, "error message"} if the metrics exporter failed to start.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_start_metrics(metrics_port: u16) -> Value {
     metrics_setup::setup_metrics(metrics_port)

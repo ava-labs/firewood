@@ -413,5 +413,10 @@ struct Value fwd_root_hash(const struct DatabaseHandle *db);
  * # Arguments
  *
  * * `metrics_port` - the port where metrics will be exposed at
+ *
+ * # Returns
+ *
+ * A `Value` containing {0, null} if the metrics exporter successfully started.
+ * A `Value` containing {0, "error message"} if the metrics exporter failed to start.
  */
 struct Value fwd_start_metrics(uint16_t metrics_port);
