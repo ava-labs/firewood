@@ -1624,14 +1624,14 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     }
 }
 
-pub struct FreeListIterator<'a, S: ReadableStorage> {
+pub(crate) struct FreeListIterator<'a, S: ReadableStorage> {
     storage: &'a S,
     next_addr: Option<LinearAddress>,
     area_index: Option<AreaIndex>,
 }
 
 impl<'a, S: ReadableStorage> FreeListIterator<'a, S> {
-    pub(crate) fn new(
+    pub(crate) const fn new(
         storage: &'a S,
         next_addr: Option<LinearAddress>,
         area_index: Option<AreaIndex>,
@@ -1644,7 +1644,7 @@ impl<'a, S: ReadableStorage> FreeListIterator<'a, S> {
     }
 }
 
-impl<'a, S: ReadableStorage> Iterator for FreeListIterator<'a, S> {
+impl<S: ReadableStorage> Iterator for FreeListIterator<'_, S> {
     type Item = Result<LinearAddress, FileIoError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -1679,10 +1679,11 @@ impl<'a, S: ReadableStorage> Iterator for FreeListIterator<'a, S> {
     }
 }
 
+#[allow(dead_code)] // TODO: free list iterators will be used in the checker
 impl<T, S: ReadableStorage> NodeStore<T, S> {
     /// Returns an iterator over the free list.
     /// The iterator returns a tuple of the address and the area index of the free area.
-    pub fn free_list_iter(
+    pub(crate) fn free_list_iter(
         &self,
     ) -> impl Iterator<Item = Result<(LinearAddress, AreaIndex), FileIoError>> {
         self.free_list_iter_inner(false)
@@ -1691,7 +1692,7 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
     /// Returns an iterator over the free list.
     /// The iterator returns a tuple of the address and the area index of the free area.
     /// If the area index does not match the expected area index, an error is returned.
-    pub fn checked_free_list_iter(
+    pub(crate) fn checked_free_list_iter(
         &self,
     ) -> impl Iterator<Item = Result<(LinearAddress, AreaIndex), FileIoError>> {
         self.free_list_iter_inner(true)
