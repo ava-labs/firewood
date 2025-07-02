@@ -23,7 +23,14 @@ mod noop_logger {
     #[macro_export]
     /// A noop logger, when the logger feature is disabled
     macro_rules! noop {
-        ($($arg:tt)+) => {};
+        ($($arg:tt)+) => {
+            if $crate::logger::trace_enabled() {
+                // This is a no-op. `trace_enabled` is always false. However, this
+                // branch exists to satisfy lints that complain about unused variables
+                // passed into the macro.
+                let _ = format!($($arg)+);
+            }
+        };
     }
 
     pub use noop as debug;
