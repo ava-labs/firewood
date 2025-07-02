@@ -1671,25 +1671,16 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 pub(crate) struct FreeListIterator<'a, S: ReadableStorage> {
     storage: &'a S,
     next_addr: Option<LinearAddress>,
-    area_index: Option<AreaIndex>,
 }
 
 impl<'a, S: ReadableStorage> FreeListIterator<'a, S> {
-    pub(crate) const fn new(
-        storage: &'a S,
-        next_addr: Option<LinearAddress>,
-        area_index: Option<AreaIndex>,
-    ) -> Self {
-        Self {
-            storage,
-            next_addr,
-            area_index,
-        }
+    pub(crate) const fn new(storage: &'a S, next_addr: Option<(LinearAddress)>) -> Self {
+        Self { storage, next_addr }
     }
 }
 
 impl<S: ReadableStorage> Iterator for FreeListIterator<'_, S> {
-    type Item = Result<LinearAddress, FileIoError>;
+    type Item = Result<(LinearAddress, AreaIndex), FileIoError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let next_addr = self.next_addr?;
@@ -1704,62 +1695,39 @@ impl<S: ReadableStorage> Iterator for FreeListIterator<'_, S> {
             }
         };
 
-        // if the area index does not match the expected area index, return an error
-        if let Some(expected_area_index) = self.area_index {
-            if expected_area_index != stored_area_index {
-                // area index mismatch, throw an error and stop iterating
-                self.next_addr = None;
-                return Some(Err(self.storage.file_io_error(
-                    Error::new(ErrorKind::InvalidData, "free list area index mismatch"),
-                    next_addr.get(),
-                    Some("FreeListIterator::next".to_string()),
-                )));
-            }
-        }
-
         // update the next address to the next free block
         self.next_addr = free_head.next_free_block;
-        Some(Ok(next_addr))
+        Some(Ok((next_addr, stored_area_index)))
     }
 }
 
 #[allow(dead_code)] // TODO: free list iterators will be used in the checker
 impl<T, S: ReadableStorage> NodeStore<T, S> {
-    /// Returns an iterator over the free list.
-    /// The iterator returns a tuple of the address and the area index of the free area.
+    // Returns an iterator over the free list of size no smaller than the size corresponding to `start_area_index`.
+    // The iterator returns a tuple of the address and the area index of the free area.
     pub(crate) fn free_list_iter(
         &self,
+        start_area_index: AreaIndex,
     ) -> impl Iterator<Item = Result<(LinearAddress, AreaIndex), FileIoError>> {
-        self.free_list_iter_inner(false)
+        self.free_list_iter_inner(start_area_index)
+            .map(|item| item.map(|(addr, area_index, _)| (addr, area_index)))
     }
 
-    /// Returns an iterator over the free list.
-    /// The iterator returns a tuple of the address and the area index of the free area.
-    /// If the area index does not match the expected area index, an error is returned.
-    pub(crate) fn checked_free_list_iter(
+    // pub(crate) since checker will use this to verify that the free areas are in the correct free list
+    // Return free_list_id as usize instead of AreaIndex to avoid type conversion
+    pub(crate) fn free_list_iter_inner(
         &self,
-    ) -> impl Iterator<Item = Result<(LinearAddress, AreaIndex), FileIoError>> {
-        self.free_list_iter_inner(true)
-    }
-
-    fn free_list_iter_inner(
-        &self,
-        check_area_index: bool,
-    ) -> impl Iterator<Item = Result<(LinearAddress, AreaIndex), FileIoError>> {
+        start_area_index: AreaIndex,
+    ) -> impl Iterator<Item = Result<(LinearAddress, AreaIndex, usize), FileIoError>> {
         self.header
             .free_lists
             .iter()
             .enumerate()
-            .flat_map(move |(area_index, next_addr)| {
-                let area_index =
-                    AreaIndex::try_from(area_index).expect("area index will not exceed u8");
-                let pass_area_index = if check_area_index {
-                    Some(area_index)
-                } else {
-                    None
-                };
-                FreeListIterator::new(self.storage.as_ref(), *next_addr, pass_area_index)
-                    .map(move |addr| addr.map(|addr| (addr, area_index)))
+            .skip(start_area_index as usize)
+            .flat_map(move |(free_list_id, next_addr)| {
+                FreeListIterator::new(self.storage.as_ref(), *next_addr).map(move |item| {
+                    item.map(|(addr, area_index)| (addr, area_index, free_list_id))
+                })
             })
     }
 }
@@ -2010,34 +1978,18 @@ mod test_freelist_iterator {
         let skip = rng.random_range(0..offsets.len());
         let mut iterator = offsets.into_iter().skip(skip);
         let start = iterator.next().unwrap();
-        let mut freelist_iter = FreeListIterator::new(
-            nodestore.storage.as_ref(),
-            LinearAddress::new(start),
-            Some(area_index),
-        );
+        let mut freelist_iter =
+            FreeListIterator::new(nodestore.storage.as_ref(), LinearAddress::new(start));
         assert_eq!(
             freelist_iter.next().unwrap().unwrap(),
-            LinearAddress::new(start).unwrap()
+            (LinearAddress::new(start).unwrap(), area_index)
         );
 
         for offset in iterator {
             let next_item = freelist_iter.next().unwrap().unwrap();
-            assert_eq!(next_item, LinearAddress::new(offset).unwrap());
+            assert_eq!(next_item, (LinearAddress::new(offset).unwrap(), area_index));
         }
 
-        assert!(freelist_iter.next().is_none());
-
-        // test iterator with mismatching area index
-        let mut freelist_iter = FreeListIterator::new(
-            nodestore.storage.as_ref(),
-            LinearAddress::new(start),
-            Some(area_index + 1),
-        );
-        assert!(matches!(
-            freelist_iter.next(),
-            Some(Err(e))
-            if e.kind() == ErrorKind::InvalidData && e.to_string().contains("area index mismatch")
-        ));
         assert!(freelist_iter.next().is_none());
     }
 }
