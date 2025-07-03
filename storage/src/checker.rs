@@ -97,7 +97,6 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 mod test {
     #![expect(clippy::unwrap_used)]
     #![expect(clippy::indexing_slicing)]
-    #![expect(clippy::cast_possible_truncation)]
 
     use super::*;
     use crate::linear::memory::MemStore;

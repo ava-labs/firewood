@@ -898,12 +898,12 @@ impl NodeStoreHeader {
 /// A [`FreeArea`] is stored at the start of the area that contained a node that
 /// has been freed.
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
-pub(crate) struct FreeArea {
+struct FreeArea {
     next_free_block: Option<LinearAddress>,
 }
 
 impl FreeArea {
-    pub(crate) fn from_storage<S: ReadableStorage>(
+    fn from_storage<S: ReadableStorage>(
         storage: &S,
         address: LinearAddress,
     ) -> Result<(Self, AreaIndex), FileIoError> {
