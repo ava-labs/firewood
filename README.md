@@ -27,7 +27,7 @@ When creating a revision,
 a list of nodes that are no longer needed are computed and saved to disk in a future-delete log (FDL) as well as kept in memory.
 When a revision expires, the nodes that were deleted when it was created are returned to the free space.
 
-Hashes are not used to determine the address of a node.
+Hashes are not used to determine where a node is stored on disk in the database file.
 Instead space for nodes may be allocated from the end of the file,
 or from space freed from expired revision.
 The root address of a node is simply the disk offset within the database file,
