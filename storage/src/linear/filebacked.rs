@@ -31,14 +31,28 @@ use std::os::unix::fs::FileExt;
 #[cfg(windows)]
 use std::os::windows::fs::FileExt;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 
 use lru::LruCache;
-use metrics::counter;
+use metrics::{Counter, counter};
 
 use crate::{CacheReadStrategy, LinearAddress, SharedNode};
 
 use super::{FileIoError, ReadableStorage, WritableStorage};
+
+// Static counters to avoid memory allocations
+static READ_NODE_COUNTER: LazyLock<Counter> =
+    LazyLock::new(|| counter!("firewood.read_node", "from" => "file"));
+static CACHE_NODE_HIT_COUNTER: LazyLock<Counter> =
+    LazyLock::new(|| counter!("firewood.cache.node", "mode" => "hit"));
+static CACHE_NODE_MISS_COUNTER: LazyLock<Counter> =
+    LazyLock::new(|| counter!("firewood.cache.node", "mode" => "miss"));
+static CACHE_FREELIST_HIT_COUNTER: LazyLock<Counter> =
+    LazyLock::new(|| counter!("firewood.cache.freelist", "type" => "hit"));
+static CACHE_FREELIST_MISS_COUNTER: LazyLock<Counter> =
+    LazyLock::new(|| counter!("firewood.cache.freelist", "type" => "miss"));
+static IO_READ_MS_COUNTER: LazyLock<Counter> = LazyLock::new(|| counter!("firewood.io.read_ms"));
+static IO_READ_COUNTER: LazyLock<Counter> = LazyLock::new(|| counter!("firewood.io.read"));
 
 /// A [`ReadableStorage`] and [`WritableStorage`] backed by a file
 pub struct FileBacked {
@@ -142,7 +156,7 @@ impl FileBacked {
 
 impl ReadableStorage for FileBacked {
     fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, FileIoError> {
-        counter!("firewood.read_node", "from" => "file").increment(1);
+        READ_NODE_COUNTER.increment(1);
         Ok(Box::new(PredictiveReader::new(self, addr)))
     }
 
@@ -154,18 +168,25 @@ impl ReadableStorage for FileBacked {
             .len())
     }
 
-    fn read_cached_node(&self, addr: LinearAddress, mode: &'static str) -> Option<SharedNode> {
+    fn read_cached_node(&self, addr: LinearAddress, _mode: &'static str) -> Option<SharedNode> {
         let mut guard = self.cache.lock().expect("poisoned lock");
         let cached = guard.get(&addr).cloned();
-        counter!("firewood.cache.node", "mode" => mode, "type" => if cached.is_some() { "hit" } else { "miss" })
-            .increment(1);
+        if cached.is_some() {
+            CACHE_NODE_HIT_COUNTER.increment(1);
+        } else {
+            CACHE_NODE_MISS_COUNTER.increment(1);
+        }
         cached
     }
 
     fn free_list_cache(&self, addr: LinearAddress) -> Option<Option<LinearAddress>> {
         let mut guard = self.free_list_cache.lock().expect("poisoned lock");
         let cached = guard.pop(&addr);
-        counter!("firewood.cache.freelist", "type" => if cached.is_some() { "hit" } else { "miss" }).increment(1);
+        if cached.is_some() {
+            CACHE_FREELIST_HIT_COUNTER.increment(1);
+        } else {
+            CACHE_FREELIST_MISS_COUNTER.increment(1);
+        }
         cached
     }
 
@@ -266,8 +287,8 @@ impl<'a> PredictiveReader<'a> {
 impl Drop for PredictiveReader<'_> {
     fn drop(&mut self) {
         let elapsed = self.started.elapsed();
-        counter!("firewood.io.read_ms").increment(elapsed.as_millis());
-        counter!("firewood.io.read").increment(1);
+        IO_READ_MS_COUNTER.increment(elapsed.as_millis());
+        IO_READ_COUNTER.increment(1);
     }
 }
 
