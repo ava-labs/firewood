@@ -86,7 +86,6 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                     expected_free_list: area_index,
                 });
             }
-            let area_size = Self::size_from_area_index(area_index);
             visited.insert_area(addr, area_size)?;
         }
         Ok(())
