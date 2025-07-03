@@ -209,7 +209,7 @@ impl<T: Hashable> Proof<T> {
             return Err(ProofError::Empty);
         };
 
-        #[allow(clippy::useless_conversion)]
+        #[cfg_attr(not(feature = "ethhash"), expect(clippy::useless_conversion))]
         let mut expected_hash: HashType = root_hash.clone().into();
 
         let mut iter = self.0.iter().peekable();
