@@ -29,7 +29,7 @@ When a revision expires, the nodes that were deleted when it was created are ret
 
 Hashes are not used to determine where a node is stored on disk in the database file.
 Instead space for nodes may be allocated from the end of the file,
-or from space freed from expired revision.
+or from space freed from expired revision. Free space management algorithmically resembles that of traditional heap memory management, with free lists used to track different-size spaces that can be reused.
 The root address of a node is simply the disk offset within the database file,
 and each branch node points to the disk offset of that other node.
 
