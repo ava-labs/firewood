@@ -67,19 +67,19 @@ jobs:
               
               if (metricChanges.trim()) {
                 const comment = `## Metrics Change Detection ⚠️
-                
-                This PR contains changes related to metrics:
-                
-                \`\`\`
-                ${metricChanges}
-                \`\`\`
-                
-                However, the dashboard was not modified.
-                
-                You may need to update \`benchmark/Grafana-dashboard.json\` accordingly.
-                
-                ---
-                *This check is automated to help maintain the dashboard.*`;
+
+This PR contains changes related to metrics:
+
+\`\`\`
+${metricChanges}
+\`\`\`
+
+However, the dashboard was not modified.
+
+You may need to update \`benchmark/Grafana-dashboard.json\` accordingly.
+
+---
+*This check is automated to help maintain the dashboard.*`;
                 
                 github.rest.issues.createComment({
                   issue_number: context.issue.number,
