@@ -85,6 +85,9 @@ In order to build firewood, the following dependencies must be installed:
 More detailed build instructions, including some scripts,
 can be found in the [benchmark setup scripts](benchmark/setup-scripts).
 
+If you want to build and test the ffi layer for another platform,
+you can find those instructions in the [ffi README](ffi/README.md).
+
 ## Ethereum compatibility
 
 By default, Firewood builds with hashes compatible with [merkledb](https://github.com/ava-labs/avalanchego/tree/master/x/merkledb),
@@ -105,9 +108,13 @@ See [replace\_hash](firewood/storage/src/hashers/ethhash.rs) for more details.
 
 ## Run
 
-There are several examples, in the examples directory, that simulate real world
-use-cases. Try running them via the command-line, via `cargo run --release
+Example(s) are in the [examples](firewood/examples) directory, that simulate real world
+use-cases. Try running the insert example via the command-line, via `cargo run --release
 --example insert`.
+
+There is a [fwdctl cli](fwdctl) for command-line operations on a database.
+
+There is also a [benchmark](benchmark) that shows some other example uses.
 
 For maximum runtime performance at the cost of compile time,
 use `cargo run --maxperf` instead,
