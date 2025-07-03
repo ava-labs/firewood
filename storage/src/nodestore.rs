@@ -602,6 +602,40 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     }
 }
 
+impl<T, S: WritableStorage> NodeStore<T, S> {
+    pub(crate) fn free_area(
+        &mut self,
+        addr: LinearAddress,
+        area_size_index: AreaIndex,
+    ) -> Result<(), FileIoError> {
+        let area: Area<Node, FreeArea> = Area::Free(FreeArea {
+            next_free_block: self.header.free_lists[area_size_index as usize],
+        });
+
+        let stored_area = StoredArea {
+            area_size_index,
+            area,
+        };
+
+        let stored_area_bytes = serializer().serialize(&stored_area).map_err(|e| {
+            self.storage.file_io_error(
+                Error::new(ErrorKind::InvalidData, e),
+                addr.get(),
+                Some("free_area".to_string()),
+            )
+        })?;
+
+        self.storage.write(addr.into(), &stored_area_bytes)?;
+
+        self.storage
+            .add_to_free_list_cache(addr, self.header.free_lists[area_size_index as usize]);
+
+        // The newly freed block is now the head of the free list.
+        self.header.free_lists[area_size_index as usize] = Some(addr);
+        Ok(())
+    }
+}
+
 impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Deletes the [Node] at the given address, updating the next pointer at
     /// the given addr, and changing the header of this committed nodestore to
@@ -622,30 +656,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             .increment(AREA_SIZES[area_size_index as usize]);
 
         // The area that contained the node is now free.
-        let area: Area<Node, FreeArea> = Area::Free(FreeArea {
-            next_free_block: self.header.free_lists[area_size_index as usize],
-        });
-
-        let stored_area = StoredArea {
-            area_size_index,
-            area,
-        };
-
-        let stored_area_bytes = serializer().serialize(&stored_area).map_err(|e| {
-            self.storage.file_io_error(
-                Error::new(ErrorKind::InvalidData, e),
-                addr.get(),
-                Some("delete_node".to_string()),
-            )
-        })?;
-
-        self.storage.write(addr.into(), &stored_area_bytes)?;
-
-        self.storage
-            .add_to_free_list_cache(addr, self.header.free_lists[area_size_index as usize]);
-
-        // The newly freed block is now the head of the free list.
-        self.header.free_lists[area_size_index as usize] = Some(addr);
+        self.free_area(addr, area_size_index)?;
 
         Ok(())
     }
@@ -1769,6 +1780,22 @@ pub(crate) mod nodestore_test_utils {
             area,
         };
         let stored_area_bytes = serializer().serialize(&stored_area).unwrap();
+        nodestore.storage.write(offset, &stored_area_bytes).unwrap();
+    }
+
+    pub(crate) fn test_write_random_stored_area<S: WritableStorage>(
+        nodestore: &NodeStore<Committed, S>,
+        area_size_index: AreaIndex,
+        offset: u64,
+    ) {
+        let area_size = AREA_SIZES[area_size_index as usize];
+        let area_content = vec![1u8; (area_size - 9) as usize]; // 1 byte for area size and 8 bytes for vector length
+        let stored_area = StoredArea {
+            area_size_index,
+            area: area_content,
+        };
+        let stored_area_bytes = serializer().serialize(&stored_area).unwrap();
+        assert!(stored_area_bytes.len() <= area_size as usize);
         nodestore.storage.write(offset, &stored_area_bytes).unwrap();
     }
 

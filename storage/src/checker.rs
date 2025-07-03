@@ -7,6 +7,8 @@ use crate::{
     WritableStorage,
 };
 
+use std::ops::Range;
+
 /// [`NodeStore`] checker
 // TODO: S needs to be writeable if we ask checker to fix the issues
 impl<S: WritableStorage> NodeStore<Committed, S> {
@@ -21,7 +23,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Panics if the header has too many free lists, which can never happen since freelists have a fixed size.
     // TODO: report all errors, not just the first one
     // TODO: add merkle hash checks as well
-    pub fn check(&self) -> Result<(), CheckerError> {
+    pub fn check(&mut self) -> Result<(), CheckerError> {
         // 1. Check the header
         let db_size = self.size();
         let file_size = self.physical_size()?;
@@ -46,7 +48,9 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         self.visit_freelist(&mut visited)?;
 
         // 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
-        let _ = visited.complement(); // TODO
+        for leaked_area in visited.complement() {
+            self.free_leaked(leaked_area)?;
+        }
 
         Ok(())
     }
@@ -87,6 +91,35 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         }
         Ok(())
     }
+
+    /// Go through the leaked areas and put them onto the free list
+    fn free_leaked(&mut self, leaked: Range<LinearAddress>) -> Result<(), CheckerError> {
+        let mut current_addr = leaked.start;
+        loop {
+            let (area_size_index, area_size) = self.area_index_and_size(current_addr)?;
+            self.free_area(current_addr, area_size_index)?;
+            let Some(next_addr) = current_addr.checked_add(area_size) else {
+                return Err(CheckerError::AreaOutOfBounds {
+                    start: current_addr,
+                    size: area_size,
+                    bounds: leaked,
+                });
+            };
+            if next_addr == leaked.end {
+                break;
+            } else if next_addr > leaked.end {
+                // the last area extends beyond the leaked area - this means the leaked area overlaps with an area we have visited
+                return Err(CheckerError::AreaIntersects {
+                    start: current_addr,
+                    size: area_size,
+                    intersection: vec![(leaked.end..next_addr)],
+                });
+            }
+            current_addr = next_addr;
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -94,12 +127,14 @@ mod test {
     #![expect(clippy::unwrap_used)]
     #![expect(clippy::indexing_slicing)]
 
+    use std::collections::HashMap;
+
     use super::*;
     use crate::linear::memory::MemStore;
     use crate::nodestore::nodestore_test_utils::{
-        test_write_free_area, test_write_header, test_write_new_node,
+        test_write_free_area, test_write_header, test_write_new_node, test_write_random_stored_area,
     };
-    use crate::nodestore::{AREA_SIZES, FreeLists, NodeStoreHeader};
+    use crate::nodestore::{AREA_SIZES, AreaIndex, FreeLists, NodeStoreHeader};
     use crate::{BranchNode, Child, HashType, LeafNode, NodeStore, Path};
 
     #[test]
@@ -207,5 +242,73 @@ mod test {
         nodestore.visit_freelist(&mut visited).unwrap();
         let complement = visited.complement();
         assert_eq!(complement.into_iter().collect::<Vec<_>>(), vec![]);
+    }
+
+    #[test]
+    // This test creates a linear set of stored areas and free some of them.
+    // When traversing the free list, we should see the areas we freed.
+    fn checker_free_leaked() {
+        use rand::Rng;
+        use rand::seq::IteratorRandom;
+
+        let mut rng = crate::test_utils::seeded_rng();
+
+        let memstore = MemStore::new(vec![]);
+        let mut nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+
+        let num_areas = 10;
+
+        // randomly insert areas into the nodestore
+        let mut high_watermark = NodeStoreHeader::SIZE;
+        let mut stored_areas = Vec::new();
+        for _ in 0..num_areas {
+            let (area_size_index, area_size) =
+                AREA_SIZES.iter().enumerate().choose(&mut rng).unwrap();
+            let area_addr = LinearAddress::new(high_watermark).unwrap();
+            test_write_random_stored_area(&nodestore, area_size_index as AreaIndex, high_watermark);
+            stored_areas.push((area_addr, area_size_index as AreaIndex, *area_size));
+            high_watermark += *area_size;
+        }
+        test_write_header(&mut nodestore, high_watermark, None, FreeLists::default());
+
+        // randomly pick some areas as leaked
+        let mut leaked = Vec::new();
+        let mut expected_free_areas = HashMap::new();
+        let mut area_to_free = None;
+        for (area_start, area_size_index, area_size) in stored_areas.iter() {
+            if rng.random::<f64>() < 0.5 {
+                // we free this area
+                expected_free_areas.insert(*area_start, *area_size_index);
+                let area_to_free_start = area_to_free
+                    .map(|(start, _)| start)
+                    .unwrap_or(area_start.get());
+                let area_to_free_end = area_start.get() + *area_size;
+                area_to_free = Some((area_to_free_start, area_to_free_end));
+            } else {
+                // we are not freeing this area, free the aggregated areas before this one
+                if let Some((start, end)) = area_to_free {
+                    leaked
+                        .push(LinearAddress::new(start).unwrap()..LinearAddress::new(end).unwrap());
+                    area_to_free = None;
+                }
+            }
+        }
+
+        // free the last one as well
+        if let Some((start, end)) = area_to_free {
+            leaked.push(LinearAddress::new(start).unwrap()..LinearAddress::new(end).unwrap());
+        }
+
+        // free leaked areas
+        for leaked_area in leaked.iter() {
+            nodestore.free_leaked(leaked_area.clone()).unwrap();
+        }
+
+        // assert that all leaked areas end up on the free list
+        let free_areas = nodestore
+            .free_list_iter(0)
+            .collect::<Result<HashMap<_, _>, _>>()
+            .unwrap();
+        assert_eq!(free_areas, expected_free_areas);
     }
 }
