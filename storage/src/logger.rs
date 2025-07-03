@@ -23,7 +23,7 @@ mod noop_logger {
     #[macro_export]
     /// A noop logger, when the logger feature is disabled
     macro_rules! noop {
-        ($($arg:tt)+) => {{
+        ($($arg:tt)+) => {
             if false {
                 // This is a no-op. If we had an empty macro, the compiler and
                 // clippy would generate warnings about variables in the
@@ -36,7 +36,7 @@ mod noop_logger {
                 // level of optimization is enabled.
                 let _ = format!($($arg)+);
             }
-        }};
+        };
     }
 
     pub use noop as debug;
