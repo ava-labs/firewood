@@ -54,7 +54,8 @@ firewood = { path = "firewood", version = "0.0.7" }
 
 This allows packages within the workspace to inherit the dependency,
 including path, version, and workspace-level features by adding `workspace = true`
-to the dependency table (note: using `cargo add -p firewood-fwdctl firewood-metrics` would automatically add the dependency with `workspace = true`).
+to the dependency table (note: using `cargo add -p firewood-fwdctl firewood-metrics`
+would automatically add the dependency with `workspace = true`).
 
 ```toml
 [dependencies]
