@@ -87,7 +87,7 @@ can be found in the [benchmark setup scripts](benchmark/setup-scripts).
 
 ## Ethereum compatibility
 
-By default, firewood builds with hashes compatible with [merkledb](https://github.com/ava-labs/avalanchego/tree/master/x/merkledb),
+By default, Firewood builds with hashes compatible with [merkledb](https://github.com/ava-labs/avalanchego/tree/master/x/merkledb),
 and does not support accounts.
 To enable this feature (at the cost of some performance) enable the ethhash [feature flag](https://doc.rust-lang.org/cargo/reference/features.html#command-line-feature-options).
 
