@@ -20,7 +20,7 @@ Switched to a new branch 'release/v0.0.8'
 ## Package Version
 
 Next, update the workspace version and ensure all crates within the firewood
-project are using the version of the new release. The root [Cargo.toml]
+project are using the version of the new release. The root [Cargo.toml](Cargo.toml)
 file uses the [`[workspace.package]`](https://doc.rust-lang.org/cargo/reference/workspaces.html#the-package-table)
 table to define the version for all subpackages.
 
@@ -97,4 +97,4 @@ git push origin v0.0.8
 
 for `v0.0.8` for the merged version change. The CI will automatically publish a
 draft release which consists of release notes and changes (see
-[.github/workflows/release.yaml]).
+[.github/workflows/release.yaml](.github/workflows/release.yaml)).
