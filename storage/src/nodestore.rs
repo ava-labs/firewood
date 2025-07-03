@@ -1772,6 +1772,24 @@ pub(crate) mod nodestore_test_utils {
         nodestore.storage.write(offset, &stored_area_bytes).unwrap();
     }
 
+    // Helper function to write a random stored area to the given offset.
+    pub(crate) fn test_write_random_stored_area<S: WritableStorage>(
+        nodestore: &NodeStore<Committed, S>,
+        area_size_index: AreaIndex,
+        offset: u64,
+    ) {
+        let area_size = AREA_SIZES[area_size_index as usize];
+        let content_size = area_size.checked_sub(9).unwrap(); // 1 byte for area size and 8 bytes for vector length
+        let area_content = vec![1u8; content_size as usize];
+        let stored_area = StoredArea {
+            area_size_index,
+            area: area_content,
+        };
+        let stored_area_bytes = serializer().serialize(&stored_area).unwrap();
+        assert!(stored_area_bytes.len() <= area_size as usize);
+        nodestore.storage.write(offset, &stored_area_bytes).unwrap();
+    }
+
     // Helper function to write the NodeStoreHeader
     pub(crate) fn test_write_header<S: WritableStorage>(
         nodestore: &mut NodeStore<Committed, S>,
