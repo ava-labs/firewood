@@ -2,14 +2,6 @@
 // See the file LICENSE.md for licensing terms.
 
 #![expect(
-    clippy::cast_possible_truncation,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-#![expect(
-    clippy::unnecessary_wraps,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-#![expect(
     clippy::used_underscore_binding,
     reason = "Found 3 occurrences after enabling the lint."
 )]
@@ -1163,7 +1155,7 @@ mod tests {
         let immutable_merkle: Merkle<NodeStore<Arc<ImmutableProposal>, _>> =
             merkle.try_into().unwrap();
         println!("{}", immutable_merkle.dump().unwrap());
-        merkle = Merkle::from(NodeStore::new(Arc::new(immutable_merkle.into_inner())).unwrap());
+        merkle = Merkle::from(NodeStore::new(&Arc::new(immutable_merkle.into_inner())).unwrap());
 
         let mut stream = merkle.key_value_iter();
 

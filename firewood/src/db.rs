@@ -9,14 +9,6 @@
     clippy::missing_panics_doc,
     reason = "Found 5 occurrences after enabling the lint."
 )]
-#![expect(
-    clippy::needless_pass_by_value,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-#![expect(
-    clippy::unused_async,
-    reason = "Found 2 occurrences after enabling the lint."
-)]
 
 use crate::merkle::Merkle;
 use crate::proof::{Proof, ProofNode};
@@ -207,7 +199,7 @@ where
             .read()
             .expect("poisoned lock")
             .current_revision();
-        let proposal = NodeStore::new(parent)?;
+        let proposal = NodeStore::new(&parent)?;
         let mut merkle = Merkle::from(proposal);
         let span = fastrace::Span::enter_with_local_parent("merkleops");
         for op in batch {
@@ -324,7 +316,7 @@ impl Db {
             .read()
             .expect("poisoned lock")
             .current_revision();
-        let proposal = NodeStore::new(parent)?;
+        let proposal = NodeStore::new(&parent)?;
         let mut merkle = Merkle::from(proposal);
         for op in batch {
             match op {
@@ -500,7 +492,7 @@ impl Proposal<'_> {
         batch: api::Batch<K, V>,
     ) -> Result<Self, api::Error> {
         let parent = self.nodestore.clone();
-        let proposal = NodeStore::new(parent)?;
+        let proposal = NodeStore::new(&parent)?;
         let mut merkle = Merkle::from(proposal);
         for op in batch {
             match op {

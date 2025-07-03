@@ -6,10 +6,6 @@
     reason = "Found 4 occurrences after enabling the lint."
 )]
 #![expect(
-    clippy::cast_possible_truncation,
-    reason = "Found 6 occurrences after enabling the lint."
-)]
-#![expect(
     clippy::indexing_slicing,
     reason = "Found 1 occurrences after enabling the lint."
 )]
@@ -478,7 +474,7 @@ pub struct PathIterItem {
 
 #[cfg(test)]
 mod test {
-    #![expect(clippy::needless_pass_by_value, clippy::unwrap_used)]
+    #![expect(clippy::unwrap_used)]
 
     use crate::node::{BranchNode, LeafNode, Node};
     use crate::{Child, LinearAddress, Path};

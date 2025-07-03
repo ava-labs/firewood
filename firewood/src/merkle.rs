@@ -2,10 +2,6 @@
 // See the file LICENSE.md for licensing terms.
 
 #![expect(
-    clippy::cast_possible_truncation,
-    reason = "Found 5 occurrences after enabling the lint."
-)]
-#![expect(
     clippy::match_same_arms,
     reason = "Found 1 occurrences after enabling the lint."
 )]
@@ -1072,10 +1068,6 @@ mod tests {
         clippy::items_after_statements,
         reason = "Found 1 occurrences after enabling the lint."
     )]
-    #![expect(
-        clippy::unnecessary_wraps,
-        reason = "Found 1 occurrences after enabling the lint."
-    )]
 
     use super::*;
     use firewood_storage::{MemStore, MutableProposal, NodeStore, RootReader, TrieHash};
@@ -2055,8 +2047,9 @@ mod tests {
                 |(mut hashes, immutable_merkle), (k, v)| {
                     let root_hash = immutable_merkle.nodestore.root_hash();
                     hashes.push(root_hash);
-                    let mut merkle =
-                        Merkle::from(NodeStore::new(Arc::new(immutable_merkle.nodestore)).unwrap());
+                    let mut merkle = Merkle::from(
+                        NodeStore::new(&Arc::new(immutable_merkle.nodestore)).unwrap(),
+                    );
                     merkle.insert(k, v.clone()).unwrap();
                     (hashes, merkle.try_into().unwrap())
                 },
@@ -2067,7 +2060,7 @@ mod tests {
                 |(mut new_hashes, immutable_merkle_before_removal), (k, _)| {
                     let before = immutable_merkle_before_removal.dump().unwrap();
                     let mut merkle = Merkle::from(
-                        NodeStore::new(Arc::new(immutable_merkle_before_removal.nodestore))
+                        NodeStore::new(&Arc::new(immutable_merkle_before_removal.nodestore))
                             .unwrap(),
                     );
                     merkle.remove(k).unwrap();

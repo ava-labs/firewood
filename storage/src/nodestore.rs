@@ -1,43 +1,6 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![expect(
-    clippy::arithmetic_side_effects,
-    reason = "Found 5 occurrences after enabling the lint."
-)]
-#![expect(
-    clippy::cast_possible_truncation,
-    reason = "Found 16 occurrences after enabling the lint."
-)]
-#![expect(
-    clippy::default_trait_access,
-    reason = "Found 6 occurrences after enabling the lint."
-)]
-#![expect(
-    clippy::indexing_slicing,
-    reason = "Found 10 occurrences after enabling the lint."
-)]
-#![expect(
-    clippy::match_wildcard_for_single_variants,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-#![expect(
-    clippy::missing_errors_doc,
-    reason = "Found 15 occurrences after enabling the lint."
-)]
-#![expect(
-    clippy::missing_panics_doc,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-#![expect(
-    clippy::needless_pass_by_value,
-    reason = "Found 3 occurrences after enabling the lint."
-)]
-#![expect(
-    clippy::unwrap_used,
-    reason = "Found 2 occurrences after enabling the lint."
-)]
-
 use crate::linear::FileIoError;
 use crate::logger::{debug, trace};
 use arc_swap::ArcSwap;
@@ -49,6 +12,7 @@ use fastrace::local::LocalSpan;
 use metrics::counter;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::fmt::Debug;
 
@@ -75,6 +39,7 @@ use std::fmt::Debug;
 /// style E color:#FFFFFF, fill:#AA00FF, stroke:#AA00FF
 /// ```
 use std::io::{Error, ErrorKind};
+use std::iter::FusedIterator;
 use std::mem::{offset_of, take};
 use std::num::NonZeroU64;
 use std::ops::Deref;
@@ -90,7 +55,7 @@ use super::linear::WritableStorage;
 
 /// [`NodeStore`] divides the linear store into blocks of different sizes.
 /// [`AREA_SIZES`] is every valid block size.
-const AREA_SIZES: [u64; 23] = [
+pub(crate) const AREA_SIZES: [u64; 23] = [
     16, // Min block size
     32,
     64,
@@ -129,7 +94,7 @@ fn area_size_hash() -> TrieHash {
 }
 
 // TODO: automate this, must stay in sync with above
-const fn index_name(index: AreaIndex) -> &'static str {
+const fn index_name(index: usize) -> &'static str {
     match index {
         0 => "16",
         1 => "32",
@@ -168,6 +133,11 @@ const NUM_AREA_SIZES: usize = AREA_SIZES.len();
 const MIN_AREA_SIZE: u64 = AREA_SIZES[0];
 const MAX_AREA_SIZE: u64 = AREA_SIZES[NUM_AREA_SIZES - 1];
 
+#[inline]
+fn new_area_index(n: usize) -> AreaIndex {
+    n.try_into().expect("Area index out of bounds")
+}
+
 /// Returns the index in `BLOCK_SIZES` of the smallest block size >= `n`.
 fn area_size_to_index(n: u64) -> Result<AreaIndex, Error> {
     if n > MAX_AREA_SIZE {
@@ -184,7 +154,7 @@ fn area_size_to_index(n: u64) -> Result<AreaIndex, Error> {
     AREA_SIZES
         .iter()
         .position(|&size| size >= n)
-        .map(|index| index as AreaIndex)
+        .map(new_area_index)
         .ok_or_else(|| {
             Error::new(
                 ErrorKind::InvalidData,
@@ -223,6 +193,10 @@ struct StoredArea<T> {
 impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
     /// Returns (index, `area_size`) for the stored area at `addr`.
     /// `index` is the index of `area_size` in the array of valid block sizes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the area cannot be read.
     pub fn area_index_and_size(
         &self,
         addr: LinearAddress,
@@ -252,6 +226,10 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
 
     /// Read a [Node] from the provided [`LinearAddress`].
     /// `addr` is the address of a `StoredArea` in the `ReadableStorage`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the node cannot be read.
     pub fn read_node_from_disk(
         &self,
         addr: LinearAddress,
@@ -263,7 +241,9 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
 
         debug_assert!(addr.get() % 8 == 0);
 
-        let actual_addr = addr.get() + 1; // skip the length byte
+        // saturating because there is no way we can be reading at u64::MAX
+        // and this will fail very soon afterwards
+        let actual_addr = addr.get().saturating_add(1); // skip the length byte
 
         let _span = LocalSpan::enter_with_local_parent("read_and_deserialize");
 
@@ -290,6 +270,10 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
 
     /// Read a [Node] from the provided [`LinearAddress`] and size.
     /// This is an uncached read, primarily used by check utilities
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the node cannot be read.
     pub fn uncached_read_node_and_size(
         &self,
         addr: LinearAddress,
@@ -303,7 +287,7 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
                 Some("uncached_read_node_and_size".to_string()),
             )
         })?;
-        self.storage.stream_from(addr.get() + 1)?;
+        self.storage.stream_from(addr.get().saturating_add(1))?;
         let node: SharedNode = Node::from_reader(area_stream)
             .map_err(|e| {
                 self.storage.file_io_error(
@@ -317,8 +301,13 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
     }
 
     /// Get the size of an area index (used by the checker)
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index` is out of bounds for the `AREA_SIZES` array.
     #[must_use]
     pub const fn size_from_area_index(index: AreaIndex) -> u64 {
+        #[expect(clippy::indexing_slicing)]
         AREA_SIZES[index as usize]
     }
 }
@@ -326,6 +315,10 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
 impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// Open an existing [`NodeStore`]
     /// Assumes the header is written in the [`ReadableStorage`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the header cannot be read or validated.
     pub fn open(storage: Arc<S>) -> Result<Self, FileIoError> {
         let mut stream = storage.stream_from(0)?;
         let mut header = NodeStoreHeader::new();
@@ -343,7 +336,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         let mut nodestore = Self {
             header,
             kind: Committed {
-                deleted: Default::default(),
+                deleted: Box::default(),
                 root_hash: None,
             },
             storage,
@@ -351,7 +344,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 
         if let Some(root_address) = nodestore.header.root_address {
             let node = nodestore.read_node_from_disk(root_address, "open");
-            let root_hash = node.map(|n| hash_node(&n, &Path(Default::default())))?;
+            let root_hash = node.map(|n| hash_node(&n, &Path(SmallVec::default())))?;
             nodestore.kind.root_hash = Some(root_hash.into_triehash());
         }
 
@@ -360,6 +353,10 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 
     /// Create a new, empty, Committed [`NodeStore`] and clobber
     /// the underlying store with an empty freelist and no root node
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the storage cannot be accessed.
     pub fn new_empty_committed(storage: Arc<S>) -> Result<Self, FileIoError> {
         let header = NodeStoreHeader::new();
 
@@ -367,7 +364,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
             header,
             storage,
             kind: Committed {
-                deleted: Default::default(),
+                deleted: Box::default(),
                 root_hash: None,
             },
         })
@@ -425,10 +422,14 @@ impl Parentable for Committed {
 
 impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     /// Create a new `MutableProposal` [`NodeStore`] from a parent [`NodeStore`]
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the parent root cannot be read.
     pub fn new<F: Parentable + ReadInMemoryNode>(
-        parent: Arc<NodeStore<F, S>>,
+        parent: &Arc<NodeStore<F, S>>,
     ) -> Result<Self, FileIoError> {
-        let mut deleted: Vec<_> = Default::default();
+        let mut deleted = Vec::default();
         let root = if let Some(root_addr) = parent.header.root_address {
             deleted.push(root_addr);
             let root = parent.read_node(root_addr)?;
@@ -457,6 +458,10 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     /// Reads a node for update, marking it as deleted in this proposal.
     /// We get an arc from cache (reading it from disk if necessary) then
     /// copy/clone the node and return it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the node cannot be read.
     pub fn read_for_update(&mut self, addr: LinearAddress) -> Result<Node, FileIoError> {
         self.delete_node(addr);
         let arc_wrapped_node = self.read_node(addr)?;
@@ -472,6 +477,10 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
 impl<S: WritableStorage> NodeStore<MutableProposal, S> {
     /// Creates a new, empty, [`NodeStore`] and clobbers the underlying `storage` with an empty header.
     /// This is used during testing and during the creation of an in-memory merkle for proofs
+    ///
+    /// # Panics
+    ///
+    /// Panics if the header cannot be written.
     pub fn new_empty_proposal(storage: Arc<S>) -> Self {
         let header = NodeStoreHeader::new();
         let header_bytes = bytemuck::bytes_of(&header);
@@ -482,7 +491,7 @@ impl<S: WritableStorage> NodeStore<MutableProposal, S> {
             header,
             kind: MutableProposal {
                 root: None,
-                deleted: Default::default(),
+                deleted: Vec::default(),
                 parent: NodeStoreParent::Committed(None),
             },
             storage,
@@ -496,6 +505,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     /// and the index of the free list that was used.
     /// If there are no free areas big enough for `n` bytes, returns None.
     /// TODO danlaine: If we return a larger area than requested, we should split it.
+    #[expect(clippy::indexing_slicing)]
     fn allocate_from_freed(
         &mut self,
         n: u64,
@@ -530,10 +540,10 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 *free_stored_area_addr = free_head.next_free_block;
             }
 
-            counter!("firewood.space.reused", "index" => index_name(index as u8))
+            counter!("firewood.space.reused", "index" => index_name(index))
                 .increment(AREA_SIZES[index]);
-            counter!("firewood.space.wasted", "index" => index_name(index as u8))
-                .increment(AREA_SIZES[index] - n);
+            counter!("firewood.space.wasted", "index" => index_name(index))
+                .increment(AREA_SIZES[index].saturating_sub(n));
 
             // Return the address of the newly allocated block.
             trace!("Allocating from free list: addr: {address:?}, size: {index}");
@@ -541,11 +551,12 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         }
 
         trace!("No free blocks of sufficient size {index_wanted} found");
-        counter!("firewood.space.from_end", "index" => index_name(index_wanted as u8))
+        counter!("firewood.space.from_end", "index" => index_name(index_wanted as usize))
             .increment(AREA_SIZES[index_wanted as usize]);
         Ok(None)
     }
 
+    #[expect(clippy::indexing_slicing)]
     fn allocate_from_end(&mut self, n: u64) -> Result<(LinearAddress, AreaIndex), FileIoError> {
         let index = area_size_to_index(n).map_err(|e| {
             self.storage
@@ -553,7 +564,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         })?;
         let area_size = AREA_SIZES[index as usize];
         let addr = LinearAddress::new(self.header.size).expect("node store size can't be 0");
-        self.header.size += area_size;
+        self.header.size = self.header.size.saturating_add(area_size);
         debug_assert!(addr.get() % 8 == 0);
         trace!("Allocating from end: addr: {addr:?}, size: {index}");
         Ok((addr, index))
@@ -569,6 +580,10 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     /// Returns an address that can be used to store the given `node` and updates
     /// `self.header` to reflect the allocation. Doesn't actually write the node to storage.
     /// Also returns the index of the free list the node was allocated from.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the node cannot be allocated.
     pub fn allocate_node(
         &mut self,
         node: &Node,
@@ -591,13 +606,19 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Deletes the [Node] at the given address, updating the next pointer at
     /// the given addr, and changing the header of this committed nodestore to
     /// have the address on the freelist
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the node cannot be deleted.
+    #[expect(clippy::indexing_slicing)]
     pub fn delete_node(&mut self, addr: LinearAddress) -> Result<(), FileIoError> {
         debug_assert!(addr.get() % 8 == 0);
 
         let (area_size_index, _) = self.area_index_and_size(addr)?;
         trace!("Deleting node at {addr:?} of size {area_size_index}");
-        counter!("firewood.delete_node", "index" => index_name(area_size_index)).increment(1);
-        counter!("firewood.space.freed", "index" => index_name(area_size_index))
+        counter!("firewood.delete_node", "index" => index_name(area_size_index as usize))
+            .increment(1);
+        counter!("firewood.space.freed", "index" => index_name(area_size_index as usize))
             .increment(AREA_SIZES[area_size_index as usize]);
 
         // The area that contained the node is now free.
@@ -750,7 +771,10 @@ impl Version {
 
         // pad with nul bytes
         let mut bytes = [0u8; Version::SIZE];
-        bytes[..VERSION_STR.len()].copy_from_slice(VERSION_STR.as_bytes());
+        bytes
+            .get_mut(..VERSION_STR.len())
+            .expect("must fit")
+            .copy_from_slice(VERSION_STR.as_bytes());
 
         Self { bytes }
     }
@@ -797,7 +821,10 @@ impl NodeStoreHeader {
             root_address: None,
             version: Version::new(),
             free_lists: Default::default(),
-            area_size_hash: area_size_hash().as_slice().try_into().unwrap(),
+            area_size_hash: area_size_hash()
+                .as_slice()
+                .try_into()
+                .expect("sizes should match"),
             #[cfg(feature = "ethhash")]
             ethhash: 1,
             #[cfg(not(feature = "ethhash"))]
@@ -876,18 +903,14 @@ pub(crate) struct FreeArea {
 }
 
 impl FreeArea {
-    pub(crate) const fn next_free_block(self) -> Option<LinearAddress> {
-        self.next_free_block
-    }
-
     pub(crate) fn from_storage<S: ReadableStorage>(
         storage: &S,
-        addr: LinearAddress,
-    ) -> Result<(FreeArea, AreaIndex), FileIoError> {
-        let free_area_addr = addr.get();
-        let free_head_stream = storage.stream_from(free_area_addr)?;
-        let free_head: StoredArea<Area<Node, FreeArea>> = serializer()
-            .deserialize_from(free_head_stream)
+        address: LinearAddress,
+    ) -> Result<(Self, AreaIndex), FileIoError> {
+        let free_area_addr = address.get();
+        let stored_area_stream = storage.stream_from(free_area_addr)?;
+        let stored_area: StoredArea<Area<Node, FreeArea>> = serializer()
+            .deserialize_from(stored_area_stream)
             .map_err(|e| {
                 storage.file_io_error(
                     Error::new(ErrorKind::InvalidData, e),
@@ -896,9 +919,9 @@ impl FreeArea {
                 )
             })?;
         let StoredArea {
-            area: Area::Free(free_head),
-            area_size_index: read_index,
-        } = free_head
+            area: Area::Free(free_area),
+            area_size_index: stored_area_index,
+        } = stored_area
         else {
             return Err(storage.file_io_error(
                 Error::new(ErrorKind::InvalidData, "Attempted to read a non-free area"),
@@ -906,7 +929,8 @@ impl FreeArea {
                 Some("FreeArea::from_storage".to_string()),
             ));
         };
-        Ok((free_head, read_index))
+
+        Ok((free_area, stored_area_index as AreaIndex))
     }
 }
 
@@ -926,6 +950,10 @@ impl<T> TrieReader for T where T: NodeReader + RootReader {}
 /// Reads nodes from a merkle trie.
 pub trait NodeReader {
     /// Returns the node at `addr`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the node cannot be read.
     fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, FileIoError>;
 }
 
@@ -1010,7 +1038,7 @@ impl ImmutableProposal {
         .as_ref()
         {
             NodeStoreParent::Committed(root_hash) => *root_hash == hash,
-            _ => false,
+            NodeStoreParent::Proposed(_) => false,
         }
     }
 }
@@ -1112,7 +1140,7 @@ impl<T: ReadInMemoryNode + Into<NodeStoreParent>, S: ReadableStorage> From<NodeS
             header: val.header,
             kind: MutableProposal {
                 root: None,
-                deleted: Default::default(),
+                deleted: Vec::default(),
                 parent: val.kind.into(),
             },
             storage: val.storage,
@@ -1149,7 +1177,8 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         if let Node::Branch(ref mut b) = node {
             // special case code for ethereum hashes at the account level
             #[cfg(feature = "ethhash")]
-            let make_fake_root = if path_prefix.0.len() + b.partial_path.0.len() == 64 {
+            let make_fake_root = if path_prefix.0.len().saturating_add(b.partial_path.0.len()) == 64
+            {
                 // looks like we're at an account branch
                 // tally up how many hashes we need to deal with
                 let (unhashed, mut hashed) = b.children.iter_mut().enumerate().fold(
@@ -1275,6 +1304,10 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
 
 impl<T, S: WritableStorage> NodeStore<T, S> {
     /// Persist the header from this proposal to storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the header cannot be written.
     pub fn flush_header(&self) -> Result<(), FileIoError> {
         let header_bytes = bytemuck::bytes_of(&self.header);
         self.storage.write(0, header_bytes)?;
@@ -1283,6 +1316,10 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
 
     /// Persist the header, including all the padding
     /// This is only done the first time we write the header
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the header cannot be written.
     pub fn flush_header_with_padding(&self) -> Result<(), FileIoError> {
         let header_bytes = bytemuck::bytes_of(&self.header)
             .iter()
@@ -1602,6 +1639,10 @@ where
 
 impl<S: WritableStorage> NodeStore<Committed, S> {
     /// adjust the freelist of this proposal to reflect the freed nodes in the oldest proposal
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if a node cannot be deleted.
     pub fn reap_deleted(
         mut self,
         proposal: &mut NodeStore<Committed, S>,
@@ -1616,88 +1657,6 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     }
 }
 
-pub struct FreeListIterator<'a, S: ReadableStorage> {
-    storage: &'a S,
-    area_index: AreaIndex,
-    next_addr: Option<LinearAddress>,
-}
-
-impl<'a, S: ReadableStorage> FreeListIterator<'a, S> {
-    pub(crate) const fn new(
-        storage: &'a S,
-        next_addr: Option<LinearAddress>,
-        area_index: AreaIndex,
-    ) -> Self {
-        Self {
-            storage,
-            area_index,
-            next_addr,
-        }
-    }
-}
-
-impl<S: ReadableStorage> Iterator for FreeListIterator<'_, S> {
-    type Item = Result<LinearAddress, FileIoError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let next_addr = self.next_addr?;
-
-        // read the free area, propagate any IO error if it occurs
-        let (free_head, stored_area_index) = match FreeArea::from_storage(self.storage, next_addr) {
-            Ok(free_area) => free_area,
-            Err(e) => {
-                // if the read fails, we cannot proceed with the current freelist
-                self.next_addr = None;
-                return Some(Err(e));
-            }
-        };
-
-        // if the area index does not match the expected area index, return an error
-        if self.area_index != stored_area_index {
-            // area index mismatch, throw an error and stop iterating
-            self.next_addr = None;
-            return Some(Err(self.storage.file_io_error(
-                Error::new(ErrorKind::InvalidData, "free list area index mismatch"),
-                next_addr.get(),
-                Some("FreeListIterator::next".to_string()),
-            )));
-        }
-
-        // update the next address to the next free block
-        self.next_addr = free_head.next_free_block();
-        Some(Ok(next_addr))
-    }
-}
-
-impl<T, S: ReadableStorage> NodeStore<T, S> {
-    #[allow(dead_code)]
-    /// Iterate over the free list for a given area index.
-    pub(crate) fn freelist_iter(
-        &self,
-        area_index: AreaIndex,
-    ) -> impl Iterator<Item = Result<LinearAddress, FileIoError>> {
-        FreeListIterator::new(
-            self.storage.as_ref(),
-            self.header.free_lists[area_index as usize],
-            area_index,
-        )
-    }
-
-    /// Iterate over all the free lists.
-    pub(crate) fn freelists_iter(
-        &self,
-    ) -> impl Iterator<Item = Result<(LinearAddress, AreaIndex), FileIoError>> {
-        self.header
-            .free_lists
-            .iter()
-            .enumerate()
-            .flat_map(|(area_index, head)| {
-                FreeListIterator::new(self.storage.as_ref(), *head, area_index as AreaIndex)
-                    .map(move |result| result.map(|addr| (addr, area_index as AreaIndex)))
-            })
-    }
-}
-
 // Helper functions for the checker
 impl<S: ReadableStorage> NodeStore<Committed, S> {
     pub(crate) const fn size(&self) -> u64 {
@@ -1709,20 +1668,78 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     }
 }
 
+pub(crate) struct FreeListIterator<'a, S: ReadableStorage> {
+    storage: &'a S,
+    next_addr: Option<LinearAddress>,
+}
+
+impl<'a, S: ReadableStorage> FreeListIterator<'a, S> {
+    pub(crate) const fn new(storage: &'a S, next_addr: Option<LinearAddress>) -> Self {
+        Self { storage, next_addr }
+    }
+}
+
+impl<S: ReadableStorage> Iterator for FreeListIterator<'_, S> {
+    type Item = Result<(LinearAddress, AreaIndex), FileIoError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let next_addr = self.next_addr?;
+
+        // read the free area, propagate any IO error if it occurs
+        let (free_area, stored_area_index) = match FreeArea::from_storage(self.storage, next_addr) {
+            Ok(free_area) => free_area,
+            Err(e) => {
+                // if the read fails, we cannot proceed with the current freelist
+                self.next_addr = None;
+                return Some(Err(e));
+            }
+        };
+
+        // update the next address to the next free block
+        self.next_addr = free_area.next_free_block;
+        Some(Ok((next_addr, stored_area_index)))
+    }
+}
+
+impl<S: ReadableStorage> FusedIterator for FreeListIterator<'_, S> {}
+
+#[allow(dead_code)] // TODO: free list iterators will be used in the checker
+impl<T, S: ReadableStorage> NodeStore<T, S> {
+    // Returns an iterator over the free lists of size no smaller than the size corresponding to `start_area_index`.
+    // The iterator returns a tuple of the address and the area index of the free area.
+    pub(crate) fn free_list_iter(
+        &self,
+        start_area_index: AreaIndex,
+    ) -> impl Iterator<Item = Result<(LinearAddress, AreaIndex), FileIoError>> {
+        self.free_list_iter_inner(start_area_index)
+            .map(|item| item.map(|(addr, area_index, _)| (addr, area_index)))
+    }
+
+    // pub(crate) since checker will use this to verify that the free areas are in the correct free list
+    // Return free_list_id as usize instead of AreaIndex to avoid type conversion
+    pub(crate) fn free_list_iter_inner(
+        &self,
+        start_area_index: AreaIndex,
+    ) -> impl Iterator<Item = Result<(LinearAddress, AreaIndex, usize), FileIoError>> {
+        self.header
+            .free_lists
+            .iter()
+            .enumerate()
+            .skip(start_area_index as usize)
+            .flat_map(move |(free_list_id, next_addr)| {
+                FreeListIterator::new(self.storage.as_ref(), *next_addr).map(move |item| {
+                    item.map(|(addr, area_index)| (addr, area_index, free_list_id))
+                })
+            })
+    }
+}
+
 #[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::indexing_slicing)]
 pub(crate) mod nodestore_test_utils {
     use super::*;
 
-    pub(crate) const fn area_sizes() -> &'static [u64] {
-        &AREA_SIZES
-    }
-
-    pub(crate) fn area_size_to_index(n: u64) -> Result<AreaIndex, Error> {
-        super::area_size_to_index(n)
-    }
-
     // Helper function to wrap the node in a StoredArea and write it to the given offset. Returns the size of the area on success.
-    #[allow(clippy::cast_possible_truncation)]
     pub(crate) fn test_write_new_node<S: WritableStorage>(
         nodestore: &NodeStore<Committed, S>,
         node: &Node,
@@ -1737,22 +1754,6 @@ pub(crate) mod nodestore_test_utils {
             .write(offset, stored_area_bytes.as_slice())
             .unwrap();
         AREA_SIZES[area_size_index as usize]
-    }
-
-    // Helper function to write the NodeStoreHeader
-    pub(crate) fn test_write_header<S: WritableStorage>(
-        nodestore: &mut NodeStore<Committed, S>,
-        size: u64,
-        root_addr: Option<LinearAddress>,
-        free_lists: FreeLists,
-    ) {
-        let mut header = NodeStoreHeader::new();
-        header.size = size;
-        header.root_address = root_addr;
-        header.free_lists = free_lists;
-        let header_bytes = bytemuck::bytes_of(&header);
-        nodestore.header = header;
-        nodestore.storage.write(0, header_bytes).unwrap();
     }
 
     // Helper function to write a free area to the given offset.
@@ -1770,10 +1771,27 @@ pub(crate) mod nodestore_test_utils {
         let stored_area_bytes = serializer().serialize(&stored_area).unwrap();
         nodestore.storage.write(offset, &stored_area_bytes).unwrap();
     }
+
+    // Helper function to write the NodeStoreHeader
+    pub(crate) fn test_write_header<S: WritableStorage>(
+        nodestore: &mut NodeStore<Committed, S>,
+        size: u64,
+        root_addr: Option<LinearAddress>,
+        free_lists: FreeLists,
+    ) {
+        let mut header = NodeStoreHeader::new();
+        header.size = size;
+        header.root_address = root_addr;
+        header.free_lists = free_lists;
+        let header_bytes = bytemuck::bytes_of(&header);
+        nodestore.header = header;
+        nodestore.storage.write(0, header_bytes).unwrap();
+    }
 }
 
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
+#[expect(clippy::cast_possible_truncation)]
 mod tests {
     use std::array::from_fn;
 
@@ -1822,13 +1840,13 @@ mod tests {
             .into();
 
         // create an empty r1, check that it's parent is the empty committed version
-        let r1 = NodeStore::new(base).unwrap();
+        let r1 = NodeStore::new(&base).unwrap();
         let r1: Arc<NodeStore<Arc<ImmutableProposal>, _>> = Arc::new(r1.try_into().unwrap());
         let parent: DynGuard<Arc<NodeStoreParent>> = r1.kind.parent.load();
         assert!(matches!(**parent, NodeStoreParent::Committed(None)));
 
         // create an empty r2, check that it's parent is the proposed version r1
-        let r2: NodeStore<MutableProposal, _> = NodeStore::new(r1.clone()).unwrap();
+        let r2: NodeStore<MutableProposal, _> = NodeStore::new(&r1.clone()).unwrap();
         let r2: Arc<NodeStore<Arc<ImmutableProposal>, _>> = Arc::new(r2.try_into().unwrap());
         let parent: DynGuard<Arc<NodeStoreParent>> = r2.kind.parent.load();
         assert!(matches!(**parent, NodeStoreParent::Proposed(_)));
@@ -1930,7 +1948,8 @@ mod tests {
 }
 
 #[cfg(test)]
-mod test_freelist_iterator {
+#[expect(clippy::unwrap_used, clippy::indexing_slicing)]
+mod test_free_list_iterator {
     use super::nodestore_test_utils::*;
     use super::*;
     use crate::linear::memory::MemStore;
@@ -1940,7 +1959,7 @@ mod test_freelist_iterator {
     use rand::seq::IteratorRandom;
 
     #[test]
-    fn freelist_iterator() {
+    fn free_list_iterator() {
         let mut rng = seeded_rng();
         let memstore = MemStore::new(vec![]);
         let nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
@@ -1948,7 +1967,7 @@ mod test_freelist_iterator {
         let area_index = rng.random_range(0..NUM_AREA_SIZES as u8);
         let area_size = AREA_SIZES[area_index as usize];
 
-        // create a random freelist scattered across the storage
+        // create a random free list scattered across the storage
         let offsets = (1..100u64)
             .map(|i| i * area_size)
             .choose_multiple(&mut rng, 10);
@@ -1966,34 +1985,18 @@ mod test_freelist_iterator {
         let skip = rng.random_range(0..offsets.len());
         let mut iterator = offsets.into_iter().skip(skip);
         let start = iterator.next().unwrap();
-        let mut freelist_iter = FreeListIterator::new(
-            nodestore.storage.as_ref(),
-            LinearAddress::new(start),
-            area_index,
-        );
+        let mut free_list_iter =
+            FreeListIterator::new(nodestore.storage.as_ref(), LinearAddress::new(start));
         assert_eq!(
-            freelist_iter.next().unwrap().unwrap(),
-            LinearAddress::new(start).unwrap()
+            free_list_iter.next().unwrap().unwrap(),
+            (LinearAddress::new(start).unwrap(), area_index)
         );
 
         for offset in iterator {
-            let next_item = freelist_iter.next().unwrap().unwrap();
-            assert_eq!(next_item, LinearAddress::new(offset).unwrap());
+            let next_item = free_list_iter.next().unwrap().unwrap();
+            assert_eq!(next_item, (LinearAddress::new(offset).unwrap(), area_index));
         }
 
-        assert!(freelist_iter.next().is_none());
-
-        // test iterator with mismatching area index
-        let mut freelist_iter = FreeListIterator::new(
-            nodestore.storage.as_ref(),
-            LinearAddress::new(start),
-            area_index + 1,
-        );
-        assert!(matches!(
-            freelist_iter.next(),
-            Some(Err(e))
-            if e.kind() == ErrorKind::InvalidData && e.to_string().contains("area index mismatch")
-        ));
-        assert!(freelist_iter.next().is_none());
+        assert!(free_list_iter.next().is_none());
     }
 }
