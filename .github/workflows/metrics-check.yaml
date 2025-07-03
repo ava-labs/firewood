@@ -56,7 +56,7 @@ jobs:
               const baseCommit = context.payload.pull_request.base.sha;
               
               // Check for metric changes
-              const metricChanges = execSync(`git diff ${baseCommit}..HEAD --unified=0 | grep -E "(metric!|#\\[metrics\\])" || true`, { encoding: 'utf8' });
+              const metricChanges = execSync(`git diff ${baseCommit}..HEAD --unified=0 | grep -E "(counter!|histogram!|gauge!|#\\[metrics\\])" || true`, { encoding: 'utf8' });
               
               if (metricChanges.trim()) {
                 const comment = `## Metrics Change Detection ⚠️
