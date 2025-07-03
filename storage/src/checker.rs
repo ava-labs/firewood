@@ -1,11 +1,16 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use crate::logger::warn;
+use crate::nodestore::{AreaIndex, NodeStoreHeader};
 use crate::range_set::LinearAddressRangeSet;
 use crate::{
     CheckerError, Committed, HashedNodeReader, LinearAddress, Node, NodeReader, NodeStore,
     WritableStorage,
 };
+
+use std::cmp::Ordering;
+use std::ops::Range;
 
 /// [`NodeStore`] checker
 // TODO: S needs to be writeable if we ask checker to fix the issues
@@ -46,7 +51,18 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         self.visit_freelist(&mut visited)?;
 
         // 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
-        let _ = visited.complement(); // TODO
+        let leaked_areas = visited
+            .complement()
+            .into_iter()
+            .map(|range| self.find_leaked_areas(range))
+            .collect::<Result<Vec<_>, CheckerError>>()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+
+        if !leaked_areas.is_empty() {
+            warn!("Found leaked areas: {:?}", leaked_areas);
+        }
 
         Ok(())
     }
@@ -87,6 +103,51 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         }
         Ok(())
     }
+
+    fn find_leaked_areas(
+        &self,
+        leaked_range: Range<LinearAddress>,
+    ) -> Result<Vec<(LinearAddress, AreaIndex)>, CheckerError> {
+        let mut leaked = Vec::new();
+        let mut current_addr = leaked_range.start;
+        loop {
+            let (area_size_index, area_size) = self.area_index_and_size(current_addr)?;
+            leaked.push((current_addr, area_size_index));
+
+            // advance to the next area
+            let Some(next_addr) = current_addr.checked_add(area_size) else {
+                return Err(CheckerError::AreaOutOfBounds {
+                    start: current_addr,
+                    size: area_size,
+                    bounds: LinearAddress::new(NodeStoreHeader::SIZE)
+                        .expect("this constant is non-zero")
+                        ..LinearAddress::new(self.size())
+                            .expect("size is not zero due to previous check"),
+                });
+            };
+
+            match next_addr.cmp(&leaked_range.end) {
+                Ordering::Equal => {
+                    // we have reached the end of the leaked area, done
+                    break;
+                }
+                Ordering::Greater => {
+                    // the last area extends beyond the leaked area - this means the leaked area overlaps with an area we have visited
+                    return Err(CheckerError::AreaIntersects {
+                        start: current_addr,
+                        size: area_size,
+                        intersection: vec![(leaked_range.end..next_addr)],
+                    });
+                }
+                Ordering::Less => {
+                    // continue to the next area
+                    current_addr = next_addr;
+                }
+            }
+        }
+
+        Ok(leaked)
+    }
 }
 
 #[cfg(test)]
@@ -94,10 +155,12 @@ mod test {
     #![expect(clippy::unwrap_used)]
     #![expect(clippy::indexing_slicing)]
 
+    use std::collections::HashMap;
+
     use super::*;
     use crate::linear::memory::MemStore;
     use crate::nodestore::nodestore_test_utils::{
-        test_write_free_area, test_write_header, test_write_new_node,
+        test_write_free_area, test_write_header, test_write_new_node, test_write_random_stored_area,
     };
     use crate::nodestore::{AREA_SIZES, FreeLists, NodeStoreHeader};
     use crate::{BranchNode, Child, HashType, LeafNode, NodeStore, Path};
@@ -207,5 +270,69 @@ mod test {
         nodestore.visit_freelist(&mut visited).unwrap();
         let complement = visited.complement();
         assert_eq!(complement.into_iter().collect::<Vec<_>>(), vec![]);
+    }
+
+    #[test]
+    // This test creates a linear set of stored areas and free some of them.
+    // When traversing it should break consecutive areas.
+    fn find_leaked_areas() {
+        use rand::Rng;
+        use rand::seq::IteratorRandom;
+
+        let mut rng = crate::test_utils::seeded_rng();
+
+        let memstore = MemStore::new(vec![]);
+        let mut nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+
+        let num_areas = 10;
+
+        // randomly insert areas into the nodestore
+        let mut high_watermark = NodeStoreHeader::SIZE;
+        let mut stored_areas = Vec::new();
+        for _ in 0..num_areas {
+            let (area_size_index, area_size) =
+                AREA_SIZES.iter().enumerate().choose(&mut rng).unwrap();
+            let area_addr = LinearAddress::new(high_watermark).unwrap();
+            test_write_random_stored_area(&nodestore, area_size_index as AreaIndex, high_watermark);
+            stored_areas.push((area_addr, area_size_index as AreaIndex, *area_size));
+            high_watermark += *area_size;
+        }
+        test_write_header(&mut nodestore, high_watermark, None, FreeLists::default());
+
+        // randomly pick some areas as leaked
+        let mut leaked = Vec::new();
+        let mut expected_free_areas = HashMap::new();
+        let mut area_to_free = None;
+        for (area_start, area_size_index, area_size) in &stored_areas {
+            if rng.random::<f64>() < 0.5 {
+                // we free this area
+                expected_free_areas.insert(*area_start, *area_size_index);
+                let area_to_free_start = area_to_free.map_or(*area_start, |(start, _)| start);
+                let area_to_free_end = area_start.checked_add(*area_size).unwrap();
+                area_to_free = Some((area_to_free_start, area_to_free_end));
+            } else {
+                // we are not freeing this area, free the aggregated areas before this one
+                if let Some((start, end)) = area_to_free {
+                    leaked.push(start..end);
+                    area_to_free = None;
+                }
+            }
+        }
+        if let Some((start, end)) = area_to_free {
+            leaked.push(start..end);
+        }
+
+        // check the leaked areas
+        let leaked_areas = leaked
+            .into_iter()
+            .map(|range| nodestore.find_leaked_areas(range))
+            .collect::<Result<Vec<_>, CheckerError>>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<HashMap<_, _>>();
+
+        // assert that all leaked areas end up on the free list
+        assert_eq!(leaked_areas, expected_free_areas);
     }
 }

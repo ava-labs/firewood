@@ -146,6 +146,13 @@ pub enum CheckerError {
         expected_free_list: AreaIndex,
     },
 
+    /// Found leaked areas
+    #[error("Found leaked areas: {leaked:?}")]
+    AreaLeaks {
+        /// The leaked areas
+        leaked: Vec<(LinearAddress, AreaIndex)>,
+    },
+
     /// IO error
     #[error("IO error")]
     IO(#[from] FileIoError),
