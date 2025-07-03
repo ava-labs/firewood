@@ -7,7 +7,7 @@
 > The Firewood API may change with little to no warning.
 
 Firewood is an embedded key-value store, optimized to store recent Merkleized blockchain
-state with minimal overhead.
+state with minimal overhead. Merkleized blockchains store their state in Merkle tries to support efficient generation and verification of state proofs.
 Firewood is implemented from the ground up to directly store trie nodes on-disk.
 Unlike most state management approaches in the field,
 it is not built on top of a generic KV store such as LevelDB/RocksDB.
