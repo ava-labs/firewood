@@ -32,7 +32,7 @@ jobs:
           fi
           
           # Check for metric-related changes
-          METRIC_CHANGES=$(git diff $BASE_COMMIT..HEAD --unified=0 | grep -E "(counter!|#\[metrics\])" || true)
+          METRIC_CHANGES=$(git diff $BASE_COMMIT..HEAD --unified=0 | grep -E "(counter!|gauge!|histogram!|#\[metrics\])" || true)
           
           if [ -n "$METRIC_CHANGES" ]; then
             echo "⚠️  WARNING: Found metric-related changes, but no dashboard modification:"
