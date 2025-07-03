@@ -66,20 +66,15 @@ jobs:
               const metricChanges = execSync(`git diff ${baseCommit}..HEAD --unified=0 | grep -E "${metricPattern}" || true`, { encoding: 'utf8' });
               
               if (metricChanges.trim()) {
-                const comment = `## Metrics Change Detection ⚠️
-
-This PR contains changes related to metrics:
-
-\`\`\`
-${metricChanges}
-\`\`\`
-
-However, the dashboard was not modified.
-
-You may need to update \`benchmark/Grafana-dashboard.json\` accordingly.
-
----
-*This check is automated to help maintain the dashboard.*`;
+                const comment = '## Metrics Change Detection ⚠️\n\n' +
+                  'This PR contains changes related to metrics:\n\n' +
+                  '```\n' +
+                  metricChanges +
+                  '\n```\n\n' +
+                  'However, the dashboard was not modified.\n\n' +
+                  'You may need to update `benchmark/Grafana-dashboard.json` accordingly.\n\n' +
+                  '---\n' +
+                  '*This check is automated to help maintain the dashboard.*';
                 
                 github.rest.issues.createComment({
                   issue_number: context.issue.number,
