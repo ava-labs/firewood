@@ -1,7 +1,6 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::nodestore::AreaIndex;
 use crate::range_set::LinearAddressRangeSet;
 use crate::{
     CheckerError, Committed, HashedNodeReader, LinearAddress, Node, NodeReader, NodeStore,
@@ -74,16 +73,14 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Traverse all the free areas in the freelist
     fn visit_freelist(&self, visited: &mut LinearAddressRangeSet) -> Result<(), CheckerError> {
         for free_area in self.free_list_iter_inner(0) {
-            let (addr, area_index, free_list_id) = free_area?;
-            let free_list_id =
-                AreaIndex::try_from(free_list_id).expect("area index will not exceed u8");
-            let area_size = Self::size_from_area_index(area_index);
-            if free_list_id != area_index {
+            let (addr, stored_area_index, free_list_id) = free_area?;
+            let area_size = Self::size_from_area_index(stored_area_index);
+            if free_list_id != stored_area_index {
                 return Err(CheckerError::FreelistAreaSizeMismatch {
                     address: addr,
                     size: area_size,
-                    free_list: free_list_id,
-                    expected_free_list: area_index,
+                    actual_free_list: free_list_id,
+                    expected_free_list: stored_area_index,
                 });
             }
             visited.insert_area(addr, area_size)?;

@@ -1716,11 +1716,11 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
     }
 
     // pub(crate) since checker will use this to verify that the free areas are in the correct free list
-    // Return free_list_id as usize instead of AreaIndex to avoid type conversion
+    // Since this is a low-level iterator, we avoid safe conversion to AreaIndex for performance
     pub(crate) fn free_list_iter_inner(
         &self,
         start_area_index: AreaIndex,
-    ) -> impl Iterator<Item = Result<(LinearAddress, AreaIndex, usize), FileIoError>> {
+    ) -> impl Iterator<Item = Result<(LinearAddress, AreaIndex, AreaIndex), FileIoError>> {
         self.header
             .free_lists
             .iter()
@@ -1728,7 +1728,7 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
             .skip(start_area_index as usize)
             .flat_map(move |(free_list_id, next_addr)| {
                 FreeListIterator::new(self.storage.as_ref(), *next_addr).map(move |item| {
-                    item.map(|(addr, area_index)| (addr, area_index, free_list_id))
+                    item.map(|(addr, area_index)| (addr, area_index, free_list_id as AreaIndex))
                 })
             })
     }
