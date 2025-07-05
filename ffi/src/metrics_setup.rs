@@ -1,6 +1,7 @@
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::error::Error;
-use std::io::Write;
+use std::fmt::Write;
 use std::net::Ipv6Addr;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -63,7 +64,7 @@ struct TextRecorder {
 
 impl TextRecorder {
     fn stats(&self) -> String {
-        let mut output = Vec::new();
+        let mut output = String::new();
         let systemtime_now = SystemTime::now();
         let utc_now: DateTime<Utc> = systemtime_now.into();
         let epoch_duration = systemtime_now
@@ -76,39 +77,72 @@ impl TextRecorder {
         writeln!(output, "# {utc_now}").unwrap();
 
         let counters = self.registry.get_counter_handles();
-        let mut seen = HashSet::new();
+        let mut seen_counters = HashSet::new();
         for (key, counter) in counters {
-            let sanitized_key_name = key.name().to_string().replace('.', "_");
-            if !seen.contains(&sanitized_key_name) {
-                writeln!(
-                    output,
-                    "# TYPE {} counter",
-                    key.name().to_string().replace('.', "_")
-                )
-                .expect("write error");
-                seen.insert(sanitized_key_name.clone());
+            let sanitized_key_name = self.sanitize_key_name(key.name());
+            if !seen_counters.contains(sanitized_key_name.as_ref()) {
+                writeln!(output, "# TYPE {} counter", &sanitized_key_name).expect("write error");
+                seen_counters.insert(sanitized_key_name.to_string());
             }
             write!(output, "{sanitized_key_name}").expect("write error");
-            if key.labels().len() > 0 {
-                write!(
-                    output,
-                    "{{{}}}",
-                    key.labels()
-                        .map(|label| format!("{}=\"{}\"", label.key(), label.value()))
-                        .collect::<Vec<_>>()
-                        .join(",")
-                )
-                .expect("write error");
-            }
+            self.write_labels(&mut output, key.labels());
+
             writeln!(output, " {} {}", counter.load(Ordering::Relaxed), epoch_ms)
                 .expect("write error");
         }
-        writeln!(output).expect("write error");
-        output.flush().expect("flush error");
 
-        std::str::from_utf8(output.as_slice())
-            .expect("failed to convert to string")
-            .into()
+        // Get gauge handles: Uses self.registry.get_gauge_handles() to retrieve all registered gauges
+        let gauges = self.registry.get_gauge_handles();
+        // Track seen gauges: Uses a separate HashSet to avoid duplicate # TYPE declarations
+        let mut seen_gauges = HashSet::new();
+        for (key, gauge) in gauges {
+            let sanitized_key_name = self.sanitize_key_name(key.name());
+            if !seen_gauges.contains(sanitized_key_name.as_ref()) {
+                // Output type declaration: Writes # TYPE {name} gauge for each unique gauge name
+                writeln!(output, "# TYPE {sanitized_key_name} gauge").expect("write error");
+                seen_gauges.insert(sanitized_key_name.to_string());
+            }
+            // Format metric line: Outputs the gauge name, labels (if any), current value, and timestamp
+            write!(output, "{sanitized_key_name}").expect("write error");
+            self.write_labels(&mut output, key.labels());
+            // Load gauge value: Uses gauge.load(Ordering::Relaxed) to get the current gauge value
+            writeln!(output, " {} {}", gauge.load(Ordering::Relaxed), epoch_ms)
+                .expect("write error");
+        }
+        writeln!(output).expect("write error");
+
+        output
+    }
+
+    // helper to write labels to the output, minimizing allocations
+    fn write_labels<'a, I: Iterator<Item = &'a metrics::Label>>(
+        &self,
+        output: &mut impl Write,
+        labels: I,
+    ) {
+        let mut label_iter = labels.into_iter();
+        if let Some(first_label) = label_iter.next() {
+            write!(
+                output,
+                "{{{}=\"{}\"",
+                first_label.key(),
+                first_label.value()
+            )
+            .expect("write error");
+            label_iter.for_each(|label| {
+                write!(output, ",{}=\"{}\"", label.key(), label.value()).expect("write error");
+            });
+            write!(output, "}}").expect("write error");
+        }
+    }
+
+    // remove dots from key names, if they are present
+    fn sanitize_key_name<'a>(&self, key_name: &'a str) -> Cow<'a, str> {
+        if key_name.contains('.') {
+            Cow::Owned(key_name.replace('.', "_"))
+        } else {
+            Cow::Borrowed(key_name)
+        }
     }
 }
 
