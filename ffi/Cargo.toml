@@ -20,7 +20,6 @@ rust-version.workspace = true
 crate-type = ["staticlib"]
 
 [dependencies]
-libc = "0.2.174"
 firewood.workspace = true
 metrics = { workspace = true }
 metrics-util = { workspace = true }
