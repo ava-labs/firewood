@@ -1,11 +1,11 @@
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::Write;
 use std::net::Ipv6Addr;
 use std::ops::Deref;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use oxhttp::Server;
@@ -24,6 +24,7 @@ use metrics_util::registry::{AtomicStorage, Registry};
 pub(crate) fn setup_metrics(metrics_port: u16) -> Result<(), Box<dyn Error>> {
     let inner: TextRecorderInner = TextRecorderInner {
         registry: Registry::atomic(),
+        help: Mutex::new(HashMap::new()),
     };
     let recorder = TextRecorder {
         inner: Arc::new(inner),
@@ -55,6 +56,7 @@ pub(crate) fn setup_metrics(metrics_port: u16) -> Result<(), Box<dyn Error>> {
 #[derive(Debug)]
 struct TextRecorderInner {
     registry: Registry<Key, AtomicStorage>,
+    help: Mutex<HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -76,11 +78,16 @@ impl TextRecorder {
             .saturating_add(u64::from(epoch_duration.subsec_millis()));
         writeln!(output, "# {utc_now}").unwrap();
 
+        let help_guard = self.inner.help.lock().expect("poisoned lock");
+
         let counters = self.registry.get_counter_handles();
         let mut seen_counters = HashSet::new();
         for (key, counter) in counters {
             let sanitized_key_name = self.sanitize_key_name(key.name());
             if !seen_counters.contains(sanitized_key_name.as_ref()) {
+                if let Some(help) = help_guard.get(sanitized_key_name.as_ref()) {
+                    writeln!(output, "# HELP {sanitized_key_name} {help}").expect("write error");
+                }
                 writeln!(output, "# TYPE {} counter", &sanitized_key_name).expect("write error");
                 seen_counters.insert(sanitized_key_name.to_string());
             }
@@ -99,6 +106,9 @@ impl TextRecorder {
             let sanitized_key_name = self.sanitize_key_name(key.name());
             if !seen_gauges.contains(sanitized_key_name.as_ref()) {
                 // Output type declaration: Writes # TYPE {name} gauge for each unique gauge name
+                if let Some(help) = help_guard.get(sanitized_key_name.as_ref()) {
+                    writeln!(output, "# HELP {sanitized_key_name} {help}").expect("write error");
+                }
                 writeln!(output, "# TYPE {sanitized_key_name} gauge").expect("write error");
                 seen_gauges.insert(sanitized_key_name.to_string());
             }
@@ -109,6 +119,7 @@ impl TextRecorder {
             writeln!(output, " {} {}", gauge.load(Ordering::Relaxed), epoch_ms)
                 .expect("write error");
         }
+        drop(help_guard);
         writeln!(output).expect("write error");
 
         output
@@ -157,18 +168,28 @@ impl Deref for TextRecorder {
 impl metrics::Recorder for TextRecorder {
     fn describe_counter(
         &self,
-        _key: metrics::KeyName,
+        key: metrics::KeyName,
         _unit: Option<metrics::Unit>,
-        _description: metrics::SharedString,
+        description: metrics::SharedString,
     ) {
+        self.inner
+            .help
+            .lock()
+            .expect("poisoned lock")
+            .insert(key.as_str().to_string(), description.to_string());
     }
 
     fn describe_gauge(
         &self,
-        _key: metrics::KeyName,
+        key: metrics::KeyName,
         _unit: Option<metrics::Unit>,
-        _description: metrics::SharedString,
+        description: metrics::SharedString,
     ) {
+        self.inner
+            .help
+            .lock()
+            .expect("poisoned lock")
+            .insert(key.as_str().to_string(), description.to_string());
     }
 
     fn describe_histogram(
