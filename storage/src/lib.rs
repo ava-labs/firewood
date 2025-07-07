@@ -173,6 +173,21 @@ pub enum CheckerError {
     #[error("Found leaked areas: {0:?}")]
     AreaLeaks(LeakedAreas),
 
+    /// Leaked area is too large, possibly corrupted
+    #[error(
+        "Leaked area at {address} is too large (area_index: {area_index}, size: {size}): {space_available} bytes before the next unleaked area"
+    )]
+    LeakedAreaTooLarge {
+        /// The address of the leaked area
+        address: LinearAddress,
+        /// Area index of the leaked area
+        area_index: AreaIndex,
+        /// The size of the leaked area
+        size: u64,
+        /// Space before the next valid area
+        space_available: u64,
+    },
+
     /// IO error
     #[error("IO error")]
     IO(#[from] FileIoError),

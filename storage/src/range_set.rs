@@ -3,6 +3,7 @@
 
 #![warn(clippy::pedantic)]
 
+use nonzero_ext::nonzero;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::ops::Range;
@@ -209,7 +210,7 @@ pub(super) struct LinearAddressRangeSet {
 }
 
 impl LinearAddressRangeSet {
-    const NODE_STORE_ADDR_START: LinearAddress = LinearAddress::new(NodeStoreHeader::SIZE).unwrap();
+    const NODE_STORE_ADDR_START: LinearAddress = nonzero!(NodeStoreHeader::SIZE);
 
     pub(super) fn new(db_size: u64) -> Result<Self, CheckerError> {
         if db_size < NodeStoreHeader::SIZE {
@@ -229,6 +230,10 @@ impl LinearAddressRangeSet {
             range_set: RangeSet::new(),
             max_addr, // STORAGE_AREA_START..U64::MAX
         })
+    }
+
+    pub(super) const fn full_range(&self) -> Range<LinearAddress> {
+        Self::NODE_STORE_ADDR_START..self.max_addr
     }
 
     pub(super) fn insert_area(
