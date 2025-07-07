@@ -547,11 +547,11 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
             )
             .increment(AREA_SIZES[index]);
             firewood_counter!(
-                "firewood.space.wasted",
-                "Bytes wasted from free list by index",
-                "index" => index_name(index)
+                   "firewood.space.wasted",
+                   "Bytes wasted from free list by index",
+                   "index" => index_name(index)
             )
-            .increment(AREA_SIZES[index] - n);
+            .increment(AREA_SIZES[index].saturating_sub(n));
 
             // Return the address of the newly allocated block.
             trace!("Allocating from free list: addr: {address:?}, size: {index}");
@@ -627,7 +627,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         debug_assert!(addr.get() % 8 == 0);
 
         let (area_size_index, _) = self.area_index_and_size(addr)?;
-        trace!("Deleting node at {addr:?} of size {}", area_size_index);
+        trace!("Deleting node at {addr:?} of size {area_size_index}");
         firewood_counter!(
             "firewood.delete_node",
             "Node deleted from nodestore",
