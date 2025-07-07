@@ -57,7 +57,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         if !leaked_areas.is_empty() {
             // warning here since there are multiple revisions on disk but only the latest one is traversed
             // TODO: change it to an error once we have a way to traverse all the revisions
-            warn!("Found leaked areas: {:?}", leaked_areas);
+            warn!("Found leaked areas: {:?}", LeakedAreas(leaked_areas));
         }
 
         Ok(())
