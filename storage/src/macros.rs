@@ -6,8 +6,8 @@
 /// macros. It ensures that the description is registered only once.
 ///
 /// Usage:
-///   firewood_counter!("metric_name", "description")
-///   firewood_counter!("metric_name", "description", "label" => "value")
+///   `firewood_counter!("metric_name", "description")`
+///   `firewood_counter!("metric_name", "description", "label" => "value")`
 ///
 /// Call `.increment(val)` or `.absolute(val)` on the result as appropriate.
 macro_rules! firewood_counter {
