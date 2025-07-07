@@ -1,6 +1,8 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+//! Internal utilities for working with iterators.
+
 use std::num::NonZeroUsize;
 
 /// Writes an iterator of displayable items to a writer, separated by a specified separator.
@@ -53,19 +55,25 @@ fn write_iter_with_limit(
 ) -> std::fmt::Result {
     let mut iter = iter.into_iter();
     let Some(item) = iter.next() else {
+        // Iterator is empty, nothing to write.
         return Ok(());
     };
 
+    // Write the first item without a separator.
     write!(writer, "{item}")?;
-    #[expect(clippy::arithmetic_side_effects)]
-    let mut limit = limit.get() - 1; // Already wrote the first item
+
+    #[expect(clippy::arithmetic_side_effects, reason = "nonzero - 1 is safe")]
+    let mut limit = limit.get() - 1; // -1 because we wrote the first item
     loop {
         match (iter.next(), limit.checked_sub(1)) {
             (Some(item), Some(new_limit)) => {
+                // we can write another item, write it with the separator
                 write!(writer, "{sep}{item}")?;
                 limit = new_limit;
             }
             (Some(_), None) => {
+                // we exhausted our limit, but there are still items left including the item
+                // we just removed from the iterator.
                 let n = iter.count().saturating_add(1); // +1 for the current item
                 write!(writer, "{sep}... ({n} more hidden)")?;
                 break;
