@@ -5,8 +5,8 @@ use crate::logger::warn;
 use crate::nodestore::{AreaIndex, NodeStoreHeader};
 use crate::range_set::LinearAddressRangeSet;
 use crate::{
-    CheckerError, Committed, HashedNodeReader, LinearAddress, Node, NodeReader, NodeStore,
-    WritableStorage,
+    CheckerError, Committed, HashedNodeReader, LeakedAreas, LinearAddress, Node, NodeReader,
+    NodeStore, WritableStorage,
 };
 
 use nonzero_ext::nonzero;
@@ -114,8 +114,8 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             })
     }
 
-    /// Find all stored areas within leaked_range.
-    /// We assume that all space within leaked_range are leaked and the stored areas are contiguous.
+    /// Find all stored areas within `leaked_range`.
+    /// We assume that all space within `leaked_range` are leaked and the stored areas are contiguous.
     /// Returns error if the last leaked area extends beyond the end of the range.
     fn find_leaked_areas(
         &self,
