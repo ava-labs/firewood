@@ -34,6 +34,7 @@ use std::vec;
 
 pub mod branch;
 mod leaf;
+pub mod memdisk;
 pub mod path;
 
 pub use branch::{BranchNode, Child};
