@@ -25,6 +25,7 @@ use thiserror::Error;
 mod checker;
 mod hashednode;
 mod hashers;
+mod iter;
 mod linear;
 mod node;
 mod nodestore;
@@ -101,19 +102,22 @@ pub struct LeakedAreas(Vec<(LinearAddress, AreaIndex)>);
 
 impl std::fmt::Debug for LeakedAreas {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let content = self
-            .0
-            .iter()
-            .take(MAX_LEAKED_AREAS_PRINT)
-            .map(|(addr, size)| format!("{{start: {addr}, size: {size}}}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        if let Some(hidden_count) = self.0.len().checked_sub(MAX_LEAKED_AREAS_PRINT) {
-            write!(f, "[{content}, ... ({hidden_count} more hidden)]")?;
-        } else {
-            write!(f, "[{content}]")?;
+        struct DisplayArea<'a>(&'a (LinearAddress, AreaIndex));
+        impl std::fmt::Display for DisplayArea<'_> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let DisplayArea((start, size)) = self;
+                write!(f, "{{start: {start}, size: {size}}}")
+            }
         }
-        Ok(())
+
+        write!(f, "LeakedAreas([")?;
+        crate::iter::write_iter(
+            f,
+            self.0.iter().map(DisplayArea),
+            ", ",
+            std::num::NonZeroUsize::new(MAX_LEAKED_AREAS_PRINT),
+        )?;
+        write!(f, "])")
     }
 }
 
