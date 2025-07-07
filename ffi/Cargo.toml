@@ -40,3 +40,6 @@ cbindgen = "0.29.0"
 
 [lints]
 workspace = true
+
+[package.metadata.cargo-machete]
+ignored = ["cbindgen"]

@@ -35,6 +35,7 @@ typed-builder = "0.21.0"
 fastrace = { workspace = true }
 coarsetime = { workspace = true }
 firewood-macros.workspace = true
+tokio = "1.0.0"
 
 [features]
 default = []
@@ -74,4 +75,4 @@ firewood-storage.workspace = true
 workspace = true
 
 [package.metadata.cargo-machete]
-ignored = ["coarsetime"]
+ignored = ["coarsetime", "hex-literal"]
