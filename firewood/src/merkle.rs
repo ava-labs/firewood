@@ -28,7 +28,7 @@ use crate::stream::PathIterator;
 use crate::v2::api;
 use firewood_storage::{
     BranchNode, Child, FileIoError, HashType, Hashable, HashedNodeReader, ImmutableProposal,
-    LeafNode, LinearAddress, MutableProposal, NibblesIterator, Node, NodeStore, Path,
+    IntoHashType, LeafNode, LinearAddress, MutableProposal, NibblesIterator, Node, NodeStore, Path,
     ReadableStorage, SharedNode, TrieReader, ValueDigest,
 };
 #[cfg(test)]
@@ -428,9 +428,13 @@ impl<T: HashedNodeReader> Merkle<T> {
                 .map_err(|e| FileIoError::new(e, None, 0, None))
                 .map_err(Error::other)?;
             let mut seen = HashSet::new();
-            #[cfg_attr(not(feature = "ethhash"), expect(clippy::useless_conversion))]
-            self.dump_node(root_addr, Some(&root_hash.into()), &mut seen, &mut result)
-                .map_err(Error::other)?;
+            self.dump_node(
+                root_addr,
+                Some(&root_hash.into_hash_type()),
+                &mut seen,
+                &mut result,
+            )
+            .map_err(Error::other)?;
         }
         write!(result, "}}")
             .map_err(Error::other)
