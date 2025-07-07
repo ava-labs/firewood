@@ -94,6 +94,29 @@ pub fn empty_trie_hash() -> TrieHash {
         .expect("empty trie hash is 32 bytes")
 }
 
+const MAX_LEAKED_AREAS_PRINT: usize = 10;
+
+/// A collection of leaked areas
+pub struct LeakedAreas(Vec<(LinearAddress, AreaIndex)>);
+
+impl std::fmt::Debug for LeakedAreas {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let content = self
+            .0
+            .iter()
+            .take(MAX_LEAKED_AREAS_PRINT)
+            .map(|(addr, size)| format!("{{start: {addr}, size: {size}}}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if let Some(hidden_count) = self.0.len().checked_sub(MAX_LEAKED_AREAS_PRINT) {
+            write!(f, "[{content}, ... ({hidden_count} more hidden)]")?;
+        } else {
+            write!(f, "[{content}]")?;
+        }
+        Ok(())
+    }
+}
+
 /// Errors returned by the checker
 #[derive(Error, Debug)]
 #[non_exhaustive]
@@ -147,11 +170,8 @@ pub enum CheckerError {
     },
 
     /// Found leaked areas
-    #[error("Found leaked areas: {leaked:?}")]
-    AreaLeaks {
-        /// The leaked areas
-        leaked: Vec<(LinearAddress, AreaIndex)>,
-    },
+    #[error("Found leaked areas: {0:?}")]
+    AreaLeaks(LeakedAreas),
 
     /// IO error
     #[error("IO error")]

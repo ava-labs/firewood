@@ -9,6 +9,7 @@ use crate::{
     WritableStorage,
 };
 
+use nonzero_ext::nonzero;
 use std::cmp::Ordering;
 use std::ops::Range;
 
@@ -51,16 +52,11 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         self.visit_freelist(&mut visited)?;
 
         // 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
-        let leaked_areas = visited
-            .complement()
-            .into_iter()
-            .map(|range| self.find_leaked_areas(range))
-            .collect::<Result<Vec<_>, CheckerError>>()?
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
+        let leaked_areas = self.find_all_leaked_areas(visited.complement())?;
 
         if !leaked_areas.is_empty() {
+            // warning here since there are multiple revisions on disk but only the latest one is traversed
+            // TODO: change it to an error once we have a way to traverse all the revisions
             warn!("Found leaked areas: {:?}", leaked_areas);
         }
 
@@ -104,6 +100,23 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         Ok(())
     }
 
+    /// Wrapper around `find_leaked_areas` that iterates over a collection of ranges.
+    fn find_all_leaked_areas(
+        &self,
+        leaked_ranges: impl IntoIterator<Item = Range<LinearAddress>>,
+    ) -> Result<Vec<(LinearAddress, AreaIndex)>, CheckerError> {
+        leaked_ranges
+            .into_iter()
+            .try_fold(Vec::new(), |mut leaked, range| {
+                let leaked_areas = self.find_leaked_areas(range)?;
+                leaked.extend(leaked_areas);
+                Ok::<_, CheckerError>(leaked)
+            })
+    }
+
+    /// Find all stored areas within leaked_range.
+    /// We assume that all space within leaked_range are leaked and the stored areas are contiguous.
+    /// Returns error if the last leaked area extends beyond the end of the range.
     fn find_leaked_areas(
         &self,
         leaked_range: Range<LinearAddress>,
@@ -115,16 +128,15 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             leaked.push((current_addr, area_size_index));
 
             // advance to the next area
-            let Some(next_addr) = current_addr.checked_add(area_size) else {
-                return Err(CheckerError::AreaOutOfBounds {
-                    start: current_addr,
-                    size: area_size,
-                    bounds: LinearAddress::new(NodeStoreHeader::SIZE)
-                        .expect("this constant is non-zero")
-                        ..LinearAddress::new(self.size())
-                            .expect("size is not zero due to previous check"),
-                });
-            };
+            let next_addr =
+                current_addr
+                    .checked_add(area_size)
+                    .ok_or(CheckerError::AreaOutOfBounds {
+                        start: current_addr,
+                        size: area_size,
+                        bounds: nonzero!(NodeStoreHeader::SIZE)
+                            ..LinearAddress::new(self.size()).expect("size should be non-zero"),
+                    })?;
 
             match next_addr.cmp(&leaked_range.end) {
                 Ordering::Equal => {
@@ -323,14 +335,7 @@ mod test {
         }
 
         // check the leaked areas
-        let leaked_areas = leaked
-            .into_iter()
-            .map(|range| nodestore.find_leaked_areas(range))
-            .collect::<Result<Vec<_>, CheckerError>>()
-            .unwrap()
-            .into_iter()
-            .flatten()
-            .collect::<HashMap<_, _>>();
+        let leaked_areas = HashMap::from_iter(nodestore.find_all_leaked_areas(leaked).unwrap());
 
         // assert that all leaked areas end up on the free list
         assert_eq!(leaked_areas, expected_free_areas);
