@@ -100,7 +100,7 @@ impl TextRecorder {
 
         // Get gauge handles: Uses self.registry.get_gauge_handles() to retrieve all registered gauges
         let gauges = self.registry.get_gauge_handles();
-        // Track seen gauges: Uses a separate HashSet to avoid duplicate # TYPE declarations
+        // Track seen gauges. We don't reuse the hashset above to allow us to check for duplicates.
         let mut seen_gauges = HashSet::new();
         for (key, gauge) in gauges {
             let sanitized_key_name = self.sanitize_key_name(key.name());
@@ -119,6 +119,15 @@ impl TextRecorder {
             writeln!(output, " {} {}", gauge.load(Ordering::Relaxed), epoch_ms)
                 .expect("write error");
         }
+
+        // Prometheus does not support multiple TYPE declarations for the same metric,
+        // but we will emit them anyway, and panic if we're in debug mode.
+        debug_assert_eq!(
+            seen_gauges.intersection(&seen_counters).count(),
+            0,
+            "duplicate name(s) for gauge and counter: {:?}",
+            seen_gauges.intersection(&seen_counters).collect::<Vec<_>>()
+        );
         drop(help_guard);
         writeln!(output).expect("write error");
 
