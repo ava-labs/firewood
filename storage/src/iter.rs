@@ -1,3 +1,6 @@
+// Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
+// See the file LICENSE.md for licensing terms.
+
 use std::num::NonZeroUsize;
 
 /// Writes an iterator of displayable items to a writer, separated by a specified separator.
