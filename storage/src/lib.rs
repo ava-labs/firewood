@@ -41,7 +41,7 @@ pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use node::path::{NibblesIterator, Path};
 pub use node::{
-    BranchNode, Child, LeafNode, Node, PathIterItem, branch::HashType, memdisk::MaybePersistedNode,
+    BranchNode, Child, LeafNode, Node, PathIterItem, branch::HashType, persist::MaybePersistedNode,
 };
 pub use nodestore::{
     Committed, HashedNodeReader, ImmutableProposal, LinearAddress, MutableProposal, NodeReader,
