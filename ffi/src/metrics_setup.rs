@@ -4,6 +4,7 @@ use std::error::Error;
 use std::fmt::Write;
 use std::net::Ipv6Addr;
 use std::ops::Deref;
+use std::sync::LazyLock;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
@@ -18,25 +19,36 @@ use chrono::{DateTime, Utc};
 use metrics::Key;
 use metrics_util::registry::{AtomicStorage, Registry};
 
-/// Sets up a metrics server over a specified port.
-/// This happens on a per-process basis, meaning that the metrics system
-/// cannot be initialized if it has already been set up in the same process.
-pub(crate) fn setup_metrics(metrics_port: u16) -> Result<(), Box<dyn Error>> {
-    let inner: TextRecorderInner = TextRecorderInner {
+static RECORDER: LazyLock<TextRecorder> = LazyLock::new(|| {
+    let inner = TextRecorderInner {
         registry: Registry::atomic(),
         help: Mutex::new(HashMap::new()),
     };
-    let recorder = TextRecorder {
+    TextRecorder {
         inner: Arc::new(inner),
-    };
-    metrics::set_global_recorder(recorder.clone())?;
+    }
+});
+
+/// Starts metrics recorder.
+/// This happens on a per-process basis, meaning that the metrics system cannot
+/// be initialized if it has already been set up in the same process.
+pub(crate) fn setup_metrics() -> Result<(), Box<dyn Error>> {
+    metrics::set_global_recorder(RECORDER.clone())?;
+    Ok(())
+}
+
+/// Starts metrics recorder along with an exporter over a specified port.
+/// This happens on a per-process basis, meaning that the metrics system
+/// cannot be initialized if it has already been set up in the same process.
+pub(crate) fn setup_metrics_with_exporter(metrics_port: u16) -> Result<(), Box<dyn Error>> {
+    metrics::set_global_recorder(RECORDER.clone())?;
 
     Server::new(move |request| {
         if request.method() == "GET" {
             Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "text/plain")
-                .body(Body::from(recorder.stats()))
+                .body(Body::from(RECORDER.stats()))
                 .expect("failed to build response")
         } else {
             Response::builder()
@@ -51,6 +63,11 @@ pub(crate) fn setup_metrics(metrics_port: u16) -> Result<(), Box<dyn Error>> {
     .with_max_concurrent_connections(2)
     .spawn()?;
     Ok(())
+}
+
+/// Returns the latest metrics for this process.
+pub(crate) fn gather_metrics() -> String {
+    RECORDER.stats()
 }
 
 #[derive(Debug)]
