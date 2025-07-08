@@ -5,8 +5,8 @@ use crate::logger::warn;
 use crate::nodestore::AreaIndex;
 use crate::range_set::LinearAddressRangeSet;
 use crate::{
-    CheckerError, Committed, HashedNodeReader, LinearAddress, Node, NodeReader, NodeStore,
-    WritableStorage,
+    CheckerError, Committed, HashedNodeReader, LeakedAreas, LinearAddress, Node, NodeReader,
+    NodeStore, WritableStorage,
 };
 
 use std::cmp::Ordering;
