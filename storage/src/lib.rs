@@ -39,10 +39,10 @@ pub mod logger;
 // re-export these so callers don't need to know where they are
 pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
+pub use node::branch::HashType;
 pub use node::path::{NibblesIterator, Path};
-pub use node::{
-    BranchNode, Child, LeafNode, Node, PathIterItem, branch::HashType, persist::MaybePersistedNode,
-};
+pub use node::persist::MaybePersistedNode;
+pub use node::{BranchNode, Child, LeafNode, Node, PathIterItem};
 pub use nodestore::{
     Committed, HashedNodeReader, ImmutableProposal, LinearAddress, MutableProposal, NodeReader,
     NodeStore, Parentable, ReadInMemoryNode, RootReader, TrieReader, UpdateError,

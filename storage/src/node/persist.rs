@@ -12,19 +12,19 @@ use crate::{FileIoError, LinearAddress, NodeReader, SharedNode};
 /// In-memory nodes can be moved to disk. This structure allows that to happen
 /// atomically.
 #[derive(Debug, Clone)]
-pub struct MaybePersistedNode(Arc<ArcSwap<MaybePersistedEnum>>);
+pub struct MaybePersistedNode(Arc<ArcSwap<MaybePersisted>>);
 
 impl From<SharedNode> for MaybePersistedNode {
     fn from(node: SharedNode) -> Self {
-        MaybePersistedNode(Arc::new(ArcSwap::new(Arc::new(MaybePersistedEnum::Mem(
-            node,
-        )))))
+        MaybePersistedNode(Arc::new(ArcSwap::new(Arc::new(
+            MaybePersisted::Unpersisted(node),
+        ))))
     }
 }
 
 impl From<LinearAddress> for MaybePersistedNode {
     fn from(address: LinearAddress) -> Self {
-        MaybePersistedNode(Arc::new(ArcSwap::new(Arc::new(MaybePersistedEnum::Disk(
+        MaybePersistedNode(Arc::new(ArcSwap::new(Arc::new(MaybePersisted::Persisted(
             address,
         )))))
     }
@@ -47,8 +47,8 @@ impl MaybePersistedNode {
     /// - `Err(FileIoError)` if there was an error reading from storage
     pub fn as_shared_node<S: NodeReader>(&self, storage: &S) -> Result<SharedNode, FileIoError> {
         match self.0.load().as_ref() {
-            MaybePersistedEnum::Mem(node) => Ok(node.clone()),
-            MaybePersistedEnum::Disk(address) => storage.read_node(*address),
+            MaybePersisted::Unpersisted(node) => Ok(node.clone()),
+            MaybePersisted::Persisted(address) => storage.read_node(*address),
         }
     }
 
@@ -63,17 +63,17 @@ impl MaybePersistedNode {
     ///
     /// * `addr` - The `LinearAddress` where the node has been persisted on disk
     pub fn persist_at(&self, addr: LinearAddress) {
-        self.0.store(Arc::new(MaybePersistedEnum::Disk(addr)));
+        self.0.store(Arc::new(MaybePersisted::Persisted(addr)));
     }
 }
 
 /// The internal state of a `MaybePersistedNode`.
 ///
-/// This enum represents the two possible states of a `MaybePersistedNode`:
-/// - `Mem(SharedNode)`: The node is currently in memory
-/// - `Disk(LinearAddress)`: The node is currently on disk at the specified address
+/// This enum represents the two possible states of a `MaybePersisted`:
+/// - `Unpersisted(SharedNode)`: The node is currently in memory
+/// - `Persisted(LinearAddress)`: The node is currently on disk at the specified address
 #[derive(Debug)]
-pub enum MaybePersistedEnum {
-    Mem(SharedNode),
-    Disk(LinearAddress),
+pub enum MaybePersisted {
+    Unpersisted(SharedNode),
+    Persisted(LinearAddress),
 }
