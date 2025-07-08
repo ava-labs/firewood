@@ -48,18 +48,18 @@ impl MemDiskNode {
         }
     }
 
-    /// Allocates this node to disk by moving it from memory to the specified disk address.
+    /// Updates the internal state to indicate this node is persisted at the specified disk address.
     ///
     /// This method changes the internal state of the `MemDiskNode` from `Mem` to `Disk`,
-    /// effectively moving the node from memory to the specified disk location.
+    /// indicating that the node has been written to the specified disk location.
     ///
     /// This is done atomically using the `ArcSwap` mechanism.
     ///
     /// # Arguments
     ///
-    /// * `addr` - The `LinearAddress` where the node should be stored on disk
-    pub fn allocate(&self, addr: LinearAddress) {
-        self.0.swap(Arc::new(MemDiskEnum::Disk(addr)));
+    /// * `addr` - The `LinearAddress` where the node has been persisted on disk
+    pub fn persist_at(&self, addr: LinearAddress) {
+        self.0.store(Arc::new(MemDiskEnum::Disk(addr)));
     }
 }
 
