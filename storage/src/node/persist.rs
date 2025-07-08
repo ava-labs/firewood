@@ -9,8 +9,34 @@ use crate::{FileIoError, LinearAddress, NodeReader, SharedNode};
 
 /// A node that is either in memory or on disk.
 ///
-/// In-memory nodes can be moved to disk. This structure allows that to happen
+/// In-memory nodes that can be moved to disk. This structure allows that to happen
 /// atomically.
+///
+/// `MaybePersistedNode` owns a reference counted pointer to an atomically swapable
+/// pointer. The atomically swapable pointer points to a reference counted pointer
+/// to the enum of either an un-persisted but committed (or committing) node or the
+/// linear address of a persisted node.
+///
+/// This type is complicated, so here is a breakdown of the types involved:
+///
+/// | Item                   | Description                                            |
+/// |------------------------|--------------------------------------------------------|
+/// | [`MaybePersistedNode`] | Newtype wrapper around the remaining items.            |
+/// | [Arc]                  | reference counted pointer to an updatable pointer.     |
+/// | [`ArcSwap`]            | Swappable [Arc]. Actually an `ArcSwapAny`<`Arc`<_>>    |
+/// | [Arc]                  | reference-counted pointer to the enum (required by `ArcSwap`) |
+/// | `MaybePersisted`       | Enum of either `Unpersisted` or `Persisted`            |
+/// | variant `Unpersisted`  | The shared node, in memory, for unpersisted nodes      |
+/// | -> [`SharedNode`]      | A `triomphe::Arc` of a [Node](`crate::Node`)           |
+/// | variant `Persisted`    | The address of a persisted node.                       |
+/// | -> [`LinearAddress`]   | A 64-bit address for a persisted node on disk.         |
+///
+/// Traversing these pointers does incur a runtime penalty.
+///
+/// When an `Unpersisted` node is `Persisted` using [`MaybePersistedNode::persist_at`],
+/// a new `Arc` is created to the new `MaybePersisted::Persisted` variant and the `ArcSwap`
+/// is updated atomically. Subsequent accesses to any instance of it, including any clones,
+/// will see the `Persisted` node address.
 #[derive(Debug, Clone)]
 pub struct MaybePersistedNode(Arc<ArcSwap<MaybePersisted>>);
 
@@ -83,7 +109,7 @@ impl MaybePersistedNode {
 /// - `Unpersisted(SharedNode)`: The node is currently in memory
 /// - `Persisted(LinearAddress)`: The node is currently on disk at the specified address
 #[derive(Debug)]
-pub enum MaybePersisted {
+enum MaybePersisted {
     Unpersisted(SharedNode),
     Persisted(LinearAddress),
 }
