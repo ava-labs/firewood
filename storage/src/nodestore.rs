@@ -48,8 +48,8 @@ use std::sync::Arc;
 use crate::hashednode::hash_node;
 use crate::node::{ByteCounter, Node};
 use crate::{
-    CacheReadStrategy, Child, FileBacked, HashType, MemDiskNode, Path, ReadableStorage, SharedNode,
-    TrieHash,
+    CacheReadStrategy, Child, FileBacked, HashType, MaybePersistedNode, Path, ReadableStorage,
+    SharedNode, TrieHash,
 };
 
 use super::linear::WritableStorage;
@@ -991,7 +991,7 @@ pub trait RootReader {
 pub struct Committed {
     deleted: Box<[LinearAddress]>,
     root_hash: Option<TrieHash>,
-    root: Option<MemDiskNode>,
+    root: Option<MaybePersistedNode>,
 }
 
 impl ReadInMemoryNode for Committed {
@@ -1031,7 +1031,7 @@ pub struct ImmutableProposal {
     /// The hash of the root node for this proposal
     root_hash: Option<TrieHash>,
     /// The root node, either in memory or on disk
-    root: Option<MemDiskNode>,
+    root: Option<MaybePersistedNode>,
 }
 
 impl ImmutableProposal {
@@ -1619,7 +1619,7 @@ impl<S: ReadableStorage> RootReader for NodeStore<Committed, S> {
 
 impl<S: ReadableStorage> RootReader for NodeStore<Arc<ImmutableProposal>, S> {
     fn root_node(&self) -> Option<SharedNode> {
-        // Use the MemDiskNode's as_shared_node method to get the root
+        // Use the MaybePersistedNode's as_shared_node method to get the root
         self.kind.root.as_ref()?.as_shared_node(self).ok()
     }
 }

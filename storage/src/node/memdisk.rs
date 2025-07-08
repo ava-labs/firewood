@@ -12,22 +12,26 @@ use crate::{FileIoError, LinearAddress, NodeReader, SharedNode};
 /// In-memory nodes can be moved to disk. This structure allows that to happen
 /// atomically.
 #[derive(Debug, Clone)]
-pub struct MemDiskNode(Arc<ArcSwap<MemDiskEnum>>);
+pub struct MaybePersistedNode(Arc<ArcSwap<MaybePersistedEnum>>);
 
-impl From<SharedNode> for MemDiskNode {
+impl From<SharedNode> for MaybePersistedNode {
     fn from(node: SharedNode) -> Self {
-        MemDiskNode(Arc::new(ArcSwap::new(Arc::new(MemDiskEnum::Mem(node)))))
+        MaybePersistedNode(Arc::new(ArcSwap::new(Arc::new(MaybePersistedEnum::Mem(
+            node,
+        )))))
     }
 }
 
-impl From<LinearAddress> for MemDiskNode {
+impl From<LinearAddress> for MaybePersistedNode {
     fn from(address: LinearAddress) -> Self {
-        MemDiskNode(Arc::new(ArcSwap::new(Arc::new(MemDiskEnum::Disk(address)))))
+        MaybePersistedNode(Arc::new(ArcSwap::new(Arc::new(MaybePersistedEnum::Disk(
+            address,
+        )))))
     }
 }
 
-impl MemDiskNode {
-    /// Converts this `MemDiskNode` to a `SharedNode` by reading from the appropriate source.
+impl MaybePersistedNode {
+    /// Converts this `MaybePersistedNode` to a `SharedNode` by reading from the appropriate source.
     ///
     /// If the node is in memory, it returns a clone of the in-memory node.
     /// If the node is on disk, it reads the node from storage using the provided `NodeReader`.
@@ -43,14 +47,14 @@ impl MemDiskNode {
     /// - `Err(FileIoError)` if there was an error reading from storage
     pub fn as_shared_node<S: NodeReader>(&self, storage: &S) -> Result<SharedNode, FileIoError> {
         match self.0.load().as_ref() {
-            MemDiskEnum::Mem(node) => Ok(node.clone()),
-            MemDiskEnum::Disk(address) => storage.read_node(*address),
+            MaybePersistedEnum::Mem(node) => Ok(node.clone()),
+            MaybePersistedEnum::Disk(address) => storage.read_node(*address),
         }
     }
 
     /// Updates the internal state to indicate this node is persisted at the specified disk address.
     ///
-    /// This method changes the internal state of the `MemDiskNode` from `Mem` to `Disk`,
+    /// This method changes the internal state of the `MaybePersistedNode` from `Mem` to `Disk`,
     /// indicating that the node has been written to the specified disk location.
     ///
     /// This is done atomically using the `ArcSwap` mechanism.
@@ -59,17 +63,17 @@ impl MemDiskNode {
     ///
     /// * `addr` - The `LinearAddress` where the node has been persisted on disk
     pub fn persist_at(&self, addr: LinearAddress) {
-        self.0.store(Arc::new(MemDiskEnum::Disk(addr)));
+        self.0.store(Arc::new(MaybePersistedEnum::Disk(addr)));
     }
 }
 
-/// The internal state of a `MemDiskNode`.
+/// The internal state of a `MaybePersistedNode`.
 ///
-/// This enum represents the two possible states of a `MemDiskNode`:
+/// This enum represents the two possible states of a `MaybePersistedNode`:
 /// - `Mem(SharedNode)`: The node is currently in memory
 /// - `Disk(LinearAddress)`: The node is currently on disk at the specified address
 #[derive(Debug)]
-pub enum MemDiskEnum {
+pub enum MaybePersistedEnum {
     Mem(SharedNode),
     Disk(LinearAddress),
 }
