@@ -30,6 +30,15 @@ impl From<LinearAddress> for MaybePersistedNode {
     }
 }
 
+impl From<&MaybePersistedNode> for Option<LinearAddress> {
+    fn from(node: &MaybePersistedNode) -> Option<LinearAddress> {
+        match node.0.load().as_ref() {
+            MaybePersisted::Unpersisted(_) => None,
+            MaybePersisted::Persisted(address) => Some(*address),
+        }
+    }
+}
+
 impl MaybePersistedNode {
     /// Converts this `MaybePersistedNode` to a `SharedNode` by reading from the appropriate source.
     ///
@@ -62,6 +71,7 @@ impl MaybePersistedNode {
     /// # Arguments
     ///
     /// * `addr` - The `LinearAddress` where the node has been persisted on disk
+    #[cfg(test)]
     pub fn persist_at(&self, addr: LinearAddress) {
         self.0.store(Arc::new(MaybePersisted::Persisted(addr)));
     }
@@ -76,4 +86,82 @@ impl MaybePersistedNode {
 pub enum MaybePersisted {
     Unpersisted(SharedNode),
     Persisted(LinearAddress),
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod test {
+    use nonzero_ext::nonzero;
+
+    use crate::{LeafNode, MemStore, Node, NodeStore, Path};
+
+    use super::*;
+
+    #[test]
+    fn test_maybe_persisted_node() -> Result<(), FileIoError> {
+        let mem_store = MemStore::new(vec![]).into();
+        let store = NodeStore::new_empty_committed(mem_store)?;
+        let node = SharedNode::new(Node::Leaf(LeafNode {
+            partial_path: Path::new(),
+            value: vec![0].into(),
+        }));
+        // create as unpersisted
+        let maybe_persisted_node = MaybePersistedNode::from(node.clone());
+        let addr = nonzero!(2048u64);
+        assert_eq!(maybe_persisted_node.as_shared_node(&store).unwrap(), node);
+        assert_eq!(
+            Option::<LinearAddress>::None,
+            Option::from(&maybe_persisted_node)
+        );
+
+        maybe_persisted_node.persist_at(addr);
+        assert!(maybe_persisted_node.as_shared_node(&store).is_err());
+        assert_eq!(Some(addr), Option::from(&maybe_persisted_node));
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_linear_address() {
+        let addr = nonzero!(1024u64);
+        let maybe_persisted_node = MaybePersistedNode::from(addr);
+        assert_eq!(Some(addr), Option::from(&maybe_persisted_node));
+    }
+
+    #[test]
+    fn test_clone_shares_underlying_shared_node() -> Result<(), FileIoError> {
+        let mem_store = MemStore::new(vec![]).into();
+        let store = NodeStore::new_empty_committed(mem_store)?;
+        let node = SharedNode::new(Node::Leaf(LeafNode {
+            partial_path: Path::new(),
+            value: vec![42].into(),
+        }));
+
+        let original = MaybePersistedNode::from(node.clone());
+        let cloned = original.clone();
+
+        // Both should be unpersisted initially
+        assert_eq!(original.as_shared_node(&store).unwrap(), node);
+        assert_eq!(cloned.as_shared_node(&store).unwrap(), node);
+        assert_eq!(Option::<LinearAddress>::None, Option::from(&original));
+        assert_eq!(Option::<LinearAddress>::None, Option::from(&cloned));
+
+        // First reference is 'node', second is shared by original and cloned
+        assert_eq!(triomphe::Arc::strong_count(&node), 2);
+
+        // Persist the original
+        let addr = nonzero!(4096u64);
+        original.persist_at(addr);
+
+        // Both original and clone should now be persisted since they share the same ArcSwap
+        assert!(original.as_shared_node(&store).is_err());
+        assert!(cloned.as_shared_node(&store).is_err());
+        assert_eq!(Some(addr), Option::from(&original));
+        assert_eq!(Some(addr), Option::from(&cloned));
+
+        // 'node' is no longer referenced by anyone but our local copy,
+        // so the count should be 1
+        assert_eq!(triomphe::Arc::strong_count(&node), 1);
+
+        Ok(())
+    }
 }
