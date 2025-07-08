@@ -1180,10 +1180,56 @@ impl<S: WritableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStore<Com
     }
 }
 
+/// Classified children for ethereum hash processing
+#[cfg(feature = "ethhash")]
+struct ClassifiedChildren<'a> {
+    unhashed: Vec<(usize, Node)>,
+    hashed: Vec<(usize, (MaybePersistedNode, &'a mut HashType))>,
+}
+
 impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
+    /// Helper function to classify children for ethereum hash processing
+    /// We have some special cases based on the number of children
+    /// and whether they are hashed or unhashed, so we need to classify them.
+    #[cfg(feature = "ethhash")]
+    fn ethhash_classify_children<'a>(
+        &self,
+        children: &'a mut [Option<Child>; crate::node::BranchNode::MAX_CHILDREN],
+    ) -> ClassifiedChildren<'a> {
+        children.iter_mut().enumerate().fold(
+            ClassifiedChildren {
+                unhashed: Vec::new(),
+                hashed: Vec::new(),
+            },
+            |mut acc, (idx, child)| {
+                match child {
+                    None => {}
+                    Some(Child::AddressWithHash(a, h)) => {
+                        // Convert address to MaybePersistedNode
+                        let maybe_persisted_node = MaybePersistedNode::from(*a);
+                        acc.hashed.push((idx, (maybe_persisted_node, h)));
+                    }
+                    Some(Child::Node(node)) => acc.unhashed.push((idx, node.clone())),
+                    Some(Child::MaybePersisted(maybe_persisted, h)) => {
+                        // For MaybePersisted, we need to get the address if it's persisted
+                        if let Some(addr) = maybe_persisted.as_linear_address() {
+                            let maybe_persisted_node = MaybePersistedNode::from(addr);
+                            acc.hashed.push((idx, (maybe_persisted_node, h)));
+                        } else {
+                            // If not persisted, we need to get the node to hash it
+                            if let Ok(node) = maybe_persisted.as_shared_node(self) {
+                                acc.unhashed.push((idx, node.deref().clone()));
+                            }
+                        }
+                    }
+                }
+                acc
+            },
+        )
+    }
+
     /// Hashes `node`, which is at the given `path_prefix`, and its children recursively.
     /// Returns the hashed node and its hash.
-    #[expect(clippy::too_many_lines)]
     fn hash_helper(
         &mut self,
         mut node: Node,
@@ -1200,33 +1246,10 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
             {
                 // looks like we're at an account branch
                 // tally up how many hashes we need to deal with
-                let (unhashed, mut hashed) = b.children.iter_mut().enumerate().fold(
-                    (Vec::new(), Vec::new()),
-                    |(mut unhashed, mut hashed), (idx, child)| {
-                        match child {
-                            None => {}
-                            Some(Child::AddressWithHash(a, h)) => {
-                                // Convert address to MaybePersistedNode
-                                let maybe_persisted_node = MaybePersistedNode::from(*a);
-                                hashed.push((idx, (maybe_persisted_node, h)));
-                            }
-                            Some(Child::Node(node)) => unhashed.push((idx, node.clone())),
-                            Some(Child::MaybePersisted(maybe_persisted, h)) => {
-                                // For MaybePersisted, we need to get the address if it's persisted
-                                if let Some(addr) = maybe_persisted.as_linear_address() {
-                                    let maybe_persisted_node = MaybePersistedNode::from(addr);
-                                    hashed.push((idx, (maybe_persisted_node, h)));
-                                } else {
-                                    // If not persisted, we need to get the node to hash it
-                                    if let Ok(node) = maybe_persisted.as_shared_node(self) {
-                                        unhashed.push((idx, node.deref().clone()));
-                                    }
-                                }
-                            }
-                        }
-                        (unhashed, hashed)
-                    },
-                );
+                let ClassifiedChildren {
+                    unhashed,
+                    mut hashed,
+                } = self.ethhash_classify_children(&mut b.children);
                 trace!("hashed {hashed:?} unhashed {unhashed:?}");
                 if hashed.len() == 1 {
                     // we were left with one hashed node that must be rehashed
@@ -1263,11 +1286,13 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 None
             };
 
-            // branch children -- 1. 1 child, already hashed, 2. >1 child, already hashed,
+            // branch children cases:
+            // 1. 1 child, already hashed
+            // 2. >1 child, already hashed,
             // 3. 1 hashed child, 1 unhashed child
             // 4. 0 hashed, 1 unhashed <-- handle child special
             // 5. 1 hashed, >0 unhashed <-- rehash case
-            // everything already hashed
+            // 6. everything already hashed
 
             for (nibble, child) in b.children.iter_mut().enumerate() {
                 // if this is already hashed, we're done
