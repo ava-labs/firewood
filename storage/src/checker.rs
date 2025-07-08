@@ -51,8 +51,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         self.visit_freelist(&mut visited)?;
 
         // 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
-        let leaked_areas =
-            self.find_all_leaked_areas(visited.complement(), &visited.full_range())?;
+        let leaked_areas = self.find_all_leaked_areas(visited.complement())?;
 
         if !leaked_areas.is_empty() {
             // warning here since there are multiple revisions on disk but only the latest one is traversed
@@ -104,12 +103,11 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     fn find_all_leaked_areas(
         &self,
         leaked_ranges: impl IntoIterator<Item = Range<LinearAddress>>,
-        address_bounds: &Range<LinearAddress>,
     ) -> Result<Vec<(LinearAddress, AreaIndex)>, CheckerError> {
         leaked_ranges
             .into_iter()
             .try_fold(Vec::new(), |mut leaked, range| {
-                let leaked_areas = self.find_leaked_areas(range, address_bounds)?;
+                let leaked_areas = self.find_leaked_areas(range)?;
                 leaked.extend(leaked_areas);
                 Ok::<_, CheckerError>(leaked)
             })
@@ -121,7 +119,6 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     fn find_leaked_areas(
         &self,
         leaked_range: Range<LinearAddress>,
-        address_bounds: &Range<LinearAddress>,
     ) -> Result<Vec<(LinearAddress, AreaIndex)>, CheckerError> {
         let mut leaked = Vec::new();
         let mut current_addr = leaked_range.start;
@@ -133,10 +130,17 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             let next_addr =
                 current_addr
                     .checked_add(area_size)
-                    .ok_or(CheckerError::AreaOutOfBounds {
-                        start: current_addr,
+                    .ok_or(CheckerError::LeakedAreaTooLarge {
+                        address: current_addr,
+                        area_index: area_size_index,
                         size: area_size,
-                        bounds: address_bounds.clone(),
+                        space_available: leaked_range
+                            .end
+                            .get()
+                            .checked_sub(current_addr.get())
+                            .expect(
+                                "impossible since this line is only reached if current_addr <= leaked_range.end",
+                            ),
                     })?;
 
             match next_addr.cmp(&leaked_range.end) {
@@ -150,10 +154,13 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                         address: current_addr,
                         area_index: area_size_index,
                         size: area_size,
-                        space_available: next_addr
+                        space_available: leaked_range
+                            .end
                             .get()
-                            .checked_sub(leaked_range.end.get())
-                            .expect("impossible since next_addr > leaked_range.end"),
+                            .checked_sub(current_addr.get())
+                            .expect(
+                                "impossible since this line is only reached if current_addr <= leaked_range.end",
+                            ),
                     });
                 }
                 Ordering::Less => {
@@ -172,7 +179,6 @@ mod test {
     #![expect(clippy::unwrap_used)]
     #![expect(clippy::indexing_slicing)]
 
-    use nonzero_ext::nonzero;
     use std::collections::HashMap;
 
     use super::*;
@@ -315,8 +321,6 @@ mod test {
             stored_areas.push((area_addr, area_size_index as AreaIndex, *area_size));
             high_watermark += *area_size;
         }
-        let full_range =
-            nonzero!(NodeStoreHeader::SIZE)..LinearAddress::new(high_watermark).unwrap();
         test_write_header(&mut nodestore, high_watermark, None, FreeLists::default());
 
         // randomly pick some areas as leaked
@@ -343,11 +347,7 @@ mod test {
         }
 
         // check the leaked areas
-        let leaked_areas = HashMap::from_iter(
-            nodestore
-                .find_all_leaked_areas(leaked, &full_range)
-                .unwrap(),
-        );
+        let leaked_areas = HashMap::from_iter(nodestore.find_all_leaked_areas(leaked).unwrap());
 
         // assert that all leaked areas end up on the free list
         assert_eq!(leaked_areas, expected_free_areas);

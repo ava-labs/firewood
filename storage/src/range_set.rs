@@ -232,10 +232,6 @@ impl LinearAddressRangeSet {
         })
     }
 
-    pub(super) const fn full_range(&self) -> Range<LinearAddress> {
-        Self::NODE_STORE_ADDR_START..self.max_addr
-    }
-
     pub(super) fn insert_area(
         &mut self,
         addr: LinearAddress,
