@@ -49,7 +49,8 @@ use crate::hashednode::hash_node;
 use crate::node::persist::MaybePersistedNode;
 use crate::node::{ByteCounter, Node};
 use crate::{
-    CacheReadStrategy, Child, FileBacked, HashType, Path, ReadableStorage, SharedNode, TrieHash,
+    CacheReadStrategy, Child, FileBacked, FreeListParentPtr, HashType, Path, ReadableStorage,
+    SharedNode, TrieHash,
 };
 
 use super::linear::WritableStorage;
@@ -1686,16 +1687,25 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 pub(crate) struct FreeListIterator<'a, S: ReadableStorage> {
     storage: &'a S,
     next_addr: Option<LinearAddress>,
+    parent_ptr: FreeListParentPtr,
 }
 
 impl<'a, S: ReadableStorage> FreeListIterator<'a, S> {
-    pub(crate) const fn new(storage: &'a S, next_addr: Option<LinearAddress>) -> Self {
-        Self { storage, next_addr }
+    pub(crate) const fn new(
+        storage: &'a S,
+        next_addr: Option<LinearAddress>,
+        parent_ptr: FreeListParentPtr,
+    ) -> Self {
+        Self {
+            storage,
+            next_addr,
+            parent_ptr,
+        }
     }
 }
 
 impl<S: ReadableStorage> Iterator for FreeListIterator<'_, S> {
-    type Item = Result<(LinearAddress, AreaIndex), FileIoError>;
+    type Item = Result<(LinearAddress, AreaIndex, FreeListParentPtr), FileIoError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let next_addr = self.next_addr?;
@@ -1711,8 +1721,12 @@ impl<S: ReadableStorage> Iterator for FreeListIterator<'_, S> {
         };
 
         // update the next address to the next free block
+        let parent_ptr = std::mem::replace(
+            &mut self.parent_ptr,
+            FreeListParentPtr::PrevFreeArea(next_addr),
+        );
         self.next_addr = free_area.next_free_block;
-        Some(Ok((next_addr, stored_area_index)))
+        Some(Ok((next_addr, stored_area_index, parent_ptr)))
     }
 }
 
@@ -1727,7 +1741,7 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
         start_area_index: AreaIndex,
     ) -> impl Iterator<Item = Result<(LinearAddress, AreaIndex), FileIoError>> {
         self.free_list_iter_inner(start_area_index)
-            .map(|item| item.map(|(addr, area_index, _)| (addr, area_index)))
+            .map(|item| item.map(|(addr, area_index, _, _)| (addr, area_index)))
     }
 
     // pub(crate) since checker will use this to verify that the free areas are in the correct free list
@@ -1735,15 +1749,25 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
     pub(crate) fn free_list_iter_inner(
         &self,
         start_area_index: AreaIndex,
-    ) -> impl Iterator<Item = Result<(LinearAddress, AreaIndex, AreaIndex), FileIoError>> {
+    ) -> impl Iterator<
+        Item = Result<(LinearAddress, AreaIndex, AreaIndex, FreeListParentPtr), FileIoError>,
+    > {
         self.header
             .free_lists
             .iter()
             .enumerate()
             .skip(start_area_index as usize)
             .flat_map(move |(free_list_id, next_addr)| {
-                FreeListIterator::new(self.storage.as_ref(), *next_addr).map(move |item| {
-                    item.map(|(addr, area_index)| (addr, area_index, free_list_id as AreaIndex))
+                let free_list_id = free_list_id as AreaIndex;
+                FreeListIterator::new(
+                    self.storage.as_ref(),
+                    *next_addr,
+                    FreeListParentPtr::FreeListHead(free_list_id),
+                )
+                .map(move |item| {
+                    item.map(|(addr, area_index, parent_ptr)| {
+                        (addr, area_index, free_list_id, parent_ptr)
+                    })
                 })
             })
     }
@@ -2000,16 +2024,38 @@ mod test_free_list_iterator {
         let skip = rng.random_range(0..offsets.len());
         let mut iterator = offsets.into_iter().skip(skip);
         let start = iterator.next().unwrap();
-        let mut free_list_iter =
-            FreeListIterator::new(nodestore.storage.as_ref(), LinearAddress::new(start));
-        assert_eq!(
-            free_list_iter.next().unwrap().unwrap(),
-            (LinearAddress::new(start).unwrap(), area_index)
+        let mut free_list_iter = FreeListIterator::new(
+            nodestore.storage.as_ref(),
+            LinearAddress::new(start),
+            FreeListParentPtr::FreeListHead(area_index),
         );
+        // assert_eq!(
+        //     free_list_iter.next().unwrap().unwrap(),
+        //     (
+        //         LinearAddress::new(start).unwrap(),
+        //         area_index,
+        //         FreeListParentPtr::FreeListHead(area_index)
+        //     )
+        // );
+        let (next_addr, returned_area_index, parent_ptr) = free_list_iter.next().unwrap().unwrap();
+        assert_eq!(next_addr, LinearAddress::new(start).unwrap());
+        assert_eq!(returned_area_index, area_index);
+        assert!(matches!(
+            parent_ptr,
+            FreeListParentPtr::FreeListHead(free_list_id) if free_list_id == area_index
+        ));
 
+        let mut parent_addr = next_addr;
         for offset in iterator {
-            let next_item = free_list_iter.next().unwrap().unwrap();
-            assert_eq!(next_item, (LinearAddress::new(offset).unwrap(), area_index));
+            let (next_addr, returned_area_index, parent_ptr) =
+                free_list_iter.next().unwrap().unwrap();
+            assert_eq!(next_addr, LinearAddress::new(offset).unwrap());
+            assert_eq!(returned_area_index, area_index);
+            assert!(matches!(
+                parent_ptr,
+                FreeListParentPtr::PrevFreeArea(prev_addr) if prev_addr == parent_addr
+            ));
+            parent_addr = next_addr;
         }
 
         assert!(free_list_iter.next().is_none());

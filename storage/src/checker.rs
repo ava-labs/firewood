@@ -4,7 +4,7 @@
 use crate::range_set::LinearAddressRangeSet;
 use crate::{
     CheckerError, Committed, HashedNodeReader, LinearAddress, Node, NodeReader, NodeStore,
-    WritableStorage,
+    ParentPtr, TrieNodeParentPtr, WritableStorage,
 };
 
 /// [`NodeStore`] checker
@@ -39,6 +39,12 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         // 2. traverse the trie and check the nodes
         if let Some(root_address) = self.root_address() {
             // the database is not empty, traverse the trie
+            if root_address.get() % 16 != 0 {
+                return Err(CheckerError::AreaMisaligned {
+                    address: root_address,
+                    parent_ptr: ParentPtr::TrieNode(TrieNodeParentPtr::Root),
+                });
+            }
             self.visit_trie(root_address, &mut visited)?;
         }
 
@@ -62,7 +68,16 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
         if let Node::Branch(branch) = self.read_node(subtree_root_address)?.as_ref() {
             // this is an internal node, traverse the children
-            for (_, address) in branch.children_addresses() {
+            for (child_idx, address) in branch.children_addresses() {
+                if address.get() % 16 != 0 {
+                    return Err(CheckerError::AreaMisaligned {
+                        address,
+                        parent_ptr: ParentPtr::TrieNode(TrieNodeParentPtr::Parent(
+                            subtree_root_address,
+                            child_idx,
+                        )),
+                    });
+                }
                 self.visit_trie(address, visited)?;
             }
         }
@@ -73,7 +88,13 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Traverse all the free areas in the freelist
     fn visit_freelist(&self, visited: &mut LinearAddressRangeSet) -> Result<(), CheckerError> {
         for free_area in self.free_list_iter_inner(0) {
-            let (addr, stored_area_index, free_list_id) = free_area?;
+            let (addr, stored_area_index, free_list_id, parent_ptr) = free_area?;
+            if addr.get() % 16 != 0 {
+                return Err(CheckerError::AreaMisaligned {
+                    address: addr,
+                    parent_ptr: ParentPtr::FreeList(parent_ptr),
+                });
+            }
             let area_size = Self::size_from_area_index(stored_area_index);
             if free_list_id != stored_area_index {
                 return Err(CheckerError::FreelistAreaSizeMismatch {
