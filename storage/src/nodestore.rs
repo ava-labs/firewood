@@ -2029,14 +2029,6 @@ mod test_free_list_iterator {
             LinearAddress::new(start),
             FreeListParentPtr::FreeListHead(area_index),
         );
-        // assert_eq!(
-        //     free_list_iter.next().unwrap().unwrap(),
-        //     (
-        //         LinearAddress::new(start).unwrap(),
-        //         area_index,
-        //         FreeListParentPtr::FreeListHead(area_index)
-        //     )
-        // );
         let (next_addr, returned_area_index, parent_ptr) = free_list_iter.next().unwrap().unwrap();
         assert_eq!(next_addr, LinearAddress::new(start).unwrap());
         assert_eq!(returned_area_index, area_index);
