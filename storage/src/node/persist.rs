@@ -97,7 +97,6 @@ impl MaybePersistedNode {
     /// # Arguments
     ///
     /// * `addr` - The `LinearAddress` where the node has been persisted on disk
-    #[cfg(test)]
     pub fn persist_at(&self, addr: LinearAddress) {
         self.0.store(Arc::new(MaybePersisted::Persisted(addr)));
     }
