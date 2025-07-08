@@ -1183,6 +1183,7 @@ impl<S: WritableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStore<Com
 impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     /// Hashes `node`, which is at the given `path_prefix`, and its children recursively.
     /// Returns the hashed node and its hash.
+    #[expect(clippy::too_many_lines)]
     fn hash_helper(
         &mut self,
         mut node: Node,
@@ -1204,8 +1205,24 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                     |(mut unhashed, mut hashed), (idx, child)| {
                         match child {
                             None => {}
-                            Some(Child::AddressWithHash(a, h)) => hashed.push((idx, (a, h))),
-                            Some(Child::Node(node)) => unhashed.push((idx, node)),
+                            Some(Child::AddressWithHash(a, h)) => {
+                                // Convert address to MaybePersistedNode
+                                let maybe_persisted_node = MaybePersistedNode::from(*a);
+                                hashed.push((idx, (maybe_persisted_node, h)));
+                            }
+                            Some(Child::Node(node)) => unhashed.push((idx, node.clone())),
+                            Some(Child::MaybePersisted(maybe_persisted, h)) => {
+                                // For MaybePersisted, we need to get the address if it's persisted
+                                if let Some(addr) = maybe_persisted.as_linear_address() {
+                                    let maybe_persisted_node = MaybePersistedNode::from(addr);
+                                    hashed.push((idx, (maybe_persisted_node, h)));
+                                } else {
+                                    // If not persisted, we need to get the node to hash it
+                                    if let Ok(node) = maybe_persisted.as_shared_node(self) {
+                                        unhashed.push((idx, node.deref().clone()));
+                                    }
+                                }
+                            }
                         }
                         (unhashed, hashed)
                     },
@@ -1214,7 +1231,13 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 if hashed.len() == 1 {
                     // we were left with one hashed node that must be rehashed
                     let invalidated_node = hashed.first_mut().expect("hashed is not empty");
-                    let mut hashable_node = self.read_node(*invalidated_node.1.0)?.deref().clone();
+                    // Extract the address from the MaybePersistedNode
+                    let addr = invalidated_node
+                        .1
+                        .0
+                        .as_linear_address()
+                        .expect("hashed node should be persisted");
+                    let mut hashable_node = self.read_node(addr)?.deref().clone();
                     let original_length = path_prefix.len();
                     path_prefix.0.extend(b.partial_path.0.iter().copied());
                     if unhashed.is_empty() {
@@ -1248,7 +1271,10 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
 
             for (nibble, child) in b.children.iter_mut().enumerate() {
                 // if this is already hashed, we're done
-                if matches!(child, Some(Child::AddressWithHash(_, _))) {
+                if matches!(
+                    child,
+                    Some(Child::AddressWithHash(_, _) | Child::MaybePersisted(_, _))
+                ) {
                     // We already know the hash of this child.
                     continue;
                 }
@@ -1257,8 +1283,16 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 // the branch and hash it. This has the side effect of dropping the [Child::Node]
                 // that was allocated. This is fine because we're about to replace it with a
                 // [Child::AddressWithHash].
-                let Some(Child::Node(child_node)) = std::mem::take(child) else {
-                    continue;
+                let child_node = match std::mem::take(child) {
+                    Some(Child::Node(node)) => node,
+                    Some(Child::MaybePersisted(maybe_persisted, _)) => {
+                        // For MaybePersisted, we need to get the node to hash it
+                        match maybe_persisted.as_shared_node(self) {
+                            Ok(shared_node) => shared_node.deref().clone(),
+                            Err(_) => continue, // Skip if we can't read the node
+                        }
+                    }
+                    _ => continue,
                 };
 
                 // Hash this child and update

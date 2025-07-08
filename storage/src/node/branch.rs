@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
 use crate::node::ExtendableBytes;
-use crate::{LeafNode, LinearAddress, Node, Path};
+use crate::{LeafNode, LinearAddress, MaybePersistedNode, Node, Path};
 use std::fmt::{Debug, Formatter};
 
 /// The type of a hash. For ethereum compatible hashes, this might be a RLP encoded
@@ -74,8 +74,12 @@ pub enum Child {
     /// There is a child at this index, but we haven't hashed it
     /// or allocated space in storage for it yet.
     Node(Node),
-    /// We know the child's address and hash.
+
+    /// We know the child's persisted address and hash.
     AddressWithHash(LinearAddress, HashType),
+
+    /// A `MaybePersisted` child
+    MaybePersisted(MaybePersistedNode, HashType),
 }
 
 #[cfg(feature = "ethhash")]
@@ -245,6 +249,12 @@ impl Serialize for BranchNode {
                     panic!("serializing in-memory node for disk storage")
                 }
                 Some(Child::AddressWithHash(addr, hash)) => Some((offset as u8, *addr, hash)),
+                Some(Child::MaybePersisted(maybe_persisted, hash)) => {
+                    // For MaybePersisted, we need to get the address if it's persisted
+                    maybe_persisted
+                        .as_linear_address()
+                        .map(|addr| (offset as u8, addr, hash))
+                }
             })
             .collect();
 
@@ -292,6 +302,13 @@ impl Debug for BranchNode {
                 Some(Child::Node(_)) => {} //TODO
                 Some(Child::AddressWithHash(addr, hash)) => {
                     write!(f, "({i:?}: address={addr:?} hash={hash})")?;
+                }
+                Some(Child::MaybePersisted(maybe_persisted, hash)) => {
+                    // For MaybePersisted, show the address if persisted, otherwise show as unpersisted
+                    match maybe_persisted.as_linear_address() {
+                        Some(addr) => write!(f, "({i:?}: address={addr:?} hash={hash})")?,
+                        None => write!(f, "({i:?}: unpersisted hash={hash})")?,
+                    }
                 }
             }
         }
@@ -345,6 +362,12 @@ impl BranchNode {
                 None => None,
                 Some(Child::Node(_)) => unreachable!("TODO make unreachable"),
                 Some(Child::AddressWithHash(address, hash)) => Some((i, (*address, hash))),
+                Some(Child::MaybePersisted(maybe_persisted, hash)) => {
+                    // For MaybePersisted, we need the address if it's persisted
+                    maybe_persisted
+                        .as_linear_address()
+                        .map(|addr| (i, (addr, hash)))
+                }
             })
     }
 
