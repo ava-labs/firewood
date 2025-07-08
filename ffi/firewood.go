@@ -131,14 +131,14 @@ func New(filePath string, conf *Config) (*Database, error) {
 
 // Starts global recorder for metrics.
 // Returns an error if the global recorder was already initialized.
-// This function should be called once per process and cannot be called
+// This function should only be called once per process and cannot be called
 // alongside StartMetricsWithExporter.
 func StartMetrics() error {
 	result := C.fwd_start_metrics()
 	return errorFromValue(&result)
 }
 
-// Start global recorder for metrics along with an HTTP exporter
+// Start global recorder for metrics along with an HTTP exporter.
 // Returns an error if the global recorder was already initialized or if the
 // metrics exporter failed to start.
 // This function should only be called once per process and cannot be called

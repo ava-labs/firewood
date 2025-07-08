@@ -843,7 +843,8 @@ pub extern "C" fn fwd_start_metrics() -> Value {
 ///
 /// # Returns
 ///
-/// A `Value` containing {0, null} if the metrics recorder was initialized.
+/// A `Value` containing {0, null} if the metrics recorder was initialized and
+/// the exporter was started.
 /// A `Value` containing {0, "error message"} if the metrics recorder was
 /// already initialized or the exporter failed to start.
 #[unsafe(no_mangle)]

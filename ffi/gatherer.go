@@ -12,7 +12,6 @@ var _ prometheus.Gatherer = (*Gatherer)(nil)
 
 type Gatherer struct{}
 
-// Gather implements prometheus.Gatherer.
 func (Gatherer) Gather() ([]*dto.MetricFamily, error) {
 	metrics, err := GatherMetrics()
 	if err != nil {

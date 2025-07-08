@@ -437,7 +437,8 @@ struct Value fwd_start_metrics(void);
  *
  * # Returns
  *
- * A `Value` containing {0, null} if the metrics recorder was initialized.
+ * A `Value` containing {0, null} if the metrics recorder was initialized and
+ * the exporter was started.
  * A `Value` containing {0, "error message"} if the metrics recorder was
  * already initialized or the exporter failed to start.
  */
