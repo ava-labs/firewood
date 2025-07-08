@@ -32,6 +32,33 @@ pub type HashType = ethhash::HashOrRlp;
 /// The type of a hash. For non-ethereum compatible hashes, this is always a `TrieHash`.
 pub type HashType = crate::TrieHash;
 
+/// A trait to convert a value into a [`HashType`].
+///
+/// This is used to allow different hash types to be conditionally used, e.g., when the
+/// `ethhash` feature is enabled. When not enabled, this suppresses the clippy warnings
+/// about useless `.into()` calls.
+pub trait IntoHashType {
+    /// Converts the value into a `HashType`.
+    #[must_use]
+    fn into_hash_type(self) -> HashType;
+}
+
+#[cfg(feature = "ethhash")]
+impl IntoHashType for crate::TrieHash {
+    #[inline]
+    fn into_hash_type(self) -> HashType {
+        self.into()
+    }
+}
+
+#[cfg(not(feature = "ethhash"))]
+impl IntoHashType for crate::TrieHash {
+    #[inline]
+    fn into_hash_type(self) -> HashType {
+        self
+    }
+}
+
 pub(crate) trait Serializable {
     fn write_to<W: ExtendableBytes>(&self, vec: &mut W);
 
@@ -310,14 +337,14 @@ impl BranchNode {
     }
 
     // Helper to iterate over only valid children
-    fn children_iter(&self) -> impl Iterator<Item = (usize, (&LinearAddress, &HashType))> + Clone {
+    fn children_iter(&self) -> impl Iterator<Item = (usize, (LinearAddress, &HashType))> + Clone {
         self.children
             .iter()
             .enumerate()
             .filter_map(|(i, child)| match child {
                 None => None,
                 Some(Child::Node(_)) => unreachable!("TODO make unreachable"),
-                Some(Child::AddressWithHash(address, hash)) => Some((i, (address, hash))),
+                Some(Child::AddressWithHash(address, hash)) => Some((i, (*address, hash))),
             })
     }
 
@@ -327,7 +354,7 @@ impl BranchNode {
     }
 
     /// Returns (index, address) for each child that has a hash set.
-    pub fn children_addresses(&self) -> impl Iterator<Item = (usize, &LinearAddress)> + Clone {
+    pub fn children_addresses(&self) -> impl Iterator<Item = (usize, LinearAddress)> + Clone {
         self.children_iter()
             .map(|(idx, (address, _))| (idx, address))
     }
