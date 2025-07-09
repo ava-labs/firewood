@@ -40,6 +40,14 @@ use crate::{FileIoError, LinearAddress, NodeReader, SharedNode};
 #[derive(Debug, Clone)]
 pub struct MaybePersistedNode(Arc<ArcSwap<MaybePersisted>>);
 
+impl PartialEq<MaybePersistedNode> for MaybePersistedNode {
+    fn eq(&self, other: &MaybePersistedNode) -> bool {
+        self.0.load().as_ref() == other.0.load().as_ref()
+    }
+}
+
+impl Eq for MaybePersistedNode {}
+
 impl From<SharedNode> for MaybePersistedNode {
     fn from(node: SharedNode) -> Self {
         MaybePersistedNode(Arc::new(ArcSwap::new(Arc::new(
@@ -87,6 +95,19 @@ impl MaybePersistedNode {
         }
     }
 
+    /// Returns the linear address of the node if it is persisted on disk.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(LinearAddress)` if the node is persisted on disk, otherwise `None`.
+    #[must_use]
+    pub fn as_linear_address(&self) -> Option<LinearAddress> {
+        match self.0.load().as_ref() {
+            MaybePersisted::Unpersisted(_) => None,
+            MaybePersisted::Persisted(address) => Some(*address),
+        }
+    }
+
     /// Updates the internal state to indicate this node is persisted at the specified disk address.
     ///
     /// This method changes the internal state of the `MaybePersistedNode` from `Mem` to `Disk`,
@@ -107,7 +128,7 @@ impl MaybePersistedNode {
 /// This enum represents the two possible states of a `MaybePersisted`:
 /// - `Unpersisted(SharedNode)`: The node is currently in memory
 /// - `Persisted(LinearAddress)`: The node is currently on disk at the specified address
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 enum MaybePersisted {
     Unpersisted(SharedNode),
     Persisted(LinearAddress),
