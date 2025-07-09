@@ -1295,30 +1295,15 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
             // 6. everything already hashed
 
             for (nibble, child) in b.children.iter_mut().enumerate() {
-                // if this is already hashed, we're done
-                if matches!(
-                    child,
-                    Some(Child::AddressWithHash(_, _) | Child::MaybePersisted(_, _))
-                ) {
-                    // We already know the hash of this child.
+                // If this is empty or already hashed, we're done
+                // Empty matches None, and non-Node types match Some(None) here, so we want
+                // Some(Some(node))
+                let Some(Some(child_node)) = child.as_mut().map(|child| child.as_mut_node()) else {
                     continue;
-                }
-
-                // If there was no child, we're done. Otherwise, remove the child from
-                // the branch and hash it. This has the side effect of dropping the [Child::Node]
-                // that was allocated. This is fine because we're about to replace it with a
-                // [Child::AddressWithHash].
-                let child_node = match std::mem::take(child) {
-                    Some(Child::Node(node)) => node,
-                    Some(Child::MaybePersisted(maybe_persisted, _)) => {
-                        // For MaybePersisted, we need to get the node to hash it
-                        match maybe_persisted.as_shared_node(self) {
-                            Ok(shared_node) => shared_node.deref().clone(),
-                            Err(_) => continue, // Skip if we can't read the node
-                        }
-                    }
-                    _ => continue,
                 };
+
+                // remove the child from the children array, we will replace it with a hashed variant
+                let child_node = std::mem::take(child_node);
 
                 // Hash this child and update
                 // we extend and truncate path_prefix to reduce memory allocations

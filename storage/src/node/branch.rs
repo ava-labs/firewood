@@ -82,6 +82,38 @@ pub enum Child {
     MaybePersisted(MaybePersistedNode, HashType),
 }
 
+impl Child {
+    /// Return a mutable reference to the underlying Node if the child
+    /// is a [`Child::Node`] variant, otherwise None.
+    #[must_use]
+    pub const fn as_mut_node(&mut self) -> Option<&mut Node> {
+        match self {
+            Child::Node(node) => Some(node),
+            _ => None,
+        }
+    }
+
+    /// Return the persisted address of the child if it is a [`Child::AddressWithHash`] or [`Child::MaybePersisted`] variant, otherwise None.
+    #[must_use]
+    pub fn persisted_address(&self) -> Option<LinearAddress> {
+        match self {
+            Child::AddressWithHash(addr, _) => Some(*addr),
+            Child::MaybePersisted(maybe_persisted, _) => maybe_persisted.as_linear_address(),
+            Child::Node(_) => None,
+        }
+    }
+
+    /// Return the hash of the child if it is a [`Child::AddressWithHash`] or [`Child::MaybePersisted`] variant, otherwise None.
+    #[must_use]
+    pub const fn hash(&self) -> Option<&HashType> {
+        match self {
+            Child::AddressWithHash(_, hash) => Some(hash),
+            Child::MaybePersisted(_, hash) => Some(hash),
+            Child::Node(_) => None,
+        }
+    }
+}
+
 #[cfg(feature = "ethhash")]
 mod ethhash {
     use serde::{Deserialize, Serialize};

@@ -2,10 +2,6 @@
 // See the file LICENSE.md for licensing terms.
 
 #![expect(
-    clippy::match_same_arms,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-#![expect(
     clippy::missing_errors_doc,
     reason = "Found 6 occurrences after enabling the lint."
 )]
@@ -392,14 +388,11 @@ impl<T: HashedNodeReader> Merkle<T> {
                 for (childidx, child) in b.children.iter().enumerate() {
                     let (child_addr, child_hash) = match child {
                         None => continue,
-                        Some(Child::Node(_)) => continue, // TODO
-                        Some(Child::AddressWithHash(addr, hash)) => (*addr, Some(hash)),
-                        Some(Child::MaybePersisted(maybe_persisted, hash)) => {
-                            // For MaybePersisted, we need the address if it's persisted
-                            match maybe_persisted.as_linear_address() {
-                                Some(addr) => (addr, Some(hash)),
-                                None => continue, // Skip if not persisted
-                            }
+                        Some(node) => {
+                            let (Some(addr), hash) = (node.persisted_address(), node.hash()) else {
+                                continue;
+                            };
+                            (addr, hash)
                         }
                     };
 
