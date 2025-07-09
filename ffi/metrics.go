@@ -2,19 +2,6 @@ package ffi
 
 //go:generate go run generate_cgo.go
 
-// // Note that -lm is required on Linux but not on Mac.
-// // FIREWOOD_CGO_BEGIN_STATIC_LIBS
-// // #cgo linux,amd64 LDFLAGS: -L${SRCDIR}/libs/x86_64-unknown-linux-gnu
-// // #cgo linux,arm64 LDFLAGS: -L${SRCDIR}/libs/aarch64-unknown-linux-gnu
-// // #cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/libs/x86_64-apple-darwin
-// // #cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/libs/aarch64-apple-darwin
-// // FIREWOOD_CGO_END_STATIC_LIBS
-// // FIREWOOD_CGO_BEGIN_LOCAL_LIBS
-// #cgo LDFLAGS: -L${SRCDIR}/../target/debug
-// #cgo LDFLAGS: -L${SRCDIR}/../target/release
-// #cgo LDFLAGS: -L${SRCDIR}/../target/maxperf
-// // FIREWOOD_CGO_END_LOCAL_LIBS
-// #cgo LDFLAGS: -lfirewood_ffi -lm
 // #include <stdlib.h>
 // #include "firewood.h"
 import "C"
