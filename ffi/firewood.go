@@ -129,37 +129,6 @@ func New(filePath string, conf *Config) (*Database, error) {
 	return &Database{handle: db}, nil
 }
 
-// Starts global recorder for metrics.
-// Returns an error if the global recorder was already initialized.
-// This function only needs to be called once.
-// An error is returned if this method is called a second time, or if it is
-// called after StartMetricsWithExporter.
-func StartMetrics() error {
-	result := C.fwd_start_metrics()
-	return errorFromValue(&result)
-}
-
-// Start global recorder for metrics along with an HTTP exporter.
-// Returns an error if the global recorder was already initialized or if the
-// metrics exporter failed to start.
-// This function only needs to be called once.
-// An error is returned if this method is called a second time, or if it is
-// called after StartMetrics.
-func StartMetricsWithExporter(metricsPort uint16) error {
-	result := C.fwd_start_metrics_with_exporter(C.uint16_t(metricsPort))
-	return errorFromValue(&result)
-}
-
-// Collect metrics from global recorder
-func GatherMetrics() (string, error) {
-	result := C.fwd_gather()
-	b, err := bytesFromValue(&result)
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
-}
-
 // Update applies a batch of updates to the database, returning the hash of the
 // root node after the batch is applied.
 //

@@ -1,0 +1,85 @@
+package ffi
+
+//go:generate go run generate_cgo.go
+
+// // Note that -lm is required on Linux but not on Mac.
+// // FIREWOOD_CGO_BEGIN_STATIC_LIBS
+// // #cgo linux,amd64 LDFLAGS: -L${SRCDIR}/libs/x86_64-unknown-linux-gnu
+// // #cgo linux,arm64 LDFLAGS: -L${SRCDIR}/libs/aarch64-unknown-linux-gnu
+// // #cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/libs/x86_64-apple-darwin
+// // #cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/libs/aarch64-apple-darwin
+// // FIREWOOD_CGO_END_STATIC_LIBS
+// // FIREWOOD_CGO_BEGIN_LOCAL_LIBS
+// #cgo LDFLAGS: -L${SRCDIR}/../target/debug
+// #cgo LDFLAGS: -L${SRCDIR}/../target/release
+// #cgo LDFLAGS: -L${SRCDIR}/../target/maxperf
+// // FIREWOOD_CGO_END_LOCAL_LIBS
+// #cgo LDFLAGS: -lfirewood_ffi -lm
+// #include <stdlib.h>
+// #include "firewood.h"
+import "C"
+
+import (
+	"strings"
+
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
+	"github.com/prometheus/common/expfmt"
+)
+
+var _ prometheus.Gatherer = (*Gatherer)(nil)
+
+type Gatherer struct{}
+
+func (Gatherer) Gather() ([]*dto.MetricFamily, error) {
+	metrics, err := GatherMetrics()
+	if err != nil {
+		return nil, err
+	}
+
+	reader := strings.NewReader(metrics)
+
+	var parser expfmt.TextParser
+	parsedMetrics, err := parser.TextToMetricFamilies(reader)
+	if err != nil {
+		return nil, err
+	}
+
+	lst := make([]*dto.MetricFamily, 0, len(parsedMetrics))
+	for _, v := range parsedMetrics {
+		lst = append(lst, v)
+	}
+
+	return lst, nil
+}
+
+// Starts global recorder for metrics.
+// Returns an error if the global recorder was already initialized.
+// This function only needs to be called once.
+// An error is returned if this method is called a second time, or if it is
+// called after StartMetricsWithExporter.
+func StartMetrics() error {
+	result := C.fwd_start_metrics()
+	return errorFromValue(&result)
+}
+
+// Start global recorder for metrics along with an HTTP exporter.
+// Returns an error if the global recorder was already initialized or if the
+// metrics exporter failed to start.
+// This function only needs to be called once.
+// An error is returned if this method is called a second time, or if it is
+// called after StartMetrics.
+func StartMetricsWithExporter(metricsPort uint16) error {
+	result := C.fwd_start_metrics_with_exporter(C.uint16_t(metricsPort))
+	return errorFromValue(&result)
+}
+
+// Collect metrics from global recorder
+func GatherMetrics() (string, error) {
+	result := C.fwd_gather()
+	b, err := bytesFromValue(&result)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
