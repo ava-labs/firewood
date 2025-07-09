@@ -2181,13 +2181,9 @@ mod test_free_list_iterator {
         ];
 
         let mut expected_iterator = if area_index1 < area_index2 {
-            expected_free_list1
-                .into_iter()
-                .chain(expected_free_list2.into_iter())
+            expected_free_list1.into_iter().chain(expected_free_list2)
         } else {
-            expected_free_list2
-                .into_iter()
-                .chain(expected_free_list1.into_iter())
+            expected_free_list2.into_iter().chain(expected_free_list1)
         };
 
         loop {

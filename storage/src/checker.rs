@@ -106,7 +106,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         Ok(())
     }
 
-    fn check_area_aligned(
+    const fn check_area_aligned(
         &self,
         address: LinearAddress,
         parent_ptr: StoredAreaParent,
@@ -243,7 +243,7 @@ mod test {
 
     #[test]
     fn area_sizes_aligned() {
-        for area_size in AREA_SIZES.iter() {
+        for area_size in &AREA_SIZES {
             assert_eq!(area_size % MIN_AREA_SIZE, 0);
         }
     }
