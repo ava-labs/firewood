@@ -32,7 +32,7 @@ static RECORDER: LazyLock<TextRecorder> = LazyLock::new(|| {
 /// Starts metrics recorder.
 /// This happens on a per-process basis, meaning that the metrics system cannot
 /// be initialized if it has already been set up in the same process.
-pub(crate) fn setup_metrics() -> Result<(), Box<dyn Error>> {
+pub fn setup_metrics() -> Result<(), Box<dyn Error>> {
     metrics::set_global_recorder(RECORDER.clone())?;
     Ok(())
 }
@@ -40,7 +40,7 @@ pub(crate) fn setup_metrics() -> Result<(), Box<dyn Error>> {
 /// Starts metrics recorder along with an exporter over a specified port.
 /// This happens on a per-process basis, meaning that the metrics system
 /// cannot be initialized if it has already been set up in the same process.
-pub(crate) fn setup_metrics_with_exporter(metrics_port: u16) -> Result<(), Box<dyn Error>> {
+pub fn setup_metrics_with_exporter(metrics_port: u16) -> Result<(), Box<dyn Error>> {
     metrics::set_global_recorder(RECORDER.clone())?;
 
     Server::new(move |request| {
@@ -66,7 +66,7 @@ pub(crate) fn setup_metrics_with_exporter(metrics_port: u16) -> Result<(), Box<d
 }
 
 /// Returns the latest metrics for this process.
-pub(crate) fn gather_metrics() -> String {
+pub fn gather_metrics() -> String {
     RECORDER.stats()
 }
 
