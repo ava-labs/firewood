@@ -860,7 +860,7 @@ pub extern "C" fn fwd_start_metrics_with_exporter(metrics_port: u16) -> Value {
 /// A `Value` containing {0, "error message"} if unable to get the latest metrics.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_gather() -> Value {
-    Value::from(metrics_setup::gather_metrics().as_bytes())
+    metrics_setup::gather_metrics().map_or_else(Into::into, |s| Value::from(s.as_bytes()))
 }
 
 /// Common arguments, accepted by both `fwd_create_db()` and `fwd_open_db()`.
