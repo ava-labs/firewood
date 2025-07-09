@@ -823,8 +823,6 @@ pub unsafe extern "C" fn fwd_free_database_error_result(
 
 /// Start metrics recorder for this process.
 ///
-/// * `metrics_port` - the port where metrics will be exposed at
-///
 /// # Returns
 ///
 /// A `Value` containing {0, null} if the metrics recorder was initialized.
