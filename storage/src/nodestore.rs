@@ -49,7 +49,7 @@ use crate::hashednode::hash_node;
 use crate::node::persist::MaybePersistedNode;
 use crate::node::{ByteCounter, Node};
 use crate::{
-    CacheReadStrategy, Child, FileBacked, FreeListParentPtr, HashType, Path, ReadableStorage,
+    CacheReadStrategy, Child, FileBacked, FreeListParent, HashType, Path, ReadableStorage,
     SharedNode, TrieHash,
 };
 
@@ -131,9 +131,9 @@ pub type AreaIndex = u8;
 
 // TODO danlaine: have type for index in AREA_SIZES
 // Implement try_into() for it.
-const NUM_AREA_SIZES: usize = AREA_SIZES.len();
-const MIN_AREA_SIZE: u64 = AREA_SIZES[0];
-const MAX_AREA_SIZE: u64 = AREA_SIZES[NUM_AREA_SIZES - 1];
+pub(crate) const NUM_AREA_SIZES: usize = AREA_SIZES.len();
+pub(crate) const MIN_AREA_SIZE: u64 = AREA_SIZES[0];
+pub(crate) const MAX_AREA_SIZE: u64 = AREA_SIZES[NUM_AREA_SIZES - 1];
 
 #[inline]
 fn new_area_index(n: usize) -> AreaIndex {
@@ -1687,25 +1687,16 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 pub(crate) struct FreeListIterator<'a, S: ReadableStorage> {
     storage: &'a S,
     next_addr: Option<LinearAddress>,
-    parent_ptr: FreeListParentPtr,
 }
 
 impl<'a, S: ReadableStorage> FreeListIterator<'a, S> {
-    pub(crate) const fn new(
-        storage: &'a S,
-        next_addr: Option<LinearAddress>,
-        parent_ptr: FreeListParentPtr,
-    ) -> Self {
-        Self {
-            storage,
-            next_addr,
-            parent_ptr,
-        }
+    pub(crate) const fn new(storage: &'a S, next_addr: Option<LinearAddress>) -> Self {
+        Self { storage, next_addr }
     }
 }
 
 impl<S: ReadableStorage> Iterator for FreeListIterator<'_, S> {
-    type Item = Result<(LinearAddress, AreaIndex, FreeListParentPtr), FileIoError>;
+    type Item = Result<(LinearAddress, AreaIndex), FileIoError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let next_addr = self.next_addr?;
@@ -1720,53 +1711,62 @@ impl<S: ReadableStorage> Iterator for FreeListIterator<'_, S> {
             }
         };
 
-        // update the next address to the next free block
-        let parent_ptr = std::mem::replace(
-            &mut self.parent_ptr,
-            FreeListParentPtr::PrevFreeArea(next_addr),
-        );
         self.next_addr = free_area.next_free_block;
-        Some(Ok((next_addr, stored_area_index, parent_ptr)))
+        Some(Ok((next_addr, stored_area_index)))
     }
 }
 
 impl<S: ReadableStorage> FusedIterator for FreeListIterator<'_, S> {}
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct FreeAreaWithMetadata {
+    pub addr: LinearAddress,
+    pub area_index: AreaIndex,
+    pub free_list_id: AreaIndex,
+    pub parent: FreeListParent,
+}
+
 impl<T, S: ReadableStorage> NodeStore<T, S> {
     // Returns an iterator over the free lists of size no smaller than the size corresponding to `start_area_index`.
     // The iterator returns a tuple of the address and the area index of the free area.
+    // Since this is a low-level iterator, we avoid safe conversion to AreaIndex for performance
     #[expect(dead_code)] // TODO: free list iterators will be used in the checker
     pub(crate) fn free_list_iter(
         &self,
         start_area_index: AreaIndex,
     ) -> impl Iterator<Item = Result<(LinearAddress, AreaIndex), FileIoError>> {
-        self.free_list_iter_inner(start_area_index)
-            .map(|item| item.map(|(addr, area_index, _, _)| (addr, area_index)))
+        self.header
+            .free_lists
+            .iter()
+            .skip(start_area_index as usize)
+            .flat_map(|next_addr| FreeListIterator::new(self.storage.as_ref(), *next_addr))
     }
 
-    // pub(crate) since checker will use this to verify that the free areas are in the correct free list
+    // This is used by the checker to verify that the free areas are in the correct free list
+    // To help fixing the freelist, we also return the parent of the free area
     // Since this is a low-level iterator, we avoid safe conversion to AreaIndex for performance
-    pub(crate) fn free_list_iter_inner(
+    pub(crate) fn free_list_iter_with_metadata(
         &self,
-        start_area_index: AreaIndex,
-    ) -> impl Iterator<
-        Item = Result<(LinearAddress, AreaIndex, AreaIndex, FreeListParentPtr), FileIoError>,
-    > {
+    ) -> impl Iterator<Item = Result<FreeAreaWithMetadata, FileIoError>> {
         self.header
             .free_lists
             .iter()
             .enumerate()
-            .skip(start_area_index as usize)
             .flat_map(move |(free_list_id, next_addr)| {
                 let free_list_id = free_list_id as AreaIndex;
-                FreeListIterator::new(
-                    self.storage.as_ref(),
-                    *next_addr,
-                    FreeListParentPtr::FreeListHead(free_list_id),
-                )
-                .map(move |item| {
-                    item.map(|(addr, area_index, parent_ptr)| {
-                        (addr, area_index, free_list_id, parent_ptr)
+                let mut parent_holder = FreeListParent::FreeListHead(free_list_id);
+                FreeListIterator::new(self.storage.as_ref(), *next_addr).map(move |item| {
+                    item.map(|(addr, area_index)| {
+                        let parent = std::mem::replace(
+                            &mut parent_holder,
+                            FreeListParent::PrevFreeArea(addr),
+                        );
+                        FreeAreaWithMetadata {
+                            addr,
+                            area_index,
+                            free_list_id,
+                            parent,
+                        }
                     })
                 })
             })
@@ -1997,6 +1997,7 @@ mod test_free_list_iterator {
     use rand::Rng;
     use rand::seq::IteratorRandom;
 
+    // Create a random free list and test that `FreeListIterator` is able to traverse all the free areas
     #[test]
     fn free_list_iterator() {
         let mut rng = seeded_rng();
@@ -2024,32 +2025,126 @@ mod test_free_list_iterator {
         let skip = rng.random_range(0..offsets.len());
         let mut iterator = offsets.into_iter().skip(skip);
         let start = iterator.next().unwrap();
-        let mut free_list_iter = FreeListIterator::new(
-            nodestore.storage.as_ref(),
-            LinearAddress::new(start),
-            FreeListParentPtr::FreeListHead(area_index),
+        let mut free_list_iter =
+            FreeListIterator::new(nodestore.storage.as_ref(), LinearAddress::new(start));
+        assert_eq!(
+            free_list_iter.next().unwrap().unwrap(),
+            (LinearAddress::new(start).unwrap(), area_index)
         );
-        let (next_addr, returned_area_index, parent_ptr) = free_list_iter.next().unwrap().unwrap();
-        assert_eq!(next_addr, LinearAddress::new(start).unwrap());
-        assert_eq!(returned_area_index, area_index);
-        assert!(matches!(
-            parent_ptr,
-            FreeListParentPtr::FreeListHead(free_list_id) if free_list_id == area_index
-        ));
 
-        let mut parent_addr = next_addr;
         for offset in iterator {
-            let (next_addr, returned_area_index, parent_ptr) =
-                free_list_iter.next().unwrap().unwrap();
-            assert_eq!(next_addr, LinearAddress::new(offset).unwrap());
-            assert_eq!(returned_area_index, area_index);
-            assert!(matches!(
-                parent_ptr,
-                FreeListParentPtr::PrevFreeArea(prev_addr) if prev_addr == parent_addr
-            ));
-            parent_addr = next_addr;
+            assert_eq!(
+                free_list_iter.next().unwrap().unwrap(),
+                (LinearAddress::new(offset).unwrap(), area_index)
+            );
         }
 
         assert!(free_list_iter.next().is_none());
+    }
+
+    // Create two free lists and check that `free_list_iter_with_metadata` correctly returns the free areas and their parents
+    #[test]
+    fn free_list_iter_with_metadata() {
+        let mut rng = seeded_rng();
+        let memstore = MemStore::new(vec![]);
+        let mut nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+
+        let mut free_lists = FreeLists::default();
+        let mut offset = NodeStoreHeader::SIZE;
+
+        // first free list
+        let area_index1 = rng.random_range(0..NUM_AREA_SIZES as u8);
+        let area_size1 = AREA_SIZES[area_index1 as usize];
+        let mut next_free_block1 = None;
+
+        test_write_free_area(&nodestore, next_free_block1, area_index1, offset);
+        let free_list1_area2 = LinearAddress::new(offset).unwrap();
+        next_free_block1 = Some(free_list1_area2);
+        offset += area_size1;
+
+        test_write_free_area(&nodestore, next_free_block1, area_index1, offset);
+        let free_list1_area1 = LinearAddress::new(offset).unwrap();
+        next_free_block1 = Some(free_list1_area1);
+        offset += area_size1;
+
+        free_lists[area_index1 as usize] = next_free_block1;
+
+        // second free list
+        let area_index2 =
+            (area_index1 + rng.random_range(0..(NUM_AREA_SIZES as u8 - 1))) % NUM_AREA_SIZES as u8; // make sure the second free list is different from the first
+        assert_ne!(area_index1, area_index2);
+        let area_size2 = AREA_SIZES[area_index2 as usize];
+        let mut next_free_block2 = None;
+
+        test_write_free_area(&nodestore, next_free_block2, area_index2, offset);
+        let free_list2_area2 = LinearAddress::new(offset).unwrap();
+        next_free_block2 = Some(free_list2_area2);
+        offset += area_size2;
+
+        test_write_free_area(&nodestore, next_free_block2, area_index2, offset);
+        let free_list2_area1 = LinearAddress::new(offset).unwrap();
+        next_free_block2 = Some(free_list2_area1);
+        offset += area_size2;
+
+        free_lists[area_index2 as usize] = next_free_block2;
+
+        // write header
+        test_write_header(&mut nodestore, offset, None, free_lists);
+
+        // test iterator
+        let mut free_list_iter = nodestore.free_list_iter_with_metadata();
+
+        // expected
+        let expected_free_list1 = vec![
+            FreeAreaWithMetadata {
+                addr: free_list1_area1,
+                area_index: area_index1,
+                free_list_id: area_index1,
+                parent: FreeListParent::FreeListHead(area_index1),
+            },
+            FreeAreaWithMetadata {
+                addr: free_list1_area2,
+                area_index: area_index1,
+                free_list_id: area_index1,
+                parent: FreeListParent::PrevFreeArea(free_list1_area1),
+            },
+        ];
+
+        let expected_free_list2 = vec![
+            FreeAreaWithMetadata {
+                addr: free_list2_area1,
+                area_index: area_index2,
+                free_list_id: area_index2,
+                parent: FreeListParent::FreeListHead(area_index2),
+            },
+            FreeAreaWithMetadata {
+                addr: free_list2_area2,
+                area_index: area_index2,
+                free_list_id: area_index2,
+                parent: FreeListParent::PrevFreeArea(free_list2_area1),
+            },
+        ];
+
+        let mut expected_iterator = if area_index1 < area_index2 {
+            expected_free_list1
+                .into_iter()
+                .chain(expected_free_list2.into_iter())
+        } else {
+            expected_free_list2
+                .into_iter()
+                .chain(expected_free_list1.into_iter())
+        };
+
+        loop {
+            let next = free_list_iter.next();
+            let expected = expected_iterator.next();
+
+            if expected.is_none() {
+                assert!(next.is_none());
+                break;
+            }
+
+            assert_eq!(next.unwrap().unwrap(), expected.unwrap());
+        }
     }
 }
