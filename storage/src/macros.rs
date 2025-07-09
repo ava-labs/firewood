@@ -3,7 +3,7 @@
 #[macro_export]
 /// Macro to register and use a metric with description and labels.
 /// This macro is a wrapper around the `metrics` crate's `counter!` and `describe_counter!`
-/// macros. It ensures that the description is registered only once.
+/// macros. It ensures that the description is registered just once.
 ///
 /// Usage:
 ///   `firewood_counter!("metric_name", "description")`
