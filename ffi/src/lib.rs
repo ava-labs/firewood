@@ -826,8 +826,7 @@ pub unsafe extern "C" fn fwd_free_database_error_result(
 /// # Returns
 ///
 /// A `Value` containing {0, null} if the metrics recorder was initialized.
-/// A `Value` containing {0, "error message"} if the metrics recorder was
-/// already initialized.
+/// A `Value` containing {0, "error message"} if an error occurs.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_start_metrics() -> Value {
     metrics_setup::setup_metrics()
@@ -843,8 +842,7 @@ pub extern "C" fn fwd_start_metrics() -> Value {
 ///
 /// A `Value` containing {0, null} if the metrics recorder was initialized and
 /// the exporter was started.
-/// A `Value` containing {0, "error message"} if the metrics recorder was
-/// already initialized or the exporter failed to start.
+/// A `Value` containing {0, "error message"} if an error occurs.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_start_metrics_with_exporter(metrics_port: u16) -> Value {
     metrics_setup::setup_metrics_with_exporter(metrics_port)

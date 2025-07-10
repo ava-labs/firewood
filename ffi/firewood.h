@@ -423,8 +423,7 @@ struct Value fwd_root_hash(const struct DatabaseHandle *db);
  * # Returns
  *
  * A `Value` containing {0, null} if the metrics recorder was initialized.
- * A `Value` containing {0, "error message"} if the metrics recorder was
- * already initialized.
+ * A `Value` containing {0, "error message"} if an error occurs.
  */
 struct Value fwd_start_metrics(void);
 
@@ -437,7 +436,6 @@ struct Value fwd_start_metrics(void);
  *
  * A `Value` containing {0, null} if the metrics recorder was initialized and
  * the exporter was started.
- * A `Value` containing {0, "error message"} if the metrics recorder was
- * already initialized or the exporter failed to start.
+ * A `Value` containing {0, "error message"} if an error occurs.
  */
 struct Value fwd_start_metrics_with_exporter(uint16_t metrics_port);
