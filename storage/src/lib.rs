@@ -25,6 +25,7 @@ use thiserror::Error;
 mod checker;
 mod hashednode;
 mod hashers;
+mod iter;
 mod linear;
 mod node;
 mod nodestore;
@@ -98,6 +99,32 @@ pub fn empty_trie_hash() -> TrieHash {
         .expect("empty trie hash is 32 bytes")
 }
 
+const MAX_LEAKED_AREAS_PRINT: usize = 10;
+
+/// A collection of leaked areas
+pub struct LeakedAreas(Vec<(LinearAddress, AreaIndex)>);
+
+impl std::fmt::Debug for LeakedAreas {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        struct DisplayArea<'a>(&'a (LinearAddress, AreaIndex));
+        impl std::fmt::Display for DisplayArea<'_> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let DisplayArea((start, size)) = self;
+                write!(f, "{{start: {start}, size: {size}}}")
+            }
+        }
+
+        write!(f, "LeakedAreas([")?;
+        crate::iter::write_iter(
+            f,
+            self.0.iter().map(DisplayArea),
+            ", ",
+            std::num::NonZeroUsize::new(MAX_LEAKED_AREAS_PRINT),
+        )?;
+        write!(f, "])")
+    }
+}
+
 /// Errors returned by the checker
 #[derive(Error, Debug)]
 #[non_exhaustive]
@@ -149,6 +176,10 @@ pub enum CheckerError {
         /// Expected size of the area
         expected_free_list: AreaIndex,
     },
+
+    /// Found leaked areas
+    #[error("Found leaked areas: {0:?}")]
+    AreaLeaks(LeakedAreas),
 
     /// IO error
     #[error("IO error")]
