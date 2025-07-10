@@ -10,6 +10,7 @@ use bytemuck_derive::{AnyBitPattern, NoUninit};
 use coarsetime::Instant;
 use fastrace::local::LocalSpan;
 use metrics::counter;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use smallvec::SmallVec;
@@ -172,7 +173,7 @@ pub type LinearAddress = NonZeroU64;
 /// Each [`StoredArea`] contains an [Area] which is either a [Node] or a [`FreeArea`].
 #[repr(u8)]
 #[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
-enum Area<T, U> {
+pub(crate) enum Area<T, U> {
     Node(T),
     Free(U) = 255, // this is magic: no node starts with a byte of 255
 }
@@ -185,10 +186,48 @@ enum Area<T, U> {
 ///  - Byte 1: 0x255 if free, otherwise the low-order bit indicates Branch or Leaf
 ///  - Bytes 2..n: The actual data
 #[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
-struct StoredArea<T> {
+pub(crate) struct StoredArea<T> {
     /// Index in [`AREA_SIZES`] of this area's size
     area_size_index: AreaIndex,
     area: T,
+}
+
+impl<T: DeserializeOwned> StoredArea<T> {
+    pub(crate) fn from_storage<S: ReadableStorage>(
+        storage: &S,
+        addr: LinearAddress,
+    ) -> Result<Self, FileIoError> {
+        let mut area_stream = storage.stream_from(addr.get())?;
+        let stored_area: StoredArea<T> =
+            serializer()
+                .deserialize_from(&mut area_stream)
+                .map_err(|e| {
+                    storage.file_io_error(
+                        Error::new(ErrorKind::InvalidData, e),
+                        addr.get(),
+                        Some("StoredArea::from_storage".to_string()),
+                    )
+                })?;
+        if stored_area.area_size_index >= NUM_AREA_SIZES as u8 {
+            return Err(storage.file_io_error(
+                Error::new(ErrorKind::InvalidData, "Invalid area size index"),
+                addr.get(),
+                Some("StoredArea::from_storage".to_string()),
+            ));
+        }
+        Ok(stored_area)
+    }
+
+    pub(crate) fn area_index_and_size(&self) -> (AreaIndex, u64) {
+        (
+            self.area_size_index,
+            AREA_SIZES[self.area_size_index as usize],
+        )
+    }
+
+    pub(crate) fn area(&self) -> &T {
+        &self.area
+    }
 }
 
 impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
@@ -912,7 +951,7 @@ impl NodeStoreHeader {
 /// A [`FreeArea`] is stored at the start of the area that contained a node that
 /// has been freed.
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
-struct FreeArea {
+pub(crate) struct FreeArea {
     next_free_block: Option<LinearAddress>,
 }
 
@@ -921,17 +960,8 @@ impl FreeArea {
         storage: &S,
         address: LinearAddress,
     ) -> Result<(Self, AreaIndex), FileIoError> {
-        let free_area_addr = address.get();
-        let stored_area_stream = storage.stream_from(free_area_addr)?;
-        let stored_area: StoredArea<Area<Node, FreeArea>> = serializer()
-            .deserialize_from(stored_area_stream)
-            .map_err(|e| {
-                storage.file_io_error(
-                    Error::new(ErrorKind::InvalidData, e),
-                    free_area_addr,
-                    Some("FreeArea::from_storage".to_string()),
-                )
-            })?;
+        let stored_area: StoredArea<Area<Node, FreeArea>> =
+            StoredArea::from_storage(storage, address)?;
         let StoredArea {
             area: Area::Free(free_area),
             area_size_index: stored_area_index,
@@ -939,7 +969,7 @@ impl FreeArea {
         else {
             return Err(storage.file_io_error(
                 Error::new(ErrorKind::InvalidData, "Attempted to read a non-free area"),
-                free_area_addr,
+                address.get(),
                 Some("FreeArea::from_storage".to_string()),
             ));
         };
@@ -1118,6 +1148,12 @@ pub struct NodeStore<T, S> {
     kind: T,
     /// Persisted storage to read nodes from.
     storage: Arc<S>,
+}
+
+impl<T, S> NodeStore<T, S> {
+    pub(crate) fn storage(&self) -> &S {
+        self.storage.as_ref()
+    }
 }
 
 /// Contains the state of a proposal that is still being modified.
@@ -1843,21 +1879,13 @@ pub(crate) mod nodestore_test_utils {
     }
 
     // Helper function to write a random stored area to the given offset.
-    pub(crate) fn test_write_random_stored_area<S: WritableStorage>(
+    pub(crate) fn test_write_empty_area<S: WritableStorage>(
         nodestore: &NodeStore<Committed, S>,
-        area_size_index: AreaIndex,
+        size: u64,
         offset: u64,
     ) {
-        let area_size = AREA_SIZES[area_size_index as usize];
-        let content_size = area_size.checked_sub(9).unwrap(); // 1 byte for area size and 8 bytes for vector length
-        let area_content = vec![1u8; content_size as usize];
-        let stored_area = StoredArea {
-            area_size_index,
-            area: area_content,
-        };
-        let stored_area_bytes = serializer().serialize(&stored_area).unwrap();
-        assert!(stored_area_bytes.len() <= area_size as usize);
-        nodestore.storage.write(offset, &stored_area_bytes).unwrap();
+        let area_content = vec![0u8; size as usize];
+        nodestore.storage.write(offset, &area_content).unwrap();
     }
 
     // Helper function to write the NodeStoreHeader

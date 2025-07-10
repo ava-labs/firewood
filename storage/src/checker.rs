@@ -2,7 +2,8 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::logger::warn;
-use crate::nodestore::AreaIndex;
+use crate::node::ALL_ZERO_NODE;
+use crate::nodestore::{AREA_SIZES, Area, AreaIndex, FreeArea, StoredArea};
 use crate::range_set::LinearAddressRangeSet;
 use crate::{
     CheckerError, Committed, HashedNodeReader, LeakedAreas, LinearAddress, Node, NodeReader,
@@ -51,7 +52,9 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         self.visit_freelist(&mut visited)?;
 
         // 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
-        let leaked_areas = self.find_all_leaked_areas(visited.complement())?;
+        let leaked_areas = self
+            .split_all_leaked_ranges(visited.complement())
+            .collect::<Vec<_>>();
 
         if !leaked_areas.is_empty() {
             // warning here since there are multiple revisions on disk but only the latest one is traversed
@@ -99,78 +102,88 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         Ok(())
     }
 
-    /// Wrapper around `find_leaked_areas` that iterates over a collection of ranges.
-    fn find_all_leaked_areas(
+    /// Wrapper around `split_into_leaked_areas` that iterates over a collection of ranges.
+    fn split_all_leaked_ranges(
         &self,
         leaked_ranges: impl IntoIterator<Item = Range<LinearAddress>>,
-    ) -> Result<Vec<(LinearAddress, AreaIndex)>, CheckerError> {
+    ) -> impl Iterator<Item = (LinearAddress, AreaIndex)> {
         leaked_ranges
             .into_iter()
-            .try_fold(Vec::new(), |mut leaked, range| {
-                let leaked_areas = self.find_leaked_areas(range)?;
-                leaked.extend(leaked_areas);
-                Ok::<_, CheckerError>(leaked)
-            })
+            .flat_map(|range| self.split_range_into_leaked_areas(range))
     }
 
-    /// Find all stored areas within `leaked_range`.
+    /// Split a range of addresses into leaked areas that can be stored in the free list.
     /// We assume that all space within `leaked_range` are leaked and the stored areas are contiguous.
     /// Returns error if the last leaked area extends beyond the end of the range.
-    fn find_leaked_areas(
+    fn split_range_into_leaked_areas(
         &self,
         leaked_range: Range<LinearAddress>,
-    ) -> Result<Vec<(LinearAddress, AreaIndex)>, CheckerError> {
+    ) -> Vec<(LinearAddress, AreaIndex)> {
         let mut leaked = Vec::new();
         let mut current_addr = leaked_range.start;
+
+        // First attempt to read the valid stored areas from the leaked range
         loop {
-            let (area_size_index, area_size) = self.area_index_and_size(current_addr)?;
-            leaked.push((current_addr, area_size_index));
+            let stored_area = match StoredArea::<Area<Node, FreeArea>>::from_storage(
+                self.storage(),
+                current_addr,
+            ) {
+                Ok(stored_area) => stored_area,
+                Err(e) => {
+                    warn!("Error reading stored area at {current_addr}: {e}");
+                    break;
+                }
+            };
 
-            // advance to the next area
-            let next_addr =
-                current_addr
-                    .checked_add(area_size)
-                    .ok_or(CheckerError::LeakedAreaTooLarge {
-                        address: current_addr,
-                        area_index: area_size_index,
-                        size: area_size,
-                        space_available: leaked_range
-                            .end
-                            .get()
-                            .checked_sub(current_addr.get())
-                            .expect(
-                                "impossible since this line is only reached if current_addr <= leaked_range.end",
-                            ),
-                    })?;
+            if stored_area.area() == &Area::Node(ALL_ZERO_NODE.clone()) {
+                // we encountered an empty area, use heuristics to split the rest of leaked range.
+                break;
+            }
 
+            let (area_size_index, area_size) = stored_area.area_index_and_size();
+            let next_addr = current_addr
+                .checked_add(area_size)
+                .expect("address overflow is impossible");
             match next_addr.cmp(&leaked_range.end) {
                 Ordering::Equal => {
                     // we have reached the end of the leaked area, done
-                    break;
+                    leaked.push((current_addr, area_size_index));
+                    return leaked;
                 }
                 Ordering::Greater => {
                     // the last area extends beyond the leaked area - this means the leaked area overlaps with an area we have visited
-                    return Err(CheckerError::LeakedAreaTooLarge {
-                        address: current_addr,
-                        area_index: area_size_index,
-                        size: area_size,
-                        space_available: leaked_range
-                            .end
-                            .get()
-                            .checked_sub(current_addr.get())
-                            .expect(
-                                "impossible since this line is only reached if current_addr <= leaked_range.end",
-                            ),
-                    });
+                    warn!(
+                        "Leaked area extends beyond {leaked_range:?}: {current_addr} -> {next_addr}"
+                    );
+                    break;
                 }
                 Ordering::Less => {
                     // continue to the next area
+                    leaked.push((current_addr, area_size_index));
                     current_addr = next_addr;
                 }
             }
         }
 
-        Ok(leaked)
+        // We encountered an error, split the rest of the leaked range into areas using heuristics
+        // The heuristic is to split the leaked range into areas of the largest size possible - we assume `AREA_SIZE` is in ascending order
+        for (area_index, area_size) in AREA_SIZES.iter().enumerate().rev() {
+            loop {
+                let next_addr = current_addr
+                    .checked_add(*area_size)
+                    .expect("address overflow is impossible");
+                if next_addr <= leaked_range.end {
+                    leaked.push((current_addr, area_index as AreaIndex));
+                    current_addr = next_addr;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // we assume that all areas are aligned to `MIN_AREA_SIZE`, in which case leaked ranges can always be split into free areas perfectly
+        debug_assert!(current_addr == leaked_range.end);
+        leaked
     }
 }
 
@@ -179,12 +192,13 @@ mod test {
     #![expect(clippy::unwrap_used)]
     #![expect(clippy::indexing_slicing)]
 
+    use nonzero_ext::nonzero;
     use std::collections::HashMap;
 
     use super::*;
     use crate::linear::memory::MemStore;
     use crate::nodestore::nodestore_test_utils::{
-        test_write_free_area, test_write_header, test_write_new_node, test_write_random_stored_area,
+        test_write_empty_area, test_write_free_area, test_write_header, test_write_new_node,
     };
     use crate::nodestore::{AREA_SIZES, FreeLists, NodeStoreHeader};
     use crate::{BranchNode, Child, HashType, LeafNode, NodeStore, Path};
@@ -297,9 +311,24 @@ mod test {
     }
 
     #[test]
-    // This test creates a linear set of stored areas and free some of them.
+    fn deserialization_test() {
+        let memstore = MemStore::new(vec![]);
+        let nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+        test_write_empty_area(&nodestore, 128, NodeStoreHeader::SIZE);
+
+        let stored_area = StoredArea::<Area<Node, FreeArea>>::from_storage(
+            nodestore.storage(),
+            LinearAddress::new(NodeStoreHeader::SIZE).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(stored_area.area(), &Area::Node(ALL_ZERO_NODE.clone()));
+    }
+
+    #[test]
+    // This test creates a linear set of free areas and free them.
     // When traversing it should break consecutive areas.
-    fn find_leaked_areas() {
+    fn split_correct_range_into_leaked_areas() {
         use rand::Rng;
         use rand::seq::IteratorRandom;
 
@@ -317,7 +346,12 @@ mod test {
             let (area_size_index, area_size) =
                 AREA_SIZES.iter().enumerate().choose(&mut rng).unwrap();
             let area_addr = LinearAddress::new(high_watermark).unwrap();
-            test_write_random_stored_area(&nodestore, area_size_index as AreaIndex, high_watermark);
+            test_write_free_area(
+                &nodestore,
+                None,
+                area_size_index as AreaIndex,
+                high_watermark,
+            );
             stored_areas.push((area_addr, area_size_index as AreaIndex, *area_size));
             high_watermark += *area_size;
         }
@@ -347,9 +381,95 @@ mod test {
         }
 
         // check the leaked areas
-        let leaked_areas = HashMap::from_iter(nodestore.find_all_leaked_areas(leaked).unwrap());
+        let leaked_areas = HashMap::from_iter(nodestore.split_all_leaked_ranges(leaked));
 
         // assert that all leaked areas end up on the free list
         assert_eq!(leaked_areas, expected_free_areas);
+    }
+
+    #[test]
+    // This test creates a linear set of free areas and free them.
+    // When traversing it should break consecutive areas.
+    fn split_empty_range_into_leaked_areas() {
+        let memstore = MemStore::new(vec![]);
+        let nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+
+        let expected_leaked_area_indices = vec![8u8, 7, 4, 2, 0];
+        let expected_leaked_area_sizes = expected_leaked_area_indices
+            .iter()
+            .map(|i| AREA_SIZES[*i as usize])
+            .collect::<Vec<_>>();
+        assert_eq!(expected_leaked_area_sizes, vec![1024, 768, 128, 64, 16]);
+        let expected_offsets = expected_leaked_area_sizes
+            .iter()
+            .scan(0, |acc, i| {
+                let offset = *acc;
+                *acc += i;
+                LinearAddress::new(NodeStoreHeader::SIZE + offset)
+            })
+            .collect::<Vec<_>>();
+
+        // write an empty area
+        let leaked_range_size = expected_leaked_area_sizes.iter().sum();
+        test_write_empty_area(&nodestore, leaked_range_size, NodeStoreHeader::SIZE);
+
+        // check the leaked areas
+        let leaked_range = nonzero!(NodeStoreHeader::SIZE)
+            ..LinearAddress::new(NodeStoreHeader::SIZE + leaked_range_size).unwrap();
+        let (leaked_areas_offsets, leaked_area_size_indices): (Vec<LinearAddress>, Vec<AreaIndex>) =
+            nodestore
+                .split_range_into_leaked_areas(leaked_range)
+                .into_iter()
+                .unzip();
+
+        // assert that all leaked areas end up on the free list
+        assert_eq!(leaked_areas_offsets, expected_offsets);
+        assert_eq!(leaked_area_size_indices, expected_leaked_area_indices);
+    }
+
+    #[test]
+    // With both valid and invalid areas in the range, return the valid areas until reaching one invalid area, then use heuristics to split the rest of the range.
+    fn split_range_into_leaked_areas_test() {
+        let memstore = MemStore::new(vec![]);
+        let nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+
+        // write two free areas
+        let mut high_watermark = NodeStoreHeader::SIZE;
+        test_write_free_area(&nodestore, None, 8, high_watermark); // 1024
+        high_watermark += AREA_SIZES[8];
+        test_write_free_area(&nodestore, None, 7, high_watermark); // 768
+        high_watermark += AREA_SIZES[7];
+        // write an empty area
+        test_write_empty_area(&nodestore, 768, high_watermark);
+        high_watermark += 768;
+        // write another free area
+        test_write_free_area(&nodestore, None, 8, high_watermark); // 1024
+        high_watermark += AREA_SIZES[8];
+
+        let expected_indices = vec![8, 7, 8, 7];
+        let expected_sizes = expected_indices
+            .iter()
+            .map(|i| AREA_SIZES[*i as usize])
+            .collect::<Vec<_>>();
+        let expected_offsets = expected_sizes
+            .iter()
+            .scan(0, |acc, i| {
+                let offset = *acc;
+                *acc += i;
+                LinearAddress::new(NodeStoreHeader::SIZE + offset)
+            })
+            .collect::<Vec<_>>();
+
+        // check the leaked areas
+        let leaked_range =
+            nonzero!(NodeStoreHeader::SIZE)..LinearAddress::new(high_watermark).unwrap();
+        let (leaked_areas_offsets, leaked_area_size_indices): (Vec<LinearAddress>, Vec<AreaIndex>) =
+            nodestore
+                .split_range_into_leaked_areas(leaked_range)
+                .into_iter()
+                .unzip();
+
+        assert_eq!(leaked_areas_offsets, expected_offsets);
+        assert_eq!(leaked_area_size_indices, expected_indices);
     }
 }

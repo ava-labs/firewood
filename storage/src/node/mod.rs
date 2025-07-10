@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::io::{Error, Read, Write};
 use std::num::NonZero;
+use std::sync::LazyLock;
 use std::vec;
 
 pub mod branch;
@@ -53,6 +54,14 @@ pub enum Node {
     /// This node is a [`LeafNode`]
     Leaf(LeafNode),
 }
+
+pub(crate) static ALL_ZERO_NODE: LazyLock<Node> = LazyLock::new(|| {
+    Node::Branch(Box::new(BranchNode {
+        partial_path: Path::new(),
+        value: None,
+        children: [const { None }; BranchNode::MAX_CHILDREN],
+    }))
+});
 
 impl Default for Node {
     fn default() -> Self {
