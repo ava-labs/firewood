@@ -84,7 +84,8 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
     /// Traverse all the free areas in the freelist
     fn visit_freelist(&self, visited: &mut LinearAddressRangeSet) -> Result<(), CheckerError> {
-        for free_area in self.free_list_iter_with_metadata() {
+        let mut free_list_iter = self.free_list_iter(0);
+        while let Some(free_area) = free_list_iter.next_with_metadata() {
             let FreeAreaWithMetadata {
                 addr,
                 area_index,
