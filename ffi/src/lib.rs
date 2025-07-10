@@ -854,7 +854,7 @@ pub extern "C" fn fwd_start_metrics_with_exporter(metrics_port: u16) -> Value {
 ///
 /// # Returns
 ///
-/// A `Value` containing the latest metrics for this process.
+/// A `Value` containing {len, bytes} representing the latest metrics for this process.
 /// A `Value` containing {0, "error message"} if unable to get the latest metrics.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_gather() -> Value {

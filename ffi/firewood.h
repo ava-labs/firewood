@@ -230,7 +230,7 @@ void fwd_free_value(struct Value *value);
  *
  * # Returns
  *
- * A `Value` containing the latest metrics for this process.
+ * A `Value` containing {len, bytes} representing the latest metrics for this process.
  * A `Value` containing {0, "error message"} if unable to get the latest metrics.
  */
 struct Value fwd_gather(void);
