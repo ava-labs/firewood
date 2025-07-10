@@ -2126,7 +2126,7 @@ mod test_free_list_iterator {
 
         // second free list
         let area_index2 =
-            (area_index1 + rng.random_range(0..(NUM_AREA_SIZES as u8 - 1))) % NUM_AREA_SIZES as u8; // make sure the second free list is different from the first
+            (area_index1 + rng.random_range(1..NUM_AREA_SIZES as u8)) % NUM_AREA_SIZES as u8; // make sure the second free list is different from the first
         assert_ne!(area_index1, area_index2);
         let area_size2 = AREA_SIZES[area_index2 as usize];
         let mut next_free_block2 = None;
