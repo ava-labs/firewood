@@ -218,14 +218,12 @@ impl<T: DeserializeOwned> StoredArea<T> {
         Ok(stored_area)
     }
 
-    pub(crate) fn area_index_and_size(&self) -> (AreaIndex, u64) {
-        (
-            self.area_size_index,
-            AREA_SIZES[self.area_size_index as usize],
-        )
+    pub(crate) fn area_index_and_size(&self) -> Option<(AreaIndex, u64)> {
+        let size = AREA_SIZES.get(self.area_size_index as usize)?;
+        Some((self.area_size_index, *size))
     }
 
-    pub(crate) fn area(&self) -> &T {
+    pub(crate) const fn area(&self) -> &T {
         &self.area
     }
 }

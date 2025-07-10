@@ -136,11 +136,17 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             };
 
             if stored_area.area() == &Area::Node(ALL_ZERO_NODE.clone()) {
-                // we encountered an empty area, use heuristics to split the rest of leaked range.
+                // we encountered an empty area - this is invalid
+                warn!("Encountered an empty area at {current_addr}");
                 break;
             }
 
-            let (area_size_index, area_size) = stored_area.area_index_and_size();
+            let Some((area_size_index, area_size)) = stored_area.area_index_and_size() else {
+                // the stored area has an invalid size index
+                warn!("Encountered an area with invalid size index at {current_addr}");
+                break;
+            };
+
             let next_addr = current_addr
                 .checked_add(area_size)
                 .expect("address overflow is impossible");
@@ -381,7 +387,7 @@ mod test {
         }
 
         // check the leaked areas
-        let leaked_areas = HashMap::from_iter(nodestore.split_all_leaked_ranges(leaked));
+        let leaked_areas: HashMap<_, _> = nodestore.split_all_leaked_ranges(leaked).collect();
 
         // assert that all leaked areas end up on the free list
         assert_eq!(leaked_areas, expected_free_areas);
@@ -415,7 +421,12 @@ mod test {
 
         // check the leaked areas
         let leaked_range = nonzero!(NodeStoreHeader::SIZE)
-            ..LinearAddress::new(NodeStoreHeader::SIZE + leaked_range_size).unwrap();
+            ..LinearAddress::new(
+                NodeStoreHeader::SIZE
+                    .checked_add(leaked_range_size)
+                    .unwrap(),
+            )
+            .unwrap();
         let (leaked_areas_offsets, leaked_area_size_indices): (Vec<LinearAddress>, Vec<AreaIndex>) =
             nodestore
                 .split_range_into_leaked_areas(leaked_range)
