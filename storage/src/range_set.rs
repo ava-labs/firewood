@@ -743,8 +743,10 @@ mod test_linear_address_range_set {
     fn test_display(items: usize, expected: &str) {
         let mut range_set = LinearAddressRangeSet::new(0x2000).unwrap();
         for i in 0..items {
+            #[allow(clippy::arithmetic_side_effects)]
+            let offset = i as u64 * 0x20 + 0x1000;
             range_set
-                .insert_area(LinearAddress::new(i as u64 * 0x20 + 0x1000).unwrap(), 0x10)
+                .insert_area(LinearAddress::new(offset).unwrap(), 0x10)
                 .unwrap();
         }
         assert_eq!(format!("{range_set}"), expected);
