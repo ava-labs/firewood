@@ -155,9 +155,12 @@ pub type LinearAddress = NonZeroU64;
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[deprecated(note = "Only used for backwards compatibility with v0.0.8 and earlier")]
 pub enum Area<T, U> {
-    #[expect(
-        unused,
-        reason = "Only ued for backwards compatibility, this will be removed in the future"
+    #[cfg_attr(
+        not(feature = "serde"),
+        expect(
+            unused,
+            reason = "Only ued for backwards compatibility, this will be removed in the future"
+        )
     )]
     Node(T),
     Free(U) = 255, // this is magic: no node starts with a byte of 255
