@@ -131,9 +131,14 @@ pub type AreaIndex = u8;
 
 // TODO danlaine: have type for index in AREA_SIZES
 // Implement try_into() for it.
-pub(crate) const NUM_AREA_SIZES: usize = AREA_SIZES.len();
-pub(crate) const MIN_AREA_SIZE: u64 = AREA_SIZES[0];
-pub(crate) const MAX_AREA_SIZE: u64 = AREA_SIZES[NUM_AREA_SIZES - 1];
+const NUM_AREA_SIZES: usize = AREA_SIZES.len();
+const MIN_AREA_SIZE: u64 = AREA_SIZES[0];
+const MAX_AREA_SIZE: u64 = AREA_SIZES[NUM_AREA_SIZES - 1];
+
+#[inline]
+pub(crate) const fn is_aligned(addr: LinearAddress) -> bool {
+    addr.get() % MIN_AREA_SIZE == 0
+}
 
 #[inline]
 fn new_area_index(n: usize) -> AreaIndex {
@@ -1965,6 +1970,13 @@ mod tests {
     use test_case::test_case;
 
     use super::*;
+
+    #[test]
+    fn area_sizes_aligned() {
+        for area_size in &AREA_SIZES {
+            assert_eq!(area_size % MIN_AREA_SIZE, 0);
+        }
+    }
 
     #[test]
     fn test_area_size_to_index() {

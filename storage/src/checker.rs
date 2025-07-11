@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::nodestore::{FreeAreaWithMetadata, MIN_AREA_SIZE};
+use crate::nodestore::{FreeAreaWithMetadata, is_aligned};
 use crate::range_set::LinearAddressRangeSet;
 use crate::{
     CheckerError, Committed, HashedNodeReader, LinearAddress, Node, NodeReader, NodeStore,
@@ -112,7 +112,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         address: LinearAddress,
         parent_ptr: StoredAreaParent,
     ) -> Result<(), CheckerError> {
-        if address.get() % MIN_AREA_SIZE != 0 {
+        if !is_aligned(address) {
             return Err(CheckerError::AreaMisaligned {
                 address,
                 parent_ptr,
@@ -132,7 +132,7 @@ mod test {
     use crate::nodestore::nodestore_test_utils::{
         test_write_free_area, test_write_header, test_write_new_node,
     };
-    use crate::nodestore::{AREA_SIZES, FreeLists, MIN_AREA_SIZE, NodeStoreHeader};
+    use crate::nodestore::{AREA_SIZES, FreeLists, NodeStoreHeader};
     use crate::{BranchNode, Child, HashType, LeafNode, NodeStore, Path};
 
     #[test]
@@ -240,12 +240,5 @@ mod test {
         nodestore.visit_freelist(&mut visited).unwrap();
         let complement = visited.complement();
         assert_eq!(complement.into_iter().collect::<Vec<_>>(), vec![]);
-    }
-
-    #[test]
-    fn area_sizes_aligned() {
-        for area_size in &AREA_SIZES {
-            assert_eq!(area_size % MIN_AREA_SIZE, 0);
-        }
     }
 }
