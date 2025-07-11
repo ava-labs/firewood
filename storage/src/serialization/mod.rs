@@ -1,7 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#[cfg(not(feature = "serde"))]
+#[cfg(any(test, not(feature = "serde")))]
 pub(crate) mod manual;
 
 #[cfg(feature = "serde")]
