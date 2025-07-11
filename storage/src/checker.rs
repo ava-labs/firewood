@@ -97,10 +97,10 @@ mod test {
     use super::*;
     use crate::linear::memory::MemStore;
     use crate::nodestore::NodeStoreHeader;
-    use crate::nodestore::alloc::{AREA_SIZES, FreeLists};
-    use crate::nodestore::nodestore_test_utils::{
+    use crate::nodestore::alloc::test_utils::{
         test_write_free_area, test_write_header, test_write_new_node,
     };
+    use crate::nodestore::alloc::{AREA_SIZES, FreeLists};
     use crate::{BranchNode, Child, HashType, LeafNode, NodeStore, Path};
 
     #[test]
