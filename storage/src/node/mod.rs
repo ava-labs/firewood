@@ -23,10 +23,8 @@
 )]
 
 use bitfield::bitfield;
-use branch::Serializable as _;
 use enum_as_inner::EnumAsInner;
 use integer_encoding::{VarIntReader as _, VarIntWriter as _};
-use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::io::{Error, Read, Write};
 use std::num::NonZero;
@@ -40,12 +38,13 @@ pub mod persist;
 pub use branch::{BranchNode, Child};
 pub use leaf::LeafNode;
 
+use crate::serialization::{ExtendableBytes, Serializable};
 use crate::{HashType, Path, SharedNode};
-
 /// A node, either a Branch or Leaf
 
 // TODO: explain why Branch is boxed but Leaf is not
-#[derive(PartialEq, Eq, Clone, Debug, EnumAsInner, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Clone, Debug, EnumAsInner)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[repr(C)]
 pub enum Node {
     /// This node is a [`BranchNode`]
@@ -112,33 +111,6 @@ bitfield! {
 impl Default for LeafFirstByte {
     fn default() -> Self {
         LeafFirstByte(1)
-    }
-}
-
-// TODO: Unstable extend_reserve re-implemented here
-// Extend<A>::extend_reserve is unstable so we implement it here
-// see https://github.com/rust-lang/rust/issues/72631
-pub trait ExtendableBytes: Write {
-    fn extend<T: IntoIterator<Item = u8>>(&mut self, other: T);
-    fn reserve(&mut self, reserve: usize) {
-        let _ = reserve;
-    }
-    fn push(&mut self, value: u8);
-
-    fn extend_from_slice(&mut self, other: &[u8]) {
-        self.extend(other.iter().copied());
-    }
-}
-
-impl ExtendableBytes for Vec<u8> {
-    fn extend<T: IntoIterator<Item = u8>>(&mut self, other: T) {
-        std::iter::Extend::extend(self, other);
-    }
-    fn reserve(&mut self, reserve: usize) {
-        self.reserve(reserve);
-    }
-    fn push(&mut self, value: u8) {
-        Vec::push(self, value);
     }
 }
 

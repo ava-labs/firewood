@@ -22,9 +22,8 @@
 
 use crate::linear::FileIoError;
 use crate::logger::trace;
-use bincode::{DefaultOptions, Options as _};
+use crate::serialization::{ReaderExt, SerializeToVec};
 use metrics::counter;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{Error, ErrorKind, Read};
 use std::iter::FusedIterator;
@@ -64,10 +63,6 @@ pub const AREA_SIZES: [u64; 23] = [
     1024 << 13,
     1024 << 14,
 ];
-
-pub fn serializer() -> impl bincode::Options {
-    DefaultOptions::new().with_varint_encoding()
-}
 
 pub fn area_size_hash() -> TrieHash {
     let mut hasher = Sha256::new();
@@ -152,7 +147,8 @@ pub type LinearAddress = NonZeroU64;
 
 /// Each [`StoredArea`] contains an [Area] which is either a [Node] or a [`FreeArea`].
 #[repr(u8)]
-#[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
+#[derive(PartialEq, Eq, Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub enum Area<T, U> {
     Node(T),
     Free(U) = 255, // this is magic: no node starts with a byte of 255
@@ -165,7 +161,8 @@ pub enum Area<T, U> {
 ///  - Byte 0: The index of the area size
 ///  - Byte 1: 0x255 if free, otherwise the low-order bit indicates Branch or Leaf
 ///  - Bytes 2..n: The actual data
-#[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
+#[derive(PartialEq, Eq, Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct StoredArea<T> {
     /// Index in [`AREA_SIZES`] of this area's size
     area_size_index: AreaIndex,
@@ -191,7 +188,8 @@ pub type FreeLists = [Option<LinearAddress>; NUM_AREA_SIZES];
 
 /// A [`FreeArea`] is stored at the start of the area that contained a node that
 /// has been freed.
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct FreeArea {
     next_free_block: Option<LinearAddress>,
 }
@@ -214,9 +212,9 @@ impl FreeArea {
         address: LinearAddress,
     ) -> Result<(Self, AreaIndex), FileIoError> {
         let free_area_addr = address.get();
-        let stored_area_stream = storage.stream_from(free_area_addr)?;
-        let stored_area: StoredArea<Area<Node, FreeArea>> = serializer()
-            .deserialize_from(stored_area_stream)
+        let mut stored_area_stream = storage.stream_from(free_area_addr)?;
+        let stored_area = stored_area_stream
+            .read_next::<StoredArea<Area<Node, FreeArea>>>()
             .map_err(|e| {
                 storage.file_io_error(
                     Error::new(ErrorKind::InvalidData, e),
@@ -224,6 +222,7 @@ impl FreeArea {
                     Some("FreeArea::from_storage".to_string()),
                 )
             })?;
+        drop(stored_area_stream);
         let (stored_area_index, area) = stored_area.into_parts();
         let Area::Free(free_area) = area else {
             return Err(storage.file_io_error(
@@ -253,15 +252,13 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
     ) -> Result<(AreaIndex, u64), FileIoError> {
         let mut area_stream = self.storage.stream_from(addr.get())?;
 
-        let index: AreaIndex = serializer()
-            .deserialize_from(&mut area_stream)
-            .map_err(|e| {
-                self.storage.file_io_error(
-                    Error::new(ErrorKind::InvalidData, e),
-                    addr.get(),
-                    Some("deserialize".to_string()),
-                )
-            })?;
+        let index = area_stream.read_next::<AreaIndex>().map_err(|e| {
+            self.storage.file_io_error(
+                Error::new(ErrorKind::InvalidData, e),
+                addr.get(),
+                Some("deserialize".to_string()),
+            )
+        })?;
 
         let size = *AREA_SIZES
             .get(index as usize)
@@ -496,7 +493,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
         let stored_area = StoredArea::new(area_size_index, area);
 
-        let stored_area_bytes = serializer().serialize(&stored_area).map_err(|e| {
+        let stored_area_bytes = stored_area.serialize_to_vec().map_err(|e| {
             self.storage.file_io_error(
                 Error::new(ErrorKind::InvalidData, e),
                 addr.get(),
@@ -600,7 +597,6 @@ pub mod test_utils {
     use super::*;
     use crate::FileBacked;
     use crate::node::Node;
-    use bincode::Options;
 
     // Helper function to wrap the node in a StoredArea and write it to the given offset. Returns the size of the area on success.
     pub fn test_write_new_node<S: WritableStorage>(
@@ -628,7 +624,7 @@ pub mod test_utils {
     ) {
         let area: Area<Node, FreeArea> = Area::Free(FreeArea::new(next_free_block));
         let stored_area = StoredArea::new(area_size_index, area);
-        let stored_area_bytes = serializer().serialize(&stored_area).unwrap();
+        let stored_area_bytes = stored_area.serialize_to_vec().unwrap();
         nodestore.storage.write(offset, &stored_area_bytes).unwrap();
     }
 
@@ -668,7 +664,7 @@ mod test_free_list_iterator {
     ) {
         let area: Area<Node, FreeArea> = Area::Free(FreeArea::new(next_free_block));
         let stored_area = StoredArea::new(area_size_index, area);
-        let stored_area_bytes = serializer().serialize(&stored_area).unwrap();
+        let stored_area_bytes = stored_area.serialize_to_vec().unwrap();
         storage.write(offset, &stored_area_bytes).unwrap();
     }
 

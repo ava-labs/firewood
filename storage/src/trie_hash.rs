@@ -3,13 +3,11 @@
 
 use std::fmt::{self, Debug, Display, Formatter};
 
-use serde::de::Visitor;
-use serde::{Deserialize, Serialize};
 use sha2::digest::generic_array::GenericArray;
 use sha2::digest::typenum;
 
-use crate::node::ExtendableBytes;
-use crate::node::branch::Serializable;
+use crate::serialization::ExtendableBytes;
+use crate::serialization::Serializable;
 
 /// A hash value inside a merkle trie
 /// We use the same type as returned by sha2 here to avoid copies
@@ -99,7 +97,8 @@ impl Serializable for TrieHash {
     }
 }
 
-impl Serialize for TrieHash {
+#[cfg(feature = "serde")]
+impl serde::Serialize for TrieHash {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -108,7 +107,8 @@ impl Serialize for TrieHash {
     }
 }
 
-impl<'de> Deserialize<'de> for TrieHash {
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for TrieHash {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -117,9 +117,11 @@ impl<'de> Deserialize<'de> for TrieHash {
     }
 }
 
+#[cfg(feature = "serde")]
 struct TrieVisitor;
 
-impl Visitor<'_> for TrieVisitor {
+#[cfg(feature = "serde")]
+impl serde::de::Visitor<'_> for TrieVisitor {
     type Value = TrieHash;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {

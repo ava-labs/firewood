@@ -29,6 +29,7 @@ mod linear;
 mod node;
 mod nodestore;
 mod range_set;
+mod serialization;
 mod trie_hash;
 
 use crate::nodestore::AreaIndex;

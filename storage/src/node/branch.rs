@@ -14,11 +14,6 @@
     reason = "Found 2 occurrences after enabling the lint."
 )]
 
-use serde::ser::SerializeStruct as _;
-use serde::{Deserialize, Serialize};
-use smallvec::SmallVec;
-
-use crate::node::ExtendableBytes;
 use crate::{LeafNode, LinearAddress, MaybePersistedNode, Node, Path};
 use std::fmt::{Debug, Formatter};
 
@@ -57,14 +52,6 @@ impl IntoHashType for crate::TrieHash {
     fn into_hash_type(self) -> HashType {
         self
     }
-}
-
-pub(crate) trait Serializable {
-    fn write_to<W: ExtendableBytes>(&self, vec: &mut W);
-
-    fn from_reader<R: std::io::Read>(reader: R) -> Result<Self, std::io::Error>
-    where
-        Self: Sized;
 }
 
 #[derive(PartialEq, Eq, Clone, Debug)]
@@ -116,7 +103,6 @@ impl Child {
 
 #[cfg(feature = "ethhash")]
 mod ethhash {
-    use serde::{Deserialize, Serialize};
     use sha2::Digest as _;
     use sha3::Keccak256;
     use smallvec::SmallVec;
@@ -128,9 +114,10 @@ mod ethhash {
     use crate::TrieHash;
     use crate::node::ExtendableBytes;
 
-    use super::Serializable;
+    use crate::serialization::Serializable;
 
-    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
     pub enum HashOrRlp {
         Hash(TrieHash),
         // TODO: this slice is never larger than 32 bytes so smallvec is probably not our best container
@@ -262,16 +249,19 @@ pub struct BranchNode {
     pub children: [Option<Child>; Self::MAX_CHILDREN],
 }
 
-impl Serialize for BranchNode {
+#[cfg(feature = "serde")]
+impl serde::Serialize for BranchNode {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
+        use serde::ser::SerializeStruct;
+
         let mut state = serializer.serialize_struct("BranchNode", 3)?;
         state.serialize_field("partial_path", &self.partial_path)?;
         state.serialize_field("value", &self.value)?;
 
-        let children: SmallVec<[(_, _, _); Self::MAX_CHILDREN]> = self
+        let children: smallvec::SmallVec<[(_, _, _); Self::MAX_CHILDREN]> = self
             .children
             .iter()
             .enumerate()
@@ -295,19 +285,22 @@ impl Serialize for BranchNode {
     }
 }
 
-impl<'de> Deserialize<'de> for BranchNode {
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for BranchNode {
     fn deserialize<D>(deserializer: D) -> Result<BranchNode, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
+        use serde::Deserialize;
+
         #[derive(Deserialize)]
         struct SerializedBranchNode {
             partial_path: Path,
             value: Option<Box<[u8]>>,
-            children: SmallVec<[(u8, LinearAddress, HashType); BranchNode::MAX_CHILDREN]>,
+            children: smallvec::SmallVec<[(u8, LinearAddress, HashType); BranchNode::MAX_CHILDREN]>,
         }
 
-        let s: SerializedBranchNode = Deserialize::deserialize(deserializer)?;
+        let s = SerializedBranchNode::deserialize(deserializer)?;
 
         let mut children: [Option<Child>; BranchNode::MAX_CHILDREN] =
             [const { None }; BranchNode::MAX_CHILDREN];
