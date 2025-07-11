@@ -197,7 +197,7 @@ formatters:
         - standard
         - default
         - blank
-        - prefix(github.com/ava-labs/avalanchego)
+        - prefix(github.com/ava-labs/firewood/ffi)
         - alias
         - dot
       custom-order: true
