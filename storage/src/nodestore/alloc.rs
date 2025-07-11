@@ -145,11 +145,20 @@ pub fn area_size_to_index(n: u64) -> Result<AreaIndex, Error> {
 /// branches can use `Option<LinearAddress>` which is the same size as a [`LinearAddress`]
 pub type LinearAddress = NonZeroU64;
 
-/// Each [`StoredArea`] contains an [Area] which is either a [Node] or a [`FreeArea`].
+/// Legacy enum for backwards compatibility with v0.0.8 and earlier databases.
+/// This enum wraps either a [Node] or a [`FreeArea`] for the old storage format.
+///
+/// **This enum is deprecated and only used for backwards compatibility.**
+/// New databases (v0.0.9+) store `FreeArea` directly without this wrapper.
 #[repr(u8)]
 #[derive(PartialEq, Eq, Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[deprecated(note = "Only used for backwards compatibility with v0.0.8 and earlier")]
 pub enum Area<T, U> {
+    #[expect(
+        unused,
+        reason = "Only ued for backwards compatibility, this will be removed in the future"
+    )]
     Node(T),
     Free(U) = 255, // this is magic: no node starts with a byte of 255
 }
@@ -204,10 +213,142 @@ impl FreeArea {
     pub const fn next_free_block(self) -> Option<LinearAddress> {
         self.next_free_block
     }
+
+    /// Write a `FreeArea` directly to storage in the new v0.0.9+ format (without Area enum wrapper).
+    /// Format: [AreaIndex:1][0xFF:1][FreeAreaData:n]
+    pub fn write_to_storage_direct<S: WritableStorage>(
+        self,
+        storage: &S,
+        area_size_index: AreaIndex,
+        address: LinearAddress,
+    ) -> Result<(), FileIoError> {
+        let mut bytes = Vec::with_capacity(10); // AreaIndex(1) + 0xFF(1) + LinearAddress(8)
+
+        // Write area size index
+        bytes.push(area_size_index);
+
+        // Write magic 0xFF byte to indicate free area
+        bytes.push(0xFF);
+
+        // Write the FreeArea data (next_free_block as Option<LinearAddress>)
+        match self.next_free_block {
+            Some(addr) => {
+                bytes.push(1); // Some variant
+                bytes.extend_from_slice(&addr.get().to_le_bytes());
+            }
+            None => {
+                bytes.push(0); // None variant
+            }
+        }
+
+        storage.write(address.get(), &bytes)?;
+        Ok(())
+    }
+
+    /// Read a `FreeArea` directly from storage in the new v0.0.9+ format (without Area enum wrapper).
+    /// Expected format: [AreaIndex:1][0xFF:1][FreeAreaData:n]
+    pub fn read_from_storage_direct<S: ReadableStorage>(
+        storage: &S,
+        address: LinearAddress,
+    ) -> Result<(Self, AreaIndex), FileIoError> {
+        let free_area_addr = address.get();
+        let mut area_stream = storage.stream_from(free_area_addr)?;
+
+        // Read area size index
+        let area_size_index = area_stream.read_next::<AreaIndex>().map_err(|e| {
+            storage.file_io_error(
+                Error::new(ErrorKind::InvalidData, e),
+                free_area_addr,
+                Some("FreeArea::read_from_storage_direct - area_size_index".to_string()),
+            )
+        })?;
+
+        // Read and verify the 0xFF magic byte
+        let magic_byte = area_stream.read_next::<u8>().map_err(|e| {
+            storage.file_io_error(
+                Error::new(ErrorKind::InvalidData, e),
+                free_area_addr,
+                Some("FreeArea::read_from_storage_direct - magic_byte".to_string()),
+            )
+        })?;
+
+        if magic_byte != 0xFF {
+            return Err(storage.file_io_error(
+                Error::new(
+                    ErrorKind::InvalidData,
+                    "Expected 0xFF magic byte for free area",
+                ),
+                free_area_addr,
+                Some("FreeArea::read_from_storage_direct".to_string()),
+            ));
+        }
+
+        // Read the Option<LinearAddress> for next_free_block
+        let has_next = area_stream.read_next::<u8>().map_err(|e| {
+            storage.file_io_error(
+                Error::new(ErrorKind::InvalidData, e),
+                free_area_addr,
+                Some("FreeArea::read_from_storage_direct - has_next".to_string()),
+            )
+        })?;
+
+        let next_free_block = if has_next == 1 {
+            let mut addr_bytes = [0u8; 8];
+            area_stream.read_exact(&mut addr_bytes).map_err(|e| {
+                storage.file_io_error(
+                    e,
+                    free_area_addr,
+                    Some("FreeArea::read_from_storage_direct - addr_bytes".to_string()),
+                )
+            })?;
+            let addr_value = u64::from_le_bytes(addr_bytes);
+            Some(LinearAddress::new(addr_value).ok_or_else(|| {
+                storage.file_io_error(
+                    Error::new(
+                        ErrorKind::InvalidData,
+                        "Invalid LinearAddress: cannot be zero",
+                    ),
+                    free_area_addr,
+                    Some("FreeArea::read_from_storage_direct".to_string()),
+                )
+            })?)
+        } else if has_next == 0 {
+            None
+        } else {
+            return Err(storage.file_io_error(
+                Error::new(
+                    ErrorKind::InvalidData,
+                    format!("Invalid Option discriminant: {has_next}"),
+                ),
+                free_area_addr,
+                Some("FreeArea::read_from_storage_direct".to_string()),
+            ));
+        };
+
+        Ok((Self { next_free_block }, area_size_index))
+    }
 }
 
 impl FreeArea {
-    pub fn from_storage<S: ReadableStorage>(
+    /// Version-aware method to read `FreeArea` from storage.
+    /// Uses the new direct format for v0.0.9+ and old Area enum format for backwards compatibility.
+    pub fn from_storage_versioned<S: ReadableStorage>(
+        storage: &S,
+        address: LinearAddress,
+        needs_compatibility: bool,
+    ) -> Result<(Self, AreaIndex), FileIoError> {
+        if needs_compatibility {
+            // Use the old Area enum format for backwards compatibility
+            Self::from_storage_legacy(storage, address)
+        } else {
+            // Use the new direct format for v0.0.9+
+            Self::read_from_storage_direct(storage, address)
+        }
+    }
+
+    /// Legacy method for reading `FreeArea` using the old Area enum format (v0.0.8 and earlier).
+    #[expect(deprecated, reason = "to remove once Area enum is removed")]
+    fn from_storage_legacy<S: ReadableStorage>(
         storage: &S,
         address: LinearAddress,
     ) -> Result<(Self, AreaIndex), FileIoError> {
@@ -219,27 +360,46 @@ impl FreeArea {
                 storage.file_io_error(
                     Error::new(ErrorKind::InvalidData, e),
                     free_area_addr,
-                    Some("FreeArea::from_storage".to_string()),
+                    Some("FreeArea::from_storage_legacy".to_string()),
                 )
             })?;
         drop(stored_area_stream);
         let (stored_area_index, area) = stored_area.into_parts();
+        #[expect(deprecated, reason = "to remove once Area enum is removed")]
         let Area::Free(free_area) = area else {
+            // If we encounter Area::Node in legacy format, this is an error
             return Err(storage.file_io_error(
-                Error::new(ErrorKind::InvalidData, "Attempted to read a non-free area"),
+                Error::new(
+                    ErrorKind::InvalidData,
+                    "Encountered Area::Node in free area - this should never happen",
+                ),
                 free_area_addr,
-                Some("FreeArea::from_storage".to_string()),
+                Some("FreeArea::from_storage_legacy".to_string()),
             ));
         };
 
         Ok((free_area, stored_area_index as AreaIndex))
     }
+
+    // pub fn from_storage<S: ReadableStorage>(
+    //     storage: &S,
+    //     address: LinearAddress,
+    // ) -> Result<(Self, AreaIndex), FileIoError> {
+    //     // For now, use legacy format until we can pass version information
+    //     // This will be updated when we modify the callers
+    //     Self::from_storage_legacy(storage, address)
+    // }
 }
 
 // Re-export the NodeStore types we need
 use super::{Committed, ImmutableProposal, NodeStore, ReadInMemoryNode};
 
 impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
+    /// Check if this `NodeStore` needs Area enum compatibility based on database version.
+    fn needs_area_enum_compatibility(&self) -> bool {
+        self.header.version().needs_area_enum_compatibility()
+    }
+
     /// Returns (index, `area_size`) for the stored area at `addr`.
     /// `index` is the index of `area_size` in the array of valid block sizes.
     ///
@@ -376,6 +536,9 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 .file_io_error(e, 0, Some("allocate_from_freed".to_string()))
         })?;
 
+        // Check version compatibility before mutable borrow
+        let needs_compatibility = self.needs_area_enum_compatibility();
+
         if let Some((index, free_stored_area_addr)) = self
             .header
             .free_lists_mut()
@@ -392,8 +555,11 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 trace!("free_head@{address}(cached): {free_head:?} size:{index}");
                 *free_stored_area_addr = free_head;
             } else {
-                let (free_head, read_index) =
-                    FreeArea::from_storage(self.storage.as_ref(), address)?;
+                let (free_head, read_index) = FreeArea::from_storage_versioned(
+                    self.storage.as_ref(),
+                    address,
+                    needs_compatibility,
+                )?;
                 debug_assert_eq!(read_index as usize, index);
 
                 // Update the free list to point to the next free block.
@@ -486,22 +652,29 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         counter!("firewood.space.freed", "index" => index_name(area_size_index as usize))
             .increment(AREA_SIZES[area_size_index as usize]);
 
-        // The area that contained the node is now free.
-        let area: Area<Node, FreeArea> = Area::Free(FreeArea::new(
-            self.header.free_lists()[area_size_index as usize],
-        ));
+        // Create the free area
+        let free_area = FreeArea::new(self.header.free_lists()[area_size_index as usize]);
 
-        let stored_area = StoredArea::new(area_size_index, area);
+        // Check version to determine serialization format
+        let needs_compatibility = self.needs_area_enum_compatibility();
 
-        let stored_area_bytes = stored_area.serialize_to_vec().map_err(|e| {
-            self.storage.file_io_error(
-                Error::new(ErrorKind::InvalidData, e),
-                addr.get(),
-                Some("delete_node".to_string()),
-            )
-        })?;
-
-        self.storage.write(addr.into(), &stored_area_bytes)?;
+        if needs_compatibility {
+            // Use the old Area enum format for backwards compatibility
+            #[expect(deprecated, reason = "to remove once Area enum is removed")]
+            let area: Area<Node, FreeArea> = Area::Free(free_area);
+            let stored_area = StoredArea::new(area_size_index, area);
+            let stored_area_bytes = stored_area.serialize_to_vec().map_err(|e| {
+                self.storage.file_io_error(
+                    Error::new(ErrorKind::InvalidData, e),
+                    addr.get(),
+                    Some("delete_node".to_string()),
+                )
+            })?;
+            self.storage.write(addr.into(), &stored_area_bytes)?;
+        } else {
+            // Use the new direct format for v0.0.9+
+            free_area.write_to_storage_direct(self.storage.as_ref(), area_size_index, addr)?;
+        }
 
         self.storage
             .add_to_free_list_cache(addr, self.header.free_lists()[area_size_index as usize]);
@@ -517,11 +690,20 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 pub struct FreeListIterator<'a, S: ReadableStorage> {
     storage: &'a S,
     next_addr: Option<LinearAddress>,
+    needs_compatibility: bool,
 }
 
 impl<'a, S: ReadableStorage> FreeListIterator<'a, S> {
-    pub const fn new(storage: &'a S, next_addr: Option<LinearAddress>) -> Self {
-        Self { storage, next_addr }
+    pub const fn new(
+        storage: &'a S,
+        next_addr: Option<LinearAddress>,
+        needs_compatibility: bool,
+    ) -> Self {
+        Self {
+            storage,
+            next_addr,
+            needs_compatibility,
+        }
     }
 }
 
@@ -532,7 +714,11 @@ impl<S: ReadableStorage> Iterator for FreeListIterator<'_, S> {
         let next_addr = self.next_addr?;
 
         // read the free area, propagate any IO error if it occurs
-        let (free_area, stored_area_index) = match FreeArea::from_storage(self.storage, next_addr) {
+        let (free_area, stored_area_index) = match FreeArea::from_storage_versioned(
+            self.storage,
+            next_addr,
+            self.needs_compatibility,
+        ) {
             Ok(free_area) => free_area,
             Err(e) => {
                 // if the read fails, we cannot proceed with the current freelist
@@ -550,7 +736,7 @@ impl<S: ReadableStorage> Iterator for FreeListIterator<'_, S> {
 impl<S: ReadableStorage> FusedIterator for FreeListIterator<'_, S> {}
 
 /// Extension methods for `NodeStore` to provide free list iteration capabilities
-impl<T, S: ReadableStorage> NodeStore<T, S> {
+impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
     /// Returns an iterator over the free lists of size no smaller than the size corresponding to `start_area_index`.
     /// The iterator returns a tuple of the address and the area index of the free area.
     ///
@@ -577,21 +763,24 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
         &self,
         start_area_index: AreaIndex,
     ) -> impl Iterator<Item = Result<(LinearAddress, AreaIndex, AreaIndex), FileIoError>> {
+        let needs_compatibility = self.needs_area_enum_compatibility();
         self.header
             .free_lists()
             .iter()
             .enumerate()
             .skip(start_area_index as usize)
             .flat_map(move |(free_list_id, next_addr)| {
-                FreeListIterator::new(self.storage.as_ref(), *next_addr).map(move |item| {
-                    item.map(|(addr, area_index)| (addr, area_index, free_list_id as AreaIndex))
-                })
+                FreeListIterator::new(self.storage.as_ref(), *next_addr, needs_compatibility).map(
+                    move |item| {
+                        item.map(|(addr, area_index)| (addr, area_index, free_list_id as AreaIndex))
+                    },
+                )
             })
     }
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::indexing_slicing)]
+#[expect(deprecated, clippy::unwrap_used, clippy::indexing_slicing)]
 pub mod test_utils {
     use super::super::{Committed, ImmutableProposal, NodeStore, NodeStoreHeader};
     use super::*;
@@ -646,7 +835,7 @@ pub mod test_utils {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::indexing_slicing)]
+#[expect(deprecated, clippy::unwrap_used, clippy::indexing_slicing)]
 mod test_free_list_iterator {
     use super::*;
     use crate::linear::memory::MemStore;
@@ -695,7 +884,8 @@ mod test_free_list_iterator {
         let skip = rng.random_range(0..offsets.len());
         let mut iterator = offsets.into_iter().skip(skip);
         let start = iterator.next().unwrap();
-        let mut free_list_iter = FreeListIterator::new(storage.as_ref(), LinearAddress::new(start));
+        let mut free_list_iter =
+            FreeListIterator::new(storage.as_ref(), LinearAddress::new(start), true); // Use legacy format for test
         assert_eq!(
             free_list_iter.next().unwrap().unwrap(),
             (LinearAddress::new(start).unwrap(), area_index)

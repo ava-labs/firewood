@@ -56,68 +56,17 @@ impl Version {
         pre: semver::Prerelease::EMPTY,
     };
 
-    /// Validates that the version identifier is valid and compatible with the current
-    /// build of firewood.
+    /// Version < 0.0.9
     ///
-    /// # Errors
-    ///
-    /// - If the token contains invalid utf-8 bytes (nul is allowed).
-    /// - If the token does not start with "firewood ".
-    /// - If the version is not parsable by [`semver::Version`].
-    /// - If the version is not compatible with the current build of firewood.
-    ///   - Currently, the minimum required version is 0.0.4.
-    pub fn validate(&self) -> Result<(), Error> {
-        let version = std::str::from_utf8(&self.bytes).map_err(|e| {
-            Error::new(
-                ErrorKind::InvalidData,
-                format!(
-                    "Invalid database version: invalid utf-8: {e} (original: [{:032x}])",
-                    u128::from_be_bytes(self.bytes)
-                ),
-            )
-        })?;
-
-        // strip trailling nuls as they're only for padding
-        let version = version.trim_end_matches('\0');
-
-        // strip magic prefix or error
-        let version = version.strip_prefix("firewood ").ok_or_else(|| {
-            Error::new(
-                ErrorKind::InvalidData,
-                format!(
-                    "Invalid database version: does not start with magic 'firewood ': {version}",
-                ),
-            )
-        })?;
-
-        // Version strings from CARGO_PKG_VERSION are guaranteed to be parsable by
-        // semver (cargo uses the same library).
-        let version = semver::Version::parse(version).map_err(|e| {
-            Error::new(
-                ErrorKind::InvalidData,
-                format!(
-                    "Invalid version string: unable to parse `{version}` as a semver string: {e}"
-                ),
-            )
-        })?;
-
-        // verify base compatibility version
-        if !Self::BASE_VERSION.matches(&version) {
-            return Err(Error::new(
-                ErrorKind::InvalidData,
-                format!(
-                    "Database was created with firewood version {version}; however, this build of firewood requires version {}",
-                    Self::BASE_VERSION,
-                ),
-            ));
-        }
-
-        debug!(
-            "Database version is valid: {version} {}",
-            Self::BASE_VERSION
-        );
-        Ok(())
-    }
+    /// This is used to determine if the database previously used the `Area` enum when
+    /// serializing `FreeArea` objects.
+    const NEEDS_AREA_ENUM: semver::Comparator = semver::Comparator {
+        op: semver::Op::Less,
+        major: 0,
+        minor: Some(0),
+        patch: Some(9),
+        pre: semver::Prerelease::EMPTY,
+    };
 
     /// Construct a [`Version`] instance for the current build of firewood.
     pub fn new() -> Self {
@@ -145,6 +94,81 @@ impl Version {
 
         Self { bytes }
     }
+
+    /// Validates that the version identifier is valid and compatible with the current
+    /// build of firewood.
+    ///
+    /// # Errors
+    ///
+    /// - If the token contains invalid utf-8 bytes (nul is allowed).
+    /// - If the token does not start with "firewood ".
+    /// - If the version is not parsable by [`semver::Version`].
+    /// - If the version is not compatible with the current build of firewood.
+    ///   - Currently, the minimum required version is 0.0.4.
+    pub fn validate(&self) -> Result<(), Error> {
+        let version = self.parse_semver_version()?;
+
+        // verify base compatibility version
+        if !Self::BASE_VERSION.matches(&version) {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "Database was created with firewood version {version}; however, this build of firewood requires version {}",
+                    Self::BASE_VERSION,
+                ),
+            ));
+        }
+
+        debug!(
+            "Database version is valid: {version} {}",
+            Self::BASE_VERSION
+        );
+        Ok(())
+    }
+
+    /// Returns true if this database version requires Area enum compatibility (v0.0.8 and earlier).
+    /// For v0.0.9 and later, we use direct `FreeArea` serialization without Area wrapper.
+    pub fn needs_area_enum_compatibility(&self) -> bool {
+        self.parse_semver_version()
+            // false if we failed to parse the version which should not happen at this point
+            .is_ok_and(|version| Self::NEEDS_AREA_ENUM.matches(&version))
+    }
+
+    fn parse_semver_version(&self) -> Result<semver::Version, Error> {
+        let version = std::str::from_utf8(&self.bytes).map_err(|e| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "Invalid database version: invalid utf-8: {e} (original: [{:032x}])",
+                    u128::from_be_bytes(self.bytes)
+                ),
+            )
+        })?;
+
+        // strip trailling nuls as they're only for padding
+        let version = version.trim_end_matches('\0');
+
+        // strip magic prefix or error
+        let version = version.strip_prefix("firewood ").ok_or_else(|| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "Invalid database version: does not start with magic 'firewood ': {version}",
+                ),
+            )
+        })?;
+
+        // Version strings from CARGO_PKG_VERSION are guaranteed to be parsable by
+        // semver (cargo uses the same library).
+        semver::Version::parse(version).map_err(|e| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "Invalid version string: unable to parse `{version}` as a semver string: {e}"
+                ),
+            )
+        })
+    }
 }
 
 /// Persisted metadata for a `NodeStore`.
@@ -169,10 +193,8 @@ pub struct NodeStoreHeader {
 }
 
 impl NodeStoreHeader {
-    /// The first SIZE bytes of the `ReadableStorage` are reserved for the
-    /// [`NodeStoreHeader`].
-    /// We also want it aligned to a disk block
-    pub const SIZE: u64 = 2048;
+    /// Size of the `NodeStoreHeader` in bytes.
+    pub const SIZE: u64 = size_of::<Self>() as u64;
 
     /// Number of extra bytes to write on the first creation of the `NodeStoreHeader`
     /// (zero-padded)
@@ -212,6 +234,11 @@ impl NodeStoreHeader {
         self.validate_ethhash()?;
 
         Ok(())
+    }
+
+    /// Get the version of this `NodeStore`
+    pub const fn version(&self) -> &Version {
+        &self.version
     }
 
     /// Get the size of the nodestore
