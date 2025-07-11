@@ -4,7 +4,8 @@
 mod range_set;
 use range_set::LinearAddressRangeSet;
 
-use crate::nodestore::alloc::{FreeAreaWithMetadata, is_aligned};
+use crate::nodestore::alloc::FreeAreaWithMetadata;
+use crate::nodestore::is_aligned;
 use crate::{
     CheckerError, Committed, HashedNodeReader, LinearAddress, Node, NodeReader, NodeStore,
     StoredAreaParent, TrieNodeParent, WritableStorage,

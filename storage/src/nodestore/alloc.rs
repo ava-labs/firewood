@@ -116,11 +116,6 @@ pub const MIN_AREA_SIZE: u64 = AREA_SIZES[0];
 pub const MAX_AREA_SIZE: u64 = AREA_SIZES[NUM_AREA_SIZES - 1];
 
 #[inline]
-pub(crate) const fn is_aligned(addr: LinearAddress) -> bool {
-    addr.get() % MIN_AREA_SIZE == 0
-}
-
-#[inline]
 pub fn new_area_index(n: usize) -> AreaIndex {
     n.try_into().expect("Area index out of bounds")
 }
@@ -686,13 +681,6 @@ pub mod test_utils {
     use crate::node::Node;
     use crate::nodestore::{Committed, ImmutableProposal, NodeStore, NodeStoreHeader};
     use bincode::Options;
-
-    #[test]
-    fn area_sizes_aligned() {
-        for area_size in &AREA_SIZES {
-            assert_eq!(area_size % MIN_AREA_SIZE, 0);
-        }
-    }
 
     // Helper function to wrap the node in a StoredArea and write it to the given offset. Returns the size of the area on success.
     pub fn test_write_new_node<S: WritableStorage>(
