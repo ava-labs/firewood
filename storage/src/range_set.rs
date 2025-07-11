@@ -293,7 +293,7 @@ impl IntoIterator for LinearAddressRangeSet {
 impl Display for LinearAddressRangeSet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         struct DisplayRange<'a>(Range<&'a LinearAddress>);
-        impl<'a> std::fmt::Display for DisplayRange<'a> {
+        impl std::fmt::Display for DisplayRange<'_> {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 let (start, end) = (self.0.start, self.0.end);
                 write!(f, "Area: [{start:#x}, {end:#x})")
