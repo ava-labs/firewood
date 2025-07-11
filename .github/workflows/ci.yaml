@@ -210,8 +210,8 @@ jobs:
         with:
           go-version-file: "ffi/go.mod"
           cache-dependency-path: "ffi/go.sum"
-      - name: Run golanci-lint
-        uses: golangci/golangci-lint-action@v3
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v7.0.1
         with:
           version: latest
           working-directory: ffi
@@ -303,4 +303,13 @@ jobs:
         run: cargo install cargo-machete
       - name: Check for stale dependencies
         run: cargo machete --with-metadata
+
+  expected-golangci-yaml-diff:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate expected golangci-lint changes
+        working-directory: ffi
+        run: ./scripts/verify_golangci_yaml_changes.sh 
 
