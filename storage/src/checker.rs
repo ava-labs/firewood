@@ -48,7 +48,9 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
         // 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
         let leaked_ranges = visited.complement();
-        warn!("Found leaked ranges: \n{leaked_ranges}");
+        if !leaked_ranges.is_empty() {
+            warn!("Found leaked ranges: {leaked_ranges}");
+        }
 
         Ok(())
     }
