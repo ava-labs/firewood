@@ -4,11 +4,14 @@
 #![warn(clippy::pedantic)]
 
 use std::collections::BTreeMap;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::ops::Range;
 
+use crate::iter::write_iter;
 use crate::nodestore::NodeStoreHeader;
 use crate::{CheckerError, LinearAddress};
+
+const MAX_AREAS_TO_DISPLAY: usize = 10;
 
 #[derive(Debug)]
 // BTreeMap: range end --> range start
@@ -191,6 +194,10 @@ impl<T: Clone + Ord + Debug> RangeSet<T> {
 
         Self(complement_tree)
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = Range<&T>> {
+        self.0.iter().map(|(end, start)| Range { start, end })
+    }
 }
 
 impl<T: Debug> IntoIterator for RangeSet<T> {
@@ -280,6 +287,25 @@ impl IntoIterator for LinearAddressRangeSet {
 
     fn into_iter(self) -> Self::IntoIter {
         self.range_set.into_iter()
+    }
+}
+
+impl Display for LinearAddressRangeSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        struct DisplayRange<'a>(Range<&'a LinearAddress>);
+        impl<'a> std::fmt::Display for DisplayRange<'a> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let (start, end) = (self.0.start, self.0.end);
+                write!(f, "Area: [{start:#x}, {end:#x})")
+            }
+        }
+
+        write_iter(
+            f,
+            self.range_set.iter().map(DisplayRange),
+            "\n",
+            Some(MAX_AREAS_TO_DISPLAY),
+        )
     }
 }
 
