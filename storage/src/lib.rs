@@ -119,7 +119,7 @@ impl std::fmt::Debug for LeakedAreas {
             f,
             self.0.iter().map(DisplayArea),
             ", ",
-            std::num::NonZeroUsize::new(MAX_LEAKED_AREAS_PRINT),
+            Some(MAX_LEAKED_AREAS_PRINT),
         )?;
         write!(f, "])")
     }

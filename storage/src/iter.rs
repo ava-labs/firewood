@@ -2,10 +2,10 @@
 // See the file LICENSE.md for licensing terms.
 
 //! Internal utilities for working with iterators.
-use std::num::NonZeroUsize;
 
 /// Writes an iterator of displayable items to a writer, separated by a specified separator.
 ///
+/// - If `limit` is `Some(0)`, it will only write the number of hidden items.
 /// - If `limit` is `Some(n)`, it will write at most `n` items, followed by a message
 ///   indicating how many more items were not written.
 /// - If `limit` is `None`, it will write all items without any limit.
@@ -22,19 +22,32 @@ pub(crate) fn write_iter(
     writer: &mut (impl std::fmt::Write + ?Sized),
     iter: impl IntoIterator<Item: std::fmt::Display>,
     sep: impl std::fmt::Display,
-    limit: Option<NonZeroUsize>,
+    limit: Option<usize>,
 ) -> std::fmt::Result {
-    if let Some(limit) = limit {
-        write_iter_with_limit(writer, iter, sep, limit)
-    } else {
-        write_iter_no_limit(writer, iter, sep)
+    match limit {
+        Some(0) => {
+            let hidden_count = iter.into_iter().count();
+            write!(writer, "({hidden_count} hidden)")
+        }
+        Some(limit) => {
+            let mut iter = iter.into_iter();
+            let to_display_iter = iter.by_ref().take(limit);
+            write_all_iter(writer, to_display_iter, &sep)?;
+
+            let hidden_count = iter.count();
+            if hidden_count > 0 {
+                write!(writer, "{sep}... ({hidden_count} more hidden)")?;
+            }
+            Ok(())
+        }
+        None => write_all_iter(writer, iter, &sep),
     }
 }
 
-fn write_iter_no_limit(
+fn write_all_iter(
     writer: &mut (impl std::fmt::Write + ?Sized),
     iter: impl IntoIterator<Item: std::fmt::Display>,
-    sep: impl std::fmt::Display,
+    sep: &impl std::fmt::Display,
 ) -> std::fmt::Result {
     let mut iter = iter.into_iter();
     if let Some(item) = iter.next() {
@@ -46,63 +59,20 @@ fn write_iter_no_limit(
     Ok(())
 }
 
-fn write_iter_with_limit(
-    writer: &mut (impl std::fmt::Write + ?Sized),
-    iter: impl IntoIterator<Item: std::fmt::Display>,
-    sep: impl std::fmt::Display,
-    limit: NonZeroUsize,
-) -> std::fmt::Result {
-    let mut iter = iter.into_iter();
-    let Some(item) = iter.next() else {
-        // Iterator is empty, nothing to write.
-        return Ok(());
-    };
-
-    // Write the first item without a separator.
-    write!(writer, "{item}")?;
-
-    #[expect(clippy::arithmetic_side_effects, reason = "nonzero - 1 is safe")]
-    let mut limit = limit.get() - 1; // -1 because we wrote the first item
-    loop {
-        match (iter.next(), limit.checked_sub(1)) {
-            (Some(item), Some(new_limit)) => {
-                // we can write another item, write it with the separator
-                write!(writer, "{sep}{item}")?;
-                limit = new_limit;
-            }
-            (Some(_), None) => {
-                // we exhausted our limit, but there are still items left including the item
-                // we just removed from the iterator.
-                let n = iter.count().saturating_add(1); // +1 for the current item
-                write!(writer, "{sep}... ({n} more hidden)")?;
-                break;
-            }
-            (None, _) => break,
-        }
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     #![expect(clippy::unwrap_used)]
 
     use super::*;
+    use test_case::test_case;
 
-    #[test]
-    fn test_write_iter_no_limit() {
-        let mut output = String::new();
-        let items = ["apple", "banana", "cherry"];
-        write_iter(&mut output, &items, ", ", None).unwrap();
-        assert_eq!(output, "apple, banana, cherry");
-    }
-
-    #[test]
-    fn test_write_iter_with_limit() {
+    #[test_case(Some(0usize), "(4 hidden)"; "with limit 0")]
+    #[test_case(Some(2usize), "apple, banana, ... (2 more hidden)"; "with limit 2")]
+    #[test_case(None, "apple, banana, cherry, date"; "without limit")]
+    fn test_write_iter(limit: Option<usize>, expected: &str) {
         let mut output = String::new();
         let items = ["apple", "banana", "cherry", "date"];
-        write_iter(&mut output, &items, ", ", NonZeroUsize::new(2)).unwrap();
-        assert_eq!(output, "apple, banana, ... (2 more hidden)");
+        write_iter(&mut output, &items, ", ", limit).unwrap();
+        assert_eq!(output, expected);
     }
 }
