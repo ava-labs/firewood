@@ -54,7 +54,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 
 // Re-export types from alloc module
-pub use alloc::{AreaIndex, LinearAddress};
+pub use alloc::{AreaIndex, FreeLists, LinearAddress};
 
 // Re-export types from header module
 pub use header::NodeStoreHeader;
@@ -459,6 +459,12 @@ pub struct NodeStore<T, S> {
     kind: T,
     /// Persisted storage to read nodes from.
     storage: Arc<S>,
+}
+
+impl<T, S> NodeStore<T, S> {
+    pub(crate) const fn freelists(&self) -> &FreeLists {
+        self.header.free_lists()
+    }
 }
 
 /// Contains the state of a proposal that is still being modified.

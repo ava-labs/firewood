@@ -28,7 +28,6 @@ mod hashers;
 mod linear;
 mod node;
 mod nodestore;
-mod range_set;
 mod trie_hash;
 
 use crate::nodestore::AreaIndex;

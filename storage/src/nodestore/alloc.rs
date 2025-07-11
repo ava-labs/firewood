@@ -33,7 +33,7 @@ use std::sync::Arc;
 
 use crate::node::persist::MaybePersistedNode;
 use crate::node::{ByteCounter, Node};
-use crate::{CacheReadStrategy, ReadableStorage, SharedNode, TrieHash};
+use crate::{CacheReadStrategy, FreeListParent, ReadableStorage, SharedNode, TrieHash};
 
 use crate::linear::WritableStorage;
 
@@ -674,21 +674,17 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
     // The iterator returns a tuple of the address and the area index of the free area.
     // Since this is a low-level iterator, we avoid safe conversion to AreaIndex for performance
     pub(crate) fn free_list_iter(&self, start_area_index: AreaIndex) -> FreeListsIterator<'_, S> {
-        FreeListsIterator::new(
-            self.storage.as_ref(),
-            &self.header.free_lists,
-            start_area_index,
-        )
+        FreeListsIterator::new(self.storage.as_ref(), self.freelists(), start_area_index)
     }
 }
 
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::indexing_slicing)]
 pub mod test_utils {
-    use super::super::{Committed, ImmutableProposal, NodeStore, NodeStoreHeader};
     use super::*;
     use crate::FileBacked;
     use crate::node::Node;
+    use crate::nodestore::{Committed, ImmutableProposal, NodeStore, NodeStoreHeader};
     use bincode::Options;
 
     #[test]
@@ -748,10 +744,11 @@ pub mod test_utils {
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::indexing_slicing)]
 mod test_free_list_iterator {
+    use super::super::NodeStoreHeader;
     use super::*;
+
     use crate::linear::memory::MemStore;
     use crate::test_utils::seeded_rng;
-
     use rand::Rng;
     use rand::seq::IteratorRandom;
 
@@ -770,14 +767,14 @@ mod test_free_list_iterator {
             .map(|i| i * area_size)
             .choose_multiple(&mut rng, 10);
         for (cur, next) in offsets.iter().zip(offsets.iter().skip(1)) {
-            test_write_free_area(
+            test_utils::test_write_free_area(
                 &nodestore,
                 Some(LinearAddress::new(*next).unwrap()),
                 area_index,
                 *cur,
             );
         }
-        test_write_free_area(&nodestore, None, area_index, *offsets.last().unwrap());
+        test_utils::test_write_free_area(&nodestore, None, area_index, *offsets.last().unwrap());
 
         // test iterator from a random starting point
         let skip = rng.random_range(0..offsets.len());
@@ -818,12 +815,12 @@ mod test_free_list_iterator {
         let area_size1 = AREA_SIZES[area_index1 as usize];
         let mut next_free_block1 = None;
 
-        test_write_free_area(&nodestore, next_free_block1, area_index1, offset);
+        test_utils::test_write_free_area(&nodestore, next_free_block1, area_index1, offset);
         let free_list1_area2 = LinearAddress::new(offset).unwrap();
         next_free_block1 = Some(free_list1_area2);
         offset += area_size1;
 
-        test_write_free_area(&nodestore, next_free_block1, area_index1, offset);
+        test_utils::test_write_free_area(&nodestore, next_free_block1, area_index1, offset);
         let free_list1_area1 = LinearAddress::new(offset).unwrap();
         next_free_block1 = Some(free_list1_area1);
         offset += area_size1;
@@ -837,12 +834,12 @@ mod test_free_list_iterator {
         let area_size2 = AREA_SIZES[area_index2 as usize];
         let mut next_free_block2 = None;
 
-        test_write_free_area(&nodestore, next_free_block2, area_index2, offset);
+        test_utils::test_write_free_area(&nodestore, next_free_block2, area_index2, offset);
         let free_list2_area2 = LinearAddress::new(offset).unwrap();
         next_free_block2 = Some(free_list2_area2);
         offset += area_size2;
 
-        test_write_free_area(&nodestore, next_free_block2, area_index2, offset);
+        test_utils::test_write_free_area(&nodestore, next_free_block2, area_index2, offset);
         let free_list2_area1 = LinearAddress::new(offset).unwrap();
         next_free_block2 = Some(free_list2_area1);
         offset += area_size2;
@@ -850,7 +847,7 @@ mod test_free_list_iterator {
         free_lists[area_index2 as usize] = next_free_block2;
 
         // write header
-        test_write_header(&mut nodestore, offset, None, free_lists);
+        test_utils::test_write_header(&mut nodestore, offset, None, free_lists);
 
         // test iterator
         let mut free_list_iter = nodestore.free_list_iter(0);

@@ -1,8 +1,10 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::nodestore::{FreeAreaWithMetadata, is_aligned};
-use crate::range_set::LinearAddressRangeSet;
+mod range_set;
+use range_set::LinearAddressRangeSet;
+
+use crate::nodestore::alloc::{FreeAreaWithMetadata, is_aligned};
 use crate::{
     CheckerError, Committed, HashedNodeReader, LinearAddress, Node, NodeReader, NodeStore,
     StoredAreaParent, TrieNodeParent, WritableStorage,
