@@ -211,7 +211,7 @@ jobs:
           go-version-file: "ffi/go.mod"
           cache-dependency-path: "ffi/go.sum"
       - name: Run golanci-lint
-        uses: golangci/golangci-lint-action@v3
+        uses: golangci/golangci-lint-action@v7.0.1
         with:
           version: latest
           working-directory: ffi
