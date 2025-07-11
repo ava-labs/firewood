@@ -54,7 +54,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 
 // Re-export types from alloc module
-pub use alloc::{AreaIndex, LinearAddress};
+pub use alloc::{AreaIndex, FreeLists, LinearAddress, MIN_AREA_SIZE};
 
 // Re-export types from header module
 pub use header::NodeStoreHeader;
@@ -91,6 +91,11 @@ use crate::node::persist::MaybePersistedNode;
 use crate::{FileBacked, Path, ReadableStorage, SharedNode, TrieHash};
 
 use super::linear::WritableStorage;
+
+#[inline]
+pub(crate) const fn is_aligned(addr: LinearAddress) -> bool {
+    addr.get() % MIN_AREA_SIZE == 0
+}
 
 impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// Open an existing [`NodeStore`]
@@ -461,6 +466,12 @@ pub struct NodeStore<T, S> {
     storage: Arc<S>,
 }
 
+impl<T, S> NodeStore<T, S> {
+    pub(crate) const fn freelists(&self) -> &FreeLists {
+        self.header.free_lists()
+    }
+}
+
 /// Contains the state of a proposal that is still being modified.
 #[derive(Debug)]
 pub struct MutableProposal {
@@ -712,6 +723,13 @@ mod tests {
 
     use super::*;
     use alloc::{AREA_SIZES, MAX_AREA_SIZE, MIN_AREA_SIZE, NUM_AREA_SIZES, area_size_to_index};
+
+    #[test]
+    fn area_sizes_aligned() {
+        for area_size in &AREA_SIZES {
+            assert_eq!(area_size % MIN_AREA_SIZE, 0);
+        }
+    }
 
     #[test]
     fn test_area_size_to_index() {
