@@ -297,28 +297,22 @@ impl Node {
                 // encode the children
                 if childcount == BranchNode::MAX_CHILDREN {
                     for (_, child) in child_iter {
-                        if let Child::AddressWithHash(address, hash) = child {
-                            encoded.extend_from_slice(&address.get().to_ne_bytes());
-                            hash.write_to(encoded);
-                        } else {
-                            panic!(
-                                "attempt to serialize to persist a branch with a child that is not an AddressWithHash"
-                            );
-                        }
+                        let (address, hash) = child
+                            .persist_info()
+                            .expect("child must be hashed when serializing");
+                        encoded.extend_from_slice(&address.get().to_ne_bytes());
+                        hash.write_to(encoded);
                     }
                 } else {
                     for (position, child) in child_iter {
                         encoded
                             .write_varint(position)
                             .expect("writing to vec should succeed");
-                        if let Child::AddressWithHash(address, hash) = child {
-                            encoded.extend_from_slice(&address.get().to_ne_bytes());
-                            hash.write_to(encoded);
-                        } else {
-                            panic!(
-                                "attempt to serialize to persist a branch with a child that is not an AddressWithHash"
-                            );
-                        }
+                        let (address, hash) = child
+                            .persist_info()
+                            .expect("child must be hashed when serializing");
+                        encoded.extend_from_slice(&address.get().to_ne_bytes());
+                        hash.write_to(encoded);
                     }
                 }
             }

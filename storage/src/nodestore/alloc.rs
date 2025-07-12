@@ -29,10 +29,9 @@ use sha2::{Digest, Sha256};
 use std::io::{Error, ErrorKind, Read};
 use std::iter::FusedIterator;
 use std::num::NonZeroU64;
-use std::sync::Arc;
 
+use crate::node::Node;
 use crate::node::persist::MaybePersistedNode;
-use crate::node::{ByteCounter, Node};
 use crate::{CacheReadStrategy, ReadableStorage, SharedNode, TrieHash};
 
 use crate::linear::WritableStorage;
@@ -238,9 +237,9 @@ impl FreeArea {
 }
 
 // Re-export the NodeStore types we need
-use super::{Committed, ImmutableProposal, NodeStore, ReadInMemoryNode};
+use super::{Committed, NodeStore};
 
-impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
+impl<T, S: ReadableStorage> NodeStore<T, S> {
     /// Returns (index, `area_size`) for the stored area at `addr`.
     /// `index` is the index of `area_size` in the array of valid block sizes.
     ///
@@ -362,7 +361,54 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
     }
 }
 
-impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
+impl<S: WritableStorage> NodeStore<Committed, S> {
+    /// Deletes the [Node] at the given address, updating the next pointer at
+    /// the given addr, and changing the header of this committed nodestore to
+    /// have the address on the freelist
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the node cannot be deleted.
+    #[expect(clippy::indexing_slicing)]
+    pub fn delete_node(&mut self, node: MaybePersistedNode) -> Result<(), FileIoError> {
+        let Some(addr) = node.as_linear_address() else {
+            return Ok(());
+        };
+        debug_assert!(addr.get() % 8 == 0);
+
+        let (area_size_index, _) = self.area_index_and_size(addr)?;
+        trace!("Deleting node at {addr:?} of size {area_size_index}");
+        counter!("firewood.delete_node", "index" => index_name(area_size_index as usize))
+            .increment(1);
+        counter!("firewood.space.freed", "index" => index_name(area_size_index as usize))
+            .increment(AREA_SIZES[area_size_index as usize]);
+
+        // The area that contained the node is now free.
+        let area: Area<Node, FreeArea> = Area::Free(FreeArea::new(
+            self.header.free_lists()[area_size_index as usize],
+        ));
+
+        let stored_area = StoredArea::new(area_size_index, area);
+
+        let stored_area_bytes = serializer().serialize(&stored_area).map_err(|e| {
+            self.storage.file_io_error(
+                Error::new(ErrorKind::InvalidData, e),
+                addr.get(),
+                Some("delete_node".to_string()),
+            )
+        })?;
+
+        self.storage.write(addr.into(), &stored_area_bytes)?;
+
+        self.storage
+            .add_to_free_list_cache(addr, self.header.free_lists()[area_size_index as usize]);
+
+        // The newly freed block is now the head of the free list.
+        self.header.free_lists_mut()[area_size_index as usize] = Some(addr);
+
+        Ok(())
+    }
+
     /// Attempts to allocate `n` bytes from the free lists.
     /// If successful returns the address of the newly allocated area
     /// and the index of the free list that was used.
@@ -434,14 +480,6 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         Ok((addr, index))
     }
 
-    /// Returns the length of the serialized area for a node.
-    #[must_use]
-    pub fn stored_len(node: &Node) -> u64 {
-        let mut bytecounter = ByteCounter::new();
-        node.as_bytes(0, &mut bytecounter);
-        bytecounter.count()
-    }
-
     /// Returns an address that can be used to store the given `node` and updates
     /// `self.header` to reflect the allocation. Doesn't actually write the node to storage.
     /// Also returns the index of the free list the node was allocated from.
@@ -451,9 +489,9 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     /// Returns a [`FileIoError`] if the node cannot be allocated.
     pub fn allocate_node(
         &mut self,
-        node: &Node,
+        node: &[u8],
     ) -> Result<(LinearAddress, AreaIndex), FileIoError> {
-        let stored_area_size = Self::stored_len(node);
+        let stored_area_size = node.len() as u64;
 
         // Attempt to allocate from a free list.
         // If we can't allocate from a free list, allocate past the existing
@@ -464,55 +502,6 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         };
 
         Ok((addr, index))
-    }
-}
-
-impl<S: WritableStorage> NodeStore<Committed, S> {
-    /// Deletes the [Node] at the given address, updating the next pointer at
-    /// the given addr, and changing the header of this committed nodestore to
-    /// have the address on the freelist
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FileIoError`] if the node cannot be deleted.
-    #[expect(clippy::indexing_slicing)]
-    pub fn delete_node(&mut self, node: MaybePersistedNode) -> Result<(), FileIoError> {
-        let Some(addr) = node.as_linear_address() else {
-            return Ok(());
-        };
-        debug_assert!(addr.get() % 8 == 0);
-
-        let (area_size_index, _) = self.area_index_and_size(addr)?;
-        trace!("Deleting node at {addr:?} of size {area_size_index}");
-        counter!("firewood.delete_node", "index" => index_name(area_size_index as usize))
-            .increment(1);
-        counter!("firewood.space.freed", "index" => index_name(area_size_index as usize))
-            .increment(AREA_SIZES[area_size_index as usize]);
-
-        // The area that contained the node is now free.
-        let area: Area<Node, FreeArea> = Area::Free(FreeArea::new(
-            self.header.free_lists()[area_size_index as usize],
-        ));
-
-        let stored_area = StoredArea::new(area_size_index, area);
-
-        let stored_area_bytes = serializer().serialize(&stored_area).map_err(|e| {
-            self.storage.file_io_error(
-                Error::new(ErrorKind::InvalidData, e),
-                addr.get(),
-                Some("delete_node".to_string()),
-            )
-        })?;
-
-        self.storage.write(addr.into(), &stored_area_bytes)?;
-
-        self.storage
-            .add_to_free_list_cache(addr, self.header.free_lists()[area_size_index as usize]);
-
-        // The newly freed block is now the head of the free list.
-        self.header.free_lists_mut()[area_size_index as usize] = Some(addr);
-
-        Ok(())
     }
 }
 
@@ -596,9 +585,9 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::indexing_slicing)]
 pub mod test_utils {
-    use super::super::{Committed, ImmutableProposal, NodeStore, NodeStoreHeader};
+    use super::super::{Committed, NodeStore, NodeStoreHeader};
     use super::*;
-    use crate::FileBacked;
+
     use crate::node::Node;
     use bincode::Options;
 
@@ -608,7 +597,7 @@ pub mod test_utils {
         node: &Node,
         offset: u64,
     ) -> u64 {
-        let node_length = NodeStore::<Arc<ImmutableProposal>, FileBacked>::stored_len(node);
+        let node_length = NodeStore::<Committed, S>::stored_len(node);
         let area_size_index = area_size_to_index(node_length).unwrap();
         let mut stored_area_bytes = Vec::new();
         node.as_bytes(area_size_index, &mut stored_area_bytes);
@@ -658,6 +647,7 @@ mod test_free_list_iterator {
 
     use rand::Rng;
     use rand::seq::IteratorRandom;
+    use std::sync::Arc;
 
     // Simple helper function for this test - just writes to storage directly
     fn write_free_area_to_storage<S: WritableStorage>(

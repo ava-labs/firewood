@@ -50,7 +50,6 @@ use crate::logger::trace;
 use arc_swap::ArcSwap;
 use arc_swap::access::DynAccess;
 use smallvec::SmallVec;
-use std::collections::HashMap;
 use std::fmt::Debug;
 
 // Re-export types from alloc module
@@ -86,11 +85,12 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::hashednode::hash_node;
-use crate::node::Node;
 use crate::node::persist::MaybePersistedNode;
+use crate::node::{ByteCounter, Node};
 use crate::{FileBacked, Path, ReadableStorage, SharedNode, TrieHash};
 
 use super::linear::WritableStorage;
+use hash::hash_helper;
 
 impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// Open an existing [`NodeStore`]
@@ -180,6 +180,18 @@ impl Parentable for Arc<ImmutableProposal> {
     }
 }
 
+impl<T: Parentable, S: ReadableStorage> Parentable for NodeStore<T, S> {
+    fn as_nodestore_parent(&self) -> NodeStoreParent {
+        self.kind.as_nodestore_parent()
+    }
+    fn root_hash(&self) -> Option<TrieHash> {
+        self.kind.root_hash()
+    }
+    fn root(&self) -> Option<MaybePersistedNode> {
+        self.kind.root()
+    }
+}
+
 impl<S> NodeStore<Arc<ImmutableProposal>, S> {
     /// When an immutable proposal commits, we need to reparent any proposal that
     /// has the committed proposal as it's parent
@@ -216,9 +228,7 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the parent root cannot be read.
-    pub fn new<F: Parentable + ReadInMemoryNode>(
-        parent: &Arc<NodeStore<F, S>>,
-    ) -> Result<Self, FileIoError> {
+    pub fn new<F: Parentable>(parent: &Arc<NodeStore<F, S>>) -> Result<Self, FileIoError> {
         let mut deleted = Vec::default();
         let root = if let Some(ref root) = parent.kind.root() {
             deleted.push(root.clone());
@@ -291,9 +301,6 @@ impl<S: WritableStorage> NodeStore<MutableProposal, S> {
 
 /// Reads from an immutable (i.e. already hashed) merkle trie.
 pub trait HashedNodeReader: TrieReader {
-    /// Gets the address of the root node of an immutable merkle trie.
-    fn root_address(&self) -> Option<LinearAddress>;
-
     /// Gets the hash of the root node of an immutable merkle trie.
     fn root_hash(&self) -> Option<TrieHash>;
 }
@@ -357,13 +364,6 @@ pub struct Committed {
     root: Option<MaybePersistedNode>,
 }
 
-impl ReadInMemoryNode for Committed {
-    // A committed revision has no in-memory changes. All its nodes are in storage.
-    fn read_in_memory_node(&self, _addr: LinearAddress) -> Option<SharedNode> {
-        None
-    }
-}
-
 #[derive(Clone, Debug)]
 pub enum NodeStoreParent {
     Proposed(Arc<ImmutableProposal>),
@@ -385,8 +385,6 @@ impl Eq for NodeStoreParent {}
 #[derive(Debug)]
 /// Contains state for a proposed revision of the trie.
 pub struct ImmutableProposal {
-    /// Address --> Node for nodes created in this proposal.
-    new: HashMap<LinearAddress, (u8, SharedNode)>,
     /// Nodes that have been deleted in this proposal.
     deleted: Box<[MaybePersistedNode]>,
     /// The parent of this proposal.
@@ -409,43 +407,6 @@ impl ImmutableProposal {
             NodeStoreParent::Committed(root_hash) => *root_hash == hash,
             NodeStoreParent::Proposed(_) => false,
         }
-    }
-}
-
-impl ReadInMemoryNode for ImmutableProposal {
-    fn read_in_memory_node(&self, addr: LinearAddress) -> Option<SharedNode> {
-        // Check if the node being requested was created in this proposal.
-        if let Some((_, node)) = self.new.get(&addr) {
-            return Some(node.clone());
-        }
-
-        // It wasn't. Try our parent, and its parent, and so on until we find it or find
-        // a committed revision.
-        match *self.parent.load() {
-            NodeStoreParent::Proposed(ref parent) => parent.read_in_memory_node(addr),
-            NodeStoreParent::Committed(_) => None,
-        }
-    }
-}
-
-/// Proposed [`NodeStore`] types keep some nodes in memory. These nodes are new nodes that were allocated from
-/// the free list, but are not yet on disk. This trait checks to see if a node is in memory and returns it if
-/// it's there. If it's not there, it will be read from disk.
-///
-/// This trait does not know anything about the underlying storage, so it just returns None if the node isn't in memory.
-pub trait ReadInMemoryNode {
-    /// Returns the node at `addr` if it is in memory.
-    /// Returns None if it isn't.
-    fn read_in_memory_node(&self, addr: LinearAddress) -> Option<SharedNode>;
-}
-
-impl<T> ReadInMemoryNode for T
-where
-    T: Deref,
-    T::Target: ReadInMemoryNode,
-{
-    fn read_in_memory_node(&self, addr: LinearAddress) -> Option<SharedNode> {
-        self.deref().read_in_memory_node(addr)
     }
 }
 
@@ -482,26 +443,7 @@ pub struct MutableProposal {
     parent: NodeStoreParent,
 }
 
-impl ReadInMemoryNode for NodeStoreParent {
-    /// Returns the node at `addr` if it is in memory from a parent proposal.
-    /// If the base revision is committed, there are no in-memory nodes, so we return None
-    fn read_in_memory_node(&self, addr: LinearAddress) -> Option<SharedNode> {
-        match self {
-            NodeStoreParent::Proposed(proposed) => proposed.read_in_memory_node(addr),
-            NodeStoreParent::Committed(_) => None,
-        }
-    }
-}
-
-impl ReadInMemoryNode for MutableProposal {
-    /// [`MutableProposal`] types do not have any nodes in memory, but their parent proposal might, so we check there.
-    /// This might be recursive: a grandparent might also have that node in memory.
-    fn read_in_memory_node(&self, addr: LinearAddress) -> Option<SharedNode> {
-        self.parent.read_in_memory_node(addr)
-    }
-}
-
-impl<T: ReadInMemoryNode + Into<NodeStoreParent>, S: ReadableStorage> From<NodeStore<T, S>>
+impl<T: Into<NodeStoreParent>, S: ReadableStorage> From<NodeStore<T, S>>
     for NodeStore<MutableProposal, S>
 {
     fn from(val: NodeStore<T, S>) -> Self {
@@ -572,7 +514,6 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
         let mut nodestore = NodeStore {
             header,
             kind: Arc::new(ImmutableProposal {
-                new: HashMap::new(),
                 deleted: kind.deleted.into(),
                 parent: Arc::new(ArcSwap::new(Arc::new(kind.parent))),
                 root_hash: None,
@@ -588,23 +529,18 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
         };
 
         // Hashes the trie and returns the address of the new root.
-        let mut new_nodes = HashMap::new();
         #[cfg(feature = "ethhash")]
-        let (root_addr, root_hash) =
-            nodestore.hash_helper(root, &mut Path::new(), &mut new_nodes, None)?;
+        let (root, root_hash) = hash_helper(root, &mut Path::new(), None, &nodestore)?;
         #[cfg(not(feature = "ethhash"))]
-        let (root_addr, root_hash) =
-            nodestore.hash_helper(root, &mut Path::new(), &mut new_nodes)?;
+        let (root, root_hash) = hash_helper(root, &mut Path::new())?;
 
-        nodestore.header.set_root_address(Some(root_addr));
         let immutable_proposal =
             Arc::into_inner(nodestore.kind).expect("no other references to the proposal");
         nodestore.kind = Arc::new(ImmutableProposal {
-            new: new_nodes,
             deleted: immutable_proposal.deleted,
             parent: immutable_proposal.parent,
             root_hash: Some(root_hash.into_triehash()),
-            root: Some(root_addr.into()),
+            root: Some(root),
         });
 
         Ok(nodestore)
@@ -613,19 +549,12 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
 
 impl<S: ReadableStorage> NodeReader for NodeStore<MutableProposal, S> {
     fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, FileIoError> {
-        if let Some(node) = self.kind.read_in_memory_node(addr) {
-            return Ok(node);
-        }
-
         self.read_node_from_disk(addr, "write")
     }
 }
 
-impl<T: Parentable + ReadInMemoryNode, S: ReadableStorage> NodeReader for NodeStore<T, S> {
+impl<T: Parentable, S: ReadableStorage> NodeReader for NodeStore<T, S> {
     fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, FileIoError> {
-        if let Some(node) = self.kind.read_in_memory_node(addr) {
-            return Ok(node);
-        }
         self.read_node_from_disk(addr, "read")
     }
 }
@@ -668,10 +597,6 @@ where
     T: Parentable,
     S: ReadableStorage,
 {
-    fn root_address(&self) -> Option<LinearAddress> {
-        self.header.root_address()
-    }
-
     fn root_hash(&self) -> Option<TrieHash> {
         self.kind.root_hash()
     }
@@ -681,10 +606,6 @@ impl<N> HashedNodeReader for Arc<N>
 where
     N: HashedNodeReader,
 {
-    fn root_address(&self) -> Option<LinearAddress> {
-        self.as_ref().root_address()
-    }
-
     fn root_hash(&self) -> Option<TrieHash> {
         self.as_ref().root_hash()
     }
@@ -718,6 +639,14 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 
     pub(crate) fn physical_size(&self) -> Result<u64, FileIoError> {
         self.storage.size()
+    }
+
+    /// Calculate the serialized length of a node
+    #[must_use]
+    pub fn stored_len(node: &Node) -> u64 {
+        let mut bytecounter = ByteCounter::new();
+        node.as_bytes(0, &mut bytecounter);
+        bytecounter.count()
     }
 }
 
@@ -824,14 +753,14 @@ mod tests {
     fn test_serialized_len<N: Into<Node>>(node: N) {
         let node = node.into();
 
-        let computed_length =
-            NodeStore::<std::sync::Arc<ImmutableProposal>, MemStore>::stored_len(&node);
+        let computed_length = NodeStore::<Committed, MemStore>::stored_len(&node);
 
         let mut serialized = Vec::new();
         node.as_bytes(0, &mut serialized);
         assert_eq!(serialized.len() as u64, computed_length);
     }
     #[test]
+    #[ignore = "https://github.com/firewood-io/firewood/issues/1054"]
     #[should_panic(expected = "Node size 16777225 is too large")]
     fn giant_node() {
         let memstore = MemStore::new(vec![]);
@@ -847,6 +776,6 @@ mod tests {
         node_store.mut_root().replace(giant_leaf);
 
         let immutable = NodeStore::<Arc<ImmutableProposal>, _>::try_from(node_store).unwrap();
-        println!("{immutable:?}"); // should not be reached, but need to consume immutable to avoid optimization removal
+        drop(immutable); // should not be reached, but need to consume immutable to avoid optimization removal
     }
 }

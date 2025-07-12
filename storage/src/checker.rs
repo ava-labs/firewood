@@ -3,7 +3,7 @@
 
 use crate::range_set::LinearAddressRangeSet;
 use crate::{
-    CheckerError, Committed, HashedNodeReader, LinearAddress, Node, NodeReader, NodeStore,
+    CheckerError, Committed, LinearAddress, Node, NodeReader, NodeStore, Parentable as _,
     WritableStorage,
 };
 
@@ -37,8 +37,10 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         let mut visited = LinearAddressRangeSet::new(db_size)?;
 
         // 2. traverse the trie and check the nodes
-        if let Some(root_address) = self.root_address() {
-            // the database is not empty, traverse the trie
+        if let Some(root) = self.root() {
+            let root_address = root
+                .as_linear_address()
+                .ok_or(CheckerError::UnpersistedRoot)?;
             self.visit_trie(root_address, &mut visited)?;
         }
 

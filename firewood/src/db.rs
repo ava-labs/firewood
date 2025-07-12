@@ -541,10 +541,8 @@ mod test {
         ];
         let proposal = db.propose(batch).await.unwrap();
         proposal.commit().await.unwrap();
-        println!("{:?}", db.root_hash().await.unwrap().unwrap());
 
         let db = db.reopen().await;
-        println!("{:?}", db.root_hash().await.unwrap().unwrap());
         let committed = db.root_hash().await.unwrap().unwrap();
         let historical = db.revision(committed).await.unwrap();
         assert_eq!(&*historical.val(b"a").await.unwrap().unwrap(), b"1");

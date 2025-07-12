@@ -1828,6 +1828,7 @@ mod tests {
     #[test_case(vec![(&[0],&[0]),(&[0,1],&[0,1]),(&[0,8],&[0,8]),(&[0,1,2],&[0,1,2])], Some("a683b4881cb540b969f885f538ba5904699d480152f350659475a962d6240ef9"); "root with branch child and leaf child")]
     fn test_root_hash_merkledb_compatible(kvs: Vec<(&[u8], &[u8])>, expected_hash: Option<&str>) {
         // TODO: get the hashes from merkledb and verify compatibility with branch factor 256
+        let _ = env_logger::builder().is_test(true).try_init();
         #[cfg(not(feature = "branch_factor_256"))]
         {
             let merkle = merkle_build_test(kvs).unwrap().hash();

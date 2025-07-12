@@ -11,6 +11,7 @@ use std::{
     ops::Deref,
 };
 
+use crate::logger::trace;
 use smallvec::SmallVec;
 
 use crate::{BranchNode, HashType, LeafNode, Node, Path};
@@ -20,6 +21,7 @@ use crate::{BranchNode, HashType, LeafNode, Node, Path};
 pub fn hash_node(node: &Node, path_prefix: &Path) -> HashType {
     match node {
         Node::Branch(node) => {
+            trace!("hashing branch {node:?}");
             // All child hashes should be filled in.
             // TODO danlaine: Enforce this with the type system.
             #[cfg(debug_assertions)]
@@ -124,7 +126,7 @@ pub trait Hashable {
     fn value_digest(&self) -> Option<ValueDigest<&[u8]>>;
     /// Each element is a child's index and hash.
     /// Yields 0 elements if the node is a leaf.
-    fn children(&self) -> impl Iterator<Item = (usize, &HashType)> + Clone;
+    fn children(&self) -> impl Iterator<Item = (usize, HashType)> + Clone;
 }
 
 /// A preimage of a hash.
@@ -138,7 +140,7 @@ pub trait Preimage {
 trait HashableNode {
     fn partial_path(&self) -> impl Iterator<Item = u8> + Clone;
     fn value(&self) -> Option<&[u8]>;
-    fn children_iter(&self) -> impl Iterator<Item = (usize, &HashType)> + Clone;
+    fn children_iter(&self) -> impl Iterator<Item = (usize, HashType)> + Clone;
 }
 
 impl HashableNode for BranchNode {
@@ -150,7 +152,7 @@ impl HashableNode for BranchNode {
         self.value.as_deref()
     }
 
-    fn children_iter(&self) -> impl Iterator<Item = (usize, &HashType)> + Clone {
+    fn children_iter(&self) -> impl Iterator<Item = (usize, HashType)> + Clone {
         self.children_hashes()
     }
 }
@@ -164,7 +166,7 @@ impl HashableNode for LeafNode {
         Some(&self.value)
     }
 
-    fn children_iter(&self) -> impl Iterator<Item = (usize, &HashType)> + Clone {
+    fn children_iter(&self) -> impl Iterator<Item = (usize, HashType)> + Clone {
         iter::empty()
     }
 }
@@ -198,7 +200,7 @@ impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
         self.node.value().map(ValueDigest::Value)
     }
 
-    fn children(&self) -> impl Iterator<Item = (usize, &HashType)> + Clone {
+    fn children(&self) -> impl Iterator<Item = (usize, HashType)> + Clone {
         self.node.children_iter()
     }
 }

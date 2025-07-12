@@ -46,7 +46,7 @@ pub use node::{
 };
 pub use nodestore::{
     Committed, HashedNodeReader, ImmutableProposal, LinearAddress, MutableProposal, NodeReader,
-    NodeStore, Parentable, ReadInMemoryNode, RootReader, TrieReader,
+    NodeStore, Parentable, RootReader, TrieReader,
 };
 
 pub use linear::filebacked::FileBacked;
@@ -150,6 +150,9 @@ pub enum CheckerError {
         expected_free_list: AreaIndex,
     },
 
+    /// The root node is not persisted
+    #[error("Root node is not persisted")]
+    UnpersistedRoot,
     /// IO error
     #[error("IO error")]
     IO(#[from] FileIoError),
