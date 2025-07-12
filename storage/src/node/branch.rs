@@ -136,6 +136,13 @@ mod ethhash {
     }
 
     impl Serializable for HashOrRlp {
+        fn encoded_len_hint(&self) -> Option<usize> {
+            match self {
+                Self::Hash(h) => h.len().checked_add(1),
+                Self::Rlp(r) => r.len().checked_add(1),
+            }
+        }
+
         fn write_to<W: ExtendableBytes>(&self, vec: &mut W) {
             match self {
                 HashOrRlp::Hash(h) => {

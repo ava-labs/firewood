@@ -89,8 +89,8 @@ impl Path {
 
     /// Creates an empty Path
     #[must_use]
-    pub fn new() -> Self {
-        Path(SmallVec::new())
+    pub const fn new() -> Self {
+        Path(SmallVec::new_const())
     }
 
     /// Read from an iterator that returns nibbles with a prefix

@@ -74,6 +74,7 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
     }
 }
 
+// #[expect(clippy::missing_errors_doc)]
 impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
     /// Persist the freelist from this proposal to storage.
     #[fastrace::trace(short_name = true)]

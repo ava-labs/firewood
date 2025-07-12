@@ -24,7 +24,7 @@
 
 use bitfield::bitfield;
 use enum_as_inner::EnumAsInner;
-use integer_encoding::{VarIntReader as _, VarIntWriter as _};
+use integer_encoding::VarIntReader as _;
 use std::fmt::Debug;
 use std::io::{Error, Read, Write};
 use std::num::NonZero;
@@ -34,14 +34,16 @@ pub mod branch;
 mod leaf;
 pub mod path;
 pub mod persist;
+#[cfg(any(test, not(feature = "serde")))]
+mod serialization;
 
 pub use branch::{BranchNode, Child};
 pub use leaf::LeafNode;
 
-use crate::serialization::{ExtendableBytes, Serializable};
+use crate::serialization::{ExtendableBytes, ExtendableBytesExt, Serializable};
 use crate::{HashType, Path, SharedNode};
-/// A node, either a Branch or Leaf
 
+/// A node, either a Branch or Leaf
 // TODO: explain why Branch is boxed but Leaf is not
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
@@ -252,17 +254,13 @@ impl Node {
 
                 // encode the partial path, including the length if it didn't fit above
                 if b.partial_path.0.len() > MAX_ENCODED_PARTIAL_PATH_LEN {
-                    encoded
-                        .write_varint(b.partial_path.len())
-                        .expect("writing to vec should succeed");
+                    encoded.extend_from_varint(b.partial_path.len());
                 }
                 encoded.extend_from_slice(&b.partial_path);
 
                 // encode the value. For tries that have the same length keys, this is always empty
                 if let Some(v) = &b.value {
-                    encoded
-                        .write_varint(v.len())
-                        .expect("writing to vec should succeed");
+                    encoded.extend_from_varint(v.len());
                     encoded.extend_from_slice(v);
                 }
 
@@ -280,9 +278,7 @@ impl Node {
                     }
                 } else {
                     for (position, child) in child_iter {
-                        encoded
-                            .write_varint(position)
-                            .expect("writing to vec should succeed");
+                        encoded.extend_from_varint(position);
                         if let Child::AddressWithHash(address, hash) = child {
                             encoded.extend_from_slice(&address.get().to_ne_bytes());
                             hash.write_to(encoded);
@@ -304,16 +300,12 @@ impl Node {
 
                 // encode the partial path, including the length if it didn't fit above
                 if l.partial_path.0.len() >= 127 {
-                    encoded
-                        .write_varint(l.partial_path.len())
-                        .expect("write to array should succeed");
+                    encoded.extend_from_varint(l.partial_path.len());
                 }
                 encoded.extend_from_slice(&l.partial_path);
 
                 // encode the value
-                encoded
-                    .write_varint(l.value.len())
-                    .expect("write to array should succeed");
+                encoded.extend_from_varint(l.value.len());
                 encoded.extend_from_slice(&l.value);
             }
         }

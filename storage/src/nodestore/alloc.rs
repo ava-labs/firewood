@@ -20,21 +20,22 @@
 //! - **`AreaType`** - 0xFF for free areas, otherwise node type data (1 byte)
 //! - **`NodeData`** - Serialized node content
 
+#[cfg(any(test, not(feature = "serde")))]
+mod serialization;
+
 use crate::linear::FileIoError;
+use crate::linear::WritableStorage;
 use crate::logger::trace;
+use crate::node::persist::MaybePersistedNode;
+use crate::node::{ByteCounter, Node};
 use crate::serialization::{ReaderExt, SerializeToVec};
+use crate::{CacheReadStrategy, ReadableStorage, SharedNode, TrieHash};
 use metrics::counter;
 use sha2::{Digest, Sha256};
 use std::io::{Error, ErrorKind, Read};
 use std::iter::FusedIterator;
 use std::num::NonZeroU64;
 use std::sync::Arc;
-
-use crate::node::persist::MaybePersistedNode;
-use crate::node::{ByteCounter, Node};
-use crate::{CacheReadStrategy, ReadableStorage, SharedNode, TrieHash};
-
-use crate::linear::WritableStorage;
 
 /// [`NodeStore`] divides the linear store into blocks of different sizes.
 /// [`AREA_SIZES`] is every valid block size.

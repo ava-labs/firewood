@@ -83,6 +83,10 @@ impl TrieHash {
 }
 
 impl Serializable for TrieHash {
+    fn encoded_len_hint(&self) -> Option<usize> {
+        todo!()
+    }
+
     fn write_to<W: ExtendableBytes>(&self, vec: &mut W) {
         vec.extend_from_slice(&self.0);
     }
