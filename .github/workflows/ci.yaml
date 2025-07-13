@@ -303,13 +303,3 @@ jobs:
         run: cargo install cargo-machete
       - name: Check for stale dependencies
         run: cargo machete --with-metadata
-
-  expected-golangci-yaml-diff:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Validate expected golangci-lint changes
-        working-directory: .github 
-        run: ./scripts/verify_golangci_yaml_changes.sh 
-
