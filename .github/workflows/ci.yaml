@@ -310,6 +310,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Validate expected golangci-lint changes
-        working-directory: ffi
+        working-directory: .github 
         run: ./scripts/verify_golangci_yaml_changes.sh 
 
