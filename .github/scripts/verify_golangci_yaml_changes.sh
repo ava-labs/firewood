@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 
-curl -o /tmp/upstream.yml https://raw.githubusercontent.com/ava-labs/avalanchego/refs/heads/master/.golangci.yml
-
 if ! [[ "$0" =~ scripts/verify_golangci_yaml_changes.sh ]]; then
   echo "must be run from .github"
   exit 255
 fi
+
+curl -o /tmp/upstream.yml https://raw.githubusercontent.com/ava-labs/avalanchego/refs/heads/master/.golangci.yml
 
 # Generate diff
 diff /tmp/upstream.yml ../ffi/.golangci.yaml > /tmp/diff.txt || true
