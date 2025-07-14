@@ -19,7 +19,7 @@
     reason = "Found 4 occurrences after enabling the lint."
 )]
 
-use std::fmt::Debug;
+use std::{fmt::Debug, num::NonZero};
 use std::io::Read;
 use std::ops::Deref;
 use std::path::PathBuf;
@@ -181,9 +181,9 @@ pub trait WritableStorage: ReadableStorage {
     fn write(&self, offset: u64, object: &[u8]) -> Result<usize, FileIoError>;
 
     /// Write all nodes to the cache (if any)
-    fn write_cached_nodes<'a>(
+    fn write_cached_nodes(
         &self,
-        _nodes: impl Iterator<Item = (LinearAddress, &'a SharedNode)>,
+        _nodes: impl Iterator<Item = (NonZero<u64>, SharedNode)>,
     ) -> Result<(), FileIoError> {
         Ok(())
     }
