@@ -9,7 +9,7 @@
 /// - If `limit` is `Some(n)`, it will write at most `n` items, followed by a message
 ///   indicating how many more items were not written.
 /// - If `limit` is `None`, it will write all items without any limit.
-/// Caution: if limit is None, this function will not work with iterators that do not terminate.
+///   Caution: if limit is None, this function will not work with iterators that do not terminate.
 ///
 /// # Arguments
 /// - `writer`: The writer to which the items will be written.
