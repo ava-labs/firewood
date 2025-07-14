@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::fmt::{Debug, Display};
 use std::ops::Range;
 
-use crate::iter::write_iter;
+use crate::iter::write_limited_with_sep;
 use crate::nodestore::NodeStoreHeader;
 use crate::{CheckerError, LinearAddress};
 
@@ -312,7 +312,7 @@ impl Display for LinearAddressRangeSet {
             write!(f, "Linear Address Range Set: <empty>")
         } else {
             write!(f, "Linear Address Range Set:\n\t")?;
-            write_iter(
+            write_limited_with_sep(
                 f,
                 self.range_set.iter().map(DisplayRange),
                 "\n\t",
