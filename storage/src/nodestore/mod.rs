@@ -461,6 +461,12 @@ pub struct NodeStore<T, S> {
     storage: Arc<S>,
 }
 
+impl<T, S> NodeStore<T, S> {
+    pub(crate) fn storage(&self) -> &S {
+        &self.storage.as_ref()
+    }
+}
+
 /// Contains the state of a proposal that is still being modified.
 #[derive(Debug)]
 pub struct MutableProposal {
