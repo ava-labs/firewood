@@ -128,6 +128,11 @@ pub trait ExtendableBytes: Write {
         self.extend(other.iter().copied());
     }
 
+    /// Write a variable-length integer to the buffer without allocating an
+    /// intermediate buffer on the heap.
+    ///
+    /// This uses a stack buffer for holding the encoded integer and copies it
+    /// into the buffer.
     #[expect(clippy::indexing_slicing)]
     fn extend_var_int<VI: VarInt>(&mut self, int: VI) {
         let mut buf = [0u8; 10];
