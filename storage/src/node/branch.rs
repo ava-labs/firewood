@@ -136,7 +136,6 @@ impl Child {
 
 #[cfg(feature = "ethhash")]
 mod ethhash {
-    use serde::{Deserialize, Serialize};
     use sha2::Digest as _;
     use sha3::Keccak256;
     use smallvec::SmallVec;
@@ -150,7 +149,7 @@ mod ethhash {
 
     use super::Serializable;
 
-    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    #[derive(Clone, Debug, PartialEq, Eq)]
     pub enum HashOrRlp {
         Hash(TrieHash),
         // TODO: this slice is never larger than 32 bytes so smallvec is probably not our best container
