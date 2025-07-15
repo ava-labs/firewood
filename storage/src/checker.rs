@@ -154,6 +154,7 @@ mod test {
     // -------------------------
     // |   [0,1] -> [3,4,5]    |    Leaf node
     // -------------------------
+    #[expect(clippy::arithmetic_side_effects)]
     fn gen_test_trie(
         nodestore: &mut NodeStore<Committed, MemStore>,
     ) -> (Vec<(Node, LinearAddress)>, u64, (LinearAddress, HashType)) {
@@ -164,7 +165,7 @@ mod test {
         });
         let leaf_addr = LinearAddress::new(high_watermark).unwrap();
         let leaf_hash = hash_node(&leaf, &Path::from_nibbles_iterator([0u8, 1].into_iter()));
-        let leaf_area = test_write_new_node(&nodestore, &leaf, high_watermark);
+        let leaf_area = test_write_new_node(nodestore, &leaf, high_watermark);
         high_watermark += leaf_area;
 
         let mut branch_children: [Option<Child>; BranchNode::MAX_CHILDREN] = Default::default();
@@ -176,7 +177,7 @@ mod test {
         }));
         let branch_addr = LinearAddress::new(high_watermark).unwrap();
         let branch_hash = hash_node(&branch, &Path::from_nibbles_iterator([0u8].into_iter()));
-        let branch_area = test_write_new_node(&nodestore, &branch, high_watermark);
+        let branch_area = test_write_new_node(nodestore, &branch, high_watermark);
         high_watermark += branch_area;
 
         let mut root_children: [Option<Child>; BranchNode::MAX_CHILDREN] = Default::default();
@@ -188,7 +189,7 @@ mod test {
         }));
         let root_addr = LinearAddress::new(high_watermark).unwrap();
         let root_hash = hash_node(&root, &Path::new());
-        let root_area = test_write_new_node(&nodestore, &root, high_watermark);
+        let root_area = test_write_new_node(nodestore, &root, high_watermark);
         high_watermark += root_area;
 
         // write the header
@@ -239,14 +240,14 @@ mod test {
         };
         let wrong_hash = HashType::default();
         let branch_path = &branch_node.as_branch().unwrap().partial_path;
-        let branch_hash = match std::mem::replace(
-            &mut root_node.as_branch_mut().unwrap().children[branch_path[0] as usize],
-            Some(Child::AddressWithHash(*branch_addr, wrong_hash.clone())),
-        ) {
-            Some(Child::AddressWithHash(_, hash)) => hash,
-            _ => panic!("test trie content changed, the test should be updated"),
+        let Some(Child::AddressWithHash(_, hash)) = root_node.as_branch_mut().unwrap().children
+            [branch_path[0] as usize]
+            .replace(Child::AddressWithHash(*branch_addr, wrong_hash.clone()))
+        else {
+            panic!("test trie content changed, the test should be updated");
         };
-        test_write_new_node(&mut nodestore, root_node, root_addr.get());
+        let branch_hash = hash;
+        test_write_new_node(&nodestore, root_node, root_addr.get());
 
         // verify that all of the space is accounted for - since there is no free area
         let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
