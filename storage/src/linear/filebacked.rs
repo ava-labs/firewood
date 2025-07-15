@@ -24,7 +24,7 @@
 )]
 
 use std::fs::{File, OpenOptions};
-use std::io::Read;
+use std::io::{ErrorKind, Read};
 use std::num::NonZero;
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
@@ -92,19 +92,39 @@ impl FileBacked {
         free_list_cache_size: NonZero<usize>,
         truncate: bool,
         cache_read_strategy: CacheReadStrategy,
-    ) -> Result<Self, FileIoError> {
+    ) -> Result<(Self, bool), FileIoError> {
+        let mut created = true;
         let fd = OpenOptions::new()
             .read(true)
             .write(true)
-            .create(true)
-            .truncate(truncate)
-            .open(&path)
-            .map_err(|inner| FileIoError {
-                inner,
-                filename: Some(path.clone()),
-                offset: 0,
-                context: Some("file open".to_string()),
-            })?;
+            .create_new(true)
+            .open(&path);
+        let fd = match fd {
+            Ok(fd) => fd,
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                // File already exists, we can open it
+                created = truncate;
+                OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .truncate(truncate)
+                    .open(&path)
+                    .map_err(|e| FileIoError {
+                        inner: e,
+                        filename: Some(path.clone()),
+                        offset: 0,
+                        context: Some("file create".to_string()),
+                    })?
+            }
+            Err(e) => {
+                return Err(FileIoError {
+                    inner: e,
+                    filename: Some(path.clone()),
+                    offset: 0,
+                    context: Some("file open".to_string()),
+                });
+            }
+        };
 
         #[cfg(feature = "io-uring")]
         let ring = {
@@ -128,15 +148,18 @@ impl FileBacked {
                 })?
         };
 
-        Ok(Self {
-            fd,
-            cache: Mutex::new(LruCache::new(node_cache_size)),
-            free_list_cache: Mutex::new(LruCache::new(free_list_cache_size)),
-            cache_read_strategy,
-            filename: path,
-            #[cfg(feature = "io-uring")]
-            ring: ring.into(),
-        })
+        Ok((
+            Self {
+                fd,
+                cache: Mutex::new(LruCache::new(node_cache_size)),
+                free_list_cache: Mutex::new(LruCache::new(free_list_cache_size)),
+                cache_read_strategy,
+                filename: path,
+                #[cfg(feature = "io-uring")]
+                ring: ring.into(),
+            },
+            created,
+        ))
     }
 }
 
@@ -313,7 +336,7 @@ mod test {
 
         // whole thing at once, this is always less than 1K so it should
         // read the whole thing in
-        let fb = FileBacked::new(
+        let (fb, created) = FileBacked::new(
             path,
             nonzero!(10usize),
             nonzero!(10usize),
@@ -321,6 +344,10 @@ mod test {
             CacheReadStrategy::WritesOnly,
         )
         .unwrap();
+        assert!(
+            !created,
+            "File should not have been created, it already exists"
+        );
 
         let mut reader = fb.stream_from(0).unwrap();
         let mut buf: String = String::new();
@@ -354,7 +381,7 @@ mod test {
             write!(output, "hello world").unwrap();
         }
 
-        let fb = FileBacked::new(
+        let (fb, created) = FileBacked::new(
             path,
             nonzero!(10usize),
             nonzero!(10usize),
@@ -362,6 +389,10 @@ mod test {
             CacheReadStrategy::WritesOnly,
         )
         .unwrap();
+        assert!(
+            !created,
+            "File should not have been created, it already exists"
+        );
         let mut reader = fb.stream_from(0).unwrap();
         let mut buf: String = String::new();
         assert_eq!(reader.read_to_string(&mut buf).unwrap(), 11000);

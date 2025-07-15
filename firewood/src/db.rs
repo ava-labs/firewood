@@ -543,11 +543,15 @@ mod test {
         proposal.commit().await.unwrap();
         println!("{:?}", db.root_hash().await.unwrap().unwrap());
 
-        let db = db.reopen().await;
+        let db = db.reopen(false).await;
         println!("{:?}", db.root_hash().await.unwrap().unwrap());
         let committed = db.root_hash().await.unwrap().unwrap();
         let historical = db.revision(committed).await.unwrap();
         assert_eq!(&*historical.val(b"a").await.unwrap().unwrap(), b"1");
+
+        let db = db.reopen(true).await;
+        println!("{:?}", db.root_hash().await.unwrap());
+        assert!(db.root_hash().await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -717,7 +721,7 @@ mod test {
         let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
             .iter()
             .collect();
-        let dbconfig = DbConfig::builder().truncate(true).build();
+        let dbconfig = DbConfig::builder().build();
         let db = Db::new(dbpath, dbconfig).await.unwrap();
         TestDb { db, tmpdir }
     }
@@ -728,10 +732,10 @@ mod test {
                 .iter()
                 .collect()
         }
-        async fn reopen(self) -> Self {
+        async fn reopen(self, truncate: bool) -> Self {
             let path = self.path();
             drop(self.db);
-            let dbconfig = DbConfig::builder().truncate(false).build();
+            let dbconfig = DbConfig::builder().truncate(truncate).build();
 
             let db = Db::new(path, dbconfig).await.unwrap();
             TestDb {

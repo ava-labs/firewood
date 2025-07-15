@@ -84,14 +84,15 @@ impl RevisionManager {
         truncate: bool,
         config: RevisionManagerConfig,
     ) -> Result<Self, FileIoError> {
-        let storage = Arc::new(FileBacked::new(
+        let (fb, created) = FileBacked::new(
             filename,
             config.node_cache_size,
             config.free_list_cache_size,
             truncate,
             config.cache_read_strategy,
-        )?);
-        let nodestore = if truncate {
+        )?;
+        let storage = Arc::new(fb);
+        let nodestore = if created {
             Arc::new(NodeStore::new_empty_committed(storage.clone())?)
         } else {
             Arc::new(NodeStore::open(storage.clone())?)
