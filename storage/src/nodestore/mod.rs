@@ -463,7 +463,7 @@ pub struct NodeStore<T, S> {
 
 impl<T, S> NodeStore<T, S> {
     pub(crate) fn storage(&self) -> &S {
-        &self.storage.as_ref()
+        self.storage.as_ref()
     }
 }
 

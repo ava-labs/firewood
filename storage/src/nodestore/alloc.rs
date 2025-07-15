@@ -24,7 +24,6 @@ use crate::linear::FileIoError;
 use crate::logger::trace;
 use bincode::{DefaultOptions, Options as _};
 use metrics::counter;
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{Error, ErrorKind, Read};
@@ -188,33 +187,6 @@ impl<T> StoredArea<T> {
     }
 }
 
-impl<T: DeserializeOwned> StoredArea<T> {
-    pub(crate) fn from_storage<S: ReadableStorage>(
-        storage: &S,
-        addr: LinearAddress,
-    ) -> Result<Self, FileIoError> {
-        let mut area_stream = storage.stream_from(addr.get())?;
-        let stored_area: StoredArea<T> =
-            serializer()
-                .deserialize_from(&mut area_stream)
-                .map_err(|e| {
-                    storage.file_io_error(
-                        Error::new(ErrorKind::InvalidData, e),
-                        addr.get(),
-                        Some("StoredArea::from_storage".to_string()),
-                    )
-                })?;
-        if stored_area.area_size_index >= NUM_AREA_SIZES as u8 {
-            return Err(storage.file_io_error(
-                Error::new(ErrorKind::InvalidData, "Invalid area size index"),
-                addr.get(),
-                Some("StoredArea::from_storage".to_string()),
-            ));
-        }
-        Ok(stored_area)
-    }
-}
-
 pub type FreeLists = [Option<LinearAddress>; NUM_AREA_SIZES];
 
 /// A [`FreeArea`] is stored at the start of the area that contained a node that
@@ -241,8 +213,16 @@ impl FreeArea {
         storage: &S,
         address: LinearAddress,
     ) -> Result<(Self, AreaIndex), FileIoError> {
-        let stored_area: StoredArea<Area<Node, FreeArea>> =
-            StoredArea::from_storage(storage, address)?;
+        let mut area_stream = storage.stream_from(address.get())?;
+        let stored_area: StoredArea<Area<Node, FreeArea>> = serializer()
+            .deserialize_from(&mut area_stream)
+            .map_err(|e| {
+                storage.file_io_error(
+                    Error::new(ErrorKind::InvalidData, e),
+                    address.get(),
+                    Some("FreeArea::from_storage".to_string()),
+                )
+            })?;
         let (stored_area_index, area) = stored_area.into_parts();
         let Area::Free(free_area) = area else {
             return Err(storage.file_io_error(
@@ -668,7 +648,7 @@ pub mod test_utils {
     }
 
     // Helper function to write a random stored area to the given offset.
-    pub(crate) fn test_write_empty_area<S: WritableStorage>(
+    pub(crate) fn test_write_zeroed_area<S: WritableStorage>(
         nodestore: &NodeStore<Committed, S>,
         size: u64,
         offset: u64,

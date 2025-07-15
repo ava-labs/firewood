@@ -2,11 +2,11 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::logger::warn;
-use crate::nodestore::alloc::{AREA_SIZES, Area, AreaIndex, FreeArea, StoredArea};
+use crate::nodestore::alloc::{AREA_SIZES, AreaIndex, FreeArea};
 use crate::range_set::LinearAddressRangeSet;
 use crate::{
-    CheckerError, Committed, HashedNodeReader, LinearAddress, Node, NodeReader, NodeStore,
-    WritableStorage,
+    CheckerError, Committed, FileIoError, HashedNodeReader, LinearAddress, Node, NodeReader,
+    NodeStore, WritableStorage,
 };
 
 use std::cmp::Ordering;
@@ -120,26 +120,16 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
         // First attempt to read the valid stored areas from the leaked range
         loop {
-            let stored_area = match StoredArea::<Area<Node, FreeArea>>::from_storage(
-                self.storage(),
-                current_addr,
-            ) {
-                Ok(stored_area) => stored_area,
+            let (area_index, area_size) = match self.find_stored_area_index_and_size(current_addr) {
+                Ok(area_index_and_size) => area_index_and_size,
                 Err(e) => {
                     warn!("Error reading stored area at {current_addr}: {e}");
                     break;
                 }
             };
 
-            let (area_index, _) = stored_area.into_parts();
-            let Some(area_size) = AREA_SIZES.get(area_index as usize) else {
-                // the stored area has an invalid size index
-                warn!("Encountered an area with invalid size index at {current_addr}");
-                break;
-            };
-
             let next_addr = current_addr
-                .checked_add(*area_size)
+                .checked_add(area_size)
                 .expect("address overflow is impossible");
             match next_addr.cmp(&leaked_range.end) {
                 Ordering::Equal => {
@@ -182,6 +172,20 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         debug_assert!(current_addr == leaked_range.end);
         leaked
     }
+
+    // Find the area index and size of the stored area at the given address if the area is valid.
+    // TODO: there should be a way to read stored area directly instead of try reading as a free area then as a node
+    fn find_stored_area_index_and_size(
+        &self,
+        address: LinearAddress,
+    ) -> Result<(AreaIndex, u64), FileIoError> {
+        if FreeArea::from_storage(self.storage(), address).is_err() {
+            self.read_node(address)?;
+        }
+
+        let area_index_and_size = self.area_index_and_size(address)?;
+        Ok(area_index_and_size)
+    }
 }
 
 #[cfg(test)]
@@ -193,36 +197,13 @@ mod test {
     use crate::linear::memory::MemStore;
     use crate::nodestore::NodeStoreHeader;
     use crate::nodestore::alloc::test_utils::{
-        test_write_empty_area, test_write_free_area, test_write_header, test_write_new_node,
+        test_write_free_area, test_write_header, test_write_new_node, test_write_zeroed_area,
     };
     use crate::nodestore::alloc::{AREA_SIZES, FreeLists};
     use crate::{BranchNode, Child, HashType, LeafNode, NodeStore, Path};
 
     use nonzero_ext::nonzero;
     use std::collections::HashMap;
-
-    #[test]
-    fn deserialization_test() {
-        let memstore = MemStore::new(vec![]);
-        let nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
-        test_write_empty_area(&nodestore, 128, NodeStoreHeader::SIZE);
-
-        let stored_area = StoredArea::<Area<Node, FreeArea>>::from_storage(
-            nodestore.storage(),
-            LinearAddress::new(NodeStoreHeader::SIZE).unwrap(),
-        )
-        .unwrap();
-
-        let (_, area) = stored_area.into_parts();
-        assert_eq!(
-            area,
-            Area::Node(Node::Branch(Box::new(BranchNode {
-                partial_path: Path::new(),
-                value: None,
-                children: [const { None }; BranchNode::MAX_CHILDREN],
-            })))
-        );
-    }
 
     #[test]
     // This test creates a simple trie and checks that the checker traverses it correctly.
@@ -396,7 +377,7 @@ mod test {
     #[test]
     // This test creates a linear set of free areas and free them.
     // When traversing it should break consecutive areas.
-    fn split_empty_range_into_leaked_areas() {
+    fn split_range_of_zeros_into_leaked_areas() {
         let memstore = MemStore::new(vec![]);
         let nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
 
@@ -415,9 +396,9 @@ mod test {
             })
             .collect::<Vec<_>>();
 
-        // write an empty area
+        // write an zeroed area
         let leaked_range_size = expected_leaked_area_sizes.iter().sum();
-        test_write_empty_area(&nodestore, leaked_range_size, NodeStoreHeader::SIZE);
+        test_write_zeroed_area(&nodestore, leaked_range_size, NodeStoreHeader::SIZE);
 
         // check the leaked areas
         let leaked_range = nonzero!(NodeStoreHeader::SIZE)
@@ -450,8 +431,8 @@ mod test {
         high_watermark += AREA_SIZES[8];
         test_write_free_area(&nodestore, None, 7, high_watermark); // 768
         high_watermark += AREA_SIZES[7];
-        // write an empty area
-        test_write_empty_area(&nodestore, 768, high_watermark);
+        // write an zeroed area
+        test_write_zeroed_area(&nodestore, 768, high_watermark);
         high_watermark += 768;
         // write another free area
         test_write_free_area(&nodestore, None, 8, high_watermark); // 1024
