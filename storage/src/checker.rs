@@ -4,8 +4,8 @@
 use crate::logger::warn;
 use crate::range_set::LinearAddressRangeSet;
 use crate::{
-    CheckerError, Committed, HashedNodeReader, LinearAddress, Node, NodeReader, NodeStore, Path,
-    TrieHash, WritableStorage, hash_node,
+    CheckerError, Committed, HashType, HashedNodeReader, LinearAddress, Node, NodeReader,
+    NodeStore, Path, WritableStorage, hash_node,
 };
 
 /// [`NodeStore`] checker
@@ -43,7 +43,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             // the database is not empty, traverse the trie
             self.visit_trie(
                 root_address,
-                root_hash,
+                HashType::from(root_hash),
                 Path::new(),
                 &mut visited,
                 hash_check,
@@ -66,7 +66,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     fn visit_trie(
         &self,
         subtree_root_address: LinearAddress,
-        subtree_root_hash: TrieHash,
+        subtree_root_hash: HashType,
         path_prefix: Path,
         visited: &mut LinearAddressRangeSet,
         hash_check: bool,
@@ -83,7 +83,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                 child_path_prefix.0.push(nibble as u8);
                 self.visit_trie(
                     address,
-                    hash.clone().into_triehash(),
+                    hash.clone(),
                     child_path_prefix,
                     visited,
                     hash_check,
@@ -93,7 +93,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
         // hash check - at this point all children hashes have been verified
         if hash_check {
-            let hash = hash_node(&node, &path_prefix).into_triehash();
+            let hash = hash_node(&node, &path_prefix);
             if hash != subtree_root_hash {
                 return Err(CheckerError::HashMismatch {
                     partial_path: path_prefix,
@@ -261,7 +261,7 @@ mod test {
 
         let mut root_children: [Option<Child>; BranchNode::MAX_CHILDREN] = Default::default();
         let root_path = Path::from([]);
-        let wrong_hash = TrieHash::default();
+        let wrong_hash = HashType::default();
         root_children[0] = Some(Child::AddressWithHash(branch_addr, wrong_hash.clone())); // branch node has the wrong hash
         let root = Node::Branch(Box::new(BranchNode {
             partial_path: root_path,
