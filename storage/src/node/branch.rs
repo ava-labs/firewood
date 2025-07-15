@@ -103,22 +103,25 @@ impl Child {
         }
     }
 
-    /// Return the unpersisted node if the child is a [`Child::MaybePersisted`] variant, otherwise None.
+    /// Return the unpersisted node if the child is an unpersisted [`Child::MaybePersisted`]
+    /// variant, otherwise None.
     #[must_use]
     pub fn unpersisted(&self) -> Option<&MaybePersistedNode> {
-        match self {
-            Child::Node(_) => None,
-            Child::AddressWithHash(_, _) => None,
-            Child::MaybePersisted(maybe_persisted, _) => maybe_persisted.unpersisted(),
+        if let Child::MaybePersisted(maybe_persisted, _) = self {
+            maybe_persisted.unpersisted()
+        } else {
+            None
         }
     }
 
-    /// Return a mutable reference to the unpersisted node if the child is a [`Child::MaybePersisted`] variant, otherwise None.
+    /// Return a mutable reference to the unpersisted node if the child is an
+    /// unpersisted [`Child::MaybePersisted`] variant, otherwise None.
+    #[must_use]
     pub fn unpersisted_mut(&mut self) -> Option<&mut MaybePersistedNode> {
-        match self {
-            Child::Node(_) => None,
-            Child::AddressWithHash(_, _) => None,
-            Child::MaybePersisted(maybe_persisted, _) => maybe_persisted.unpersisted_mut(),
+        if let Child::MaybePersisted(maybe_persisted, _) = self {
+            maybe_persisted.unpersisted_mut()
+        } else {
+            None
         }
     }
 
