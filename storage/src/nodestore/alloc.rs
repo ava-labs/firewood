@@ -22,6 +22,7 @@
 
 use crate::linear::FileIoError;
 use crate::logger::trace;
+use crate::nodestore::is_aligned;
 use bincode::{DefaultOptions, Options as _};
 use metrics::counter;
 use serde::{Deserialize, Serialize};
@@ -289,7 +290,7 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
             return Ok(node);
         }
 
-        debug_assert!(addr.get() % 8 == 0);
+        debug_assert!(is_aligned(addr));
 
         // saturating because there is no way we can be reading at u64::MAX
         // and this will fail very soon afterwards
@@ -429,7 +430,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         let addr = LinearAddress::new(self.header.size()).expect("node store size can't be 0");
         self.header
             .set_size(self.header.size().saturating_add(area_size));
-        debug_assert!(addr.get() % 8 == 0);
+        debug_assert!(is_aligned(addr));
         trace!("Allocating from end: addr: {addr:?}, size: {index}");
         Ok((addr, index))
     }
@@ -480,7 +481,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         let Some(addr) = node.as_linear_address() else {
             return Ok(());
         };
-        debug_assert!(addr.get() % 8 == 0);
+        debug_assert!(is_aligned(addr));
 
         let (area_size_index, _) = self.area_index_and_size(addr)?;
         trace!("Deleting node at {addr:?} of size {area_size_index}");
