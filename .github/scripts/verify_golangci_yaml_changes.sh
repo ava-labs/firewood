@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 
-if ! [[ "$0" =~ scripts/verify_golangci_yaml_changes.sh ]]; then
-  echo "must be run from .github"
-  exit 255
-fi
+cd "$(dirname "$(realpath "$0")")"/..
 
 curl -o /tmp/upstream.yml https://raw.githubusercontent.com/ava-labs/avalanchego/refs/heads/master/.golangci.yml
 
