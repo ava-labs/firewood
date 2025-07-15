@@ -215,16 +215,27 @@ impl FreeArea {
             return Err(ErrorKind::InvalidData.into());
         }
 
-        let option_discriminant: u8 = reader.read_byte()?;
-        if option_discriminant != 1 {
-            return Err(ErrorKind::InvalidData.into());
+        match reader.read_byte()? {
+            // serde encoded `Option::None` as 0 with no following data
+            0 => Ok(Self {
+                next_free_block: None,
+            }),
+            // `Some(_)` as 1 with the data following
+            1 => Ok(Self {
+                next_free_block: Some(LinearAddress::new(reader.read_varint()?).ok_or_else(
+                    || {
+                        Error::new(
+                            ErrorKind::InvalidData,
+                            "Option::<LinearAddress> was Some(0) which is invalid",
+                        )
+                    },
+                )?),
+            }),
+            option_discriminant => Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("Invalid Option discriminant: {option_discriminant}"),
+            )),
         }
-
-        let next_free_block: u64 = reader.read_varint()?;
-
-        Ok(Self {
-            next_free_block: LinearAddress::new(next_free_block),
-        })
     }
 
     /// Create a new `FreeArea`
@@ -710,6 +721,22 @@ mod test_free_list_iterator {
             free_area.next_free_block(),
             Some(LinearAddress::new(42).unwrap())
         );
+
+        // old equivalent of
+        // let node = StoredArea::new(
+        //     12,
+        //     Area::<Node, _>::Free(FreeArea::new(None),
+        // );
+        // but encoded with bincode with varint enabled.
+        let data = [0x0c, 0x01, 0x00];
+
+        let mut reader = &data[..];
+
+        let area_index = reader.read_byte().unwrap();
+        assert_eq!(area_index, 12);
+
+        let free_area: FreeArea = reader.next_value().unwrap();
+        assert_eq!(free_area.next_free_block(), None);
     }
 
     #[test]
