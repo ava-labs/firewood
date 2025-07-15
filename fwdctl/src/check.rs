@@ -21,6 +21,15 @@ pub struct Options {
         help = "Name of the database"
     )]
     pub db: String,
+
+    /// Whether to perform hash check
+    #[arg(
+        long,
+        required = false,
+        default_value_t = false,
+        help = "Should perform hash check"
+    )]
+    pub hash_check: bool,
 }
 
 pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
@@ -36,5 +45,7 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
         CacheReadStrategy::WritesOnly, // we scan the database once - no need to cache anything
     )?);
 
-    NodeStore::open(storage)?.check().map_err(Into::into)
+    NodeStore::open(storage)?
+        .check(opts.hash_check)
+        .map_err(|e| api::Error::InternalError(Box::new(e)))
 }
