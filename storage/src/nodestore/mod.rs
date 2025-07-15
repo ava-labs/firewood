@@ -728,6 +728,7 @@ mod tests {
     use std::array::from_fn;
 
     use crate::linear::memory::MemStore;
+    use crate::nodestore::alloc::NodeAllocator;
     use crate::{BranchNode, Child, LeafNode};
     use arc_swap::access::DynGuard;
     use nonzero_ext::nonzero;
@@ -824,8 +825,7 @@ mod tests {
     fn test_serialized_len<N: Into<Node>>(node: N) {
         let node = node.into();
 
-        let computed_length =
-            NodeStore::<std::sync::Arc<ImmutableProposal>, MemStore>::stored_len(&node);
+        let computed_length = NodeAllocator::<MemStore>::stored_len(&node);
 
         let mut serialized = Vec::new();
         node.as_bytes(0, &mut serialized);

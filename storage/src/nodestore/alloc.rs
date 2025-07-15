@@ -22,6 +22,7 @@
 
 use crate::linear::FileIoError;
 use crate::logger::trace;
+use crate::nodestore::NodeStoreHeader;
 use bincode::{DefaultOptions, Options as _};
 use metrics::counter;
 use serde::{Deserialize, Serialize};
@@ -29,7 +30,6 @@ use sha2::{Digest, Sha256};
 use std::io::{Error, ErrorKind, Read};
 use std::iter::FusedIterator;
 use std::num::NonZeroU64;
-use std::sync::Arc;
 
 use crate::node::persist::MaybePersistedNode;
 use crate::node::{ByteCounter, Node};
@@ -238,7 +238,19 @@ impl FreeArea {
 }
 
 // Re-export the NodeStore types we need
-use super::{Committed, ImmutableProposal, NodeStore, ReadInMemoryNode};
+use super::{Committed, NodeStore, ReadInMemoryNode};
+
+#[derive(Debug)]
+pub(crate) struct NodeAllocator<'a, S> {
+    storage: &'a S,
+    header: &'a mut NodeStoreHeader,
+}
+
+impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
+    pub const fn new(storage: &'a S, header: &'a mut NodeStoreHeader) -> Self {
+        Self { storage, header }
+    }
+}
 
 impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
     /// Returns (index, `area_size`) for the stored area at `addr`.
@@ -362,7 +374,7 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
     }
 }
 
-impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
+impl<S: ReadableStorage> NodeAllocator<'_, S> {
     /// Attempts to allocate `n` bytes from the free lists.
     /// If successful returns the address of the newly allocated area
     /// and the index of the free list that was used.
@@ -395,8 +407,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 trace!("free_head@{address}(cached): {free_head:?} size:{index}");
                 *free_stored_area_addr = free_head;
             } else {
-                let (free_head, read_index) =
-                    FreeArea::from_storage(self.storage.as_ref(), address)?;
+                let (free_head, read_index) = FreeArea::from_storage(self.storage, address)?;
                 debug_assert_eq!(read_index as usize, index);
 
                 // Update the free list to point to the next free block.
@@ -596,7 +607,7 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::indexing_slicing)]
 pub mod test_utils {
-    use super::super::{Committed, ImmutableProposal, NodeStore, NodeStoreHeader};
+    use super::super::{Committed, NodeStore, NodeStoreHeader};
     use super::*;
     use crate::FileBacked;
     use crate::node::Node;
@@ -608,7 +619,7 @@ pub mod test_utils {
         node: &Node,
         offset: u64,
     ) -> u64 {
-        let node_length = NodeStore::<Arc<ImmutableProposal>, FileBacked>::stored_len(node);
+        let node_length = NodeAllocator::<FileBacked>::stored_len(node);
         let area_size_index = area_size_to_index(node_length).unwrap();
         let mut stored_area_bytes = Vec::new();
         node.as_bytes(area_size_index, &mut stored_area_bytes);
@@ -652,6 +663,8 @@ pub mod test_utils {
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::indexing_slicing)]
 mod test_free_list_iterator {
+    use std::sync::Arc;
+
     use super::*;
     use crate::linear::memory::MemStore;
     use crate::test_utils::seeded_rng;

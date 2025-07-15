@@ -10,6 +10,7 @@ use crate::hashednode::hash_node;
 use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::Node;
+use crate::nodestore::alloc::NodeAllocator;
 use crate::{Child, HashType, Path, ReadableStorage, SharedNode};
 
 #[cfg(feature = "ethhash")]
@@ -195,7 +196,8 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         #[cfg(not(feature = "ethhash"))]
         let hash = hash_node(&node, path_prefix);
 
-        let (addr, size) = self.allocate_node(&node)?;
+        let (addr, size) =
+            NodeAllocator::new(self.storage.as_ref(), &mut self.header).allocate_node(&node)?;
 
         new_nodes.insert(addr, (size, node.into()));
 
