@@ -1,8 +1,17 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+//! This module provides a reader that can be rewound to the beginning. This is useful
+//! when you need to rewind the reader after failing to deserialize a value (e.g., a back
+//! tracking deserializer).
+
 use std::io::Read;
 
+/// A reader that can be rewound to the beginning of when the reader was created.
+///
+/// All data read from the reader is buffered in memory so that it can be read
+/// again if rewound. This is necessary when the underlying reader does not
+/// implement [`std::io::Seek`].
 pub(crate) struct RewindReader<R> {
     buffer: Vec<u8>,
     cursor: usize,
@@ -19,6 +28,9 @@ impl<R: Read> RewindReader<R> {
         }
     }
 
+    /// Rewinds the reader to the beginning of the stream.
+    ///
+    /// Subsequent reads will start from where the reader was first created.
     pub const fn rewind(&mut self) {
         self.cursor = 0;
     }
