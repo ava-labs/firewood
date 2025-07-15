@@ -121,15 +121,6 @@ impl MaybePersistedNode {
         }
     }
 
-    /// Returns a mutable reference to the unpersisted node if it is unpersisted.
-    #[must_use]
-    pub fn unpersisted_mut(&mut self) -> Option<&mut Self> {
-        match self.0.load().as_ref() {
-            MaybePersisted::Unpersisted(_) => Some(self),
-            MaybePersisted::Persisted(_) => None,
-        }
-    }
-
     /// Updates the internal state to indicate this node is persisted at the specified disk address.
     ///
     /// This method changes the internal state of the `MaybePersistedNode` from `Mem` to `Disk`,

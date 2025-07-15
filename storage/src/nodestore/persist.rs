@@ -155,10 +155,6 @@ impl<N: NodeReader + RootReader> Iterator for UnPersistedNodeIterator<'_, N> {
                     .as_shared_node(self.store)
                     .expect("in memory, so IO is impossible");
 
-                if shared_node.is_leaf() {
-                    return Some(next_child);
-                }
-
                 // It's a branch, so we need to get its children
                 if let Some(branch) = shared_node.as_branch() {
                     // Create an iterator over unpersisted children
@@ -177,9 +173,11 @@ impl<N: NodeReader + RootReader> Iterator for UnPersistedNodeIterator<'_, N> {
                         self.child_iter_stack
                             .push(Box::new(unpersisted_children.into_iter()));
                     }
+                    self.stack.push(next_child); // visit this node after the children
+                } else {
+                    // leaf
+                    return Some(next_child);
                 }
-
-                self.stack.push(next_child); // visit this node after the children
             } else {
                 // Current iterator is exhausted, remove it
                 self.child_iter_stack.pop();
@@ -283,10 +281,12 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
             };
             RINGSIZE
         ];
+
         for (&addr, &(area_size_index, ref node)) in &self.kind.new {
             let mut serialized = Vec::with_capacity(100); // TODO: better size? we can guess branches are larger
             node.as_bytes(area_size_index, &mut serialized);
             let mut serialized = serialized.into_boxed_slice();
+
             loop {
                 // Find the first available write buffer, enumerate to get the position for marking it completed
                 if let Some((pos, pbe)) = saved_pinned_buffers
@@ -500,10 +500,9 @@ mod tests {
             create_leaf(&[3], &[255]),
         ];
 
-        // Create a nested structure: root -> leaf[0]
+        // Create a nested structure: root -> branch1 -> leaf[0]
         //                                -> leaf[1]
-        //                                -> inner_ branch -> leaf[2]
-        //                                -> persisted_node
+        //                                -> branch2 -> leaf[2]
         let inner_branch = create_branch(&[10], Some(&[50]), vec![(0, leaves[2].clone())]);
 
         let root_branch: Node = BranchNode {

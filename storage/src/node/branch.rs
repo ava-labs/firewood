@@ -114,17 +114,6 @@ impl Child {
         }
     }
 
-    /// Return a mutable reference to the unpersisted node if the child is an
-    /// unpersisted [`Child::MaybePersisted`] variant, otherwise None.
-    #[must_use]
-    pub fn unpersisted_mut(&mut self) -> Option<&mut MaybePersistedNode> {
-        if let Child::MaybePersisted(maybe_persisted, _) = self {
-            maybe_persisted.unpersisted_mut()
-        } else {
-            None
-        }
-    }
-
     /// Return the hash of the child if it is a [`Child::AddressWithHash`] or [`Child::MaybePersisted`] variant, otherwise None.
     #[must_use]
     pub const fn hash(&self) -> Option<&HashType> {
