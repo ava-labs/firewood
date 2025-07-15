@@ -101,12 +101,16 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// Returns a [`FileIoError`] if the header cannot be read or validated.
     pub fn open(storage: Arc<S>) -> Result<Self, FileIoError> {
         let mut stream = storage.stream_from(0)?;
-        let mut header = NodeStoreHeader::new();
-        let header_bytes = bytemuck::bytes_of_mut(&mut header);
-        stream
-            .read_exact(header_bytes)
+        let mut header_bytes = vec![0u8; bincode::serialized_size(&NodeStoreHeader::new()).unwrap() as usize];
+        stream.read_exact(&mut header_bytes)
             .map_err(|e| storage.file_io_error(e, 0, Some("header read".to_string())))?;
-
+       
+        let header: NodeStoreHeader = bincode::deserialize(&header_bytes)
+            .map_err(|e| storage.file_io_error(
+                std::io::Error::new(std::io::ErrorKind::InvalidData, e),
+                0,
+                Some("header read".to_string())
+            ))?;
         drop(stream);
 
         header
@@ -273,9 +277,9 @@ impl<S: WritableStorage> NodeStore<MutableProposal, S> {
     /// Panics if the header cannot be written.
     pub fn new_empty_proposal(storage: Arc<S>) -> Self {
         let header = NodeStoreHeader::new();
-        let header_bytes = bytemuck::bytes_of(&header);
+        let header_bytes = bincode::serialize(&header).expect("failed to serialize header");
         storage
-            .write(0, header_bytes)
+            .write(0, &header_bytes)
             .expect("failed to write header");
         NodeStore {
             header,
@@ -711,7 +715,7 @@ mod tests {
     use test_case::test_case;
 
     use super::*;
-    use alloc::{AREA_SIZES, MAX_AREA_SIZE, MIN_AREA_SIZE, NUM_AREA_SIZES, area_size_to_index};
+    use alloc::{AREA_SIZES, area_size_to_index};
 
     #[test]
     fn test_area_size_to_index() {
@@ -725,7 +729,7 @@ mod tests {
                 assert_eq!(area_size_to_index(area_size - 1).unwrap(), i as AreaIndex);
             }
 
-            if i < NUM_AREA_SIZES - 1 {
+            if i < LinearAddress::num_area_sizes() - 1 {
                 // 1 more than top of range goes to next range
                 assert_eq!(
                     area_size_to_index(area_size + 1).unwrap(),
@@ -734,11 +738,11 @@ mod tests {
             }
         }
 
-        for i in 0..=MIN_AREA_SIZE {
+        for i in 0..=LinearAddress::min_area_size() {
             assert_eq!(area_size_to_index(i).unwrap(), 0);
         }
 
-        assert!(area_size_to_index(MAX_AREA_SIZE + 1).is_err());
+        assert!(area_size_to_index(LinearAddress::max_area_size() + 1).is_err());
     }
 
     #[test]
@@ -779,7 +783,7 @@ mod tests {
         value: Some(vec![9, 10, 11].into_boxed_slice()),
         children: from_fn(|i| {
             if i == 15 {
-                Some(Child::AddressWithHash(nonzero!(1u64), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
+                Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
             } else {
                 None
             }
@@ -789,7 +793,7 @@ mod tests {
         partial_path: Path::from([6, 7, 8]),
         value: Some(vec![9, 10, 11].into_boxed_slice()),
         children: from_fn(|_|
-            Some(Child::AddressWithHash(nonzero!(1u64), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
+            Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
         ),
     }; "branch node with all child")]
     #[test_case(

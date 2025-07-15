@@ -30,6 +30,7 @@ use std::io::{Error, ErrorKind, Read};
 use std::iter::FusedIterator;
 use std::num::NonZeroU64;
 use std::sync::Arc;
+use std::fmt;
 
 use crate::node::persist::MaybePersistedNode;
 use crate::node::{ByteCounter, Node};
@@ -111,9 +112,9 @@ pub const fn index_name(index: usize) -> &'static str {
 /// This is not usize because we can store this as a single byte
 pub type AreaIndex = u8;
 
-pub const NUM_AREA_SIZES: usize = AREA_SIZES.len();
-pub const MIN_AREA_SIZE: u64 = AREA_SIZES[0];
-pub const MAX_AREA_SIZE: u64 = AREA_SIZES[NUM_AREA_SIZES - 1];
+const NUM_AREA_SIZES: usize = AREA_SIZES.len();
+const MIN_AREA_SIZE: u64 = AREA_SIZES[0];
+const MAX_AREA_SIZE: u64 = AREA_SIZES[NUM_AREA_SIZES - 1];
 
 #[inline]
 pub fn new_area_index(n: usize) -> AreaIndex {
@@ -145,10 +146,58 @@ pub fn area_size_to_index(n: u64) -> Result<AreaIndex, Error> {
         })
 }
 
-/// Objects cannot be stored at the zero address, so a [`LinearAddress`] is guaranteed not
-/// to be zero. This reserved zero can be used as a [None] value for some use cases. In particular,
-/// branches can use `Option<LinearAddress>` which is the same size as a [`LinearAddress`]
-pub type LinearAddress = NonZeroU64;
+// pub type LinearAddress = NonZeroU64;
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[repr(transparent)]
+pub struct LinearAddress(NonZeroU64);
+
+impl LinearAddress {
+    /// Create a new LinearAddress, returns None if value is zero.
+    pub fn new(addr: u64) -> Option<Self> {
+        NonZeroU64::new(addr).map(LinearAddress)
+    }
+
+    /// Get the underlying address as u64.
+    pub fn get(&self) -> u64 {
+        self.0.get()
+    }
+
+    /// Check if the address is 8-byte aligned.
+    pub const fn is_aligned(&self) -> bool {
+        self.0.get() % 8 == 0
+    }
+
+    pub fn checked_add(&self, offset: u64) -> Option<Self> {
+        self.get().checked_add(offset).and_then(LinearAddress::new)
+    }
+
+    pub fn max_area_size() -> u64 {
+        AREA_SIZES[AREA_SIZES.len() - 1]
+    }
+    pub fn min_area_size() -> u64 {
+        AREA_SIZES[0]
+    }
+    pub fn num_area_sizes() -> usize {
+        AREA_SIZES.len()
+    }
+
+    /// Returns a reference to the inner NonZeroU64
+    pub fn as_nonzero(&self) -> &NonZeroU64 {
+        &self.0
+    }
+}
+
+impl fmt::Display for LinearAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.get())
+    }
+}
+
+impl From<LinearAddress> for u64 {
+    fn from(addr: LinearAddress) -> Self {
+        addr.get()
+    }
+}
 
 /// Each [`StoredArea`] contains an [Area] which is either a [Node] or a [`FreeArea`].
 #[repr(u8)]
@@ -187,7 +236,8 @@ impl<T> StoredArea<T> {
     }
 }
 
-pub type FreeLists = [Option<LinearAddress>; NUM_AREA_SIZES];
+/// FreeLists is an array of Option<LinearAddress> for each area size.
+pub type FreeLists = [Option<LinearAddress>; AREA_SIZES.len()];
 
 /// A [`FreeArea`] is stored at the start of the area that contained a node that
 /// has been freed.
@@ -289,7 +339,7 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
             return Ok(node);
         }
 
-        debug_assert!(addr.get() % 8 == 0);
+        debug_assert!(addr.is_aligned());
 
         // saturating because there is no way we can be reading at u64::MAX
         // and this will fail very soon afterwards
@@ -429,7 +479,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         let addr = LinearAddress::new(self.header.size()).expect("node store size can't be 0");
         self.header
             .set_size(self.header.size().saturating_add(area_size));
-        debug_assert!(addr.get() % 8 == 0);
+        debug_assert!(addr.is_aligned());
         trace!("Allocating from end: addr: {addr:?}, size: {index}");
         Ok((addr, index))
     }
@@ -480,7 +530,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         let Some(addr) = node.as_linear_address() else {
             return Ok(());
         };
-        debug_assert!(addr.get() % 8 == 0);
+        debug_assert!(addr.is_aligned());
 
         let (area_size_index, _) = self.area_index_and_size(addr)?;
         trace!("Deleting node at {addr:?} of size {area_size_index}");
@@ -643,9 +693,9 @@ pub mod test_utils {
         header.set_size(size);
         header.set_root_address(root_addr);
         *header.free_lists_mut() = free_lists;
-        let header_bytes = bytemuck::bytes_of(&header);
+        let header_bytes = bincode::serialize(&header).unwrap();
         nodestore.header = header;
-        nodestore.storage.write(0, header_bytes).unwrap();
+        nodestore.storage.write(0, &header_bytes).unwrap();
     }
 }
 
