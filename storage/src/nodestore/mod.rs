@@ -44,6 +44,7 @@ pub(crate) mod alloc;
 pub(crate) mod hash;
 pub(crate) mod header;
 pub(crate) mod persist;
+mod rewind;
 
 use crate::linear::FileIoError;
 use crate::logger::trace;
