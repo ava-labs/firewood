@@ -54,7 +54,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 
 // Re-export types from alloc module
-pub use alloc::{AreaIndex, FreeLists, LinearAddress, MIN_AREA_SIZE};
+pub use alloc::{AreaIndex, LinearAddress};
 
 // Re-export types from header module
 pub use header::NodeStoreHeader;
@@ -94,7 +94,7 @@ use super::linear::WritableStorage;
 
 #[inline]
 pub(crate) const fn is_aligned(addr: LinearAddress) -> bool {
-    addr.get() % MIN_AREA_SIZE == 0
+    addr.get() % alloc::MIN_AREA_SIZE == 0
 }
 
 impl<S: ReadableStorage> NodeStore<Committed, S> {
@@ -467,7 +467,7 @@ pub struct NodeStore<T, S> {
 }
 
 impl<T, S> NodeStore<T, S> {
-    pub(crate) const fn freelists(&self) -> &FreeLists {
+    pub(crate) const fn freelists(&self) -> &alloc::FreeLists {
         self.header.free_lists()
     }
 }

@@ -584,7 +584,9 @@ pub(crate) struct FreeAreaWithMetadata {
 
 pub(crate) struct FreeListsIterator<'a, S: ReadableStorage> {
     storage: &'a S,
-    free_lists: &'a FreeLists,
+    free_lists_iter: std::iter::Skip<
+        std::iter::Enumerate<std::slice::Iter<'a, std::option::Option<std::num::NonZero<u64>>>>,
+    >,
     current_free_list_id: AreaIndex,
     free_list_iter: FreeListIterator<'a, S>,
 }
@@ -595,17 +597,23 @@ impl<'a, S: ReadableStorage> FreeListsIterator<'a, S> {
         free_lists: &'a FreeLists,
         start_area_index: AreaIndex,
     ) -> Self {
+        let mut free_lists_iter = free_lists
+            .iter()
+            .enumerate()
+            .skip(start_area_index as usize);
+        let (current_free_list_id, free_list_head) = match free_lists_iter.next() {
+            Some((id, head)) => (id as AreaIndex, *head),
+            None => (NUM_AREA_SIZES as AreaIndex, None),
+        };
         let start_iterator = FreeListIterator::new(
             storage,
-            free_lists
-                .get(start_area_index as usize)
-                .and_then(|head| *head),
-            FreeListParent::FreeListHead(start_area_index),
+            free_list_head,
+            FreeListParent::FreeListHead(current_free_list_id),
         );
         Self {
             storage,
-            free_lists,
-            current_free_list_id: start_area_index,
+            free_lists_iter,
+            current_free_list_id,
             free_list_iter: start_iterator,
         }
     }
@@ -634,12 +642,9 @@ impl<'a, S: ReadableStorage> FreeListsIterator<'a, S> {
                 return Some(next);
             }
 
-            self.current_free_list_id = self
-                .current_free_list_id
-                .checked_add(1)
-                .expect("free list id overflow is not possible");
-            match self.free_lists.get(self.current_free_list_id as usize) {
-                Some(next_free_list_head) => {
+            match self.free_lists_iter.next() {
+                Some((current_free_list_id, next_free_list_head)) => {
+                    self.current_free_list_id = current_free_list_id as AreaIndex;
                     self.free_list_iter = FreeListIterator::new(
                         self.storage,
                         *next_free_list_head,
