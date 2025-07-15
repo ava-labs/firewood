@@ -218,7 +218,7 @@ impl WritableStorage for FileBacked {
     ) -> Result<(), FileIoError> {
         let mut guard = self.cache.lock().expect("poisoned lock");
         for (addr, node) in nodes {
-            guard.put(*addr, node.clone());
+            guard.put(LinearAddress::new((*addr).get()).unwrap(), node.clone());
         }
         Ok(())
     }
