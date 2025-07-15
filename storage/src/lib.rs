@@ -122,9 +122,9 @@ pub enum CheckerError {
         /// The address of the node
         address: LinearAddress,
         /// The hash value stored in the parent node
-        parent_stored_hash: HashType,
+        parent_stored_hash: TrieHash,
         /// The hash value computed for the node
-        computed_hash: HashType,
+        computed_hash: TrieHash,
     },
 
     /// The address is out of bounds

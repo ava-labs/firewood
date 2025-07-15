@@ -4,8 +4,8 @@
 use crate::logger::warn;
 use crate::range_set::LinearAddressRangeSet;
 use crate::{
-    CheckerError, Committed, HashType, HashedNodeReader, LinearAddress, Node, NodeReader,
-    NodeStore, Path, WritableStorage, hash_node,
+    CheckerError, Committed, HashedNodeReader, LinearAddress, Node, NodeReader, NodeStore, Path,
+    TrieHash, WritableStorage, hash_node,
 };
 
 /// [`NodeStore`] checker
@@ -66,7 +66,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     fn visit_trie(
         &self,
         subtree_root_address: LinearAddress,
-        subtree_root_hash: HashType,
+        subtree_root_hash: TrieHash,
         path_prefix: Path,
         visited: &mut LinearAddressRangeSet,
         hash_check: bool,
@@ -83,7 +83,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                 child_path_prefix.0.push(nibble as u8);
                 self.visit_trie(
                     address,
-                    hash.clone(),
+                    hash.clone().into_triehash(),
                     child_path_prefix,
                     visited,
                     hash_check,
@@ -93,7 +93,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
         // hash check - at this point all children hashes have been verified
         if hash_check {
-            let hash = hash_node(&node, &path_prefix);
+            let hash = hash_node(&node, &path_prefix).into_triehash();
             if hash != subtree_root_hash {
                 return Err(CheckerError::HashMismatch {
                     partial_path: path_prefix,
@@ -261,7 +261,8 @@ mod test {
 
         let mut root_children: [Option<Child>; BranchNode::MAX_CHILDREN] = Default::default();
         let root_path = Path::from([]);
-        root_children[0] = Some(Child::AddressWithHash(branch_addr, HashType::default())); // branch node has the wrong hash
+        let wrong_hash = TrieHash::default();
+        root_children[0] = Some(Child::AddressWithHash(branch_addr, wrong_hash.clone())); // branch node has the wrong hash
         let root = Node::Branch(Box::new(BranchNode {
             partial_path: root_path,
             value: None,
@@ -295,7 +296,7 @@ mod test {
         }
         if address == branch_addr
             && partial_path == branch_path
-            && parent_stored_hash == HashType::default()
+            && parent_stored_hash == wrong_hash
             && computed_hash == branch_hash
         ));
     }
