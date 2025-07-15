@@ -500,9 +500,10 @@ mod tests {
             create_leaf(&[3], &[255]),
         ];
 
-        // Create a nested structure: root -> branch1 -> leaf[0]
+        // Create a nested structure: root -> leaf[0]
         //                                -> leaf[1]
-        //                                -> branch2 -> leaf[2]
+        //                                -> inner_ branch -> leaf[2]
+        //                                -> persisted_node
         let inner_branch = create_branch(&[10], Some(&[50]), vec![(0, leaves[2].clone())]);
 
         let root_branch: Node = BranchNode {
