@@ -23,7 +23,6 @@
 use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::branch::{ReadSerializable, Serializable};
-use crate::nodestore::rewind;
 use integer_encoding::VarIntReader;
 use metrics::counter;
 use sha2::{Digest, Sha256};
@@ -162,35 +161,13 @@ impl Serializable for FreeArea {
         vec.extend_var_int(self.next_free_block.map_or(0, LinearAddress::get));
     }
 
-    fn from_reader<R: Read>(reader: R) -> std::io::Result<Self> {
-        let mut reader = rewind::RewindReader::new(reader);
-        if let Ok(this) = Self::read_old_format_free_area(&mut reader) {
-            return Ok(this);
-        }
-        reader.rewind();
-
-        let header = reader.read_byte()?;
-        if header != 0xff {
-            return Err(Error::new(
-                ErrorKind::InvalidData,
-                format!("Invalid FreeArea header: {header}"),
-            ));
-        }
-
-        let next_free_block: u64 = reader.read_varint()?;
-        Ok(Self {
-            next_free_block: LinearAddress::new(next_free_block),
-        })
-    }
-}
-
-impl FreeArea {
-    /// The old serde generate encoded unintentionally encoded [`FreeArea`]s incorrectly.
+    /// Parse a [`FreeArea`].
     ///
-    /// Integers are encoded as variable length integers, but expanded below:
+    /// The old serde generate code that unintentionally encoded [`FreeArea`]s
+    /// incorrectly. Integers were encoded as variable length integers, but
+    /// expanded to fixed-length below:
     ///
     /// ```text
-    ///
     /// [
     ///     0x01, // LE u32 begin -- field index of the old `StoredArea` struct (#1)
     ///     0x00,
@@ -209,35 +186,68 @@ impl FreeArea {
     ///     0x00, // LE u64 end
     /// ]
     /// ```
-    fn read_old_format_free_area(reader: &mut impl Read) -> std::io::Result<Self> {
-        let field_index: u32 = reader.read_varint()?;
-        if field_index != 1 {
-            return Err(ErrorKind::InvalidData.into());
-        }
-
+    ///
+    /// Our manual encoding format is (with variable int, but expanded below):
+    ///
+    /// ```text
+    /// [
+    ///     oxFF, // FreeArea marker
+    ///     0x2a, // LinearAddress(LE u64) start
+    ///     0x00,
+    ///     0x00,
+    ///     0x00,
+    ///     0x00,
+    ///     0x00,
+    ///     0x00,
+    ///     0x00, // LE u64 end
+    /// ]
+    /// ```
+    fn from_reader<R: Read>(mut reader: R) -> std::io::Result<Self> {
         match reader.read_byte()? {
-            // serde encoded `Option::None` as 0 with no following data
-            0 => Ok(Self {
-                next_free_block: None,
-            }),
-            // `Some(_)` as 1 with the data following
-            1 => Ok(Self {
-                next_free_block: Some(LinearAddress::new(reader.read_varint()?).ok_or_else(
-                    || {
-                        Error::new(
-                            ErrorKind::InvalidData,
-                            "Option::<LinearAddress> was Some(0) which is invalid",
-                        )
-                    },
-                )?),
-            }),
-            option_discriminant => Err(Error::new(
+            0x01 => {
+                // might be old format, look for option discriminant
+                match reader.read_byte()? {
+                    0x00 => {
+                        // serde encoded `Option::None` as 0 with no following data
+                        Ok(Self {
+                            next_free_block: None,
+                        })
+                    }
+                    0x01 => {
+                        // encoded `Some(_)` as 1 with the data following
+                        let addr = LinearAddress::new(reader.read_varint()?).ok_or_else(|| {
+                            Error::new(
+                                ErrorKind::InvalidData,
+                                "Option::<LinearAddress> was Some(0) which is invalid",
+                            )
+                        })?;
+                        Ok(Self {
+                            next_free_block: Some(addr),
+                        })
+                    }
+                    option_discriminant => Err(Error::new(
+                        ErrorKind::InvalidData,
+                        format!("Invalid Option discriminant: {option_discriminant}"),
+                    )),
+                }
+            }
+            0xFF => {
+                // new format: read the address directly (zero is allowed here to indicate None)
+                Ok(Self {
+                    next_free_block: LinearAddress::new(reader.read_varint()?),
+                })
+            }
+            first_byte => Err(Error::new(
                 ErrorKind::InvalidData,
-                format!("Invalid Option discriminant: {option_discriminant}"),
+                format!(
+                    "Invalid FreeArea marker, expected 0xFF (or 0x01 for old format), found {first_byte:#02x}"
+                ),
             )),
         }
     }
+}
 
+impl FreeArea {
     /// Create a new `FreeArea`
     pub const fn new(next_free_block: Option<LinearAddress>) -> Self {
         Self { next_free_block }
