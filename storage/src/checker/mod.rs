@@ -4,6 +4,7 @@
 mod range_set;
 use range_set::LinearAddressRangeSet;
 
+use crate::logger::warn;
 use crate::nodestore::alloc::FreeAreaWithMetadata;
 use crate::nodestore::is_aligned;
 use crate::{
@@ -54,7 +55,10 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         self.visit_freelist(&mut visited)?;
 
         // 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
-        let _ = visited.complement(); // TODO
+        let leaked_ranges = visited.complement();
+        if !leaked_ranges.is_empty() {
+            warn!("Found leaked ranges: {leaked_ranges}");
+        }
 
         Ok(())
     }

@@ -25,6 +25,7 @@ use thiserror::Error;
 mod checker;
 mod hashednode;
 mod hashers;
+mod iter;
 mod linear;
 mod node;
 mod nodestore;
@@ -187,6 +188,10 @@ pub enum CheckerError {
         /// The start address of the parent that points to the stored area
         parent_ptr: StoredAreaParent,
     },
+
+    /// Found leaked areas
+    #[error("Found leaked areas: {0:?}")]
+    AreaLeaks(Vec<Range<LinearAddress>>),
 
     /// IO error
     #[error("IO error")]
