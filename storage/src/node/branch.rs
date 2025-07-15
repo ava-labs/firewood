@@ -59,7 +59,10 @@ pub(crate) trait Serializable {
         Self: Sized;
 }
 
+/// An extension trait for [`std::io::Read`] for convenience methods when
+/// reading serialized data.
 pub(crate) trait ReadSerializable: std::io::Read {
+    /// Read a single byte from the reader.
     fn read_byte(&mut self) -> Result<u8, std::io::Error> {
         let mut this = 0;
         self.read_exact(std::slice::from_mut(&mut this))?;
