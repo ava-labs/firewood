@@ -529,6 +529,7 @@ mod test {
     #[tokio::test]
     async fn reopen_test() {
         let db = testdb().await;
+        let initial_root = db.root_hash().await.unwrap();
         let batch = vec![
             BatchOp::Put {
                 key: b"a",
@@ -551,7 +552,7 @@ mod test {
 
         let db = db.replace().await;
         println!("{:?}", db.root_hash().await.unwrap());
-        assert!(db.root_hash().await.unwrap().is_none());
+        assert!(db.root_hash().await.unwrap() == initial_root);
     }
 
     #[tokio::test]
