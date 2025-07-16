@@ -28,7 +28,6 @@ func TestMetrics(t *testing.T) {
 	)
 
 	config := DefaultConfig()
-	config.Create = true
 	config.EnableLogs = true
 	config.LogsDir = logDir
 	config.FilterLevel = "trace"
