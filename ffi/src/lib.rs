@@ -936,14 +936,20 @@ unsafe fn open_db(args: &CreateOrOpenArgs) -> Result<Db, String> {
 
         let log_path = unsafe { CStr::from_ptr(log_args.path) }
             .to_str()
-            .map(|v| {
-                if v.is_empty() {
-                    "/tmp/logs/firewood.log"
-                } else {
-                    v
-                }
-            })
             .map_err(|e| e.to_string())?;
+
+        // .map(|v| {
+        //     if v.is_empty() {
+        //         "/tmp/logs/firewood.log"
+        //     } else {
+        //         v
+        //     }
+        // })
+        let log_path = if log_path.is_empty() {
+            "/tmp/logs/firewood.log"
+        } else {
+            log_path
+        };
 
         let log_dir = Path::new(log_path)
             .parent()
