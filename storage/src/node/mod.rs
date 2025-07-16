@@ -402,7 +402,7 @@ impl Node {
 
                 let partial_path_len = match branch_first_byte.partial_path_length() {
                     len @ 0..BRANCH_PARTIAL_PATH_LEN_OVERFLOW => {
-                        // less than 126 nibbles
+                        // less than 3 nibbles
                         len as usize
                     }
                     _ => serialized.read_varint()?,
