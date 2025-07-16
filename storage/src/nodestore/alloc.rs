@@ -191,7 +191,7 @@ impl Serializable for FreeArea {
     ///
     /// ```text
     /// [
-    ///     oxFF, // FreeArea marker
+    ///     0xff, // FreeArea marker
     ///     0x2a, // LinearAddress(LE u64) start
     ///     0x00,
     ///     0x00,
