@@ -2,10 +2,6 @@
 // See the file LICENSE.md for licensing terms.
 
 #![expect(
-    clippy::indexing_slicing,
-    reason = "Found 2 occurrences after enabling the lint."
-)]
-#![expect(
     clippy::match_same_arms,
     reason = "Found 1 occurrences after enabling the lint."
 )]
@@ -14,13 +10,10 @@
     reason = "Found 2 occurrences after enabling the lint."
 )]
 
-use serde::ser::SerializeStruct as _;
-use serde::{Deserialize, Serialize};
-use smallvec::SmallVec;
-
 use crate::node::ExtendableBytes;
 use crate::{LeafNode, LinearAddress, MaybePersistedNode, Node, Path, SharedNode};
 use std::fmt::{Debug, Formatter};
+use std::io::Read;
 
 /// The type of a hash. For ethereum compatible hashes, this might be a RLP encoded
 /// value if it's small enough to fit in less than 32 bytes. For merkledb compatible
@@ -62,10 +55,41 @@ impl IntoHashType for crate::TrieHash {
 pub(crate) trait Serializable {
     fn write_to<W: ExtendableBytes>(&self, vec: &mut W);
 
-    fn from_reader<R: std::io::Read>(reader: R) -> Result<Self, std::io::Error>
+    fn from_reader<R: Read>(reader: R) -> Result<Self, std::io::Error>
     where
         Self: Sized;
 }
+
+/// An extension trait for [`Read`] for convenience methods when
+/// reading serialized data.
+pub(crate) trait ReadSerializable: Read {
+    /// Read a single byte from the reader.
+    fn read_byte(&mut self) -> Result<u8, std::io::Error> {
+        let mut this = 0;
+        self.read_exact(std::slice::from_mut(&mut this))?;
+        Ok(this)
+    }
+
+    /// Reads a fixed amount of bytes from the reader into a vector
+    fn read_fixed_len(&mut self, len: usize) -> Result<Vec<u8>, std::io::Error> {
+        let mut buf = Vec::with_capacity(len);
+        self.take(len as u64).read_to_end(&mut buf)?;
+        if buf.len() != len {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "not enough bytes read",
+            ));
+        }
+        Ok(buf)
+    }
+
+    /// Read a value of type `T` from the reader.
+    fn next_value<T: Serializable>(&mut self) -> Result<T, std::io::Error> {
+        T::from_reader(self)
+    }
+}
+
+impl<T: Read> ReadSerializable for T {}
 
 #[derive(PartialEq, Eq, Clone, Debug)]
 #[repr(C)]
@@ -103,12 +127,43 @@ impl Child {
         }
     }
 
+    /// Return the unpersisted node if the child is an unpersisted [`Child::MaybePersisted`]
+    /// variant, otherwise None.
+    #[must_use]
+    pub fn unpersisted(&self) -> Option<&MaybePersistedNode> {
+        if let Child::MaybePersisted(maybe_persisted, _) = self {
+            maybe_persisted.unpersisted()
+        } else {
+            None
+        }
+    }
+
     /// Return the hash of the child if it is a [`Child::AddressWithHash`] or [`Child::MaybePersisted`] variant, otherwise None.
     #[must_use]
     pub const fn hash(&self) -> Option<&HashType> {
         match self {
             Child::AddressWithHash(_, hash) => Some(hash),
             Child::MaybePersisted(_, hash) => Some(hash),
+            Child::Node(_) => None,
+        }
+    }
+
+    /// Return the persistence information (address and hash) of the child if it is persisted.
+    ///
+    /// This method returns `Some((address, hash))` for:
+    /// - [`Child::AddressWithHash`] variants (already persisted)
+    /// - [`Child::MaybePersisted`] variants that have been persisted
+    ///
+    /// Returns `None` for:
+    /// - [`Child::Node`] variants (unpersisted nodes)
+    /// - [`Child::MaybePersisted`] variants that are not yet persisted
+    #[must_use]
+    pub fn persist_info(&self) -> Option<(LinearAddress, &HashType)> {
+        match self {
+            Child::AddressWithHash(addr, hash) => Some((*addr, hash)),
+            Child::MaybePersisted(maybe_persisted, hash) => {
+                maybe_persisted.as_linear_address().map(|addr| (addr, hash))
+            }
             Child::Node(_) => None,
         }
     }
@@ -129,7 +184,6 @@ impl Child {
 
 #[cfg(feature = "ethhash")]
 mod ethhash {
-    use serde::{Deserialize, Serialize};
     use sha2::Digest as _;
     use sha3::Keccak256;
     use smallvec::SmallVec;
@@ -143,7 +197,7 @@ mod ethhash {
 
     use super::Serializable;
 
-    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    #[derive(Clone, Debug, PartialEq, Eq)]
     pub enum HashOrRlp {
         Hash(TrieHash),
         // TODO: this slice is never larger than 32 bytes so smallvec is probably not our best container
@@ -273,67 +327,6 @@ pub struct BranchNode {
     /// Each element is (`child_hash`, `child_address`).
     /// `child_address` is None if we don't know the child's hash.
     pub children: [Option<Child>; Self::MAX_CHILDREN],
-}
-
-impl Serialize for BranchNode {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut state = serializer.serialize_struct("BranchNode", 3)?;
-        state.serialize_field("partial_path", &self.partial_path)?;
-        state.serialize_field("value", &self.value)?;
-
-        let children: SmallVec<[(_, _, _); Self::MAX_CHILDREN]> = self
-            .children
-            .iter()
-            .enumerate()
-            .filter_map(|(offset, child)| match child {
-                None => None,
-                Some(Child::Node(_)) => {
-                    panic!("serializing in-memory node for disk storage")
-                }
-                Some(Child::AddressWithHash(addr, hash)) => Some((offset as u8, *addr, hash)),
-                Some(Child::MaybePersisted(maybe_persisted, hash)) => {
-                    // For MaybePersisted, we need to get the address if it's persisted
-                    maybe_persisted
-                        .as_linear_address()
-                        .map(|addr| (offset as u8, addr, hash))
-                }
-            })
-            .collect();
-
-        state.serialize_field("children", &children)?;
-        state.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for BranchNode {
-    fn deserialize<D>(deserializer: D) -> Result<BranchNode, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct SerializedBranchNode {
-            partial_path: Path,
-            value: Option<Box<[u8]>>,
-            children: SmallVec<[(u8, LinearAddress, HashType); BranchNode::MAX_CHILDREN]>,
-        }
-
-        let s: SerializedBranchNode = Deserialize::deserialize(deserializer)?;
-
-        let mut children: [Option<Child>; BranchNode::MAX_CHILDREN] =
-            [const { None }; BranchNode::MAX_CHILDREN];
-        for (offset, addr, hash) in &s.children {
-            children[*offset as usize] = Some(Child::AddressWithHash(*addr, hash.clone()));
-        }
-
-        Ok(BranchNode {
-            partial_path: s.partial_path,
-            value: s.value,
-            children,
-        })
-    }
 }
 
 impl Debug for BranchNode {
