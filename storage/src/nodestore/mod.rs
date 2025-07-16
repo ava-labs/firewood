@@ -45,7 +45,6 @@ pub(crate) mod hash;
 pub(crate) mod header;
 pub(crate) mod persist;
 
-use crate::linear::FileIoError;
 use crate::logger::trace;
 use arc_swap::ArcSwap;
 use arc_swap::access::DynAccess;
@@ -88,9 +87,14 @@ use std::sync::Arc;
 use crate::hashednode::hash_node;
 use crate::node::Node;
 use crate::node::persist::MaybePersistedNode;
-use crate::{FileBacked, Path, ReadableStorage, SharedNode, TrieHash};
+use crate::{FileBacked, FileIoError, Path, ReadableStorage, SharedNode, TrieHash};
 
 use super::linear::WritableStorage;
+
+#[inline]
+pub(crate) const fn is_aligned(addr: LinearAddress) -> bool {
+    addr.get() % alloc::MIN_AREA_SIZE == 0
+}
 
 impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// Open an existing [`NodeStore`]
@@ -103,9 +107,12 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         let mut stream = storage.stream_from(0)?;
         let mut header = NodeStoreHeader::new();
         let header_bytes = bytemuck::bytes_of_mut(&mut header);
-        stream
-            .read_exact(header_bytes)
-            .map_err(|e| storage.file_io_error(e, 0, Some("header read".to_string())))?;
+        if let Err(e) = stream.read_exact(header_bytes) {
+            if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                return Self::new_empty_committed(storage.clone());
+            }
+            return Err(storage.file_io_error(e, 0, Some("header read".to_string())));
+        }
 
         drop(stream);
 
@@ -472,6 +479,12 @@ pub struct NodeStore<T, S> {
     storage: Arc<S>,
 }
 
+impl<T, S> NodeStore<T, S> {
+    pub(crate) const fn freelists(&self) -> &alloc::FreeLists {
+        self.header.free_lists()
+    }
+}
+
 /// Contains the state of a proposal that is still being modified.
 #[derive(Debug)]
 pub struct MutableProposal {
@@ -749,6 +762,13 @@ mod tests {
 
     use super::*;
     use alloc::{AREA_SIZES, MAX_AREA_SIZE, MIN_AREA_SIZE, NUM_AREA_SIZES, area_size_to_index};
+
+    #[test]
+    fn area_sizes_aligned() {
+        for area_size in &AREA_SIZES {
+            assert_eq!(area_size % MIN_AREA_SIZE, 0);
+        }
+    }
 
     #[test]
     fn test_area_size_to_index() {
