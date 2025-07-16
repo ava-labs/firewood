@@ -61,7 +61,7 @@ jobs:
         run: ${{ matrix.pre-build-cmd }}
 
       - name: Build for ${{ matrix.target }}
-        run: cargo build --profile maxperf --features ethhash,logger --target ${{ matrix.target }} -p firewood-ffi
+        run: cargo build --profile maxperf --features ethhash --target ${{ matrix.target }} -p firewood-ffi
         
       - name: Upload binary
         uses: actions/upload-artifact@v4
