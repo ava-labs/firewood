@@ -901,12 +901,12 @@ pub struct CreateOrOpenArgs {
 ///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_open_db(args: CreateOrOpenArgs) -> DatabaseCreationResult {
-    unsafe { create(&args) }.into()
+    unsafe { open_db(&args) }.into()
 }
 
 /// Internal call for `fwd_open_db` to remove error handling from the C API
 #[doc(hidden)]
-unsafe fn create(args: &CreateOrOpenArgs) -> Result<Db, String> {
+unsafe fn open_db(args: &CreateOrOpenArgs) -> Result<Db, String> {
     let cfg = DbConfig::builder()
         .truncate(args.truncate)
         .manager(manager_config(

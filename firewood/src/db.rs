@@ -734,15 +734,20 @@ mod test {
                 .collect()
         }
         async fn reopen(self) -> Self {
-            self.reopen_truncate(false).await
-        }
-        async fn replace(self) -> Self {
-            self.reopen_truncate(true).await
-        }
-        async fn reopen_truncate(self, truncate: bool) -> Self {
             let path = self.path();
             drop(self.db);
-            let dbconfig = DbConfig::builder().truncate(truncate).build();
+            let dbconfig = DbConfig::builder().truncate(false).build();
+
+            let db = Db::new(path, dbconfig).await.unwrap();
+            TestDb {
+                db,
+                tmpdir: self.tmpdir,
+            }
+        }
+        async fn replace(self) -> Self {
+            let path = self.path();
+            drop(self.db);
+            let dbconfig = DbConfig::builder().truncate(true).build();
 
             let db = Db::new(path, dbconfig).await.unwrap();
             TestDb {
