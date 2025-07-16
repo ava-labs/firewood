@@ -84,7 +84,7 @@ impl RevisionManager {
         truncate: bool,
         config: RevisionManagerConfig,
     ) -> Result<Self, FileIoError> {
-        let (fb, created) = FileBacked::new(
+        let fb = FileBacked::new(
             filename,
             config.node_cache_size,
             config.free_list_cache_size,
@@ -92,11 +92,7 @@ impl RevisionManager {
             config.cache_read_strategy,
         )?;
         let storage = Arc::new(fb);
-        let nodestore = if created {
-            Arc::new(NodeStore::new_empty_committed(storage.clone())?)
-        } else {
-            Arc::new(NodeStore::open(storage.clone())?)
-        };
+        let nodestore = Arc::new(NodeStore::open(storage.clone())?);
         let manager = Self {
             max_revisions: config.max_revisions,
             historical: RwLock::new(VecDeque::from([nodestore.clone()])),

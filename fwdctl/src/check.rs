@@ -28,7 +28,7 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     let node_cache_size = nonzero!(1usize);
     let free_list_cache_size = nonzero!(1usize);
 
-    let (fb, _) = FileBacked::new(
+    let fb = FileBacked::new(
         db_path,
         node_cache_size,
         free_list_cache_size,

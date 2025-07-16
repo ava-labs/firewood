@@ -543,13 +543,13 @@ mod test {
         proposal.commit().await.unwrap();
         println!("{:?}", db.root_hash().await.unwrap().unwrap());
 
-        let db = db.reopen(false).await;
+        let db = db.reopen().await;
         println!("{:?}", db.root_hash().await.unwrap().unwrap());
         let committed = db.root_hash().await.unwrap().unwrap();
         let historical = db.revision(committed).await.unwrap();
         assert_eq!(&*historical.val(b"a").await.unwrap().unwrap(), b"1");
 
-        let db = db.reopen(true).await;
+        let db = db.replace().await;
         println!("{:?}", db.root_hash().await.unwrap());
         assert!(db.root_hash().await.unwrap().is_none());
     }
@@ -732,7 +732,13 @@ mod test {
                 .iter()
                 .collect()
         }
-        async fn reopen(self, truncate: bool) -> Self {
+        async fn reopen(self) -> Self {
+            self.reopen_truncate(false).await
+        }
+        async fn replace(self) -> Self {
+            self.reopen_truncate(true).await
+        }
+        async fn reopen_truncate(self, truncate: bool) -> Self {
             let path = self.path();
             drop(self.db);
             let dbconfig = DbConfig::builder().truncate(truncate).build();
