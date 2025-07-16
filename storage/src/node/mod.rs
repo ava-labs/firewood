@@ -40,7 +40,7 @@ pub mod persist;
 pub use branch::{BranchNode, Child};
 pub use leaf::LeafNode;
 
-use crate::{HashType, Path, SharedNode};
+use crate::{HashType, LinearAddress, Path, SharedNode};
 
 /// A node, either a Branch or Leaf
 
@@ -424,7 +424,7 @@ impl Node {
                         let hash = HashType::from_reader(&mut serialized)?;
 
                         *child = Some(Child::AddressWithHash(
-                            NonZero::new(address).ok_or(Error::other("zero address in child"))?,
+                            LinearAddress::new(address).ok_or(Error::other("zero address in child"))?,
                             hash,
                         ));
                     }
@@ -441,7 +441,7 @@ impl Node {
                         let hash = HashType::from_reader(&mut serialized)?;
 
                         children[position] = Some(Child::AddressWithHash(
-                            NonZero::new(address).ok_or(Error::other("zero address in child"))?,
+                            LinearAddress::new(address).ok_or(Error::other("zero address in child"))?,
                             hash,
                         ));
                     }

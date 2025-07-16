@@ -50,8 +50,8 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
     ///
     /// Returns a [`FileIoError`] if the header cannot be written.
     pub fn flush_header(&self) -> Result<(), FileIoError> {
-        let header_bytes = bytemuck::bytes_of(&self.header);
-        self.storage.write(0, header_bytes)?;
+        let header_bytes = bincode::serialize(&self.header).expect("failed to serialize header");
+        self.storage.write(0, &header_bytes)?;
         Ok(())
     }
 
@@ -62,12 +62,9 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
     ///
     /// Returns a [`FileIoError`] if the header cannot be written.
     pub fn flush_header_with_padding(&self) -> Result<(), FileIoError> {
-        let header_bytes = bytemuck::bytes_of(&self.header)
-            .iter()
-            .copied()
-            .chain(std::iter::repeat_n(0u8, NodeStoreHeader::EXTRA_BYTES))
-            .collect::<Box<[u8]>>();
-        debug_assert_eq!(header_bytes.len(), NodeStoreHeader::SIZE as usize);
+        let mut header_bytes = bincode::serialize(&self.header).expect("failed to serialize header");
+            header_bytes.resize(NodeStoreHeader::SIZE as usize, 0);
+            debug_assert_eq!(header_bytes.len(), NodeStoreHeader::SIZE as usize);
 
         self.storage.write(0, &header_bytes)?;
         Ok(())
@@ -79,9 +76,9 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
     #[fastrace::trace(short_name = true)]
     pub fn flush_freelist(&self) -> Result<(), FileIoError> {
         // Write the free lists to storage
-        let free_list_bytes = bytemuck::bytes_of(self.header.free_lists());
+        let free_list_bytes = bincode::serialize(self.header.free_lists()).expect("failed to serialize free_lists");
         let free_list_offset = NodeStoreHeader::free_lists_offset();
-        self.storage.write(free_list_offset, free_list_bytes)?;
+        self.storage.write(free_list_offset, &free_list_bytes)?;
         Ok(())
     }
 
@@ -99,8 +96,8 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
         }
 
         self.storage
-            .write_cached_nodes(self.kind.new.iter().map(|(addr, (_, node))| (addr, node)))?;
-
+        .write_cached_nodes(self.kind.new.iter().map(|(addr, (_, node))| (addr.as_nonzero(), node)))?;
+    
         let flush_time = flush_start.elapsed().as_millis();
         counter!("firewood.flush_nodes").increment(flush_time);
 
@@ -238,7 +235,7 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
         );
 
         self.storage
-            .write_cached_nodes(self.kind.new.iter().map(|(addr, (_, node))| (addr, node)))?;
+            .write_cached_nodes(self.kind.new.iter().map(|(addr, (_, node))| (addr.as_nonzero(), node)))?;
         debug_assert!(ring.completion().is_empty());
 
         let flush_time = flush_start.elapsed().as_millis();
