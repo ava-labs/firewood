@@ -20,7 +20,6 @@ use std::ops::Deref;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::Path;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -870,8 +869,8 @@ pub extern "C" fn fwd_gather() -> Value {
 /// * `free_list_cache_size` - The size of the free list cache, returns an error if <= 0
 /// * `revisions` - The maximum number of revisions to keep; firewood currently requires this to be at least 2.
 /// * `enable_logs` - Whether to enable logs for this process.
-/// * `logs_dir` - The directory where logs for this process are stored. By
-///   default, this is set to /tmp/logs.
+/// * `log_path` - The file path where logs for this process are stored. By
+///   default, this is set to /tmp/logs/firewood.log.
 /// * `filter_level` - The filter level for logs. By default, this is set to info.
 /// * `strategy` - The cache read strategy to use, 0 for writes only,
 ///   1 for branch reads, and 2 for all reads.
@@ -884,7 +883,7 @@ pub struct CreateOrOpenArgs {
     free_list_cache_size: usize,
     revisions: usize,
     enable_logs: bool,
-    logs_dir: *const std::ffi::c_char,
+    log_path: *const std::ffi::c_char,
     filter_level: *const std::ffi::c_char,
     strategy: u8,
     truncate: bool,
@@ -926,12 +925,21 @@ unsafe fn open_db(args: &CreateOrOpenArgs) -> Result<Db, String> {
         .build();
 
     if args.enable_logs {
-        let logs_dir = unsafe { CStr::from_ptr(args.logs_dir) }
+        let log_path = unsafe { CStr::from_ptr(args.log_path) }
             .to_str()
-            .map(|v| if v.is_empty() { "/tmp/log" } else { v })
+            .map(|v| {
+                if v.is_empty() {
+                    "/tmp/logs/firewood.log"
+                } else {
+                    v
+                }
+            })
             .map_err(|e| e.to_string())?;
 
-        std::fs::create_dir_all(logs_dir).map_err(|e| e.to_string())?;
+        let log_dir = Path::new(log_path)
+            .parent()
+            .ok_or("failed to get log directory")?;
+        std::fs::create_dir_all(log_dir).map_err(|e| e.to_string())?;
 
         let level = unsafe { CStr::from_ptr(args.filter_level) }
             .to_str()
@@ -947,7 +955,7 @@ unsafe fn open_db(args: &CreateOrOpenArgs) -> Result<Db, String> {
                     .create(true)
                     .write(true)
                     .truncate(true)
-                    .open(PathBuf::from(logs_dir).join("firewood.log"))
+                    .open(log_path)
                     .map_err(|e| e.to_string())?,
             )))
             .try_init()

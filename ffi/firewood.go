@@ -59,7 +59,7 @@ type Config struct {
 	FreeListCacheEntries uint
 	Revisions            uint
 	EnableLogs           bool
-	LogsDir              string
+	LogPath              string
 	FilterLevel          string
 	ReadCacheStrategy    CacheStrategy
 }
@@ -112,7 +112,7 @@ func New(filePath string, conf *Config) (*Database, error) {
 		free_list_cache_size: C.size_t(conf.FreeListCacheEntries),
 		revisions:            C.size_t(conf.Revisions),
 		enable_logs:          C.bool(conf.EnableLogs),
-		logs_dir:             C.CString(conf.LogsDir),
+		log_path:             C.CString(conf.LogPath),
 		filter_level:         C.CString(conf.FilterLevel),
 		strategy:             C.uint8_t(conf.ReadCacheStrategy),
 		truncate:             C.bool(conf.Truncate),
@@ -120,7 +120,7 @@ func New(filePath string, conf *Config) (*Database, error) {
 	// Defer freeing the C string allocated to the heap on the other side
 	// of the FFI boundary.
 	defer C.free(unsafe.Pointer(args.path))
-	defer C.free(unsafe.Pointer(args.logs_dir))
+	defer C.free(unsafe.Pointer(args.log_path))
 	defer C.free(unsafe.Pointer(args.filter_level))
 
 	dbResult := C.fwd_open_db(args)

@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -23,13 +22,13 @@ func TestMetrics(t *testing.T) {
 
 	// test params
 	var (
-		logDir      = "/tmp/logs"
+		logPath     = "/tmp/logs/firewood.log"
 		metricsPort = uint16(3000)
 	)
 
 	config := DefaultConfig()
 	config.EnableLogs = true
-	config.LogsDir = logDir
+	config.LogPath = logPath
 	config.FilterLevel = "trace"
 	db := newTestDatabaseWithConfig(t, config)
 
@@ -87,7 +86,7 @@ func TestMetrics(t *testing.T) {
 	}
 
 	// logs should be non-empty if logging with trace filter level
-	f, err := os.ReadFile(filepath.Join(logDir, "firewood.log"))
+	f, err := os.ReadFile(logPath)
 	r.NoError(err)
 	r.NotEmpty(f)
 }
