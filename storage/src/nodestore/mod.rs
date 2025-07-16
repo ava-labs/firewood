@@ -472,12 +472,6 @@ pub struct NodeStore<T, S> {
     storage: Arc<S>,
 }
 
-impl<T, S> NodeStore<T, S> {
-    pub(crate) fn storage(&self) -> &S {
-        self.storage.as_ref()
-    }
-}
-
 /// Contains the state of a proposal that is still being modified.
 #[derive(Debug)]
 pub struct MutableProposal {
@@ -724,6 +718,20 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 
     pub(crate) fn physical_size(&self) -> Result<u64, FileIoError> {
         self.storage.size()
+    }
+
+    // Find the area index and size of the stored area at the given address if the area is valid.
+    // TODO: there should be a way to read stored area directly instead of try reading as a free area then as a node
+    pub(crate) fn read_leaked_area(
+        &self,
+        address: LinearAddress,
+    ) -> Result<(AreaIndex, u64), FileIoError> {
+        if alloc::FreeArea::from_storage(self.storage.as_ref(), address).is_err() {
+            self.read_node(address)?;
+        }
+
+        let area_index_and_size = self.area_index_and_size(address)?;
+        Ok(area_index_and_size)
     }
 }
 

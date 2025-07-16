@@ -213,13 +213,13 @@ impl FreeArea {
         storage: &S,
         address: LinearAddress,
     ) -> Result<(Self, AreaIndex), FileIoError> {
-        let mut area_stream = storage.stream_from(address.get())?;
-        let stored_area: StoredArea<Area<Node, FreeArea>> = serializer()
-            .deserialize_from(&mut area_stream)
-            .map_err(|e| {
+        let free_area_addr = address.get();
+        let area_stream = storage.stream_from(free_area_addr)?;
+        let stored_area: StoredArea<Area<Node, FreeArea>> =
+            serializer().deserialize_from(area_stream).map_err(|e| {
                 storage.file_io_error(
                     Error::new(ErrorKind::InvalidData, e),
-                    address.get(),
+                    free_area_addr,
                     Some("FreeArea::from_storage".to_string()),
                 )
             })?;
@@ -227,7 +227,7 @@ impl FreeArea {
         let Area::Free(free_area) = area else {
             return Err(storage.file_io_error(
                 Error::new(ErrorKind::InvalidData, "Attempted to read a non-free area"),
-                address.get(),
+                free_area_addr,
                 Some("FreeArea::from_storage".to_string()),
             ));
         };

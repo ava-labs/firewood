@@ -2,11 +2,11 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::logger::warn;
-use crate::nodestore::alloc::{AREA_SIZES, AreaIndex, FreeArea};
+use crate::nodestore::alloc::{AREA_SIZES, AreaIndex};
 use crate::range_set::LinearAddressRangeSet;
 use crate::{
-    CheckerError, Committed, FileIoError, HashedNodeReader, LinearAddress, Node, NodeReader,
-    NodeStore, WritableStorage,
+    CheckerError, Committed, HashedNodeReader, LinearAddress, Node, NodeReader, NodeStore,
+    WritableStorage,
 };
 
 use std::cmp::Ordering;
@@ -120,7 +120,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
         // First attempt to read the valid stored areas from the leaked range
         loop {
-            let (area_index, area_size) = match self.find_stored_area_index_and_size(current_addr) {
+            let (area_index, area_size) = match self.read_leaked_area(current_addr) {
                 Ok(area_index_and_size) => area_index_and_size,
                 Err(e) => {
                     warn!("Error reading stored area at {current_addr}: {e}");
@@ -171,20 +171,6 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         // we assume that all areas are aligned to `MIN_AREA_SIZE`, in which case leaked ranges can always be split into free areas perfectly
         debug_assert!(current_addr == leaked_range.end);
         leaked
-    }
-
-    // Find the area index and size of the stored area at the given address if the area is valid.
-    // TODO: there should be a way to read stored area directly instead of try reading as a free area then as a node
-    fn find_stored_area_index_and_size(
-        &self,
-        address: LinearAddress,
-    ) -> Result<(AreaIndex, u64), FileIoError> {
-        if FreeArea::from_storage(self.storage(), address).is_err() {
-            self.read_node(address)?;
-        }
-
-        let area_index_and_size = self.area_index_and_size(address)?;
-        Ok(area_index_and_size)
     }
 }
 
