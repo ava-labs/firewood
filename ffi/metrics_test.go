@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -19,9 +21,19 @@ func TestMetrics(t *testing.T) {
 	r := require.New(t)
 	ctx := context.Background()
 
-	db := newTestDatabase(t)
+	// test params
+	var (
+		logDir      = "/tmp/logs"
+		metricsPort = uint16(3000)
+	)
 
-	metricsPort := uint16(3000)
+	config := DefaultConfig()
+	config.Create = true
+	config.EnableLogs = true
+	config.LogsDir = logDir
+	config.FilterLevel = "trace"
+	db := newTestDatabaseWithConfig(t, config)
+
 	r.NoError(StartMetricsWithExporter(metricsPort))
 
 	// Populate DB
@@ -74,4 +86,9 @@ func TestMetrics(t *testing.T) {
 		r.NotNil(d)
 		r.Equal(v, *d.Type)
 	}
+
+	// logs should be non-empty if logging with trace filter level
+	f, err := os.ReadFile(filepath.Join(logDir, "firewood.log"))
+	r.NoError(err)
+	r.NotEmpty(f)
 }

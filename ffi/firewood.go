@@ -58,6 +58,9 @@ type Config struct {
 	NodeCacheEntries     uint
 	FreeListCacheEntries uint
 	Revisions            uint
+	EnableLogs           bool
+	LogsDir              string
+	FilterLevel          string
 	ReadCacheStrategy    CacheStrategy
 }
 
@@ -108,11 +111,16 @@ func New(filePath string, conf *Config) (*Database, error) {
 		cache_size:           C.size_t(conf.NodeCacheEntries),
 		free_list_cache_size: C.size_t(conf.FreeListCacheEntries),
 		revisions:            C.size_t(conf.Revisions),
+		enable_logs:          C.bool(conf.EnableLogs),
+		logs_dir:             C.CString(conf.LogsDir),
+		filter_level:         C.CString(conf.FilterLevel),
 		strategy:             C.uint8_t(conf.ReadCacheStrategy),
 	}
 	// Defer freeing the C string allocated to the heap on the other side
 	// of the FFI boundary.
 	defer C.free(unsafe.Pointer(args.path))
+	defer C.free(unsafe.Pointer(args.logs_dir))
+	defer C.free(unsafe.Pointer(args.filter_level))
 
 	var dbResult C.struct_DatabaseCreationResult
 	if conf.Create {

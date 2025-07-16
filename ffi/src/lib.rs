@@ -20,6 +20,7 @@ use std::ops::Deref;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -868,6 +869,10 @@ pub extern "C" fn fwd_gather() -> Value {
 /// * `cache_size` - The size of the node cache, returns an error if <= 0
 /// * `free_list_cache_size` - The size of the free list cache, returns an error if <= 0
 /// * `revisions` - The maximum number of revisions to keep; firewood currently requires this to be at least 2.
+/// * `enable_logs` - Whether to enable logs for this process.
+/// * `logs_dir` - The directory where logs for this process are stored. By
+///   default, this is set to /tmp/logs.
+/// * `filter_level` - The filter level for logs. By default, this is set to info.
 /// * `strategy` - The cache read strategy to use, 0 for writes only,
 ///   1 for branch reads, and 2 for all reads.
 ///   Returns an error if the value is not 0, 1, or 2.
@@ -877,6 +882,9 @@ pub struct CreateOrOpenArgs {
     cache_size: usize,
     free_list_cache_size: usize,
     revisions: usize,
+    enable_logs: bool,
+    logs_dir: *const std::ffi::c_char,
+    filter_level: *const std::ffi::c_char,
     strategy: u8,
 }
 
@@ -937,9 +945,35 @@ unsafe fn common_create(args: &CreateOrOpenArgs, create_file: bool) -> Result<Db
             args.strategy,
         )?)
         .build();
-    #[cfg(feature = "logger")]
-    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .try_init();
+
+    if args.enable_logs {
+        let logs_dir = unsafe { CStr::from_ptr(args.logs_dir) }
+            .to_str()
+            .map(|v| if v.is_empty() { "/tmp/log" } else { v })
+            .map_err(|e| e.to_string())?;
+
+        std::fs::create_dir_all(logs_dir).map_err(|e| e.to_string())?;
+
+        let level = unsafe { CStr::from_ptr(args.filter_level) }
+            .to_str()
+            .map(|v| if v.is_empty() { "info" } else { v })
+            .map_err(|e| e.to_string())?
+            .parse::<log::LevelFilter>()
+            .map_err(|e| e.to_string())?;
+
+        env_logger::Builder::new()
+            .filter_level(level)
+            .target(env_logger::Target::Pipe(Box::new(
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .open(PathBuf::from(logs_dir).join("firewood.log"))
+                    .map_err(|e| e.to_string())?,
+            )))
+            .try_init()
+            .map_err(|e| e.to_string())?;
+    }
 
     let path = unsafe { CStr::from_ptr(args.path) };
     #[cfg(unix)]

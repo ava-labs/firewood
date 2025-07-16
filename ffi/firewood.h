@@ -57,6 +57,10 @@ typedef struct DatabaseCreationResult {
  * * `cache_size` - The size of the node cache, returns an error if <= 0
  * * `free_list_cache_size` - The size of the free list cache, returns an error if <= 0
  * * `revisions` - The maximum number of revisions to keep; firewood currently requires this to be at least 2.
+ * * `enable_logs` - Whether to enable logs for this process.
+ * * `logs_dir` - The directory where logs for this process are stored. By
+ *   default, this is set to /tmp/logs.
+ * * `filter_level` - The filter level for logs. By default, this is set to info.
  * * `strategy` - The cache read strategy to use, 0 for writes only,
  *   1 for branch reads, and 2 for all reads.
  *   Returns an error if the value is not 0, 1, or 2.
@@ -66,6 +70,9 @@ typedef struct CreateOrOpenArgs {
   size_t cache_size;
   size_t free_list_cache_size;
   size_t revisions;
+  bool enable_logs;
+  const char *logs_dir;
+  const char *filter_level;
   uint8_t strategy;
 } CreateOrOpenArgs;
 
