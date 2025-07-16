@@ -58,10 +58,13 @@ type Config struct {
 	NodeCacheEntries     uint
 	FreeListCacheEntries uint
 	Revisions            uint
-	EnableLogs           bool
-	LogPath              string
-	FilterLevel          string
 	ReadCacheStrategy    CacheStrategy
+	LogConfig            *LogConfig
+}
+
+type LogConfig struct {
+	Path        string
+	FilterLevel string
 }
 
 // DefaultConfig returns a sensible default Config.
@@ -111,17 +114,25 @@ func New(filePath string, conf *Config) (*Database, error) {
 		cache_size:           C.size_t(conf.NodeCacheEntries),
 		free_list_cache_size: C.size_t(conf.FreeListCacheEntries),
 		revisions:            C.size_t(conf.Revisions),
-		enable_logs:          C.bool(conf.EnableLogs),
-		log_path:             C.CString(conf.LogPath),
-		filter_level:         C.CString(conf.FilterLevel),
 		strategy:             C.uint8_t(conf.ReadCacheStrategy),
 		truncate:             C.bool(conf.Truncate),
 	}
-	// Defer freeing the C string allocated to the heap on the other side
+
+	enableLogs := conf.LogConfig != nil
+	if enableLogs {
+		args.log_args = &C.struct_LogArgs{
+			path:         C.CString(conf.LogConfig.Path),
+			filter_level: C.CString(conf.LogConfig.FilterLevel),
+		}
+	}
+
+	// Defer freeing the C strings allocated to the heap on the other side
 	// of the FFI boundary.
 	defer C.free(unsafe.Pointer(args.path))
-	defer C.free(unsafe.Pointer(args.log_path))
-	defer C.free(unsafe.Pointer(args.filter_level))
+	if enableLogs {
+		defer C.free(unsafe.Pointer(args.log_args.filter_level))
+		defer C.free(unsafe.Pointer(args.log_args.path))
+	}
 
 	dbResult := C.fwd_open_db(args)
 	db, err := databaseFromResult(&dbResult)

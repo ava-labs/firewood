@@ -52,6 +52,18 @@ typedef struct DatabaseCreationResult {
 typedef uint32_t ProposalId;
 
 /**
+ * Arguments for logging
+ *
+ * * `path` - The file path where logs for this process are stored. By
+ *   default, this is set to /tmp/logs/firewood.log
+ * * `filter_level` - The filter level for logs. By default, this is set to info.
+ */
+typedef struct LogArgs {
+  const char *path;
+  const char *filter_level;
+} LogArgs;
+
+/**
  * Common arguments, accepted by both `fwd_create_db()` and `fwd_open_db()`.
  *
  * * `path` - The path to the database file, which will be truncated if passed to `fwd_create_db()`
@@ -59,25 +71,21 @@ typedef uint32_t ProposalId;
  * * `cache_size` - The size of the node cache, returns an error if <= 0
  * * `free_list_cache_size` - The size of the free list cache, returns an error if <= 0
  * * `revisions` - The maximum number of revisions to keep; firewood currently requires this to be at least 2.
- * * `enable_logs` - Whether to enable logs for this process.
- * * `log_path` - The file path where logs for this process are stored. By
- *   default, this is set to /tmp/logs/firewood.log.
- * * `filter_level` - The filter level for logs. By default, this is set to info.
  * * `strategy` - The cache read strategy to use, 0 for writes only,
  *   1 for branch reads, and 2 for all reads.
  * * `truncate` - Whether to truncate the database file if it exists.
  *   Returns an error if the value is not 0, 1, or 2.
+ * * `log_args` - The logging configuration for this process. Logging is
+ *   enabled if this argument is defined.
  */
 typedef struct CreateOrOpenArgs {
   const char *path;
   size_t cache_size;
   size_t free_list_cache_size;
   size_t revisions;
-  bool enable_logs;
-  const char *log_path;
-  const char *filter_level;
   uint8_t strategy;
   bool truncate;
+  const struct LogArgs *log_args;
 } CreateOrOpenArgs;
 
 /**

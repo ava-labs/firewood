@@ -27,9 +27,10 @@ func TestMetrics(t *testing.T) {
 	)
 
 	config := DefaultConfig()
-	config.EnableLogs = true
-	config.LogPath = logPath
-	config.FilterLevel = "trace"
+	config.LogConfig = &LogConfig{
+		Path:        logPath,
+		FilterLevel: "trace",
+	}
 	db := newTestDatabaseWithConfig(t, config)
 
 	r.NoError(StartMetricsWithExporter(metricsPort))

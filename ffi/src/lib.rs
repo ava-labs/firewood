@@ -868,25 +868,32 @@ pub extern "C" fn fwd_gather() -> Value {
 /// * `cache_size` - The size of the node cache, returns an error if <= 0
 /// * `free_list_cache_size` - The size of the free list cache, returns an error if <= 0
 /// * `revisions` - The maximum number of revisions to keep; firewood currently requires this to be at least 2.
-/// * `enable_logs` - Whether to enable logs for this process.
-/// * `log_path` - The file path where logs for this process are stored. By
-///   default, this is set to /tmp/logs/firewood.log.
-/// * `filter_level` - The filter level for logs. By default, this is set to info.
 /// * `strategy` - The cache read strategy to use, 0 for writes only,
 ///   1 for branch reads, and 2 for all reads.
 /// * `truncate` - Whether to truncate the database file if it exists.
 ///   Returns an error if the value is not 0, 1, or 2.
+/// * `log_args` - The logging configuration for this process. Logging is
+///   enabled if this argument is defined.
 #[repr(C)]
 pub struct CreateOrOpenArgs {
     path: *const std::ffi::c_char,
     cache_size: usize,
     free_list_cache_size: usize,
     revisions: usize,
-    enable_logs: bool,
-    log_path: *const std::ffi::c_char,
-    filter_level: *const std::ffi::c_char,
     strategy: u8,
     truncate: bool,
+    log_args: *const LogArgs,
+}
+
+/// Arguments for logging
+///
+/// * `path` - The file path where logs for this process are stored. By
+///   default, this is set to /tmp/logs/firewood.log
+/// * `filter_level` - The filter level for logs. By default, this is set to info.
+#[repr(C)]
+pub struct LogArgs {
+    path: *const std::ffi::c_char,
+    filter_level: *const std::ffi::c_char,
 }
 
 /// Open a database with the given cache size and maximum number of revisions
@@ -924,8 +931,10 @@ unsafe fn open_db(args: &CreateOrOpenArgs) -> Result<Db, String> {
         )?)
         .build();
 
-    if args.enable_logs {
-        let log_path = unsafe { CStr::from_ptr(args.log_path) }
+    if !args.log_args.is_null() {
+        let log_args = unsafe { &*args.log_args };
+
+        let log_path = unsafe { CStr::from_ptr(log_args.path) }
             .to_str()
             .map(|v| {
                 if v.is_empty() {
@@ -941,7 +950,7 @@ unsafe fn open_db(args: &CreateOrOpenArgs) -> Result<Db, String> {
             .ok_or("failed to get log directory")?;
         std::fs::create_dir_all(log_dir).map_err(|e| e.to_string())?;
 
-        let level = unsafe { CStr::from_ptr(args.filter_level) }
+        let level = unsafe { CStr::from_ptr(log_args.filter_level) }
             .to_str()
             .map(|v| if v.is_empty() { "info" } else { v })
             .map_err(|e| e.to_string())?
