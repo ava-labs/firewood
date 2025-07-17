@@ -23,7 +23,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: "false"
-          shared-key: "debug-no-features"
+          shared-key: debug-default-features
       - name: Check
         run: cargo check --workspace --all-targets
       - name: Build
