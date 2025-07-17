@@ -31,9 +31,9 @@
 use std::iter::FusedIterator;
 use std::sync::Arc;
 
+use crate::firewood_counter;
 use crate::linear::FileIoError;
 use coarsetime::Instant;
-use crate::firewood_counter;
 
 #[cfg(feature = "io-uring")]
 use crate::logger::trace;
