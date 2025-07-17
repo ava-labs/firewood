@@ -959,10 +959,11 @@ fn enable_logs(log_args: &LogArgs) -> Result<(), String> {
         .ok_or("failed to get log directory")?;
     std::fs::create_dir_all(log_dir).map_err(|e| e.to_string())?;
 
-    let level = unsafe { CStr::from_ptr(log_args.filter_level) }
+    let cstr = unsafe { CStr::from_ptr(log_args.filter_level) };
+    let level_str = OsStr::from_bytes(cstr.to_bytes())
         .to_str()
-        .map(|v| if v.is_empty() { "info" } else { v })
-        .map_err(|e| e.to_string())?
+        .unwrap_or("info");
+    let level = level_str
         .parse::<log::LevelFilter>()
         .map_err(|e| e.to_string())?;
 
