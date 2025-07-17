@@ -93,7 +93,7 @@ use super::linear::WritableStorage;
 
 #[inline]
 pub(crate) const fn is_aligned(addr: LinearAddress) -> bool {
-    addr.get() % alloc::MIN_AREA_SIZE == 0
+    addr.is_aligned()
 }
 
 impl<S: ReadableStorage> NodeStore<Committed, S> {
@@ -105,9 +105,8 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// Returns a [`FileIoError`] if the header cannot be read or validated.
     pub fn open(storage: Arc<S>) -> Result<Self, FileIoError> {
         let mut stream = storage.stream_from(0)?;
-        let mut header = NodeStoreHeader::new();
-        let header_bytes = bytemuck::bytes_of_mut(&mut header);
-        if let Err(e) = stream.read_exact(header_bytes) {
+        let mut header_bytes = vec![0u8; std::mem::size_of::<NodeStoreHeader>()];
+        if let Err(e) = stream.read_exact(&mut header_bytes) {
             if e.kind() == std::io::ErrorKind::UnexpectedEof {
                 return Self::new_empty_committed(storage.clone());
             }
@@ -116,6 +115,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 
         drop(stream);
 
+        let header = *NodeStoreHeader::from_bytes(&header_bytes);
         header
             .validate()
             .map_err(|e| storage.file_io_error(e, 0, Some("header read".to_string())))?;
@@ -280,9 +280,9 @@ impl<S: WritableStorage> NodeStore<MutableProposal, S> {
     /// Panics if the header cannot be written.
     pub fn new_empty_proposal(storage: Arc<S>) -> Self {
         let header = NodeStoreHeader::new();
-        let header_bytes = bincode::serialize(&header).expect("failed to serialize header");
+        let header_bytes = bytemuck::bytes_of(&header);
         storage
-            .write(0, &header_bytes)
+            .write(0, header_bytes)
             .expect("failed to write header");
         NodeStore {
             header,
@@ -753,7 +753,7 @@ mod tests {
     use crate::linear::memory::MemStore;
     use crate::{BranchNode, Child, LeafNode};
     use arc_swap::access::DynGuard;
-    use nonzero_ext::nonzero;
+
     use test_case::test_case;
 
     use super::*;
@@ -762,7 +762,7 @@ mod tests {
     #[test]
     fn area_sizes_aligned() {
         for area_size in &AREA_SIZES {
-            assert_eq!(area_size % MIN_AREA_SIZE, 0);
+            assert_eq!(area_size % LinearAddress::min_area_size(), 0);
         }
     }
 

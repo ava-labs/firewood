@@ -217,8 +217,8 @@ impl WritableStorage for FileBacked {
         nodes: impl Iterator<Item = (&'a std::num::NonZero<u64>, &'a SharedNode)>,
     ) -> Result<(), FileIoError> {
         let mut guard = self.cache.lock().expect("poisoned lock");
-        for (addr, node) in nodes {
-            guard.put(LinearAddress::new((*addr).get()).unwrap(), node.clone());
+        for (&addr, node) in nodes {
+            guard.put(addr.into(), node.clone());
         }
         Ok(())
     }

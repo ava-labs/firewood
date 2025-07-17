@@ -212,7 +212,8 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                 Ordering::Less => {
                     // continue to the next area
                     leaked.push((current_addr, area_index));
-                    current_addr = next_addr;
+                    current_addr =
+                        LinearAddress::new(next_addr.get()).expect("next_addr is non-zero");
                 }
             }
         }
@@ -224,9 +225,10 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                 let next_addr = current_addr
                     .checked_add(*area_size)
                     .expect("address overflow is impossible");
-                if next_addr <= leaked_range.end {
+                if next_addr <= *leaked_range.end {
                     leaked.push((current_addr, area_index as AreaIndex));
-                    current_addr = next_addr;
+                    current_addr =
+                        LinearAddress::new(next_addr.get()).expect("next_addr is non-zero");
                 } else {
                     break;
                 }
@@ -243,6 +245,8 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 mod test {
     #![expect(clippy::unwrap_used)]
     #![expect(clippy::indexing_slicing)]
+
+    use nonzero_ext::nonzero;
 
     use super::*;
     use crate::linear::memory::MemStore;
@@ -320,7 +324,6 @@ mod test {
         )
     }
 
-    use nonzero_ext::nonzero;
     use std::collections::HashMap;
 
     #[test]
@@ -470,13 +473,13 @@ mod test {
             } else {
                 // we are not freeing this area, free the aggregated areas before this one
                 if let Some((start, end)) = area_to_free {
-                    leaked.push(start..end);
+                    leaked.push(start..end.into());
                     area_to_free = None;
                 }
             }
         }
         if let Some((start, end)) = area_to_free {
-            leaked.push(start..end);
+            leaked.push(start..end.into());
         }
 
         // check the leaked areas
@@ -513,7 +516,7 @@ mod test {
         test_write_zeroed_area(&nodestore, leaked_range_size, NodeStoreHeader::SIZE);
 
         // check the leaked areas
-        let leaked_range = nonzero!(NodeStoreHeader::SIZE)
+        let leaked_range = nonzero!(NodeStoreHeader::SIZE).into()
             ..LinearAddress::new(
                 NodeStoreHeader::SIZE
                     .checked_add(leaked_range_size)
@@ -566,7 +569,7 @@ mod test {
 
         // check the leaked areas
         let leaked_range =
-            nonzero!(NodeStoreHeader::SIZE)..LinearAddress::new(high_watermark).unwrap();
+            nonzero!(NodeStoreHeader::SIZE).into()..LinearAddress::new(high_watermark).unwrap();
         let (leaked_areas_offsets, leaked_area_size_indices): (Vec<LinearAddress>, Vec<AreaIndex>) =
             nodestore
                 .split_range_into_leaked_areas(leaked_range)

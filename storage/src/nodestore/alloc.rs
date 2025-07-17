@@ -23,9 +23,9 @@
 use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::branch::{ReadSerializable, Serializable};
-use crate::nodestore::is_aligned;
 use integer_encoding::VarIntReader;
 use metrics::counter;
+
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::io::{Error, ErrorKind, Read};
@@ -149,64 +149,106 @@ pub fn area_size_to_index(n: u64) -> Result<AreaIndex, Error> {
 }
 
 // pub type LinearAddress = NonZeroU64;
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+/// A linear address in the nodestore storage.
+///
+/// This represents a non-zero address in the linear storage space.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct LinearAddress(NonZeroU64);
 
+#[expect(unsafe_code)]
+unsafe impl bytemuck::ZeroableInOption for LinearAddress {}
+#[expect(unsafe_code)]
+unsafe impl bytemuck::PodInOption for LinearAddress {}
+
 impl LinearAddress {
-    /// Create a new LinearAddress, returns None if value is zero.
+    /// Create a new `LinearAddress`, returns None if value is zero.
     pub fn new(addr: u64) -> Option<Self> {
         NonZeroU64::new(addr).map(LinearAddress)
     }
 
     /// Get the underlying address as u64.
-    pub fn get(&self) -> u64 {
+    #[must_use]
+    pub const fn get(&self) -> u64 {
         self.0.get()
     }
 
     /// Check if the address is 8-byte aligned.
+    #[must_use]
     pub const fn is_aligned(&self) -> bool {
         self.0.get() % 8 == 0
     }
 
-    pub fn checked_add(&self, offset: u64) -> Option<Self> {
-        self.get().checked_add(offset).and_then(LinearAddress::new)
+    /// Returns the maximum area size available for allocation.
+    #[allow(clippy::missing_panics_doc)]
+    #[must_use]
+    pub const fn max_area_size() -> u64 {
+        *AREA_SIZES.last().expect("AREA_SIZES is never empty")
     }
 
-    pub fn max_area_size() -> u64 {
-        AREA_SIZES[AREA_SIZES.len() - 1]
+    /// Returns the minimum area size available for allocation.
+    #[must_use]
+    #[allow(clippy::missing_panics_doc)]
+    pub const fn min_area_size() -> u64 {
+        *AREA_SIZES.first().expect("AREA_SIZES is never empty")
     }
-    pub fn min_area_size() -> u64 {
-        AREA_SIZES[0]
-    }
-    pub fn num_area_sizes() -> usize {
+
+    /// Returns the number of different area sizes available.
+    #[must_use]
+    pub const fn num_area_sizes() -> usize {
         AREA_SIZES.len()
     }
 
-    /// Returns a reference to the inner NonZeroU64
-    pub fn as_nonzero(&self) -> &NonZeroU64 {
+    /// Returns a reference to the inner `NonZeroU64`
+    #[must_use]
+    pub const fn as_nonzero(&self) -> &NonZeroU64 {
+        &self.0
+    }
+}
+
+impl std::ops::Add for LinearAddress {
+    type Output = Self;
+    fn add(self, other: Self) -> Self {
+        self.checked_add(other.get())
+            .map(LinearAddress)
+            .expect("non zero result")
+    }
+}
+
+impl num_traits::CheckedAdd for LinearAddress {
+    fn checked_add(&self, other: &Self) -> Option<Self> {
+        self.0.checked_add(other.get()).map(LinearAddress)
+    }
+}
+
+impl std::ops::Deref for LinearAddress {
+    type Target = NonZeroU64;
+    fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
 impl fmt::Display for LinearAddress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.get())
+        std::fmt::Display::fmt(&self.get(), f)
     }
 }
 
+impl fmt::LowerHex for LinearAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        std::fmt::LowerHex::fmt(&self.get(), f)
+    }
+}
 impl From<LinearAddress> for u64 {
     fn from(addr: LinearAddress) -> Self {
         addr.get()
     }
 }
 
-/// Each [`StoredArea`] contains an [Area] which is either a [Node] or a [`FreeArea`].
-#[repr(u8)]
-#[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
-pub enum Area<T, U> {
-    Node(T),
-    Free(U) = 255, // this is magic: no node starts with a byte of 255
+impl From<NonZeroU64> for LinearAddress {
+    fn from(addr: NonZeroU64) -> Self {
+        LinearAddress(addr)
+    }
 }
 
 /// Every item stored in the [`NodeStore`]'s `ReadableStorage`  after the
@@ -216,29 +258,14 @@ pub enum Area<T, U> {
 ///  - Byte 0: The index of the area size
 ///  - Byte 1: 0x255 if free, otherwise the low-order bit indicates Branch or Leaf
 ///  - Bytes 2..n: The actual data
-#[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub struct StoredArea<T> {
     /// Index in [`AREA_SIZES`] of this area's size
     area_size_index: AreaIndex,
     area: T,
 }
 
-impl<T> StoredArea<T> {
-    /// Create a new `StoredArea`
-    pub const fn new(area_size_index: AreaIndex, area: T) -> Self {
-        Self {
-            area_size_index,
-            area,
-        }
-    }
-
-    /// Destructure the `StoredArea` into its components
-    pub fn into_parts(self) -> (AreaIndex, T) {
-        (self.area_size_index, self.area)
-    }
-}
-
-/// FreeLists is an array of Option<LinearAddress> for each area size.
+/// `FreeLists` is an array of `Option<LinearAddress>` for each area size.
 pub type FreeLists = [Option<LinearAddress>; AREA_SIZES.len()];
 
 /// A [`FreeArea`] is stored at the start of the area that contained a node that
@@ -251,7 +278,7 @@ pub struct FreeArea {
 impl Serializable for FreeArea {
     fn write_to<W: crate::node::ExtendableBytes>(&self, vec: &mut W) {
         vec.push(0xff); // 0xff indicates a free area
-        vec.extend_var_int(self.next_free_block.map_or(0, LinearAddress::get));
+        vec.extend_var_int(self.next_free_block.map_or(0, |addr| addr.get()));
     }
 
     /// Parse a [`FreeArea`].
@@ -717,7 +744,7 @@ pub(crate) struct FreeAreaWithMetadata {
 pub(crate) struct FreeListsIterator<'a, S: ReadableStorage> {
     storage: &'a S,
     free_lists_iter: std::iter::Skip<
-        std::iter::Enumerate<std::slice::Iter<'a, std::option::Option<std::num::NonZero<u64>>>>,
+        std::iter::Enumerate<std::slice::Iter<'a, std::option::Option<LinearAddress>>>,
     >,
     current_free_list_id: AreaIndex,
     free_list_iter: FreeListIterator<'a, S>,
@@ -858,9 +885,9 @@ pub mod test_utils {
         header.set_size(size);
         header.set_root_address(root_addr);
         *header.free_lists_mut() = free_lists;
-        let header_bytes = bincode::serialize(&header).unwrap();
+        let header_bytes = bytemuck::bytes_of(&header);
         nodestore.header = header;
-        nodestore.storage.write(0, &header_bytes).unwrap();
+        nodestore.storage.write(0, header_bytes).unwrap();
     }
 
     // Helper function to write a random stored area to the given offset.
@@ -886,7 +913,6 @@ mod tests {
     use rand::seq::IteratorRandom;
     use test_case::test_case;
 
-    // StoredArea::new(12, Area::<Node, _>::Free(FreeArea::new(LinearAddress::new(42))));
     #[test_case(&[0x01, 0x01, 0x01, 0x2a], Some((1, 42)); "old format")]
     // StoredArea::new(12, Area::<Node, _>::Free(FreeArea::new(None)));
     #[test_case(&[0x02, 0x01, 0x00], Some((2, 0)); "none")]

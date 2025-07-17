@@ -32,7 +32,6 @@ use integer_encoding::{VarInt, VarIntReader as _};
 pub use leaf::LeafNode;
 use std::fmt::Debug;
 use std::io::{Error, Read, Write};
-use std::num::NonZero;
 
 pub mod branch;
 mod leaf;
