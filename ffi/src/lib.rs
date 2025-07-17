@@ -19,7 +19,7 @@ use std::fmt::{self, Display, Formatter};
 use std::ops::Deref;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -933,41 +933,7 @@ unsafe fn open_db(args: &CreateOrOpenArgs) -> Result<Db, String> {
 
     if !args.log_args.is_null() {
         let log_args = unsafe { &*args.log_args };
-
-        let log_path = unsafe { CStr::from_ptr(log_args.path) }
-            .to_str()
-            .map_err(|e| e.to_string())?;
-
-        let log_path = if log_path.is_empty() {
-            "/tmp/logs/firewood.log"
-        } else {
-            log_path
-        };
-
-        let log_dir = Path::new(log_path)
-            .parent()
-            .ok_or("failed to get log directory")?;
-        std::fs::create_dir_all(log_dir).map_err(|e| e.to_string())?;
-
-        let level = unsafe { CStr::from_ptr(log_args.filter_level) }
-            .to_str()
-            .map(|v| if v.is_empty() { "info" } else { v })
-            .map_err(|e| e.to_string())?
-            .parse::<log::LevelFilter>()
-            .map_err(|e| e.to_string())?;
-
-        env_logger::Builder::new()
-            .filter_level(level)
-            .target(env_logger::Target::Pipe(Box::new(
-                std::fs::OpenOptions::new()
-                    .create(true)
-                    .write(true)
-                    .truncate(true)
-                    .open(log_path)
-                    .map_err(|e| e.to_string())?,
-            )))
-            .try_init()
-            .map_err(|e| e.to_string())?;
+        enable_logs(log_args)?;
     }
 
     let path = unsafe { CStr::from_ptr(args.path) };
@@ -976,6 +942,44 @@ unsafe fn open_db(args: &CreateOrOpenArgs) -> Result<Db, String> {
     #[cfg(windows)]
     let path: &Path = OsStr::new(path.to_str().expect("path should be valid UTF-8")).as_ref();
     Db::new_sync(path, cfg).map_err(|e| e.to_string())
+}
+
+#[doc(hidden)]
+fn enable_logs(log_args: &LogArgs) -> Result<(), String> {
+    let cstr = unsafe { CStr::from_ptr(log_args.path) };
+    let osstr = OsStr::from_bytes(cstr.to_bytes());
+    let log_path = if osstr.is_empty() {
+        Path::join(&std::env::temp_dir(), "firewood-log.txt")
+    } else {
+        PathBuf::from(osstr)
+    };
+
+    let log_dir = Path::new(&log_path)
+        .parent()
+        .ok_or("failed to get log directory")?;
+    std::fs::create_dir_all(log_dir).map_err(|e| e.to_string())?;
+
+    let level = unsafe { CStr::from_ptr(log_args.filter_level) }
+        .to_str()
+        .map(|v| if v.is_empty() { "info" } else { v })
+        .map_err(|e| e.to_string())?
+        .parse::<log::LevelFilter>()
+        .map_err(|e| e.to_string())?;
+
+    env_logger::Builder::new()
+        .filter_level(level)
+        .target(env_logger::Target::Pipe(Box::new(
+            std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(log_path)
+                .map_err(|e| e.to_string())?,
+        )))
+        .try_init()
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
 }
 
 #[doc(hidden)]
