@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use clap::Args;
 use firewood::v2::api;
-use firewood_storage::{CacheReadStrategy, FileBacked, NodeStore};
+use firewood_storage::{CacheReadStrategy, CheckOpt, FileBacked, NodeStore};
 use nonzero_ext::nonzero;
 
 // TODO: (optionally) add a fix option
@@ -47,6 +47,8 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     let storage = Arc::new(fb);
 
     NodeStore::open(storage)?
-        .check(opts.hash_check)
+        .check(CheckOpt {
+            hash_check: opts.hash_check,
+        })
         .map_err(|e| api::Error::InternalError(Box::new(e)))
 }

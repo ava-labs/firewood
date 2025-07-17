@@ -15,6 +15,13 @@ use crate::{
 use std::cmp::Ordering;
 use std::ops::Range;
 
+/// Options for the checker
+#[derive(Debug)]
+pub struct CheckOpt {
+    /// Whether to check the hash of the nodes
+    pub hash_check: bool,
+}
+
 /// [`NodeStore`] checker
 // TODO: S needs to be writeable if we ask checker to fix the issues
 #[expect(clippy::result_large_err)]
@@ -29,8 +36,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// # Panics
     /// Panics if the header has too many free lists, which can never happen since freelists have a fixed size.
     // TODO: report all errors, not just the first one
-    // TODO: add merkle hash checks as well
-    pub fn check(&self, hash_check: bool) -> Result<(), CheckerError> {
+    pub fn check(&self, opt: CheckOpt) -> Result<(), CheckerError> {
         // 1. Check the header
         let db_size = self.size();
         let file_size = self.physical_size()?;
@@ -57,7 +63,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                 HashType::from(root_hash),
                 Path::new(),
                 &mut visited,
-                hash_check,
+                opt.hash_check,
             )?;
         }
 
