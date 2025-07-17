@@ -872,8 +872,6 @@ pub extern "C" fn fwd_gather() -> Value {
 ///   1 for branch reads, and 2 for all reads.
 /// * `truncate` - Whether to truncate the database file if it exists.
 ///   Returns an error if the value is not 0, 1, or 2.
-/// * `log_args` - The logging configuration for this process. Logging is
-///   enabled if this argument is defined.
 #[repr(C)]
 pub struct CreateOrOpenArgs {
     path: *const std::ffi::c_char,

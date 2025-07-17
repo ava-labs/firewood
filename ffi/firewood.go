@@ -111,7 +111,6 @@ func New(filePath string, conf *Config) (*Database, error) {
 		strategy:             C.uint8_t(conf.ReadCacheStrategy),
 		truncate:             C.bool(conf.Truncate),
 	}
-
 	// Defer freeing the C strings allocated to the heap on the other side
 	// of the FFI boundary.
 	defer C.free(unsafe.Pointer(args.path))

@@ -63,8 +63,6 @@ typedef uint32_t ProposalId;
  *   1 for branch reads, and 2 for all reads.
  * * `truncate` - Whether to truncate the database file if it exists.
  *   Returns an error if the value is not 0, 1, or 2.
- * * `log_args` - The logging configuration for this process. Logging is
- *   enabled if this argument is defined.
  */
 typedef struct CreateOrOpenArgs {
   const char *path;
