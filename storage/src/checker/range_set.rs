@@ -222,7 +222,7 @@ pub(super) struct LinearAddressRangeSet {
 #[expect(clippy::result_large_err)]
 impl LinearAddressRangeSet {
     fn node_store_addr_start() -> LinearAddress {
-        LinearAddress::new(NodeStoreHeader::SIZE).unwrap()
+        LinearAddress::new(NodeStoreHeader::SIZE).expect("NodeStoreHeader::SIZE is non-zero")
     }
 
     pub(super) fn new(db_size: u64) -> Result<Self, CheckerError> {
@@ -241,7 +241,7 @@ impl LinearAddressRangeSet {
 
         Ok(Self {
             range_set: RangeSet::new(),
-            max_addr: max_addr, // STORAGE_AREA_START..U64::MAX
+            max_addr,
         })
     }
 
@@ -258,7 +258,7 @@ impl LinearAddressRangeSet {
                 size,
                 bounds: Self::node_store_addr_start()..self.max_addr,
             })?; // This can only happen due to overflow
-        if addr < Self::node_store_addr_start() || end > self.max_addr {
+        if addr < Self::node_store_addr_start() || end > *self.max_addr {
             return Err(CheckerError::AreaOutOfBounds {
                 start: addr,
                 size,
@@ -266,7 +266,9 @@ impl LinearAddressRangeSet {
             });
         }
 
-        if let Err(intersection) = self.range_set.insert_disjoint_range(start..end) {
+        if let Err(intersection) = self.range_set.insert_disjoint_range(
+            start..LinearAddress::new(end.get()).expect("end address is non-zero"),
+        ) {
             return Err(CheckerError::AreaIntersects {
                 start: addr,
                 size,

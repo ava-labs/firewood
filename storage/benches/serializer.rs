@@ -12,7 +12,6 @@
 
 use std::array::from_fn;
 use std::fs::File;
-use std::num::NonZeroU64;
 use std::os::raw::c_int;
 
 use criterion::profiler::Profiler;

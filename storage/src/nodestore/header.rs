@@ -26,7 +26,6 @@
 
 use bytemuck_derive::{AnyBitPattern, NoUninit};
 use std::io::{Error, ErrorKind};
-use std::num::NonZeroU64;
 
 use super::alloc::{FreeLists, LinearAddress, area_size_hash};
 use crate::logger::{debug, trace};
@@ -149,7 +148,7 @@ impl Version {
 
 /// Persisted metadata for a `NodeStore`.
 /// The [`NodeStoreHeader`] is at the start of the `ReadableStorage`.
-#[derive(Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
+#[derive(Copy, Debug, PartialEq, Eq, Clone)]
 #[repr(C)]
 pub struct NodeStoreHeader {
     /// Identifies the version of firewood used to create this `NodeStore`.
@@ -173,10 +172,13 @@ impl NodeStoreHeader {
     /// We also want it aligned to a disk block
     pub const SIZE: u64 = 2048;
 
-    /// Number of extra bytes to write on the first creation of the `NodeStoreHeader`
-    /// (zero-padded)
-    /// also a compile time check to prevent setting SIZE too small
-    pub const EXTRA_BYTES: usize = Self::SIZE as usize - std::mem::size_of::<NodeStoreHeader>();
+    // Compile-time assertion that SIZE is large enough for the header
+    const _ASSERT_SIZE: () = assert!(Self::SIZE as usize >= std::mem::size_of::<NodeStoreHeader>());
+
+    /// Deserialize a `NodeStoreHeader` from bytes using bytemuck
+    pub fn from_bytes(bytes: &[u8]) -> &Self {
+        bytemuck::from_bytes(bytes)
+    }
 
     pub fn new() -> Self {
         Self {
@@ -224,22 +226,22 @@ impl NodeStoreHeader {
     }
 
     /// Get the free lists
-    pub fn free_lists(&self) -> &FreeLists {
+    pub const fn free_lists(&self) -> &FreeLists {
         &self.free_lists
     }
 
     /// Get mutable access to the free lists
-    pub fn free_lists_mut(&mut self) -> &mut FreeLists {
+    pub const fn free_lists_mut(&mut self) -> &mut FreeLists {
         &mut self.free_lists
     }
 
     /// Get the root address
-    pub fn root_address(&self) -> Option<LinearAddress> {
+    pub const fn root_address(&self) -> Option<LinearAddress> {
         self.root_address
     }
 
     /// Set the root address
-    pub fn set_root_address(&mut self, root_address: Option<LinearAddress>) {
+    pub const fn set_root_address(&mut self, root_address: Option<LinearAddress>) {
         self.root_address = root_address;
     }
 
@@ -293,17 +295,12 @@ impl NodeStoreHeader {
             ))
         }
     }
-
-    /// Helper to get free list as LinearAddress
-    pub fn free_list_linear(&self, idx: usize) -> Option<LinearAddress> {
-        self.free_lists[idx]
-    }
-
-    /// Helper to set free list as LinearAddress
-    pub fn set_free_list_linear(&mut self, idx: usize, addr: Option<LinearAddress>) {
-        self.free_lists[idx] = addr;
-    }
 }
+
+#[expect(unsafe_code)]
+unsafe impl bytemuck::Zeroable for NodeStoreHeader {}
+#[expect(unsafe_code)]
+unsafe impl bytemuck::Pod for NodeStoreHeader {}
 
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
@@ -336,10 +333,9 @@ mod tests {
 
         // Check the empty header is written at the start of the ReadableStorage.
         let mut header_stream = node_store.storage.stream_from(0).unwrap();
-        let mut header_bytes =
-            vec![0u8; bincode::serialized_size(&NodeStoreHeader::new()).unwrap() as usize];
+        let mut header_bytes = vec![0u8; std::mem::size_of::<NodeStoreHeader>()];
         header_stream.read_exact(&mut header_bytes).unwrap();
-        let header: NodeStoreHeader = bincode::deserialize(&header_bytes).unwrap();
+        let header = NodeStoreHeader::from_bytes(&header_bytes);
         assert_eq!(header.version, Version::new());
         let empty_free_list: FreeLists = Default::default();
         assert_eq!(*header.free_lists(), empty_free_list);
