@@ -972,6 +972,7 @@ fn start_logs(log_args: &LogArgs) -> Result<(), String> {
             std::fs::OpenOptions::new()
                 .create(true)
                 .write(true)
+                .truncate(false)
                 .open(log_path)
                 .map_err(|e| e.to_string())?,
         )))
