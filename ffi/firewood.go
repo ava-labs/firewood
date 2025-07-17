@@ -118,20 +118,20 @@ func New(filePath string, conf *Config) (*Database, error) {
 		truncate:             C.bool(conf.Truncate),
 	}
 
-	enableLogs := conf.LogConfig != nil
-	if enableLogs {
-		args.log_args = &C.struct_LogArgs{
-			path:         C.CString(conf.LogConfig.Path),
-			filter_level: C.CString(conf.LogConfig.FilterLevel),
-		}
-	}
-
 	// Defer freeing the C strings allocated to the heap on the other side
 	// of the FFI boundary.
 	defer C.free(unsafe.Pointer(args.path))
-	if enableLogs {
-		defer C.free(unsafe.Pointer(args.log_args.filter_level))
-		defer C.free(unsafe.Pointer(args.log_args.path))
+
+	if conf.LogConfig != nil {
+		args.log_args = &C.struct_LogArgs{}
+		if conf.LogConfig.Path != "" {
+			args.log_args.path = C.CString(conf.LogConfig.Path)
+			defer C.free(unsafe.Pointer(args.log_args.path))
+		}
+		if conf.LogConfig.FilterLevel != "" {
+			args.log_args.filter_level = C.CString(conf.LogConfig.FilterLevel)
+			defer C.free(unsafe.Pointer(args.log_args.filter_level))
+		}
 	}
 
 	dbResult := C.fwd_open_db(args)
