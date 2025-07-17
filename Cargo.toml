@@ -56,11 +56,11 @@ cast_possible_truncation = "allow"
 
 [workspace.dependencies]
 # workspace local packages
-firewood = { path = "firewood" }
-firewood-macros = { path = "firewood-macros" }
-firewood-storage = { path = "storage" }
-firewood-ffi = { path = "ffi" }
-firewood-triehash = { path = "triehash" }
+firewood = { path = "firewood", version = "0.0.9" }
+firewood-macros = { path = "firewood-macros", version = "0.0.9" }
+firewood-storage = { path = "storage", version = "0.0.9" }
+firewood-ffi = { path = "ffi", version = "0.0.9" }
+firewood-triehash = { path = "triehash", version = "0.0.9" }
 
 # common dependencies
 metrics = "0.24.2"
