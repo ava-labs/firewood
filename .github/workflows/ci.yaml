@@ -23,9 +23,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - profile-key: debug-no-features
+          - profile-key: debug-no-default-features
             profile-args: "--no-default-features"
-          - profile-key: debug-default-features
+          - profile-key: debug-no-features
             profile-args: ""
           - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
@@ -69,9 +69,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - profile-key: debug-no-features
+          - profile-key: debug-no-default-features
             profile-args: "--no-default-features"
-          - profile-key: debug-default-features
+          - profile-key: debug-no-features
             profile-args: ""
           - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
@@ -97,9 +97,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - profile-key: debug-no-features
+          - profile-key: debug-no-default-features
             profile-args: "--no-default-features"
-          - profile-key: debug-default-features
+          - profile-key: debug-no-features
             profile-args: ""
           - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
@@ -122,9 +122,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - profile-key: debug-no-features
+          - profile-key: debug-no-default-features
             profile-args: "--no-default-features"
-          - profile-key: debug-default-features
+          - profile-key: debug-no-features
             profile-args: ""
           - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
@@ -148,9 +148,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - profile-key: debug-no-features
+          - profile-key: debug-no-default-features
             profile-args: "--no-default-features"
-          - profile-key: debug-default-features
+          - profile-key: debug-no-features
             profile-args: ""
           - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
@@ -183,7 +183,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: "false"
-          shared-key: debug-default-features
+          shared-key: "debug-no-features"
       - name: md check
         uses: DavidAnson/markdownlint-cli2-action@v20
         with:
@@ -210,7 +210,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: "false"
-          shared-key: debug-default-features
+          shared-key: "debug-no-features"
       - name: Build Firewood FFI
         working-directory: ffi
         run: cargo build --release
@@ -276,7 +276,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: "false"
-          shared-key: debug-default-features
+          shared-key: "debug-no-features"
       - name: Build Firewood FFI
         run: cargo build -p firewood-ffi
       - name: Set up Go
@@ -307,7 +307,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: "false"
-          shared-key: debug-default-features
+          shared-key: "debug-no-features"
       - name: Install cargo-machete
         run: cargo install cargo-machete
       - name: Check for stale dependencies
