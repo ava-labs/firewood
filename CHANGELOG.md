@@ -41,7 +41,7 @@ All notable changes to this project will be documented in this file.
 - Update `golangci-lint` (#1053)
 - Update CODEOWNERS (#1080)
 - Run CI with --no-default-features (#1081)
-- Release 0.0.9
+- Release 0.0.9 (#1084)
 
 ## [0.0.8] - 2025-07-07
 
