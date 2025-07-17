@@ -884,17 +884,6 @@ pub struct CreateOrOpenArgs {
     truncate: bool,
 }
 
-/// Arguments for logging
-///
-/// * `path` - The file path where logs for this process are stored. By
-///   default, this is set to /tmp/logs/firewood.log
-/// * `filter_level` - The filter level for logs. By default, this is set to info.
-#[repr(C)]
-pub struct LogArgs {
-    path: *const std::ffi::c_char,
-    filter_level: *const std::ffi::c_char,
-}
-
 /// Open a database with the given cache size and maximum number of revisions
 ///
 /// # Arguments
@@ -936,6 +925,17 @@ unsafe fn open_db(args: &CreateOrOpenArgs) -> Result<Db, String> {
     #[cfg(windows)]
     let path: &Path = OsStr::new(path.to_str().expect("path should be valid UTF-8")).as_ref();
     Db::new_sync(path, cfg).map_err(|e| e.to_string())
+}
+
+/// Arguments for logging
+///
+/// * `path` - The file path where logs for this process are stored. By
+///   default, this is set to /tmp/firewood.log
+/// * `filter_level` - The filter level for logs. By default, this is set to info.
+#[repr(C)]
+pub struct LogArgs {
+    path: *const std::ffi::c_char,
+    filter_level: *const std::ffi::c_char,
 }
 
 /// Start logs for this process.
