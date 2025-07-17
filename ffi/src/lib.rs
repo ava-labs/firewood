@@ -924,7 +924,7 @@ unsafe fn open_db(args: &CreateOrOpenArgs) -> Result<Db, String> {
 /// Arguments for logging
 ///
 /// * `path` - The file path where logs for this process are stored. By
-///   default, this is set to /tmp/firewood.log
+///   default, this is set to /tmp/firewood-log.txt
 /// * `filter_level` - The filter level for logs. By default, this is set to info.
 #[repr(C)]
 pub struct LogArgs {

@@ -77,7 +77,7 @@ typedef struct CreateOrOpenArgs {
  * Arguments for logging
  *
  * * `path` - The file path where logs for this process are stored. By
- *   default, this is set to /tmp/firewood.log
+ *   default, this is set to /tmp/firewood-log.txt
  * * `filter_level` - The filter level for logs. By default, this is set to info.
  */
 typedef struct LogArgs {
