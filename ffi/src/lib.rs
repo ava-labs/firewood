@@ -938,13 +938,6 @@ unsafe fn open_db(args: &CreateOrOpenArgs) -> Result<Db, String> {
             .to_str()
             .map_err(|e| e.to_string())?;
 
-        // .map(|v| {
-        //     if v.is_empty() {
-        //         "/tmp/logs/firewood.log"
-        //     } else {
-        //         v
-        //     }
-        // })
         let log_path = if log_path.is_empty() {
             "/tmp/logs/firewood.log"
         } else {
