@@ -973,7 +973,6 @@ fn enable_logs(log_args: &LogArgs) -> Result<(), String> {
             std::fs::OpenOptions::new()
                 .create(true)
                 .write(true)
-                .truncate(true)
                 .open(log_path)
                 .map_err(|e| e.to_string())?,
         )))
