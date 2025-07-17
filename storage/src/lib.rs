@@ -37,7 +37,7 @@ use crate::nodestore::AreaIndex;
 pub mod logger;
 
 // re-export these so callers don't need to know where they are
-pub use checker::CheckOpt;
+pub use checker::{CheckOpt, LinearAddressRangeSet};
 pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use node::path::{NibblesIterator, Path};
@@ -100,7 +100,7 @@ pub fn empty_trie_hash() -> TrieHash {
 }
 
 /// This enum encapsulates what points to the stored area.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum StoredAreaParent {
     /// The stored area is a trie node
     TrieNode(TrieNodeParent),
@@ -109,7 +109,7 @@ pub enum StoredAreaParent {
 }
 
 /// This enum encapsulates what points to the stored area allocated for a trie node.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum TrieNodeParent {
     /// The stored area is the root of the trie, so the header points to it
     Root,
@@ -118,7 +118,7 @@ pub enum TrieNodeParent {
 }
 
 /// This enum encapsulates what points to the stored area allocated for a free list.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum FreeListParent {
     /// The stored area is the head of the free list, so the header points to it
     FreeListHead(AreaIndex),
@@ -141,13 +141,15 @@ pub enum CheckerError {
 
     /// Hash mismatch for a node
     #[error(
-        "Hash mismatch for node {partial_path:?} at address {address}: parent stored {parent_stored_hash}, computed {computed_hash}"
+        "Hash mismatch for node {partial_path:?} at address {address}: parent ({parent:?}) stored {parent_stored_hash}, computed {computed_hash}"
     )]
     HashMismatch {
         /// The path of the node
         partial_path: Path,
         /// The address of the node
         address: LinearAddress,
+        /// The parent of the node
+        parent: TrieNodeParent,
         /// The hash value stored in the parent node
         parent_stored_hash: HashType,
         /// The hash value computed for the node
@@ -163,6 +165,8 @@ pub enum CheckerError {
         size: u64,
         /// Valid range of addresses
         bounds: Range<LinearAddress>,
+        /// The parent of the `StoredArea`
+        parent: StoredAreaParent,
     },
 
     /// Stored areas intersect
@@ -176,6 +180,8 @@ pub enum CheckerError {
         size: u64,
         /// The intersection
         intersection: Vec<Range<LinearAddress>>,
+        /// The parent of the `StoredArea`
+        parent: StoredAreaParent,
     },
 
     /// Freelist area size does not match
@@ -191,23 +197,25 @@ pub enum CheckerError {
         actual_free_list: AreaIndex,
         /// Expected size of the area
         expected_free_list: AreaIndex,
+        /// The parent of the free area
+        parent: FreeListParent,
     },
 
     /// The start address of a stored area is not a multiple of 16
     #[error(
-        "The start address of a stored area is not a multiple of {}: {address} (parent: {parent_ptr:?})",
+        "The start address of a stored area is not a multiple of {}: {address} (parent: {parent:?})",
         nodestore::alloc::MIN_AREA_SIZE
     )]
     AreaMisaligned {
         /// The start address of the stored area
         address: LinearAddress,
-        /// The start address of the parent that points to the stored area
-        parent_ptr: StoredAreaParent,
+        /// The parent of the `StoredArea`
+        parent: StoredAreaParent,
     },
 
     /// Found leaked areas
-    #[error("Found leaked areas: {0:?}")]
-    AreaLeaks(Vec<Range<LinearAddress>>),
+    #[error("Found leaked areas: {0}")]
+    AreaLeaks(LinearAddressRangeSet),
 
     /// IO error
     #[error("IO error")]

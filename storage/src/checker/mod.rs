@@ -2,7 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 mod range_set;
-use range_set::LinearAddressRangeSet;
+pub use range_set::LinearAddressRangeSet;
 
 use crate::logger::warn;
 use crate::nodestore::alloc::{AREA_SIZES, AreaIndex, FreeAreaWithMetadata};
@@ -33,8 +33,6 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
     /// # Errors
     /// Returns a [`CheckerError`] if the database is inconsistent.
-    /// # Panics
-    /// Panics if the header has too many free lists, which can never happen since freelists have a fixed size.
     // TODO: report all errors, not just the first one
     pub fn check(&self, opt: CheckOpt) -> Result<(), CheckerError> {
         // 1. Check the header
@@ -45,13 +43,10 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         // 2. traverse the trie and check the nodes
         if let (Some(root_address), Some(root_hash)) = (self.root_address(), self.root_hash()) {
             // the database is not empty, traverse the trie
-            self.check_area_aligned(
-                root_address,
-                StoredAreaParent::TrieNode(TrieNodeParent::Root),
-            )?;
             self.visit_trie(
                 root_address,
                 HashType::from(root_hash),
+                TrieNodeParent::Root,
                 Path::new(),
                 &mut visited,
                 opt.hash_check,
@@ -77,30 +72,37 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         &self,
         subtree_root_address: LinearAddress,
         subtree_root_hash: HashType,
+        parent: TrieNodeParent,
         path_prefix: Path,
         visited: &mut LinearAddressRangeSet,
         hash_check: bool,
     ) -> Result<(), CheckerError> {
-        let (_, area_size) = self.area_index_and_size(subtree_root_address)?;
-        let node = self.read_node(subtree_root_address)?;
-        visited.insert_area(subtree_root_address, area_size)?;
+        // check that address is aligned
+        self.check_area_aligned(
+            subtree_root_address,
+            StoredAreaParent::TrieNode(parent.clone()),
+        )?;
 
-        // iterate over the children
+        // check that the area is within bounds and does not intersect with other areas
+        let (_, area_size) = self.area_index_and_size(subtree_root_address)?;
+        visited.insert_area(
+            subtree_root_address,
+            area_size,
+            StoredAreaParent::TrieNode(parent),
+        )?;
+
+        // read the node and iterate over the children if branch node
+        let node = self.read_node(subtree_root_address)?;
         if let Node::Branch(branch) = node.as_ref() {
             // this is an internal node, traverse the children
             for (nibble, (address, hash)) in branch.children_iter() {
-                self.check_area_aligned(
-                    address,
-                    StoredAreaParent::TrieNode(TrieNodeParent::Parent(
-                        subtree_root_address,
-                        nibble,
-                    )),
-                )?;
+                let parent = TrieNodeParent::Parent(subtree_root_address, nibble);
                 let mut child_path_prefix = path_prefix.clone();
                 child_path_prefix.0.push(nibble as u8);
                 self.visit_trie(
                     address,
                     hash.clone(),
+                    parent,
                     child_path_prefix,
                     visited,
                     hash_check,
@@ -115,6 +117,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                 return Err(CheckerError::HashMismatch {
                     partial_path: path_prefix,
                     address: subtree_root_address,
+                    parent,
                     parent_stored_hash: subtree_root_hash,
                     computed_hash: hash,
                 });
@@ -142,9 +145,10 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                     size: area_size,
                     actual_free_list: free_list_id,
                     expected_free_list: area_index,
+                    parent,
                 });
             }
-            visited.insert_area(addr, area_size)?;
+            visited.insert_area(addr, area_size, StoredAreaParent::FreeList(parent))?;
         }
         Ok(())
     }
@@ -152,13 +156,10 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     const fn check_area_aligned(
         &self,
         address: LinearAddress,
-        parent_ptr: StoredAreaParent,
+        parent: StoredAreaParent,
     ) -> Result<(), CheckerError> {
         if !is_aligned(address) {
-            return Err(CheckerError::AreaMisaligned {
-                address,
-                parent_ptr,
-            });
+            return Err(CheckerError::AreaMisaligned { address, parent });
         }
         Ok(())
     }
@@ -336,7 +337,14 @@ mod test {
         // verify that all of the space is accounted for - since there is no free area
         let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
         nodestore
-            .visit_trie(root_addr, root_hash, Path::new(), &mut visited, true)
+            .visit_trie(
+                root_addr,
+                root_hash,
+                TrieNodeParent::Root,
+                Path::new(),
+                &mut visited,
+                true,
+            )
             .unwrap();
         let complement = visited.complement();
         assert_eq!(complement.into_iter().collect::<Vec<_>>(), vec![]);
@@ -368,18 +376,27 @@ mod test {
         // verify that all of the space is accounted for - since there is no free area
         let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
         let err = nodestore
-            .visit_trie(root_addr, root_hash, Path::new(), &mut visited, true)
+            .visit_trie(
+                root_addr,
+                root_hash,
+                TrieNodeParent::Root,
+                Path::new(),
+                &mut visited,
+                true,
+            )
             .unwrap_err();
         assert!(matches!(
         err,
         CheckerError::HashMismatch {
             address,
             partial_path,
+            parent,
             parent_stored_hash,
             computed_hash
         }
         if address == *branch_addr
             && partial_path == *branch_path
+            && parent == TrieNodeParent::Parent(root_addr, 0)
             && parent_stored_hash == wrong_hash
             && computed_hash == branch_hash
         ));
