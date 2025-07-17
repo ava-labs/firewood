@@ -33,7 +33,7 @@ use std::sync::Arc;
 
 use crate::linear::FileIoError;
 use coarsetime::Instant;
-use metrics::counter;
+use crate::firewood_counter;
 
 #[cfg(feature = "io-uring")]
 use crate::logger::trace;
@@ -217,7 +217,7 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
             .write_cached_nodes(self.kind.new.iter().map(|(addr, (_, node))| (addr, node)))?;
 
         let flush_time = flush_start.elapsed().as_millis();
-        counter!("firewood.flush_nodes").increment(flush_time);
+        firewood_counter!("firewood.flush_nodes", "flushed node amount").increment(flush_time);
 
         Ok(())
     }
@@ -317,13 +317,13 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
                             )
                         })?;
                         trace!("submission queue is full");
-                        counter!("ring.full").increment(1);
+                        firewood_counter!("ring.full", "amount of full ring").increment(1);
                     }
                     break;
                 }
                 // if we get here, that means we couldn't find a place to queue the request, so wait for at least one operation
                 // to complete, then handle the completion queue
-                counter!("ring.full").increment(1);
+                firewood_counter!("ring.full", "amount of full ring").increment(1);
                 ring.submit_and_wait(1).map_err(|e| {
                     self.storage
                         .file_io_error(e, 0, Some("io-uring submit_and_wait".to_string()))
@@ -359,7 +359,7 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
         debug_assert!(ring.completion().is_empty());
 
         let flush_time = flush_start.elapsed().as_millis();
-        counter!("firewood.flush_nodes").increment(flush_time);
+        firewood_counter!("firewood.flush_nodes", "amount flushed nodes").increment(flush_time);
 
         Ok(())
     }
