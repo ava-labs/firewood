@@ -359,7 +359,7 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
         debug_assert!(ring.completion().is_empty());
 
         let flush_time = flush_start.elapsed().as_millis();
-        firewood_counter!("firewood.flush_nodes", "amount flushed nodes").increment(flush_time);
+        firewood_counter!("firewood.flush_nodes", "flushed nodes amount").increment(flush_time);
 
         Ok(())
     }
