@@ -919,11 +919,7 @@ unsafe fn open_db(args: &CreateOrOpenArgs) -> Result<Db, String> {
         )?)
         .build();
 
-    let path = unsafe { CStr::from_ptr(args.path) };
-    #[cfg(unix)]
-    let path: &Path = OsStr::from_bytes(path.to_bytes()).as_ref();
-    #[cfg(windows)]
-    let path: &Path = OsStr::new(path.to_str().expect("path should be valid UTF-8")).as_ref();
+    let path = to_path(args.path).ok_or("failed to provide path")?;
     Db::new_sync(path, cfg).map_err(|e| e.to_string())
 }
 
@@ -955,23 +951,21 @@ pub extern "C" fn fwd_start_logs(args: &LogArgs) -> Value {
 
 #[doc(hidden)]
 fn start_logs(log_args: &LogArgs) -> Result<(), String> {
-    let cstr = unsafe { CStr::from_ptr(log_args.path) };
-    let osstr = OsStr::from_bytes(cstr.to_bytes());
-    let log_path = if osstr.is_empty() {
-        Path::join(&std::env::temp_dir(), "firewood-log.txt")
-    } else {
-        PathBuf::from(osstr)
-    };
+    let log_path =
+        to_path(log_args.path).unwrap_or(Path::join(&std::env::temp_dir(), "firewood-log.txt"));
 
     let log_dir = Path::new(&log_path)
         .parent()
         .ok_or("failed to get log directory")?;
     std::fs::create_dir_all(log_dir).map_err(|e| e.to_string())?;
 
-    let cstr = unsafe { CStr::from_ptr(log_args.filter_level) };
-    let level_str = OsStr::from_bytes(cstr.to_bytes())
-        .to_str()
-        .unwrap_or("info");
+    let level_str = if log_args.filter_level.is_null() {
+        "info"
+    } else {
+        unsafe { CStr::from_ptr(log_args.filter_level) }
+            .to_str()
+            .map_err(|e| e.to_string())?
+    };
     let level = level_str
         .parse::<log::LevelFilter>()
         .map_err(|e| e.to_string())?;
@@ -990,6 +984,20 @@ fn start_logs(log_args: &LogArgs) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+/// Helper function to convert C String pointers to a path
+/// Returns None if the pointer is null or if the string is empty
+#[doc(hidden)]
+fn to_path(cstr: *const i8) -> Option<PathBuf> {
+    if cstr.is_null() {
+        return None;
+    }
+
+    let cstr = unsafe { CStr::from_ptr(cstr) };
+    let osstr = OsStr::from_bytes(cstr.to_bytes());
+
+    (!osstr.is_empty()).then(|| PathBuf::from(osstr))
 }
 
 #[doc(hidden)]
