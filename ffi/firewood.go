@@ -59,12 +59,6 @@ type Config struct {
 	FreeListCacheEntries uint
 	Revisions            uint
 	ReadCacheStrategy    CacheStrategy
-	LogConfig            *LogConfig
-}
-
-type LogConfig struct {
-	Path        string
-	FilterLevel string
 }
 
 // DefaultConfig returns a sensible default Config.
@@ -121,18 +115,6 @@ func New(filePath string, conf *Config) (*Database, error) {
 	// Defer freeing the C strings allocated to the heap on the other side
 	// of the FFI boundary.
 	defer C.free(unsafe.Pointer(args.path))
-
-	if conf.LogConfig != nil {
-		args.log_args = &C.struct_LogArgs{}
-		if conf.LogConfig.Path != "" {
-			args.log_args.path = C.CString(conf.LogConfig.Path)
-			defer C.free(unsafe.Pointer(args.log_args.path))
-		}
-		if conf.LogConfig.FilterLevel != "" {
-			args.log_args.filter_level = C.CString(conf.LogConfig.FilterLevel)
-			defer C.free(unsafe.Pointer(args.log_args.filter_level))
-		}
-	}
 
 	dbResult := C.fwd_open_db(args)
 	db, err := databaseFromResult(&dbResult)

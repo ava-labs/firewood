@@ -882,7 +882,6 @@ pub struct CreateOrOpenArgs {
     revisions: usize,
     strategy: u8,
     truncate: bool,
-    log_args: *const LogArgs,
 }
 
 /// Arguments for logging
@@ -931,11 +930,6 @@ unsafe fn open_db(args: &CreateOrOpenArgs) -> Result<Db, String> {
         )?)
         .build();
 
-    if !args.log_args.is_null() {
-        let log_args = unsafe { &*args.log_args };
-        enable_logs(log_args)?;
-    }
-
     let path = unsafe { CStr::from_ptr(args.path) };
     #[cfg(unix)]
     let path: &Path = OsStr::from_bytes(path.to_bytes()).as_ref();
@@ -944,8 +938,13 @@ unsafe fn open_db(args: &CreateOrOpenArgs) -> Result<Db, String> {
     Db::new_sync(path, cfg).map_err(|e| e.to_string())
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_start_logs(args: &LogArgs) -> Value {
+    start_logs(args).map_or_else(Into::into, Into::into)
+}
+
 #[doc(hidden)]
-fn enable_logs(log_args: &LogArgs) -> Result<(), String> {
+fn start_logs(log_args: &LogArgs) -> Result<(), String> {
     let cstr = unsafe { CStr::from_ptr(log_args.path) };
     let osstr = OsStr::from_bytes(cstr.to_bytes());
     let log_path = if osstr.is_empty() {

@@ -26,14 +26,14 @@ func TestMetrics(t *testing.T) {
 		metricsPort = uint16(3000)
 	)
 
-	config := DefaultConfig()
-	config.LogConfig = &LogConfig{
+	db := newTestDatabase(t)
+	r.NoError(StartMetricsWithExporter(metricsPort))
+
+	logConfig := &LogConfig{
 		Path:        logPath,
 		FilterLevel: "trace",
 	}
-	db := newTestDatabaseWithConfig(t, config)
-
-	r.NoError(StartMetricsWithExporter(metricsPort))
+	r.NoError(StartLogs(logConfig))
 
 	// Populate DB
 	keys, vals := kvForTest(10)

@@ -52,18 +52,6 @@ typedef struct DatabaseCreationResult {
 typedef uint32_t ProposalId;
 
 /**
- * Arguments for logging
- *
- * * `path` - The file path where logs for this process are stored. By
- *   default, this is set to /tmp/logs/firewood.log
- * * `filter_level` - The filter level for logs. By default, this is set to info.
- */
-typedef struct LogArgs {
-  const char *path;
-  const char *filter_level;
-} LogArgs;
-
-/**
  * Common arguments, accepted by both `fwd_create_db()` and `fwd_open_db()`.
  *
  * * `path` - The path to the database file, which will be truncated if passed to `fwd_create_db()`
@@ -85,8 +73,19 @@ typedef struct CreateOrOpenArgs {
   size_t revisions;
   uint8_t strategy;
   bool truncate;
-  const struct LogArgs *log_args;
 } CreateOrOpenArgs;
+
+/**
+ * Arguments for logging
+ *
+ * * `path` - The file path where logs for this process are stored. By
+ *   default, this is set to /tmp/logs/firewood.log
+ * * `filter_level` - The filter level for logs. By default, this is set to info.
+ */
+typedef struct LogArgs {
+  const char *path;
+  const char *filter_level;
+} LogArgs;
 
 /**
  * Puts the given key-value pairs into the database.
@@ -411,6 +410,8 @@ struct Value fwd_propose_on_proposal(const struct DatabaseHandle *db,
  *
  */
 struct Value fwd_root_hash(const struct DatabaseHandle *db);
+
+struct Value fwd_start_logs(const struct LogArgs *args);
 
 /**
  * Start metrics recorder for this process.

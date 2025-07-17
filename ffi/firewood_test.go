@@ -132,20 +132,6 @@ func newTestDatabase(t *testing.T) *Database {
 	return db
 }
 
-func newTestDatabaseWithConfig(t *testing.T, config *Config) *Database {
-	t.Helper()
-	r := require.New(t)
-
-	dbFile := filepath.Join(t.TempDir(), "test.db")
-	f, err := New(dbFile, config)
-	r.NoError(err)
-	t.Cleanup(func() {
-		r.NoError(f.Close())
-	})
-
-	return f
-}
-
 func newDatabase(dbFile string) (*Database, func() error, error) {
 	conf := DefaultConfig()
 	conf.Truncate = true // in tests, we use filepath.Join, which creates an empty file
