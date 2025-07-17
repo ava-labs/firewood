@@ -989,7 +989,7 @@ fn start_logs(log_args: &LogArgs) -> Result<(), String> {
 /// Helper function to convert C String pointers to a path
 /// Returns None if the pointer is null or if the string is empty
 #[doc(hidden)]
-fn to_path(cstr: *const i8) -> Option<PathBuf> {
+fn to_path(cstr: *const std::ffi::c_char) -> Option<PathBuf> {
     if cstr.is_null() {
         return None;
     }
