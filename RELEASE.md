@@ -12,9 +12,9 @@ Start off by crating a new branch:
 
 ```console
 $ git fetch
-$ git switch -c release/v0.0.8 origin/main
-branch 'release/v0.0.8' set up to track 'origin/main'.
-Switched to a new branch 'release/v0.0.8'
+$ git switch -c release/v0.0.10 origin/main
+branch 'release/v0.0.10' set up to track 'origin/main'.
+Switched to a new branch 'release/v0.0.10'
 ```
 
 ## Package Version
