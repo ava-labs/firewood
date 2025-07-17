@@ -78,10 +78,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         hash_check: bool,
     ) -> Result<(), CheckerError> {
         // check that address is aligned
-        self.check_area_aligned(
-            subtree_root_address,
-            StoredAreaParent::TrieNode(parent.clone()),
-        )?;
+        self.check_area_aligned(subtree_root_address, StoredAreaParent::TrieNode(parent))?;
 
         // check that the area is within bounds and does not intersect with other areas
         let (_, area_size) = self.area_index_and_size(subtree_root_address)?;
