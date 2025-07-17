@@ -72,6 +72,7 @@ func GatherMetrics() (string, error) {
 	return string(b), nil
 }
 
+// LogConfig configures logs for this process.
 type LogConfig struct {
 	Path        string
 	FilterLevel string

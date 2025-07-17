@@ -938,6 +938,16 @@ unsafe fn open_db(args: &CreateOrOpenArgs) -> Result<Db, String> {
     Db::new_sync(path, cfg).map_err(|e| e.to_string())
 }
 
+/// Start logs for this process.
+///
+/// # Arguments
+///
+/// See `LogsArgs`.
+///
+/// # Returns
+///
+/// A `Value` containing {0, null} if the global logger was initialized.
+/// A `Value` containing {0, "error message"} if an error occurs.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_start_logs(args: &LogArgs) -> Value {
     start_logs(args).map_or_else(Into::into, Into::into)

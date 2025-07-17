@@ -411,6 +411,18 @@ struct Value fwd_propose_on_proposal(const struct DatabaseHandle *db,
  */
 struct Value fwd_root_hash(const struct DatabaseHandle *db);
 
+/**
+ * Start logs for this process.
+ *
+ * # Arguments
+ *
+ * See `LogsArgs`.
+ *
+ * # Returns
+ *
+ * A `Value` containing {0, null} if the global logger was initialized.
+ * A `Value` containing {0, "error message"} if an error occurs.
+ */
 struct Value fwd_start_logs(const struct LogArgs *args);
 
 /**
