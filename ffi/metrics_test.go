@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -22,7 +23,7 @@ func TestMetrics(t *testing.T) {
 
 	// test params
 	var (
-		logPath     = "/tmp/logs/firewood.log"
+		logPath     = filepath.Join(t.TempDir(), "firewood.log")
 		metricsPort = uint16(3000)
 	)
 
