@@ -35,10 +35,10 @@ func TestMetrics(t *testing.T) {
 		FilterLevel: "trace",
 	}
 
+	var logsDisabled bool
 	if err := StartLogs(logConfig); err != nil {
-		expectedErr := "logger feature is disabled"
-		r.Contains(err.Error(), expectedErr)
-		t.Skip(expectedErr)
+		r.Contains(err.Error(), "logger feature is disabled")
+		logsDisabled = true
 	}
 
 	// Populate DB
@@ -92,8 +92,10 @@ func TestMetrics(t *testing.T) {
 		r.Equal(v, *d.Type)
 	}
 
-	// logs should be non-empty if logging with trace filter level
-	f, err := os.ReadFile(logPath)
-	r.NoError(err)
-	r.NotEmpty(f)
+	if !logsDisabled {
+		// logs should be non-empty if logging with trace filter level
+		f, err := os.ReadFile(logPath)
+		r.NoError(err)
+		r.NotEmpty(f)
+	}
 }
