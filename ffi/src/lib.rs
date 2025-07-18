@@ -946,8 +946,11 @@ pub struct LogArgs {
 /// A `Value` containing {0, null} if the global logger was initialized.
 /// A `Value` containing {0, "error message"} if an error occurs.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_start_logs(args: &LogArgs) -> Value {
-    start_logs(args).map_or_else(Into::into, Into::into)
+pub extern "C" fn fwd_start_logs(args: Option<&LogArgs>) -> Value {
+    match args {
+        Some(log_args) => start_logs(log_args).map_or_else(Into::into, Into::into),
+        None => String::from("failed to provide args").into(),
+    }
 }
 
 #[doc(hidden)]
