@@ -10,6 +10,7 @@ import "C"
 
 import (
 	"errors"
+	"fmt"
 	"runtime"
 	"unsafe"
 )
@@ -17,12 +18,39 @@ import (
 var (
 	errNilStruct = errors.New("firewood error: nil struct pointer cannot be freed")
 	errBadValue  = errors.New("firewood error: value from cgo formatted incorrectly")
+
+	ErrDB      = errors.New("db error")
+	ErrRequest = errors.New("db non-fatal error")
 )
 
 // KeyValue is a key-value pair.
 type KeyValue struct {
 	Key   []byte
 	Value []byte
+}
+
+func parseProofResponse(resp *C.struct_ProofResponse) (proofBytes []byte, dbError error, requestError error) {
+	defer runtime.KeepAlive(resp)
+
+	if resp == nil {
+		return nil, errNilStruct, nil
+	}
+
+	defer C.fwd_free_proof_response(resp)
+
+	// Assume value is well-formed.
+	proofBytes, _ = bytesFromValue(resp.proof_data)
+	if resp.db_error != nil {
+		errStr := C.GoString((*C.char)(unsafe.Pointer(resp.db_error)))
+		dbError = fmt.Errorf("%w: %s", ErrDB, errStr)
+	}
+
+	if resp.request_error != nil {
+		errStr := C.GoString((*C.char)(unsafe.Pointer(resp.request_error)))
+		requestError = fmt.Errorf("%w: %s", ErrRequest, errStr)
+	}
+
+	return proofBytes, dbError, requestError
 }
 
 // hashAndIDFromValue converts the cgo `Value` payload into:
