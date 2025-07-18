@@ -34,7 +34,12 @@ func TestMetrics(t *testing.T) {
 		Path:        logPath,
 		FilterLevel: "trace",
 	}
-	r.NoError(StartLogs(logConfig))
+
+	if err := StartLogs(logConfig); err != nil {
+		expectedErr := "logger feature is disabled"
+		r.Contains(err.Error(), expectedErr)
+		t.Skip(expectedErr)
+	}
 
 	// Populate DB
 	keys, vals := kvForTest(10)

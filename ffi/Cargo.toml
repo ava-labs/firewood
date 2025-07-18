@@ -20,7 +20,7 @@ rust-version.workspace = true
 crate-type = ["staticlib"]
 
 [dependencies]
-firewood = { workspace = true, features = ["logger"] }
+firewood.workspace = true
 metrics = { workspace = true }
 metrics-util = { workspace = true }
 chrono = "0.4.41"
@@ -33,6 +33,7 @@ env_logger = { workspace = true }
 tikv-jemallocator = "0.6.0"
 
 [features]
+logger = ["firewood/logger"]
 ethhash = ["firewood/ethhash"]
 
 [build-dependencies]
