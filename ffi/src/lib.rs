@@ -13,8 +13,12 @@
     )
 )]
 
+#[cfg(feature = "logger")]
 use env_logger::Target::Pipe;
+#[cfg(feature = "logger")]
 use std::fs::OpenOptions;
+#[cfg(feature = "logger")]
+use std::path::Path;
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, OsStr, c_char};
@@ -22,7 +26,7 @@ use std::fmt::{self, Display, Formatter};
 use std::ops::Deref;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt as _;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -947,15 +951,13 @@ pub struct LogArgs {
 /// A `Value` containing {0, "error message"} if an error occurs.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_start_logs(args: Option<&LogArgs>) -> Value {
-    if !cfg!(feature = "logger") {
-        return String::from("logger feature is disabled").into();
-    }
     match args {
         Some(log_args) => start_logs(log_args).map_or_else(Into::into, Into::into),
         None => String::from("failed to provide args").into(),
     }
 }
 
+#[cfg(feature = "logger")]
 #[doc(hidden)]
 fn start_logs(log_args: &LogArgs) -> Result<(), String> {
     let log_path =
@@ -989,6 +991,12 @@ fn start_logs(log_args: &LogArgs) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+#[cfg(not(feature = "logger"))]
+#[doc(hidden)]
+fn start_logs(_log_args: &LogArgs) -> Result<(), String> {
+    Err(String::from("logger feature is disabled"))
 }
 
 /// Helper function to convert C String pointers to a path
