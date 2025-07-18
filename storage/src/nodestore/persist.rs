@@ -68,11 +68,8 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
     ///
     /// Returns a [`FileIoError`] if the header cannot be written.
     pub fn flush_header_with_padding(&self) -> Result<(), FileIoError> {
-        let header_bytes = bytemuck::bytes_of(&self.header)
-            .iter()
-            .copied()
-            .chain(std::iter::repeat_n(0u8, NodeStoreHeader::EXTRA_BYTES))
-            .collect::<Box<[u8]>>();
+        let mut header_bytes = bytemuck::bytes_of(&self.header).to_vec();
+        header_bytes.resize(NodeStoreHeader::SIZE as usize, 0);
         debug_assert_eq!(header_bytes.len(), NodeStoreHeader::SIZE as usize);
 
         self.storage.write(0, &header_bytes)?;
@@ -191,6 +188,10 @@ impl<N: NodeReader + RootReader> Iterator for UnPersistedNodeIterator<'_, N> {
 
 impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
     /// Persist the freelist from this proposal to storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the free list cannot be written to storage.
     #[fastrace::trace(short_name = true)]
     pub fn flush_freelist(&self) -> Result<(), FileIoError> {
         // Write the free lists to storage
@@ -201,6 +202,10 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
     }
 
     /// Persist all the nodes of a proposal to storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if any node cannot be written to storage.
     #[fastrace::trace(short_name = true)]
     #[cfg(not(feature = "io-uring"))]
     pub fn flush_nodes(&self) -> Result<(), FileIoError> {
@@ -213,9 +218,12 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
                 .write(addr.get(), stored_area_bytes.as_slice())?;
         }
 
-        self.storage
-            .write_cached_nodes(self.kind.new.iter().map(|(addr, (_, node))| (addr, node)))?;
-
+        self.storage.write_cached_nodes(
+            self.kind
+                .new
+                .iter()
+                .map(|(addr, (_, node))| (addr.as_nonzero(), node)),
+        )?;
         let flush_time = flush_start.elapsed().as_millis();
         counter!("firewood.flush_nodes").increment(flush_time);
 
@@ -223,6 +231,10 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
     }
 
     /// Persist all the nodes of a proposal to storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if any node cannot be written to storage.
     #[fastrace::trace(short_name = true)]
     #[cfg(feature = "io-uring")]
     pub fn flush_nodes(&self) -> Result<(), FileIoError> {
@@ -354,8 +366,12 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
             saved_pinned_buffers.iter().find(|pbe| pbe.offset.is_some())
         );
 
-        self.storage
-            .write_cached_nodes(self.kind.new.iter().map(|(addr, (_, node))| (addr, node)))?;
+        self.storage.write_cached_nodes(
+            self.kind
+                .new
+                .iter()
+                .map(|(addr, (_, node))| (addr.as_nonzero(), node)),
+        )?;
         debug_assert!(ring.completion().is_empty());
 
         let flush_time = flush_start.elapsed().as_millis();
