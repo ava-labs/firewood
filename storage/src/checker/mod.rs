@@ -2,7 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 mod range_set;
-pub use range_set::LinearAddressRangeSet;
+pub(crate) use range_set::LinearAddressRangeSet;
 
 use crate::logger::warn;
 use crate::nodestore::alloc::{AREA_SIZES, AreaIndex, FreeAreaWithMetadata};
@@ -112,7 +112,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             let hash = hash_node(&node, &path_prefix);
             if hash != subtree_root_hash {
                 return Err(CheckerError::HashMismatch {
-                    partial_path: path_prefix,
+                    path_prefix,
                     address: subtree_root_address,
                     parent,
                     parent_stored_hash: subtree_root_hash,
@@ -386,13 +386,13 @@ mod test {
         err,
         CheckerError::HashMismatch {
             address,
-            partial_path,
+            path_prefix,
             parent,
             parent_stored_hash,
             computed_hash
         }
         if address == *branch_addr
-            && partial_path == *branch_path
+            && path_prefix == *branch_path
             && parent == TrieNodeParent::Parent(root_addr, 0)
             && parent_stored_hash == wrong_hash
             && computed_hash == branch_hash

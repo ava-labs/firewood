@@ -17,7 +17,7 @@
 // TODO: remove bitflags, we only use one bit
 use bitflags::bitflags;
 use smallvec::SmallVec;
-use std::fmt::{self, Debug};
+use std::fmt::{self, Debug, LowerHex};
 use std::iter::{FusedIterator, once};
 
 static NIBBLES: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
@@ -35,6 +35,16 @@ impl Debug for Path {
             } else {
                 write!(f, "{:x} ", *nib)?;
             }
+        }
+        Ok(())
+    }
+}
+
+impl LowerHex for Path {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+        write!(f, "0x")?;
+        for nib in &self.0 {
+            write!(f, "{:x}", *nib)?;
         }
         Ok(())
     }

@@ -37,7 +37,7 @@ use crate::nodestore::AreaIndex;
 pub mod logger;
 
 // re-export these so callers don't need to know where they are
-pub use checker::{CheckOpt, LinearAddressRangeSet};
+pub use checker::CheckOpt;
 pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use node::path::{NibblesIterator, Path};
@@ -126,29 +126,38 @@ pub enum FreeListParent {
     PrevFreeArea(LinearAddress),
 }
 
-impl std::fmt::Display for StoredAreaParent {
+impl std::fmt::LowerHex for StoredAreaParent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            StoredAreaParent::TrieNode(trie_parent) => write!(f, "{trie_parent}"),
-            StoredAreaParent::FreeList(free_list_parent) => write!(f, "{free_list_parent}"),
+            StoredAreaParent::TrieNode(trie_parent) => std::fmt::LowerHex::fmt(trie_parent, f),
+            StoredAreaParent::FreeList(free_list_parent) => {
+                std::fmt::LowerHex::fmt(free_list_parent, f)
+            }
         }
     }
 }
 
-impl std::fmt::Display for TrieNodeParent {
+impl std::fmt::LowerHex for TrieNodeParent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TrieNodeParent::Root => write!(f, "Root"),
-            TrieNodeParent::Parent(addr, index) => write!(f, "TrieNode@{addr:#x}[{index}]"),
+            TrieNodeParent::Root => f.write_str("Root"),
+            TrieNodeParent::Parent(addr, index) => {
+                f.write_str("TrieNode@")?;
+                std::fmt::LowerHex::fmt(addr, f)?;
+                f.write_fmt(format_args!("[{index}]"))
+            }
         }
     }
 }
 
-impl std::fmt::Display for FreeListParent {
+impl std::fmt::LowerHex for FreeListParent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FreeListParent::FreeListHead(index) => write!(f, "FreeLists[{index}]"),
-            FreeListParent::PrevFreeArea(addr) => write!(f, "FreeArea@{addr:#x}"),
+            FreeListParent::FreeListHead(index) => f.write_fmt(format_args!("FreeLists[{index}]")),
+            FreeListParent::PrevFreeArea(addr) => {
+                f.write_str("FreeArea@")?;
+                std::fmt::LowerHex::fmt(addr, f)
+            }
         }
     }
 }
@@ -168,11 +177,11 @@ pub enum CheckerError {
 
     /// Hash mismatch for a node
     #[error(
-        "Hash mismatch for node {partial_path:?} at address {address:#x}: parent ({parent}) stored {parent_stored_hash}, computed {computed_hash}"
+        "Hash mismatch for node (path prefix: {path_prefix:?}) at address {address:#x}: parent ({parent:#x}) stored {parent_stored_hash}, computed {computed_hash}"
     )]
     HashMismatch {
         /// The path of the node
-        partial_path: Path,
+        path_prefix: Path,
         /// The address of the node
         address: LinearAddress,
         /// The parent of the node
@@ -185,7 +194,7 @@ pub enum CheckerError {
 
     /// The address is out of bounds
     #[error(
-        "stored area at {start:#x} with size {size} (parent: {parent}) is out of bounds ({bounds:#x?})"
+        "stored area at {start:#x} with size {size} (parent: {parent:#x}) is out of bounds ({bounds:#x?})"
     )]
     AreaOutOfBounds {
         /// Start of the `StoredArea`
@@ -200,7 +209,7 @@ pub enum CheckerError {
 
     /// Stored areas intersect
     #[error(
-        "stored area at {start:#x} with size {size} (parent: {parent}) intersects with other stored areas: {intersection:#x?}"
+        "stored area at {start:#x} with size {size} (parent: {parent:#x}) intersects with other stored areas: {intersection:#x?}"
     )]
     AreaIntersects {
         /// Start of the `StoredArea`
@@ -215,7 +224,7 @@ pub enum CheckerError {
 
     /// Freelist area size does not match
     #[error(
-        "Free area {address:#x} of size {size} (parent: {parent}) is found in free list {actual_free_list} but it should be in freelist {expected_free_list}"
+        "Free area {address:#x} of size {size} (parent: {parent:#x}) is found in free list {actual_free_list} but it should be in freelist {expected_free_list}"
     )]
     FreelistAreaSizeMismatch {
         /// Address of the free area
@@ -232,7 +241,7 @@ pub enum CheckerError {
 
     /// The start address of a stored area is not a multiple of 16
     #[error(
-        "The start address of a stored area (parent: {parent}) is not a multiple of {}: {address:#x}",
+        "The start address of a stored area (parent: {parent:#x}) is not a multiple of {}: {address:#x}",
         nodestore::alloc::MIN_AREA_SIZE
     )]
     AreaMisaligned {
@@ -244,7 +253,7 @@ pub enum CheckerError {
 
     /// Found leaked areas
     #[error("Found leaked areas: {0}")]
-    AreaLeaks(LinearAddressRangeSet),
+    AreaLeaks(checker::LinearAddressRangeSet),
 
     /// IO error
     #[error("IO error")]
