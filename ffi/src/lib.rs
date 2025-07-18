@@ -732,65 +732,6 @@ impl From<()> for Value {
     }
 }
 
-/// Proof response!!!!
-#[derive(Debug, Default)]
-#[repr(C)]
-pub struct ProofResponse {
-    pub proof_data: Option<std::ptr::NonNull<Value>>,
-    pub db_error: Option<std::ptr::NonNull<u8>>,
-    pub request_error: Option<std::ptr::NonNull<u8>>,
-}
-
-#[unsafe(no_mangle)]
-#[allow(unused_variables)]
-pub unsafe extern "C" fn fwd_get_range_proof(
-    db: Option<&DatabaseHandle<'_>>,
-    root: Value,
-    start: Value,
-    end: Value,
-) -> ProofResponse {
-    ProofResponse::default()
-}
-
-#[unsafe(no_mangle)]
-#[allow(unused_variables)]
-pub unsafe extern "C" fn fwd_commit_range_proof(
-    db: Option<&DatabaseHandle<'_>>,
-    root: Value,
-    start: Value,
-    end: Value,
-) -> ProofResponse {
-    ProofResponse::default()
-}
-
-#[unsafe(no_mangle)]
-#[allow(unused_variables)]
-pub unsafe extern "C" fn fwd_get_change_proof(
-    db: Option<&DatabaseHandle<'_>>,
-    start_root: Value,
-    end_root: Value,
-    start_key: Value,
-    end_key: Value,
-) -> ProofResponse {
-    ProofResponse::default()
-}
-
-#[unsafe(no_mangle)]
-#[allow(unused_variables)]
-pub unsafe extern "C" fn fwd_commit_change_proof(
-    db: Option<&DatabaseHandle<'_>>,
-    start_root: Value,
-    end_root: Value,
-    start_key: Value,
-    end_key: Value,
-) -> ProofResponse {
-    ProofResponse::default()
-}
-
-#[unsafe(no_mangle)]
-#[allow(unused_variables)]
-pub unsafe extern "C" fn fwd_free_proof_response(resp: Option<&mut ProofResponse>) {}
-
 /// Frees the memory associated with a `Value`.
 ///
 /// # Arguments
@@ -823,6 +764,67 @@ pub unsafe extern "C" fn fwd_free_value(value: Option<&mut Value>) {
         }
     }
 }
+
+/// Proof response!!!!
+#[derive(Debug, Default)]
+#[repr(C)]
+pub struct ProofResponse {
+    pub proof_data: Option<std::ptr::NonNull<Value>>,
+    pub db_error: Option<std::ptr::NonNull<u8>>,
+    pub request_error: Option<std::ptr::NonNull<u8>>,
+}
+
+#[unsafe(no_mangle)]
+#[allow(unused_variables)]
+pub unsafe extern "C" fn fwd_get_range_proof(
+    db: Option<&DatabaseHandle<'_>>,
+    root: Value,
+    start: Value,
+    end: Value,
+) -> ProofResponse {
+    ProofResponse::default()
+}
+
+#[unsafe(no_mangle)]
+#[allow(unused_variables)]
+pub unsafe extern "C" fn fwd_commit_range_proof(
+    db: Option<&DatabaseHandle<'_>>,
+    root: Value,
+    start: Value,
+    end: Value,
+    proof_bytes: Value,
+) -> ProofResponse {
+    ProofResponse::default()
+}
+
+#[unsafe(no_mangle)]
+#[allow(unused_variables)]
+pub unsafe extern "C" fn fwd_get_change_proof(
+    db: Option<&DatabaseHandle<'_>>,
+    start_root: Value,
+    end_root: Value,
+    start_key: Value,
+    end_key: Value,
+) -> ProofResponse {
+    ProofResponse::default()
+}
+
+#[unsafe(no_mangle)]
+#[allow(unused_variables)]
+pub unsafe extern "C" fn fwd_commit_change_proof(
+    db: Option<&DatabaseHandle<'_>>,
+    start_root: Value,
+    end_root: Value,
+    start_key: Value,
+    end_key: Value,
+    proof_bytes: Value,
+) -> ProofResponse {
+    ProofResponse::default()
+}
+
+#[unsafe(no_mangle)]
+#[allow(unused_variables)]
+pub unsafe extern "C" fn fwd_free_proof_response(resp: Option<&mut ProofResponse>) {}
 
 /// Struct returned by `fwd_create_db` and `fwd_open_db`
 #[derive(Debug)]

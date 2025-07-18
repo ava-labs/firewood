@@ -162,12 +162,14 @@ struct ProofResponse fwd_commit_change_proof(const struct DatabaseHandle *db,
                                              struct Value start_root,
                                              struct Value end_root,
                                              struct Value start_key,
-                                             struct Value end_key);
+                                             struct Value end_key,
+                                             struct Value proof_bytes);
 
 struct ProofResponse fwd_commit_range_proof(const struct DatabaseHandle *db,
                                             struct Value root,
                                             struct Value start,
-                                            struct Value end);
+                                            struct Value end,
+                                            struct Value proof_bytes);
 
 /**
  * Drops a proposal from the database.
