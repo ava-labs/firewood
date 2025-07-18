@@ -20,7 +20,7 @@ func NewProofClient(db *Database) *ProofClient {
 	return &ProofClient{db: db}
 }
 
-func (c *ProofClient) CommitRangeProof(root, startKey, endKey []byte) ([]byte, error) {
+func (c *ProofClient) CommitRangeProof(root, startKey, endKey, proofBytes []byte) ([]byte, error) {
 	if c.db.handle == nil {
 		return nil, errDBClosed
 	}
@@ -37,9 +37,10 @@ func (c *ProofClient) CommitRangeProof(root, startKey, endKey []byte) ([]byte, e
 		values.from(root),
 		values.from(startKey),
 		values.from(endKey),
+		values.from(proofBytes),
 	)
 
-	proofBytes, dbErr, reqErr := parseProofResponse(&proofResult)
+	nextKey, dbErr, reqErr := parseProofResponse(&proofResult)
 
 	// Any fatal error should take precedence.
 	if dbErr != nil {
@@ -48,10 +49,10 @@ func (c *ProofClient) CommitRangeProof(root, startKey, endKey []byte) ([]byte, e
 	if reqErr != nil {
 		return nil, reqErr
 	}
-	return proofBytes, nil
+	return nextKey, nil
 }
 
-func (c *ProofClient) CommitChangeProof(startRoot, endRoot, startKey, endKey []byte) ([]byte, error) {
+func (c *ProofClient) CommitChangeProof(startRoot, endRoot, startKey, endKey, proofBytes []byte) ([]byte, error) {
 	if c.db.handle == nil {
 		return nil, errDBClosed
 	}
@@ -69,9 +70,10 @@ func (c *ProofClient) CommitChangeProof(startRoot, endRoot, startKey, endKey []b
 		values.from(endRoot),
 		values.from(startKey),
 		values.from(endKey),
+		values.from(proofBytes),
 	)
 
-	proofBytes, dbErr, reqErr := parseProofResponse(&proofResult)
+	nextKey, dbErr, reqErr := parseProofResponse(&proofResult)
 
 	// Any fatal error should take precedence.
 	if dbErr != nil {
@@ -80,5 +82,5 @@ func (c *ProofClient) CommitChangeProof(startRoot, endRoot, startKey, endKey []b
 	if reqErr != nil {
 		return nil, reqErr
 	}
-	return proofBytes, nil
+	return nextKey, nil
 }

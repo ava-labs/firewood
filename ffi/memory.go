@@ -19,8 +19,8 @@ var (
 	errNilStruct = errors.New("nil struct pointer cannot be freed")
 	errBadValue  = errors.New("value from cgo formatted incorrectly")
 
-	DBError      = errors.New("db error")
-	RequestError = errors.New("db non-fatal error")
+	ErrDB      = errors.New("db error")
+	ErrRequest = errors.New("db non-fatal error")
 )
 
 // KeyValue is a key-value pair.
@@ -42,12 +42,12 @@ func parseProofResponse(resp *C.struct_ProofResponse) (proofBytes []byte, dbErro
 	proofBytes, _ = bytesFromValue(resp.proof_data)
 	if resp.db_error != nil {
 		errStr := C.GoString((*C.char)(unsafe.Pointer(resp.db_error)))
-		dbError = fmt.Errorf("%w: %s", DBError, errStr)
+		dbError = fmt.Errorf("%w: %s", ErrDB, errStr)
 	}
 
 	if resp.request_error != nil {
 		errStr := C.GoString((*C.char)(unsafe.Pointer(resp.request_error)))
-		requestError = fmt.Errorf("%w: %s", RequestError, errStr)
+		requestError = fmt.Errorf("%w: %s", ErrRequest, errStr)
 	}
 
 	return proofBytes, dbError, requestError
