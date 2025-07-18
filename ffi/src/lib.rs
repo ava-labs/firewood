@@ -13,6 +13,9 @@
     )
 )]
 
+use env_logger::Target::Pipe;
+use std::fs::OpenOptions;
+
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, OsStr, c_char};
 use std::fmt::{self, Display, Formatter};
@@ -968,16 +971,16 @@ fn start_logs(log_args: &LogArgs) -> Result<(), String> {
         .parse::<log::LevelFilter>()
         .map_err(|e| e.to_string())?;
 
+    let file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(log_path)
+        .map_err(|e| e.to_string())?;
+
     env_logger::Builder::new()
         .filter_level(level)
-        .target(env_logger::Target::Pipe(Box::new(
-            std::fs::OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(false)
-                .open(log_path)
-                .map_err(|e| e.to_string())?,
-        )))
+        .target(Pipe(Box::new(file)))
         .try_init()
         .map_err(|e| e.to_string())?;
 
