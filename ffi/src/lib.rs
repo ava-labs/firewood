@@ -955,9 +955,7 @@ fn start_logs(log_args: &LogArgs) -> Result<(), String> {
     let log_path =
         to_path(log_args.path).unwrap_or(Path::join(&std::env::temp_dir(), "firewood-log.txt"));
 
-    let log_dir = Path::new(&log_path)
-        .parent()
-        .ok_or("failed to get log directory")?;
+    let log_dir = log_path.parent().unwrap_or_else(|| Path::new("/"));
     std::fs::create_dir_all(log_dir).map_err(|e| e.to_string())?;
 
     let level_str = if log_args.filter_level.is_null() {
