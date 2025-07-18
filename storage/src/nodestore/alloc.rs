@@ -163,46 +163,79 @@ unsafe impl bytemuck::PodInOption for LinearAddress {}
 
 impl LinearAddress {
     /// Create a new `LinearAddress`, returns None if value is zero.
-    pub fn new(addr: u64) -> Option<Self> {
-        NonZeroU64::new(addr).map(LinearAddress)
+    #[expect(clippy::missing_panics_doc)]
+    #[inline]
+    #[must_use]
+    pub const fn new(addr: u64) -> Option<Self> {
+        match addr {
+            0 => None,
+            _ => Some(LinearAddress(NonZeroU64::new(addr).expect("non zero"))),
+        }
     }
 
     /// Get the underlying address as u64.
+    #[inline]
     #[must_use]
     pub const fn get(&self) -> u64 {
         self.0.get()
     }
 
     /// Check if the address is 8-byte aligned.
+    #[inline]
     #[must_use]
     pub const fn is_aligned(&self) -> bool {
         self.0.get() % 8 == 0
     }
 
     /// Returns the maximum area size available for allocation.
-    #[allow(clippy::missing_panics_doc)]
+    #[expect(clippy::missing_panics_doc)]
+    #[inline]
     #[must_use]
     pub const fn max_area_size() -> u64 {
-        *AREA_SIZES.last().expect("AREA_SIZES is never empty")
+        const { *AREA_SIZES.last().unwrap() }
     }
 
     /// Returns the minimum area size available for allocation.
+    #[expect(clippy::missing_panics_doc)]
+    #[inline]
     #[must_use]
-    #[allow(clippy::missing_panics_doc)]
     pub const fn min_area_size() -> u64 {
-        *AREA_SIZES.first().expect("AREA_SIZES is never empty")
+        const { *AREA_SIZES.first().unwrap() }
     }
 
     /// Returns the number of different area sizes available.
+    #[inline]
     #[must_use]
     pub const fn num_area_sizes() -> usize {
-        AREA_SIZES.len()
+        const { AREA_SIZES.len() }
     }
 
     /// Returns a reference to the inner `NonZeroU64`
+    #[inline]
     #[must_use]
     pub const fn as_nonzero(&self) -> &NonZeroU64 {
         &self.0
+    }
+
+    /// Advances a `LinearAddress` by `n` bytes.
+    ///
+    /// Returns `None` if the result overflows a u64
+    /// Some(LinearAddress) otherwise
+    ///
+    #[expect(clippy::missing_panics_doc)]
+    #[inline]
+    #[must_use]
+    pub const fn advance(self, n: u64) -> Option<Self> {
+        match self.0.get().checked_add(n) {
+            // overflowed
+            None => None,
+
+            // It is impossible to add a non-zero positive number to a u64 and get 0 without
+            // overflowing, so we don't check for that here, and panic instead.
+            Some(sum) => Some(LinearAddress(
+                NonZeroU64::new(sum).expect("sum cannot be zero"),
+            )),
+        }
     }
 }
 
@@ -695,9 +728,9 @@ impl<'a, S: ReadableStorage> FreeListIterator<'a, S> {
         }
     }
 
-    #[allow(
+    #[expect(
         clippy::type_complexity,
-        reason = "this iterator is private and will not be exposed"
+        reason = "TODO: we need some additional newtypes here"
     )]
     fn next_with_parent(
         &mut self,
@@ -1073,5 +1106,12 @@ mod tests {
 
             assert_eq!(next.unwrap().unwrap(), expected.unwrap());
         }
+    }
+
+    #[test]
+    fn const_expr_tests() {
+        // these are const expr
+        let _ = const { LinearAddress::new(0) };
+        let _ = const { LinearAddress::new(1).unwrap().advance(1u64) };
     }
 }
