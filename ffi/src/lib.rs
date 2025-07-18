@@ -920,7 +920,7 @@ unsafe fn open_db(args: &CreateOrOpenArgs) -> Result<Db, String> {
         )?)
         .build();
 
-    let path = to_path(args.path).ok_or("failed to provide path")?;
+    let path = to_path(args.path).ok_or("database path is empty")?;
     Db::new_sync(path, cfg).map_err(|e| e.to_string())
 }
 
