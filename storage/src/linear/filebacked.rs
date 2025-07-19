@@ -212,13 +212,13 @@ impl WritableStorage for FileBacked {
         }
     }
 
-    fn write_cached_nodes<'a>(
+    fn write_cached_nodes(
         &self,
-        nodes: impl Iterator<Item = (&'a std::num::NonZero<u64>, &'a SharedNode)>,
+        nodes: impl IntoIterator<Item = (std::num::NonZero<u64>, SharedNode)>,
     ) -> Result<(), FileIoError> {
         let mut guard = self.cache.lock().expect("poisoned lock");
         for (addr, node) in nodes {
-            guard.put(*addr, node.clone());
+            guard.put(addr, node);
         }
         Ok(())
     }

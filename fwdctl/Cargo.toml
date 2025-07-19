@@ -36,6 +36,7 @@ nonzero_ext = "0.3.0"
 
 [features]
 ethhash = ["firewood/ethhash"]
+logger = ["firewood/logger"]
 
 [dev-dependencies]
 anyhow = "1.0.98"
