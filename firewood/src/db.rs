@@ -700,6 +700,93 @@ mod test {
         assert_eq!(&*value, b"proposal_value");
     }
 
+    #[tokio::test]
+    async fn test_propose_on_proposal() {
+        let db = testdb().await;
+
+        // create 20 keys and values like (key0, value0)..(key19, value19)
+        let keys = (0..20)
+            .map(|i| format!("key{i}").as_bytes().to_vec())
+            .collect::<Vec<_>>();
+        let vals = (0..20)
+            .map(|i| format!("value{i}").as_bytes().to_vec())
+            .collect::<Vec<_>>();
+
+        // create two batches, one with the first 10 keys and values, and one with the last 10 keys and values
+        let batch1 = keys
+            .iter()
+            .take(10)
+            .zip(vals.iter().take(10))
+            .map(|(k, v)| BatchOp::Put { key: k, value: v })
+            .collect::<Vec<_>>();
+        let batch2 = keys
+            .iter()
+            .skip(10)
+            .zip(vals.iter().skip(10))
+            .map(|(k, v)| BatchOp::Put { key: k, value: v })
+            .collect::<Vec<_>>();
+
+        // create two proposals
+        let proposal1 = db.propose(batch1).await.unwrap();
+
+        for (k, v) in keys.iter().take(10).zip(vals.iter()) {
+            // first half of keys are in the first proposal
+            assert_eq!(
+                proposal1.val(k).await.unwrap().unwrap(),
+                v.clone().into_boxed_slice()
+            );
+        }
+
+        let proposal2 = proposal1.clone().propose(batch2).await.unwrap();
+
+        for (k, v) in keys.iter().take(10).zip(vals.iter()) {
+            // first half of keys are in the first proposal
+            assert_eq!(
+                proposal1.val(k).await.unwrap().unwrap(),
+                v.clone().into_boxed_slice()
+            );
+            // and in the second
+            assert_eq!(
+                proposal2.val(k).await.unwrap().unwrap(),
+                v.clone().into_boxed_slice()
+            );
+        }
+
+        for (k, v) in keys.iter().skip(10).zip(vals.iter().skip(10)) {
+            // second half of keys are in the second proposal
+            assert_eq!(
+                proposal2.val(k).await.unwrap().unwrap(),
+                v.clone().into_boxed_slice()
+            );
+            // but not in the first
+            assert_eq!(proposal1.val(k).await.unwrap(), None);
+        }
+
+        proposal1.commit().await.unwrap();
+
+        // all keys are in the second proposal
+        for (k, v) in keys.iter().zip(vals.iter()) {
+            assert_eq!(
+                proposal2.val(k).await.unwrap().unwrap(),
+                v.clone().into_boxed_slice()
+            );
+        }
+
+        // commit the second proposal
+        proposal2.commit().await.unwrap();
+
+        // all keys are in the database
+        let committed = db.root_hash().await.unwrap().unwrap();
+        let revision = db.revision(committed).await.unwrap();
+
+        for (k, v) in keys.iter().zip(vals.iter()) {
+            assert_eq!(
+                revision.val(k).await.unwrap().unwrap(),
+                v.clone().into_boxed_slice()
+            );
+        }
+    }
+
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
     struct TestDb {
         db: Db,
