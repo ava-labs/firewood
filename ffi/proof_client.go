@@ -20,12 +20,16 @@ func NewProofClient(db *Database) *ProofClient {
 	return &ProofClient{db: db}
 }
 
-func (c *ProofClient) CommitRangeProof(root, startKey, endKey, proofBytes []byte) ([]byte, error) {
+// CommitRangeProof verifies and commits a range proof to the database.
+// It returns the next key to retrieve if successful, or an error if the operation fails.
+// If the request doesn't match the expected root or is malformed, it returns a `ErrRequest`.
+// If there is a database error, it returns an `ErrDB`.
+func (c *ProofClient) CommitRangeProof(targetRoot, proofBytes []byte) ([]byte, error) {
 	if c.db.handle == nil {
 		return nil, errDBClosed
 	}
 
-	if len(root) == 0 || bytes.Equal(root, EmptyRoot) {
+	if len(targetRoot) == 0 || bytes.Equal(targetRoot, EmptyRoot) {
 		return nil, nil
 	}
 
@@ -34,30 +38,23 @@ func (c *ProofClient) CommitRangeProof(root, startKey, endKey, proofBytes []byte
 
 	proofResult := C.fwd_commit_range_proof(
 		c.db.handle,
-		values.from(root),
-		values.from(startKey),
-		values.from(endKey),
+		values.from(targetRoot),
 		values.from(proofBytes),
 	)
 
-	nextKey, dbErr, reqErr := parseProofResponse(&proofResult)
-
-	// Any fatal error should take precedence.
-	if dbErr != nil {
-		return nil, dbErr
-	}
-	if reqErr != nil {
-		return nil, reqErr
-	}
-	return nextKey, nil
+	return parseProofResponse(&proofResult)
 }
 
-func (c *ProofClient) CommitChangeProof(startRoot, endRoot, startKey, endKey, proofBytes []byte) ([]byte, error) {
+// CommitChangeProof verifies and commits a change proof to the database.
+// It returns the next key to retrieve if successful, or an error if the operation fails.
+// If the request doesn't match the expected root or is malformed, it returns a `ErrRequest`.
+// If there is a database error, it returns an `ErrDB`.
+func (c *ProofClient) CommitChangeProof(targetStartRoot, targetEndRoot, proofBytes []byte) ([]byte, error) {
 	if c.db.handle == nil {
 		return nil, errDBClosed
 	}
 
-	if len(endRoot) == 0 || bytes.Equal(endRoot, EmptyRoot) {
+	if len(targetEndRoot) == 0 || bytes.Equal(targetEndRoot, EmptyRoot) {
 		return nil, nil
 	}
 
@@ -66,21 +63,10 @@ func (c *ProofClient) CommitChangeProof(startRoot, endRoot, startKey, endKey, pr
 
 	proofResult := C.fwd_commit_change_proof(
 		c.db.handle,
-		values.from(startRoot),
-		values.from(endRoot),
-		values.from(startKey),
-		values.from(endKey),
+		values.from(targetStartRoot),
+		values.from(targetEndRoot),
 		values.from(proofBytes),
 	)
 
-	nextKey, dbErr, reqErr := parseProofResponse(&proofResult)
-
-	// Any fatal error should take precedence.
-	if dbErr != nil {
-		return nil, dbErr
-	}
-	if reqErr != nil {
-		return nil, reqErr
-	}
-	return nextKey, nil
+	return parseProofResponse(&proofResult)
 }

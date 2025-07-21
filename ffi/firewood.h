@@ -5,6 +5,13 @@
 #include <stdlib.h>
 
 
+enum ErrorType {
+  NoError,
+  RequestError,
+  DbError,
+};
+typedef uint8_t ErrorType;
+
 /**
  * A handle to the database, returned by `fwd_create_db` and `fwd_open_db`.
  *
@@ -46,8 +53,8 @@ typedef struct KeyValue {
  */
 typedef struct ProofResponse {
   struct Value *proof_data;
-  uint8_t *db_error;
-  uint8_t *request_error;
+  ErrorType error_type;
+  uint8_t *error_str;
 } ProofResponse;
 
 /**
@@ -159,16 +166,12 @@ void fwd_close_db(struct DatabaseHandle *db);
 struct Value fwd_commit(const struct DatabaseHandle *db, uint32_t proposal_id);
 
 struct ProofResponse fwd_commit_change_proof(const struct DatabaseHandle *db,
-                                             struct Value start_root,
-                                             struct Value end_root,
-                                             struct Value start_key,
-                                             struct Value end_key,
+                                             struct Value target_start_root,
+                                             struct Value target_end_root,
                                              struct Value proof_bytes);
 
 struct ProofResponse fwd_commit_range_proof(const struct DatabaseHandle *db,
-                                            struct Value root,
-                                            struct Value start,
-                                            struct Value end,
+                                            struct Value target_root,
                                             struct Value proof_bytes);
 
 /**

@@ -20,6 +20,10 @@ func NewProofServer(db *Database) *ProofServer {
 	return &ProofServer{db: db}
 }
 
+// GetRangeProof retrieves a range proof for the specified root and key range.
+// It returns the proof bytes if successful, or an error if the operation fails.
+// If the root isn't available, it returns an `ErrRequest`.
+// If there is a database error, it returns an `ErrDB`.
 func (s *ProofServer) GetRangeProof(root, startKey, endKey []byte) ([]byte, error) {
 	if s.db.handle == nil {
 		return nil, errDBClosed
@@ -38,19 +42,13 @@ func (s *ProofServer) GetRangeProof(root, startKey, endKey []byte) ([]byte, erro
 		values.from(startKey),
 		values.from(endKey),
 	)
-
-	proofBytes, dbErr, reqErr := parseProofResponse(&proofResult)
-
-	// Any fatal error should take precedence.
-	if dbErr != nil {
-		return nil, dbErr
-	}
-	if reqErr != nil {
-		return nil, reqErr
-	}
-	return proofBytes, nil
+	return parseProofResponse(&proofResult)
 }
 
+// GetChangeProof retrieves a change proof for the specified start and end roots and key range.
+// It returns the proof bytes if successful, or an error if the operation fails.
+// If the start and/or end roots aren't available, it returns an `ErrRequest`.
+// If there is a database error, it returns an `ErrDB`.
 func (s *ProofServer) GetChangeProof(startRoot, endRoot, startKey, endKey []byte) ([]byte, error) {
 	if s.db.handle == nil {
 		return nil, errDBClosed
@@ -71,14 +69,5 @@ func (s *ProofServer) GetChangeProof(startRoot, endRoot, startKey, endKey []byte
 		values.from(endKey),
 	)
 
-	proofBytes, dbErr, reqErr := parseProofResponse(&proofResult)
-
-	// Any fatal error should take precedence.
-	if dbErr != nil {
-		return nil, dbErr
-	}
-	if reqErr != nil {
-		return nil, reqErr
-	}
-	return proofBytes, nil
+	return parseProofResponse(&proofResult)
 }

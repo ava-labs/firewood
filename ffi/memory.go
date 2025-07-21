@@ -19,8 +19,9 @@ var (
 	errNilStruct = errors.New("nil struct pointer cannot be freed")
 	errBadValue  = errors.New("value from cgo formatted incorrectly")
 
+	ErrUnknown = errors.New("unknown error")
 	ErrDB      = errors.New("db error")
-	ErrRequest = errors.New("db non-fatal error")
+	ErrRequest = errors.New("request error")
 )
 
 // KeyValue is a key-value pair.
@@ -29,28 +30,38 @@ type KeyValue struct {
 	Value []byte
 }
 
-func parseProofResponse(resp *C.struct_ProofResponse) (proofBytes []byte, dbError error, requestError error) {
+func parseProofResponse(resp *C.struct_ProofResponse) ([]byte, error) {
 	defer runtime.KeepAlive(resp)
 
 	if resp == nil {
-		return nil, errNilStruct, nil
+		return nil, errNilStruct
 	}
 
 	defer C.fwd_free_proof_response(resp)
 
 	// Assume value is well-formed.
-	proofBytes, _ = bytesFromValue(resp.proof_data)
-	if resp.db_error != nil {
-		errStr := C.GoString((*C.char)(unsafe.Pointer(resp.db_error)))
-		dbError = fmt.Errorf("%w: %s", ErrDB, errStr)
+	proofBytes, _ := bytesFromValue(resp.proof_data)
+	var errStr string
+	if resp.error_str != nil {
+		errStr = C.GoString((*C.char)(unsafe.Pointer(resp.error_str)))
 	}
 
-	if resp.request_error != nil {
-		errStr := C.GoString((*C.char)(unsafe.Pointer(resp.request_error)))
-		requestError = fmt.Errorf("%w: %s", ErrRequest, errStr)
+	// Parse the error type.
+	var err error
+	switch resp.error_type {
+	case C.DbError:
+		err = fmt.Errorf("%w: %s", ErrDB, errStr)
+	case C.RequestError:
+		err = fmt.Errorf("%w: %s", ErrRequest, errStr)
+	case C.NoError:
+		if errStr != "" {
+			err = errBadValue
+		}
+	default:
+		err = fmt.Errorf("%w: %s", ErrUnknown, errStr)
 	}
 
-	return proofBytes, dbError, requestError
+	return proofBytes, err
 }
 
 // hashAndIDFromValue converts the cgo `Value` payload into:
