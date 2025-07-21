@@ -943,7 +943,7 @@ pub struct LogArgs {
 ///
 /// # Arguments
 ///
-/// See `LogsArgs`.
+/// See `LogArgs`.
 ///
 /// # Returns
 ///
