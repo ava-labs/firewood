@@ -414,7 +414,7 @@ struct Value fwd_root_hash(const struct DatabaseHandle *db);
  *
  * # Arguments
  *
- * See `LogsArgs`.
+ * See `LogArgs`.
  *
  * # Returns
  *
