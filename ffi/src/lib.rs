@@ -13,13 +13,6 @@
     )
 )]
 
-#[cfg(feature = "logger")]
-use env_logger::Target::Pipe;
-#[cfg(feature = "logger")]
-use std::fs::OpenOptions;
-#[cfg(feature = "logger")]
-use std::path::Path;
-
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, OsStr, c_char};
 use std::fmt::{self, Display, Formatter};
@@ -960,6 +953,10 @@ pub extern "C" fn fwd_start_logs(args: Option<&LogArgs>) -> Value {
 #[cfg(feature = "logger")]
 #[doc(hidden)]
 fn start_logs(log_args: &LogArgs) -> Result<(), String> {
+    use env_logger::Target::Pipe;
+    use std::fs::OpenOptions;
+    use std::path::Path;
+
     let log_path =
         to_path(log_args.path).unwrap_or(Path::join(&std::env::temp_dir(), "firewood-log.txt"));
 
