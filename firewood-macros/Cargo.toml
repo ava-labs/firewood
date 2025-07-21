@@ -21,8 +21,8 @@ syn = { version = "2.0", features = ["full", "extra-traits"] }
 
 [dev-dependencies]
 trybuild = "1.0"
-metrics = "0.24"
-coarsetime = "0.1"
+metrics.workspace = true
+coarsetime.workspace = true
 
 [lints]
 workspace = true

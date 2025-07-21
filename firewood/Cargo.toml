@@ -26,16 +26,16 @@ rust-version.workspace = true
 aquamarine = "0.6.0"
 async-trait = "0.1.88"
 futures = "0.3.31"
-hex = "0.4.3"
-metrics = { workspace = true }
-sha2 = { workspace = true }
-test-case = "3.3.1"
-thiserror = { workspace = true }
+hex.workspace = true
+metrics.workspace = true
+sha2.workspace = true
+test-case.workspace = true
+thiserror.workspace = true
 typed-builder = "0.21.0"
-fastrace = { workspace = true }
-coarsetime = { workspace = true }
+fastrace.workspace = true
+coarsetime.workspace = true
 firewood-macros.workspace = true
-tokio = "1.0.0"
+tokio.workspace = true
 
 [features]
 default = []
@@ -48,17 +48,17 @@ ethhash = [ "firewood-storage/ethhash" ]
 [dev-dependencies]
 firewood-triehash.workspace = true
 criterion = { workspace = true, features = ["async_tokio"] }
-rand = { workspace = true }
-rand_distr = "0.5.1"
-clap = { version = "4.5.40", features = ['derive'] }
+rand.workspace = true
+rand_distr.workspace = true
+clap = { workspace = true, features = ['derive'] }
 pprof = { workspace = true, features = ["flamegraph"] }
-tempfile = { workspace = true }
-tokio = { version = "1.46.0", features = ["rt", "sync", "macros", "rt-multi-thread"] }
-ethereum-types = { workspace = true }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "macros", "rt-multi-thread"] }
+ethereum-types.workspace = true
 sha3 = "0.10.8"
 plain_hasher = "0.2.3"
-hex-literal = { workspace = true }
-env_logger = "0.11.8"
+hex-literal.workspace = true
+env_logger.workspace = true
 hash-db = "0.16.0"
 
 [[bench]]
