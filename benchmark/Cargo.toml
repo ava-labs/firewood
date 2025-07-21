@@ -18,24 +18,26 @@ name = "benchmark"
 path = "src/main.rs"
 
 [dependencies]
+# Workspace dependencies
+clap = { workspace = true, features = ['string'] }
+env_logger.workspace = true
+fastrace = { workspace = true, features = ["enable"] }
 firewood.workspace = true
 hex.workspace = true
-clap = { workspace = true, features = ['string'] }
-sha2.workspace = true
+log.workspace = true
 metrics.workspace = true
 metrics-util.workspace = true
-metrics-exporter-prometheus = "0.17.2"
-tokio = { workspace = true, features = ["rt", "sync", "macros", "rt-multi-thread"] }
 rand.workspace = true
 rand_distr.workspace = true
-pretty-duration = "0.1.1"
-env_logger.workspace = true
-log.workspace = true
-fastrace = { workspace = true, features = ["enable"] }
+sha2.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "macros", "rt-multi-thread"] }
+# Regular dependencies
 fastrace-opentelemetry = { version = "0.13.0" }
-opentelemetry-otlp = { version = "0.30.0", features = ["grpc-tonic"] }
+metrics-exporter-prometheus = "0.17.2"
 opentelemetry = "0.30.0"
+opentelemetry-otlp = { version = "0.30.0", features = ["grpc-tonic"] }
 opentelemetry_sdk = "0.30.0"
+pretty-duration = "0.1.1"
 
 [target.'cfg(unix)'.dependencies]
 tikv-jemallocator = "0.6.0"
