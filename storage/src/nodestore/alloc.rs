@@ -198,10 +198,10 @@ impl LinearAddress {
         const { AREA_SIZES.len() }
     }
 
-    /// Returns a reference to the inner `NonZeroU64`
+    /// Returns the inner `NonZeroU64`
     #[inline]
     #[must_use]
-    pub const fn as_nonzero(self) -> NonZeroU64 {
+    pub const fn into_nonzero(self) -> NonZeroU64 {
         self.0
     }
 
