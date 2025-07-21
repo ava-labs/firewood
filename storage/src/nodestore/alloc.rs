@@ -23,9 +23,11 @@
 use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::branch::{ReadSerializable, Serializable};
-use crate::nodestore::is_aligned;
 use integer_encoding::VarIntReader;
+use metrics::counter;
+
 use sha2::{Digest, Sha256};
+use std::fmt;
 use std::io::{Error, ErrorKind, Read};
 use std::iter::FusedIterator;
 use std::num::NonZeroU64;
@@ -33,9 +35,7 @@ use std::sync::Arc;
 
 use crate::node::persist::MaybePersistedNode;
 use crate::node::{ByteCounter, ExtendableBytes, Node};
-use crate::{
-    CacheReadStrategy, FreeListParent, ReadableStorage, SharedNode, TrieHash, firewood_counter,
-};
+use crate::{CacheReadStrategy, FreeListParent, ReadableStorage, SharedNode, TrieHash};
 
 use crate::linear::WritableStorage;
 
@@ -114,9 +114,9 @@ pub const fn index_name(index: usize) -> &'static str {
 /// This is not usize because we can store this as a single byte
 pub type AreaIndex = u8;
 
-pub const NUM_AREA_SIZES: usize = AREA_SIZES.len();
-pub const MIN_AREA_SIZE: u64 = AREA_SIZES[0];
-pub const MAX_AREA_SIZE: u64 = AREA_SIZES[NUM_AREA_SIZES - 1];
+const NUM_AREA_SIZES: usize = AREA_SIZES.len();
+const MIN_AREA_SIZE: u64 = AREA_SIZES[0];
+const MAX_AREA_SIZE: u64 = AREA_SIZES[NUM_AREA_SIZES - 1];
 
 #[inline]
 pub fn new_area_index(n: usize) -> AreaIndex {
@@ -148,12 +148,143 @@ pub fn area_size_to_index(n: u64) -> Result<AreaIndex, Error> {
         })
 }
 
-/// Objects cannot be stored at the zero address, so a [`LinearAddress`] is guaranteed not
-/// to be zero. This reserved zero can be used as a [None] value for some use cases. In particular,
-/// branches can use `Option<LinearAddress>` which is the same size as a [`LinearAddress`]
-pub type LinearAddress = NonZeroU64;
+/// A linear address in the nodestore storage.
+///
+/// This represents a non-zero address in the linear storage space.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct LinearAddress(NonZeroU64);
 
-pub type FreeLists = [Option<LinearAddress>; NUM_AREA_SIZES];
+#[expect(unsafe_code)]
+unsafe impl bytemuck::ZeroableInOption for LinearAddress {}
+#[expect(unsafe_code)]
+unsafe impl bytemuck::PodInOption for LinearAddress {}
+
+impl LinearAddress {
+    /// Create a new `LinearAddress`, returns None if value is zero.
+    #[inline]
+    #[must_use]
+    pub const fn new(addr: u64) -> Option<Self> {
+        match NonZeroU64::new(addr) {
+            Some(addr) => Some(LinearAddress(addr)),
+            None => None,
+        }
+    }
+
+    /// Get the underlying address as u64.
+    #[inline]
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+
+    /// Check if the address is 8-byte aligned.
+    #[inline]
+    #[must_use]
+    pub const fn is_aligned(self) -> bool {
+        self.0.get() % (Self::MIN_AREA_SIZE) == 0
+    }
+
+    /// The maximum area size available for allocation.
+    pub const MAX_AREA_SIZE: u64 = *AREA_SIZES.last().unwrap();
+
+    /// The minimum area size available for allocation.
+    pub const MIN_AREA_SIZE: u64 = *AREA_SIZES.first().unwrap();
+
+    /// Returns the number of different area sizes available.
+    #[inline]
+    #[must_use]
+    pub const fn num_area_sizes() -> usize {
+        const { AREA_SIZES.len() }
+    }
+
+    /// Returns the inner `NonZeroU64`
+    #[inline]
+    #[must_use]
+    pub const fn into_nonzero(self) -> NonZeroU64 {
+        self.0
+    }
+
+    /// Advances a `LinearAddress` by `n` bytes.
+    ///
+    /// Returns `None` if the result overflows a u64
+    /// Some(LinearAddress) otherwise
+    ///
+    #[inline]
+    #[must_use]
+    pub const fn advance(self, n: u64) -> Option<Self> {
+        match self.0.checked_add(n) {
+            // overflowed
+            None => None,
+
+            // It is impossible to add a non-zero positive number to a u64 and get 0 without
+            // overflowing, so we don't check for that here, and panic instead.
+            Some(sum) => Some(LinearAddress(sum)),
+        }
+    }
+}
+
+impl std::ops::Add for LinearAddress {
+    type Output = Self;
+    fn add(self, other: Self) -> Self {
+        self.checked_add(other.get())
+            .map(LinearAddress)
+            .expect("non zero result")
+    }
+}
+
+impl num_traits::CheckedAdd for LinearAddress {
+    fn checked_add(&self, other: &Self) -> Option<Self> {
+        self.0.checked_add(other.get()).map(LinearAddress)
+    }
+}
+
+impl std::ops::Deref for LinearAddress {
+    type Target = NonZeroU64;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl fmt::Display for LinearAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        std::fmt::Display::fmt(&self.get(), f)
+    }
+}
+
+impl fmt::LowerHex for LinearAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        std::fmt::LowerHex::fmt(&self.get(), f)
+    }
+}
+impl From<LinearAddress> for u64 {
+    fn from(addr: LinearAddress) -> Self {
+        addr.get()
+    }
+}
+
+impl From<NonZeroU64> for LinearAddress {
+    fn from(addr: NonZeroU64) -> Self {
+        LinearAddress(addr)
+    }
+}
+
+/// Every item stored in the [`NodeStore`]'s `ReadableStorage`  after the
+/// `NodeStoreHeader` is a [`StoredArea`].
+///
+/// As an overview of what this looks like stored, we get something like this:
+///  - Byte 0: The index of the area size
+///  - Byte 1: 0x255 if free, otherwise the low-order bit indicates Branch or Leaf
+///  - Bytes 2..n: The actual data
+#[derive(PartialEq, Eq, Clone, Debug)]
+pub struct StoredArea<T> {
+    /// Index in [`AREA_SIZES`] of this area's size
+    area_size_index: AreaIndex,
+    area: T,
+}
+
+/// `FreeLists` is an array of `Option<LinearAddress>` for each area size.
+pub type FreeLists = [Option<LinearAddress>; AREA_SIZES.len()];
 
 /// A [`FreeArea`] is stored at the start of the area that contained a node that
 /// has been freed.
@@ -345,7 +476,7 @@ impl<T: ReadInMemoryNode, S: ReadableStorage> NodeStore<T, S> {
             return Ok(node);
         }
 
-        debug_assert!(is_aligned(addr));
+        debug_assert!(addr.is_aligned());
 
         // saturating because there is no way we can be reading at u64::MAX
         // and this will fail very soon afterwards
@@ -459,18 +590,10 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 *free_stored_area_addr = free_head.next_free_block;
             }
 
-            firewood_counter!(
-                "firewood.space.reused",
-                "Bytes reused from free list by index",
-                "index" => index_name(index)
-            )
-            .increment(AREA_SIZES[index]);
-            firewood_counter!(
-                "firewood.space.wasted",
-                "Bytes wasted from free list by index",
-                "index" => index_name(index)
-            )
-            .increment(AREA_SIZES[index].saturating_sub(n));
+            counter!("firewood.space.reused", "index" => index_name(index))
+                .increment(AREA_SIZES[index]);
+            counter!("firewood.space.wasted", "index" => index_name(index))
+                .increment(AREA_SIZES[index].saturating_sub(n));
 
             // Return the address of the newly allocated block.
             trace!("Allocating from free list: addr: {address:?}, size: {index}");
@@ -478,12 +601,8 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         }
 
         trace!("No free blocks of sufficient size {index_wanted} found");
-        firewood_counter!(
-            "firewood.space.from_end",
-            "Space allocated from end of nodestore",
-            "index" => index_name(index_wanted as usize)
-        )
-        .increment(AREA_SIZES[index_wanted as usize]);
+        counter!("firewood.space.from_end", "index" => index_name(index_wanted as usize))
+            .increment(AREA_SIZES[index_wanted as usize]);
         Ok(None)
     }
 
@@ -497,7 +616,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         let addr = LinearAddress::new(self.header.size()).expect("node store size can't be 0");
         self.header
             .set_size(self.header.size().saturating_add(area_size));
-        debug_assert!(is_aligned(addr));
+        debug_assert!(addr.is_aligned());
         trace!("Allocating from end: addr: {addr:?}, size: {index}");
         Ok((addr, index))
     }
@@ -548,22 +667,14 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         let Some(addr) = node.as_linear_address() else {
             return Ok(());
         };
-        debug_assert!(is_aligned(addr));
+        debug_assert!(addr.is_aligned());
 
         let (area_size_index, _) = self.area_index_and_size(addr)?;
         trace!("Deleting node at {addr:?} of size {area_size_index}");
-        firewood_counter!(
-            "firewood.delete_node",
-            "Nodes deleted",
-            "index" => index_name(area_size_index as usize)
-        )
-        .increment(1);
-        firewood_counter!(
-            "firewood.space.freed",
-            "Bytes freed in nodestore",
-            "index" => index_name(area_size_index as usize)
-        )
-        .increment(AREA_SIZES[area_size_index as usize]);
+        counter!("firewood.delete_node", "index" => index_name(area_size_index as usize))
+            .increment(1);
+        counter!("firewood.space.freed", "index" => index_name(area_size_index as usize))
+            .increment(AREA_SIZES[area_size_index as usize]);
 
         // The area that contained the node is now free.
         let mut stored_area_bytes = Vec::new();
@@ -602,9 +713,9 @@ impl<'a, S: ReadableStorage> FreeListIterator<'a, S> {
         }
     }
 
-    #[allow(
+    #[expect(
         clippy::type_complexity,
-        reason = "this iterator is private and will not be exposed"
+        reason = "TODO: we need some additional newtypes here"
     )]
     fn next_with_parent(
         &mut self,
@@ -651,7 +762,7 @@ pub(crate) struct FreeAreaWithMetadata {
 pub(crate) struct FreeListsIterator<'a, S: ReadableStorage> {
     storage: &'a S,
     free_lists_iter: std::iter::Skip<
-        std::iter::Enumerate<std::slice::Iter<'a, std::option::Option<std::num::NonZero<u64>>>>,
+        std::iter::Enumerate<std::slice::Iter<'a, std::option::Option<LinearAddress>>>,
     >,
     current_free_list_id: AreaIndex,
     free_list_iter: FreeListIterator<'a, S>,
@@ -820,7 +931,6 @@ mod tests {
     use rand::seq::IteratorRandom;
     use test_case::test_case;
 
-    // StoredArea::new(12, Area::<Node, _>::Free(FreeArea::new(LinearAddress::new(42))));
     #[test_case(&[0x01, 0x01, 0x01, 0x2a], Some((1, 42)); "old format")]
     // StoredArea::new(12, Area::<Node, _>::Free(FreeArea::new(None)));
     #[test_case(&[0x02, 0x01, 0x00], Some((2, 0)); "none")]
@@ -981,5 +1091,12 @@ mod tests {
 
             assert_eq!(next.unwrap().unwrap(), expected.unwrap());
         }
+    }
+
+    #[test]
+    fn const_expr_tests() {
+        // these are const expr
+        let _ = const { LinearAddress::new(0) };
+        let _ = const { LinearAddress::new(1).unwrap().advance(1u64) };
     }
 }
