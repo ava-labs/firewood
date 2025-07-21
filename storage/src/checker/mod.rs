@@ -194,7 +194,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             };
 
             let next_addr = current_addr
-                .checked_add(area_size)
+                .advance(area_size)
                 .expect("address overflow is impossible");
             match next_addr.cmp(&leaked_range.end) {
                 Ordering::Equal => {
@@ -212,8 +212,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                 Ordering::Less => {
                     // continue to the next area
                     leaked.push((current_addr, area_index));
-                    current_addr =
-                        LinearAddress::new(next_addr.get()).expect("next_addr is non-zero");
+                    current_addr = next_addr;
                 }
             }
         }
@@ -223,12 +222,11 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         for (area_index, area_size) in AREA_SIZES.iter().enumerate().rev() {
             loop {
                 let next_addr = current_addr
-                    .checked_add(*area_size)
+                    .advance(*area_size)
                     .expect("address overflow is impossible");
-                if next_addr <= *leaked_range.end {
+                if next_addr <= leaked_range.end {
                     leaked.push((current_addr, area_index as AreaIndex));
-                    current_addr =
-                        LinearAddress::new(next_addr.get()).expect("next_addr is non-zero");
+                    current_addr = next_addr;
                 } else {
                     break;
                 }

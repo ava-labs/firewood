@@ -762,7 +762,7 @@ mod tests {
     #[test]
     fn area_sizes_aligned() {
         for area_size in &AREA_SIZES {
-            assert_eq!(area_size % LinearAddress::min_area_size(), 0);
+            assert_eq!(area_size % LinearAddress::MIN_AREA_SIZE, 0);
         }
     }
 
@@ -787,11 +787,11 @@ mod tests {
             }
         }
 
-        for i in 0..=LinearAddress::min_area_size() {
+        for i in 0..=LinearAddress::MIN_AREA_SIZE {
             assert_eq!(area_size_to_index(i).unwrap(), 0);
         }
 
-        assert!(area_size_to_index(LinearAddress::max_area_size() + 1).is_err());
+        assert!(area_size_to_index(LinearAddress::MAX_AREA_SIZE + 1).is_err());
     }
 
     #[test]

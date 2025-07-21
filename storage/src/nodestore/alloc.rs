@@ -148,7 +148,6 @@ pub fn area_size_to_index(n: u64) -> Result<AreaIndex, Error> {
         })
 }
 
-// pub type LinearAddress = NonZeroU64;
 /// A linear address in the nodestore storage.
 ///
 /// This represents a non-zero address in the linear storage space.
@@ -176,7 +175,7 @@ impl LinearAddress {
     /// Get the underlying address as u64.
     #[inline]
     #[must_use]
-    pub const fn get(&self) -> u64 {
+    pub const fn get(self) -> u64 {
         self.0.get()
     }
 
@@ -184,24 +183,14 @@ impl LinearAddress {
     #[inline]
     #[must_use]
     pub const fn is_aligned(&self) -> bool {
-        self.0.get() % 8 == 0
+        self.0.get() % (Self::MIN_AREA_SIZE) == 0
     }
 
-    /// Returns the maximum area size available for allocation.
-    #[expect(clippy::missing_panics_doc)]
-    #[inline]
-    #[must_use]
-    pub const fn max_area_size() -> u64 {
-        const { *AREA_SIZES.last().unwrap() }
-    }
+    /// The maximum area size available for allocation.
+    pub const MAX_AREA_SIZE: u64 = *AREA_SIZES.last().unwrap();
 
-    /// Returns the minimum area size available for allocation.
-    #[expect(clippy::missing_panics_doc)]
-    #[inline]
-    #[must_use]
-    pub const fn min_area_size() -> u64 {
-        const { *AREA_SIZES.first().unwrap() }
-    }
+    /// The minimum area size available for allocation.
+    pub const MIN_AREA_SIZE: u64 = *AREA_SIZES.first().unwrap();
 
     /// Returns the number of different area sizes available.
     #[inline]
@@ -222,19 +211,16 @@ impl LinearAddress {
     /// Returns `None` if the result overflows a u64
     /// Some(LinearAddress) otherwise
     ///
-    #[expect(clippy::missing_panics_doc)]
     #[inline]
     #[must_use]
     pub const fn advance(self, n: u64) -> Option<Self> {
-        match self.0.get().checked_add(n) {
+        match self.0.checked_add(n) {
             // overflowed
             None => None,
 
             // It is impossible to add a non-zero positive number to a u64 and get 0 without
             // overflowing, so we don't check for that here, and panic instead.
-            Some(sum) => Some(LinearAddress(
-                NonZeroU64::new(sum).expect("sum cannot be zero"),
-            )),
+            Some(sum) => Some(LinearAddress(sum)),
         }
     }
 }
@@ -311,7 +297,7 @@ pub struct FreeArea {
 impl Serializable for FreeArea {
     fn write_to<W: crate::node::ExtendableBytes>(&self, vec: &mut W) {
         vec.push(0xff); // 0xff indicates a free area
-        vec.extend_var_int(self.next_free_block.map_or(0, |addr| addr.get()));
+        vec.extend_var_int(self.next_free_block.map_or(0, LinearAddress::get));
     }
 
     /// Parse a [`FreeArea`].

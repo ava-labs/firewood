@@ -249,14 +249,12 @@ impl LinearAddressRangeSet {
         size: u64,
     ) -> Result<(), CheckerError> {
         let start = addr;
-        let end = start
-            .checked_add(size)
-            .ok_or(CheckerError::AreaOutOfBounds {
-                start,
-                size,
-                bounds: Self::NODE_STORE_START_ADDR..self.max_addr,
-            })?; // This can only happen due to overflow
-        if addr < Self::NODE_STORE_START_ADDR || end > *self.max_addr {
+        let end = start.advance(size).ok_or(CheckerError::AreaOutOfBounds {
+            start,
+            size,
+            bounds: Self::NODE_STORE_START_ADDR..self.max_addr,
+        })?; // This can only happen due to overflow
+        if addr < Self::NODE_STORE_START_ADDR || end > self.max_addr {
             return Err(CheckerError::AreaOutOfBounds {
                 start: addr,
                 size,
@@ -264,9 +262,7 @@ impl LinearAddressRangeSet {
             });
         }
 
-        if let Err(intersection) = self.range_set.insert_disjoint_range(
-            start..LinearAddress::new(end.get()).expect("end address is non-zero"),
-        ) {
+        if let Err(intersection) = self.range_set.insert_disjoint_range(start..end) {
             return Err(CheckerError::AreaIntersects {
                 start: addr,
                 size,

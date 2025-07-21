@@ -218,12 +218,8 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
                 .write(addr.get(), stored_area_bytes.as_slice())?;
         }
 
-        self.storage.write_cached_nodes(
-            self.kind
-                .new
-                .iter()
-                .map(|(addr, (_, node))| (addr.as_nonzero(), node)),
-        )?;
+        self.storage
+            .write_cached_nodes(self.kind.new.iter().map(|(addr, (_, node))| (addr, node)))?;
         let flush_time = flush_start.elapsed().as_millis();
         counter!("firewood.flush_nodes").increment(flush_time);
 
@@ -366,12 +362,8 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
             saved_pinned_buffers.iter().find(|pbe| pbe.offset.is_some())
         );
 
-        self.storage.write_cached_nodes(
-            self.kind
-                .new
-                .iter()
-                .map(|(addr, (_, node))| (addr.as_nonzero(), node)),
-        )?;
+        self.storage
+            .write_cached_nodes(self.kind.new.iter().map(|(addr, (_, node))| (addr, node)))?;
         debug_assert!(ring.completion().is_empty());
 
         let flush_time = flush_start.elapsed().as_millis();
