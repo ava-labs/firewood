@@ -214,10 +214,10 @@ impl WritableStorage for FileBacked {
 
     fn write_cached_nodes<'a>(
         &self,
-        nodes: impl Iterator<Item = (&'a LinearAddress, &'a SharedNode)>,
+        nodes: impl Iterator<Item = (LinearAddress, &'a SharedNode)>,
     ) -> Result<(), FileIoError> {
         let mut guard = self.cache.lock().expect("poisoned lock");
-        for (&addr, node) in nodes {
+        for (addr, node) in nodes {
             guard.put(addr, node.clone());
         }
         Ok(())

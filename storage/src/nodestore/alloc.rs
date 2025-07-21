@@ -162,13 +162,12 @@ unsafe impl bytemuck::PodInOption for LinearAddress {}
 
 impl LinearAddress {
     /// Create a new `LinearAddress`, returns None if value is zero.
-    #[expect(clippy::missing_panics_doc)]
     #[inline]
     #[must_use]
     pub const fn new(addr: u64) -> Option<Self> {
-        match addr {
-            0 => None,
-            _ => Some(LinearAddress(NonZeroU64::new(addr).expect("non zero"))),
+        match NonZeroU64::new(addr) {
+            Some(addr) => Some(LinearAddress(addr)),
+            None => None,
         }
     }
 
@@ -182,7 +181,7 @@ impl LinearAddress {
     /// Check if the address is 8-byte aligned.
     #[inline]
     #[must_use]
-    pub const fn is_aligned(&self) -> bool {
+    pub const fn is_aligned(self) -> bool {
         self.0.get() % (Self::MIN_AREA_SIZE) == 0
     }
 
@@ -202,8 +201,8 @@ impl LinearAddress {
     /// Returns a reference to the inner `NonZeroU64`
     #[inline]
     #[must_use]
-    pub const fn as_nonzero(&self) -> &NonZeroU64 {
-        &self.0
+    pub const fn as_nonzero(self) -> NonZeroU64 {
+        self.0
     }
 
     /// Advances a `LinearAddress` by `n` bytes.

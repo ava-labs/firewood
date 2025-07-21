@@ -183,7 +183,7 @@ pub trait WritableStorage: ReadableStorage {
     /// Write all nodes to the cache (if any)
     fn write_cached_nodes<'a>(
         &self,
-        _nodes: impl Iterator<Item = (&'a LinearAddress, &'a SharedNode)>,
+        _nodes: impl Iterator<Item = (LinearAddress, &'a SharedNode)>,
     ) -> Result<(), FileIoError> {
         Ok(())
     }
