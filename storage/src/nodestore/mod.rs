@@ -91,11 +91,6 @@ use crate::{FileBacked, FileIoError, Path, ReadableStorage, SharedNode, TrieHash
 
 use super::linear::WritableStorage;
 
-#[inline]
-pub(crate) const fn is_aligned(addr: LinearAddress) -> bool {
-    addr.is_aligned()
-}
-
 impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// Open an existing [`NodeStore`]
     /// Assumes the header is written in the [`ReadableStorage`].

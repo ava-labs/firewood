@@ -6,7 +6,6 @@ use range_set::LinearAddressRangeSet;
 
 use crate::logger::warn;
 use crate::nodestore::alloc::{AREA_SIZES, AreaIndex, FreeAreaWithMetadata};
-use crate::nodestore::is_aligned;
 use crate::{
     CheckerError, Committed, HashType, HashedNodeReader, LinearAddress, Node, NodeReader,
     NodeStore, Path, StoredAreaParent, TrieNodeParent, WritableStorage, hash_node,
@@ -154,7 +153,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         address: LinearAddress,
         parent_ptr: StoredAreaParent,
     ) -> Result<(), CheckerError> {
-        if !is_aligned(address) {
+        if !address.is_aligned() {
             return Err(CheckerError::AreaMisaligned {
                 address,
                 parent_ptr,
