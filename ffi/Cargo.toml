@@ -30,7 +30,7 @@ metrics-util.workspace = true
 chrono = "0.4.41"
 oxhttp = "0.3.1"
 # Optional dependencies
-env_logger = { workspace = true, optional = true  }
+env_logger = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 tikv-jemallocator = "0.6.0"
