@@ -77,29 +77,29 @@ A `Config` should be provided when creating the database. A default config is pr
 
 If no config is provided (`config == nil`), the default config is used. A description of all available values, and the default if not set, is available below.
 
-#### Truncate - `bool`
+#### `Truncate` - `bool`
 
 If set to `true`, an empty database will be created, overriding any existing file. Otherwise, if a file exists, that file will be loaded to create the database. In either case, if the file doesn't exist, it will be created.
 
 *Default*: `false`
 
-#### Revisions - `uint`
+#### `Revisions` - `uint`
 
 Indicates the number of committed roots accessible before the diff layer is compressed. Must be explicitly set if the config is specified to at least 2.
 
-#### ReadCacheStrategy - `uint`
+#### `ReadCacheStrategy` - `uint`
 
-Should be one of `OnlyCacheWrites`, `CacheBrancheReads`, or `CacheAllReads`. In the latter two cases, writes are still cached.
+Should be one of `OnlyCacheWrites`, `CacheBranchReads`, or `CacheAllReads`. In the latter two cases, writes are still cached.
 
 *Default*: `OnlyCacheWrites`
 
-#### NodeCacheEntries
+#### `NodeCacheEntries`- `uint`
 
 The number of nodes in the database that are stored in cache. Must be explicitly set if the config is supplied.
 
-#### FreeListCacheEntries
+#### `FreeListCacheEntries` - `uint`
 
-The number of entries of the free list (see [Firewood Overview](../README.md)). Must be explicitly set if the config is supplied.
+The number of entries in the free list (see [Firewood Overview](../README.md)). Must be explicitly set if the config is supplied.
 
 ### Metrics
 
@@ -118,17 +118,17 @@ gathering, err := gatherer.Gather()
 
 ### Logs
 
-Logs are configured globally on the process, and not enabled by default. They can be enabled using the `StartLogs(config)` function. Firewood must be built with the `logger` feature for this function to work. If a config isn't provided, the default values will be used.
+Logs are configured globally on the process, and not enabled by default. They can be enabled using the `StartLogs(config)` function. Firewood must be built with the `logger` feature for this function to work. This should be called before opening the database.
 
-#### Path
+#### `Path` - `string`
 
 The path to the file where the logs will be written.
 
 *Default*: `{TEMP}/firewood-log.txt`, where `{TEMP}` is the platform's temporary directory. For Unix-based OSes, this is typically `/tmp`.
 
-#### FilterLevel
+#### `FilterLevel` - `string`
 
-One of `trace`, `debug`, `info`.
+One of `trace`, `debug`, `info`, `warn` or `error`.
 
 *Default*: `info`
 
