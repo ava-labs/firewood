@@ -15,6 +15,7 @@ use crate::{LeafNode, LinearAddress, MaybePersistedNode, Node, Path, SharedNode}
 use std::fmt::{Debug, Formatter};
 use std::io::Read;
 use std::slice::{Iter, IterMut};
+use std::sync::{Arc, Mutex};
 
 /// The type of a hash. For ethereum compatible hashes, this might be a RLP encoded
 /// value if it's small enough to fit in less than 32 bytes. For merkledb compatible
@@ -333,7 +334,6 @@ pub struct BranchNode<T> {
     /// "children" which serves as the lock for the node, and each entry in the array
     /// also has a lock for the Option<Child>.
     pub children: T,
-    //[Option<Child>; Self::MAX_CHILDREN],
 }
 
 #[allow(missing_docs)]
@@ -350,6 +350,22 @@ impl BranchConstants {
 }
 
 #[allow(missing_docs)]
+#[derive(Debug, Clone)]
+pub struct BranchLockedArray {
+    pub children: [Arc<Mutex<Option<Child>>>; BranchConstants::MAX_CHILDREN],
+}
+
+impl BranchLockedArray {
+    fn get_arc(&self, child_index: usize) ->  Option<Arc<Mutex<Option<Child>>>> {
+        let child = self.children.get(child_index);
+        let Some(c) = child else {
+            return None;
+        };
+        return Some(c.clone());
+    }    
+}
+
+#[allow(missing_docs)]
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct BranchArray {
     pub children: [Option<Child>; BranchConstants::MAX_CHILDREN],
@@ -357,29 +373,43 @@ pub struct BranchArray {
 
 #[allow(missing_docs)]
 pub trait BranchArrayTrait {
-    fn clone(&self) -> &impl BranchArrayTrait;
+    //fn clone(&self) -> &impl BranchArrayTrait;
     fn iter(&self) -> Iter<'_, Option<Child>>;
     fn iter_mut(&mut self) -> IterMut<'_, Option<Child>>;
     fn get(&self, child_index: usize) -> Option<&Option<Child>>;
     fn get_mut(&mut self, child_index: usize) -> Option<&mut Option<Child>>;
-    //fn get_array_len(&self) -> usize;
     fn set_array(&mut self, array: [Option<Child>; BranchConstants::MAX_CHILDREN]);
 }
+
+impl BranchArrayTrait for BranchLockedArray {
+    fn set_array(&mut self, mut array: [Option<Child>; BranchConstants::MAX_CHILDREN]) {
+        for (i, child) in array.iter_mut().enumerate() {
+            self.children[i] = Arc::new(Mutex::new(child.take()));
+        }
+    }
+
+    fn iter(&self) -> Iter<'_, Option<Child>> {
+        todo!(); // TODO: Check if this is necessary for BranchLockedArray
+    }
+
+    fn iter_mut(&mut self) -> IterMut<'_, Option<Child>> {
+        todo!(); //// TODO: Check if this is necessary for BranchLockedArray
+    } 
+
+    fn get(&self, child_index: usize) -> Option<&Option<Child>> {
+        todo!();
+    }
+
+    fn get_mut(&mut self, child_index: usize) -> Option<&mut Option<Child>> {
+        todo!();
+    }
+}
+
 
 impl BranchArrayTrait for BranchArray {
     fn set_array(&mut self, array: [Option<Child>; BranchConstants::MAX_CHILDREN]) {
         self.children = array;
     }
-
-    fn clone(&self) -> &impl BranchArrayTrait {
-        return Clone::clone(&self);
-    }
-
-    /*
-    fn get_array_len(&self) -> usize {
-        return BranchNode::<BranchArray>::MAX_CHILDREN;
-    }
-    */
 
     fn iter(&self) -> Iter<'_, Option<Child>> {
         return self.children.iter();
@@ -391,14 +421,14 @@ impl BranchArrayTrait for BranchArray {
 
     fn get(&self, child_index: usize) -> Option<&Option<Child>> {
         return self.children.get(child_index);
-    }
+    }   
 
     fn get_mut(&mut self, child_index: usize) -> Option<&mut Option<Child>> {
         return self.children.get_mut(child_index);
     }
 }
 
-impl <T> Debug for BranchNode<T> where T: BranchArrayTrait {
+impl <T: BranchArrayTrait> Debug for BranchNode<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "[BranchNode")?;
         write!(f, r#" path="{:?}""#, self.partial_path)?;
@@ -431,25 +461,17 @@ impl <T> Debug for BranchNode<T> where T: BranchArrayTrait {
     }
 }
 
-impl<T> BranchNode<T> where T: BranchArrayTrait {
-    /* 
-    /// The maximum number of children in a [`BranchNode`]
-    #[cfg(feature = "branch_factor_256")]
-    pub const MAX_CHILDREN: usize = 256;
-
-    /// The maximum number of children in a [`BranchNode`]
-    #[cfg(not(feature = "branch_factor_256"))]
-    pub const MAX_CHILDREN: usize = 16;
-    */
-
+impl BranchNode<BranchArray> {
     /// Returns the address of the child at the given index.
     /// Panics if `child_index` >= [`BranchNode::MAX_CHILDREN`].
+    /* 
     #[must_use]
     pub fn child(&self, child_index: u8) -> &Option<Child> {
         self.children
             .get(child_index as usize)
             .expect("child_index is in bounds")
     }
+    */
 
     /// Update the child at `child_index` to be `new_child_addr`.
     /// If `new_child_addr` is None, the child is removed.
@@ -491,7 +513,58 @@ impl<T> BranchNode<T> where T: BranchArrayTrait {
     pub fn children_addresses(&self) -> impl Iterator<Item = (usize, LinearAddress)> + Clone {
         self.children_iter()
             .map(|(idx, (address, _))| (idx, address))
+    }    
+}
+
+
+impl BranchNode<BranchLockedArray> {
+    /// Returns the address of the child at the given index.
+    /// Panics if `child_index` >= [`BranchNode::MAX_CHILDREN`].
+    /*
+    #[must_use]
+    pub fn child(&self, child_index: u8) -> &Option<Child> {
+        self.children
+            .get(child_index as usize)
+            .expect("child_index is in bounds")
     }
+    */
+
+    /// Update the child at `child_index` to be `new_child_addr`.
+    /// If `new_child_addr` is None, the child is removed.
+    pub fn update_child(&mut self, child_index: u8, new_child: Option<Child>) {
+        todo!();
+    }
+
+    // Helper to iterate over only valid children
+    pub(crate) fn children_iter(
+        &self,
+    ) -> impl Iterator<Item = (usize, (LinearAddress, &HashType))> + Clone {
+        self.children
+            .iter()
+            .enumerate()
+            .filter_map(|(i, child)| match child {
+                None => None,
+                Some(Child::Node(_)) => unreachable!("TODO make unreachable"),
+                Some(Child::AddressWithHash(address, hash)) => Some((i, (*address, hash))),
+                Some(Child::MaybePersisted(maybe_persisted, hash)) => {
+                    // For MaybePersisted, we need the address if it's persisted
+                    maybe_persisted
+                        .as_linear_address()
+                        .map(|addr| (i, (addr, hash)))
+                }
+            })
+    }
+
+    /// Returns (index, hash) for each child that has a hash set.
+    pub fn children_hashes(&self) -> impl Iterator<Item = (usize, &HashType)> + Clone {
+        self.children_iter().map(|(idx, (_, hash))| (idx, hash))
+    }
+
+    /// Returns (index, address) for each child that has a hash set.
+    pub fn children_addresses(&self) -> impl Iterator<Item = (usize, LinearAddress)> + Clone {
+        self.children_iter()
+            .map(|(idx, (address, _))| (idx, address))
+    }    
 }
 
 impl From<&LeafNode> for BranchNode<BranchArray> {
