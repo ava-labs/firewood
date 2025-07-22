@@ -19,6 +19,7 @@
 //!
 //! A [`NodeStore`] is backed by a [`ReadableStorage`] which is persisted storage.
 
+use std::fmt::{Display, Formatter, LowerHex, Result};
 use std::ops::Range;
 use thiserror::Error;
 
@@ -75,8 +76,8 @@ pub enum CacheReadStrategy {
     All,
 }
 
-impl std::fmt::Display for CacheReadStrategy {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for CacheReadStrategy {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         write!(f, "{self:?}")
     }
 }
@@ -126,37 +127,35 @@ pub enum FreeListParent {
     PrevFreeArea(LinearAddress),
 }
 
-impl std::fmt::LowerHex for StoredAreaParent {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl LowerHex for StoredAreaParent {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
-            StoredAreaParent::TrieNode(trie_parent) => std::fmt::LowerHex::fmt(trie_parent, f),
-            StoredAreaParent::FreeList(free_list_parent) => {
-                std::fmt::LowerHex::fmt(free_list_parent, f)
-            }
+            StoredAreaParent::TrieNode(trie_parent) => LowerHex::fmt(trie_parent, f),
+            StoredAreaParent::FreeList(free_list_parent) => LowerHex::fmt(free_list_parent, f),
         }
     }
 }
 
-impl std::fmt::LowerHex for TrieNodeParent {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl LowerHex for TrieNodeParent {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
             TrieNodeParent::Root => f.write_str("Root"),
             TrieNodeParent::Parent(addr, index) => {
                 f.write_str("TrieNode@")?;
-                std::fmt::LowerHex::fmt(addr, f)?;
+                LowerHex::fmt(addr, f)?;
                 f.write_fmt(format_args!("[{index}]"))
             }
         }
     }
 }
 
-impl std::fmt::LowerHex for FreeListParent {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl LowerHex for FreeListParent {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
             FreeListParent::FreeListHead(index) => f.write_fmt(format_args!("FreeLists[{index}]")),
             FreeListParent::PrevFreeArea(addr) => {
                 f.write_str("FreeArea@")?;
-                std::fmt::LowerHex::fmt(addr, f)
+                LowerHex::fmt(addr, f)
             }
         }
     }
