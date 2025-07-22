@@ -629,7 +629,7 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
             return Ok(node);
         }
 
-        debug_assert!(addr.get() % 8 == 0);
+        debug_assert!(addr.is_aligned());
 
         // saturating because there is no way we can be reading at u64::MAX
         // and this will fail very soon afterwards
