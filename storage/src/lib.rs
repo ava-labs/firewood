@@ -209,6 +209,10 @@ pub enum CheckerError {
     #[error("Found leaked areas: {0:?}")]
     AreaLeaks(Vec<Range<LinearAddress>>),
 
+    /// The root is not persisted
+    #[error("The checker can only check persisted nodestores")]
+    UnpersistedRoot,
+
     /// IO error
     #[error("IO error")]
     IO(#[from] FileIoError),

@@ -7,7 +7,9 @@ use range_set::LinearAddressRangeSet;
 use crate::logger::warn;
 use crate::nodestore::alloc::{AREA_SIZES, AreaIndex, FreeAreaWithMetadata, size_from_area_index};
 use crate::{
-    hash_node, CheckerError, Committed, HashType, HashedNodeReader, IntoHashType, LinearAddress, Node, NodeReader, NodeStore, Path, RootReader, StoredAreaParent, TrieNodeParent, WritableStorage
+    CheckerError, Committed, HashType, HashedNodeReader, IntoHashType, LinearAddress, Node,
+    NodeReader, NodeStore, Path, RootReader, StoredAreaParent, TrieNodeParent, WritableStorage,
+    hash_node,
 };
 
 use std::cmp::Ordering;
@@ -41,33 +43,24 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         let mut visited = LinearAddressRangeSet::new(db_size)?;
 
         // 2. traverse the trie and check the nodes
-        if let Some(root) = self.root_as_maybe_persisted_node() {
-            // the database is not empty, traverse the trie
+        if let (Some(root), Some(root_hash)) =
+            (self.root_as_maybe_persisted_node(), self.root_hash())
+        {
+            // the database is not empty, and has a physical address, so traverse the trie
             if let Some(root_address) = root.as_linear_address() {
                 self.check_area_aligned(
                     root_address,
                     StoredAreaParent::TrieNode(TrieNodeParent::Root),
                 )?;
-                // For hash checking, we need the root hash if it exists
-                let root_hash = self.root_hash().map(IntoHashType::into_hash_type);
-                if let Some(root_hash) = root_hash {
-                    self.visit_trie(
-                        root_address,
-                        root_hash,
-                        Path::new(),
-                        &mut visited,
-                        opt.hash_check,
-                    )?;
-                } else {
-                    // No root hash available, visit without hash checking
-                    self.visit_trie(
-                        root_address,
-                        HashType::default(), // dummy hash
-                        Path::new(),
-                        &mut visited,
-                        false, // can't check hashes without root hash
-                    )?;
-                }
+                self.visit_trie(
+                    root_address,
+                    root_hash.into_hash_type(),
+                    Path::new(),
+                    &mut visited,
+                    opt.hash_check,
+                )?;
+            } else {
+                return Err(CheckerError::UnpersistedRoot);
             }
         }
 
