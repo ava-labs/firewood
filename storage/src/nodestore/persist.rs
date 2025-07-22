@@ -432,8 +432,7 @@ impl NodeStore<Committed, FileBacked> {
             saved_pinned_buffers.iter().find(|pbe| pbe.offset.is_some())
         );
 
-        self.storage
-            .write_cached_nodes(cached_nodes.into_iter().map(|(addr, node)| (*addr, node)))?;
+        self.storage.write_cached_nodes(cached_nodes)?;
         debug_assert!(ring.completion().is_empty());
 
         let flush_time = flush_start.elapsed().as_millis();
