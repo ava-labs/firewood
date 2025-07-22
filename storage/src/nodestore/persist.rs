@@ -234,7 +234,8 @@ impl NodeStore<Committed, FileBacked> {
             cached_nodes.push((persisted_address, shared_node));
         }
 
-        self.storage.write_cached_nodes(cached_nodes.into_iter().map(|(addr, node)| (*addr, node)))?;
+        self.storage
+            .write_cached_nodes(cached_nodes.into_iter().map(|(addr, node)| (*addr, node)))?;
 
         let flush_time = flush_start.elapsed().as_millis();
         counter!("firewood.flush_nodes").increment(flush_time);

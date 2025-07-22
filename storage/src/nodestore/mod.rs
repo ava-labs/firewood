@@ -674,7 +674,7 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
             self.storage.file_io_error(
                 Error::new(ErrorKind::InvalidData, e),
                 addr.get(),
-                Some("deserialize".to_string()),
+                Some("area_index_and_size".to_string()),
             )
         })?;
 
@@ -683,7 +683,7 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
             .ok_or(self.storage.file_io_error(
                 Error::other(format!("Invalid area size index {index}")),
                 addr.get(),
-                None,
+                Some("area_index_and_size".to_string()),
             ))?;
 
         Ok((index, size))

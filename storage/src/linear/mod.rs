@@ -19,10 +19,10 @@
     reason = "Found 4 occurrences after enabling the lint."
 )]
 
-use std::{fmt::Debug, num::NonZero};
 use std::io::Read;
 use std::ops::Deref;
 use std::path::PathBuf;
+use std::{fmt::Debug, num::NonZero};
 
 use crate::{CacheReadStrategy, LinearAddress, MaybePersistedNode, SharedNode};
 pub(super) mod filebacked;

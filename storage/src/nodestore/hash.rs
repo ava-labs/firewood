@@ -70,8 +70,7 @@ where
     /// Hashes `node`, which is at the given `path_prefix`, and its children recursively.
     /// Returns the hashed node and its hash.
     pub(super) fn hash_helper(
-        #[cfg(feature = "ethhash")]
-        &self,
+        #[cfg(feature = "ethhash")] &self,
         mut node: Node,
         path_prefix: &mut Path,
         #[cfg(feature = "ethhash")] fake_root_extra_nibble: Option<u8>,
