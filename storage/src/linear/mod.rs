@@ -22,7 +22,7 @@
 use std::io::Read;
 use std::ops::Deref;
 use std::path::PathBuf;
-use std::{fmt::Debug, num::NonZero};
+use std::fmt::Debug;
 
 use crate::{CacheReadStrategy, LinearAddress, MaybePersistedNode, SharedNode};
 pub(super) mod filebacked;
@@ -183,7 +183,7 @@ pub trait WritableStorage: ReadableStorage {
     /// Write all nodes to the cache (if any)
     fn write_cached_nodes(
         &self,
-        _nodes: impl Iterator<Item = (NonZero<u64>, SharedNode)>,
+        _nodes: impl IntoIterator<Item = (LinearAddress, SharedNode)>,
     ) -> Result<(), FileIoError> {
         Ok(())
     }

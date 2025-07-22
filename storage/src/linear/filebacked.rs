@@ -25,7 +25,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::Read;
-use std::num::{NonZero, NonZeroU64};
+use std::num::NonZero;
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
 #[cfg(windows)]
@@ -214,11 +214,11 @@ impl WritableStorage for FileBacked {
 
     fn write_cached_nodes(
         &self,
-        nodes: impl Iterator<Item = (NonZeroU64, SharedNode)>,
+        nodes: impl IntoIterator<Item = (LinearAddress, SharedNode)>,
     ) -> Result<(), FileIoError> {
         let mut guard = self.cache.lock().expect("poisoned lock");
         for (addr, node) in nodes {
-            guard.put(addr.into(), node);
+            guard.put(addr, node);
         }
         Ok(())
     }
