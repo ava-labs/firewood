@@ -576,7 +576,7 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
 }
 
 impl<S: WritableStorage> NodeAllocator<'_, S> {
-    /// Deletes the [Node] and updates the header of the allocator.
+    /// Deletes the `Node` and updates the header of the allocator.
     /// Nodes that are not persisted are just dropped.
     ///
     /// # Errors

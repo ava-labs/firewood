@@ -7,9 +7,7 @@ use range_set::LinearAddressRangeSet;
 use crate::logger::warn;
 use crate::nodestore::alloc::{AREA_SIZES, AreaIndex, FreeAreaWithMetadata, size_from_area_index};
 use crate::{
-    CheckerError, Committed, HashType, HashedNodeReader, IntoHashType as _, LinearAddress, Node,
-    NodeReader, NodeStore, Path, RootReader, StoredAreaParent, TrieNodeParent, WritableStorage,
-    hash_node,
+    hash_node, CheckerError, Committed, HashType, HashedNodeReader, IntoHashType, LinearAddress, Node, NodeReader, NodeStore, Path, RootReader, StoredAreaParent, TrieNodeParent, WritableStorage
 };
 
 use std::cmp::Ordering;
@@ -51,7 +49,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                     StoredAreaParent::TrieNode(TrieNodeParent::Root),
                 )?;
                 // For hash checking, we need the root hash if it exists
-                let root_hash = self.root_hash().map(|h| h.into_hash_type());
+                let root_hash = self.root_hash().map(IntoHashType::into_hash_type);
                 if let Some(root_hash) = root_hash {
                     self.visit_trie(
                         root_address,
