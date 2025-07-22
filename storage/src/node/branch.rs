@@ -315,7 +315,7 @@ mod ethhash {
 
 #[derive(PartialEq, Eq, Clone)]
 /// A branch node
-pub struct BranchNode {
+pub struct BranchNode<T> {
     /// The partial path for this branch
     pub partial_path: Path,
 
@@ -326,10 +326,24 @@ pub struct BranchNode {
     /// Element i is the child at index i, or None if there is no child at that index.
     /// Each element is (`child_hash`, `child_address`).
     /// `child_address` is None if we don't know the child's hash.
-    pub children: [Option<Child>; Self::MAX_CHILDREN],
+    //pub children: [Option<Child>; Self::MAX_CHILDREN],
+    pub children: [T; BranchConstants::MAX_CHILDREN],
 }
 
-impl Debug for BranchNode {
+#[allow(missing_docs)]
+#[derive(Debug)]
+pub struct BranchConstants;
+impl BranchConstants {
+    /// The maximum number of children in a [`BranchNode`]
+    #[cfg(feature = "branch_factor_256")]
+    pub const MAX_CHILDREN: usize = 256;
+
+    /// The maximum number of children in a [`BranchNode`]
+    #[cfg(not(feature = "branch_factor_256"))]
+    pub const MAX_CHILDREN: usize = 16;    
+}
+
+impl Debug for BranchNode<Option<Child>> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "[BranchNode")?;
         write!(f, r#" path="{:?}""#, self.partial_path)?;
@@ -362,35 +376,7 @@ impl Debug for BranchNode {
     }
 }
 
-impl BranchNode {
-    /// The maximum number of children in a [`BranchNode`]
-    #[cfg(feature = "branch_factor_256")]
-    pub const MAX_CHILDREN: usize = 256;
-
-    /// The maximum number of children in a [`BranchNode`]
-    #[cfg(not(feature = "branch_factor_256"))]
-    pub const MAX_CHILDREN: usize = 16;
-
-    /// Returns the address of the child at the given index.
-    /// Panics if `child_index` >= [`BranchNode::MAX_CHILDREN`].
-    #[must_use]
-    pub fn child(&self, child_index: u8) -> &Option<Child> {
-        self.children
-            .get(child_index as usize)
-            .expect("child_index is in bounds")
-    }
-
-    /// Update the child at `child_index` to be `new_child_addr`.
-    /// If `new_child_addr` is None, the child is removed.
-    pub fn update_child(&mut self, child_index: u8, new_child: Option<Child>) {
-        let child = self
-            .children
-            .get_mut(child_index as usize)
-            .expect("child_index is in bounds");
-
-        *child = new_child;
-    }
-
+impl BranchNode<Option<Child>> {
     // Helper to iterate over only valid children
     pub(crate) fn children_iter(
         &self,
@@ -423,12 +409,76 @@ impl BranchNode {
     }
 }
 
-impl From<&LeafNode> for BranchNode {
+impl <T> BranchNode <T> {
+    /// The maximum number of children in a [`BranchNode`]
+    #[cfg(feature = "branch_factor_256")]
+    pub const MAX_CHILDREN: usize = 256;
+
+    /// The maximum number of children in a [`BranchNode`]
+    #[cfg(not(feature = "branch_factor_256"))]
+    pub const MAX_CHILDREN: usize = 16;
+
+    /* Mot actually used 
+    /// Returns the address of the child at the given index.
+    /// Panics if `child_index` >= [`BranchNode::MAX_CHILDREN`].
+    #[must_use]
+    pub fn child(&self, child_index: u8) -> &Option<Child> {
+        self.children
+            .get(child_index as usize)
+            .expect("child_index is in bounds")
+    }
+    */
+
+    /// Update the child at `child_index` to be `new_child_addr`.
+    /// If `new_child_addr` is None, the child is removed.
+    pub fn update_child(&mut self, child_index: u8, new_child: T) {
+        let child = self
+            .children
+            .get_mut(child_index as usize)
+            .expect("child_index is in bounds");
+
+        *child = new_child;
+    }
+/* 
+    // Helper to iterate over only valid children
+    pub(crate) fn children_iter(
+        &self,
+    ) -> impl Iterator<Item = (usize, (LinearAddress, &HashType))> + Clone {
+        self.children
+            .iter()
+            .enumerate()
+            .filter_map(|(i, child)| match child {
+                None => None,
+                Some(Child::Node(_)) => unreachable!("TODO make unreachable"),
+                Some(Child::AddressWithHash(address, hash)) => Some((i, (*address, hash))),
+                Some(Child::MaybePersisted(maybe_persisted, hash)) => {
+                    // For MaybePersisted, we need the address if it's persisted
+                    maybe_persisted
+                        .as_linear_address()
+                        .map(|addr| (i, (addr, hash)))
+                }
+            })
+    }
+
+    /// Returns (index, hash) for each child that has a hash set.
+    pub fn children_hashes(&self) -> impl Iterator<Item = (usize, &HashType)> + Clone {
+        self.children_iter().map(|(idx, (_, hash))| (idx, hash))
+    }
+
+    /// Returns (index, address) for each child that has a hash set.
+    pub fn children_addresses(&self) -> impl Iterator<Item = (usize, LinearAddress)> + Clone {
+        self.children_iter()
+            .map(|(idx, (address, _))| (idx, address))
+    }
+*/
+}
+
+impl From<&LeafNode> for BranchNode<Option<Child>> {
     fn from(leaf: &LeafNode) -> Self {
         BranchNode {
             partial_path: leaf.partial_path.clone(),
             value: Some(Box::from(&leaf.value[..])),
-            children: [const { None }; BranchNode::MAX_CHILDREN],
+            children: [const { None }; BranchConstants::MAX_CHILDREN],
         }
     }
 }

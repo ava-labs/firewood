@@ -23,9 +23,7 @@ use crate::stream::PathIterator;
 #[cfg(test)]
 use crate::v2::api;
 use firewood_storage::{
-    BranchNode, Child, FileIoError, HashType, Hashable, HashedNodeReader, ImmutableProposal,
-    IntoHashType, LeafNode, MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore,
-    Path, ReadableStorage, SharedNode, TrieReader, ValueDigest,
+    BranchConstants, BranchNode, Child, FileIoError, HashType, Hashable, HashedNodeReader, ImmutableProposal, IntoHashType, LeafNode, MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore, Path, ReadableStorage, SharedNode, TrieReader, ValueDigest
 };
 #[cfg(test)]
 use futures::{StreamExt, TryStreamExt};
@@ -195,8 +193,8 @@ impl<T: TrieReader> Merkle<T> {
             // No nodes, even the root, are before `key`.
             // The root alone proves the non-existence of `key`.
             // TODO reduce duplicate code with ProofNode::from<PathIterItem>
-            let mut child_hashes: [Option<HashType>; BranchNode::MAX_CHILDREN] =
-                [const { None }; BranchNode::MAX_CHILDREN];
+            let mut child_hashes: [Option<HashType>; BranchConstants::MAX_CHILDREN] =
+                [const { None }; BranchConstants::MAX_CHILDREN];
             if let Some(branch) = root.as_branch() {
                 // TODO danlaine: can we avoid indexing?
                 #[expect(clippy::indexing_slicing)]
@@ -534,7 +532,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 let mut branch = BranchNode {
                     partial_path: path_overlap.shared.into(),
                     value: Some(value),
-                    children: [const { None }; BranchNode::MAX_CHILDREN],
+                    children: [const { None }; BranchConstants::MAX_CHILDREN],
                 };
 
                 // Shorten the node's partial path since it has a new parent.
@@ -585,7 +583,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                         let mut branch = BranchNode {
                             partial_path: std::mem::replace(&mut leaf.partial_path, Path::new()),
                             value: Some(std::mem::take(&mut leaf.value)),
-                            children: [const { None }; BranchNode::MAX_CHILDREN],
+                            children: [const { None }; BranchConstants::MAX_CHILDREN],
                         };
 
                         let new_leaf = Node::Leaf(LeafNode {
@@ -611,7 +609,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 let mut branch = BranchNode {
                     partial_path: path_overlap.shared.into(),
                     value: None,
-                    children: [const { None }; BranchNode::MAX_CHILDREN],
+                    children: [const { None }; BranchConstants::MAX_CHILDREN],
                 };
 
                 node.update_partial_path(node_partial_path);
@@ -1022,7 +1020,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Recursively deletes all children of a branch node.
     fn delete_children(
         &mut self,
-        branch: &mut BranchNode,
+        branch: &mut BranchNode<Option<Child>>,
         deleted: &mut usize,
     ) -> Result<(), FileIoError> {
         if branch.value.is_some() {

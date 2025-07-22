@@ -609,7 +609,7 @@ where
 
 /// Returns an iterator that returns (`pos`,`child`) for each non-empty child of `branch`,
 /// where `pos` is the position of the child in `branch`'s children array.
-fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (u8, Child)> + use<> {
+fn as_enumerated_children_iter(branch: &BranchNode<Option<Child>>) -> impl Iterator<Item = (u8, Child)> + use<> {
     branch
         .children
         .clone()

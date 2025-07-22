@@ -22,11 +22,13 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
+#[cfg(not(feature = "branch_factor_256"))]
+//use crate::node::branch::BranchConstants;
 use crate::node::branch::ReadSerializable;
 use crate::{HashType, LinearAddress, Path, SharedNode};
 use bitfield::bitfield;
 use branch::Serializable as _;
-pub use branch::{BranchNode, Child};
+pub use branch::{BranchNode, Child, BranchConstants};
 use enum_as_inner::EnumAsInner;
 use integer_encoding::{VarInt, VarIntReader as _};
 pub use leaf::LeafNode;
@@ -44,7 +46,7 @@ pub mod persist;
 #[repr(C)]
 pub enum Node {
     /// This node is a [`BranchNode`]
-    Branch(Box<BranchNode>),
+    Branch(Box<BranchNode<Option<Child>>>),
     /// This node is a [`LeafNode`]
     Leaf(LeafNode),
 }
@@ -58,8 +60,8 @@ impl Default for Node {
     }
 }
 
-impl From<BranchNode> for Node {
-    fn from(branch: BranchNode) -> Self {
+impl From<BranchNode<Option<Child>>> for Node {
+    fn from(branch: BranchNode<Option<Child>>) -> Self {
         Node::Branch(Box::new(branch))
     }
 }
@@ -276,7 +278,7 @@ impl Node {
                 #[cfg(not(feature = "branch_factor_256"))]
                 let first_byte: BranchFirstByte = BranchFirstByte::new(
                     u8::from(b.value.is_some()),
-                    (childcount % BranchNode::MAX_CHILDREN) as u8,
+                    (childcount % BranchConstants::MAX_CHILDREN) as u8,
                     pp_len,
                 );
                 #[cfg(feature = "branch_factor_256")]
@@ -304,7 +306,7 @@ impl Node {
                 }
 
                 // encode the children
-                if childcount == BranchNode::MAX_CHILDREN {
+                if childcount == BranchConstants::MAX_CHILDREN {
                     for (_, child) in child_iter {
                         if let Child::AddressWithHash(address, hash) = child {
                             encoded.extend_from_slice(&address.get().to_ne_bytes());
@@ -398,7 +400,7 @@ impl Node {
                     None
                 };
 
-                let mut children = [const { None }; BranchNode::MAX_CHILDREN];
+                let mut children = [const { None }; BranchConstants::MAX_CHILDREN];
                 if childcount == 0 {
                     // branch is full of all children
                     for child in &mut children {

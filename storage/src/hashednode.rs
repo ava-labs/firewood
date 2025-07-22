@@ -13,7 +13,7 @@ use std::{
 
 use smallvec::SmallVec;
 
-use crate::{BranchNode, HashType, LeafNode, Node, Path};
+use crate::{BranchNode, Child, HashType, LeafNode, Node, Path};
 
 /// Returns the hash of `node`, which is at the given `path_prefix`.
 #[must_use]
@@ -141,7 +141,7 @@ trait HashableNode {
     fn children_iter(&self) -> impl Iterator<Item = (usize, &HashType)> + Clone;
 }
 
-impl HashableNode for BranchNode {
+impl HashableNode for BranchNode<Option<Child>> {
     fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
         self.partial_path.0.iter().copied()
     }

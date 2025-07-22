@@ -247,6 +247,7 @@ mod test {
 
     use super::*;
     use crate::linear::memory::MemStore;
+    use crate::node::branch::BranchConstants;
     use crate::nodestore::NodeStoreHeader;
     use crate::nodestore::alloc::test_utils::{
         test_write_free_area, test_write_header, test_write_new_node, test_write_zeroed_area,
@@ -282,7 +283,7 @@ mod test {
         let leaf_area = test_write_new_node(nodestore, &leaf, high_watermark);
         high_watermark += leaf_area;
 
-        let mut branch_children: [Option<Child>; BranchNode::MAX_CHILDREN] = Default::default();
+        let mut branch_children: [Option<Child>; BranchConstants::MAX_CHILDREN] = Default::default();
         branch_children[1] = Some(Child::AddressWithHash(leaf_addr, leaf_hash));
         let branch = Node::Branch(Box::new(BranchNode {
             partial_path: Path::from([0]),
@@ -294,7 +295,7 @@ mod test {
         let branch_area = test_write_new_node(nodestore, &branch, high_watermark);
         high_watermark += branch_area;
 
-        let mut root_children: [Option<Child>; BranchNode::MAX_CHILDREN] = Default::default();
+        let mut root_children: [Option<Child>; BranchConstants::MAX_CHILDREN] = Default::default();
         root_children[0] = Some(Child::AddressWithHash(branch_addr, branch_hash));
         let root = Node::Branch(Box::new(BranchNode {
             partial_path: Path::from([]),
