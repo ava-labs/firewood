@@ -436,7 +436,9 @@ impl<T> BranchNode<T> where T: BranchArrayTrait {
     }
 
     // Helper to iterate over only valid children
-    fn children_iter(&self) -> impl Iterator<Item = (usize, (LinearAddress, &HashType))> + Clone {
+    pub(crate) fn children_iter(
+        &self,
+    ) -> impl Iterator<Item = (usize, (LinearAddress, &HashType))> + Clone {
         self.children
             .iter()
             .enumerate()

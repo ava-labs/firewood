@@ -37,6 +37,7 @@ use crate::nodestore::AreaIndex;
 pub mod logger;
 
 // re-export these so callers don't need to know where they are
+pub use checker::CheckOpt;
 pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use node::path::{NibblesIterator, Path};
@@ -138,6 +139,21 @@ pub enum CheckerError {
         description: String,
     },
 
+    /// Hash mismatch for a node
+    #[error(
+        "Hash mismatch for node {partial_path:?} at address {address}: parent stored {parent_stored_hash}, computed {computed_hash}"
+    )]
+    HashMismatch {
+        /// The path of the node
+        partial_path: Path,
+        /// The address of the node
+        address: LinearAddress,
+        /// The hash value stored in the parent node
+        parent_stored_hash: HashType,
+        /// The hash value computed for the node
+        computed_hash: HashType,
+    },
+
     /// The address is out of bounds
     #[error("stored area at {start} with size {size} is out of bounds ({bounds:?})")]
     AreaOutOfBounds {
@@ -180,7 +196,7 @@ pub enum CheckerError {
     /// The start address of a stored area is not a multiple of 16
     #[error(
         "The start address of a stored area is not a multiple of {}: {address} (parent: {parent_ptr:?})",
-        nodestore::alloc::MIN_AREA_SIZE
+        nodestore::alloc::LinearAddress::MIN_AREA_SIZE
     )]
     AreaMisaligned {
         /// The start address of the stored area
