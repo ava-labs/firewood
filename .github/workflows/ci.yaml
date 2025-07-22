@@ -219,6 +219,11 @@ jobs:
         with:
           go-version-file: "ffi/go.mod"
           cache-dependency-path: "ffi/go.sum"
+      - name: Install GNU grep on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install grep
+          echo "$(brew --prefix)/opt/grep/libexec/gnubin" >> $GITHUB_PATH
       - name: Run lint
         working-directory: ffi
         run : ./scripts/lint.sh
