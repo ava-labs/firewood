@@ -833,6 +833,76 @@ mod test {
         }
     }
 
+    #[tokio::test]
+    async fn test_deep_propose() {
+        const NUM_KEYS: usize = 2;
+        const NUM_PROPOSALS: usize = 100;
+
+        let db = testdb().await;
+
+        // create NUM_KEYS * NUM_PROPOSALS keys and values
+        let (keys, vals): (Vec<_>, Vec<_>) = (0..NUM_KEYS * NUM_PROPOSALS)
+            .map(|i| {
+                (
+                    format!("key{i}").into_bytes(),
+                    Box::from(format!("value{i}").as_bytes()),
+                )
+            })
+            .unzip();
+
+        // create batches of NUM_KEYS keys and values
+        let batches: Vec<_> = keys
+            .chunks(NUM_KEYS)
+            .zip(vals.chunks(NUM_KEYS))
+            .map(|(k, v)| {
+                k.iter()
+                    .zip(v.iter())
+                    .map(|(k, v)| BatchOp::Put { key: k, value: v })
+                    .collect()
+            })
+            .collect();
+
+        // better me correct
+        assert_eq!(batches.len(), NUM_PROPOSALS);
+
+        // create proposals from the batches. The first one is created from the db, the others are
+        // children
+        let mut batches_iter = batches.into_iter();
+        let mut proposals = vec![db.propose(batches_iter.next().unwrap()).await.unwrap()];
+
+        for batch in batches_iter {
+            let proposal = proposals
+                .last()
+                .unwrap()
+                .clone()
+                .propose(batch)
+                .await
+                .unwrap();
+            proposals.push(proposal);
+        }
+
+        // check that each value is present in the final proposal
+        for (k, v) in keys.iter().zip(vals.iter()) {
+            assert_eq!(&proposals.last().unwrap().val(k).await.unwrap().unwrap(), v);
+        }
+
+        // commit the proposals
+        for proposal in proposals {
+            proposal.commit().await.unwrap();
+        }
+
+        // get the last committed revision
+        let committed = db
+            .revision(db.root_hash().await.unwrap().unwrap())
+            .await
+            .unwrap();
+
+        // check that all the keys and values are still present
+        for (k, v) in keys.iter().zip(vals.iter()) {
+            assert_eq!(&committed.val(k).await.unwrap().unwrap(), v);
+        }
+    }
+
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
     struct TestDb {
         db: Db,
