@@ -36,7 +36,7 @@ use std::io::Error;
 use std::iter::once;
 #[cfg(test)]
 use std::num::NonZeroUsize;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 /// Keys are boxed u8 slices
 pub type Key = Box<[u8]>;
@@ -150,6 +150,7 @@ fn get_helper<T: TrieReader>(
 /// Merkle operations against a nodestore
 pub struct Merkle<T> {
     nodestore: T,
+    lock: Option<Arc<Mutex<bool>>>,
 }
 
 impl<T> Merkle<T> {
@@ -160,7 +161,7 @@ impl<T> Merkle<T> {
 
 impl<T> From<T> for Merkle<T> {
     fn from(nodestore: T) -> Self {
-        Merkle { nodestore }
+        Merkle { nodestore, lock: Some(Arc::new(Mutex::new(true)))}
     }
 }
 
@@ -452,6 +453,7 @@ impl<S: ReadableStorage> TryFrom<Merkle<NodeStore<MutableProposal, S>>>
     fn try_from(m: Merkle<NodeStore<MutableProposal, S>>) -> Result<Self, Self::Error> {
         Ok(Merkle {
             nodestore: m.nodestore.try_into()?,
+            lock: None,
         })
     }
 }
@@ -470,6 +472,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     pub fn insert(&mut self, key: &[u8], value: Box<[u8]>) -> Result<(), FileIoError> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
+        // Acquire root lock before accessing the root node
+        let root_clone = self.lock.as_ref().unwrap().clone();
+        let root_guard = root_clone.lock().unwrap();
         let root = self.nodestore.mut_root();
 
         let Some(root_node) = std::mem::take(root) else {
@@ -483,7 +488,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
             return Ok(());
         };
 
-        let root_node = self.insert_helper(root_node, key.as_ref(), value)?;
+        let root_node = self.insert_helper(root_node, key.as_ref(), value, Some(root_guard))?;
         *self.nodestore.mut_root() = root_node.into();
         Ok(())
     }
@@ -496,12 +501,18 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         mut node: Node,
         key: &[u8],
         value: Box<[u8]>,
+        guard: Option<MutexGuard<'_, bool>>,
     ) -> Result<Node, FileIoError> {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`
         // 2. The key is above the node (i.e. its ancestor)
         // 3. The key is below the node (i.e. its descendant)
         // 4. Neither is an ancestor of the other
+        match guard {
+            Some(g) => drop(g),
+            None => (),
+        }
+
         let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
 
         let unique_key = path_overlap.unique_a;
@@ -574,7 +585,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                             }
                         };
 
-                        let child = self.insert_helper(child, partial_path.as_ref(), value)?;
+                        let child = self.insert_helper(child, partial_path.as_ref(), value, None)?;
                         branch.update_child(child_index, Some(Child::Node(child)));
                         Ok(node)
                     }
@@ -1164,7 +1175,7 @@ mod tests {
 
         let nodestore = NodeStore::new_empty_proposal(memstore.into());
 
-        Merkle { nodestore }
+        Merkle { nodestore, lock: Some(Arc::new(Mutex::new(true)))}
     }
 
     #[test]
