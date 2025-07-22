@@ -755,7 +755,7 @@ mod tests {
     use std::array::from_fn;
 
     use crate::linear::memory::MemStore;
-    use crate::{BranchNode, Child, LeafNode};
+    use crate::{BranchArray, BranchNode, Child, LeafNode};
     use arc_swap::access::DynGuard;
     use nonzero_ext::nonzero;
     use test_case::test_case;
@@ -834,20 +834,22 @@ mod tests {
     #[test_case(BranchNode {
         partial_path: Path::from([6, 7, 8]),
         value: Some(vec![9, 10, 11].into_boxed_slice()),
-        children: from_fn(|i| {
+        children: BranchArray {
+            children: from_fn(|i| {
             if i == 15 {
                 Some(Child::AddressWithHash(nonzero!(1u64), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
             } else {
                 None
             }
-        }),
+        })},
     }; "branch node with 1 child")]
     #[test_case(BranchNode {
         partial_path: Path::from([6, 7, 8]),
         value: Some(vec![9, 10, 11].into_boxed_slice()),
-        children: from_fn(|_|
+        children: BranchArray {
+            children: from_fn(|_|
             Some(Child::AddressWithHash(nonzero!(1u64), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
-        ),
+        )},
     }; "branch node with all child")]
     #[test_case(
     Node::Leaf(LeafNode {

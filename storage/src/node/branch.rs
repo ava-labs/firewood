@@ -14,6 +14,7 @@ use crate::node::ExtendableBytes;
 use crate::{LeafNode, LinearAddress, MaybePersistedNode, Node, Path, SharedNode};
 use std::fmt::{Debug, Formatter};
 use std::io::Read;
+use std::slice::{Iter, IterMut};
 
 /// The type of a hash. For ethereum compatible hashes, this might be a RLP encoded
 /// value if it's small enough to fit in less than 32 bytes. For merkledb compatible
@@ -315,7 +316,7 @@ mod ethhash {
 
 #[derive(PartialEq, Eq, Clone)]
 /// A branch node
-pub struct BranchNode {
+pub struct BranchNode<T> {
     /// The partial path for this branch
     pub partial_path: Path,
 
@@ -326,10 +327,53 @@ pub struct BranchNode {
     /// Element i is the child at index i, or None if there is no child at that index.
     /// Each element is (`child_hash`, `child_address`).
     /// `child_address` is None if we don't know the child's hash.
-    pub children: [Option<Child>; Self::MAX_CHILDREN],
+    pub children: T,
+    //[Option<Child>; Self::MAX_CHILDREN],
 }
 
-impl Debug for BranchNode {
+#[allow(missing_docs)]
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct BranchArray {
+    pub children: [Option<Child>; BranchNode::<BranchArray>::MAX_CHILDREN],
+}
+
+#[allow(missing_docs)]
+pub trait BranchArrayTrait {
+    fn clone(&self) -> &impl BranchArrayTrait;
+    fn iter(&self) -> Iter<'_, Option<Child>>;
+    fn iter_mut(&mut self) -> IterMut<'_, Option<Child>>;
+    fn get(&self, child_index: usize) -> Option<&Option<Child>>;
+    fn get_mut(&mut self, child_index: usize) -> Option<&mut Option<Child>>;
+    fn get_array_len(&self) -> usize;
+}
+
+impl BranchArrayTrait for BranchArray {
+    fn clone(&self) -> &impl BranchArrayTrait {
+        return Clone::clone(&self);
+    }
+
+    fn get_array_len(&self) -> usize {
+        return BranchNode::<BranchArray>::MAX_CHILDREN;
+    }
+
+    fn iter(&self) -> Iter<'_, Option<Child>> {
+        return self.children.iter();
+    }
+
+    fn iter_mut(&mut self) -> IterMut<'_, Option<Child>> {
+        return self.children.iter_mut();
+    }   
+
+    fn get(&self, child_index: usize) -> Option<&Option<Child>> {
+        return self.children.get(child_index);
+    }
+
+    fn get_mut(&mut self, child_index: usize) -> Option<&mut Option<Child>> {
+        return self.children.get_mut(child_index);
+    }
+}
+
+impl <T> Debug for BranchNode<T> where T: BranchArrayTrait {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "[BranchNode")?;
         write!(f, r#" path="{:?}""#, self.partial_path)?;
@@ -362,7 +406,7 @@ impl Debug for BranchNode {
     }
 }
 
-impl BranchNode {
+impl<T> BranchNode<T> where T: BranchArrayTrait {
     /// The maximum number of children in a [`BranchNode`]
     #[cfg(feature = "branch_factor_256")]
     pub const MAX_CHILDREN: usize = 256;
@@ -421,12 +465,14 @@ impl BranchNode {
     }
 }
 
-impl From<&LeafNode> for BranchNode {
+impl From<&LeafNode> for BranchNode<BranchArray> {
     fn from(leaf: &LeafNode) -> Self {
-        BranchNode {
+        BranchNode::<BranchArray> {
             partial_path: leaf.partial_path.clone(),
             value: Some(Box::from(&leaf.value[..])),
-            children: [const { None }; BranchNode::MAX_CHILDREN],
+            children: BranchArray {
+                children: [const { None }; BranchNode::<BranchArray>::MAX_CHILDREN],
+            },
         }
     }
 }

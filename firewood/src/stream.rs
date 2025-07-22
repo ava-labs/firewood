@@ -10,7 +10,7 @@ use crate::merkle::{Key, Value};
 use crate::v2::api;
 
 use firewood_storage::{
-    BranchNode, Child, FileIoError, NibblesIterator, Node, PathIterItem, SharedNode, TrieReader,
+    BranchArray, BranchNode, Child, FileIoError, NibblesIterator, Node, PathIterItem, SharedNode, TrieReader
 };
 use futures::stream::FusedStream;
 use futures::{Stream, StreamExt};
@@ -281,7 +281,7 @@ fn get_iterator_intial_state<T: TrieReader>(
                     });
 
                     #[expect(clippy::indexing_slicing)]
-                    let child = &branch.children[next_unmatched_key_nibble as usize];
+                    let child = &branch.children.children[next_unmatched_key_nibble as usize];
                     node = match child {
                         None => return Ok(NodeStreamState::Iterating { iter_stack }),
                         Some(Child::AddressWithHash(addr, _)) => merkle.read_node(*addr)?,
@@ -506,7 +506,7 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                                 };
 
                                 #[expect(clippy::indexing_slicing)]
-                                let child = &branch.children[next_unmatched_key_nibble as usize];
+                                let child = &branch.children.children[next_unmatched_key_nibble as usize];
                                 match child {
                                     None => {
                                         // There's no child at the index of the next nibble in the key.
@@ -609,8 +609,9 @@ where
 
 /// Returns an iterator that returns (`pos`,`child`) for each non-empty child of `branch`,
 /// where `pos` is the position of the child in `branch`'s children array.
-fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (u8, Child)> + use<> {
+fn as_enumerated_children_iter(branch: &BranchNode<BranchArray>) -> impl Iterator<Item = (u8, Child)> + use<> {
     branch
+        .children
         .children
         .clone()
         .into_iter()

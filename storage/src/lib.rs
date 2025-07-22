@@ -42,7 +42,7 @@ pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use node::path::{NibblesIterator, Path};
 pub use node::{
     BranchNode, Child, LeafNode, Node, PathIterItem,
-    branch::{HashType, IntoHashType},
+    branch::{HashType, IntoHashType, BranchArrayTrait, BranchArray},
 };
 pub use nodestore::{
     Committed, HashedNodeReader, ImmutableProposal, LinearAddress, MutableProposal, NodeReader,

@@ -22,7 +22,7 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-use crate::node::branch::ReadSerializable;
+use crate::node::branch::{BranchArray, BranchArrayTrait, ReadSerializable};
 use crate::{HashType, Path, SharedNode};
 use bitfield::bitfield;
 use branch::Serializable as _;
@@ -46,7 +46,7 @@ pub mod persist;
 #[repr(C)]
 pub enum Node {
     /// This node is a [`BranchNode`]
-    Branch(Box<BranchNode>),
+    Branch(Box<BranchNode<BranchArray>>),
     /// This node is a [`LeafNode`]
     Leaf(LeafNode),
 }
@@ -60,8 +60,8 @@ impl Default for Node {
     }
 }
 
-impl From<BranchNode> for Node {
-    fn from(branch: BranchNode) -> Self {
+impl From<BranchNode<BranchArray>> for Node {
+    fn from(branch: BranchNode<BranchArray>) -> Self {
         Node::Branch(Box::new(branch))
     }
 }
@@ -278,7 +278,7 @@ impl Node {
                 #[cfg(not(feature = "branch_factor_256"))]
                 let first_byte: BranchFirstByte = BranchFirstByte::new(
                     u8::from(b.value.is_some()),
-                    (childcount % BranchNode::MAX_CHILDREN) as u8,
+                    (childcount % b.children.get_array_len()) as u8,
                     pp_len,
                 );
                 #[cfg(feature = "branch_factor_256")]
@@ -291,7 +291,8 @@ impl Node {
                 encoded.push(prefix);
                 encoded.push(first_byte.0);
                 #[cfg(feature = "branch_factor_256")]
-                encoded.push((childcount % BranchNode::MAX_CHILDREN) as u8);
+                //encoded.push((childcount % BranchNode::MAX_CHILDREN) as u8);
+                encoded.push((childcount % b.children.get_array_len()) as u8);
 
                 // encode the partial path, including the length if it didn't fit above
                 if pp_len == BRANCH_PARTIAL_PATH_LEN_OVERFLOW {
@@ -306,7 +307,8 @@ impl Node {
                 }
 
                 // encode the children
-                if childcount == BranchNode::MAX_CHILDREN {
+                //if childcount == BranchNode::MAX_CHILDREN {
+                if childcount == b.children.get_array_len() {    
                     for (_, child) in child_iter {
                         if let Child::AddressWithHash(address, hash) = child {
                             encoded.extend_from_slice(&address.get().to_ne_bytes());
@@ -400,7 +402,9 @@ impl Node {
                     None
                 };
 
-                let mut children = [const { None }; BranchNode::MAX_CHILDREN];
+                // TODO (Bernard) will need to distinguish this root from non-root
+                let mut children = [const { None }; BranchNode::<BranchArray>::MAX_CHILDREN];
+                //let mut children = [const { None }; b.children.get_array_len()];
                 if childcount == 0 {
                     // branch is full of all children
                     for child in &mut children {
@@ -435,10 +439,13 @@ impl Node {
                     }
                 }
 
+                // TODO (Bernard): Need to distinguish between root and non-root
                 Ok(Node::Branch(Box::new(BranchNode {
                     partial_path,
                     value,
-                    children,
+                    children: BranchArray {
+                        children: children,
+                    },
                 })))
             }
         }
@@ -490,6 +497,7 @@ fn read_path_with_provided_length(reader: &mut impl Read, len: usize) -> std::io
 mod test {
     #![expect(clippy::unwrap_used)]
 
+    use crate::node::branch::BranchArray;
     use crate::node::{BranchNode, LeafNode, Node};
     use crate::{Child, LinearAddress, NibblesIterator, Path};
     use test_case::test_case;
@@ -507,27 +515,31 @@ mod test {
     #[test_case(Node::Branch(Box::new(BranchNode {
         partial_path: Path::from(vec![0, 1]),
         value: None,
-        children: std::array::from_fn(|i| {
-            if i == 15 {
-                Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
-            } else {
-                None
-            }
-        })})), 45; "one child branch node with short partial path and no value"
+        children: BranchArray {
+            children: std::array::from_fn(|i| {
+                if i == 15 {
+                    Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
+                } else {
+                    None
+                }
+            }),
+        }})),  45; "one child branch node with short partial path and no value"
     )]
     #[test_case(Node::Branch(Box::new(BranchNode {
         partial_path: Path::from(vec![0, 1, 2, 3]),
         value: Some(vec![4, 5, 6, 7].into()),
-        children: std::array::from_fn(|_|
+        children: BranchArray {
+            children: std::array::from_fn(|_|
                 Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
-        )})), 652; "full branch node with long partial path and value"
+        )}})), 652; "full branch node with long partial path and value"
     )]
     #[test_case(Node::Branch(Box::new(BranchNode {
         partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"this is a really long partial path, like so long it's more than 63 nibbles long which triggers #1056.")),
         value: Some(vec![4, 5, 6, 7].into()),
-        children: std::array::from_fn(|_|
+        children: BranchArray {
+            children: std::array::from_fn(|_|
                 Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
-        )})), 851; "full branch node with obnoxiously long partial path"
+        )}})), 851; "full branch node with obnoxiously long partial path"
     )]
     #[test_case(Node::Branch(Box::new(BranchNode {
         partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"this is a really long partial path, like so long it's more than 63 nibbles long which triggers #1056.")),
@@ -537,9 +549,10 @@ verify that we decode the entire value every time. previously, we would only rea
 the first byte for the value length, which is incorrect if the length is greater
 than 126 bytes as the length would be encoded in multiple bytes.
         ").into()),
-        children: std::array::from_fn(|_|
+        children: BranchArray {
+            children: std::array::from_fn(|_|
                 Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
-        )})), 1165; "full branch node with obnoxiously long partial path and long value"
+        )}})), 1165; "full branch node with obnoxiously long partial path and long value"
     )]
     // When ethhash is enabled, we don't actually check the `expected_length`
     fn test_serialize_deserialize(

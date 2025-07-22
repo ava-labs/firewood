@@ -9,6 +9,7 @@
 use crate::hashednode::hash_node;
 use crate::linear::FileIoError;
 use crate::logger::trace;
+use crate::node::branch::BranchArrayTrait;
 use crate::node::Node;
 use crate::{Child, HashType, Path, ReadableStorage, SharedNode};
 

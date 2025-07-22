@@ -13,7 +13,7 @@ use std::{
 
 use smallvec::SmallVec;
 
-use crate::{BranchNode, HashType, LeafNode, Node, Path};
+use crate::{node::branch::BranchArrayTrait, BranchNode, HashType, LeafNode, Node, Path};
 
 /// Returns the hash of `node`, which is at the given `path_prefix`.
 #[must_use]
@@ -28,7 +28,7 @@ pub fn hash_node(node: &Node, path_prefix: &Path) -> HashType {
                     .iter()
                     .all(|c| !matches!(c, Some(crate::Child::Node(_)))),
                 "branch children: {:?}",
-                node.children
+                node.children.children
             );
             NodeAndPrefix {
                 node: node.as_ref(),
@@ -141,7 +141,7 @@ trait HashableNode {
     fn children_iter(&self) -> impl Iterator<Item = (usize, &HashType)> + Clone;
 }
 
-impl HashableNode for BranchNode {
+impl <T> HashableNode for BranchNode<T> where T: BranchArrayTrait {
     fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
         self.partial_path.0.iter().copied()
     }

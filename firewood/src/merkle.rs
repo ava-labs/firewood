@@ -23,9 +23,7 @@ use crate::stream::PathIterator;
 #[cfg(test)]
 use crate::v2::api;
 use firewood_storage::{
-    BranchNode, Child, FileIoError, HashType, Hashable, HashedNodeReader, ImmutableProposal,
-    IntoHashType, LeafNode, MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore,
-    Path, ReadableStorage, SharedNode, TrieReader, ValueDigest,
+    BranchArray, BranchArrayTrait, BranchNode, Child, FileIoError, HashType, Hashable, HashedNodeReader, ImmutableProposal, IntoHashType, LeafNode, MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore, Path, ReadableStorage, SharedNode, TrieReader, ValueDigest
 };
 #[cfg(test)]
 use futures::{StreamExt, TryStreamExt};
@@ -195,8 +193,9 @@ impl<T: TrieReader> Merkle<T> {
             // No nodes, even the root, are before `key`.
             // The root alone proves the non-existence of `key`.
             // TODO reduce duplicate code with ProofNode::from<PathIterItem>
-            let mut child_hashes: [Option<HashType>; BranchNode::MAX_CHILDREN] =
-                [const { None }; BranchNode::MAX_CHILDREN];
+            // TODO (Bernard): Need to distinguish between root and branch
+            let mut child_hashes: [Option<HashType>; BranchNode::<BranchArray>::MAX_CHILDREN] =
+                [const { None }; BranchNode::<BranchArray>::MAX_CHILDREN];
             if let Some(branch) = root.as_branch() {
                 // TODO danlaine: can we avoid indexing?
                 #[expect(clippy::indexing_slicing)]
@@ -534,7 +533,10 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 let mut branch = BranchNode {
                     partial_path: path_overlap.shared.into(),
                     value: Some(value),
-                    children: [const { None }; BranchNode::MAX_CHILDREN],
+                    // TODO (Bernard): Need to distinguish between root and branch
+                    children: BranchArray {
+                        children: [const { None }; BranchNode::<BranchArray>::MAX_CHILDREN],
+                    }
                 };
 
                 // Shorten the node's partial path since it has a new parent.
@@ -554,7 +556,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 match node {
                     Node::Branch(ref mut branch) => {
                         #[expect(clippy::indexing_slicing)]
-                        let child = match std::mem::take(&mut branch.children[child_index as usize])
+                        //let child = match std::mem::take(&mut branch.children[child_index as usize])
+                        // TODO (Bernard): Need to fix for root/branch
+                        let child = match std::mem::take(&mut branch.children.children[child_index as usize])
                         {
                             None => {
                                 // There is no child at this index.
@@ -585,7 +589,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                         let mut branch = BranchNode {
                             partial_path: std::mem::replace(&mut leaf.partial_path, Path::new()),
                             value: Some(std::mem::take(&mut leaf.value)),
-                            children: [const { None }; BranchNode::MAX_CHILDREN],
+                            children: BranchArray {
+                                children: [const { None }; BranchNode::<BranchArray>::MAX_CHILDREN],
+                            }
                         };
 
                         let new_leaf = Node::Leaf(LeafNode {
@@ -611,7 +617,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 let mut branch = BranchNode {
                     partial_path: path_overlap.shared.into(),
                     value: None,
-                    children: [const { None }; BranchNode::MAX_CHILDREN],
+                    children: BranchArray {
+                        children: [const { None }; BranchNode::<BranchArray>::MAX_CHILDREN],
+                    },
                 };
 
                 node.update_partial_path(node_partial_path);
@@ -781,7 +789,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                     Node::Leaf(_) => Ok((Some(node), None)),
                     Node::Branch(ref mut branch) => {
                         #[expect(clippy::indexing_slicing)]
-                        let child = match std::mem::take(&mut branch.children[child_index as usize])
+                        let child = match std::mem::take(&mut branch.children.children[child_index as usize])
                         {
                             None => {
                                 return Ok((Some(node), None));
@@ -935,7 +943,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                     Node::Leaf(_) => Ok(Some(node)),
                     Node::Branch(ref mut branch) => {
                         #[expect(clippy::indexing_slicing)]
-                        let child = match std::mem::take(&mut branch.children[child_index as usize])
+                        let child = match std::mem::take(&mut branch.children.children[child_index as usize])
                         {
                             None => {
                                 return Ok(Some(node));
@@ -1020,16 +1028,17 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     }
 
     /// Recursively deletes all children of a branch node.
-    fn delete_children(
+    fn delete_children<T>(
         &mut self,
-        branch: &mut BranchNode,
+        branch: &mut BranchNode<T>,
         deleted: &mut usize,
-    ) -> Result<(), FileIoError> {
+    ) -> Result<(), FileIoError> where T: BranchArrayTrait {
         if branch.value.is_some() {
             // a KV pair was in the branch itself
             *deleted = deleted.saturating_add(1);
         }
-        for children in &mut branch.children {
+        //for children in &mut branch.children {
+        for children in branch.children.iter_mut() {
             // read the child node
             let child = match children {
                 Some(Child::Node(node)) => node,

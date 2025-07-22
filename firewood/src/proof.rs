@@ -11,8 +11,7 @@
 )]
 
 use firewood_storage::{
-    BranchNode, FileIoError, HashType, Hashable, IntoHashType, NibblesIterator, PathIterItem,
-    Preimage, TrieHash, ValueDigest,
+    BranchArray, BranchNode, FileIoError, HashType, Hashable, IntoHashType, NibblesIterator, PathIterItem, Preimage, TrieHash, ValueDigest
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -86,7 +85,7 @@ pub struct ProofNode {
     /// Otherwise, the node's value or the hash of its value.
     pub value_digest: Option<ValueDigest<Box<[u8]>>>,
     /// The hash of each child, or None if the child does not exist.
-    pub child_hashes: [Option<HashType>; BranchNode::MAX_CHILDREN],
+    pub child_hashes: [Option<HashType>; BranchNode::<BranchArray>::MAX_CHILDREN],
 }
 
 impl Hashable for ProofNode {
@@ -116,8 +115,8 @@ impl Hashable for ProofNode {
 
 impl From<PathIterItem> for ProofNode {
     fn from(item: PathIterItem) -> Self {
-        let mut child_hashes: [Option<HashType>; BranchNode::MAX_CHILDREN] =
-            [const { None }; BranchNode::MAX_CHILDREN];
+        let mut child_hashes: [Option<HashType>; BranchNode::<BranchArray>::MAX_CHILDREN] =
+            [const { None }; BranchNode::<BranchArray>::MAX_CHILDREN];
 
         if let Some(branch) = item.node.as_branch() {
             // TODO danlaine: can we avoid indexing?

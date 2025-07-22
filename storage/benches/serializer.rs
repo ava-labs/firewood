@@ -17,7 +17,7 @@ use std::os::raw::c_int;
 
 use criterion::profiler::Profiler;
 use criterion::{Bencher, Criterion, criterion_group, criterion_main};
-use firewood_storage::{LeafNode, Node, Path};
+use firewood_storage::{BranchArray, LeafNode, Node, Path};
 use pprof::ProfilerGuard;
 use smallvec::SmallVec;
 
@@ -98,7 +98,8 @@ fn branch(c: &mut Criterion) {
     let mut input = Node::Branch(Box::new(firewood_storage::BranchNode {
         partial_path: Path(SmallVec::from_slice(&[0, 1])),
         value: Some(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9].into_boxed_slice()),
-        children: from_fn(|i| {
+        children: BranchArray {
+            children: from_fn(|i| {
             if i == 0 {
                 Some(firewood_storage::Child::AddressWithHash(
                     NonZeroU64::new(1).unwrap(),
@@ -107,7 +108,7 @@ fn branch(c: &mut Criterion) {
             } else {
                 None
             }
-        }),
+        })},
     }));
 
     group.bench_with_input("manual", &input, manual_serializer);
@@ -120,15 +121,15 @@ fn branch(c: &mut Criterion) {
     group.bench_with_input("from_reader", &to_bytes(&input), manual_deserializer);
     group.finish();
 
-    let child = input.as_branch().unwrap().children[0].clone();
+    let child = input.as_branch().unwrap().children.children[0].clone();
     let mut group = c.benchmark_group("2_child");
-    input.as_branch_mut().unwrap().children[1] = child.clone();
+    input.as_branch_mut().unwrap().children.children[1] = child.clone();
     group.bench_with_input("manual", &input, manual_serializer);
     group.bench_with_input("from_reader", &to_bytes(&input), manual_deserializer);
     group.finish();
 
     let mut group = c.benchmark_group("16_child");
-    input.as_branch_mut().unwrap().children = std::array::from_fn(|_| child.clone());
+    input.as_branch_mut().unwrap().children.children = std::array::from_fn(|_| child.clone());
     group.bench_with_input("manual", &input, manual_serializer);
     group.bench_with_input("from_reader", &to_bytes(&input), manual_deserializer);
     group.finish();
