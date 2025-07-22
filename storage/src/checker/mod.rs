@@ -273,7 +273,7 @@ fn update_progress_bar(progress_bar: Option<&ProgressBar>, range_set: &LinearAdd
             range_set
                 .bytes_in_set()
                 .checked_add(crate::nodestore::NodeStoreHeader::SIZE)
-                .expect("Overflow is not possible"),
+                .expect("overflow can only happen if max_addr >= U64_MAX + NODE_STORE_START_ADDR"),
         );
     }
 }

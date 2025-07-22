@@ -49,7 +49,7 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
 
     let progress_bar = ProgressBar::no_length().with_style(
         ProgressStyle::with_template("{wide_bar} {bytes}/{total_bytes}")
-            .expect("This should render to a correct template")
+            .expect("valid template")
             .progress_chars("#>-"),
     );
 

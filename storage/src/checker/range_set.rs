@@ -274,7 +274,7 @@ impl LinearAddressRangeSet {
         self.bytes_in_set = self
             .bytes_in_set
             .checked_add(size)
-            .expect("Overflow is not possible");
+            .expect("overflow can only happen if max_addr >= U64_MAX + NODE_STORE_START_ADDR");
         Ok(())
     }
 
@@ -284,11 +284,12 @@ impl LinearAddressRangeSet {
             .complement(&Self::NODE_STORE_START_ADDR, &self.max_addr);
         let bytes_in_complement = self
             .max_addr
-            .get()
-            .checked_sub(NodeStoreHeader::SIZE)
-            .expect("Impossible due to check in new()")
+            .distance_from(Self::NODE_STORE_START_ADDR)
+            .expect("checked in new()")
             .checked_sub(self.bytes_in_set)
-            .expect("Underflow is not possible since total_bytes only gets incremented when inserting disjoint area within [NODE_STORE_ADDR_START, max_addr)");
+            .expect(
+                "bytes_in_set is always less than or equal to max_addr - NODE_STORE_START_ADDR",
+            );
         Self {
             range_set: complement_set,
             max_addr: self.max_addr,
