@@ -222,7 +222,8 @@ impl NodeStore<Committed, FileBacked> {
             let mut serialized = Vec::new();
             shared_node.as_bytes(0, &mut serialized);
 
-            let (persisted_address, _) = allocator.allocate_node(serialized.as_slice())?;
+            let (persisted_address, area_size_index) = allocator.allocate_node(serialized.as_slice())?;
+            *serialized.get_mut(0).expect("byte was reserved") = area_size_index;
             self.storage
                 .write(persisted_address.get(), serialized.as_slice())?;
             node.persist_at(persisted_address);
@@ -355,7 +356,8 @@ impl NodeStore<Committed, FileBacked> {
             let shared_node = node.as_shared_node(self).expect("in memory, so no IO");
             let mut serialized = Vec::with_capacity(100); // TODO: better size? we can guess branches are larger
             shared_node.as_bytes(0, &mut serialized);
-            let (persisted_address, _) = node_allocator.allocate_node(serialized.as_slice())?;
+            let (persisted_address, area_size_index) = node_allocator.allocate_node(serialized.as_slice())?;
+            *serialized.get_mut(0).expect("byte was reserved") = area_size_index;
             let mut serialized = serialized.into_boxed_slice();
 
             loop {
