@@ -500,7 +500,7 @@ mod tests {
         assert!(children_nodes.iter().any(|n| **n == leaves[1]));
         assert!(children_nodes.iter().any(|n| **n == leaves[2]));
     }
-/* 
+
     #[test]
     fn test_nested_branches() {
         let leaves = [
@@ -514,10 +514,11 @@ mod tests {
         //                                -> branch2 -> leaf[2]
         let inner_branch = create_branch(&[10], Some(&[50]), vec![(0, leaves[2].clone())]);
 
-        let root_branch: Node = BranchNode {
+        let root_branch: Node = BranchNode::<BranchArray> {
             partial_path: Path::new(),
             value: None,
-            children: [
+            children: BranchArray {
+                children : [
                 // unpersisted leaves
                 Some(Child::MaybePersisted(
                     MaybePersistedNode::from(SharedNode::new(leaves[0].clone())),
@@ -550,7 +551,7 @@ mod tests {
                 None,
                 None,
             ],
-        }
+        }}
         .into();
 
         let store = create_test_store_with_root(root_branch.clone());
@@ -576,5 +577,4 @@ mod tests {
         assert!(leaf3_pos < inner_branch_pos);
         assert!(inner_branch_pos < root_pos);
     }
-    */
 }
