@@ -223,7 +223,7 @@ pub struct LinearAddressRangeSet {
 
 #[expect(clippy::result_large_err)]
 impl LinearAddressRangeSet {
-    const NODE_STORE_ADDR_START: LinearAddress = LinearAddress::new(NodeStoreHeader::SIZE).unwrap();
+    const NODE_STORE_START_ADDR: LinearAddress = LinearAddress::new(NodeStoreHeader::SIZE).unwrap();
 
     pub(super) fn new(db_size: u64) -> Result<Self, CheckerError> {
         if db_size < NodeStoreHeader::SIZE {
@@ -241,7 +241,7 @@ impl LinearAddressRangeSet {
 
         Ok(Self {
             range_set: RangeSet::new(),
-            max_addr, // STORAGE_AREA_START..U64::MAX
+            max_addr,
         })
     }
 
@@ -252,19 +252,17 @@ impl LinearAddressRangeSet {
         parent: StoredAreaParent,
     ) -> Result<(), CheckerError> {
         let start = addr;
-        let end = start
-            .checked_add(size)
-            .ok_or(CheckerError::AreaOutOfBounds {
-                start,
-                size,
-                bounds: Self::NODE_STORE_ADDR_START..self.max_addr,
-                parent,
-            })?; // This can only happen due to overflow
-        if addr < Self::NODE_STORE_ADDR_START || end > self.max_addr {
+        let end = start.advance(size).ok_or(CheckerError::AreaOutOfBounds {
+            start,
+            size,
+            bounds: Self::NODE_STORE_START_ADDR..self.max_addr,
+            parent,
+        })?; // This can only happen due to overflow
+        if addr < Self::NODE_STORE_START_ADDR || end > self.max_addr {
             return Err(CheckerError::AreaOutOfBounds {
                 start: addr,
                 size,
-                bounds: Self::NODE_STORE_ADDR_START..self.max_addr,
+                bounds: Self::NODE_STORE_START_ADDR..self.max_addr,
                 parent,
             });
         }
@@ -283,7 +281,7 @@ impl LinearAddressRangeSet {
     pub(super) fn complement(&self) -> Self {
         let complement_set = self
             .range_set
-            .complement(&Self::NODE_STORE_ADDR_START, &self.max_addr);
+            .complement(&Self::NODE_STORE_START_ADDR, &self.max_addr);
 
         Self {
             range_set: complement_set,
@@ -668,7 +666,7 @@ mod test_linear_address_range_set {
         let size2 = 1024;
         let db_size = 0x2000;
 
-        let db_begin = LinearAddressRangeSet::NODE_STORE_ADDR_START;
+        let db_begin = LinearAddressRangeSet::NODE_STORE_START_ADDR;
         let start1_addr = LinearAddress::new(start1).unwrap();
         let end1_addr = LinearAddress::new(start1 + size1).unwrap();
         let start2_addr = LinearAddress::new(start2).unwrap();
@@ -710,7 +708,7 @@ mod test_linear_address_range_set {
 
     #[test]
     fn test_complement_with_empty() {
-        let db_size = LinearAddressRangeSet::NODE_STORE_ADDR_START;
+        let db_size = LinearAddressRangeSet::NODE_STORE_START_ADDR;
         let visited = LinearAddressRangeSet::new(db_size.get()).unwrap();
         let complement = visited.complement().into_iter().collect::<Vec<_>>();
         assert_eq!(complement, vec![]);
