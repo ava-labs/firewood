@@ -1,3 +1,6 @@
+// Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
+// See the file LICENSE for licensing terms.
+
 package eth
 
 import (
@@ -155,8 +158,7 @@ func (tr *merkleTriePair) createAccount() {
 	accountRLP, err := rlp.EncodeToBytes(acc)
 	tr.require.NoError(err)
 
-	err = tr.accountTrie.UpdateAccount(addr, acc)
-	tr.require.NoError(err)
+	tr.require.NoError(tr.accountTrie.UpdateAccount(addr, acc))
 	tr.currentAddrs = append(tr.currentAddrs, addr)
 
 	tr.pendingFwdKeys = append(tr.pendingFwdKeys, accHash[:])
@@ -182,8 +184,7 @@ func (tr *merkleTriePair) updateAccount(addrIndex int) {
 	accountRLP, err := rlp.EncodeToBytes(acc)
 	tr.require.NoError(err)
 
-	err = tr.accountTrie.UpdateAccount(addr, acc)
-	tr.require.NoError(err)
+	tr.require.NoError(tr.accountTrie.UpdateAccount(addr, acc))
 
 	tr.pendingFwdKeys = append(tr.pendingFwdKeys, accHash[:])
 	tr.pendingFwdVals = append(tr.pendingFwdVals, accountRLP)
@@ -242,8 +243,7 @@ func (tr *merkleTriePair) addStorage(accountIndex int) {
 	val := crypto.Keccak256Hash(keyHash[:])
 
 	str := tr.openStorageTrie(addr)
-	err := str.UpdateStorage(addr, key[:], val[:])
-	tr.require.NoError(err)
+	tr.require.NoError(str.UpdateStorage(addr, key[:], val[:]))
 
 	// Update storage key-value pair in firewood
 	tr.pendingFwdKeys = append(tr.pendingFwdKeys, append(accHash[:], keyHash[:]...))
