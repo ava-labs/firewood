@@ -64,7 +64,7 @@ To support development in [Coreth](https://github.com/ava-labs/coreth), Firewood
 
 ### Database Config
 
-A `Config` must be provided when creating the database. A default config is provided at `ffi.DefaultConfig()`:
+A `Config` should be provided when creating the database. A default config is provided at `ffi.DefaultConfig()`:
 
 ```go
 &Config{
@@ -75,12 +75,11 @@ A `Config` must be provided when creating the database. A default config is prov
 }
 ```
 
-A description of all available values, and the default if not set, is available below.
+If no config is provided (`config == nil`), the default config is used. A description of all available values, and the default if not set, is available below.
 
 #### Truncate - `bool`
 
-If set to `true`, an empty database will be created, overriding any existing file. Otherwise, if a file exists, that file will be loaded to cr:w
-eate the database. In either case, if the file doesn't exist, it will be created.
+If set to `true`, an empty database will be created, overriding any existing file. Otherwise, if a file exists, that file will be loaded to create the database. In either case, if the file doesn't exist, it will be created.
 
 *Default*: `false`
 
