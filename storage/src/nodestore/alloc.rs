@@ -24,7 +24,6 @@ use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::branch::{ReadSerializable, Serializable};
 use integer_encoding::VarIntReader;
-use metrics::counter;
 
 use sha2::{Digest, Sha256};
 use std::fmt;
