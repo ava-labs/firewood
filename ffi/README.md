@@ -60,6 +60,79 @@ cargo build -p firewood-ffi --features ethhash
 
 To support development in [Coreth](https://github.com/ava-labs/coreth), Firewood pushes static libraries for Ethereum-compatible hashing to [firewood-go-ethhash](https://github.com/ava-labs/firewood-go-ethhash) with `ethhash` enabled by default. To use Firewood's native hashing structure, you must still build the static library separately.
 
+## Configuration
+
+### Database Config
+
+A `Config` must be provided when creating the database. A default config is provided at `ffi.DefaultConfig()`:
+
+```go
+&Config{
+    NodeCacheEntries:     1000000,
+    FreeListCacheEntries: 40000,
+    Revisions:            100,
+    ReadCacheStrategy:    OnlyCacheWrites,
+}
+```
+
+A description of all available values, and the default if not set, is available below.
+
+#### Truncate - `bool`
+
+If set to `true`, an empty database will be created, overriding any existing file. Otherwise, if a file exists, that file will be loaded to cr:w
+eate the database. In either case, if the file doesn't exist, it will be created.
+
+*Default*: `false`
+
+#### Revisions - `uint`
+
+Indicates the number of committed roots accessible before the diff layer is compressed. Must be explicitly set if the config is specified to at least 2.
+
+#### ReadCacheStrategy - `uint`
+
+Should be one of `OnlyCacheWrites`, `CacheBrancheReads`, or `CacheAllReads`. In the latter two cases, writes are still cached.
+
+*Default*: `OnlyCacheWrites`
+
+#### NodeCacheEntries
+
+The number of nodes in the database that are stored in cache. Must be explicitly set if the config is supplied.
+
+#### FreeListCacheEntries
+
+The number of entries of the free list (see [Firewood Overview](../README.md)). Must be explicitly set if the config is supplied.
+
+### Metrics
+
+By default, metrics are not enabled in Firewood's FFI. However, if compiled with this option, they can be recorded by a call to `StartMetrics()` or `StartMetricsWithExporter(port)`. One of these may be called exactly once, since it starts the metrics globally on the process.
+
+To use these metrics, you can:
+
+- Listen on the port specified, if you started the metrics with the exporter.
+- Call `GatherMetrics()`, which returns an easily parsable string containing all metrics.
+- Create the Prometheus gatherer, and call `Gather`. This can easily be integrated into other applications which already use prometehus. Example usage is below:
+
+```go
+gatherer := ffi.Gatherer{}
+gathering, err := gatherer.Gather()
+```
+
+### Logs
+
+Logs are configured globally on the process, and not enabled by default. They can be enabled using the `StartLogs(config)` function. Firewood must be built with the `logger` feature for this function to work. If a config isn't provided, the default values will be used.
+
+#### Path
+
+The path to the file where the logs will be written.
+
+*Default*: `{TEMP}/firewood-log.txt`, where `{TEMP}` is the platform's temporary directory. For Unix-based OSes, this is typically `/tmp`.
+
+#### FilterLevel
+
+One of `trace`, `debug`, `info`.
+
+*Default*: `info`
+
 ## Development
 
 Iterative building is unintuitive for the ffi and some common sources of confusion are listed below.
