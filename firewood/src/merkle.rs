@@ -23,7 +23,10 @@ use crate::stream::PathIterator;
 #[cfg(test)]
 use crate::v2::api;
 use firewood_storage::{
-    BranchArray, BranchArrayTrait, BranchNode, Child, FileIoError, HashType, Hashable, HashedNodeReader, ImmutableProposal, IntoHashType, LeafNode, MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore, Path, ReadableStorage, SharedNode, TrieReader, ValueDigest
+    BranchArray, BranchArrayTrait, BranchConstants, BranchNode, Child, FileIoError, HashType,
+    Hashable, HashedNodeReader, ImmutableProposal, IntoHashType, LeafNode, MaybePersistedNode,
+    MutableProposal, NibblesIterator, Node, NodeStore, Path, ReadableStorage, SharedNode,
+    TrieReader, ValueDigest,
 };
 #[cfg(test)]
 use futures::{StreamExt, TryStreamExt};
@@ -194,8 +197,8 @@ impl<T: TrieReader> Merkle<T> {
             // The root alone proves the non-existence of `key`.
             // TODO reduce duplicate code with ProofNode::from<PathIterItem>
             // TODO (Bernard): Need to distinguish between root and branch
-            let mut child_hashes: [Option<HashType>; BranchNode::<BranchArray>::MAX_CHILDREN] =
-                [const { None }; BranchNode::<BranchArray>::MAX_CHILDREN];
+            let mut child_hashes: [Option<HashType>; BranchConstants::MAX_CHILDREN] =
+                [const { None }; BranchConstants::MAX_CHILDREN];
             if let Some(branch) = root.as_branch() {
                 // TODO danlaine: can we avoid indexing?
                 #[expect(clippy::indexing_slicing)]
@@ -535,8 +538,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                     value: Some(value),
                     // TODO (Bernard): Need to distinguish between root and branch
                     children: BranchArray {
-                        children: [const { None }; BranchNode::<BranchArray>::MAX_CHILDREN],
-                    }
+                        children: [const { None }; BranchConstants::MAX_CHILDREN],
+                    },
                 };
 
                 // Shorten the node's partial path since it has a new parent.
@@ -558,8 +561,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                         #[expect(clippy::indexing_slicing)]
                         //let child = match std::mem::take(&mut branch.children[child_index as usize])
                         // TODO (Bernard): Need to fix for root/branch
-                        let child = match std::mem::take(&mut branch.children.children[child_index as usize])
-                        {
+                        let child = match std::mem::take(
+                            &mut branch.children.children[child_index as usize],
+                        ) {
                             None => {
                                 // There is no child at this index.
                                 // Create a new leaf and put it here.
@@ -590,8 +594,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                             partial_path: std::mem::replace(&mut leaf.partial_path, Path::new()),
                             value: Some(std::mem::take(&mut leaf.value)),
                             children: BranchArray {
-                                children: [const { None }; BranchNode::<BranchArray>::MAX_CHILDREN],
-                            }
+                                children: [const { None }; BranchConstants::MAX_CHILDREN],
+                            },
                         };
 
                         let new_leaf = Node::Leaf(LeafNode {
@@ -618,7 +622,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                     partial_path: path_overlap.shared.into(),
                     value: None,
                     children: BranchArray {
-                        children: [const { None }; BranchNode::<BranchArray>::MAX_CHILDREN],
+                        children: [const { None }; BranchConstants::MAX_CHILDREN],
                     },
                 };
 
@@ -789,8 +793,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                     Node::Leaf(_) => Ok((Some(node), None)),
                     Node::Branch(ref mut branch) => {
                         #[expect(clippy::indexing_slicing)]
-                        let child = match std::mem::take(&mut branch.children.children[child_index as usize])
-                        {
+                        let child = match std::mem::take(
+                            &mut branch.children.children[child_index as usize],
+                        ) {
                             None => {
                                 return Ok((Some(node), None));
                             }
@@ -943,8 +948,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                     Node::Leaf(_) => Ok(Some(node)),
                     Node::Branch(ref mut branch) => {
                         #[expect(clippy::indexing_slicing)]
-                        let child = match std::mem::take(&mut branch.children.children[child_index as usize])
-                        {
+                        let child = match std::mem::take(
+                            &mut branch.children.children[child_index as usize],
+                        ) {
                             None => {
                                 return Ok(Some(node));
                             }
@@ -1032,7 +1038,10 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         &mut self,
         branch: &mut BranchNode<T>,
         deleted: &mut usize,
-    ) -> Result<(), FileIoError> where T: BranchArrayTrait {
+    ) -> Result<(), FileIoError>
+    where
+        T: BranchArrayTrait,
+    {
         if branch.value.is_some() {
             // a KV pair was in the branch itself
             *deleted = deleted.saturating_add(1);

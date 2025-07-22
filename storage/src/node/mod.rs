@@ -22,7 +22,7 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-use crate::node::branch::{BranchArray, BranchArrayTrait, ReadSerializable};
+use crate::node::branch::{BranchArray, BranchArrayTrait, BranchConstants, ReadSerializable};
 use crate::{HashType, LinearAddress, Path, SharedNode};
 use bitfield::bitfield;
 use branch::Serializable as _;
@@ -276,7 +276,7 @@ impl Node {
                 #[cfg(not(feature = "branch_factor_256"))]
                 let first_byte: BranchFirstByte = BranchFirstByte::new(
                     u8::from(b.value.is_some()),
-                    (childcount % b.children.get_array_len()) as u8,
+                    (childcount % BranchConstants::MAX_CHILDREN) as u8,
                     pp_len,
                 );
                 #[cfg(feature = "branch_factor_256")]
@@ -306,7 +306,7 @@ impl Node {
 
                 // encode the children
                 //if childcount == BranchNode::MAX_CHILDREN {
-                if childcount == b.children.get_array_len() {    
+                if childcount == BranchConstants::MAX_CHILDREN {    
                     for (_, child) in child_iter {
                         if let Child::AddressWithHash(address, hash) = child {
                             encoded.extend_from_slice(&address.get().to_ne_bytes());
@@ -401,7 +401,7 @@ impl Node {
                 };
 
                 // TODO (Bernard) will need to distinguish this root from non-root
-                let mut children = [const { None }; BranchNode::<BranchArray>::MAX_CHILDREN];
+                let mut children = [const { None }; BranchConstants::MAX_CHILDREN];
                 //let mut children = [const { None }; b.children.get_array_len()];
                 if childcount == 0 {
                     // branch is full of all children

@@ -327,14 +327,32 @@ pub struct BranchNode<T> {
     /// Element i is the child at index i, or None if there is no child at that index.
     /// Each element is (`child_hash`, `child_address`).
     /// `child_address` is None if we don't know the child's hash.
+    /// NOTE: There are two main branch node types: root and non-root. For a non-root
+    /// branch, the children is BranchArray which is just an array and child structs.
+    /// For root branches, the children is a BranchLockedArray, which has a lock for
+    /// "children" which serves as the lock for the node, and each entry in the array
+    /// also has a lock for the Option<Child>.
     pub children: T,
     //[Option<Child>; Self::MAX_CHILDREN],
 }
 
 #[allow(missing_docs)]
+#[derive(Debug)]
+pub struct BranchConstants;
+impl BranchConstants {
+    /// The maximum number of children in a [`BranchNode`]
+    #[cfg(feature = "branch_factor_256")]
+    pub const MAX_CHILDREN: usize = 256;
+
+    /// The maximum number of children in a [`BranchNode`]
+    #[cfg(not(feature = "branch_factor_256"))]
+    pub const MAX_CHILDREN: usize = 16;    
+}
+
+#[allow(missing_docs)]
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct BranchArray {
-    pub children: [Option<Child>; BranchNode::<BranchArray>::MAX_CHILDREN],
+    pub children: [Option<Child>; BranchConstants::MAX_CHILDREN],
 }
 
 #[allow(missing_docs)]
@@ -344,17 +362,24 @@ pub trait BranchArrayTrait {
     fn iter_mut(&mut self) -> IterMut<'_, Option<Child>>;
     fn get(&self, child_index: usize) -> Option<&Option<Child>>;
     fn get_mut(&mut self, child_index: usize) -> Option<&mut Option<Child>>;
-    fn get_array_len(&self) -> usize;
+    //fn get_array_len(&self) -> usize;
+    fn set_array(&mut self, array: [Option<Child>; BranchConstants::MAX_CHILDREN]);
 }
 
 impl BranchArrayTrait for BranchArray {
+    fn set_array(&mut self, array: [Option<Child>; BranchConstants::MAX_CHILDREN]) {
+        self.children = array;
+    }
+
     fn clone(&self) -> &impl BranchArrayTrait {
         return Clone::clone(&self);
     }
 
+    /*
     fn get_array_len(&self) -> usize {
         return BranchNode::<BranchArray>::MAX_CHILDREN;
     }
+    */
 
     fn iter(&self) -> Iter<'_, Option<Child>> {
         return self.children.iter();
@@ -407,6 +432,7 @@ impl <T> Debug for BranchNode<T> where T: BranchArrayTrait {
 }
 
 impl<T> BranchNode<T> where T: BranchArrayTrait {
+    /* 
     /// The maximum number of children in a [`BranchNode`]
     #[cfg(feature = "branch_factor_256")]
     pub const MAX_CHILDREN: usize = 256;
@@ -414,6 +440,7 @@ impl<T> BranchNode<T> where T: BranchArrayTrait {
     /// The maximum number of children in a [`BranchNode`]
     #[cfg(not(feature = "branch_factor_256"))]
     pub const MAX_CHILDREN: usize = 16;
+    */
 
     /// Returns the address of the child at the given index.
     /// Panics if `child_index` >= [`BranchNode::MAX_CHILDREN`].
@@ -473,7 +500,7 @@ impl From<&LeafNode> for BranchNode<BranchArray> {
             partial_path: leaf.partial_path.clone(),
             value: Some(Box::from(&leaf.value[..])),
             children: BranchArray {
-                children: [const { None }; BranchNode::<BranchArray>::MAX_CHILDREN],
+                children: [const { None }; BranchConstants::MAX_CHILDREN],
             },
         }
     }
