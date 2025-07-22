@@ -836,7 +836,7 @@ mod tests {
     }; "branch node with 1 child")]
     #[test_case(BranchNode {
         partial_path: Path::from([6, 7, 8]),
-        value: Some(vec![9, 10, 11].into_boxed_slice()),
+        value: Some(vec![9, 10, 11].into_boxed_slice()),Í
         children: BranchArray {
             children: from_fn(|_|
             Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))

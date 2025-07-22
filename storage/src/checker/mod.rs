@@ -284,7 +284,8 @@ mod test {
         high_watermark += leaf_area;
 
         // TODO (Bernard): Will later need to distinguish this from the root
-        let mut branch_children: [Option<Child>; BranchNode::<BranchArray>::MAX_CHILDREN] = Default::default();
+        let mut branch_children: [Option<Child>; BranchNode::<BranchArray>::MAX_CHILDREN] =
+            Default::default();
         branch_children[1] = Some(Child::AddressWithHash(leaf_addr, leaf_hash));
         let branch = Node::Branch(Box::new(BranchNode {
             partial_path: Path::from([0]),
@@ -299,7 +300,8 @@ mod test {
         high_watermark += branch_area;
 
         // TODO (Bernard): Will later need to distinguish this from the root
-        let mut root_children: [Option<Child>; BranchNode::<BranchArray>::MAX_CHILDREN] = Default::default();
+        let mut root_children: [Option<Child>; BranchNode::<BranchArray>::MAX_CHILDREN] =
+            Default::default();
         root_children[0] = Some(Child::AddressWithHash(branch_addr, branch_hash));
         let root = Node::Branch(Box::new(BranchNode {
             partial_path: Path::from([]),
@@ -363,9 +365,9 @@ mod test {
         };
         let wrong_hash = HashType::default();
         let branch_path = &branch_node.as_branch().unwrap().partial_path;
-        let Some(Child::AddressWithHash(_, hash)) = root_node.as_branch_mut().unwrap().children.children
-            [branch_path[0] as usize]
-            .replace(Child::AddressWithHash(*branch_addr, wrong_hash.clone()))
+        let Some(Child::AddressWithHash(_, hash)) =
+            root_node.as_branch_mut().unwrap().children.children[branch_path[0] as usize]
+                .replace(Child::AddressWithHash(*branch_addr, wrong_hash.clone()))
         else {
             panic!("test trie content changed, the test should be updated");
         };
