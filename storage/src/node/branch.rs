@@ -400,7 +400,15 @@ impl BranchNode {
         *child = new_child;
     }
 
-    // Helper to iterate over only valid children
+    /// Helper to iterate over only valid children
+    ///
+    /// ## Panics
+    ///
+    /// Note: This function will panic if any child is a [`Child::Node`] variant
+    /// as it is still mutable and has not been hashed yet. Unlike
+    /// [`BranchNode::children_addresses`], this will _not_ panic if the child
+    /// is an unpersisted [`Child::MaybePersisted`].
+    #[track_caller]
     pub(crate) fn children_iter(
         &self,
     ) -> impl Iterator<Item = (usize, (LinearAddress, &HashType))> + Clone {
@@ -409,7 +417,9 @@ impl BranchNode {
             .enumerate()
             .filter_map(|(i, child)| match child {
                 None => None,
-                Some(Child::Node(_)) => unreachable!("TODO make unreachable"),
+                Some(Child::Node(_)) => {
+                    panic!("attempted to iterate over an in-memory mutable node")
+                }
                 Some(Child::AddressWithHash(address, hash)) => Some((i, (*address, hash))),
                 Some(Child::MaybePersisted(maybe_persisted, hash)) => {
                     // For MaybePersisted, we need the address if it's persisted
@@ -424,13 +434,24 @@ impl BranchNode {
     ///
     /// The index of the hash in the returned array corresponds to the index of the child
     /// in the branch node.
+    ///
+    /// ## Panics
+    ///
+    /// Note: This function will panic if any child is a [`Child::Node`] variant
+    /// as it is still mutable and has not been hashed yet.
+    ///
+    /// This is an unintentional side effect of the current implementation. Future
+    /// changes will have this check implemented structurally to prevent such panics.
     #[must_use]
+    #[track_caller]
     pub fn children_hashes(&self) -> Children<HashType> {
         let mut hashes = Self::empty_children();
         for (child, slot) in self.children.iter().zip(hashes.iter_mut()) {
             match child {
                 None => {}
-                Some(Child::Node(_)) => unreachable!("TODO make unreachable"),
+                Some(Child::Node(_)) => {
+                    panic!("attempted to get the hash of an in-memory mutable node")
+                }
                 Some(Child::AddressWithHash(_, hash)) => _ = slot.replace(hash.clone()),
                 Some(Child::MaybePersisted(_, hash)) => _ = slot.replace(hash.clone()),
             }
@@ -442,20 +463,33 @@ impl BranchNode {
     ///
     /// The index of the address in the returned array corresponds to the index of the child
     /// in the branch node.
+    ///
+    /// ## Panics
+    ///
+    /// Note: This function will panic if:
+    ///   - Any child is a [`Child::Node`] variant as it does not have an address.
+    ///   - Any child is a [`Child::MaybePersisted`] variant that is not yet
+    ///     persisted, as we do not yet know its address.
+    ///
+    /// This is an unintentional side effect of the current implementation. Future
+    /// changes will have this check implemented structurally to prevent such panics.
     #[must_use]
+    #[track_caller]
     pub fn children_addresses(&self) -> Children<LinearAddress> {
         let mut addrs = Self::empty_children();
         for (child, slot) in self.children.iter().zip(addrs.iter_mut()) {
             match child {
                 None => {}
-                Some(Child::Node(_)) => unreachable!("TODO make unreachable"),
+                Some(Child::Node(_)) => {
+                    panic!("attempted to get the address of an in-memory mutable node")
+                }
                 Some(Child::AddressWithHash(address, _)) => _ = slot.replace(*address),
                 Some(Child::MaybePersisted(maybe_persisted, _)) => {
                     // For MaybePersisted, we need the address if it's persisted
                     if let Some(addr) = maybe_persisted.as_linear_address() {
                         slot.replace(addr);
                     } else {
-                        // should we panic here?
+                        panic!("attempted to get the address of an unpersisted MaybePersistedNode")
                     }
                 }
             }
