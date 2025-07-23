@@ -18,18 +18,17 @@
     )
 )]
 
-use std::iter::once;
-
 use crate::logger::warn;
 use crate::{
-    HashType, Hashable, Preimage, TrieHash, ValueDigest, hashednode::HasUpdate, logger::trace,
+    BranchNode, HashType, Hashable, Preimage, TrieHash, ValueDigest, hashednode::HasUpdate,
+    logger::trace,
 };
 use bitfield::bitfield;
 use bytes::BytesMut;
+use rlp::{Rlp, RlpStream};
 use sha3::{Digest, Keccak256};
 use smallvec::SmallVec;
-
-use rlp::{Rlp, RlpStream};
+use std::iter::once;
 
 impl HasUpdate for Keccak256 {
     fn update<T: AsRef<[u8]>>(&mut self, data: T) {
@@ -118,7 +117,14 @@ impl<T: Hashable> Preimage for T {
         let is_account = self.key().size_hint().0 == 64;
         trace!("is_account: {is_account}");
 
-        let children = self.children().count();
+        let child_hashes = self.children();
+
+        // This will use auto-vectorization to sum the non-zero children
+        let children = child_hashes
+            .iter()
+            .map(Option::is_some)
+            .map(usize::from)
+            .sum::<usize>();
 
         if children == 0 {
             // since there are no children, this must be a leaf
@@ -170,31 +176,17 @@ impl<T: Hashable> Preimage for T {
         } else {
             // for a branch, there are always 16 children and a value
             // Child::None we encode as RLP empty_data (0x80)
-            let mut rlp = RlpStream::new_list(17);
-            let mut child_iter = self.children().peekable();
-            for index in 0..=15 {
-                if let Some(&(child_index, digest)) = child_iter.peek() {
-                    if child_index == index {
-                        match digest {
-                            HashType::Hash(hash) => rlp.append(&hash.as_slice()),
-                            HashType::Rlp(rlp_bytes) => rlp.append_raw(rlp_bytes, 1),
-                        };
-                        child_iter.next();
-                    } else {
-                        rlp.append_empty_data();
-                    }
-                } else {
-                    // exhausted all indexes
-                    rlp.append_empty_data();
-                }
+            let mut rlp = RlpStream::new_list(const { BranchNode::MAX_CHILDREN + 1 });
+            for child in &child_hashes {
+                match child {
+                    Some(HashType::Hash(hash)) => rlp.append(&hash.as_slice()),
+                    Some(HashType::Rlp(rlp_bytes)) => rlp.append_raw(rlp_bytes, 1),
+                    None => rlp.append_empty_data(),
+                };
             }
 
-            if let Some(digest) = self.value_digest() {
-                if is_account {
-                    rlp.append_empty_data();
-                } else {
-                    rlp.append(&*digest);
-                }
+            if !is_account && let Some(digest) = self.value_digest() {
+                rlp.append(&*digest);
             } else {
                 rlp.append_empty_data();
             }
@@ -217,7 +209,11 @@ impl<T: Hashable> Preimage for T {
                     let replacement_hash = if children == 1 {
                         // we need to treat this child like it's a root node, so the partial path is
                         // actually one longer than it is reported
-                        match self.children().next().expect("we know there is one").1 {
+                        match child_hashes
+                            .iter()
+                            .find_map(|c| c.as_ref())
+                            .expect("we know there is exactly one child")
+                        {
                             HashType::Hash(hash) => hash.clone(),
                             HashType::Rlp(rlp_bytes) => {
                                 let mut rlp = RlpStream::new_list(2);

@@ -35,12 +35,20 @@ impl<T: Hashable> Preimage for T {
     fn write(&self, buf: &mut impl HasUpdate) {
         let children = self.children();
 
-        let num_children = children.clone().count() as u64;
+        // This will use auto-vectorization to sum the non-zero children
+        let num_children = children
+            .iter()
+            .map(Option::is_some)
+            .map(u64::from)
+            .sum::<u64>();
+
         add_varint_to_buf(buf, num_children);
 
-        for (index, hash) in children {
-            add_varint_to_buf(buf, index as u64);
-            buf.update(hash);
+        for (index, hash) in children.iter().enumerate() {
+            if let Some(hash) = hash {
+                add_varint_to_buf(buf, index as u64);
+                buf.update(hash);
+            }
         }
 
         // Add value digest (if any) to hash pre-image
