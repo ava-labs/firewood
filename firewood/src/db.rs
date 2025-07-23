@@ -803,7 +803,9 @@ mod test {
 
         let db = testdb().await;
 
-        for _ in 0..10 {
+        // takes about 0.3s on a mac to run 50 times
+        for _ in 0..50 {
+            // create a batch of 10 random key-value pairs
             let batch = (0..10).fold(vec![], |mut batch, _| {
                 let key: [u8; 32] = rng.borrow_mut().random();
                 let value: [u8; 32] = rng.borrow_mut().random();
@@ -814,6 +816,7 @@ mod test {
             let proposal = db.propose(batch).await.unwrap();
             proposal.commit().await.unwrap();
 
+            // check the database for consistency, sometimes checking the hashes
             let hash_check = rng.borrow_mut().random();
             if let Err(e) = db.check(CheckOpt { hash_check }).await {
                 db.dump(&mut std::io::stdout()).await.unwrap();
