@@ -39,14 +39,6 @@ mod leaf;
 pub mod path;
 pub mod persist;
 
-/* 
-pub enum Root {
-    Branch(Box<BranchNode<Option<LockedChild>>>),
-    /// This node is a [`LeafNode`]
-    Leaf(LeafNode),
-}
-*/
-
 /// A node, either a Branch or Leaf
 // TODO: explain why Branch is boxed but Leaf is not
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner)]
@@ -63,8 +55,8 @@ pub trait NodeOptionTrait {
     /// TODO
     fn get_child_option(&self) -> &Option<Child>;
 
-    ///
-    fn set_child_option(&mut self, child: &Option<Child>);
+    /// TODO
+    fn set_child_option(&mut self, child: Option<Child>);
 }
 
 impl NodeOptionTrait for Option<Child> {
@@ -72,13 +64,9 @@ impl NodeOptionTrait for Option<Child> {
         return self;
     }
 
-    fn set_child_option(&mut self, child: &Option<Child>) {
-        *self = child.clone();
-
-        // TODO
-        //*self = *child;
+    fn set_child_option(&mut self, child: Option<Child>) {
+        *self = child;
     }
-
 }
 
 impl<T: NodeOptionTrait> Default for Node<T> {
@@ -218,6 +206,8 @@ impl ExtendableBytes for ByteCounter {
     }
 }
 
+// We do not provide generic implementations of as_bytes and from_reader. Instead, we will have either separate
+// functions for each Node type, or we will convert between other node types and Node<Option<Child>>.
 impl Node<Option<Child>> {
     /// Given a [Node], returns a set of bytes to write to storage
     /// The format is as follows:
@@ -352,6 +342,8 @@ impl Node<Option<Child>> {
         }
     }
 
+    // TODO: Currently not sure whether a Node<Option<Child>> should be generated
+    //       or another Node type.
     /// Given a reader, return a [Node] from those bytes
     pub fn from_reader(mut serialized: impl Read) -> Result<Self, Error> {
         match serialized.read_byte()? {
@@ -442,7 +434,7 @@ impl Node<Option<Child>> {
     }
 }
 
-impl <U> Node<U> where U: NodeOptionTrait {
+impl<U: NodeOptionTrait> Node<U> {
     /// Returns the partial path of the node.
     #[must_use]
     pub fn partial_path(&self) -> &Path {
@@ -478,32 +470,30 @@ impl <U> Node<U> where U: NodeOptionTrait {
         }
     }
 
-    /// TODO
+    /// Currently very inefficient as we perform this conversation even if
+    /// the original type is already a Node<Option<Child>>.
+    ///
+    /// Would implementing From(T) -> Node<Option<Child>> be more efficient
     pub fn convert_child_option(&self) -> Node<Option<Child>> {
         match self {
+            Node::Leaf(l) => Node::Leaf(l.clone()),
             Node::Branch(b) => {
-                let mut new_children = [ const {None}; BranchConstants::MAX_CHILDREN];
+                let mut new_children = [const { None }; BranchConstants::MAX_CHILDREN];
                 for (i, entry) in b.children.iter().enumerate() {
-                    match entry.get_child_option() {
-                        Some(c) => { new_children[i] = Some(c.clone()); },
-                        None => { new_children[i] = None; }
-                    }
+                    if let Some(c) = entry.get_child_option() {
+                        new_children[i] = Some(c.clone());
+                    } else {
+                        new_children[i] = None;
+                    };
                 }
-
                 Node::Branch(Box::new(BranchNode::<Option<Child>> {
                     partial_path: b.partial_path.clone(),
                     value: b.value.clone(),
-                    //value: Some(Box::from(&b.value[..])),
                     children: new_children,
-                    //[const { None }; BranchConstants::MAX_CHILDREN]
                 }))
-            },
-            Node::Leaf(l) => {               
-                Node::Leaf(LeafNode { partial_path: l.partial_path.clone(), value: l.value.clone()})
             }
         }
     }
-
 }
 
 /// A path iterator item, which has the key nibbles up to this point,
