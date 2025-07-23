@@ -211,28 +211,6 @@ impl<T: TrieReader> Merkle<T> {
     /// ## Errors
     ///
     /// Returns an error if the proof is invalid, or if the key does not match the expected value.
-    pub fn _verify_range_proof<V: AsRef<[u8]>>(
-        &self,
-        _proof: &Proof<impl ProofCollection>,
-        _first_key: &[u8],
-        _last_key: &[u8],
-        _keys: Vec<&[u8]>,
-        _vals: Vec<V>,
-    ) -> Result<(), ProofError> {
-        todo!();
-    }
-
-    /// Verify that all invariants of the range proof are satisfied.
-    ///
-    /// - At least one of `first_key`, `last_key`, or a non-empty `key_values` is provided.
-    /// - `first_key` <= `last_key` if both are provided
-    /// - `proof` is valid for all key-value pairs for the given `root_hash`.
-    ///
-    /// All key-value pairs are
-    ///
-    /// ## Errors
-    ///
-    /// Returns an error if the proof is invalid, or if the key does not match the expected value.
     pub fn verify_range_proof(
         &self,
         first_key: Option<impl KeyType>,
@@ -269,7 +247,7 @@ impl<T: TrieReader> Merkle<T> {
         // 4. Reconstruct trie and verify root
         self.verify_reconstructed_trie_root(proof, root_hash)?;
 
-        todo!();
+        Ok(())
     }
 
     /// Verify that the range proof is structurally valid and that we can use it

@@ -1,9 +1,10 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![expect(clippy::used_underscore_items)]
-
 use super::*;
+use crate::range_proof::RangeProof;
+
+type KeyValuePairs = Vec<(Box<[u8]>, Box<[u8]>)>;
 
 #[tokio::test]
 #[ignore = "broken tests not yet validated"]
@@ -285,20 +286,25 @@ fn test_range_proof() {
             continue;
         }
 
-        let proof = merkle
-            .prove(items[start].0)
-            .unwrap()
-            .join(merkle.prove(items[end - 1].0).unwrap());
+        let start_proof = merkle.prove(items[start].0).unwrap();
+        let end_proof = merkle.prove(items[end - 1].0).unwrap();
 
-        let mut keys = Vec::new();
-        let mut vals = Vec::new();
-        for item in &items[start..end] {
-            keys.push(item.0.as_ref());
-            vals.push(&item.1);
-        }
+        let key_values: KeyValuePairs = items[start..end]
+            .iter()
+            .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
+            .collect();
+
+        let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+
+        let root_hash = merkle.nodestore().root_hash().unwrap();
 
         merkle
-            ._verify_range_proof(&proof, items[start].0, items[end - 1].0, keys, vals)
+            .verify_range_proof(
+                Some(items[start].0),
+                Some(items[end - 1].0),
+                &root_hash,
+                &range_proof,
+            )
             .unwrap();
     }
 }
@@ -321,7 +327,7 @@ fn test_bad_range_proof() {
             continue;
         }
 
-        let proof = merkle
+        let _proof = merkle
             .prove(items[start].0)
             .unwrap()
             .join(merkle.prove(items[end - 1].0).unwrap());
@@ -373,13 +379,27 @@ fn test_bad_range_proof() {
             _ => unreachable!(),
         }
 
-        let keys_slice = keys
+        let key_values: KeyValuePairs = keys
             .iter()
-            .map(std::convert::AsRef::as_ref)
-            .collect::<Vec<&[u8]>>();
+            .zip(vals.iter())
+            .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
+            .collect();
+
+        let start_proof = merkle.prove(items[start].0).unwrap();
+        let end_proof = merkle.prove(items[end - 1].0).unwrap();
+
+        let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+
+        let root_hash = merkle.nodestore().root_hash().unwrap();
+
         assert!(
             merkle
-                ._verify_range_proof(&proof, items[start].0, items[end - 1].0, keys_slice, vals)
+                .verify_range_proof(
+                    Some(items[start].0),
+                    Some(items[end - 1].0),
+                    &root_hash,
+                    &range_proof,
+                )
                 .is_err()
         );
     }
@@ -422,38 +442,41 @@ fn test_range_proof_with_non_existent_proof() {
             continue;
         }
 
-        let proof = merkle
-            .prove(&first)
-            .unwrap()
-            .join(merkle.prove(&last).unwrap());
+        let start_proof = merkle.prove(&first).unwrap();
+        let end_proof = merkle.prove(&last).unwrap();
 
-        let mut keys: Vec<&[u8]> = Vec::new();
-        let mut vals: Vec<[u8; 20]> = Vec::new();
-        for item in &items[start..end] {
-            keys.push(item.0);
-            vals.push(*item.1);
-        }
+        let key_values: KeyValuePairs = items[start..end]
+            .iter()
+            .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
+            .collect();
+
+        let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+
+        let root_hash = merkle.nodestore().root_hash().unwrap();
 
         merkle
-            ._verify_range_proof(&proof, &first, &last, keys, vals)
+            .verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof)
             .unwrap();
     }
 
     // Special case, two edge proofs for two edge key.
     let first = &[0; 32];
     let last = &[255; 32];
-    let proof = merkle
-        .prove(first)
-        .unwrap()
-        .join(merkle.prove(last).unwrap());
 
-    let (keys, vals): (Vec<&[u8; 32]>, Vec<&[u8; 20]>) = items.into_iter().unzip();
-    let keys = keys
-        .iter()
-        .map(std::convert::AsRef::as_ref)
-        .collect::<Vec<&[u8]>>();
+    let start_proof = merkle.prove(first).unwrap();
+    let end_proof = merkle.prove(last).unwrap();
+
+    let key_values: KeyValuePairs = items
+        .into_iter()
+        .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
+        .collect();
+
+    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
     merkle
-        ._verify_range_proof(&proof, first, last, keys, vals)
+        .verify_range_proof(Some(first), Some(last), &root_hash, &range_proof)
         .unwrap();
 }
 
@@ -473,22 +496,27 @@ fn test_range_proof_with_invalid_non_existent_proof() {
     let mut end = 200;
     let first = decrease_key(items[start].0);
 
-    let proof = merkle
-        .prove(&first)
-        .unwrap()
-        .join(merkle.prove(items[end - 1].0).unwrap());
+    let start_proof = merkle.prove(&first).unwrap();
+    let end_proof = merkle.prove(items[end - 1].0).unwrap();
 
     start = 105; // Gap created
-    let mut keys: Vec<&[u8]> = Vec::new();
-    let mut vals: Vec<[u8; 20]> = Vec::new();
-    // Create gap
-    for item in &items[start..end] {
-        keys.push(item.0);
-        vals.push(*item.1);
-    }
+    let key_values: KeyValuePairs = items[start..end]
+        .iter()
+        .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
+        .collect();
+
+    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
     assert!(
         merkle
-            ._verify_range_proof(&proof, &first, items[end - 1].0, keys, vals)
+            .verify_range_proof(
+                Some(&first),
+                Some(items[end - 1].0),
+                &root_hash,
+                &range_proof,
+            )
             .is_err()
     );
 
@@ -497,22 +525,28 @@ fn test_range_proof_with_invalid_non_existent_proof() {
     end = 200;
     let last = increase_key(items[end - 1].0);
 
-    let proof = merkle
-        .prove(items[start].0)
-        .unwrap()
-        .join(merkle.prove(&last).unwrap());
+    let start_proof_2 = merkle.prove(items[start].0).unwrap();
+    let end_proof_2 = merkle.prove(&last).unwrap();
 
     end = 195; // Capped slice
-    let mut keys: Vec<&[u8]> = Vec::new();
-    let mut vals: Vec<[u8; 20]> = Vec::new();
-    // Create gap
-    for item in &items[start..end] {
-        keys.push(item.0);
-        vals.push(*item.1);
-    }
+    let key_values_2: KeyValuePairs = items[start..end]
+        .iter()
+        .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
+        .collect();
+
+    let range_proof_2 =
+        RangeProof::new(start_proof_2, end_proof_2, key_values_2.into_boxed_slice());
+
+    let root_hash_2 = merkle.nodestore().root_hash().unwrap();
+
     assert!(
         merkle
-            ._verify_range_proof(&proof, items[start].0, &last, keys, vals)
+            .verify_range_proof(
+                Some(items[start].0),
+                Some(&last),
+                &root_hash_2,
+                &range_proof_2,
+            )
             .is_err()
     );
 }
@@ -530,81 +564,112 @@ fn test_one_element_range_proof() {
     // One element with existent edge proof, both edge proofs
     // point to the SAME key.
     let start = 1000;
-    let start_proof = merkle.prove(items[start].0).unwrap();
-    assert!(!start_proof.is_empty());
+    let proof = merkle.prove(items[start].0).unwrap();
+    assert!(!proof.is_empty());
+
+    let key_values = vec![(
+        items[start].0.to_vec().into_boxed_slice(),
+        items[start].1.to_vec().into_boxed_slice(),
+    )];
+
+    let range_proof = RangeProof::new(
+        proof.clone(), // Same proof for start and end
+        proof,
+        key_values.into_boxed_slice(),
+    );
+
+    let root_hash = merkle.nodestore().root_hash().unwrap();
 
     merkle
-        ._verify_range_proof(
-            &start_proof,
-            items[start].0,
-            items[start].0,
-            vec![items[start].0],
-            vec![&items[start].1],
+        .verify_range_proof(
+            Some(items[start].0),
+            Some(items[start].0),
+            &root_hash,
+            &range_proof,
         )
         .unwrap();
 
     // One element with left non-existent edge proof
     let first = decrease_key(items[start].0);
-    let proof = merkle
-        .prove(&first)
-        .unwrap()
-        .join(merkle.prove(items[start].0).unwrap());
+    let start_proof_2 = merkle.prove(&first).unwrap();
+    let end_proof_2 = merkle.prove(items[start].0).unwrap();
+
+    let key_values_2 = vec![(
+        items[start].0.to_vec().into_boxed_slice(),
+        items[start].1.to_vec().into_boxed_slice(),
+    )];
+
+    let range_proof_2 =
+        RangeProof::new(start_proof_2, end_proof_2, key_values_2.into_boxed_slice());
 
     merkle
-        ._verify_range_proof(
-            &proof,
-            &first,
-            items[start].0,
-            vec![items[start].0],
-            vec![*items[start].1],
+        .verify_range_proof(
+            Some(&first),
+            Some(items[start].0),
+            &root_hash,
+            &range_proof_2,
         )
         .unwrap();
 
     // One element with right non-existent edge proof
     let last = increase_key(items[start].0);
-    let proof = merkle
-        .prove(items[start].0)
-        .unwrap()
-        .join(merkle.prove(&last).unwrap());
+    let start_proof_3 = merkle.prove(items[start].0).unwrap();
+    let end_proof_3 = merkle.prove(&last).unwrap();
+
+    let key_values_3 = vec![(
+        items[start].0.to_vec().into_boxed_slice(),
+        items[start].1.to_vec().into_boxed_slice(),
+    )];
+
+    let range_proof_3 =
+        RangeProof::new(start_proof_3, end_proof_3, key_values_3.into_boxed_slice());
 
     merkle
-        ._verify_range_proof(
-            &proof,
-            items[start].0,
-            &last,
-            vec![items[start].0],
-            vec![*items[start].1],
+        .verify_range_proof(
+            Some(items[start].0),
+            Some(&last),
+            &root_hash,
+            &range_proof_3,
         )
         .unwrap();
 
     // One element with two non-existent edge proofs
-    let proof = merkle
-        .prove(&first)
-        .unwrap()
-        .join(merkle.prove(&last).unwrap());
+    let start_proof_4 = merkle.prove(&first).unwrap();
+    let end_proof_4 = merkle.prove(&last).unwrap();
+
+    let key_values_4 = vec![(
+        items[start].0.to_vec().into_boxed_slice(),
+        items[start].1.to_vec().into_boxed_slice(),
+    )];
+
+    let range_proof_4 =
+        RangeProof::new(start_proof_4, end_proof_4, key_values_4.into_boxed_slice());
 
     merkle
-        ._verify_range_proof(
-            &proof,
-            &first,
-            &last,
-            vec![items[start].0],
-            vec![*items[start].1],
-        )
+        .verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof_4)
         .unwrap();
 
     // Test the mini trie with only a single element.
     let key = rand::rng().random::<[u8; 32]>();
     let val = rand::rng().random::<[u8; 20]>();
-    let merkle = init_merkle(vec![(key, val)]);
+    let merkle_mini = init_merkle(vec![(key, val)]);
 
     let first = &[0; 32];
-    let proof = merkle
-        .prove(first)
-        .unwrap()
-        .join(merkle.prove(&key).unwrap());
-    merkle
-        ._verify_range_proof(&proof, first, &key, vec![&key], vec![val])
+    let start_proof_5 = merkle_mini.prove(first).unwrap();
+    let end_proof_5 = merkle_mini.prove(&key).unwrap();
+
+    let key_values_5 = vec![(
+        key.to_vec().into_boxed_slice(),
+        val.to_vec().into_boxed_slice(),
+    )];
+
+    let range_proof_5 =
+        RangeProof::new(start_proof_5, end_proof_5, key_values_5.into_boxed_slice());
+
+    let root_hash_mini = merkle_mini.nodestore().root_hash().unwrap();
+
+    merkle_mini
+        .verify_range_proof(Some(first), Some(&key), &root_hash_mini, &range_proof_5)
         .unwrap();
 }
 
@@ -619,49 +684,68 @@ fn test_all_elements_proof() {
     let merkle = init_merkle(items.clone());
 
     let item_iter = items.clone().into_iter();
-    let keys: Vec<&[u8]> = item_iter.clone().map(|item| item.0.as_ref()).collect();
-    let vals: Vec<&[u8; 20]> = item_iter.map(|item| item.1).collect();
+    let _keys: Vec<&[u8]> = item_iter.clone().map(|item| item.0.as_ref()).collect();
+    let _vals: Vec<&[u8; 20]> = item_iter.map(|item| item.1).collect();
 
     let empty_proof = Proof::empty();
     let empty_key: [u8; 32] = [0; 32];
+
+    let key_values: KeyValuePairs = items
+        .iter()
+        .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
+        .collect();
+
+    let range_proof = RangeProof::new(
+        empty_proof.clone(),
+        empty_proof,
+        key_values.into_boxed_slice(),
+    );
+
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
     merkle
-        ._verify_range_proof(
-            &empty_proof,
-            &empty_key,
-            &empty_key,
-            keys.clone(),
-            vals.clone(),
-        )
+        .verify_range_proof(Some(&empty_key), Some(&empty_key), &root_hash, &range_proof)
         .unwrap();
 
     // With edge proofs, it should still work.
     let start = 0;
     let end = &items.len() - 1;
-    let proof = merkle
-        .prove(items[start].0)
-        .unwrap()
-        .join(merkle.prove(items[end].0).unwrap());
+    let start_proof_2 = merkle.prove(items[start].0).unwrap();
+    let end_proof_2 = merkle.prove(items[end].0).unwrap();
+
+    let key_values_2: KeyValuePairs = items
+        .iter()
+        .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
+        .collect();
+
+    let range_proof_2 =
+        RangeProof::new(start_proof_2, end_proof_2, key_values_2.into_boxed_slice());
 
     merkle
-        ._verify_range_proof(
-            &proof,
-            items[start].0,
-            items[end].0,
-            keys.clone(),
-            vals.clone(),
+        .verify_range_proof(
+            Some(items[start].0),
+            Some(items[end].0),
+            &root_hash,
+            &range_proof_2,
         )
         .unwrap();
 
     // Even with non-existent edge proofs, it should still work.
     let first = &[0; 32];
     let last = &[255; 32];
-    let proof = merkle
-        .prove(first)
-        .unwrap()
-        .join(merkle.prove(last).unwrap());
+    let start_proof_3 = merkle.prove(first).unwrap();
+    let end_proof_3 = merkle.prove(last).unwrap();
+
+    let key_values_3: KeyValuePairs = items
+        .iter()
+        .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
+        .collect();
+
+    let range_proof_3 =
+        RangeProof::new(start_proof_3, end_proof_3, key_values_3.into_boxed_slice());
 
     merkle
-        ._verify_range_proof(&proof, first, last, keys, vals)
+        .verify_range_proof(Some(first), Some(last), &root_hash, &range_proof_3)
         .unwrap();
 }
 
@@ -682,18 +766,21 @@ fn test_empty_range_proof() {
         assert!(!proof.is_empty());
 
         // key and value vectors are intentionally empty.
-        let keys: Vec<&[u8]> = Vec::new();
-        let vals: Vec<[u8; 20]> = Vec::new();
+        let key_values: KeyValuePairs = Vec::new();
+
+        let range_proof = RangeProof::new(proof.clone(), proof, key_values.into_boxed_slice());
+
+        let root_hash = merkle.nodestore().root_hash().unwrap();
 
         if c.1 {
             assert!(
                 merkle
-                    ._verify_range_proof(&proof, &first, &first, keys, vals)
+                    .verify_range_proof(Some(&first), Some(&first), &root_hash, &range_proof,)
                     .is_err()
             );
         } else {
             merkle
-                ._verify_range_proof(&proof, &first, &first, keys, vals)
+                .verify_range_proof(Some(&first), Some(&first), &root_hash, &range_proof)
                 .unwrap();
         }
     }
@@ -717,22 +804,34 @@ fn test_gapped_range_proof() {
 
     let first = 2;
     let last = 8;
-    let proof = merkle
-        .prove(&items[first].0)
-        .unwrap()
-        .join(merkle.prove(&items[last - 1].0).unwrap());
+    let start_proof = merkle.prove(&items[first].0).unwrap();
+    let end_proof = merkle.prove(&items[last - 1].0).unwrap();
 
     let middle = usize::midpoint(first, last) - first;
-    let (keys, vals): (Vec<&[u8]>, Vec<&[u8; 4]>) = items[first..last]
+    let key_values: KeyValuePairs = items[first..last]
         .iter()
         .enumerate()
         .filter(|(pos, _)| *pos != middle)
-        .map(|(_, item)| (item.0.as_ref(), &item.1))
-        .unzip();
+        .map(|(_, item)| {
+            (
+                item.0.to_vec().into_boxed_slice(),
+                item.1.to_vec().into_boxed_slice(),
+            )
+        })
+        .collect();
+
+    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+
+    let root_hash = merkle.nodestore().root_hash().unwrap();
 
     assert!(
         merkle
-            ._verify_range_proof(&proof, &items[0].0, &items[items.len() - 1].0, keys, vals)
+            .verify_range_proof(
+                Some(&items[0].0),
+                Some(&items[items.len() - 1].0),
+                &root_hash,
+                &range_proof,
+            )
             .is_err()
     );
 }
@@ -751,20 +850,21 @@ fn test_same_side_proof() {
     let mut first = last;
     first = decrease_key(&first);
 
-    let proof = merkle
-        .prove(&first)
-        .unwrap()
-        .join(merkle.prove(&last).unwrap());
+    let start_proof = merkle.prove(&first).unwrap();
+    let end_proof = merkle.prove(&last).unwrap();
+
+    let key_values = vec![(
+        items[pos].0.to_vec().into_boxed_slice(),
+        items[pos].1.to_vec().into_boxed_slice(),
+    )];
+
+    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+
+    let root_hash = merkle.nodestore().root_hash().unwrap();
 
     assert!(
         merkle
-            ._verify_range_proof(
-                &proof,
-                &first,
-                &last,
-                vec![items[pos].0],
-                vec![items[pos].1]
-            )
+            .verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof,)
             .is_err()
     );
 
@@ -772,20 +872,20 @@ fn test_same_side_proof() {
     last = first;
     last = increase_key(&last);
 
-    let proof = merkle
-        .prove(&first)
-        .unwrap()
-        .join(merkle.prove(&last).unwrap());
+    let start_proof_2 = merkle.prove(&first).unwrap();
+    let end_proof_2 = merkle.prove(&last).unwrap();
+
+    let key_values_2 = vec![(
+        items[pos].0.to_vec().into_boxed_slice(),
+        items[pos].1.to_vec().into_boxed_slice(),
+    )];
+
+    let range_proof_2 =
+        RangeProof::new(start_proof_2, end_proof_2, key_values_2.into_boxed_slice());
 
     assert!(
         merkle
-            ._verify_range_proof(
-                &proof,
-                &first,
-                &last,
-                vec![items[pos].0],
-                vec![items[pos].1]
-            )
+            .verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof_2,)
             .is_err()
     );
 }
@@ -808,17 +908,22 @@ fn test_single_side_range_proof() {
         let cases = vec![0, 1, 100, 1000, items.len() - 1];
         for case in cases {
             let start = &[0; 32];
-            let proof = merkle
-                .prove(start)
-                .unwrap()
-                .join(merkle.prove(items[case].0).unwrap());
+            let start_proof = merkle.prove(start).unwrap();
+            let end_proof = merkle.prove(items[case].0).unwrap();
 
-            let item_iter = items.clone().into_iter().take(case + 1);
-            let keys = item_iter.clone().map(|item| item.0.as_ref()).collect();
-            let vals = item_iter.map(|item| item.1).collect();
+            let key_values: KeyValuePairs = items
+                .iter()
+                .take(case + 1)
+                .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
+                .collect();
+
+            let range_proof =
+                RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+
+            let root_hash = merkle.nodestore().root_hash().unwrap();
 
             merkle
-                ._verify_range_proof(&proof, start, items[case].0, keys, vals)
+                .verify_range_proof(Some(start), Some(items[case].0), &root_hash, &range_proof)
                 .unwrap();
         }
     }
@@ -843,17 +948,22 @@ fn test_reverse_single_side_range_proof() {
         for case in cases {
             let end = &[255; 32];
 
-            let proof = merkle
-                .prove(items[case].0)
-                .unwrap()
-                .join(merkle.prove(end).unwrap());
+            let start_proof = merkle.prove(items[case].0).unwrap();
+            let end_proof = merkle.prove(end).unwrap();
 
-            let item_iter = items.clone().into_iter().skip(case);
-            let keys = item_iter.clone().map(|item| item.0.as_ref()).collect();
-            let vals = item_iter.map(|item| item.1).collect();
+            let key_values: KeyValuePairs = items
+                .iter()
+                .skip(case)
+                .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
+                .collect();
+
+            let range_proof =
+                RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+
+            let root_hash = merkle.nodestore().root_hash().unwrap();
 
             merkle
-                ._verify_range_proof(&proof, items[case].0, end, keys, vals)
+                .verify_range_proof(Some(items[case].0), Some(end), &root_hash, &range_proof)
                 .unwrap();
         }
     }
@@ -876,18 +986,20 @@ fn test_both_sides_range_proof() {
 
         let start = &[0; 32];
         let end = &[255; 32];
-        let proof = merkle
-            .prove(start)
-            .unwrap()
-            .join(merkle.prove(end).unwrap());
+        let start_proof = merkle.prove(start).unwrap();
+        let end_proof = merkle.prove(end).unwrap();
 
-        let (keys, vals): (Vec<&[u8; 32]>, Vec<&[u8; 20]>) = items.into_iter().unzip();
-        let keys = keys
-            .iter()
-            .map(std::convert::AsRef::as_ref)
-            .collect::<Vec<&[u8]>>();
+        let key_values: KeyValuePairs = items
+            .into_iter()
+            .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
+            .collect();
+
+        let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+
+        let root_hash = merkle.nodestore().root_hash().unwrap();
+
         merkle
-            ._verify_range_proof(&proof, start, end, keys, vals)
+            .verify_range_proof(Some(start), Some(end), &root_hash, &range_proof)
             .unwrap();
     }
 }
@@ -912,17 +1024,28 @@ fn test_empty_value_range_proof() {
     let start = 1;
     let end = items.len() - 1;
 
-    let proof = merkle
-        .prove(items[start].0)
-        .unwrap()
-        .join(merkle.prove(items[end - 1].0).unwrap());
+    let start_proof = merkle.prove(items[start].0).unwrap();
+    let end_proof = merkle.prove(items[end - 1].0).unwrap();
 
-    let item_iter = items.clone().into_iter().skip(start).take(end - start);
-    let keys = item_iter.clone().map(|item| item.0.as_ref()).collect();
-    let vals = item_iter.map(|item| item.1).collect();
+    let key_values: KeyValuePairs = items
+        .iter()
+        .skip(start)
+        .take(end - start)
+        .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
+        .collect();
+
+    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
     assert!(
         merkle
-            ._verify_range_proof(&proof, items[start].0, items[end - 1].0, keys, vals)
+            .verify_range_proof(
+                Some(items[start].0),
+                Some(items[end - 1].0),
+                &root_hash,
+                &range_proof,
+            )
             .is_err()
     );
 }
@@ -947,17 +1070,26 @@ fn test_all_elements_empty_value_range_proof() {
     let start = 0;
     let end = items.len() - 1;
 
-    let proof = merkle
-        .prove(items[start].0)
-        .unwrap()
-        .join(merkle.prove(items[end].0).unwrap());
+    let start_proof = merkle.prove(items[start].0).unwrap();
+    let end_proof = merkle.prove(items[end].0).unwrap();
 
-    let item_iter = items.clone().into_iter();
-    let keys = item_iter.clone().map(|item| item.0.as_ref()).collect();
-    let vals = item_iter.map(|item| item.1).collect();
+    let key_values: KeyValuePairs = items
+        .iter()
+        .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
+        .collect();
+
+    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
     assert!(
         merkle
-            ._verify_range_proof(&proof, items[start].0, items[end].0, keys, vals)
+            .verify_range_proof(
+                Some(items[start].0),
+                Some(items[end].0),
+                &root_hash,
+                &range_proof,
+            )
             .is_err()
     );
 }
@@ -984,16 +1116,20 @@ fn test_range_proof_keys_with_shared_prefix() {
     let end = hex::decode("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
         .expect("Decoding failed");
 
-    let proof = merkle
-        .prove(&start)
-        .unwrap()
-        .join(merkle.prove(&end).unwrap());
+    let start_proof = merkle.prove(&start).unwrap();
+    let end_proof = merkle.prove(&end).unwrap();
 
-    let keys = items.iter().map(|item| item.0.as_ref()).collect();
-    let vals = items.iter().map(|item| item.1.clone()).collect();
+    let key_values: KeyValuePairs = items
+        .iter()
+        .map(|(k, v)| (k.clone().into_boxed_slice(), v.clone().into_boxed_slice()))
+        .collect();
+
+    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+
+    let root_hash = merkle.nodestore().root_hash().unwrap();
 
     merkle
-        ._verify_range_proof(&proof, &start, &end, keys, vals)
+        .verify_range_proof(Some(&start), Some(&end), &root_hash, &range_proof)
         .unwrap();
 }
 
@@ -1030,7 +1166,27 @@ fn test_bloadted_range_proof() {
         }
     }
 
+    // Create start and end proofs (same key in this case since only one key-value pair)
+    let start_proof = merkle.prove(keys[0]).unwrap();
+    let end_proof = merkle.prove(keys[keys.len() - 1]).unwrap();
+
+    // Convert to the format expected by RangeProof
+    let key_values: KeyValuePairs = keys
+        .iter()
+        .zip(vals.iter())
+        .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
+        .collect();
+
+    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
     merkle
-        ._verify_range_proof(&proof, keys[0], keys[keys.len() - 1], keys.clone(), vals)
+        .verify_range_proof(
+            Some(keys[0]),
+            Some(keys[keys.len() - 1]),
+            &root_hash,
+            &range_proof,
+        )
         .unwrap();
 }
