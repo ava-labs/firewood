@@ -358,7 +358,7 @@ mod test {
             panic!("test trie content changed, the test should be updated");
         };
         let wrong_hash = HashType::default();
-        let branch_path = &branch_node.as_branch().unwrap().partial_path;
+        let branch_path = Path::from([0]) + branch_node.as_branch().unwrap().partial_path.clone();
         let Some(Child::AddressWithHash(_, hash)) = root_node.as_branch_mut().unwrap().children
             [branch_path[0] as usize]
             .replace(Child::AddressWithHash(*branch_addr, wrong_hash.clone()))
@@ -382,7 +382,7 @@ mod test {
             computed_hash
         }
         if address == *branch_addr
-            && path == *branch_path
+            && path == branch_path
             && parent_stored_hash == wrong_hash
             && computed_hash == branch_hash
         ));
