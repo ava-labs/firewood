@@ -37,6 +37,10 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Panics if the header has too many free lists, which can never happen since freelists have a fixed size.
     // TODO: report all errors, not just the first one
     pub fn check(&self, opt: CheckOpt) -> Result<(), CheckerError> {
+        if cfg!(feature = "ethhash") {
+            unimplemented!("ethhash is not supported yet");
+        }
+
         // 1. Check the header
         let db_size = self.size();
 
