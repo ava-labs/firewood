@@ -10,9 +10,7 @@ use crate::hashednode::hash_node;
 use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::Node;
-use crate::{
-    Child, HashType, MaybePersistedNode, NodeStore, Parentable, Path, ReadableStorage, SharedNode,
-};
+use crate::{Child, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorage, SharedNode};
 
 use super::NodeReader;
 #[cfg(feature = "ethhash")]
@@ -71,6 +69,7 @@ where
     }
 
     /// Hashes `node`, which is at the given `path_prefix`, and its children recursively.
+    /// The function appends to `path_prefix` and then truncate it back to the original length - we only reuse the memory space to avoid allocations
     /// Returns the hashed node and its hash.
     pub(super) fn hash_helper(
         #[cfg(feature = "ethhash")] &self,
@@ -149,13 +148,6 @@ where
                 // we extend and truncate path_prefix to reduce memory allocations
                 let original_length = path_prefix.len();
                 path_prefix.0.extend(b.partial_path.0.iter().copied());
-                #[cfg(feature = "ethhash")]
-                if make_fake_root.is_none() {
-                    // we don't push the nibble there is only one unhashed child and
-                    // we're on an account
-                    path_prefix.0.push(nibble as u8);
-                }
-                #[cfg(not(feature = "ethhash"))]
                 path_prefix.0.push(nibble as u8);
 
                 #[cfg(feature = "ethhash")]
@@ -171,32 +163,15 @@ where
         }
         // At this point, we either have a leaf or a branch with all children hashed.
         // if the encoded child hash <32 bytes then we use that RLP
-
-        #[cfg(feature = "ethhash")]
-        // if we have a child that is the only child of an account branch, we will hash this child as if it
-        // is a root node. This means we have to take the nibble from the parent and prefix it to the partial path
-        let hash = if let Some(nibble) = fake_root_extra_nibble {
-            let mut fake_root = node.clone();
-            trace!("old node: {fake_root:?}");
-            fake_root.update_partial_path(Path::from_nibbles_iterator(
-                std::iter::once(nibble).chain(fake_root.partial_path().0.iter().copied()),
-            ));
-            trace!("new node: {fake_root:?}");
-            hash_node(&fake_root, path_prefix)
-        } else {
-            hash_node(&node, path_prefix)
-        };
-
-        #[cfg(not(feature = "ethhash"))]
-        let hash = hash_node(&node, path_prefix);
+        let hash = Self::compute_node_hash(&node, path_prefix, fake_root_extra_nibble.is_none());
 
         Ok((SharedNode::new(node).into(), hash))
     }
-}
 
-impl<T: Parentable, S: ReadableStorage> NodeStore<T, S> {
     pub(crate) fn compute_node_hash(node: &Node, path_prefix: &Path, have_peers: bool) -> HashType {
         if cfg!(feature = "ethhash") && path_prefix.0.len() == 65 && !have_peers {
+            // This is the special case when this node is the only child of an account
+            //  - 64 nibbles for account + 1 nibble for its position in account branch node
             let mut fake_root = node.clone();
             fake_root.update_partial_path(Path::from_nibbles_iterator(
                 std::iter::once(*path_prefix.0.last().expect("path_prefix not empty"))
