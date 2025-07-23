@@ -68,13 +68,13 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
         // 3. check the free list - this can happen in parallel with the trie traversal
         if let Some(progress_bar) = &opt.progress_bar {
-            progress_bar.println("Traversing the free list...");
+            progress_bar.println("Traversing the free lists...");
         }
         self.visit_freelist(&mut visited, opt.progress_bar.as_ref())?;
 
         // 4. check leaked areas - what are the spaces between trie nodes and free lists we have traversed?
         if let Some(progress_bar) = &opt.progress_bar {
-            progress_bar.println("Checking for leaked areas...");
+            progress_bar.println("Checking leaked areas...");
         }
         let leaked_ranges = visited.complement();
         if !leaked_ranges.is_empty() {
