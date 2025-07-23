@@ -31,7 +31,7 @@ use std::iter::FusedIterator;
 
 use crate::linear::FileIoError;
 use coarsetime::Instant;
-use metrics::counter;
+use metrics::{counter, gauge};
 
 #[cfg(feature = "io-uring")]
 use crate::logger::trace;
@@ -206,6 +206,7 @@ impl NodeStore<Committed, FileBacked> {
     /// Returns a [`FileIoError`] if any node cannot be written to storage.
     #[fastrace::trace(short_name = true)]
     #[cfg(not(feature = "io-uring"))]
+    #[expect(clippy::missing_panics_doc)]
     pub fn flush_nodes(&mut self) -> Result<NodeStoreHeader, FileIoError> {
         let flush_start = Instant::now();
 
@@ -228,6 +229,9 @@ impl NodeStore<Committed, FileBacked> {
             self.storage
                 .write(persisted_address.get(), serialized.as_slice())?;
             node.persist_at(persisted_address);
+
+            // Decrement gauge immediately after node is written to storage
+            gauge!("firewood.nodes.unwritten").decrement(1.0);
 
             // Move the arc to a vector of persisted nodes for caching
             // we save them so we don't have to lock the cache while we write them
@@ -272,6 +276,11 @@ impl NodeStore<Committed, FileBacked> {
         // Finally persist the header
         self.flush_header()?;
 
+        // Reset unwritten nodes counter to zero since all nodes are now persisted
+        self.kind
+            .unwritten_nodes
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+
         Ok(())
     }
 
@@ -292,11 +301,13 @@ impl NodeStore<Committed, FileBacked> {
         }
 
         /// Helper function to handle completion queue entries and check for errors
+        /// Returns the number of completed operations
         fn handle_completion_queue(
             storage: &FileBacked,
             completion_queue: io_uring::cqueue::CompletionQueue<'_>,
             saved_pinned_buffers: &mut [PinnedBufferEntry],
-        ) -> Result<(), FileIoError> {
+        ) -> Result<usize, FileIoError> {
+            let mut completed_count = 0;
             for entry in completion_queue {
                 let item = entry.user_data() as usize;
                 let pbe = saved_pinned_buffers
@@ -322,8 +333,9 @@ impl NodeStore<Committed, FileBacked> {
                     ));
                 }
                 pbe.offset = None;
+                completed_count += 1;
             }
-            Ok(())
+            Ok(completed_count)
         }
 
         const RINGSIZE: usize = FileBacked::RINGSIZE as usize;
@@ -404,11 +416,16 @@ impl NodeStore<Committed, FileBacked> {
                 })?;
                 let completion_queue = ring.completion();
                 trace!("competion queue length: {}", completion_queue.len());
-                handle_completion_queue(
+                let completed_writes = handle_completion_queue(
                     &self.storage,
                     completion_queue,
                     &mut saved_pinned_buffers,
                 )?;
+
+                // Decrement gauge for writes that have actually completed
+                if completed_writes > 0 {
+                    gauge!("firewood.nodes.unwritten").decrement(completed_writes as f64);
+                }
             }
 
             // Mark node as persisted and collect for cache
@@ -424,7 +441,13 @@ impl NodeStore<Committed, FileBacked> {
                 .file_io_error(e, 0, Some("io-uring final submit_and_wait".to_string()))
         })?;
 
-        handle_completion_queue(&self.storage, ring.completion(), &mut saved_pinned_buffers)?;
+        let final_completed_writes =
+            handle_completion_queue(&self.storage, ring.completion(), &mut saved_pinned_buffers)?;
+
+        // Decrement gauge for final batch of writes that completed
+        if final_completed_writes > 0 {
+            gauge!("firewood.nodes.unwritten").decrement(final_completed_writes as f64);
+        }
 
         debug_assert!(
             !saved_pinned_buffers.iter().any(|pbe| pbe.offset.is_some()),

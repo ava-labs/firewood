@@ -70,15 +70,16 @@ where
     }
 
     /// Hashes `node`, which is at the given `path_prefix`, and its children recursively.
-    /// Returns the hashed node and its hash.
+    /// Returns the hashed node, its hash, and the count of nodes processed.
     pub(super) fn hash_helper(
         #[cfg(feature = "ethhash")] &self,
         mut node: Node,
         path_prefix: &mut Path,
         #[cfg(feature = "ethhash")] fake_root_extra_nibble: Option<u8>,
-    ) -> Result<(MaybePersistedNode, HashType), FileIoError> {
+    ) -> Result<(MaybePersistedNode, HashType, usize), FileIoError> {
         // If this is a branch, find all unhashed children and recursively hash them.
         trace!("hashing {node:?} at {path_prefix:?}");
+        let mut nodes_processed = 1usize; // Count this node
         if let Node::Branch(ref mut b) = node {
             // special case code for ethereum hashes at the account level
             #[cfg(feature = "ethhash")]
@@ -159,10 +160,13 @@ where
                 path_prefix.0.push(nibble as u8);
 
                 #[cfg(feature = "ethhash")]
-                let (child_node, child_hash) =
+                let (child_node, child_hash, child_count) =
                     self.hash_helper(child_node, path_prefix, make_fake_root)?;
                 #[cfg(not(feature = "ethhash"))]
-                let (child_node, child_hash) = Self::hash_helper(child_node, path_prefix)?;
+                let (child_node, child_hash, child_count) =
+                    Self::hash_helper(child_node, path_prefix)?;
+
+                nodes_processed = nodes_processed.saturating_add(child_count);
 
                 *child = Some(Child::MaybePersisted(child_node, child_hash));
                 trace!("child now {child:?}");
@@ -190,6 +194,6 @@ where
         #[cfg(not(feature = "ethhash"))]
         let hash = hash_node(&node, path_prefix);
 
-        Ok((SharedNode::new(node).into(), hash))
+        Ok((SharedNode::new(node).into(), hash, nodes_processed))
     }
 }
