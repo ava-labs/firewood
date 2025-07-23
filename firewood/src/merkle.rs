@@ -36,7 +36,7 @@ use std::io::Error;
 use std::iter::once;
 #[cfg(test)]
 use std::num::NonZeroUsize;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 /// Keys are boxed u8 slices
 pub type Key = Box<[u8]>;

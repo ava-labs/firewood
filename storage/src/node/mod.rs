@@ -22,48 +22,53 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-use crate::node::branch::LockedChild;
 #[cfg(not(feature = "branch_factor_256"))]
-//use crate::node::branch::BranchConstants;
 use crate::node::branch::ReadSerializable;
 use crate::{HashType, LinearAddress, Path, SharedNode};
 use bitfield::bitfield;
 use branch::Serializable as _;
-pub use branch::{BranchNode, Child, BranchConstants};
+pub use branch::{BranchConstants, BranchNode, Child};
 use enum_as_inner::EnumAsInner;
 use integer_encoding::{VarInt, VarIntReader as _};
 pub use leaf::LeafNode;
 use std::fmt::Debug;
 use std::io::{Error, Read, Write};
-use std::sync::{Arc, Mutex};
 
 pub mod branch;
 mod leaf;
 pub mod path;
 pub mod persist;
 
-
+/* 
 pub enum Root {
     Branch(Box<BranchNode<Option<LockedChild>>>),
     /// This node is a [`LeafNode`]
-    Leaf(LeafNode), 
+    Leaf(LeafNode),
 }
+*/
 
 /// A node, either a Branch or Leaf
 // TODO: explain why Branch is boxed but Leaf is not
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner)]
 #[repr(C)]
-pub enum Node<T>{
+pub enum Node<T: NodeOptionTrait> {
     /// This node is a [`BranchNode`]
-    //Branch(Box<BranchNode<Option<Child>>>),
     Branch(Box<BranchNode<T>>),
-    ///
-    //Root(Box<BranchNode<Option<LockedChild>>>),
     /// This node is a [`LeafNode`]
     Leaf(LeafNode),
 }
 
-impl <T> Default for Node<T> {
+pub trait NodeOptionTrait {
+    fn get_child_option(&self) -> &Option<Child>;
+}
+
+impl NodeOptionTrait for Option<Child> {
+    fn get_child_option(&self) -> &Option<Child> {
+        return self;
+    }
+}
+
+impl<T: NodeOptionTrait> Default for Node<T> {
     fn default() -> Self {
         Node::Leaf(LeafNode {
             partial_path: Path::new(),
@@ -72,13 +77,13 @@ impl <T> Default for Node<T> {
     }
 }
 
-impl <T> From<BranchNode<T>> for Node<T> {
+impl<T: NodeOptionTrait> From<BranchNode<T>> for Node<T> {
     fn from(branch: BranchNode<T>) -> Self {
         Node::Branch(Box::new(branch))
     }
 }
 
-impl <T> From<LeafNode> for Node<T> {
+impl<T: NodeOptionTrait> From<LeafNode> for Node<T> {
     fn from(leaf: LeafNode) -> Self {
         Node::Leaf(leaf)
     }
