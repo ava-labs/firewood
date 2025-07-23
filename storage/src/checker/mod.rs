@@ -111,8 +111,10 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         if hash_check {
             let hash = hash_node(&node, &path_prefix);
             if hash != subtree_root_hash {
+                let mut path = path_prefix.clone();
+                path.0.extend_from_slice(node.partial_path());
                 return Err(CheckerError::HashMismatch {
-                    partial_path: path_prefix,
+                    path,
                     address: subtree_root_address,
                     parent_stored_hash: subtree_root_hash,
                     computed_hash: hash,
@@ -374,12 +376,12 @@ mod test {
         err,
         CheckerError::HashMismatch {
             address,
-            partial_path,
+            path,
             parent_stored_hash,
             computed_hash
         }
         if address == *branch_addr
-            && partial_path == *branch_path
+            && path == *branch_path
             && parent_stored_hash == wrong_hash
             && computed_hash == branch_hash
         ));
