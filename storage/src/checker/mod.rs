@@ -48,7 +48,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         // 2. traverse the trie and check the nodes
         if let Some(progress_bar) = &opt.progress_bar {
             progress_bar.set_length(db_size);
-            progress_bar.println("Traversing the trie...");
+            progress_bar.set_message("Traversing the trie...");
         }
         if let (Some(root_address), Some(root_hash)) = (self.root_address(), self.root_hash()) {
             // the database is not empty, traverse the trie
@@ -68,13 +68,13 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
         // 3. check the free list - this can happen in parallel with the trie traversal
         if let Some(progress_bar) = &opt.progress_bar {
-            progress_bar.println("Traversing the free lists...");
+            progress_bar.set_message("Traversing free lists...");
         }
         self.visit_freelist(&mut visited, opt.progress_bar.as_ref())?;
 
         // 4. check leaked areas - what are the spaces between trie nodes and free lists we have traversed?
         if let Some(progress_bar) = &opt.progress_bar {
-            progress_bar.println("Checking leaked areas...");
+            progress_bar.set_message("Checking leaked areas...");
         }
         let leaked_ranges = visited.complement();
         if !leaked_ranges.is_empty() {
