@@ -22,7 +22,7 @@ use crate::node::branch::ReadSerializable;
 use crate::{HashType, LinearAddress, Path, SharedNode};
 use bitfield::bitfield;
 use branch::Serializable as _;
-pub use branch::{BranchNode, Child, Children};
+pub use branch::{BranchNode, Child};
 use enum_as_inner::EnumAsInner;
 use integer_encoding::{VarInt, VarIntReader as _};
 pub use leaf::LeafNode;

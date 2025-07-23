@@ -8,7 +8,7 @@
 
 use crate::merkle::{Merkle, Value};
 use crate::stream::MerkleKeyValueStream;
-use crate::v2::api::{self, FrozenProof, FrozenRangeProof, KeyType, ValueType};
+use crate::v2::api::{self, FrozenRangeProof, KeyType, ValueType};
 pub use crate::v2::api::{Batch, BatchOp};
 
 use crate::manager::{RevisionManager, RevisionManagerConfig};
@@ -19,6 +19,7 @@ use firewood_storage::{
 };
 use metrics::{counter, describe_counter};
 use std::io::Write;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -97,33 +98,36 @@ impl api::DbView for HistoricalRev {
     where
         Self: 'a;
 
-    async fn root_hash(&self) -> Result<Option<api::HashKey>, api::Error> {
+    async fn root_hash(&self) -> api::Result<Option<api::HashKey>> {
         Ok(HashedNodeReader::root_hash(self))
     }
 
-    async fn val<K: api::KeyType>(&self, key: K) -> Result<Option<Value>, api::Error> {
+    async fn val<K: api::KeyType>(&self, key: K) -> api::Result<Option<Value>> {
         let merkle = Merkle::from(self);
         Ok(merkle.get_value(key.as_ref())?)
     }
 
-    async fn single_key_proof<K: api::KeyType>(&self, key: K) -> Result<FrozenProof, api::Error> {
+    async fn single_key_proof<K: api::KeyType>(&self, key: K) -> api::Result<api::FrozenProof> {
         let merkle = Merkle::from(self);
         merkle.prove(key.as_ref()).map_err(api::Error::from)
     }
 
-    async fn range_proof<K: api::KeyType, V>(
-        &self,
-        _first_key: Option<K>,
-        _last_key: Option<K>,
-        _limit: Option<usize>,
-    ) -> Result<FrozenRangeProof, api::Error> {
-        todo!()
-    }
-
-    fn iter_option<K: KeyType>(
+    async fn range_proof<K: api::KeyType>(
         &self,
         first_key: Option<K>,
-    ) -> Result<Self::Stream<'_>, api::Error> {
+        last_key: Option<K>,
+        limit: Option<NonZeroUsize>,
+    ) -> api::Result<FrozenRangeProof> {
+        Merkle::from(self)
+            .range_proof(
+                first_key.as_ref().map(AsRef::as_ref),
+                last_key.as_ref().map(AsRef::as_ref),
+                limit,
+            )
+            .await
+    }
+
+    fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> api::Result<Self::Stream<'_>> {
         match first_key {
             Some(key) => Ok(MerkleKeyValueStream::from_key(self, key)),
             None => Ok(MerkleKeyValueStream::from(self)),
@@ -162,16 +166,16 @@ where
     where
         Self: 'p;
 
-    async fn revision(&self, root_hash: TrieHash) -> Result<Arc<Self::Historical>, api::Error> {
+    async fn revision(&self, root_hash: TrieHash) -> api::Result<Arc<Self::Historical>> {
         let nodestore = self.manager.revision(root_hash)?;
         Ok(nodestore)
     }
 
-    async fn root_hash(&self) -> Result<Option<TrieHash>, api::Error> {
+    async fn root_hash(&self) -> api::Result<Option<TrieHash>> {
         self.root_hash_sync()
     }
 
-    async fn all_hashes(&self) -> Result<Vec<TrieHash>, api::Error> {
+    async fn all_hashes(&self) -> api::Result<Vec<TrieHash>> {
         Ok(self.manager.all_hashes())
     }
 
@@ -179,7 +183,7 @@ where
     async fn propose<'p, K: KeyType, V: ValueType>(
         &'p self,
         batch: api::Batch<K, V>,
-    ) -> Result<Arc<Self::Proposal<'p>>, api::Error>
+    ) -> api::Result<Arc<Self::Proposal<'p>>>
     where
         Self: 'p,
     {
@@ -224,7 +228,7 @@ where
 
 impl Db {
     /// Create a new database instance.
-    pub async fn new<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> Result<Self, api::Error> {
+    pub async fn new<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> api::Result<Self> {
         let metrics = Arc::new(DbMetrics {
             proposals: counter!("firewood.proposals"),
         });
@@ -239,7 +243,7 @@ impl Db {
     }
 
     /// Create a new database instance with synchronous I/O.
-    pub fn new_sync<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> Result<Self, api::Error> {
+    pub fn new_sync<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> api::Result<Self> {
         let metrics = Arc::new(DbMetrics {
             proposals: counter!("firewood.proposals"),
         });
@@ -254,7 +258,7 @@ impl Db {
     }
 
     /// Synchronously get the root hash of the latest revision.
-    pub fn root_hash_sync(&self) -> Result<Option<TrieHash>, api::Error> {
+    pub fn root_hash_sync(&self) -> api::Result<Option<TrieHash>> {
         let hash = self.manager.root_hash()?;
         #[cfg(not(feature = "ethhash"))]
         return Ok(hash);
@@ -263,13 +267,13 @@ impl Db {
     }
 
     /// Synchronously get a revision from a root hash
-    pub fn revision_sync(&self, root_hash: TrieHash) -> Result<Arc<HistoricalRev>, api::Error> {
+    pub fn revision_sync(&self, root_hash: TrieHash) -> api::Result<Arc<HistoricalRev>> {
         let nodestore = self.manager.revision(root_hash)?;
         Ok(nodestore)
     }
 
     /// Synchronously get a view, either committed or proposed
-    pub fn view_sync(&self, root_hash: TrieHash) -> Result<Box<dyn DbViewSyncBytes>, api::Error> {
+    pub fn view_sync(&self, root_hash: TrieHash) -> api::Result<Box<dyn DbViewSyncBytes>> {
         let nodestore = self.manager.view(root_hash)?;
         Ok(nodestore)
     }
@@ -278,7 +282,7 @@ impl Db {
     pub fn propose_sync<K: KeyType, V: ValueType>(
         &'_ self,
         batch: Batch<K, V>,
-    ) -> Result<Arc<Proposal<'_>>, api::Error> {
+    ) -> api::Result<Arc<Proposal<'_>>> {
         let parent = self.manager.current_revision();
         let proposal = NodeStore::new(&parent)?;
         let mut merkle = Merkle::from(proposal);
@@ -310,12 +314,12 @@ impl Db {
     }
 
     /// Dump the Trie of the latest revision.
-    pub async fn dump(&self, w: &mut dyn Write) -> Result<(), std::io::Error> {
+    pub async fn dump(&self, w: &mut dyn Write) -> std::io::Result<()> {
         self.dump_sync(w)
     }
 
     /// Dump the Trie of the latest revision, synchronously.
-    pub fn dump_sync(&self, w: &mut dyn Write) -> Result<(), std::io::Error> {
+    pub fn dump_sync(&self, w: &mut dyn Write) -> std::io::Result<()> {
         let latest_rev_nodestore = self.manager.current_revision();
         let merkle = Merkle::from(latest_rev_nodestore);
         // TODO: This should be a stream
@@ -345,7 +349,7 @@ pub struct Proposal<'p> {
 
 impl Proposal<'_> {
     /// Get the root hash of the proposal synchronously
-    pub fn start_commit(&self) -> Result<(), api::Error> {
+    pub fn start_commit(&self) -> api::Result<()> {
         if self
             .committed
             .swap(true, std::sync::atomic::Ordering::Relaxed)
@@ -356,15 +360,19 @@ impl Proposal<'_> {
     }
 
     /// Get the root hash of the proposal synchronously
-    pub fn root_hash_sync(&self) -> Result<Option<api::HashKey>, api::Error> {
+    pub fn root_hash_sync(&self) -> api::Result<Option<api::HashKey>> {
         #[cfg(not(feature = "ethhash"))]
-        return Ok(self.nodestore.root_hash());
+        {
+            Ok(self.nodestore.root_hash())
+        }
         #[cfg(feature = "ethhash")]
-        return Ok(Some(
-            self.nodestore
-                .root_hash()
-                .unwrap_or_else(firewood_storage::empty_trie_hash),
-        ));
+        {
+            Ok(Some(
+                self.nodestore
+                    .root_hash()
+                    .unwrap_or_else(firewood_storage::empty_trie_hash),
+            ))
+        }
     }
 }
 
@@ -375,33 +383,36 @@ impl api::DbView for Proposal<'_> {
     where
         Self: 'b;
 
-    async fn root_hash(&self) -> Result<Option<api::HashKey>, api::Error> {
+    async fn root_hash(&self) -> api::Result<Option<api::HashKey>> {
         Ok(self.nodestore.root_hash())
     }
 
-    async fn val<K: KeyType>(&self, key: K) -> Result<Option<Value>, api::Error> {
+    async fn val<K: KeyType>(&self, key: K) -> api::Result<Option<Value>> {
         let merkle = Merkle::from(self.nodestore.clone());
         merkle.get_value(key.as_ref()).map_err(api::Error::from)
     }
 
-    async fn single_key_proof<K: KeyType>(&self, key: K) -> Result<FrozenProof, api::Error> {
+    async fn single_key_proof<K: KeyType>(&self, key: K) -> api::Result<api::FrozenProof> {
         let merkle = Merkle::from(self.nodestore.clone());
         merkle.prove(key.as_ref()).map_err(api::Error::from)
     }
 
-    async fn range_proof<K: KeyType, V>(
+    async fn range_proof<K: KeyType>(
         &self,
-        _first_key: Option<K>,
-        _last_key: Option<K>,
-        _limit: Option<usize>,
-    ) -> Result<FrozenRangeProof, api::Error> {
-        todo!()
+        first_key: Option<K>,
+        last_key: Option<K>,
+        limit: Option<NonZeroUsize>,
+    ) -> api::Result<FrozenRangeProof> {
+        Merkle::from(&self.nodestore)
+            .range_proof(
+                first_key.as_ref().map(AsRef::as_ref),
+                last_key.as_ref().map(AsRef::as_ref),
+                limit,
+            )
+            .await
     }
 
-    fn iter_option<K: KeyType>(
-        &self,
-        _first_key: Option<K>,
-    ) -> Result<Self::Stream<'_>, api::Error> {
+    fn iter_option<K: KeyType>(&self, _first_key: Option<K>) -> api::Result<Self::Stream<'_>> {
         todo!()
     }
 }
@@ -414,11 +425,11 @@ impl<'a> api::Proposal for Proposal<'a> {
     async fn propose<K: KeyType, V: ValueType>(
         self: Arc<Self>,
         batch: api::Batch<K, V>,
-    ) -> Result<Arc<Self::Proposal>, api::Error> {
+    ) -> api::Result<Arc<Self::Proposal>> {
         Ok(self.create_proposal(batch)?.into())
     }
 
-    async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
+    async fn commit(self: Arc<Self>) -> api::Result<()> {
         self.start_commit()?;
         Ok(self.db.manager.commit(self.nodestore.clone())?)
     }
@@ -426,7 +437,7 @@ impl<'a> api::Proposal for Proposal<'a> {
 
 impl Proposal<'_> {
     /// Commit a proposal synchronously
-    pub fn commit_sync(self: Arc<Self>) -> Result<(), api::Error> {
+    pub fn commit_sync(self: Arc<Self>) -> api::Result<()> {
         self.start_commit()?;
         Ok(self.db.manager.commit(self.nodestore.clone())?)
     }
@@ -435,7 +446,7 @@ impl Proposal<'_> {
     pub fn propose_sync<K: KeyType, V: ValueType>(
         &self,
         batch: api::Batch<K, V>,
-    ) -> Result<Arc<Self>, api::Error> {
+    ) -> api::Result<Arc<Self>> {
         Ok(self.create_proposal(batch)?.into())
     }
 
@@ -443,7 +454,7 @@ impl Proposal<'_> {
     fn create_proposal<K: KeyType, V: ValueType>(
         &self,
         batch: api::Batch<K, V>,
-    ) -> Result<Self, api::Error> {
+    ) -> api::Result<Self> {
         let parent = self.nodestore.clone();
         let proposal = NodeStore::new(&parent)?;
         let mut merkle = Merkle::from(proposal);

@@ -77,6 +77,20 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
         self.storage.write(0, &header_bytes)?;
         Ok(())
     }
+
+    /// Persist the freelist from this proposal to storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the free list cannot be written to storage.
+    #[fastrace::trace(short_name = true)]
+    pub fn flush_freelist(&self) -> Result<(), FileIoError> {
+        // Write the free lists to storage
+        let free_list_bytes = bytemuck::bytes_of(self.header.free_lists());
+        let free_list_offset = NodeStoreHeader::free_lists_offset();
+        self.storage.write(free_list_offset, free_list_bytes)?;
+        Ok(())
+    }
 }
 
 /// Iterator that returns unpersisted nodes in depth first order.
@@ -184,19 +198,34 @@ impl<N: NodeReader + RootReader> Iterator for UnPersistedNodeIterator<'_, N> {
     }
 }
 
-impl NodeStore<Committed, FileBacked> {
-    /// Persist the freelist from this proposal to storage.
+impl<S: WritableStorage> NodeStore<Committed, S> {
+    /// Persist all the nodes of a proposal to storage.
     ///
     /// # Errors
     ///
-    /// Returns a [`FileIoError`] if the free list cannot be written to storage.
+    /// Returns a [`FileIoError`] if any node cannot be written to storage.
     #[fastrace::trace(short_name = true)]
-    pub fn flush_freelist(&self) -> Result<(), FileIoError> {
-        // Write the free lists to storage
-        let free_list_bytes = bytemuck::bytes_of(self.header.free_lists());
-        let free_list_offset = NodeStoreHeader::free_lists_offset();
-        self.storage.write(free_list_offset, free_list_bytes)?;
-        Ok(())
+    pub fn flush_nodes(&mut self) -> Result<NodeStoreHeader, FileIoError> {
+        #[cfg(feature = "io-uring")]
+        {
+            /**
+             * FIXME(rust-lang/rfcs#1210, rust-lang/rust#31844):
+             *
+             * This is a bit of rust black magic that exists because trait specialization
+             * is not yet stable. If the `io-uring` feature is enabled, we attempt to
+             * downcast `self` into a `NodeStore<Committed, FileBacked>`, and if successful,
+             * we call the specialized `flush_nodes_io_uring` method.
+             *
+             * During monomorphization, this will be completely optimized out as the
+             * type id comparison is done with constants that the compiler can resolve
+             * and use to detect dead branches.
+             */
+            let mut this = self as &dyn std::any::Any;
+            if let Some(this) = this.downcast_mut::<NodeStore<Committed, FileBacked>>() {
+                return this.flush_nodes_io_uring();
+            }
+        }
+        self.flush_nodes_generic()
     }
 
     /// Persist all the nodes of a proposal to storage.
@@ -204,9 +233,7 @@ impl NodeStore<Committed, FileBacked> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if any node cannot be written to storage.
-    #[fastrace::trace(short_name = true)]
-    #[cfg(not(feature = "io-uring"))]
-    pub fn flush_nodes(&mut self) -> Result<NodeStoreHeader, FileIoError> {
+    fn flush_nodes_generic(&self) -> Result<NodeStoreHeader, FileIoError> {
         let flush_start = Instant::now();
 
         // keep arcs to the allocated nodes to add them to cache
@@ -245,12 +272,12 @@ impl NodeStore<Committed, FileBacked> {
     }
 }
 
-impl NodeStore<Committed, FileBacked> {
+impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Persist the entire nodestore to storage.
     ///
     /// This method performs a complete persistence operation by:
     /// 1. Flushing all nodes to storage
-    /// 2. Setting the root address in the header  
+    /// 2. Setting the root address in the header
     /// 3. Flushing the header to storage
     ///
     /// # Errors
@@ -274,7 +301,9 @@ impl NodeStore<Committed, FileBacked> {
 
         Ok(())
     }
+}
 
+impl NodeStore<Committed, FileBacked> {
     /// Persist all the nodes of a proposal to storage.
     ///
     /// # Errors
@@ -282,7 +311,7 @@ impl NodeStore<Committed, FileBacked> {
     /// Returns a [`FileIoError`] if any node cannot be written to storage.
     #[fastrace::trace(short_name = true)]
     #[cfg(feature = "io-uring")]
-    pub fn flush_nodes(&mut self) -> Result<NodeStoreHeader, FileIoError> {
+    fn flush_nodes_io_uring(&mut self) -> Result<NodeStoreHeader, FileIoError> {
         use std::pin::Pin;
 
         #[derive(Clone, Debug)]
@@ -582,42 +611,38 @@ mod tests {
         //                                -> branch2 -> leaf[2]
         let inner_branch = create_branch(&[10], Some(&[50]), vec![(0, leaves[2].clone())]);
 
+        let mut children = BranchNode::empty_children();
+        for (value, slot) in [
+            // unpersisted leaves
+            Child::MaybePersisted(
+                MaybePersistedNode::from(SharedNode::new(leaves[0].clone())),
+                HashType::default(),
+            ),
+            Child::MaybePersisted(
+                MaybePersistedNode::from(SharedNode::new(leaves[1].clone())),
+                HashType::default(),
+            ),
+            // unpersisted branch
+            Child::MaybePersisted(
+                MaybePersistedNode::from(SharedNode::new(inner_branch.clone())),
+                HashType::default(),
+            ),
+            // persisted branch
+            Child::MaybePersisted(
+                MaybePersistedNode::from(LinearAddress::new(42).unwrap()),
+                HashType::default(),
+            ),
+        ]
+        .into_iter()
+        .zip(children.iter_mut())
+        {
+            slot.replace(value);
+        }
+
         let root_branch: Node = BranchNode {
             partial_path: Path::new(),
             value: None,
-            children: [
-                // unpersisted leaves
-                Some(Child::MaybePersisted(
-                    MaybePersistedNode::from(SharedNode::new(leaves[0].clone())),
-                    HashType::default(),
-                )),
-                Some(Child::MaybePersisted(
-                    MaybePersistedNode::from(SharedNode::new(leaves[1].clone())),
-                    HashType::default(),
-                )),
-                // unpersisted branch
-                Some(Child::MaybePersisted(
-                    MaybePersistedNode::from(SharedNode::new(inner_branch.clone())),
-                    HashType::default(),
-                )),
-                // persisted branch
-                Some(Child::MaybePersisted(
-                    MaybePersistedNode::from(LinearAddress::new(42).unwrap()),
-                    HashType::default(),
-                )),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            ],
+            children,
         }
         .into();
 

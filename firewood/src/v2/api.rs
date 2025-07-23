@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use firewood_storage::{FileIoError, TrieHash};
 use futures::Stream;
 use std::fmt::Debug;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
@@ -29,7 +30,7 @@ impl<T> KeyType for T where T: AsRef<[u8]> + Send + Sync + Debug {}
 
 /// A `ValueType` is the same as a `KeyType`. However, these could
 /// be a different type from the `KeyType` on a given API call.
-/// For example, you might insert {key: "key", value: vec!\[0u8\]}
+/// For example, you might insert `{key: "key", value: [0u8]}`
 /// This also means that the type of all the keys for a single
 /// API call must be the same, as well as the type of all values
 /// must be the same.
@@ -50,6 +51,11 @@ pub type FrozenRangeProof = RangeProof<Key, Value, Box<[ProofNode]>>;
 
 /// A frozen proof uses an immutable collection of proof nodes.
 pub type FrozenProof = Proof<Box<[ProofNode]>>;
+
+/// A convenience alias for a result type where the error defaults to [`Error`] but
+/// can be overridden allowing it to be imported. However, typical usage is to use
+/// a path like `api::Result<T>`.
+pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// A key/value pair operation. Only put (upsert) and delete are
 /// supported
@@ -83,7 +89,9 @@ pub type Batch<K, V> = Vec<BatchOp<K, V>>;
 /// A convenience implementation to convert a vector of key/value
 /// pairs into a batch of insert operations
 #[must_use]
-pub fn vec_into_batch<K: KeyType, V: ValueType>(value: Vec<(K, V)>) -> Batch<K, V> {
+pub fn vec_into_batch<K: KeyType, V: ValueType>(
+    value: impl IntoIterator<Item = (K, V)>,
+) -> Batch<K, V> {
     value
         .into_iter()
         .map(|(key, value)| BatchOp::Put { key, value })
@@ -193,7 +201,7 @@ pub trait Db {
     /// # Arguments
     ///
     /// - `hash` - Identifies the revision for the view
-    async fn revision(&self, hash: TrieHash) -> Result<Arc<Self::Historical>, Error>;
+    async fn revision(&self, hash: TrieHash) -> Result<Arc<Self::Historical>>;
 
     /// Get the hash of the most recently committed version
     ///
@@ -201,10 +209,10 @@ pub trait Db {
     ///
     /// If the database is empty, this will return None, unless the ethhash feature is enabled.
     /// In that case, we return the special ethhash compatible empty trie hash.
-    async fn root_hash(&self) -> Result<Option<TrieHash>, Error>;
+    async fn root_hash(&self) -> Result<Option<TrieHash>>;
 
     /// Get all the hashes available
-    async fn all_hashes(&self) -> Result<Vec<TrieHash>, Error>;
+    async fn all_hashes(&self) -> Result<Vec<TrieHash>>;
 
     /// Propose a change to the database via a batch
     ///
@@ -219,7 +227,7 @@ pub trait Db {
     async fn propose<'p, K: KeyType, V: ValueType>(
         &'p self,
         data: Batch<K, V>,
-    ) -> Result<Arc<Self::Proposal<'p>>, Error>
+    ) -> Result<Arc<Self::Proposal<'p>>>
     where
         Self: 'p;
 }
@@ -235,7 +243,7 @@ pub trait Db {
 #[async_trait]
 pub trait DbView {
     /// The type of a stream of key/value pairs
-    type Stream<'a>: Stream<Item = Result<(Key, Value), Error>>
+    type Stream<'a>: Stream<Item = Result<(Key, Value)>>
     where
         Self: 'a;
 
@@ -245,13 +253,13 @@ pub trait DbView {
     ///
     /// If the database is empty, this will return None, unless the ethhash feature is enabled.
     /// In that case, we return the special ethhash compatible empty trie hash.
-    async fn root_hash(&self) -> Result<Option<HashKey>, Error>;
+    async fn root_hash(&self) -> Result<Option<HashKey>>;
 
     /// Get the value of a specific key
-    async fn val<K: KeyType>(&self, key: K) -> Result<Option<Value>, Error>;
+    async fn val<K: KeyType>(&self, key: K) -> Result<Option<Value>>;
 
     /// Obtain a proof for a single key
-    async fn single_key_proof<K: KeyType>(&self, key: K) -> Result<FrozenProof, Error>;
+    async fn single_key_proof<K: KeyType>(&self, key: K) -> Result<FrozenProof>;
 
     /// Obtain a range proof over a set of keys
     ///
@@ -261,12 +269,12 @@ pub trait DbView {
     /// * `last_key` - If None, continue to the end of the database
     /// * `limit` - The maximum number of keys in the range proof
     ///
-    async fn range_proof<K: KeyType, V: Send + Sync>(
+    async fn range_proof<K: KeyType>(
         &self,
         first_key: Option<K>,
         last_key: Option<K>,
-        limit: Option<usize>,
-    ) -> Result<FrozenRangeProof, Error>;
+        limit: Option<NonZeroUsize>,
+    ) -> Result<FrozenRangeProof>;
 
     /// Obtain a stream over the keys/values of this view, using an optional starting point
     ///
@@ -279,15 +287,15 @@ pub trait DbView {
     /// If you always want to start at the beginning, [DbView::iter] is easier to use
     /// If you always provide a key, [DbView::iter_from] is easier to use
     ///
-    fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Stream<'_>, Error>;
+    fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Stream<'_>>;
 
     /// Obtain a stream over the keys/values of this view, starting from the beginning
-    fn iter(&self) -> Result<Self::Stream<'_>, Error> {
-        self.iter_option(Option::<Key>::None)
+    fn iter(&self) -> Result<Self::Stream<'_>> {
+        self.iter_option(Option::<Box<[u8]>>::None)
     }
 
     /// Obtain a stream over the key/values, starting at a specific key
-    fn iter_from<K: KeyType + 'static>(&self, first_key: K) -> Result<Self::Stream<'_>, Error> {
+    fn iter_from<K: KeyType + 'static>(&self, first_key: K) -> Result<Self::Stream<'_>> {
         self.iter_option(Some(first_key))
     }
 }
@@ -309,7 +317,7 @@ pub trait Proposal: DbView + Send + Sync {
     type Proposal: DbView + Proposal;
 
     /// Commit this revision
-    async fn commit(self: Arc<Self>) -> Result<(), Error>;
+    async fn commit(self: Arc<Self>) -> Result<()>;
 
     /// Propose a new revision on top of an existing proposal
     ///
@@ -324,5 +332,5 @@ pub trait Proposal: DbView + Send + Sync {
     async fn propose<K: KeyType, V: ValueType>(
         self: Arc<Self>,
         data: Batch<K, V>,
-    ) -> Result<Arc<Self::Proposal>, Error>;
+    ) -> Result<Arc<Self::Proposal>>;
 }

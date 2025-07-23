@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::fmt::{Debug, Error as FmtError, Formatter};
+use std::fmt::{Debug, Formatter};
 
 use crate::Path;
 
@@ -16,7 +16,7 @@ pub struct LeafNode {
 }
 
 impl Debug for LeafNode {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), FmtError> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "[Leaf {:?} {}]",

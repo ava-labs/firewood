@@ -1,12 +1,14 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use super::api::{Batch, Db, DbView, Error, HashKey, KeyType, ValueType};
-use super::propose::{Proposal, ProposalBase};
 use crate::merkle::{Key, Value};
-use crate::v2::api::{FrozenProof, FrozenRangeProof};
+use crate::v2::api::{
+    self, Batch, Db, DbView, Error, FrozenProof, FrozenRangeProof, HashKey, KeyType, ValueType,
+};
+use crate::v2::propose::{Proposal, ProposalBase};
 use async_trait::async_trait;
 use futures::Stream;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 /// An `EmptyDb` is a simple implementation of `api::Db`
@@ -57,7 +59,7 @@ impl Db for EmptyDb {
 impl DbView for HistoricalImpl {
     type Stream<'a> = EmptyStreamer;
 
-    async fn root_hash(&self) -> Result<Option<HashKey>, Error> {
+    async fn root_hash(&self) -> api::Result<Option<HashKey>> {
         Ok(None)
     }
 
@@ -69,11 +71,11 @@ impl DbView for HistoricalImpl {
         Err(Error::RangeProofOnEmptyTrie)
     }
 
-    async fn range_proof<K: KeyType, V>(
+    async fn range_proof<K: KeyType>(
         &self,
         _first_key: Option<K>,
         _last_key: Option<K>,
-        _limit: Option<usize>,
+        _limit: Option<NonZeroUsize>,
     ) -> Result<FrozenRangeProof, Error> {
         Err(Error::RangeProofOnEmptyTrie)
     }

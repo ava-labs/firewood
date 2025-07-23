@@ -25,7 +25,7 @@
 //!
 
 use bytemuck_derive::{AnyBitPattern, NoUninit};
-use std::io::{Error, ErrorKind};
+use std::io::{self, ErrorKind};
 
 use super::alloc::{FreeLists, LinearAddress, area_size_hash};
 use crate::logger::{debug, trace};
@@ -65,9 +65,9 @@ impl Version {
     /// - If the version is not parsable by [`semver::Version`].
     /// - If the version is not compatible with the current build of firewood.
     ///   - Currently, the minimum required version is 0.0.4.
-    pub fn validate(&self) -> Result<(), Error> {
+    pub fn validate(&self) -> io::Result<()> {
         let version = std::str::from_utf8(&self.bytes).map_err(|e| {
-            Error::new(
+            io::Error::new(
                 ErrorKind::InvalidData,
                 format!(
                     "Invalid database version: invalid utf-8: {e} (original: [{:032x}])",
@@ -81,7 +81,7 @@ impl Version {
 
         // strip magic prefix or error
         let version = version.strip_prefix("firewood ").ok_or_else(|| {
-            Error::new(
+            io::Error::new(
                 ErrorKind::InvalidData,
                 format!(
                     "Invalid database version: does not start with magic 'firewood ': {version}",
@@ -92,7 +92,7 @@ impl Version {
         // Version strings from CARGO_PKG_VERSION are guaranteed to be parsable by
         // semver (cargo uses the same library).
         let version = semver::Version::parse(version).map_err(|e| {
-            Error::new(
+            io::Error::new(
                 ErrorKind::InvalidData,
                 format!(
                     "Invalid version string: unable to parse `{version}` as a semver string: {e}"
@@ -102,7 +102,7 @@ impl Version {
 
         // verify base compatibility version
         if !Self::BASE_VERSION.matches(&version) {
-            return Err(Error::new(
+            return Err(io::Error::new(
                 ErrorKind::InvalidData,
                 format!(
                     "Database was created with firewood version {version}; however, this build of firewood requires version {}",
@@ -205,7 +205,7 @@ impl NodeStoreHeader {
         }
     }
 
-    pub fn validate(&self) -> Result<(), Error> {
+    pub fn validate(&self) -> io::Result<()> {
         trace!("Checking version...");
         self.version.validate()?;
 
@@ -256,22 +256,22 @@ impl NodeStoreHeader {
         std::mem::offset_of!(NodeStoreHeader, free_lists) as u64
     }
 
-    fn validate_endian_test(&self) -> Result<(), Error> {
+    fn validate_endian_test(&self) -> io::Result<()> {
         if self.endian_test == 1 {
             Ok(())
         } else {
-            Err(Error::new(
+            Err(io::Error::new(
                 ErrorKind::InvalidData,
                 "Database cannot be opened due to difference in endianness",
             ))
         }
     }
 
-    fn validate_area_size_hash(&self) -> Result<(), Error> {
+    fn validate_area_size_hash(&self) -> io::Result<()> {
         if self.area_size_hash == area_size_hash().as_slice() {
             Ok(())
         } else {
-            Err(Error::new(
+            Err(io::Error::new(
                 ErrorKind::InvalidData,
                 "Database cannot be opened due to difference in area size hash",
             ))
@@ -279,11 +279,11 @@ impl NodeStoreHeader {
     }
 
     #[cfg(not(feature = "ethhash"))]
-    fn validate_ethhash(&self) -> Result<(), Error> {
+    fn validate_ethhash(&self) -> io::Result<()> {
         if self.ethhash == 0 {
             Ok(())
         } else {
-            Err(Error::new(
+            Err(io::Error::new(
                 ErrorKind::InvalidData,
                 "Database cannot be opened as it was created with ethhash enabled",
             ))
@@ -291,11 +291,11 @@ impl NodeStoreHeader {
     }
 
     #[cfg(feature = "ethhash")]
-    fn validate_ethhash(&self) -> Result<(), Error> {
+    fn validate_ethhash(&self) -> io::Result<()> {
         if self.ethhash == 1 {
             Ok(())
         } else {
-            Err(Error::new(
+            Err(io::Error::new(
                 ErrorKind::InvalidData,
                 "Database cannot be opened as it was created without ethhash enabled",
             ))

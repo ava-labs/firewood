@@ -6,7 +6,7 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-use crate::{BranchNode, Children, HashType, LeafNode, Node, Path};
+use crate::{BranchNode, HashType, LeafNode, Node, Path, node::branch::Children};
 use sha2::{Digest, Sha256};
 use smallvec::SmallVec;
 use std::ops::Deref;
@@ -87,7 +87,7 @@ impl HasUpdate for SmallVec<[u8; 32]> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 /// A `ValueDigest` is either a node's value or the hash of its value.
 pub enum ValueDigest<T> {
     /// The node's value.
@@ -151,7 +151,7 @@ pub trait Preimage {
 trait HashableNode {
     fn partial_path(&self) -> impl Iterator<Item = u8> + Clone;
     fn value(&self) -> Option<&[u8]>;
-    fn children_iter(&self) -> Children<HashType>;
+    fn child_hashes(&self) -> Children<HashType>;
 }
 
 impl HashableNode for BranchNode {
@@ -163,7 +163,7 @@ impl HashableNode for BranchNode {
         self.value.as_deref()
     }
 
-    fn children_iter(&self) -> Children<HashType> {
+    fn child_hashes(&self) -> Children<HashType> {
         self.children_hashes()
     }
 }
@@ -177,7 +177,7 @@ impl HashableNode for LeafNode {
         Some(&self.value)
     }
 
-    fn children_iter(&self) -> Children<HashType> {
+    fn child_hashes(&self) -> Children<HashType> {
         BranchNode::empty_children()
     }
 }
@@ -212,6 +212,6 @@ impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
     }
 
     fn children(&self) -> Children<HashType> {
-        self.node.children_iter()
+        self.node.child_hashes()
     }
 }
