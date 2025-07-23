@@ -140,7 +140,7 @@ impl Add<Path> for Path {
     type Output = Path;
     fn add(self, other: Path) -> Self::Output {
         let mut new = self.clone();
-        new.extend(other);
+        new.extend(other.iter().copied());
         new
     }
 }

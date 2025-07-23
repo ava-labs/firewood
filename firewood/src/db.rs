@@ -6,11 +6,9 @@
     reason = "Found 12 occurrences after enabling the lint."
 )]
 
-use crate::merkle::Merkle;
-use crate::proof::{Proof, ProofNode};
-use crate::range_proof::RangeProof;
+use crate::merkle::{Merkle, Value};
 use crate::stream::MerkleKeyValueStream;
-use crate::v2::api::{self, KeyType, ValueType};
+use crate::v2::api::{self, FrozenProof, FrozenRangeProof, KeyType, ValueType};
 pub use crate::v2::api::{Batch, BatchOp};
 
 use crate::manager::{RevisionManager, RevisionManagerConfig};
@@ -52,24 +50,24 @@ impl std::fmt::Debug for DbMetrics {
 /// A synchronous view of the database.
 pub trait DbViewSync {
     /// find a value synchronously
-    fn val_sync<K: KeyType>(&self, key: K) -> Result<Option<Box<[u8]>>, DbError>;
+    fn val_sync<K: KeyType>(&self, key: K) -> Result<Option<Value>, DbError>;
 }
 
 /// A synchronous view of the database with raw byte keys (object-safe version).
 pub trait DbViewSyncBytes: std::fmt::Debug {
     /// find a value synchronously using raw bytes
-    fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, DbError>;
+    fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError>;
 }
 
 // Provide blanket implementation for DbViewSync using DbViewSyncBytes
 impl<T: DbViewSyncBytes> DbViewSync for T {
-    fn val_sync<K: KeyType>(&self, key: K) -> Result<Option<Box<[u8]>>, DbError> {
+    fn val_sync<K: KeyType>(&self, key: K) -> Result<Option<Value>, DbError> {
         self.val_sync_bytes(key.as_ref())
     }
 }
 
 impl DbViewSyncBytes for Arc<HistoricalRev> {
-    fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, DbError> {
+    fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
         let merkle = Merkle::from(self);
         let value = merkle.get_value(key)?;
         Ok(value)
@@ -77,7 +75,7 @@ impl DbViewSyncBytes for Arc<HistoricalRev> {
 }
 
 impl DbViewSyncBytes for Proposal<'_> {
-    fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, DbError> {
+    fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
         let merkle = Merkle::from(self.nodestore.clone());
         let value = merkle.get_value(key)?;
         Ok(value)
@@ -85,7 +83,7 @@ impl DbViewSyncBytes for Proposal<'_> {
 }
 
 impl DbViewSyncBytes for Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> {
-    fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, DbError> {
+    fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
         let merkle = Merkle::from(self.clone());
         let value = merkle.get_value(key)?;
         Ok(value)
@@ -103,15 +101,12 @@ impl api::DbView for HistoricalRev {
         Ok(HashedNodeReader::root_hash(self))
     }
 
-    async fn val<K: api::KeyType>(&self, key: K) -> Result<Option<Box<[u8]>>, api::Error> {
+    async fn val<K: api::KeyType>(&self, key: K) -> Result<Option<Value>, api::Error> {
         let merkle = Merkle::from(self);
         Ok(merkle.get_value(key.as_ref())?)
     }
 
-    async fn single_key_proof<K: api::KeyType>(
-        &self,
-        key: K,
-    ) -> Result<Proof<ProofNode>, api::Error> {
+    async fn single_key_proof<K: api::KeyType>(&self, key: K) -> Result<FrozenProof, api::Error> {
         let merkle = Merkle::from(self);
         merkle.prove(key.as_ref()).map_err(api::Error::from)
     }
@@ -121,7 +116,7 @@ impl api::DbView for HistoricalRev {
         _first_key: Option<K>,
         _last_key: Option<K>,
         _limit: Option<usize>,
-    ) -> Result<Option<RangeProof<Box<[u8]>, Box<[u8]>, ProofNode>>, api::Error> {
+    ) -> Result<FrozenRangeProof, api::Error> {
         todo!()
     }
 
@@ -384,12 +379,12 @@ impl api::DbView for Proposal<'_> {
         Ok(self.nodestore.root_hash())
     }
 
-    async fn val<K: KeyType>(&self, key: K) -> Result<Option<Box<[u8]>>, api::Error> {
+    async fn val<K: KeyType>(&self, key: K) -> Result<Option<Value>, api::Error> {
         let merkle = Merkle::from(self.nodestore.clone());
         merkle.get_value(key.as_ref()).map_err(api::Error::from)
     }
 
-    async fn single_key_proof<K: KeyType>(&self, key: K) -> Result<Proof<ProofNode>, api::Error> {
+    async fn single_key_proof<K: KeyType>(&self, key: K) -> Result<FrozenProof, api::Error> {
         let merkle = Merkle::from(self.nodestore.clone());
         merkle.prove(key.as_ref()).map_err(api::Error::from)
     }
@@ -399,7 +394,7 @@ impl api::DbView for Proposal<'_> {
         _first_key: Option<K>,
         _last_key: Option<K>,
         _limit: Option<usize>,
-    ) -> Result<Option<api::RangeProof<Box<[u8]>, Box<[u8]>, ProofNode>>, api::Error> {
+    ) -> Result<FrozenRangeProof, api::Error> {
         todo!()
     }
 

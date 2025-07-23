@@ -259,17 +259,20 @@ mod test {
 
     // set up a basic trie:
     // -------------------------
+    // | partial path: []      |
     // |     |  X  |  X  | ... |    Root node
     // -------------------------
     //    |
     //    V
     // -------------------------
-    // |  X  |     |  X  | ... |    Branch node
+    // | partial path: [9]     |
+    // |  X  |     |  X  | ... |    Branch node (path: 0x09)
     // -------------------------
     //          |
     //          V
     // -------------------------
-    // |   [0,1] -> [3,4,5]    |    Leaf node
+    // | partial path: [2, 0]  |
+    // |   [3,4,5]             |    Leaf node (0x09120 -> [3, 4, 5])
     // -------------------------
     #[expect(clippy::arithmetic_side_effects)]
     fn gen_test_trie(
@@ -277,23 +280,23 @@ mod test {
     ) -> (Vec<(Node, LinearAddress)>, u64, (LinearAddress, HashType)) {
         let mut high_watermark = NodeStoreHeader::SIZE;
         let leaf = Node::Leaf(LeafNode {
-            partial_path: Path::from([0, 1]),
+            partial_path: Path::from([2, 0]),
             value: Box::new([3, 4, 5]),
         });
         let leaf_addr = LinearAddress::new(high_watermark).unwrap();
-        let leaf_hash = hash_node(&leaf, &Path::from_nibbles_iterator([0u8, 0, 1].into_iter()));
+        let leaf_hash = hash_node(&leaf, &Path::from([0u8, 9, 1]));
         let leaf_area = test_write_new_node(nodestore, &leaf, high_watermark);
         high_watermark += leaf_area;
 
         let mut branch_children: [Option<Child>; BranchNode::MAX_CHILDREN] = Default::default();
         branch_children[1] = Some(Child::AddressWithHash(leaf_addr, leaf_hash));
         let branch = Node::Branch(Box::new(BranchNode {
-            partial_path: Path::from([0]),
+            partial_path: Path::from([9]),
             value: None,
             children: branch_children,
         }));
         let branch_addr = LinearAddress::new(high_watermark).unwrap();
-        let branch_hash = hash_node(&branch, &Path::from_nibbles_iterator([0u8].into_iter()));
+        let branch_hash = hash_node(&branch, &Path::from([0u8]));
         let branch_area = test_write_new_node(nodestore, &branch, high_watermark);
         high_watermark += branch_area;
 
@@ -354,13 +357,12 @@ mod test {
         let (mut nodes, high_watermark, (root_addr, root_hash)) = gen_test_trie(&mut nodestore);
 
         // replace the branch hash in the root node with a wrong hash
-        let [_, (branch_node, branch_addr), (root_node, _)] = nodes.as_mut_slice() else {
+        let [_, (_, branch_addr), (root_node, _)] = nodes.as_mut_slice() else {
             panic!("test trie content changed, the test should be updated");
         };
         let wrong_hash = HashType::default();
-        let branch_path = Path::from([0]) + branch_node.as_branch().unwrap().partial_path;
-        let Some(Child::AddressWithHash(_, hash)) = root_node.as_branch_mut().unwrap().children
-            [branch_path[0] as usize]
+        let branch_path = Path::from([0, 9]);
+        let Some(Child::AddressWithHash(_, hash)) = root_node.as_branch_mut().unwrap().children[0]
             .replace(Child::AddressWithHash(*branch_addr, wrong_hash.clone()))
         else {
             panic!("test trie content changed, the test should be updated");
