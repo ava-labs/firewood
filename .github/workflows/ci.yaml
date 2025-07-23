@@ -143,6 +143,34 @@ jobs:
       - name: Run tests with features enabled
         run: cargo test --verbose ${{ matrix.profile-args }}
 
+  test-ignored:
+    needs: build
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      matrix:
+        include:
+          - profile-key: debug-no-default-features
+            profile-args: "--no-default-features"
+          - profile-key: debug-no-features
+            profile-args: ""
+          - profile-key: debug-ethhash-logger
+            profile-args: "--features ethhash,logger"
+          - profile-key: maxperf-ethhash-logger
+            profile-args: "--profile maxperf --features ethhash,logger"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: "false"
+          shared-key: ${{ matrix.profile-key }}
+      - name: Run ignored tests with features enabled
+        run: cargo test --verbose ${{ matrix.profile-args }} -- --include-ignored
+
   examples:
     runs-on: ubuntu-latest
     strategy:
