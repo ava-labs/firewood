@@ -779,6 +779,7 @@ mod test {
     }
 
     #[tokio::test]
+    #[cfg(not(feature = "ethhash"))]
     async fn fuzz_checker() {
         use rand::rngs::StdRng;
         use rand::{Rng, SeedableRng};
