@@ -180,10 +180,12 @@ impl<T: Hashable> Preimage for T {
                 };
             }
 
-            if !is_account && let Some(digest) = self.value_digest() {
-                rlp.append(&*digest);
-            } else {
-                rlp.append_empty_data();
+            if !is_account {
+                if let Some(digest) = self.value_digest() {
+                    rlp.append(&*digest);
+                } else {
+                    rlp.append_empty_data();
+                }
             }
             let bytes = rlp.out();
             trace!("pass 1 bytes {:02X?}", hex::encode(&bytes));
