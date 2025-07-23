@@ -151,7 +151,7 @@ pub trait Preimage {
 trait HashableNode {
     fn partial_path(&self) -> impl Iterator<Item = u8> + Clone;
     fn value(&self) -> Option<&[u8]>;
-    fn children_iter(&self) -> Children<HashType>;
+    fn child_hashes(&self) -> Children<HashType>;
 }
 
 impl HashableNode for BranchNode {
@@ -163,7 +163,7 @@ impl HashableNode for BranchNode {
         self.value.as_deref()
     }
 
-    fn children_iter(&self) -> Children<HashType> {
+    fn child_hashes(&self) -> Children<HashType> {
         self.children_hashes()
     }
 }
@@ -177,7 +177,7 @@ impl HashableNode for LeafNode {
         Some(&self.value)
     }
 
-    fn children_iter(&self) -> Children<HashType> {
+    fn child_hashes(&self) -> Children<HashType> {
         BranchNode::empty_children()
     }
 }
@@ -212,6 +212,6 @@ impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
     }
 
     fn children(&self) -> Children<HashType> {
-        self.node.children_iter()
+        self.node.child_hashes()
     }
 }
