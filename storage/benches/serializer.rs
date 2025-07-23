@@ -16,7 +16,7 @@ use std::os::raw::c_int;
 
 use criterion::profiler::Profiler;
 use criterion::{Bencher, Criterion, criterion_group, criterion_main};
-use firewood_storage::{LeafNode, Node, Path};
+use firewood_storage::{Child, LeafNode, Node, Path};
 use pprof::ProfilerGuard;
 use smallvec::SmallVec;
 
@@ -62,7 +62,7 @@ impl Profiler for FlamegraphProfiler {
     }
 }
 
-fn manual_serializer(b: &mut Bencher, input: &Node) {
+fn manual_serializer(b: &mut Bencher, input: &Node<Option<Child>>) {
     b.iter(|| to_bytes(input));
 }
 
@@ -74,7 +74,7 @@ fn manual_deserializer(b: &mut Bencher, input: &Vec<u8>) {
     b.iter(|| Node::from_reader(std::io::Cursor::new(input)).expect("to deserialize node"));
 }
 
-fn to_bytes(input: &Node) -> Vec<u8> {
+fn to_bytes(input: &Node<Option<Child>>) -> Vec<u8> {
     let mut bytes = Vec::new();
     input.as_bytes(0, &mut bytes);
     bytes

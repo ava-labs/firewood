@@ -14,6 +14,7 @@ use crate::node::ExtendableBytes;
 use crate::{LeafNode, LinearAddress, MaybePersistedNode, Node, Path, SharedNode};
 use std::fmt::{Debug, Formatter};
 use std::io::Read;
+use std::sync::{Arc, Mutex};
 
 /// The type of a hash. For ethereum compatible hashes, this might be a RLP encoded
 /// value if it's small enough to fit in less than 32 bytes. For merkledb compatible
@@ -97,7 +98,7 @@ impl<T: Read> ReadSerializable for T {}
 pub enum Child {
     /// There is a child at this index, but we haven't hashed it
     /// or allocated space in storage for it yet.
-    Node(Node),
+    Node(Node<Option<Child>>),
 
     /// We know the child's persisted address and hash.
     AddressWithHash(LinearAddress, HashType),
@@ -110,7 +111,7 @@ impl Child {
     /// Return a mutable reference to the underlying Node if the child
     /// is a [`Child::Node`] variant, otherwise None.
     #[must_use]
-    pub const fn as_mut_node(&mut self) -> Option<&mut Node> {
+    pub const fn as_mut_node(&mut self) -> Option<&mut Node<Option<Child>>> {
         match self {
             Child::Node(node) => Some(node),
             _ => None,
@@ -313,7 +314,7 @@ mod ethhash {
     }
 }
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 /// A branch node
 pub struct BranchNode<T> {
     /// The partial path for this branch
@@ -343,6 +344,34 @@ impl BranchConstants {
     pub const MAX_CHILDREN: usize = 16;    
 }
 
+#[derive(Clone, Debug)]
+pub struct LockedChild {
+    pub child: Arc<Mutex<Child>>,
+}
+
+/* 
+impl PartialEq for LockedChild {
+    fn eq(&self, other: &Self) -> bool {
+        let binding = self.child.clone();
+        let guard = binding.lock().unwrap();
+        let this_child = guard.clone();
+        drop(guard); // Explicit drop 
+        this_child == *other.child.clone().lock().unwrap()
+        // TODO: Do I need to worry about lock ordering?
+        // *self.child.clone().lock().unwrap() == *other.child.clone().lock().unwrap()
+    }
+}
+
+impl Eq for LockedChild {} // No methods to implement
+
+impl Debug for BranchNode<Option<LockedChild>> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        todo!();
+    }
+}
+*/
+
+/* 
 impl Debug for BranchNode<Option<Child>> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "[BranchNode")?;
@@ -375,6 +404,7 @@ impl Debug for BranchNode<Option<Child>> {
         )
     }
 }
+*/
 
 impl BranchNode<Option<Child>> {
     // Helper to iterate over only valid children

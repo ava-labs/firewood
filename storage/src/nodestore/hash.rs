@@ -77,7 +77,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     /// Returns the hashed node and its hash.
     pub(super) fn hash_helper(
         &mut self,
-        mut node: Node,
+        mut node: Node<Option<Child>>,
         path_prefix: &mut Path,
         new_nodes: &mut HashMap<LinearAddress, (u8, SharedNode)>,
         #[cfg(feature = "ethhash")] fake_root_extra_nibble: Option<u8>,

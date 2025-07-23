@@ -57,7 +57,7 @@ pub use node::persist::MaybePersistedNode;
 pub use trie_hash::TrieHash;
 
 /// A shared node, which is just a triophe Arc of a node
-pub type SharedNode = triomphe::Arc<Node>;
+pub type SharedNode = triomphe::Arc<Node<Option<Child>>>;
 
 /// The strategy for caching nodes that are read
 /// from the storage layer. Generally, we only want to

@@ -385,7 +385,7 @@ mod tests {
     };
 
     /// Helper to create a test node store with a specific root
-    fn create_test_store_with_root(root: Node) -> NodeStore<MutableProposal, MemStore> {
+    fn create_test_store_with_root(root: Node<Option<Child>>) -> NodeStore<MutableProposal, MemStore> {
         let mem_store = MemStore::new(vec![]).into();
         let mut store = NodeStore::new_empty_proposal(mem_store);
         store.mut_root().replace(root);
@@ -393,7 +393,7 @@ mod tests {
     }
 
     /// Helper to create a leaf node
-    fn create_leaf(path: &[u8], value: &[u8]) -> Node {
+    fn create_leaf<T>(path: &[u8], value: &[u8]) -> Node<T> {
         Node::Leaf(LeafNode {
             partial_path: Path::from(path),
             value: value.to_vec().into_boxed_slice(),
@@ -401,7 +401,7 @@ mod tests {
     }
 
     /// Helper to create a branch node with children
-    fn create_branch(path: &[u8], value: Option<&[u8]>, children: Vec<(u8, Node)>) -> Node {
+    fn create_branch(path: &[u8], value: Option<&[u8]>, children: Vec<(u8, Node<Option<Child>>)>) -> Node<Option<Child>> {
         let mut branch = BranchNode {
             partial_path: Path::from(path),
             value: value.map(|v| v.to_vec().into_boxed_slice()),
@@ -513,7 +513,7 @@ mod tests {
         //                                -> branch2 -> leaf[2]
         let inner_branch = create_branch(&[10], Some(&[50]), vec![(0, leaves[2].clone())]);
 
-        let root_branch: Node = BranchNode {
+        let root_branch: Node<Option<Child>> = BranchNode {
             partial_path: Path::new(),
             value: None,
             children: [

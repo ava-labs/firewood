@@ -100,7 +100,7 @@ macro_rules! write_attributes {
 /// Returns the value mapped to by `key` in the subtrie rooted at `node`.
 fn get_helper<T: TrieReader>(
     nodestore: &T,
-    node: &Node,
+    node: &Node<Option<Child>>,
     key: &[u8],
 ) -> Result<Option<SharedNode>, FileIoError> {
     // 4 possibilities for the position of the `key` relative to `node`:
@@ -150,7 +150,7 @@ fn get_helper<T: TrieReader>(
 /// Merkle operations against a nodestore
 pub struct Merkle<T> {
     nodestore: T,
-    lock: Option<Arc<Mutex<bool>>>,
+    //lock: Option<Arc<Mutex<bool>>>,
 }
 
 impl<T> Merkle<T> {
@@ -161,7 +161,8 @@ impl<T> Merkle<T> {
 
 impl<T> From<T> for Merkle<T> {
     fn from(nodestore: T) -> Self {
-        Merkle { nodestore, lock: Some(Arc::new(Mutex::new(true)))}
+        //Merkle { nodestore, lock: Some(Arc::new(Mutex::new(true)))}
+        Merkle { nodestore }
     }
 }
 
@@ -453,7 +454,7 @@ impl<S: ReadableStorage> TryFrom<Merkle<NodeStore<MutableProposal, S>>>
     fn try_from(m: Merkle<NodeStore<MutableProposal, S>>) -> Result<Self, Self::Error> {
         Ok(Merkle {
             nodestore: m.nodestore.try_into()?,
-            lock: None,
+            //lock: None,
         })
     }
 }
@@ -473,8 +474,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
         // Acquire root lock before accessing the root node
-        let root_clone = self.lock.as_ref().unwrap().clone();
-        let root_guard = root_clone.lock().unwrap();
+        //let root_clone = self.lock.as_ref().unwrap().clone();
+        //let root_guard = root_clone.lock().unwrap();
         let root = self.nodestore.mut_root();
 
         let Some(root_node) = std::mem::take(root) else {
@@ -488,7 +489,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
             return Ok(());
         };
 
-        let root_node = self.insert_helper(root_node, key.as_ref(), value, Some(root_guard))?;
+        //let root_node = self.insert_helper(root_node, key.as_ref(), value, Some(root_guard))?;
+        let root_node = self.insert_helper(root_node, key.as_ref(), value)?;
         *self.nodestore.mut_root() = root_node.into();
         Ok(())
     }
@@ -498,20 +500,20 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Returns the new root of the subtrie.
     pub fn insert_helper(
         &mut self,
-        mut node: Node,
+        mut node: Node<Option<Child>>,
         key: &[u8],
         value: Box<[u8]>,
-        guard: Option<MutexGuard<'_, bool>>,
-    ) -> Result<Node, FileIoError> {
+        //guard: Option<MutexGuard<'_, bool>>,
+    ) -> Result<Node<Option<Child>>, FileIoError> {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`
         // 2. The key is above the node (i.e. its ancestor)
         // 3. The key is below the node (i.e. its descendant)
         // 4. Neither is an ancestor of the other
-        match guard {
-            Some(g) => drop(g),
-            None => (),
-        }
+        //match guard {
+        //    Some(g) => drop(g),
+        //    None => (),
+        //}
 
         let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
 
@@ -585,7 +587,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                             }
                         };
 
-                        let child = self.insert_helper(child, partial_path.as_ref(), value, None)?;
+                        let child = self.insert_helper(child, partial_path.as_ref(), value)?;
                         branch.update_child(child_index, Some(Child::Node(child)));
                         Ok(node)
                     }
@@ -670,9 +672,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     #[expect(clippy::type_complexity)]
     fn remove_helper(
         &mut self,
-        mut node: Node,
+        mut node: Node<Option<Child>>,
         key: &[u8],
-    ) -> Result<(Option<Node>, Option<Box<[u8]>>), FileIoError> {
+    ) -> Result<(Option<Node<Option<Child>>>, Option<Box<[u8]>>), FileIoError> {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`
         // 2. The key is above the node (i.e. its ancestor)
@@ -896,10 +898,10 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 
     fn remove_prefix_helper(
         &mut self,
-        mut node: Node,
+        mut node: Node<Option<Child>>,
         key: &[u8],
         deleted: &mut usize,
-    ) -> Result<Option<Node>, FileIoError> {
+    ) -> Result<Option<Node<Option<Child>>>, FileIoError> {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`, in which case we need to delete this node and all its children.
         // 2. The key is above the node (i.e. its ancestor), so the parent needs to be restructured (TODO).
@@ -1175,7 +1177,8 @@ mod tests {
 
         let nodestore = NodeStore::new_empty_proposal(memstore.into());
 
-        Merkle { nodestore, lock: Some(Arc::new(Mutex::new(true)))}
+        //Merkle { nodestore, lock: Some(Arc::new(Mutex::new(true)))}
+        Merkle { nodestore }
     }
 
     #[test]

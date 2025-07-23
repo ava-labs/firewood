@@ -17,7 +17,7 @@ use crate::{BranchNode, Child, HashType, LeafNode, Node, Path};
 
 /// Returns the hash of `node`, which is at the given `path_prefix`.
 #[must_use]
-pub fn hash_node(node: &Node, path_prefix: &Path) -> HashType {
+pub fn hash_node(node: &Node<Option<Child>>, path_prefix: &Path) -> HashType {
     match node {
         Node::Branch(node) => {
             // All child hashes should be filled in.
@@ -36,6 +36,11 @@ pub fn hash_node(node: &Node, path_prefix: &Path) -> HashType {
             }
             .into()
         }
+        /*
+        Node::Root(_) => {
+            todo!();
+        }
+        */
         Node::Leaf(node) => NodeAndPrefix {
             node,
             prefix: path_prefix,
@@ -47,7 +52,7 @@ pub fn hash_node(node: &Node, path_prefix: &Path) -> HashType {
 /// Returns the serialized representation of `node` used as the pre-image
 /// when hashing the node. The node is at the given `path_prefix`.
 #[must_use]
-pub fn hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
+pub fn hash_preimage<T>(node: &Node<Option<Child>>, path_prefix: &Path) -> Box<[u8]> {
     // Key, 3 options, value digest
     let est_len = node.partial_path().len() + path_prefix.len() + 3 + HashType::default().len();
     let mut buf = Vec::with_capacity(est_len);

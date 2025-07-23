@@ -87,7 +87,7 @@ use std::sync::Arc;
 use crate::hashednode::hash_node;
 use crate::node::Node;
 use crate::node::persist::MaybePersistedNode;
-use crate::{FileBacked, FileIoError, Path, ReadableStorage, SharedNode, TrieHash};
+use crate::{Child, FileBacked, FileIoError, Path, ReadableStorage, SharedNode, TrieHash};
 
 use super::linear::WritableStorage;
 
@@ -254,14 +254,14 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the node cannot be read.
-    pub fn read_for_update(&mut self, node: MaybePersistedNode) -> Result<Node, FileIoError> {
+    pub fn read_for_update(&mut self, node: MaybePersistedNode) -> Result<Node<Option<Child>>, FileIoError> {
         let arc_wrapped_node = node.as_shared_node(self)?;
         self.delete_node(node);
         Ok((*arc_wrapped_node).clone())
     }
 
     /// Returns the root of this proposal.
-    pub const fn mut_root(&mut self) -> &mut Option<Node> {
+    pub const fn mut_root(&mut self) -> &mut Option<Node<Option<Child>>> {
         &mut self.kind.root
     }
 }
@@ -484,7 +484,7 @@ impl<T, S> NodeStore<T, S> {
 #[derive(Debug)]
 pub struct MutableProposal {
     /// The root of the trie in this proposal.
-    root: Option<Node>,
+    root: Option<Node<Option<Child>>>,
     /// Nodes that have been deleted in this proposal.
     deleted: Vec<MaybePersistedNode>,
     parent: NodeStoreParent,
@@ -846,7 +846,7 @@ mod tests {
         value: Box::new([3, 4, 5]),
     }); "leaf node")]
 
-    fn test_serialized_len<N: Into<Node>>(node: N) {
+    fn test_serialized_len<N: Into<Node<Option<Child>>>>(node: N) {
         let node = node.into();
 
         let computed_length =

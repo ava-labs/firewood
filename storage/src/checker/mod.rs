@@ -272,7 +272,7 @@ mod test {
     #[expect(clippy::arithmetic_side_effects)]
     fn gen_test_trie(
         nodestore: &mut NodeStore<Committed, MemStore>,
-    ) -> (Vec<(Node, LinearAddress)>, u64, (LinearAddress, HashType)) {
+    ) -> (Vec<(Node<Option<Child>>, LinearAddress)>, u64, (LinearAddress, HashType)) {
         let mut high_watermark = NodeStoreHeader::SIZE;
         let leaf = Node::Leaf(LeafNode {
             partial_path: Path::from([0, 1]),

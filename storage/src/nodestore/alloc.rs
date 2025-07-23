@@ -35,7 +35,7 @@ use std::sync::Arc;
 
 use crate::node::persist::MaybePersistedNode;
 use crate::node::{ByteCounter, ExtendableBytes, Node};
-use crate::{CacheReadStrategy, FreeListParent, ReadableStorage, SharedNode, TrieHash};
+use crate::{CacheReadStrategy, Child, FreeListParent, ReadableStorage, SharedNode, TrieHash};
 
 use crate::linear::WritableStorage;
 
@@ -623,7 +623,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
 
     /// Returns the length of the serialized area for a node.
     #[must_use]
-    pub fn stored_len(node: &Node) -> u64 {
+    pub fn stored_len(node: &Node<Option<Child>>) -> u64 {
         let mut bytecounter = ByteCounter::new();
         node.as_bytes(0, &mut bytecounter);
         bytecounter.count()
@@ -638,7 +638,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     /// Returns a [`FileIoError`] if the node cannot be allocated.
     pub fn allocate_node(
         &mut self,
-        node: &Node,
+        node: &Node<Option<Child>>,
     ) -> Result<(LinearAddress, AreaIndex), FileIoError> {
         let stored_area_size = Self::stored_len(node);
 
@@ -866,7 +866,7 @@ pub mod test_utils {
     // Helper function to wrap the node in a StoredArea and write it to the given offset. Returns the size of the area on success.
     pub fn test_write_new_node<S: WritableStorage>(
         nodestore: &NodeStore<Committed, S>,
-        node: &Node,
+        node: &Node<Option<Child>>,
         offset: u64,
     ) -> u64 {
         let node_length = NodeStore::<Arc<ImmutableProposal>, FileBacked>::stored_len(node);

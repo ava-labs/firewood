@@ -22,6 +22,7 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
+use crate::node::branch::LockedChild;
 #[cfg(not(feature = "branch_factor_256"))]
 //use crate::node::branch::BranchConstants;
 use crate::node::branch::ReadSerializable;
@@ -34,24 +35,35 @@ use integer_encoding::{VarInt, VarIntReader as _};
 pub use leaf::LeafNode;
 use std::fmt::Debug;
 use std::io::{Error, Read, Write};
+use std::sync::{Arc, Mutex};
 
 pub mod branch;
 mod leaf;
 pub mod path;
 pub mod persist;
-/// A node, either a Branch or Leaf
 
+
+pub enum Root {
+    Branch(Box<BranchNode<Option<LockedChild>>>),
+    /// This node is a [`LeafNode`]
+    Leaf(LeafNode), 
+}
+
+/// A node, either a Branch or Leaf
 // TODO: explain why Branch is boxed but Leaf is not
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner)]
 #[repr(C)]
-pub enum Node {
+pub enum Node<T>{
     /// This node is a [`BranchNode`]
-    Branch(Box<BranchNode<Option<Child>>>),
+    //Branch(Box<BranchNode<Option<Child>>>),
+    Branch(Box<BranchNode<T>>),
+    ///
+    //Root(Box<BranchNode<Option<LockedChild>>>),
     /// This node is a [`LeafNode`]
     Leaf(LeafNode),
 }
 
-impl Default for Node {
+impl <T> Default for Node<T> {
     fn default() -> Self {
         Node::Leaf(LeafNode {
             partial_path: Path::new(),
@@ -60,13 +72,13 @@ impl Default for Node {
     }
 }
 
-impl From<BranchNode<Option<Child>>> for Node {
-    fn from(branch: BranchNode<Option<Child>>) -> Self {
+impl <T> From<BranchNode<T>> for Node<T> {
+    fn from(branch: BranchNode<T>) -> Self {
         Node::Branch(Box::new(branch))
     }
 }
 
-impl From<LeafNode> for Node {
+impl <T> From<LeafNode> for Node<T> {
     fn from(leaf: LeafNode) -> Self {
         Node::Leaf(leaf)
     }
@@ -188,7 +200,7 @@ impl ExtendableBytes for ByteCounter {
     }
 }
 
-impl Node {
+impl Node<Option<Child>> {
     /// Returns the partial path of the node.
     #[must_use]
     pub fn partial_path(&self) -> &Path {
@@ -545,7 +557,7 @@ than 126 bytes as the length would be encoded in multiple bytes.
     )]
     // When ethhash is enabled, we don't actually check the `expected_length`
     fn test_serialize_deserialize(
-        node: Node,
+        node: Node<Option<Child>>,
         #[cfg_attr(
             any(feature = "branch_factor_256", feature = "ethhash"),
             expect(unused_variables)
