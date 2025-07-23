@@ -35,12 +35,7 @@ impl<T: Hashable> Preimage for T {
     fn write(&self, buf: &mut impl HasUpdate) {
         let children = self.children();
 
-        // This will use auto-vectorization to sum the non-zero children
-        let num_children = children
-            .iter()
-            .map(Option::is_some)
-            .map(u64::from)
-            .sum::<u64>();
+        let num_children = children.iter().filter(|c| c.is_some()).count() as u64;
 
         add_varint_to_buf(buf, num_children);
 
