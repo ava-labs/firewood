@@ -9,7 +9,6 @@ use crate::nodestore::alloc::{AREA_SIZES, AreaIndex, FreeAreaWithMetadata, size_
 use crate::{
     CheckerError, Committed, HashType, HashedNodeReader, IntoHashType, LinearAddress, Node,
     NodeReader, NodeStore, Path, RootReader, StoredAreaParent, TrieNodeParent, WritableStorage,
-    hash_node,
 };
 
 use std::cmp::Ordering;
@@ -55,7 +54,6 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                 self.visit_trie(
                     root_address,
                     root_hash.into_hash_type(),
-                    Path::new(),
                     &mut visited,
                     opt.hash_check,
                 )?;
@@ -78,12 +76,30 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         Ok(())
     }
 
-    /// Recursively traverse the trie from the given root node.
     fn visit_trie(
+        &self,
+        root_address: LinearAddress,
+        root_hash: HashType,
+        visited: &mut LinearAddressRangeSet,
+        hash_check: bool,
+    ) -> Result<(), CheckerError> {
+        self.visit_trie_helper(
+            root_address,
+            root_hash,
+            Path::new(),
+            false,
+            visited,
+            hash_check,
+        )
+    }
+
+    /// Recursively traverse the trie from the given root node.
+    fn visit_trie_helper(
         &self,
         subtree_root_address: LinearAddress,
         subtree_root_hash: HashType,
         path_prefix: Path,
+        has_peers: bool,
         visited: &mut LinearAddressRangeSet,
         hash_check: bool,
     ) -> Result<(), CheckerError> {
@@ -94,6 +110,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         // iterate over the children
         if let Node::Branch(branch) = node.as_ref() {
             // this is an internal node, traverse the children
+            let num_children = branch.children_iter().count();
             for (nibble, (address, hash)) in branch.children_iter() {
                 self.check_area_aligned(
                     address,
@@ -105,10 +122,11 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                 let mut child_path_prefix = path_prefix.clone();
                 child_path_prefix.0.extend_from_slice(node.partial_path());
                 child_path_prefix.0.push(nibble as u8);
-                self.visit_trie(
+                self.visit_trie_helper(
                     address,
                     hash.clone(),
                     child_path_prefix,
+                    num_children != 1,
                     visited,
                     hash_check,
                 )?;
@@ -117,7 +135,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
         // hash check - at this point all children hashes have been verified
         if hash_check {
-            let hash = hash_node(&node, &path_prefix);
+            let hash = Self::compute_node_hash(&node, &path_prefix, has_peers);
             if hash != subtree_root_hash {
                 let mut path = path_prefix.clone();
                 path.0.extend_from_slice(node.partial_path());
@@ -349,7 +367,7 @@ mod test {
         // verify that all of the space is accounted for - since there is no free area
         let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
         nodestore
-            .visit_trie(root_addr, root_hash, Path::new(), &mut visited, true)
+            .visit_trie(root_addr, root_hash, &mut visited, true)
             .unwrap();
         let complement = visited.complement();
         assert_eq!(complement.into_iter().collect::<Vec<_>>(), vec![]);
@@ -380,7 +398,7 @@ mod test {
         // verify that all of the space is accounted for - since there is no free area
         let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
         let err = nodestore
-            .visit_trie(root_addr, root_hash, Path::new(), &mut visited, true)
+            .visit_trie(root_addr, root_hash, &mut visited, true)
             .unwrap_err();
         assert!(matches!(
         err,

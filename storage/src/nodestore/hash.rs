@@ -10,7 +10,9 @@ use crate::hashednode::hash_node;
 use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::Node;
-use crate::{Child, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorage, SharedNode};
+use crate::{
+    Child, HashType, MaybePersistedNode, NodeStore, Parentable, Path, ReadableStorage, SharedNode,
+};
 
 use super::NodeReader;
 #[cfg(feature = "ethhash")]
@@ -189,5 +191,20 @@ where
         let hash = hash_node(&node, path_prefix);
 
         Ok((SharedNode::new(node).into(), hash))
+    }
+}
+
+impl<T: Parentable, S: ReadableStorage> NodeStore<T, S> {
+    pub(crate) fn compute_node_hash(node: &Node, path_prefix: &Path, have_peers: bool) -> HashType {
+        if cfg!(feature = "ethhash") && path_prefix.0.len() == 65 && !have_peers {
+            let mut fake_root = node.clone();
+            fake_root.update_partial_path(Path::from_nibbles_iterator(
+                std::iter::once(*path_prefix.0.last().expect("path_prefix not empty"))
+                    .chain(fake_root.partial_path().0.iter().copied()),
+            ));
+            return hash_node(&fake_root, path_prefix);
+        }
+
+        hash_node(node, path_prefix)
     }
 }
