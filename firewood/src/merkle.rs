@@ -20,8 +20,9 @@ use crate::range_proof::RangeProof;
 #[cfg(test)]
 use crate::stream::MerkleKeyValueStream;
 use crate::stream::PathIterator;
+use crate::v2::api::FrozenProof;
 #[cfg(test)]
-use crate::v2::api;
+use crate::v2::api::{self, FrozenRangeProof};
 use firewood_storage::{
     BranchNode, Child, FileIoError, HashType, Hashable, HashedNodeReader, ImmutableProposal,
     IntoHashType, LeafNode, MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore,
@@ -43,9 +44,8 @@ use std::sync::Arc;
 /// Keys are boxed u8 slices
 pub type Key = Box<[u8]>;
 
-/// Values are vectors
-/// TODO: change to Box<[u8]>
-pub type Value = Vec<u8>;
+/// Values are boxed u8 slices
+pub type Value = Box<[u8]>;
 
 // convert a set of nibbles into a printable string
 // panics if there is a non-nibble byte in the set
@@ -178,7 +178,7 @@ impl<T: TrieReader> Merkle<T> {
 
     /// Returns a proof that the given key has a certain value,
     /// or that the key isn't in the trie.
-    pub fn prove(&self, key: &[u8]) -> Result<Proof<ProofNode>, ProofError> {
+    pub fn prove(&self, key: &[u8]) -> Result<FrozenProof, ProofError> {
         let Some(root) = self.root() else {
             return Err(ProofError::Empty);
         };
@@ -216,7 +216,7 @@ impl<T: TrieReader> Merkle<T> {
             });
         }
 
-        Ok(Proof(proof.into_boxed_slice()))
+        Ok(Proof::new(proof.into_boxed_slice()))
     }
 
     /// Verify a proof that a key has a certain value, or that the key isn't in the trie.
@@ -258,7 +258,7 @@ impl<T: TrieReader> Merkle<T> {
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
         limit: Option<NonZeroUsize>,
-    ) -> Result<RangeProof<Box<[u8]>, Box<[u8]>, ProofNode>, api::Error> {
+    ) -> Result<FrozenRangeProof, api::Error> {
         if let (Some(k1), Some(k2)) = (&start_key, &end_key) {
             if k1 > k2 {
                 return Err(api::Error::InvalidRange {
@@ -302,7 +302,7 @@ impl<T: TrieReader> Merkle<T> {
         let start_proof = self.prove(&first_key)?;
         let limit = limit.map(|old_limit| old_limit.get().saturating_sub(1));
 
-        let mut key_values = vec![(first_key, first_value.into_boxed_slice())];
+        let mut key_values = vec![(first_key, first_value)];
 
         // we stop streaming if either we hit the limit or the key returned was larger
         // than the largest key requested
@@ -323,8 +323,7 @@ impl<T: TrieReader> Merkle<T> {
                     // keep going if the key returned is less than the last key requested
                     ready(&*kv.0 <= last_key)
                 })
-                .map(|kv| kv.map(|(k, v)| (k, v.into())))
-                .try_collect::<Vec<(Box<[u8]>, Box<[u8]>)>>()
+                .try_collect::<Vec<(Key, Value)>>()
                 .await?,
         );
 
@@ -342,7 +341,7 @@ impl<T: TrieReader> Merkle<T> {
         })
     }
 
-    pub(crate) fn get_value(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, FileIoError> {
+    pub(crate) fn get_value(&self, key: &[u8]) -> Result<Option<Value>, FileIoError> {
         let Some(node) = self.get_node(key)? else {
             return Ok(None);
         };
@@ -390,7 +389,7 @@ impl<T: HashedNodeReader> Merkle<T> {
 
                     let inserted = seen.insert(format!("{child}"));
                     if inserted {
-                        writeln!(writer, "  {node} -> {child}[label=\"{childidx}\"]")
+                        writeln!(writer, "  {node} -> {child}[label=\"{childidx:x}\"]")
                             .map_err(|e| FileIoError::from_generic_no_file(e, "write branch"))?;
                         self.dump_node(&child, child_hash, seen, writer)?;
                     } else {
@@ -398,7 +397,7 @@ impl<T: HashedNodeReader> Merkle<T> {
                         // Indicate this with a red edge.
                         writeln!(
                             writer,
-                            "  {node} -> {child}[label=\"{childidx} (dup)\" color=red]"
+                            "  {node} -> {child}[label=\"{childidx:x} (dup)\" color=red]"
                         )
                         .map_err(|e| FileIoError::from_generic_no_file(e, "write branch"))?;
                     }
@@ -469,7 +468,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 
     /// Map `key` to `value` in the trie.
     /// Each element of key is 2 nibbles.
-    pub fn insert(&mut self, key: &[u8], value: Box<[u8]>) -> Result<(), FileIoError> {
+    pub fn insert(&mut self, key: &[u8], value: Value) -> Result<(), FileIoError> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
         let root = self.nodestore.mut_root();
@@ -497,7 +496,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         &mut self,
         mut node: Node,
         key: &[u8],
-        value: Box<[u8]>,
+        value: Value,
     ) -> Result<Node, FileIoError> {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`
@@ -633,7 +632,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Returns the value that was removed, if any.
     /// Otherwise returns `None`.
     /// Each element of `key` is 2 nibbles.
-    pub fn remove(&mut self, key: &[u8]) -> Result<Option<Box<[u8]>>, FileIoError> {
+    pub fn remove(&mut self, key: &[u8]) -> Result<Option<Value>, FileIoError> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
         let root = self.nodestore.mut_root();
@@ -658,12 +657,11 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Removes the value associated with the given `key` from the subtrie rooted at `node`.
     /// Returns the new root of the subtrie and the value that was removed, if any.
     /// Each element of `key` is 1 nibble.
-    #[expect(clippy::type_complexity)]
     fn remove_helper(
         &mut self,
         mut node: Node,
         key: &[u8],
-    ) -> Result<(Option<Node>, Option<Box<[u8]>>), FileIoError> {
+    ) -> Result<(Option<Node>, Option<Value>), FileIoError> {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`
         // 2. The key is above the node (i.e. its ancestor)
