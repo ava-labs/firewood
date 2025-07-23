@@ -16,7 +16,8 @@ pub use crate::v2::api::{Batch, BatchOp};
 use crate::manager::{RevisionManager, RevisionManagerConfig};
 use async_trait::async_trait;
 use firewood_storage::{
-    Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore, TrieHash,
+    CheckOpt, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore,
+    TrieHash,
 };
 use metrics::{counter, describe_counter};
 use std::io::Write;
@@ -331,6 +332,12 @@ impl Db {
     pub fn metrics(&self) -> Arc<DbMetrics> {
         self.metrics.clone()
     }
+
+    /// Check the database for consistency
+    pub async fn check(&self, opt: CheckOpt) -> Result<(), firewood_storage::CheckerError> {
+        let latest_rev_nodestore = self.manager.current_revision();
+        latest_rev_nodestore.check(opt)
+    }
 }
 
 #[derive(Debug)]
@@ -481,6 +488,10 @@ mod test {
 
     use std::ops::{Deref, DerefMut};
     use std::path::PathBuf;
+
+    use firewood_storage::CheckOpt;
+    use firewood_storage::logger::trace;
+    use rand::rng;
 
     use crate::db::Db;
     use crate::v2::api::{Db as _, DbView as _, Error, Proposal as _};
@@ -769,6 +780,45 @@ mod test {
 
         for (k, v) in keys.into_iter().zip(vals.into_iter()) {
             assert_eq!(revision.val(k).await.unwrap().unwrap(), v);
+        }
+    }
+
+    #[tokio::test]
+    async fn fuzz_checker() {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        let _ = env_logger::Builder::new().is_test(true).try_init();
+
+        let seed = std::env::var("FIREWOOD_TEST_SEED")
+            .ok()
+            .map_or_else(
+                || None,
+                |s| Some(str::parse(&s).expect("couldn't parse FIREWOOD_TEST_SEED; must be a u64")),
+            )
+            .unwrap_or_else(|| rng().random());
+
+        eprintln!("Seed {seed}: to rerun with this data, export FIREWOOD_TEST_SEED={seed}");
+        let rng = std::cell::RefCell::new(StdRng::seed_from_u64(seed));
+
+        let db = testdb().await;
+
+        for _ in 0..10 {
+            let batch = (0..10).fold(vec![], |mut batch, _| {
+                let key: [u8; 32] = rng.borrow_mut().random();
+                let value: [u8; 32] = rng.borrow_mut().random();
+                batch.push(BatchOp::Put { key, value });
+                trace!("batch: {batch:?}");
+                batch
+            });
+            let proposal = db.propose(batch).await.unwrap();
+            proposal.commit().await.unwrap();
+
+            let hash_check = rng.borrow_mut().random();
+            if let Err(e) = db.check(CheckOpt { hash_check }).await {
+                db.dump(&mut std::io::stdout()).await.unwrap();
+                panic!("error: {e}");
+            }
         }
     }
 
