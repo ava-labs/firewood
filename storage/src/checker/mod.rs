@@ -281,7 +281,7 @@ mod test {
             value: Box::new([3, 4, 5]),
         });
         let leaf_addr = LinearAddress::new(high_watermark).unwrap();
-        let leaf_hash = hash_node(&leaf, &Path::from_nibbles_iterator([0u8, 1].into_iter()));
+        let leaf_hash = hash_node(&leaf, &Path::from_nibbles_iterator([0u8, 0, 1].into_iter()));
         let leaf_area = test_write_new_node(nodestore, &leaf, high_watermark);
         high_watermark += leaf_area;
 
