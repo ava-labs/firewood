@@ -180,12 +180,16 @@ impl<T: Hashable> Preimage for T {
                 };
             }
 
-            if !is_account {
-                if let Some(digest) = self.value_digest() {
-                    rlp.append(&*digest);
-                } else {
-                    rlp.append_empty_data();
-                }
+            // For branch nodes, we need to append the value as the 17th element in the RLP list.
+            // However, account nodes (depth 32) handle values differently - they don't store
+            // the value directly in the branch node, but rather in the account structure itself.
+            // This is because account nodes have special handling where the storage root hash
+            // gets replaced in the account data structure during serialization.
+            let digest = (!is_account).then(|| self.value_digest()).flatten();
+            if let Some(digest) = digest {
+                rlp.append(&*digest);
+            } else {
+                rlp.append_empty_data();
             }
             let bytes = rlp.out();
             trace!("pass 1 bytes {:02X?}", hex::encode(&bytes));
