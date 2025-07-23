@@ -113,7 +113,7 @@ To use these metrics, you can:
 
 ```go
 gatherer := ffi.Gatherer{}
-gathering, err := gatherer.Gather()
+metrics, err := gatherer.Gather()
 ```
 
 ### Logs
