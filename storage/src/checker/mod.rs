@@ -299,7 +299,7 @@ mod test {
         let leaf_hash = hash_node(&leaf, &Path::from([2, 0, 3, 1]));
         high_watermark += test_write_new_node(nodestore, &leaf, high_watermark);
 
-        let mut branch_children: [Option<Child>; BranchNode::MAX_CHILDREN] = Default::default();
+        let mut branch_children = BranchNode::empty_children();
         branch_children[1] = Some(Child::AddressWithHash(leaf_addr, leaf_hash));
         let branch = Node::Branch(Box::new(BranchNode {
             partial_path: Path::from([3]),
@@ -310,7 +310,7 @@ mod test {
         let branch_hash = hash_node(&branch, &Path::from([2, 0]));
         high_watermark += test_write_new_node(nodestore, &branch, high_watermark);
 
-        let mut root_children: [Option<Child>; BranchNode::MAX_CHILDREN] = Default::default();
+        let mut root_children = BranchNode::empty_children();
         root_children[0] = Some(Child::AddressWithHash(branch_addr, branch_hash));
         let root = Node::Branch(Box::new(BranchNode {
             partial_path: Path::from([2]),
