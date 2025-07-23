@@ -42,7 +42,7 @@ pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use node::path::{NibblesIterator, Path};
 pub use node::{
-    BranchNode, BranchConstants, Child, LeafNode, Node, PathIterItem,
+    BranchNode, BranchConstants, Child, LeafNode, Node, PathIterItem, NodeOptionTrait,
     branch::{HashType, IntoHashType},
 };
 pub use nodestore::{

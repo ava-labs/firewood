@@ -58,14 +58,27 @@ pub enum Node<T: NodeOptionTrait> {
     Leaf(LeafNode),
 }
 
+/// TODO
 pub trait NodeOptionTrait {
+    /// TODO
     fn get_child_option(&self) -> &Option<Child>;
+
+    ///
+    fn set_child_option(&mut self, child: &Option<Child>);
 }
 
 impl NodeOptionTrait for Option<Child> {
     fn get_child_option(&self) -> &Option<Child> {
         return self;
     }
+
+    fn set_child_option(&mut self, child: &Option<Child>) {
+        *self = child.clone();
+
+        // TODO
+        //*self = *child;
+    }
+
 }
 
 impl<T: NodeOptionTrait> Default for Node<T> {
@@ -206,41 +219,6 @@ impl ExtendableBytes for ByteCounter {
 }
 
 impl Node<Option<Child>> {
-    /// Returns the partial path of the node.
-    #[must_use]
-    pub fn partial_path(&self) -> &Path {
-        match self {
-            Node::Branch(b) => &b.partial_path,
-            Node::Leaf(l) => &l.partial_path,
-        }
-    }
-
-    /// Updates the partial path of the node to `partial_path`.
-    pub fn update_partial_path(&mut self, partial_path: Path) {
-        match self {
-            Node::Branch(b) => b.partial_path = partial_path,
-            Node::Leaf(l) => l.partial_path = partial_path,
-        }
-    }
-
-    /// Updates the value of the node to `value`.
-    pub fn update_value(&mut self, value: Box<[u8]>) {
-        match self {
-            Node::Branch(b) => b.value = Some(value),
-            Node::Leaf(l) => l.value = value,
-        }
-    }
-
-    /// Returns Some(value) inside the node, or None if the node is a branch
-    /// with no value.
-    #[must_use]
-    pub fn value(&self) -> Option<&[u8]> {
-        match self {
-            Node::Branch(b) => b.value.as_deref(),
-            Node::Leaf(l) => Some(&l.value),
-        }
-    }
-
     /// Given a [Node], returns a set of bytes to write to storage
     /// The format is as follows:
     ///
@@ -462,6 +440,70 @@ impl Node<Option<Child>> {
             }
         }
     }
+}
+
+impl <U> Node<U> where U: NodeOptionTrait {
+    /// Returns the partial path of the node.
+    #[must_use]
+    pub fn partial_path(&self) -> &Path {
+        match self {
+            Node::Branch(b) => &b.partial_path,
+            Node::Leaf(l) => &l.partial_path,
+        }
+    }
+
+    /// Updates the partial path of the node to `partial_path`.
+    pub fn update_partial_path(&mut self, partial_path: Path) {
+        match self {
+            Node::Branch(b) => b.partial_path = partial_path,
+            Node::Leaf(l) => l.partial_path = partial_path,
+        }
+    }
+
+    /// Updates the value of the node to `value`.
+    pub fn update_value(&mut self, value: Box<[u8]>) {
+        match self {
+            Node::Branch(b) => b.value = Some(value),
+            Node::Leaf(l) => l.value = value,
+        }
+    }
+
+    /// Returns Some(value) inside the node, or None if the node is a branch
+    /// with no value.
+    #[must_use]
+    pub fn value(&self) -> Option<&[u8]> {
+        match self {
+            Node::Branch(b) => b.value.as_deref(),
+            Node::Leaf(l) => Some(&l.value),
+        }
+    }
+
+    /// TODO
+    pub fn convert_child_option(&self) -> Node<Option<Child>> {
+        match self {
+            Node::Branch(b) => {
+                let mut new_children = [ const {None}; BranchConstants::MAX_CHILDREN];
+                for (i, entry) in b.children.iter().enumerate() {
+                    match entry.get_child_option() {
+                        Some(c) => { new_children[i] = Some(c.clone()); },
+                        None => { new_children[i] = None; }
+                    }
+                }
+
+                Node::Branch(Box::new(BranchNode::<Option<Child>> {
+                    partial_path: b.partial_path.clone(),
+                    value: b.value.clone(),
+                    //value: Some(Box::from(&b.value[..])),
+                    children: new_children,
+                    //[const { None }; BranchConstants::MAX_CHILDREN]
+                }))
+            },
+            Node::Leaf(l) => {               
+                Node::Leaf(LeafNode { partial_path: l.partial_path.clone(), value: l.value.clone()})
+            }
+        }
+    }
+
 }
 
 /// A path iterator item, which has the key nibbles up to this point,

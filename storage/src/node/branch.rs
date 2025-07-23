@@ -340,7 +340,7 @@ impl BranchConstants {
 
     /// The maximum number of children in a [`BranchNode`]
     #[cfg(not(feature = "branch_factor_256"))]
-    pub const MAX_CHILDREN: usize = 16;    
+    pub const MAX_CHILDREN: usize = 16;
 }
 
 /*
@@ -350,13 +350,13 @@ pub struct LockedChild {
 }
 */
 
-/* 
+/*
 impl PartialEq for LockedChild {
     fn eq(&self, other: &Self) -> bool {
         let binding = self.child.clone();
         let guard = binding.lock().unwrap();
         let this_child = guard.clone();
-        drop(guard); // Explicit drop 
+        drop(guard); // Explicit drop
         this_child == *other.child.clone().lock().unwrap()
         // TODO: Do I need to worry about lock ordering?
         // *self.child.clone().lock().unwrap() == *other.child.clone().lock().unwrap()
@@ -372,7 +372,7 @@ impl Debug for BranchNode<Option<LockedChild>> {
 }
 */
 
-impl <T: NodeOptionTrait> Debug for BranchNode<T>  {
+impl<T: NodeOptionTrait> Debug for BranchNode<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "[BranchNode")?;
         write!(f, r#" path="{:?}""#, self.partial_path)?;
@@ -439,7 +439,7 @@ impl BranchNode<Option<Child>> {
     }
 }
 
-impl <T> BranchNode <T> {
+impl<T: NodeOptionTrait> BranchNode<T> {
     /// The maximum number of children in a [`BranchNode`]
     #[cfg(feature = "branch_factor_256")]
     pub const MAX_CHILDREN: usize = 256;
@@ -447,7 +447,7 @@ impl <T> BranchNode <T> {
     /// The maximum number of children in a [`BranchNode`]
     #[cfg(not(feature = "branch_factor_256"))]
     pub const MAX_CHILDREN: usize = 16;
- 
+
     /// Returns the address of the child at the given index.
     /// Panics if `child_index` >= [`BranchNode::MAX_CHILDREN`].
     #[must_use]
@@ -459,13 +459,19 @@ impl <T> BranchNode <T> {
 
     /// Update the child at `child_index` to be `new_child_addr`.
     /// If `new_child_addr` is None, the child is removed.
-    pub fn update_child(&mut self, child_index: u8, new_child: T) {
+    //pub fn update_child(&mut self, child_index: u8, new_child: T) {
+    pub fn update_child(&mut self, child_index: u8, new_child: Option<Child>) {
         let child = self
             .children
             .get_mut(child_index as usize)
             .expect("child_index is in bounds");
 
-        *child = new_child;
+        //*child = new_child;
+        child.set_child_option(&new_child);
+        //*child = new_child;
+        // TODO:
+        // Implement set function
+        //todo!();
     }
 }
 
