@@ -7,7 +7,6 @@ use crate::range_proof::RangeProof;
 type KeyValuePairs = Vec<(Box<[u8]>, Box<[u8]>)>;
 
 #[tokio::test]
-#[ignore = "broken tests not yet validated"]
 async fn range_proof_invalid_bounds() {
     let merkle = create_in_memory_merkle().hash();
 
@@ -28,7 +27,6 @@ async fn range_proof_invalid_bounds() {
 }
 
 #[tokio::test]
-#[ignore = "broken tests not yet validated"]
 async fn full_range_proof() {
     let merkle = init_merkle((u8::MIN..=u8::MAX).map(|k| ([k], [k])));
 
@@ -42,7 +40,6 @@ async fn full_range_proof() {
 }
 
 #[tokio::test]
-#[ignore = "broken tests not yet validated"]
 async fn single_value_range_proof() {
     const RANDOM_KEY: u8 = 42;
 
@@ -57,7 +54,6 @@ async fn single_value_range_proof() {
 }
 
 #[test]
-#[ignore = "broken tests not yet validated"]
 fn shared_path_proof() {
     let key1 = b"key1";
     let value1 = b"1";
@@ -80,7 +76,6 @@ fn shared_path_proof() {
 
 // this was a specific failing case
 #[test]
-#[ignore = "broken tests not yet validated"]
 fn shared_path_on_insert() {
     init_merkle([
         (
@@ -103,7 +98,6 @@ fn shared_path_on_insert() {
 }
 
 #[test]
-#[ignore = "broken tests not yet validated"]
 fn overwrite_leaf() {
     let key = &[0x00];
     let val = &[1];
@@ -127,7 +121,6 @@ fn overwrite_leaf() {
 }
 
 #[test]
-#[ignore = "broken tests not yet validated"]
 fn single_key_proof_with_one_node() {
     let key = b"key";
     let value = b"value";
@@ -141,7 +134,6 @@ fn single_key_proof_with_one_node() {
 }
 
 #[test]
-#[ignore = "broken tests not yet validated"]
 fn two_key_proof_without_shared_path() {
     let key1 = &[0x00];
     let key2 = &[0xff];
@@ -158,7 +150,6 @@ fn two_key_proof_without_shared_path() {
 }
 
 #[test]
-#[ignore = "broken tests not yet validated"]
 fn test_proof() {
     let set = fixed_and_pseudorandom_data(500);
     let mut items = set.iter().collect::<Vec<_>>();
@@ -176,7 +167,6 @@ fn test_proof() {
 
 #[test]
 /// Verify the proofs that end with leaf node with the given key.
-#[ignore = "broken tests not yet validated"]
 fn test_proof_end_with_leaf() {
     let merkle = init_merkle([
         ("do", "verb"),
@@ -198,7 +188,6 @@ fn test_proof_end_with_leaf() {
 
 #[test]
 /// Verify the proofs that end with branch node with the given key.
-#[ignore = "broken tests not yet validated"]
 fn test_proof_end_with_branch() {
     let items = [
         ("d", "verb"),
@@ -218,7 +207,6 @@ fn test_proof_end_with_branch() {
 }
 
 #[test]
-#[ignore = "broken tests not yet validated"]
 fn test_bad_proof() {
     let set = fixed_and_pseudorandom_data(800);
     let mut items = set.iter().collect::<Vec<_>>();
@@ -258,7 +246,6 @@ fn test_missing_key_proof() {
 }
 
 #[test]
-#[ignore = "broken tests not yet validated"]
 fn test_empty_tree_proof() {
     let items: Vec<(&str, &str)> = Vec::new();
     let merkle = init_merkle(items);
@@ -312,7 +299,6 @@ fn test_range_proof() {
 #[test]
 // Tests a few cases which the proof is wrong.
 // The prover is expected to detect the error.
-#[ignore = "broken tests not yet validated"]
 fn test_bad_range_proof() {
     let set = fixed_and_pseudorandom_data(4096);
     let mut items = set.iter().collect::<Vec<_>>();
@@ -789,7 +775,6 @@ fn test_empty_range_proof() {
 #[test]
 // Focuses on the small trie with embedded nodes. If the gapped
 // node is embedded in the trie, it should be detected too.
-#[ignore = "broken tests not yet validated"]
 fn test_gapped_range_proof() {
     let mut items = Vec::new();
     // Sorted entries
