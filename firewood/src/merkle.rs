@@ -10,8 +10,8 @@ use crate::stream::{MerkleKeyValueStream, PathIterator};
 use crate::v2::api::{self, FrozenProof, FrozenRangeProof, KeyType, ValueType};
 use firewood_storage::{
     BranchNode, Child, FileIoError, HashType, Hashable, HashedNodeReader, ImmutableProposal,
-    IntoHashType, LeafNode, MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore,
-    Parentable, Path, ReadableStorage, SharedNode, TrieHash, TrieReader, ValueDigest,
+    IntoHashType, LeafNode, MaybePersistedNode, MemStore, MutableProposal, NibblesIterator, Node,
+    NodeStore, Parentable, Path, ReadableStorage, SharedNode, TrieHash, TrieReader, ValueDigest,
 };
 use futures::{StreamExt, TryStreamExt};
 use metrics::counter;
@@ -154,7 +154,6 @@ impl<T: TrieReader> Merkle<T> {
         self.nodestore.root_node()
     }
 
-    #[cfg(test)]
     pub(crate) const fn nodestore(&self) -> &T {
         &self.nodestore
     }
@@ -240,7 +239,7 @@ impl<T: TrieReader> Merkle<T> {
         last_key: Option<impl KeyType>,
         root_hash: &TrieHash,
         proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection>,
-    ) -> Result<(), ProofError> {
+    ) -> api::Result<()> {
         let first_key = first_key.map(Path::from).unwrap_or_default();
         let last_key = last_key.map(Path::from).unwrap_or_default();
 
@@ -423,10 +422,34 @@ impl<T: TrieReader> Merkle<T> {
 
     fn verify_reconstructed_trie_root(
         &self,
-        _proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection>,
-        _root_hash: &TrieHash,
-    ) -> Result<(), ProofError> {
-        todo!()
+        proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection>,
+        root_hash: &TrieHash,
+    ) -> api::Result<()> {
+        // Create in-memory trie for reconstruction
+        let memstore = MemStore::new(vec![]);
+        let nodestore = NodeStore::new_empty_proposal(memstore.into());
+        let mut merkle = Merkle { nodestore };
+
+        // Insert all key-value pairs from the range proof
+        for (key, value) in proof.key_values() {
+            merkle
+                .insert(key.as_ref(), value.as_ref().into())
+                .map_err(ProofError::IO)?;
+        }
+
+        // Hash the trie and get root
+        let merkle: Merkle<NodeStore<Arc<ImmutableProposal>, _>> = merkle.try_into()?;
+        let computed_root = merkle.nodestore().root_hash().ok_or(ProofError::Empty)?;
+
+        // Compare with expected root
+        if computed_root == *root_hash {
+            Ok(())
+        } else {
+            Err(api::Error::IncorrectRootHash {
+                provided: root_hash.clone(),
+                current: computed_root,
+            })
+        }
     }
 
     /// Get the value for the given key from the proof key-values. If not found,
