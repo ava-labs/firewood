@@ -521,6 +521,7 @@ fn fwdctl_dump_with_hex() -> Result<()> {
 
 #[test]
 #[serial]
+#[cfg(not(feature = "ethhash"))]
 fn fwdctl_check_empty_db() -> Result<()> {
     Command::cargo_bin(PRG)?
         .arg("create")
@@ -540,6 +541,7 @@ fn fwdctl_check_empty_db() -> Result<()> {
 
 #[test]
 #[serial]
+#[cfg(not(feature = "ethhash"))]
 fn fwdctl_check_db_with_data() -> Result<()> {
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng, rng};

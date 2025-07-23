@@ -776,19 +776,22 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::indexing_slicing)]
+#[expect(clippy::unwrap_used)]
 pub mod test_utils {
     use super::*;
 
+    #[cfg(not(feature = "ethhash"))]
     use crate::node::Node;
     use crate::nodestore::{Committed, NodeStore, NodeStoreHeader};
 
     // Helper function to wrap the node in a StoredArea and write it to the given offset. Returns the size of the area on success.
+    #[cfg(not(feature = "ethhash"))]
     pub fn test_write_new_node<S: WritableStorage>(
         nodestore: &NodeStore<Committed, S>,
         node: &Node,
         offset: u64,
     ) -> u64 {
+        #![expect(clippy::indexing_slicing)]
         let mut encoded_node = Vec::new();
         node.as_bytes(0, &mut encoded_node);
         let encoded_node_len = encoded_node.len() as u64;
@@ -831,6 +834,7 @@ pub mod test_utils {
     }
 
     // Helper function to write a random stored area to the given offset.
+    #[cfg(not(feature = "ethhash"))]
     pub(crate) fn test_write_zeroed_area<S: WritableStorage>(
         nodestore: &NodeStore<Committed, S>,
         size: u64,

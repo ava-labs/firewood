@@ -250,6 +250,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 }
 
 #[cfg(test)]
+#[cfg(not(feature = "ethhash"))]
 mod test {
     #![expect(clippy::unwrap_used)]
     #![expect(clippy::indexing_slicing)]
