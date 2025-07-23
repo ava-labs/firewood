@@ -216,7 +216,7 @@ impl<T: Hashable> Preimage for T {
                                     self.partial_path().collect::<Box<_>>(),
                                     true,
                                 ));
-                                rlp.append_raw(&rlp_bytes, 1);
+                                rlp.append_raw(rlp_bytes, 1);
                                 let bytes = rlp.out();
                                 TrieHash::from(Keccak256::digest(bytes))
                             }
