@@ -26,7 +26,7 @@ pub struct Options {
     pub db: String,
 }
 
-pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
+pub(super) async fn run(opts: &Options) -> api::Result<()> {
     log::debug!("inserting key value pair {opts:?}");
     let cfg = DbConfig::builder().truncate(false);
 

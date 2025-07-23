@@ -3,16 +3,15 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::stream::Empty;
 
 use super::api::{KeyType, ValueType};
-use crate::{
-    merkle::{Key, Value},
-    v2::api::{self, FrozenProof, FrozenRangeProof},
-};
+use crate::merkle::{Key, Value};
+use crate::v2::api::{self, FrozenProof, FrozenRangeProof};
 
 #[derive(Clone, Debug)]
 pub(crate) enum KeyOp<V: ValueType> {
@@ -114,47 +113,53 @@ impl<T> Proposal<T> {
 impl<T: api::DbView + Send + Sync> api::DbView for Proposal<T> {
     // TODO: Replace with the correct stream type for an in-memory proposal implementation
     type Stream<'a>
-        = Empty<Result<(Key, Value), api::Error>>
+        = Empty<api::Result<(Key, Value)>>
     where
         T: 'a;
 
-    async fn root_hash(&self) -> Result<Option<api::HashKey>, api::Error> {
-        todo!();
+    async fn root_hash(&self) -> api::Result<Option<api::HashKey>> {
+        todo!(
+            "Proposal::<T>::root_hash not implemented. TODO: use an in-memory trie to compute the root hash from the delta"
+        );
     }
 
-    async fn val<K: KeyType>(&self, key: K) -> Result<Option<Value>, api::Error> {
+    async fn val<K: KeyType>(&self, key: K) -> api::Result<Option<Value>> {
         // see if this key is in this proposal
-        match self.delta.get(key.as_ref()) {
-            Some(change) => match change {
-                // key in proposal, check for Put or Delete
-                KeyOp::Put(val) => Ok(Some(val.clone())),
-                KeyOp::Delete => Ok(None), // key was deleted in this proposal
-            },
-            None => match &self.base {
-                // key not in this proposal, so delegate to base
-                ProposalBase::Proposal(p) => p.val(key).await,
-                ProposalBase::View(view) => view.val(key).await,
-            },
+        let key = key.as_ref();
+        let mut this = self;
+        // avoid recursion problems by looping over the proposal chain
+        loop {
+            match this.delta.get(key) {
+                Some(change) => {
+                    // key is in `this` proposal, check for Put or Delete
+                    break match change {
+                        KeyOp::Put(val) => Ok(Some(val.clone())),
+                        KeyOp::Delete => Ok(None), // key was deleted in this proposal
+                    };
+                }
+                None => match &this.base {
+                    // key not in this proposal, so delegate to base
+                    ProposalBase::Proposal(p) => this = p,
+                    ProposalBase::View(view) => break view.val(key).await,
+                },
+            }
         }
     }
 
-    async fn single_key_proof<K: KeyType>(&self, _key: K) -> Result<FrozenProof, api::Error> {
+    async fn single_key_proof<K: KeyType>(&self, _key: K) -> api::Result<FrozenProof> {
         todo!();
     }
 
-    async fn range_proof<KT: KeyType, VT>(
+    async fn range_proof<KT: KeyType>(
         &self,
         _first_key: Option<KT>,
         _last_key: Option<KT>,
-        _limit: Option<usize>,
-    ) -> Result<FrozenRangeProof, api::Error> {
+        _limit: Option<NonZeroUsize>,
+    ) -> api::Result<FrozenRangeProof> {
         todo!();
     }
 
-    fn iter_option<K: KeyType>(
-        &self,
-        _first_key: Option<K>,
-    ) -> Result<Self::Stream<'_>, api::Error> {
+    fn iter_option<K: KeyType>(&self, _first_key: Option<K>) -> api::Result<Self::Stream<'_>> {
         todo!();
     }
 }
@@ -166,12 +171,12 @@ impl<T: api::DbView + Send + Sync> api::Proposal for Proposal<T> {
     async fn propose<K: KeyType, V: ValueType>(
         self: Arc<Self>,
         data: api::Batch<K, V>,
-    ) -> Result<Arc<Self::Proposal>, api::Error> {
+    ) -> api::Result<Arc<Self::Proposal>> {
         // find the Arc for this base proposal from the parent
         Ok(Proposal::new(ProposalBase::Proposal(self), data))
     }
 
-    async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
+    async fn commit(self: Arc<Self>) -> api::Result<()> {
         match &self.base {
             ProposalBase::Proposal(base) => base.clone().commit().await,
             ProposalBase::View(_) => Ok(()),

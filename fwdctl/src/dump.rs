@@ -18,7 +18,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
-type KeyFromStream = Option<Result<(Key, Value), api::Error>>;
+type KeyFromStream = Option<api::Result<(Key, Value)>>;
 
 #[derive(Debug, Args)]
 pub struct Options {
@@ -120,7 +120,7 @@ pub struct Options {
     pub hex: bool,
 }
 
-pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
+pub(super) async fn run(opts: &Options) -> api::Result<()> {
     log::debug!("dump database {opts:?}");
 
     let cfg = DbConfig::builder().truncate(false);
