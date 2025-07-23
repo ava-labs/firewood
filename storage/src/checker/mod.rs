@@ -96,6 +96,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                     )),
                 )?;
                 let mut child_path_prefix = path_prefix.clone();
+                child_path_prefix.0.extend_from_slice(node.partial_path());
                 child_path_prefix.0.push(nibble as u8);
                 self.visit_trie(
                     address,
