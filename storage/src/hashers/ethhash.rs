@@ -119,7 +119,7 @@ impl<T: Hashable> Preimage for T {
 
         let child_hashes = self.children();
 
-        let children = children.iter().filter(|c| c.is_some()).count();
+        let children = child_hashes.iter().filter(|c| c.is_some()).count();
 
         if children == 0 {
             // since there are no children, this must be a leaf
