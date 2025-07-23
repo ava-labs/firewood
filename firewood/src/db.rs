@@ -7,10 +7,8 @@
 )]
 
 use crate::merkle::Merkle;
-use crate::proof::{Proof, ProofNode};
-use crate::range_proof::RangeProof;
 use crate::stream::MerkleKeyValueStream;
-use crate::v2::api::{self, KeyType, ValueType};
+use crate::v2::api::{self, FrozenProof, FrozenRangeProof, KeyType, ValueType};
 pub use crate::v2::api::{Batch, BatchOp};
 
 use crate::manager::{RevisionManager, RevisionManagerConfig};
@@ -108,10 +106,7 @@ impl api::DbView for HistoricalRev {
         Ok(merkle.get_value(key.as_ref())?)
     }
 
-    async fn single_key_proof<K: api::KeyType>(
-        &self,
-        key: K,
-    ) -> Result<Proof<ProofNode>, api::Error> {
+    async fn single_key_proof<K: api::KeyType>(&self, key: K) -> Result<FrozenProof, api::Error> {
         let merkle = Merkle::from(self);
         merkle.prove(key.as_ref()).map_err(api::Error::from)
     }
@@ -121,7 +116,7 @@ impl api::DbView for HistoricalRev {
         _first_key: Option<K>,
         _last_key: Option<K>,
         _limit: Option<usize>,
-    ) -> Result<Option<RangeProof<Box<[u8]>, Box<[u8]>, ProofNode>>, api::Error> {
+    ) -> Result<FrozenRangeProof, api::Error> {
         todo!()
     }
 
@@ -389,7 +384,7 @@ impl api::DbView for Proposal<'_> {
         merkle.get_value(key.as_ref()).map_err(api::Error::from)
     }
 
-    async fn single_key_proof<K: KeyType>(&self, key: K) -> Result<Proof<ProofNode>, api::Error> {
+    async fn single_key_proof<K: KeyType>(&self, key: K) -> Result<FrozenProof, api::Error> {
         let merkle = Merkle::from(self.nodestore.clone());
         merkle.prove(key.as_ref()).map_err(api::Error::from)
     }
@@ -399,7 +394,7 @@ impl api::DbView for Proposal<'_> {
         _first_key: Option<K>,
         _last_key: Option<K>,
         _limit: Option<usize>,
-    ) -> Result<Option<api::RangeProof<Box<[u8]>, Box<[u8]>, ProofNode>>, api::Error> {
+    ) -> Result<FrozenRangeProof, api::Error> {
         todo!()
     }
 
