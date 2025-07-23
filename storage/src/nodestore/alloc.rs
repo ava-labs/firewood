@@ -780,12 +780,10 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
 pub mod test_utils {
     use super::*;
 
-    #[cfg(not(feature = "ethhash"))]
     use crate::node::Node;
     use crate::nodestore::{Committed, NodeStore, NodeStoreHeader};
 
     // Helper function to wrap the node in a StoredArea and write it to the given offset. Returns the size of the area on success.
-    #[cfg(not(feature = "ethhash"))]
     pub fn test_write_new_node<S: WritableStorage>(
         nodestore: &NodeStore<Committed, S>,
         node: &Node,
@@ -834,7 +832,6 @@ pub mod test_utils {
     }
 
     // Helper function to write a random stored area to the given offset.
-    #[cfg(not(feature = "ethhash"))]
     pub(crate) fn test_write_zeroed_area<S: WritableStorage>(
         nodestore: &NodeStore<Committed, S>,
         size: u64,
