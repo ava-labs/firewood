@@ -33,7 +33,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// 1. Check the header
     /// 2. traverse the trie and check the nodes
     /// 3. check the free list
-    /// 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
+    /// 4. check leaked areas - what are the spaces between trie nodes and free lists we have traversed?
     /// # Errors
     /// Returns a [`CheckerError`] if the database is inconsistent.
     /// # Panics
@@ -67,9 +67,15 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         }
 
         // 3. check the free list - this can happen in parallel with the trie traversal
+        if let Some(progress_bar) = &opt.progress_bar {
+            progress_bar.println("Traversing the free list...");
+        }
         self.visit_freelist(&mut visited, opt.progress_bar.as_ref())?;
 
-        // 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
+        // 4. check leaked areas - what are the spaces between trie nodes and free lists we have traversed?
+        if let Some(progress_bar) = &opt.progress_bar {
+            progress_bar.println("Checking for leaked areas...");
+        }
         let leaked_ranges = visited.complement();
         if !leaked_ranges.is_empty() {
             warn!("Found leaked ranges: {leaked_ranges}");
