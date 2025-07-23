@@ -485,7 +485,6 @@ mod test {
     use std::path::PathBuf;
 
     use firewood_storage::CheckOpt;
-    use firewood_storage::logger::trace;
     use rand::rng;
 
     use crate::db::Db;
