@@ -23,7 +23,10 @@ use crate::stream::PathIterator;
 #[cfg(test)]
 use crate::v2::api;
 use firewood_storage::{
-    BranchConstants, BranchNode, Child, FileIoError, HashType, Hashable, HashedNodeReader, ImmutableProposal, IntoHashType, LeafNode, MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeOptionTrait, NodeStore, Path, ReadableStorage, SharedNode, TrieReader, ValueDigest
+    BranchConstants, BranchNode, Child, FileIoError, HashType, Hashable, HashedNodeReader,
+    ImmutableProposal, IntoHashType, LeafNode, MaybePersistedNode, MutableProposal,
+    NibblesIterator, Node, NodeOptionTrait, NodeStore, Path, ReadableStorage, SharedNode,
+    TrieReader, ValueDigest,
 };
 #[cfg(test)]
 use futures::{StreamExt, TryStreamExt};
@@ -98,9 +101,9 @@ macro_rules! write_attributes {
 }
 
 /// Returns the value mapped to by `key` in the subtrie rooted at `node`.
-fn get_helper<T: TrieReader>(
+fn get_helper<T: TrieReader, U: NodeOptionTrait>(
     nodestore: &T,
-    node: &Node<Option<Child>>,
+    node: &Node<U>,
     key: &[u8],
 ) -> Result<Option<SharedNode>, FileIoError> {
     // 4 possibilities for the position of the `key` relative to `node`:
@@ -120,10 +123,10 @@ fn get_helper<T: TrieReader>(
             // Case (2) or (4)
             Ok(None)
         }
-        (None, None) => Ok(Some(node.clone().into())), // 1. The node is at `key`
+        (None, None) => Ok(Some(node.into())), // 1. The node is at `key`
         (Some((child_index, remaining_key)), None) => {
             // 3. The key is below the node (i.e. its descendant)
-            match node {
+            match node.convert_child_option() {
                 Node::Leaf(_) => Ok(None),
                 Node::Branch(node) => match node
                     .children

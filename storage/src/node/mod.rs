@@ -31,6 +31,7 @@ pub use branch::{BranchConstants, BranchNode, Child};
 use enum_as_inner::EnumAsInner;
 use integer_encoding::{VarInt, VarIntReader as _};
 pub use leaf::LeafNode;
+use triomphe::Arc;
 use std::fmt::Debug;
 use std::io::{Error, Read, Write};
 
@@ -48,6 +49,12 @@ pub enum Node<T: NodeOptionTrait> {
     Branch(Box<BranchNode<T>>),
     /// This node is a [`LeafNode`]
     Leaf(LeafNode),
+}
+
+impl <T: NodeOptionTrait> From<&Node<T>> for Arc<Node<Option<Child>>> {
+    fn from(item: &Node<T>) -> Self {
+        return Arc::new(item.convert_child_option());
+    }
 }
 
 /// TODO
