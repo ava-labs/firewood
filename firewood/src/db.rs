@@ -808,9 +808,17 @@ mod test {
             // create a batch of 10 random key-value pairs
             let batch = (0..10).fold(vec![], |mut batch, _| {
                 let key: [u8; 32] = rng.borrow_mut().random();
-                let value: [u8; 32] = rng.borrow_mut().random();
-                batch.push(BatchOp::Put { key, value });
-                trace!("batch: {batch:?}");
+                let value: [u8; 8] = rng.borrow_mut().random();
+                batch.push(BatchOp::Put {
+                    key: key.to_vec(),
+                    value,
+                });
+                if rng.borrow_mut().random_range(0..5) == 0 {
+                    let addon: [u8; 32] = rng.borrow_mut().random();
+                    let key = [key, addon].concat();
+                    let value: [u8; 8] = rng.borrow_mut().random();
+                    batch.push(BatchOp::Put { key, value });
+                }
                 batch
             });
             let proposal = db.propose(batch).await.unwrap();
