@@ -532,7 +532,7 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
 
         // Hashes the trie and returns the address of the new root.
         #[cfg(feature = "ethhash")]
-        let (root, root_hash) = nodestore.hash_helper(root, &mut Path::new(), None)?;
+        let (root, root_hash) = nodestore.hash_helper(root, &mut Path::new(), false)?;
         #[cfg(not(feature = "ethhash"))]
         let (root, root_hash) =
             NodeStore::<MutableProposal, S>::hash_helper(root, &mut Path::new())?;
