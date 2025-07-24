@@ -886,16 +886,20 @@ mod test {
             assert_eq!(&proposals.last().unwrap().val(k).await.unwrap().unwrap(), v);
         }
 
+        // save the last proposal root hash for comparison with the final database root hash
+        let last_proposal_root_hash = proposals.last().unwrap().root_hash().await.unwrap().unwrap();
+
         // commit the proposals
         for proposal in proposals {
             proposal.commit().await.unwrap();
         }
 
         // get the last committed revision
-        let committed = db
-            .revision(db.root_hash().await.unwrap().unwrap())
-            .await
-            .unwrap();
+        let last_root_hash = db.root_hash().await.unwrap().unwrap();
+        let committed = db.revision(last_root_hash.clone()).await.unwrap();
+
+        // the last root hash should be the same as the last proposal root hash
+        assert_eq!(last_root_hash, last_proposal_root_hash);
 
         // check that all the keys and values are still present
         for (k, v) in keys.iter().zip(vals.iter()) {
