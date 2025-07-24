@@ -208,7 +208,7 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
     pub fn flush_nodes(&mut self) -> Result<NodeStoreHeader, FileIoError> {
         #[cfg(feature = "io-uring")]
         {
-            /**
+            /*
              * FIXME(rust-lang/rfcs#1210, rust-lang/rust#31844):
              *
              * This is a slight hack that exists because rust trait specialization
@@ -220,7 +220,7 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
              * type id comparison is done with constants that the compiler can resolve
              * and use to detect dead branches.
              */
-            let mut this = self as &mut dyn std::any::Any;
+            let this = self as &mut dyn std::any::Any;
             if let Some(this) = this.downcast_mut::<NodeStore<Committed, FileBacked>>() {
                 return this.flush_nodes_io_uring();
             }
@@ -476,11 +476,23 @@ impl NodeStore<Committed, FileBacked> {
 mod tests {
     use super::*;
     use crate::{
-        Child, HashType, LinearAddress, NodeStore, Path, SharedNode,
+        Child, HashType, ImmutableProposal, LinearAddress, NodeStore, Path, SharedNode,
         linear::memory::MemStore,
         node::{BranchNode, LeafNode, Node},
         nodestore::MutableProposal,
     };
+    use std::sync::Arc;
+
+    fn into_committed(
+        ns: NodeStore<std::sync::Arc<ImmutableProposal>, MemStore>,
+        parent: &NodeStore<Committed, MemStore>,
+    ) -> NodeStore<Committed, MemStore> {
+        ns.flush_freelist().unwrap();
+        ns.flush_header().unwrap();
+        let mut ns = ns.as_committed(parent);
+        ns.flush_nodes().unwrap();
+        ns
+    }
 
     /// Helper to create a test node store with a specific root
     fn create_test_store_with_root(root: Node) -> NodeStore<MutableProposal, MemStore> {
@@ -668,5 +680,61 @@ mod tests {
         // inner_branch should come before root_branch
         assert!(leaf3_pos < inner_branch_pos);
         assert!(inner_branch_pos < root_pos);
+    }
+
+    #[test]
+    fn test_as_committed_with_generic_storage() {
+        // Create a base committed store with MemStore
+        let mem_store = MemStore::new(vec![]);
+        let base_committed = NodeStore::new_empty_committed(mem_store.into()).unwrap();
+
+        // Create a mutable proposal from the base
+        let mut mutable_store = NodeStore::new(&base_committed).unwrap();
+
+        // Add some nodes to the mutable store
+        let leaf1 = create_leaf(&[1, 2, 3], b"value1");
+        let leaf2 = create_leaf(&[4, 5, 6], b"value2");
+        let branch = create_branch(
+            &[0],
+            Some(b"branch_value"),
+            vec![(1, leaf1.clone()), (2, leaf2.clone())],
+        );
+
+        mutable_store.mut_root().replace(branch.clone());
+
+        // Convert to immutable proposal
+        let immutable_store: NodeStore<Arc<ImmutableProposal>, _> =
+            mutable_store.try_into().unwrap();
+
+        // Commit the immutable store
+        let committed_store = into_committed(immutable_store, &base_committed);
+
+        // Verify the committed store has the expected values
+        let root = committed_store.kind.root.as_ref().unwrap();
+        let root_node = root.as_shared_node(&committed_store).unwrap();
+        assert_eq!(*root_node.partial_path(), Path::from(&[0]));
+        assert_eq!(root_node.value(), Some(&b"branch_value"[..]));
+        assert!(root_node.is_branch());
+        let root_branch = root_node.as_branch().unwrap();
+        assert_eq!(
+            root_branch.children.iter().filter(|c| c.is_some()).count(),
+            2
+        );
+
+        let child1 = root_branch.children[1].as_ref().unwrap();
+        let child1_node = child1
+            .as_maybe_persisted_node()
+            .as_shared_node(&committed_store)
+            .unwrap();
+        assert_eq!(*child1_node.partial_path(), Path::from(&[1, 2, 3]));
+        assert_eq!(child1_node.value(), Some(&b"value1"[..]));
+
+        let child2 = root_branch.children[2].as_ref().unwrap();
+        let child2_node = child2
+            .as_maybe_persisted_node()
+            .as_shared_node(&committed_store)
+            .unwrap();
+        assert_eq!(*child2_node.partial_path(), Path::from(&[4, 5, 6]));
+        assert_eq!(child2_node.value(), Some(&b"value2"[..]));
     }
 }
