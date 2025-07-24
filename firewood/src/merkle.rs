@@ -501,22 +501,22 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Map `key` to `value` into the subtrie rooted at `node`.
     /// Each element of `key` is 1 nibble.
     /// Returns the new root of the subtrie.
+    /// Note that the returned root is always a Node<Option<Child>>.
     pub fn insert_helper<T: NodeOptionTrait + Default>(
         &mut self,
         mut node: Node<T>,
         key: &[u8],
         value: Box<[u8]>,
-        //guard: Option<MutexGuard<'_, bool>>,
-    ) -> Result<Node<Option<Child>>, FileIoError> {
+    ) -> Result<Node<Option<Child>>, FileIoError>
+    where
+        Node<Option<Child>>: From<Node<T>>,
+        Node<T>: From<Node<Option<Child>>>,
+    {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`
         // 2. The key is above the node (i.e. its ancestor)
         // 3. The key is below the node (i.e. its descendant)
         // 4. Neither is an ancestor of the other
-        //match guard {
-        //    Some(g) => drop(g),
-        //    None => (),
-        //}
 
         let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
 
@@ -535,12 +535,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 // 1. The node is at `key`
                 node.update_value(value);
                 counter!("firewood.insert", "merkle" => "update").increment(1);
-                Ok(node.convert_child_option())
-                //if node.is_branch(){
-                //    return Ok(node.convert_child_option().unwrap());
-                //} else {
-                //    return Ok(node.into());
-                //}
+                Ok(node.into())
             }
             (None, Some((child_index, partial_path))) => {
                 // 2. The key is above the node (i.e. its ancestor)
@@ -559,9 +554,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 // Shorten the node's partial path since it has a new parent.
                 node.update_partial_path(partial_path);
                 //branch.update_child(child_index, Some(Child::Node(node.convert_child_option())));
-                //let a = node.convert_child_option().unwrap();
-                branch.update_child(child_index, Some(Child::Node(node.convert_child_option())));
-                //branch.update_child(child_index, node.convert_child_option());
+                branch.update_child(child_index, Some(Child::Node(node.into())));
                 counter!("firewood.insert", "merkle"=>"above").increment(1);
 
                 Ok(Node::Branch(Box::new(branch)))
@@ -592,20 +585,23 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                 //branch.update_child(child_index, Some(Child::Node(new_leaf)));
                                 branch.update_child(child_index, Some(Child::Node(new_leaf)));
                                 counter!("firewood.insert", "merkle"=>"below").increment(1);
-                                return Ok(node.convert_child_option());
+                                //return Ok(node.convert_child_option());
+                                return Ok(node.into());
                             }
-                            Some(Child::Node(child)) => child.convert_child_option(),
+                            Some(Child::Node(child)) => child.clone(),
                             Some(Child::AddressWithHash(addr, _)) => {
-                                self.nodestore.read_for_update((*addr).into())?.convert_child_option()
+                                self.nodestore.read_for_update((*addr).into())?
                             }
                             Some(Child::MaybePersisted(maybe_persisted, _)) => {
-                                self.nodestore.read_for_update(maybe_persisted.clone())?.convert_child_option()
+                                self.nodestore.read_for_update(maybe_persisted.clone())?
                             }
                         };
 
-                        let child = self.insert_helper(child, partial_path.as_ref(), value)?;
+                        let child =
+                            self.insert_helper(child.into(), partial_path.as_ref(), value)?;
                         branch.update_child(child_index, Some(Child::Node(child)));
-                        Ok(node.convert_child_option())
+                        //Ok(node.convert_child_option())
+                        Ok(node.into())
                     }
                     Node::Leaf(ref mut leaf) => {
                         // Turn this node into a branch node and put a new leaf as a child.
@@ -642,7 +638,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 };
 
                 node.update_partial_path(node_partial_path);
-                branch.update_child(node_index, Some(Child::Node(node.convert_child_option())));
+                branch.update_child(node_index, Some(Child::Node(node.into())));
 
                 let new_leaf = Node::Leaf(LeafNode {
                     value,
