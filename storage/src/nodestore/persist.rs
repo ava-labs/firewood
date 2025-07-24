@@ -261,6 +261,7 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
             node.persist_at(persisted_address);
 
             // Decrement gauge immediately after node is written to storage
+            #[expect(clippy::cast_possible_truncation)]
             gauge!("firewood.nodes.unwritten").decrement(1.0);
 
             // Move the arc to a vector of persisted nodes for caching
@@ -339,7 +340,7 @@ impl NodeStore<Committed, FileBacked> {
             completion_queue: io_uring::cqueue::CompletionQueue<'_>,
             saved_pinned_buffers: &mut [PinnedBufferEntry],
         ) -> Result<usize, FileIoError> {
-            let mut completed_count = 0;
+            let mut completed_count = 0usize;
             for entry in completion_queue {
                 let item = entry.user_data() as usize;
                 let pbe = saved_pinned_buffers
@@ -365,7 +366,7 @@ impl NodeStore<Committed, FileBacked> {
                     ));
                 }
                 pbe.offset = None;
-                completed_count += 1;
+                completed_count = completed_count.wrapping_add(1);
             }
             Ok(completed_count)
         }
@@ -456,6 +457,7 @@ impl NodeStore<Committed, FileBacked> {
 
                 // Decrement gauge for writes that have actually completed
                 if completed_writes > 0 {
+                    #[expect(clippy::cast_possible_truncation)]
                     gauge!("firewood.nodes.unwritten").decrement(completed_writes as f64);
                 }
             }
@@ -478,6 +480,7 @@ impl NodeStore<Committed, FileBacked> {
 
         // Decrement gauge for final batch of writes that completed
         if final_completed_writes > 0 {
+            #[expect(clippy::cast_possible_truncation)]
             gauge!("firewood.nodes.unwritten").decrement(final_completed_writes as f64);
         }
 
