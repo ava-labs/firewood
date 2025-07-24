@@ -91,7 +91,7 @@ where
                     mut hashed,
                 } = self.ethhash_classify_children(&mut b.children);
                 trace!("hashed {hashed:?} unhashed {unhashed:?}");
-                if hashed.len() == 1 && !unhashed.is_empty() {
+                if hashed.len() == 1 {
                     // special case:
                     //  - there was only one child in the current account branch when previously hashed
                     //  - but now we are adding more children
@@ -105,7 +105,11 @@ where
                     let original_length = path_prefix.len();
                     path_prefix.0.extend(b.partial_path.0.iter().copied());
                     path_prefix.0.push(*child_idx as u8);
-                    let hash = Self::compute_node_ethhash(&hashable_node, path_prefix, true);
+                    let hash = Self::compute_node_ethhash(
+                        &hashable_node,
+                        path_prefix,
+                        unhashed.is_empty(),
+                    );
                     path_prefix.0.truncate(original_length);
                     **child_hash = hash;
                 }
