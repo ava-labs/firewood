@@ -457,7 +457,7 @@ impl NodeStore<Committed, FileBacked> {
 
                 // Decrement gauge for writes that have actually completed
                 if completed_writes > 0 {
-                    #[expect(clippy::cast_possible_truncation)]
+                    #[expect(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
                     gauge!("firewood.nodes.unwritten").decrement(completed_writes as f64);
                 }
             }
@@ -480,7 +480,7 @@ impl NodeStore<Committed, FileBacked> {
 
         // Decrement gauge for final batch of writes that completed
         if final_completed_writes > 0 {
-            #[expect(clippy::cast_possible_truncation)]
+            #[expect(clippy::cast_possible_truncation, clippy::cast_possible_truncation)]
             gauge!("firewood.nodes.unwritten").decrement(final_completed_writes as f64);
         }
 
