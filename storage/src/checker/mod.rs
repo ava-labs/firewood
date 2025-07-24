@@ -2,7 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 mod range_set;
-use range_set::LinearAddressRangeSet;
+pub(crate) use range_set::LinearAddressRangeSet;
 
 use crate::logger::warn;
 use crate::nodestore::alloc::{AREA_SIZES, AreaIndex, FreeAreaWithMetadata, size_from_area_index};
@@ -31,6 +31,7 @@ pub struct CheckOpt {
 struct SubTrieMetadata {
     root_address: LinearAddress,
     root_hash: HashType,
+    parent: TrieNodeParent,
     path_prefix: Path,
     #[cfg(feature = "ethhash")]
     has_peers: bool,
@@ -47,8 +48,6 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// 4. check leaked areas - what are the spaces between trie nodes and free lists we have traversed?
     /// # Errors
     /// Returns a [`CheckerError`] if the database is inconsistent.
-    /// # Panics
-    /// Panics if the header has too many free lists, which can never happen since freelists have a fixed size.
     // TODO: report all errors, not just the first one
     pub fn check(&self, opt: CheckOpt) -> Result<(), CheckerError> {
         // 1. Check the header
@@ -110,18 +109,15 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         progress_bar: Option<&ProgressBar>,
         hash_check: bool,
     ) -> Result<(), CheckerError> {
-        self.visit_trie_helper(
-            SubTrieMetadata {
-                root_address,
-                root_hash,
-                path_prefix: Path::new(),
-                #[cfg(feature = "ethhash")]
-                has_peers: false,
-            },
-            visited,
-            progress_bar,
-            hash_check,
-        )
+        let trie = SubTrieMetadata {
+            root_address,
+            root_hash,
+            parent: TrieNodeParent::Root,
+            path_prefix: Path::new(),
+            #[cfg(feature = "ethhash")]
+            has_peers: false,
+        };
+        self.visit_trie_helper(trie, visited, progress_bar, hash_check)
     }
 
     /// Recursively traverse the trie from the given root node.
@@ -133,35 +129,40 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         hash_check: bool,
     ) -> Result<(), CheckerError> {
         let SubTrieMetadata {
-            root_address: subtree_root_address,
-            root_hash: subtree_root_hash,
+            root_address: subtrie_root_address,
+            root_hash: subtrie_root_hash,
+            parent,
             path_prefix,
             #[cfg(feature = "ethhash")]
             has_peers,
         } = subtrie;
-        let (_, area_size) = self.area_index_and_size(subtree_root_address)?;
-        let node = self.read_node(subtree_root_address)?;
-        visited.insert_area(subtree_root_address, area_size)?;
 
-        // iterate over the children
+        // check that address is aligned
+        self.check_area_aligned(subtrie_root_address, StoredAreaParent::TrieNode(parent))?;
+
+        // check that the area is within bounds and does not intersect with other areas
+        let (_, area_size) = self.area_index_and_size(subtrie_root_address)?;
+        visited.insert_area(
+            subtrie_root_address,
+            area_size,
+            StoredAreaParent::TrieNode(parent),
+        )?;
+
+        // read the node and iterate over the children if branch node
+        let node = self.read_node(subtrie_root_address)?;
         if let Node::Branch(branch) = node.as_ref() {
             // this is an internal node, traverse the children
             #[cfg(feature = "ethhash")]
             let num_children = branch.children_iter().count();
             for (nibble, (address, hash)) in branch.children_iter() {
-                self.check_area_aligned(
-                    address,
-                    StoredAreaParent::TrieNode(TrieNodeParent::Parent(
-                        subtree_root_address,
-                        nibble,
-                    )),
-                )?;
+                let parent = TrieNodeParent::Parent(subtrie_root_address, nibble);
                 let mut child_path_prefix = path_prefix.clone();
                 child_path_prefix.0.extend_from_slice(node.partial_path());
                 child_path_prefix.0.push(nibble as u8);
                 let child_subtrie = SubTrieMetadata {
                     root_address: address,
                     root_hash: hash.clone(),
+                    parent,
                     path_prefix: child_path_prefix,
                     #[cfg(feature = "ethhash")]
                     has_peers: num_children != 1,
@@ -176,13 +177,14 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             let hash = Self::compute_node_ethhash(&node, &path_prefix, has_peers);
             #[cfg(not(feature = "ethhash"))]
             let hash = hash_node(&node, &path_prefix);
-            if hash != subtree_root_hash {
+            if hash != subtrie_root_hash {
                 let mut path = path_prefix.clone();
                 path.0.extend_from_slice(node.partial_path());
                 return Err(CheckerError::HashMismatch {
                     path,
-                    address: subtree_root_address,
-                    parent_stored_hash: subtree_root_hash,
+                    address: subtrie_root_address,
+                    parent,
+                    parent_stored_hash: subtrie_root_hash,
                     computed_hash: hash,
                 });
             }
@@ -215,9 +217,10 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                     size: area_size,
                     actual_free_list: free_list_id,
                     expected_free_list: area_index,
+                    parent,
                 });
             }
-            visited.insert_area(addr, area_size)?;
+            visited.insert_area(addr, area_size, StoredAreaParent::FreeList(parent))?;
             update_progress_bar(progress_bar, visited);
         }
         Ok(())
@@ -226,13 +229,10 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     const fn check_area_aligned(
         &self,
         address: LinearAddress,
-        parent_ptr: StoredAreaParent,
+        parent: StoredAreaParent,
     ) -> Result<(), CheckerError> {
         if !address.is_aligned() {
-            return Err(CheckerError::AreaMisaligned {
-                address,
-                parent_ptr,
-            });
+            return Err(CheckerError::AreaMisaligned { address, parent });
         }
         Ok(())
     }
@@ -495,6 +495,7 @@ mod test {
         let expected_error = CheckerError::HashMismatch {
             address: branch_addr,
             path: Path::from([2, 0, 3]),
+            parent: TrieNodeParent::Parent(*root_addr, 0),
             parent_stored_hash: HashType::default(),
             computed_hash,
         };
