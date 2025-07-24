@@ -219,7 +219,7 @@ impl RevisionManager {
                 .insert(hash, committed.clone());
         }
 
-        // 6. Proposal Cleanup
+        // 8. Proposal Cleanup
         // Free proposal that is being committed as well as any proposals no longer
         // referenced by anyone else.
         self.proposals
