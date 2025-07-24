@@ -98,7 +98,7 @@ where
                     let (invalidated_node_idx, (invalidated_node, invalidated_hash)) =
                         hashed.first_mut().expect("hashed is not empty");
                     // Extract the address from the MaybePersistedNode
-                    let addr = invalidated_node
+                    let addr: crate::LinearAddress = invalidated_node
                         .as_linear_address()
                         .expect("hashed node should be persisted");
                     let mut hashable_node = self.read_node(addr)?.deref().clone();
