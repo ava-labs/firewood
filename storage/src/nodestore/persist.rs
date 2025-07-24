@@ -207,25 +207,29 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
     #[fastrace::trace(short_name = true)]
     pub fn flush_nodes(&mut self) -> Result<NodeStoreHeader, FileIoError> {
         #[cfg(feature = "io-uring")]
-        {
-            /*
-             * FIXME(rust-lang/rfcs#1210, rust-lang/rust#31844):
-             *
-             * This is a slight hack that exists because rust trait specialization
-             * is not yet stable. If the `io-uring` feature is enabled, we attempt to
-             * downcast `self` into a `NodeStore<Committed, FileBacked>`, and if successful,
-             * we call the specialized `flush_nodes_io_uring` method.
-             *
-             * During monomorphization, this will be completely optimized out as the
-             * type id comparison is done with constants that the compiler can resolve
-             * and use to detect dead branches.
-             */
-            let this = self as &mut dyn std::any::Any;
-            if let Some(this) = this.downcast_mut::<NodeStore<Committed, FileBacked>>() {
-                return this.flush_nodes_io_uring();
-            }
+        if let Some(this) = self.downcast_to_file_backed() {
+            return this.flush_nodes_io_uring();
         }
         self.flush_nodes_generic()
+    }
+
+    #[cfg(feature = "io-uring")]
+    #[inline]
+    fn downcast_to_file_backed(&mut self) -> Option<&mut NodeStore<Committed, FileBacked>> {
+        /*
+         * FIXME(rust-lang/rfcs#1210, rust-lang/rust#31844):
+         *
+         * This is a slight hack that exists because rust trait specialization
+         * is not yet stable. If the `io-uring` feature is enabled, we attempt to
+         * downcast `self` into a `NodeStore<Committed, FileBacked>`, and if successful,
+         * we call the specialized `flush_nodes_io_uring` method.
+         *
+         * During monomorphization, this will be completely optimized out as the
+         * type id comparison is done with constants that the compiler can resolve
+         * and use to detect dead branches.
+         */
+        let this = self as &mut dyn std::any::Any;
+        this.downcast_mut::<NodeStore<Committed, FileBacked>>()
     }
 
     /// Persist all the nodes of a proposal to storage.
@@ -736,5 +740,39 @@ mod tests {
             .unwrap();
         assert_eq!(*child2_node.partial_path(), Path::from(&[4, 5, 6]));
         assert_eq!(child2_node.value(), Some(&b"value2"[..]));
+    }
+
+    #[cfg(feature = "io-uring")]
+    #[test]
+    fn test_downcast_to_file_backed() {
+        use nonzero_ext::nonzero;
+
+        use crate::CacheReadStrategy;
+
+        {
+            let tf = tempfile::NamedTempFile::new().unwrap();
+            let path = tf.path().to_owned();
+
+            let fb = Arc::new(
+                FileBacked::new(
+                    path,
+                    nonzero!(10usize),
+                    nonzero!(10usize),
+                    false,
+                    CacheReadStrategy::WritesOnly,
+                )
+                .unwrap(),
+            );
+
+            let mut ns = NodeStore::new_empty_committed(fb.clone()).unwrap();
+
+            assert!(ns.downcast_to_file_backed().is_some());
+        }
+
+        {
+            let ms = Arc::new(MemStore::new(vec![]));
+            let mut ns = NodeStore::new_empty_committed(ms.clone()).unwrap();
+            assert!(ns.downcast_to_file_backed().is_none());
+        }
     }
 }
