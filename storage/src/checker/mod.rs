@@ -11,14 +11,29 @@ use crate::{
     NodeReader, NodeStore, Path, RootReader, StoredAreaParent, TrieNodeParent, WritableStorage,
 };
 
+#[cfg(not(feature = "ethhash"))]
+use crate::hashednode::hash_node;
+
 use std::cmp::Ordering;
 use std::ops::Range;
+
+use indicatif::ProgressBar;
 
 /// Options for the checker
 #[derive(Debug)]
 pub struct CheckOpt {
     /// Whether to check the hash of the nodes
     pub hash_check: bool,
+    /// Optional progress bar to show the checker progress
+    pub progress_bar: Option<ProgressBar>,
+}
+
+struct SubTrieMetadata {
+    root_address: LinearAddress,
+    root_hash: HashType,
+    path_prefix: Path,
+    #[cfg(feature = "ethhash")]
+    has_peers: bool,
 }
 
 /// [`NodeStore`] checker
@@ -29,7 +44,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// 1. Check the header
     /// 2. traverse the trie and check the nodes
     /// 3. check the free list
-    /// 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
+    /// 4. check leaked areas - what are the spaces between trie nodes and free lists we have traversed?
     /// # Errors
     /// Returns a [`CheckerError`] if the database is inconsistent.
     /// # Panics
@@ -46,6 +61,10 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         let mut visited = LinearAddressRangeSet::new(db_size)?;
 
         // 2. traverse the trie and check the nodes
+        if let Some(progress_bar) = &opt.progress_bar {
+            progress_bar.set_length(db_size);
+            progress_bar.set_message("Traversing the trie...");
+        }
         if let (Some(root), Some(root_hash)) =
             (self.root_as_maybe_persisted_node(), self.root_hash())
         {
@@ -59,6 +78,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                     root_address,
                     root_hash.into_hash_type(),
                     &mut visited,
+                    opt.progress_bar.as_ref(),
                     opt.hash_check,
                 )?;
             } else {
@@ -67,14 +87,20 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         }
 
         // 3. check the free list - this can happen in parallel with the trie traversal
-        self.visit_freelist(&mut visited)?;
+        if let Some(progress_bar) = &opt.progress_bar {
+            progress_bar.set_message("Traversing free lists...");
+        }
+        self.visit_freelist(&mut visited, opt.progress_bar.as_ref())?;
 
-        // 4. check missed areas - what are the spaces between trie nodes and free lists we have traversed?
+        // 4. check leaked areas - what are the spaces between trie nodes and free lists we have traversed?
+        if let Some(progress_bar) = &opt.progress_bar {
+            progress_bar.set_message("Checking leaked areas...");
+        }
         let leaked_ranges = visited.complement();
         if !leaked_ranges.is_empty() {
             warn!("Found leaked ranges: {leaked_ranges}");
         }
-        let _leaked_areas = self.split_all_leaked_ranges(leaked_ranges);
+        let _leaked_areas = self.split_all_leaked_ranges(leaked_ranges, opt.progress_bar.as_ref());
         // TODO: add leaked areas to the free list
 
         Ok(())
@@ -85,14 +111,19 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         root_address: LinearAddress,
         root_hash: HashType,
         visited: &mut LinearAddressRangeSet,
+        progress_bar: Option<&ProgressBar>,
         hash_check: bool,
     ) -> Result<(), CheckerError> {
         self.visit_trie_helper(
-            root_address,
-            root_hash,
-            Path::new(),
-            false,
+            SubTrieMetadata {
+                root_address,
+                root_hash,
+                path_prefix: Path::new(),
+                #[cfg(feature = "ethhash")]
+                has_peers: false,
+            },
             visited,
+            progress_bar,
             hash_check,
         )
     }
@@ -100,13 +131,18 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Recursively traverse the trie from the given root node.
     fn visit_trie_helper(
         &self,
-        subtree_root_address: LinearAddress,
-        subtree_root_hash: HashType,
-        path_prefix: Path,
-        has_peers: bool,
+        subtrie: SubTrieMetadata,
         visited: &mut LinearAddressRangeSet,
+        progress_bar: Option<&ProgressBar>,
         hash_check: bool,
     ) -> Result<(), CheckerError> {
+        let SubTrieMetadata {
+            root_address: subtree_root_address,
+            root_hash: subtree_root_hash,
+            path_prefix,
+            #[cfg(feature = "ethhash")]
+            has_peers,
+        } = subtrie;
         let (_, area_size) = self.area_index_and_size(subtree_root_address)?;
         let node = self.read_node(subtree_root_address)?;
         visited.insert_area(subtree_root_address, area_size)?;
@@ -114,6 +150,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         // iterate over the children
         if let Node::Branch(branch) = node.as_ref() {
             // this is an internal node, traverse the children
+            #[cfg(feature = "ethhash")]
             let num_children = branch.children_iter().count();
             for (nibble, (address, hash)) in branch.children_iter() {
                 self.check_area_aligned(
@@ -126,20 +163,23 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                 let mut child_path_prefix = path_prefix.clone();
                 child_path_prefix.0.extend_from_slice(node.partial_path());
                 child_path_prefix.0.push(nibble as u8);
-                self.visit_trie_helper(
-                    address,
-                    hash.clone(),
-                    child_path_prefix,
-                    num_children != 1,
-                    visited,
-                    hash_check,
-                )?;
+                let child_subtrie = SubTrieMetadata {
+                    root_address: address,
+                    root_hash: hash.clone(),
+                    path_prefix: child_path_prefix,
+                    #[cfg(feature = "ethhash")]
+                    has_peers: num_children != 1,
+                };
+                self.visit_trie_helper(child_subtrie, visited, progress_bar, hash_check)?;
             }
         }
 
         // hash check - at this point all children hashes have been verified
         if hash_check {
-            let hash = Self::compute_node_hash(&node, &path_prefix, has_peers);
+            #[cfg(feature = "ethhash")]
+            let hash = Self::compute_node_ethhash(&node, &path_prefix, has_peers);
+            #[cfg(not(feature = "ethhash"))]
+            let hash = hash_node(&node, &path_prefix);
             if hash != subtree_root_hash {
                 let mut path = path_prefix.clone();
                 path.0.extend_from_slice(node.partial_path());
@@ -152,11 +192,17 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             }
         }
 
+        update_progress_bar(progress_bar, visited);
+
         Ok(())
     }
 
     /// Traverse all the free areas in the freelist
-    fn visit_freelist(&self, visited: &mut LinearAddressRangeSet) -> Result<(), CheckerError> {
+    fn visit_freelist(
+        &self,
+        visited: &mut LinearAddressRangeSet,
+        progress_bar: Option<&ProgressBar>,
+    ) -> Result<(), CheckerError> {
         let mut free_list_iter = self.free_list_iter(0);
         while let Some(free_area) = free_list_iter.next_with_metadata() {
             let FreeAreaWithMetadata {
@@ -176,6 +222,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                 });
             }
             visited.insert_area(addr, area_size)?;
+            update_progress_bar(progress_bar, visited);
         }
         Ok(())
     }
@@ -198,10 +245,11 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     fn split_all_leaked_ranges(
         &self,
         leaked_ranges: impl IntoIterator<Item = Range<LinearAddress>>,
+        progress_bar: Option<&ProgressBar>,
     ) -> impl Iterator<Item = (LinearAddress, AreaIndex)> {
         leaked_ranges
             .into_iter()
-            .flat_map(|range| self.split_range_into_leaked_areas(range))
+            .flat_map(move |range| self.split_range_into_leaked_areas(range, progress_bar))
     }
 
     /// Split a range of addresses into leaked areas that can be stored in the free list.
@@ -210,6 +258,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     fn split_range_into_leaked_areas(
         &self,
         leaked_range: Range<LinearAddress>,
+        progress_bar: Option<&ProgressBar>,
     ) -> Vec<(LinearAddress, AreaIndex)> {
         let mut leaked = Vec::new();
         let mut current_addr = leaked_range.start;
@@ -231,6 +280,9 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                 Ordering::Equal => {
                     // we have reached the end of the leaked area, done
                     leaked.push((current_addr, area_index));
+                    if let Some(progress_bar) = progress_bar {
+                        progress_bar.inc(area_size);
+                    }
                     return leaked;
                 }
                 Ordering::Greater => {
@@ -243,6 +295,9 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                 Ordering::Less => {
                     // continue to the next area
                     leaked.push((current_addr, area_index));
+                    if let Some(progress_bar) = progress_bar {
+                        progress_bar.inc(area_size);
+                    }
                     current_addr = next_addr;
                 }
             }
@@ -257,6 +312,9 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                     .expect("address overflow is impossible");
                 if next_addr <= leaked_range.end {
                     leaked.push((current_addr, area_index as AreaIndex));
+                    if let Some(progress_bar) = progress_bar {
+                        progress_bar.inc(*area_size);
+                    }
                     current_addr = next_addr;
                 } else {
                     break;
@@ -267,6 +325,17 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         // we assume that all areas are aligned to `MIN_AREA_SIZE`, in which case leaked ranges can always be split into free areas perfectly
         debug_assert!(current_addr == leaked_range.end);
         leaked
+    }
+}
+
+fn update_progress_bar(progress_bar: Option<&ProgressBar>, range_set: &LinearAddressRangeSet) {
+    if let Some(progress_bar) = progress_bar {
+        progress_bar.set_position(
+            range_set
+                .bytes_in_set()
+                .checked_add(crate::nodestore::NodeStoreHeader::SIZE)
+                .expect("overflow can only happen if max_addr >= U64_MAX + NODE_STORE_START_ADDR"),
+        );
     }
 }
 
@@ -378,6 +447,7 @@ mod test {
                 test_trie.root_address,
                 test_trie.root_hash,
                 &mut visited,
+                None,
                 true,
             )
             .unwrap();
@@ -429,6 +499,7 @@ mod test {
                 test_trie.root_address,
                 test_trie.root_hash,
                 &mut visited,
+                None,
                 true,
             )
             .unwrap_err();
@@ -476,7 +547,7 @@ mod test {
 
         // test that the we traversed all the free areas
         let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
-        nodestore.visit_freelist(&mut visited).unwrap();
+        nodestore.visit_freelist(&mut visited, None).unwrap();
         let complement = visited.complement();
         assert_eq!(complement.into_iter().collect::<Vec<_>>(), vec![]);
     }
@@ -537,7 +608,7 @@ mod test {
         }
 
         // check the leaked areas
-        let leaked_areas: HashMap<_, _> = nodestore.split_all_leaked_ranges(leaked).collect();
+        let leaked_areas: HashMap<_, _> = nodestore.split_all_leaked_ranges(leaked, None).collect();
 
         // assert that all leaked areas end up on the free list
         assert_eq!(leaked_areas, expected_free_areas);
@@ -579,7 +650,7 @@ mod test {
             .unwrap();
         let (leaked_areas_offsets, leaked_area_size_indices): (Vec<LinearAddress>, Vec<AreaIndex>) =
             nodestore
-                .split_range_into_leaked_areas(leaked_range)
+                .split_range_into_leaked_areas(leaked_range, None)
                 .into_iter()
                 .unzip();
 
@@ -626,7 +697,7 @@ mod test {
             nonzero!(NodeStoreHeader::SIZE).into()..LinearAddress::new(high_watermark).unwrap();
         let (leaked_areas_offsets, leaked_area_size_indices): (Vec<LinearAddress>, Vec<AreaIndex>) =
             nodestore
-                .split_range_into_leaked_areas(leaked_range)
+                .split_range_into_leaked_areas(leaked_range, None)
                 .into_iter()
                 .unzip();
 

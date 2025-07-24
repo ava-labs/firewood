@@ -165,13 +165,21 @@ where
         }
         // At this point, we either have a leaf or a branch with all children hashed.
         // if the encoded child hash <32 bytes then we use that RLP
-        let hash = Self::compute_node_hash(&node, path_prefix, fake_root_extra_nibble.is_none());
+        #[cfg(feature = "ethhash")]
+        let hash = Self::compute_node_ethhash(&node, path_prefix, fake_root_extra_nibble.is_none());
+        #[cfg(not(feature = "ethhash"))]
+        let hash = hash_node(&node, path_prefix);
 
         Ok((SharedNode::new(node).into(), hash))
     }
 
-    pub(crate) fn compute_node_hash(node: &Node, path_prefix: &Path, have_peers: bool) -> HashType {
-        if cfg!(feature = "ethhash") && path_prefix.0.len() == 65 && !have_peers {
+    #[cfg(feature = "ethhash")]
+    pub(crate) fn compute_node_ethhash(
+        node: &Node,
+        path_prefix: &Path,
+        have_peers: bool,
+    ) -> HashType {
+        if path_prefix.0.len() == 65 && !have_peers {
             // This is the special case when this node is the only child of an account
             //  - 64 nibbles for account + 1 nibble for its position in account branch node
             let mut fake_root = node.clone();
@@ -179,9 +187,9 @@ where
                 std::iter::once(*path_prefix.0.last().expect("path_prefix not empty"))
                     .chain(fake_root.partial_path().0.iter().copied()),
             ));
-            return hash_node(&fake_root, path_prefix);
+            hash_node(&fake_root, path_prefix)
+        } else {
+            hash_node(node, path_prefix)
         }
-
-        hash_node(node, path_prefix)
     }
 }
