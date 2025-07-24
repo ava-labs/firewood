@@ -20,7 +20,6 @@
 //! A [`NodeStore`] is backed by a [`ReadableStorage`] which is persisted storage.
 
 use std::ops::Range;
-use thiserror::Error;
 
 mod checker;
 mod hashednode;
@@ -42,12 +41,12 @@ pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use node::path::{NibblesIterator, Path};
 pub use node::{
-    BranchNode, Child, LeafNode, Node, PathIterItem,
+    BranchNode, Child, Children, LeafNode, Node, PathIterItem,
     branch::{HashType, IntoHashType},
 };
 pub use nodestore::{
     Committed, HashedNodeReader, ImmutableProposal, LinearAddress, MutableProposal, NodeReader,
-    NodeStore, Parentable, ReadInMemoryNode, RootReader, TrieReader,
+    NodeStore, Parentable, RootReader, TrieReader,
 };
 
 pub use linear::filebacked::FileBacked;
@@ -126,8 +125,11 @@ pub enum FreeListParent {
     PrevFreeArea(LinearAddress),
 }
 
+use derive_where::derive_where;
+
 /// Errors returned by the checker
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
+#[derive_where(PartialEq)]
 #[non_exhaustive]
 pub enum CheckerError {
     /// The file size is not valid
@@ -141,11 +143,11 @@ pub enum CheckerError {
 
     /// Hash mismatch for a node
     #[error(
-        "Hash mismatch for node {partial_path:?} at address {address}: parent stored {parent_stored_hash}, computed {computed_hash}"
+        "Hash mismatch for node {path:?} at address {address}: parent stored {parent_stored_hash}, computed {computed_hash}"
     )]
     HashMismatch {
         /// The path of the node
-        partial_path: Path,
+        path: Path,
         /// The address of the node
         address: LinearAddress,
         /// The hash value stored in the parent node
@@ -209,8 +211,13 @@ pub enum CheckerError {
     #[error("Found leaked areas: {0:?}")]
     AreaLeaks(Vec<Range<LinearAddress>>),
 
+    /// The root is not persisted
+    #[error("The checker can only check persisted nodestores")]
+    UnpersistedRoot,
+
     /// IO error
     #[error("IO error")]
+    #[derive_where(skip_inner)]
     IO(#[from] FileIoError),
 }
 
