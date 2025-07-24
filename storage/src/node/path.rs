@@ -42,6 +42,7 @@ impl Debug for Path {
 }
 
 impl LowerHex for Path {
+    // TODO: handle fill / alignment / etc
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         if self.0.is_empty() {
             write!(f, "[]")
@@ -50,7 +51,6 @@ impl LowerHex for Path {
                 write!(f, "0x")?;
             }
             for nib in &self.0 {
-                // TODO: delegate instead of calling write! directly
                 write!(f, "{:x}", *nib)?;
             }
             Ok(())
