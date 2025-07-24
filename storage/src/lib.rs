@@ -48,7 +48,7 @@ pub use node::{
 };
 pub use nodestore::{
     Committed, HashedNodeReader, ImmutableProposal, LinearAddress, MutableProposal, NodeReader,
-    NodeStore, Parentable, ReadInMemoryNode, RootReader, TrieReader,
+    NodeStore, Parentable, RootReader, TrieReader,
 };
 
 pub use linear::filebacked::FileBacked;
@@ -176,11 +176,11 @@ pub enum CheckerError {
 
     /// Hash mismatch for a node
     #[error(
-        "Hash mismatch for node (path prefix: {path_prefix:?}) at address {address:#x}: parent ({parent:#x}) stored {parent_stored_hash}, computed {computed_hash}"
+        "Hash mismatch for node {path:?} at address {address}: parent stored {parent_stored_hash}, computed {computed_hash}"
     )]
     HashMismatch {
         /// The path of the node
-        path_prefix: Path,
+        path: Path,
         /// The address of the node
         address: LinearAddress,
         /// The parent of the node
@@ -253,6 +253,10 @@ pub enum CheckerError {
     /// Found leaked areas
     #[error("Found leaked areas: {0}")]
     AreaLeaks(checker::LinearAddressRangeSet),
+
+    /// The root is not persisted
+    #[error("The checker can only check persisted nodestores")]
+    UnpersistedRoot,
 
     /// IO error
     #[error("IO error")]

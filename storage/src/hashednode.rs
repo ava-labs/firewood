@@ -6,14 +6,13 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
+use crate::{BranchNode, HashType, LeafNode, Node, Path};
+use sha2::{Digest, Sha256};
+use smallvec::SmallVec;
 use std::{
     iter::{self},
     ops::Deref,
 };
-
-use smallvec::SmallVec;
-
-use crate::{BranchNode, HashType, LeafNode, Node, Path};
 
 /// Returns the hash of `node`, which is at the given `path_prefix`.
 #[must_use]
@@ -113,6 +112,23 @@ impl<T> Deref for ValueDigest<T> {
     }
 }
 
+impl<T: AsRef<[u8]>> ValueDigest<T> {
+    /// Verifies that the value or hash matches the expected value.
+    pub fn verify(&self, expected: impl AsRef<[u8]>) -> bool {
+        match self {
+            Self::Value(got_value) => {
+                // This proof proves that `key` maps to `got_value`.
+                got_value.as_ref() == expected.as_ref()
+            }
+            Self::Hash(got_hash) => {
+                // This proof proves that `key` maps to a value
+                // whose hash is `got_hash`.
+                got_hash.as_ref() == Sha256::digest(expected.as_ref()).as_slice()
+            }
+        }
+    }
+}
+
 /// A node in the trie that can be hashed.
 pub trait Hashable {
     /// The key of the node where each byte is a nibble.
@@ -124,7 +140,7 @@ pub trait Hashable {
     fn value_digest(&self) -> Option<ValueDigest<&[u8]>>;
     /// Each element is a child's index and hash.
     /// Yields 0 elements if the node is a leaf.
-    fn children(&self) -> impl Iterator<Item = (usize, &HashType)> + Clone;
+    fn children(&self) -> impl Iterator<Item = (usize, HashType)> + Clone;
 }
 
 /// A preimage of a hash.
@@ -138,7 +154,7 @@ pub trait Preimage {
 trait HashableNode {
     fn partial_path(&self) -> impl Iterator<Item = u8> + Clone;
     fn value(&self) -> Option<&[u8]>;
-    fn children_iter(&self) -> impl Iterator<Item = (usize, &HashType)> + Clone;
+    fn children_iter(&self) -> impl Iterator<Item = (usize, HashType)> + Clone;
 }
 
 impl HashableNode for BranchNode {
@@ -150,7 +166,7 @@ impl HashableNode for BranchNode {
         self.value.as_deref()
     }
 
-    fn children_iter(&self) -> impl Iterator<Item = (usize, &HashType)> + Clone {
+    fn children_iter(&self) -> impl Iterator<Item = (usize, HashType)> + Clone {
         self.children_hashes()
     }
 }
@@ -164,7 +180,7 @@ impl HashableNode for LeafNode {
         Some(&self.value)
     }
 
-    fn children_iter(&self) -> impl Iterator<Item = (usize, &HashType)> + Clone {
+    fn children_iter(&self) -> impl Iterator<Item = (usize, HashType)> + Clone {
         iter::empty()
     }
 }
@@ -198,7 +214,7 @@ impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
         self.node.value().map(ValueDigest::Value)
     }
 
-    fn children(&self) -> impl Iterator<Item = (usize, &HashType)> + Clone {
+    fn children(&self) -> impl Iterator<Item = (usize, HashType)> + Clone {
         self.node.children_iter()
     }
 }
