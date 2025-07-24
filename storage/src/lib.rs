@@ -21,7 +21,6 @@
 
 use std::fmt::{Display, Formatter, LowerHex, Result};
 use std::ops::Range;
-use thiserror::Error;
 
 mod checker;
 mod hashednode;
@@ -43,7 +42,7 @@ pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use node::path::{NibblesIterator, Path};
 pub use node::{
-    BranchNode, Child, LeafNode, Node, PathIterItem,
+    BranchNode, Child, Children, LeafNode, Node, PathIterItem,
     branch::{HashType, IntoHashType},
 };
 pub use nodestore::{
@@ -161,8 +160,11 @@ impl LowerHex for FreeListParent {
     }
 }
 
+use derive_where::derive_where;
+
 /// Errors returned by the checker
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
+#[derive_where(PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CheckerError {
     /// The file size is not valid
@@ -252,6 +254,7 @@ pub enum CheckerError {
 
     /// Found leaked areas
     #[error("Found leaked areas: {0}")]
+    #[derive_where(skip_inner)]
     AreaLeaks(checker::LinearAddressRangeSet),
 
     /// The root is not persisted
@@ -260,6 +263,7 @@ pub enum CheckerError {
 
     /// IO error
     #[error("IO error")]
+    #[derive_where(skip_inner)]
     IO(#[from] FileIoError),
 }
 
