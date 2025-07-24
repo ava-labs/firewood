@@ -20,7 +20,6 @@
 //! A [`NodeStore`] is backed by a [`ReadableStorage`] which is persisted storage.
 
 use std::ops::Range;
-use thiserror::Error;
 
 mod checker;
 mod hashednode;
@@ -42,7 +41,7 @@ pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use node::path::{NibblesIterator, Path};
 pub use node::{
-    BranchNode, Child, LeafNode, Node, PathIterItem,
+    BranchNode, Child, Children, LeafNode, Node, PathIterItem,
     branch::{HashType, IntoHashType},
 };
 pub use nodestore::{
@@ -126,8 +125,11 @@ pub enum FreeListParent {
     PrevFreeArea(LinearAddress),
 }
 
+use derive_where::derive_where;
+
 /// Errors returned by the checker
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
+#[derive_where(PartialEq)]
 #[non_exhaustive]
 pub enum CheckerError {
     /// The file size is not valid
@@ -215,6 +217,7 @@ pub enum CheckerError {
 
     /// IO error
     #[error("IO error")]
+    #[derive_where(skip_inner)]
     IO(#[from] FileIoError),
 }
 
