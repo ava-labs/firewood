@@ -682,11 +682,16 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Returns the new root of the subtrie and the value that was removed, if any.
     /// Each element of `key` is 1 nibble.
     #[expect(clippy::type_complexity)]
-    fn remove_helper(
+    fn remove_helper<T: NodeOptionTrait + Default>(
         &mut self,
-        mut node: Node<Option<Child>>,
+        //mut node: Node<Option<Child>>,
+        mut node: Node<T>,
         key: &[u8],
-    ) -> Result<(Option<Node<Option<Child>>>, Option<Box<[u8]>>), FileIoError> {
+    ) -> Result<(Option<Node<Option<Child>>>, Option<Box<[u8]>>), FileIoError>
+    where
+        Node<Option<Child>>: From<Node<T>>,
+        Node<T>: From<Node<Option<Child>>>,
+    {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`
         // 2. The key is above the node (i.e. its ancestor)
@@ -705,7 +710,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         ) {
             (_, Some(_)) => {
                 // Case (2) or (4)
-                Ok((Some(node), None))
+                Ok((Some(node.into()), None))
             }
             (None, None) => {
                 // 1. The node is at `key`
@@ -713,7 +718,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                     Node::Branch(branch) => {
                         let Some(removed_value) = branch.value.take() else {
                             // The branch has no value. Return the node as is.
-                            return Ok((Some(node), None));
+                            return Ok((Some(node.into()), None));
                         };
 
                         // This branch node has a value.
@@ -725,7 +730,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                 .iter_mut()
                                 .enumerate()
                                 .filter_map(|(index, child)| {
-                                    child.as_mut().map(|child| (index, child))
+                                    child.perform_as_mut().map(|child| (index, child))
                                 });
 
                         let (child_index, child) = children_iter
@@ -734,7 +739,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 
                         if children_iter.next().is_some() {
                             // The branch has more than 1 child so it can't be removed.
-                            Ok((Some(node), Some(removed_value)))
+                            Ok((Some(node.into()), Some(removed_value)))
                         } else {
                             // The branch's only child becomes the root of this subtrie.
                             let mut child = match child {
@@ -801,17 +806,21 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 // 3. The key is below the node (i.e. its descendant)
                 match node {
                     // we found a non-matching leaf node, so the value does not exist
-                    Node::Leaf(_) => Ok((Some(node), None)),
+                    Node::Leaf(_) => Ok((Some(node.into()), None)),
                     Node::Branch(ref mut branch) => {
+                        let n = std::mem::take(&mut branch.children[child_index as usize]);
+
                         #[expect(clippy::indexing_slicing)]
-                        let child = match std::mem::take(&mut branch.children[child_index as usize])
+                        let child: Node<Option<Child>> = match n.get_child_option()
+                        //#[expect(clippy::indexing_slicing)]
+                        //let child = match std::mem::take(&mut branch.children[child_index as usize])
                         {
                             None => {
-                                return Ok((Some(node), None));
+                                return Ok((Some(node.into()), None));
                             }
-                            Some(Child::Node(node)) => node,
+                            Some(Child::Node(node)) => node.clone().into(),
                             Some(Child::AddressWithHash(addr, _)) => {
-                                self.nodestore.read_for_update(addr.into())?
+                                self.nodestore.read_for_update((*addr).into())?
                             }
                             Some(Child::MaybePersisted(maybe_persisted, _)) => {
                                 self.nodestore.read_for_update(maybe_persisted.clone())?
@@ -819,7 +828,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                         };
 
                         let (child, removed_value) =
-                            self.remove_helper(child, child_partial_path.as_ref())?;
+                            self.remove_helper(child.into(), child_partial_path.as_ref())?;
 
                         if let Some(child) = child {
                             branch.update_child(child_index, Some(Child::Node(child)));
@@ -833,7 +842,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                 .iter_mut()
                                 .enumerate()
                                 .filter_map(|(index, child)| {
-                                    child.as_mut().map(|child| (index, child))
+                                    child.perform_as_mut().map(|child| (index, child))
                                 });
 
                         let Some((child_index, child)) = children_iter.next() else {
@@ -849,7 +858,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 
                         // if there is more than one child or the branch has a value, return it
                         if branch.value.is_some() || children_iter.next().is_some() {
-                            return Ok((Some(node), removed_value));
+                            return Ok((Some(node.into()), removed_value));
                         }
 
                         // The branch has only 1 child. Remove the branch and return the child.
@@ -908,7 +917,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         Ok(deleted)
     }
 
-    fn remove_prefix_helper<T: NodeOptionTrait + Default> (
+    fn remove_prefix_helper<T: NodeOptionTrait + Default>(
         &mut self,
         //mut node: Node<Option<Child>>,
         mut node: Node<T>,
@@ -963,16 +972,14 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                     Node::Leaf(_) => Ok(Some(node.into())),
                     Node::Branch(ref mut branch) => {
                         let n = std::mem::take(&mut branch.children[child_index as usize]);
-                        
+
                         #[expect(clippy::indexing_slicing)]
-                        let child = match n.get_child_option()
-                        {
+                        let child = match n.get_child_option() {
                             None => {
                                 return Ok(Some(node.into()));
                             }
                             Some(Child::Node(node)) => node,
                             Some(Child::AddressWithHash(addr, _)) => {
-
                                 //self.nodestore.read_for_update((*addr).into())?
 
                                 &self.nodestore.read_for_update((*addr).into())?
@@ -982,8 +989,11 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                             }
                         };
 
-                        let child =
-                            self.remove_prefix_helper(child.clone().into(), child_partial_path.as_ref(), deleted)?;
+                        let child = self.remove_prefix_helper(
+                            child.clone().into(),
+                            child_partial_path.as_ref(),
+                            deleted,
+                        )?;
 
                         if let Some(child) = child {
                             branch.update_child(child_index, Some(Child::Node(child)));
@@ -1019,16 +1029,14 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                         // The branch has only 1 child. Remove the branch and return the child.
                         let mut child = match child {
                             Child::Node(child_node) => {
-                                let l:  Node<Option<Child>> = Node::Leaf(LeafNode {
-                                        value: Box::default(),
-                                        partial_path: Path::new(),
+                                let l: Node<Option<Child>> = Node::Leaf(LeafNode {
+                                    value: Box::default(),
+                                    partial_path: Path::new(),
                                 });
-                            
-                                std::mem::replace(
-                                    child_node,
-                                    l)
+
+                                std::mem::replace(child_node, l)
                             }
-              
+
                             Child::AddressWithHash(addr, _) => {
                                 self.nodestore.read_for_update((*addr).into())?
                             }
