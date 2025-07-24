@@ -219,6 +219,7 @@ impl<T: Debug> IntoIterator for RangeSet<T> {
 pub struct LinearAddressRangeSet {
     range_set: RangeSet<LinearAddress>,
     max_addr: LinearAddress,
+    bytes_in_set: u64,
 }
 
 #[expect(clippy::result_large_err)]
@@ -242,6 +243,7 @@ impl LinearAddressRangeSet {
         Ok(Self {
             range_set: RangeSet::new(),
             max_addr,
+            bytes_in_set: 0,
         })
     }
 
@@ -275,6 +277,10 @@ impl LinearAddressRangeSet {
                 parent,
             });
         }
+        self.bytes_in_set = self
+            .bytes_in_set
+            .checked_add(size)
+            .expect("overflow can only happen if max_addr >= U64_MAX + NODE_STORE_START_ADDR");
         Ok(())
     }
 
@@ -282,15 +288,27 @@ impl LinearAddressRangeSet {
         let complement_set = self
             .range_set
             .complement(&Self::NODE_STORE_START_ADDR, &self.max_addr);
-
+        let bytes_in_complement = self
+            .max_addr
+            .distance_from(Self::NODE_STORE_START_ADDR)
+            .expect("checked in new()")
+            .checked_sub(self.bytes_in_set)
+            .expect(
+                "bytes_in_set is always less than or equal to max_addr - NODE_STORE_START_ADDR",
+            );
         Self {
             range_set: complement_set,
             max_addr: self.max_addr,
+            bytes_in_set: bytes_in_complement,
         }
     }
 
     pub(super) fn is_empty(&self) -> bool {
         self.range_set.is_empty()
+    }
+
+    pub(super) const fn bytes_in_set(&self) -> u64 {
+        self.bytes_in_set
     }
 }
 
