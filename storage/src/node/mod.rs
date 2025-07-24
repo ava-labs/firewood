@@ -67,9 +67,16 @@ pub trait NodeOptionTrait {
 
     /// TODO
     fn set_child_option(&mut self, child: Option<Child>);
+
+    /// TODO
+    fn perform_as_mut(&mut self) -> Option<&mut Child>;
+    
 }
 
 impl NodeOptionTrait for Option<Child> {
+    fn perform_as_mut(&mut self) -> Option<&mut Child> {
+        return self.as_mut();
+    }
 
     fn get_child_option_mut(&mut self) -> &mut Option<Child> {
         return self;
