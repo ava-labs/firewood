@@ -378,6 +378,7 @@ impl<T: NodeOptionTrait> Debug for BranchNode<T> {
 }
 
 impl<T: NodeOptionTrait> BranchNode<T> {
+    /* 
     /// The maximum number of children in a [`BranchNode`]
     #[cfg(feature = "branch_factor_256")]
     pub const MAX_CHILDREN: usize = 256;
@@ -385,6 +386,7 @@ impl<T: NodeOptionTrait> BranchNode<T> {
     /// The maximum number of children in a [`BranchNode`]
     #[cfg(not(feature = "branch_factor_256"))]
     pub const MAX_CHILDREN: usize = 16;
+    */
 
     /// Returns the address of the child at the given index.
     /// Panics if `child_index` >= [`BranchNode::MAX_CHILDREN`].

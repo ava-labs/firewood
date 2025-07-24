@@ -1043,9 +1043,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     }
 
     /// Recursively deletes all children of a branch node.
-    fn delete_children(
+    fn delete_children<T: NodeOptionTrait>(
         &mut self,
-        branch: &mut BranchNode<Option<Child>>,
+        branch: &mut BranchNode<T>,
         deleted: &mut usize,
     ) -> Result<(), FileIoError> {
         if branch.value.is_some() {
@@ -1054,7 +1054,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         }
         for children in &mut branch.children {
             // read the child node
-            let child = match children {
+            let child = match children.get_child_option_mut() {
                 Some(Child::Node(node)) => node,
                 Some(Child::AddressWithHash(addr, _)) => {
                     &mut self.nodestore.read_for_update((*addr).into())?

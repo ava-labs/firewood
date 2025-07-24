@@ -63,10 +63,18 @@ pub trait NodeOptionTrait {
     fn get_child_option(&self) -> &Option<Child>;
 
     /// TODO
+    fn get_child_option_mut(&mut self) -> &mut Option<Child>;
+
+    /// TODO
     fn set_child_option(&mut self, child: Option<Child>);
 }
 
 impl NodeOptionTrait for Option<Child> {
+
+    fn get_child_option_mut(&mut self) -> &mut Option<Child> {
+        return self;
+    }
+
     fn get_child_option(&self) -> &Option<Child> {
         return self;
     }
