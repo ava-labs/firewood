@@ -77,50 +77,50 @@ where
         #[cfg(feature = "ethhash")] &self,
         mut node: Node,
         path_prefix: &mut Path,
-        #[cfg(feature = "ethhash")] account_child_has_peers: bool,
+        #[cfg(feature = "ethhash")] account_child_no_peers: bool,
     ) -> Result<(MaybePersistedNode, HashType), FileIoError> {
         // If this is a branch, find all unhashed children and recursively hash them.
         trace!("hashing {node:?} at {path_prefix:?}");
         if let Node::Branch(ref mut b) = node {
             #[cfg(feature = "ethhash")]
             // special case code for ethhash at the account level
-            let have_multiple_children =
-                if path_prefix.0.len().saturating_add(b.partial_path.0.len()) == 64 {
-                    let ClassifiedChildren {
-                        unhashed,
-                        mut hashed,
-                    } = self.ethhash_classify_children(&mut b.children);
-                    trace!("hashed {hashed:?} unhashed {unhashed:?}");
-                    if hashed.len() == 1 && !unhashed.is_empty() {
-                        // special case:
-                        //  - there was only one child in the current account branch when previously hashed
-                        //  - but now we are adding more children
-                        // we need to rehash the child
-                        let (child_idx, (child_node, child_hash)) =
-                            hashed.first_mut().expect("hashed is not empty");
-                        let addr: crate::LinearAddress = child_node
-                            .as_linear_address()
-                            .expect("hashed node should be persisted");
-                        let hashable_node = self.read_node(addr)?.deref().clone();
-                        let original_length = path_prefix.len();
-                        path_prefix.0.extend(b.partial_path.0.iter().copied());
-                        path_prefix.0.push(*child_idx as u8);
-                        let hash = Self::compute_node_ethhash(&hashable_node, path_prefix, true);
-                        path_prefix.0.truncate(original_length);
-                        **child_hash = hash;
-                    }
+            let only_one_child = if path_prefix.0.len().saturating_add(b.partial_path.0.len()) == 64
+            {
+                let ClassifiedChildren {
+                    unhashed,
+                    mut hashed,
+                } = self.ethhash_classify_children(&mut b.children);
+                trace!("hashed {hashed:?} unhashed {unhashed:?}");
+                if hashed.len() == 1 && !unhashed.is_empty() {
+                    // special case:
+                    //  - there was only one child in the current account branch when previously hashed
+                    //  - but now we are adding more children
+                    // we need to rehash the child
+                    let (child_idx, (child_node, child_hash)) =
+                        hashed.first_mut().expect("hashed is not empty");
+                    let addr: crate::LinearAddress = child_node
+                        .as_linear_address()
+                        .expect("hashed node should be persisted");
+                    let hashable_node = self.read_node(addr)?.deref().clone();
+                    let original_length = path_prefix.len();
+                    path_prefix.0.extend(b.partial_path.0.iter().copied());
+                    path_prefix.0.push(*child_idx as u8);
+                    let hash = Self::compute_node_ethhash(&hashable_node, path_prefix, true);
+                    path_prefix.0.truncate(original_length);
+                    **child_hash = hash;
+                }
 
-                    {
-                        #![expect(
-                            clippy::arithmetic_side_effects,
-                            reason = "hashed and unhashed can have at most 16 elements"
-                        )]
-                        hashed.len() + unhashed.len() > 1
-                    }
-                } else {
-                    // not an account branch
-                    false
-                };
+                {
+                    #![expect(
+                        clippy::arithmetic_side_effects,
+                        reason = "hashed and unhashed can have at most 16 elements"
+                    )]
+                    hashed.len() + unhashed.len() == 1
+                }
+            } else {
+                // not an account branch
+                false
+            };
 
             // branch children cases:
             // 1. 1 child, already hashed
@@ -150,7 +150,7 @@ where
 
                 #[cfg(feature = "ethhash")]
                 let (child_node, child_hash) =
-                    self.hash_helper(child_node, path_prefix, have_multiple_children)?;
+                    self.hash_helper(child_node, path_prefix, only_one_child)?;
                 #[cfg(not(feature = "ethhash"))]
                 let (child_node, child_hash) = Self::hash_helper(child_node, path_prefix)?;
 
@@ -163,7 +163,7 @@ where
         // At this point, we either have a leaf or a branch with all children hashed.
         // if the encoded child hash <32 bytes then we use that RLP
         #[cfg(feature = "ethhash")]
-        let hash = Self::compute_node_ethhash(&node, path_prefix, account_child_has_peers);
+        let hash = Self::compute_node_ethhash(&node, path_prefix, account_child_no_peers);
         #[cfg(not(feature = "ethhash"))]
         let hash = hash_node(&node, path_prefix);
 
@@ -174,9 +174,9 @@ where
     pub(crate) fn compute_node_ethhash(
         node: &Node,
         path_prefix: &Path,
-        account_child_has_peers: bool,
+        account_child_no_peers: bool,
     ) -> HashType {
-        if path_prefix.0.len() == 65 && !account_child_has_peers {
+        if path_prefix.0.len() == 65 && account_child_no_peers {
             // This is the special case when this node is the only child of an account
             //  - 64 nibbles for account + 1 nibble for its position in account branch node
             let mut fake_root = node.clone();
