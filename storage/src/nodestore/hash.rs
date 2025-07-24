@@ -150,6 +150,13 @@ where
                 // we extend and truncate path_prefix to reduce memory allocations
                 let original_length = path_prefix.len();
                 path_prefix.0.extend(b.partial_path.0.iter().copied());
+                #[cfg(feature = "ethhash")]
+                if make_fake_root.is_none() {
+                    // we don't push the nibble there is only one unhashed child and
+                    // we're on an account
+                    path_prefix.0.push(nibble as u8);
+                }
+                #[cfg(not(feature = "ethhash"))]
                 path_prefix.0.push(nibble as u8);
 
                 #[cfg(feature = "ethhash")]
@@ -165,8 +172,22 @@ where
         }
         // At this point, we either have a leaf or a branch with all children hashed.
         // if the encoded child hash <32 bytes then we use that RLP
+
         #[cfg(feature = "ethhash")]
-        let hash = Self::compute_node_ethhash(&node, path_prefix, fake_root_extra_nibble.is_none());
+        // if we have a child that is the only child of an account branch, we will hash this child as if it
+        // is a root node. This means we have to take the nibble from the parent and prefix it to the partial path
+        let hash = if let Some(nibble) = fake_root_extra_nibble {
+            let mut fake_root = node.clone();
+            trace!("old node: {fake_root:?}");
+            fake_root.update_partial_path(Path::from_nibbles_iterator(
+                std::iter::once(nibble).chain(fake_root.partial_path().0.iter().copied()),
+            ));
+            trace!("new node: {fake_root:?}");
+            hash_node(&fake_root, path_prefix)
+        } else {
+            hash_node(&node, path_prefix)
+        };
+
         #[cfg(not(feature = "ethhash"))]
         let hash = hash_node(&node, path_prefix);
 
