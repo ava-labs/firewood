@@ -205,8 +205,12 @@ where
             //  - 64 nibbles for account + 1 nibble for its position in account branch node
             let mut fake_root = node.clone();
             fake_root.update_partial_path(Path::from_nibbles_iterator(
-                std::iter::once(*path_prefix.0.last().expect("path_prefix not empty"))
-                    .chain(fake_root.partial_path().0.iter().copied()),
+                path_prefix
+                    .0
+                    .last()
+                    .into_iter()
+                    .chain(fake_root.partial_path().0.iter())
+                    .copied(),
             ));
             hash_node(&fake_root, path_prefix)
         } else {
