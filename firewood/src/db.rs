@@ -862,7 +862,7 @@ mod test {
             })
             .collect();
 
-        // better me correct
+        // better be correct
         assert_eq!(batches.len(), NUM_PROPOSALS);
 
         // create proposals from the batches. The first one is created from the db, the others are
