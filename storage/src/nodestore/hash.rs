@@ -15,14 +15,17 @@ use crate::node::Node;
 use crate::{Child, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorage, SharedNode};
 
 use super::NodeReader;
+
+#[cfg(feature = "ethhash")]
+use crate::LinearAddress;
 #[cfg(feature = "ethhash")]
 use std::ops::Deref;
 
 /// Classified children for ethereum hash processing
 #[cfg(feature = "ethhash")]
 pub(super) struct ClassifiedChildren<'a> {
-    pub(super) unhashed: Vec<(usize, Node)>,
-    pub(super) hashed: Vec<(usize, (MaybePersistedNode, &'a mut HashType))>,
+    pub(super) num_unhashed: usize,
+    pub(super) hashed: Vec<(usize, (LinearAddress, &'a mut HashType))>,
 }
 
 impl<T, S: ReadableStorage> NodeStore<T, S>
@@ -33,13 +36,17 @@ where
     /// We have some special cases based on the number of children
     /// and whether they are hashed or unhashed, so we need to classify them.
     #[cfg(feature = "ethhash")]
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "num_hashed will be less than number of children (small const)"
+    )]
     pub(super) fn ethhash_classify_children<'a>(
         &self,
         children: &'a mut Children<Child>,
     ) -> ClassifiedChildren<'a> {
         children.iter_mut().enumerate().fold(
             ClassifiedChildren {
-                unhashed: Vec::new(),
+                num_unhashed: 0,
                 hashed: Vec::new(),
             },
             |mut acc, (idx, child)| {
@@ -47,21 +54,14 @@ where
                     None => {}
                     Some(Child::AddressWithHash(a, h)) => {
                         // Convert address to MaybePersistedNode
-                        let maybe_persisted_node = MaybePersistedNode::from(*a);
-                        acc.hashed.push((idx, (maybe_persisted_node, h)));
+                        acc.hashed.push((idx, (*a, h)));
                     }
-                    Some(Child::Node(node)) => acc.unhashed.push((idx, node.clone())),
+                    Some(Child::Node(_)) => acc.num_unhashed += 1,
                     Some(Child::MaybePersisted(maybe_persisted, h)) => {
                         // For MaybePersisted, we need to get the address if it's persisted
-                        if let Some(addr) = maybe_persisted.as_linear_address() {
-                            let maybe_persisted_node = MaybePersistedNode::from(addr);
-                            acc.hashed.push((idx, (maybe_persisted_node, h)));
-                        } else {
-                            // If not persisted, we need to get the node to hash it
-                            let node = maybe_persisted
-                                .as_shared_node(&self)
-                                .expect("will never fail for unpersisted nodes");
-                            acc.unhashed.push((idx, node.deref().clone()));
+                        match maybe_persisted.as_linear_address() {
+                            Some(addr) => acc.hashed.push((idx, (addr, h))),
+                            None => acc.num_unhashed += 1,
                         }
                     }
                 }
@@ -77,54 +77,45 @@ where
         #[cfg(feature = "ethhash")] &self,
         mut node: Node,
         path_prefix: &mut Path,
-        #[cfg(feature = "ethhash")] fake_root_extra_nibble: Option<u8>,
+        #[cfg(feature = "ethhash")] account_child_no_peers: bool,
     ) -> Result<(MaybePersistedNode, HashType), FileIoError> {
         // If this is a branch, find all unhashed children and recursively hash them.
         trace!("hashing {node:?} at {path_prefix:?}");
         if let Node::Branch(ref mut b) = node {
-            // special case code for ethereum hashes at the account level
             #[cfg(feature = "ethhash")]
-            let make_fake_root = if path_prefix.0.len().saturating_add(b.partial_path.0.len()) == 64
+            // special case for ethhash at the account level
+            let only_one_child = if path_prefix.0.len().saturating_add(b.partial_path.0.len()) == 64
             {
-                // looks like we're at an account branch
-                // tally up how many hashes we need to deal with
                 let ClassifiedChildren {
-                    unhashed,
+                    num_unhashed,
                     mut hashed,
                 } = self.ethhash_classify_children(&mut b.children);
-                trace!("hashed {hashed:?} unhashed {unhashed:?}");
-                if hashed.len() == 1 {
-                    // we were left with one hashed node that must be rehashed
-                    let (invalidated_node_idx, (invalidated_node, invalidated_hash)) =
-                        hashed.first_mut().expect("hashed is not empty");
-                    // Extract the address from the MaybePersistedNode
-                    let addr: crate::LinearAddress = invalidated_node
-                        .as_linear_address()
-                        .expect("hashed node should be persisted");
-                    let mut hashable_node = self.read_node(addr)?.deref().clone();
+                trace!("hashed {hashed:?} unhashed {num_unhashed:?}");
+                if let [(child_idx, (child_node_addr, child_hash))] = &mut hashed[..] {
+                    // special case:
+                    //  - there was only one child in the current account branch when previously hashed
+                    //  - but now we are adding more children
+                    // we need to rehash the child
+                    let hashable_node = self.read_node(*child_node_addr)?.deref().clone();
                     let original_length = path_prefix.len();
                     path_prefix.0.extend(b.partial_path.0.iter().copied());
-                    if unhashed.is_empty() {
-                        hashable_node.update_partial_path(Path::from_nibbles_iterator(
-                            std::iter::once(*invalidated_node_idx as u8)
-                                .chain(hashable_node.partial_path().0.iter().copied()),
-                        ));
-                    } else {
-                        path_prefix.0.push(*invalidated_node_idx as u8);
-                    }
-                    let hash = hash_node(&hashable_node, path_prefix);
+                    path_prefix.0.push(*child_idx as u8);
+                    let hash =
+                        Self::compute_node_ethhash(&hashable_node, path_prefix, num_unhashed == 0);
                     path_prefix.0.truncate(original_length);
-                    **invalidated_hash = hash;
+                    **child_hash = hash;
                 }
-                // handle the single-child case for an account special below
-                if hashed.is_empty() && unhashed.len() == 1 {
-                    Some(unhashed.last().expect("only one").0 as u8)
-                } else {
-                    None
+
+                {
+                    #![expect(
+                        clippy::arithmetic_side_effects,
+                        reason = "hashed and unhashed can have at most 16 elements"
+                    )]
+                    hashed.len() + num_unhashed == 1
                 }
             } else {
-                // not a single child
-                None
+                // not an account branch
+                false
             };
 
             // branch children cases:
@@ -135,6 +126,7 @@ where
             // 5. 1 hashed, >0 unhashed <-- rehash case
             // 6. everything already hashed
 
+            // general case: recusively hash unhashed children
             for (nibble, child) in b.children.iter_mut().enumerate() {
                 // If this is empty or already hashed, we're done
                 // Empty matches None, and non-Node types match Some(None) here, so we want
@@ -150,18 +142,11 @@ where
                 // we extend and truncate path_prefix to reduce memory allocations
                 let original_length = path_prefix.len();
                 path_prefix.0.extend(b.partial_path.0.iter().copied());
-                #[cfg(feature = "ethhash")]
-                if make_fake_root.is_none() {
-                    // we don't push the nibble there is only one unhashed child and
-                    // we're on an account
-                    path_prefix.0.push(nibble as u8);
-                }
-                #[cfg(not(feature = "ethhash"))]
                 path_prefix.0.push(nibble as u8);
 
                 #[cfg(feature = "ethhash")]
                 let (child_node, child_hash) =
-                    self.hash_helper(child_node, path_prefix, make_fake_root)?;
+                    self.hash_helper(child_node, path_prefix, only_one_child)?;
                 #[cfg(not(feature = "ethhash"))]
                 let (child_node, child_hash) = Self::hash_helper(child_node, path_prefix)?;
 
@@ -170,24 +155,11 @@ where
                 path_prefix.0.truncate(original_length);
             }
         }
+
         // At this point, we either have a leaf or a branch with all children hashed.
         // if the encoded child hash <32 bytes then we use that RLP
-
         #[cfg(feature = "ethhash")]
-        // if we have a child that is the only child of an account branch, we will hash this child as if it
-        // is a root node. This means we have to take the nibble from the parent and prefix it to the partial path
-        let hash = if let Some(nibble) = fake_root_extra_nibble {
-            let mut fake_root = node.clone();
-            trace!("old node: {fake_root:?}");
-            fake_root.update_partial_path(Path::from_nibbles_iterator(
-                std::iter::once(nibble).chain(fake_root.partial_path().0.iter().copied()),
-            ));
-            trace!("new node: {fake_root:?}");
-            hash_node(&fake_root, path_prefix)
-        } else {
-            hash_node(&node, path_prefix)
-        };
-
+        let hash = Self::compute_node_ethhash(&node, path_prefix, account_child_no_peers);
         #[cfg(not(feature = "ethhash"))]
         let hash = hash_node(&node, path_prefix);
 
@@ -195,24 +167,24 @@ where
     }
 
     #[cfg(feature = "ethhash")]
+    /// This function computes the ethhash of a single node assuming all its children are hashed.
+    /// The function appends to `path_prefix` and then truncate it back to the original length - we only reuse the memory space to avoid allocations
     pub(crate) fn compute_node_ethhash(
         node: &Node,
-        path_prefix: &Path,
-        have_peers: bool,
+        path_prefix: &mut Path,
+        account_child_no_peers: bool,
     ) -> HashType {
-        if path_prefix.0.len() == 65 && !have_peers {
+        if path_prefix.0.len() == 65 && account_child_no_peers {
             // This is the special case when this node is the only child of an account
             //  - 64 nibbles for account + 1 nibble for its position in account branch node
             let mut fake_root = node.clone();
+            let extra_nibble = path_prefix.0.pop().expect("path_prefix not empty");
             fake_root.update_partial_path(Path::from_nibbles_iterator(
-                path_prefix
-                    .0
-                    .last()
-                    .into_iter()
-                    .chain(fake_root.partial_path().0.iter())
-                    .copied(),
+                std::iter::once(extra_nibble).chain(fake_root.partial_path().0.iter().copied()),
             ));
-            hash_node(&fake_root, path_prefix)
+            let hash = hash_node(&fake_root, path_prefix);
+            path_prefix.0.push(extra_nibble);
+            hash
         } else {
             hash_node(node, path_prefix)
         }
