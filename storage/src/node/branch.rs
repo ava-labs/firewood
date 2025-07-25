@@ -326,11 +326,11 @@ pub struct BranchNode<T> {
     /// Element i is the child at index i, or None if there is no child at that index.
     /// Each element is (`child_hash`, `child_address`).
     /// `child_address` is None if we don't know the child's hash.
-    //pub children: [Option<Child>; Self::MAX_CHILDREN],
     pub children: [T; BranchConstants::MAX_CHILDREN],
 }
 
-#[allow(missing_docs)]
+/// Contants used in Branch. Moved out into its own struct as they are
+/// independent of the generic parameter for Branch.
 #[derive(Debug)]
 pub struct BranchConstants;
 impl BranchConstants {
@@ -378,16 +378,6 @@ impl<T: ChildOption> Debug for BranchNode<T> {
 }
 
 impl<T: ChildOption> BranchNode<T> {
-    /* 
-    /// The maximum number of children in a [`BranchNode`]
-    #[cfg(feature = "branch_factor_256")]
-    pub const MAX_CHILDREN: usize = 256;
-
-    /// The maximum number of children in a [`BranchNode`]
-    #[cfg(not(feature = "branch_factor_256"))]
-    pub const MAX_CHILDREN: usize = 16;
-    */
-
     /// Returns the address of the child at the given index.
     /// Panics if `child_index` >= [`BranchNode::MAX_CHILDREN`].
     #[must_use]

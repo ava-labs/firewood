@@ -73,7 +73,6 @@ impl ChildOption for Option<Child> {
     fn as_child_option_mut(&mut self) -> &mut Option<Child> {
         return self;
     }
-
     fn as_child_option(&self) -> &Option<Child> {
         return self;
     }
