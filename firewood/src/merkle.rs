@@ -23,9 +23,9 @@ use crate::stream::PathIterator;
 #[cfg(test)]
 use crate::v2::api;
 use firewood_storage::{
-    BranchConstants, BranchNode, Child, FileIoError, HashType, Hashable, HashedNodeReader,
-    ImmutableProposal, IntoHashType, LeafNode, MaybePersistedNode, MutableProposal,
-    NibblesIterator, Node, ChildOption, NodeStore, Path, ReadableStorage, SharedNode,
+    BranchConstants, BranchNode, Child, ChildOption, FileIoError, HashType, Hashable,
+    HashedNodeReader, ImmutableProposal, IntoHashType, LeafNode, MaybePersistedNode,
+    MutableProposal, NibblesIterator, Node, NodeStore, Path, ReadableStorage, SharedNode,
     TrieReader, ValueDigest,
 };
 #[cfg(test)]
@@ -512,7 +512,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     where
         Node<Option<Child>>: From<Node<T>>,
         Node<T>: From<Node<Option<Child>>>,
-        //Option<Child>: From<T>,
     {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`
@@ -599,7 +598,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                         let child =
                             self.insert_helper(child.into(), partial_path.as_ref(), value)?;
                         branch.update_child(child_index, Some(Child::Node(child)));
-                        //Ok(node.convert_child_option())
                         Ok(node.into())
                     }
                     Node::Leaf(ref mut leaf) => {
@@ -683,14 +681,13 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     #[expect(clippy::type_complexity)]
     fn remove_helper<T: ChildOption + Default>(
         &mut self,
-        //mut node: Node<Option<Child>>,
         mut node: Node<T>,
         key: &[u8],
     ) -> Result<(Option<Node<Option<Child>>>, Option<Box<[u8]>>), FileIoError>
     where
         Node<Option<Child>>: From<Node<T>>,
         Node<T>: From<Node<Option<Child>>>,
-        Option<firewood_storage::Child>: From<T>,
+        Option<Child>: From<T>,
     {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`
@@ -730,7 +727,10 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                 .iter_mut()
                                 .enumerate()
                                 .filter_map(|(index, child)| {
-                                    child.as_child_option_mut().as_mut().map(|child| (index, child))
+                                    child
+                                        .as_child_option_mut()
+                                        .as_mut()
+                                        .map(|child| (index, child))
                                 });
 
                         let (child_index, child) = children_iter
@@ -839,7 +839,10 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                 .iter_mut()
                                 .enumerate()
                                 .filter_map(|(index, child)| {
-                                    child.as_child_option_mut().as_mut().map(|child| (index, child))
+                                    child
+                                        .as_child_option_mut()
+                                        .as_mut()
+                                        .map(|child| (index, child))
                                 });
 
                         let Some((child_index, child)) = children_iter.next() else {
@@ -916,7 +919,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 
     fn remove_prefix_helper<T: ChildOption + Default>(
         &mut self,
-        //mut node: Node<Option<Child>>,
         mut node: Node<T>,
         key: &[u8],
         deleted: &mut usize,
@@ -1005,7 +1007,10 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                 .iter_mut()
                                 .enumerate()
                                 .filter_map(|(index, child)| {
-                                    child.as_child_option_mut().as_mut().map(|child| (index, child))
+                                    child
+                                        .as_child_option_mut()
+                                        .as_mut()
+                                        .map(|child| (index, child))
                                 });
 
                         let Some((child_index, child)) = children_iter.next() else {
