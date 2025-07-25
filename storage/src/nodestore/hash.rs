@@ -12,7 +12,10 @@ use crate::hashednode::hash_node;
 use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::Node;
-use crate::{Child, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorage, SharedNode};
+use crate::{
+    Child, HashType, LinearAddress, MaybePersistedNode, NodeStore, Path, ReadableStorage,
+    SharedNode,
+};
 
 use super::NodeReader;
 #[cfg(feature = "ethhash")]
@@ -21,8 +24,8 @@ use std::ops::Deref;
 /// Classified children for ethereum hash processing
 #[cfg(feature = "ethhash")]
 pub(super) struct ClassifiedChildren<'a> {
-    pub(super) unhashed: Vec<(usize, Node)>,
-    pub(super) hashed: Vec<(usize, (MaybePersistedNode, &'a mut HashType))>,
+    pub(super) num_unhashed: usize,
+    pub(super) hashed: Vec<(usize, (LinearAddress, &'a mut HashType))>,
 }
 
 impl<T, S: ReadableStorage> NodeStore<T, S>
@@ -33,13 +36,17 @@ where
     /// We have some special cases based on the number of children
     /// and whether they are hashed or unhashed, so we need to classify them.
     #[cfg(feature = "ethhash")]
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "num_hashed will be less than number of children (small const)"
+    )]
     pub(super) fn ethhash_classify_children<'a>(
         &self,
         children: &'a mut Children<Child>,
     ) -> ClassifiedChildren<'a> {
         children.iter_mut().enumerate().fold(
             ClassifiedChildren {
-                unhashed: Vec::new(),
+                num_unhashed: 0,
                 hashed: Vec::new(),
             },
             |mut acc, (idx, child)| {
@@ -47,21 +54,14 @@ where
                     None => {}
                     Some(Child::AddressWithHash(a, h)) => {
                         // Convert address to MaybePersistedNode
-                        let maybe_persisted_node = MaybePersistedNode::from(*a);
-                        acc.hashed.push((idx, (maybe_persisted_node, h)));
+                        acc.hashed.push((idx, (*a, h)));
                     }
-                    Some(Child::Node(node)) => acc.unhashed.push((idx, node.clone())),
+                    Some(Child::Node(_)) => acc.num_unhashed += 1,
                     Some(Child::MaybePersisted(maybe_persisted, h)) => {
                         // For MaybePersisted, we need to get the address if it's persisted
-                        if let Some(addr) = maybe_persisted.as_linear_address() {
-                            let maybe_persisted_node = MaybePersistedNode::from(addr);
-                            acc.hashed.push((idx, (maybe_persisted_node, h)));
-                        } else {
-                            // If not persisted, we need to get the node to hash it
-                            let node = maybe_persisted
-                                .as_shared_node(&self)
-                                .expect("will never fail for unpersisted nodes");
-                            acc.unhashed.push((idx, node.deref().clone()));
+                        match maybe_persisted.as_linear_address() {
+                            Some(addr) => acc.hashed.push((idx, (addr, h))),
+                            None => acc.num_unhashed += 1,
                         }
                     }
                 }
@@ -83,31 +83,25 @@ where
         trace!("hashing {node:?} at {path_prefix:?}");
         if let Node::Branch(ref mut b) = node {
             #[cfg(feature = "ethhash")]
-            // special case code for ethhash at the account level
+            // special case for ethhash at the account level
             let only_one_child = if path_prefix.0.len().saturating_add(b.partial_path.0.len()) == 64
             {
                 let ClassifiedChildren {
-                    unhashed,
+                    num_unhashed,
                     mut hashed,
                 } = self.ethhash_classify_children(&mut b.children);
-                trace!("hashed {hashed:?} unhashed {unhashed:?}");
-                if let [(child_idx, (child_node, child_hash))] = &mut hashed[..] {
+                trace!("hashed {hashed:?} unhashed {num_unhashed:?}");
+                if let [(child_idx, (child_node_addr, child_hash))] = &mut hashed[..] {
                     // special case:
                     //  - there was only one child in the current account branch when previously hashed
                     //  - but now we are adding more children
                     // we need to rehash the child
-                    let addr = child_node
-                        .as_linear_address()
-                        .expect("hashed node should be persisted");
-                    let hashable_node = self.read_node(addr)?.deref().clone();
+                    let hashable_node = self.read_node(*child_node_addr)?.deref().clone();
                     let original_length = path_prefix.len();
                     path_prefix.0.extend(b.partial_path.0.iter().copied());
                     path_prefix.0.push(*child_idx as u8);
-                    let hash = Self::compute_node_ethhash(
-                        &hashable_node,
-                        path_prefix,
-                        unhashed.is_empty(),
-                    );
+                    let hash =
+                        Self::compute_node_ethhash(&hashable_node, path_prefix, num_unhashed == 0);
                     path_prefix.0.truncate(original_length);
                     **child_hash = hash;
                 }
@@ -117,7 +111,7 @@ where
                         clippy::arithmetic_side_effects,
                         reason = "hashed and unhashed can have at most 16 elements"
                     )]
-                    hashed.len() + unhashed.len() == 1
+                    hashed.len() + num_unhashed == 1
                 }
             } else {
                 // not an account branch
@@ -173,6 +167,8 @@ where
     }
 
     #[cfg(feature = "ethhash")]
+    /// This function computes the ethhash of a single node assuming all its children are hashed.
+    /// The function appends to `path_prefix` and then truncate it back to the original length - we only reuse the memory space to avoid allocations
     pub(crate) fn compute_node_ethhash(
         node: &Node,
         path_prefix: &mut Path,
