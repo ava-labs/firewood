@@ -175,18 +175,20 @@ where
     #[cfg(feature = "ethhash")]
     pub(crate) fn compute_node_ethhash(
         node: &Node,
-        path_prefix: &Path,
+        path_prefix: &mut Path,
         account_child_no_peers: bool,
     ) -> HashType {
         if path_prefix.0.len() == 65 && account_child_no_peers {
             // This is the special case when this node is the only child of an account
             //  - 64 nibbles for account + 1 nibble for its position in account branch node
             let mut fake_root = node.clone();
+            let extra_nibble = path_prefix.0.pop().expect("path_prefix not empty");
             fake_root.update_partial_path(Path::from_nibbles_iterator(
-                std::iter::once(*path_prefix.0.last().expect("path_prefix not empty"))
-                    .chain(fake_root.partial_path().0.iter().copied()),
+                std::iter::once(extra_nibble).chain(fake_root.partial_path().0.iter().copied()),
             ));
-            hash_node(&fake_root, path_prefix)
+            let hash = hash_node(&fake_root, path_prefix);
+            path_prefix.0.push(extra_nibble);
+            hash
         } else {
             hash_node(node, path_prefix)
         }
