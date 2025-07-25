@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -980,4 +981,59 @@ func TestGetFromRoot(t *testing.T) {
 	}
 	_, err = db.GetFromRoot(nonExistentRoot, []byte("key"))
 	r.Error(err, "GetFromRoot with non-existent root should return error")
+}
+
+func TestCommitQueue(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	commit_queue := make(chan *fw.Proposal)
+
+	go func() {
+		for {
+			prop, more := <-commit_queue
+			if more {
+				err := prop.Commit()
+				if err != nil {
+					t.Fatalf("Error committing proposal: %v", err)
+				}
+			} else {
+				break
+			}
+		}
+	}()
+	for i := range 100 {
+		key := [][]byte{[]byte("key" + strconv.Itoa(i))}
+		value := [][]byte{[]byte("value" + strconv.Itoa(i))}
+		prop, err := db.Propose(key, value)
+		if err != nil {
+			t.Fatalf("%v", err)
+		}
+
+		got, err := prop.Get(key[0])
+		if err != nil {
+			t.Fatalf("get from proposal failed: %v", err)
+		}
+
+		rev, err := prop.Root()
+		if err != nil {
+			t.Fatalf("error getting root from proposal %v", err)
+		}
+
+		if !reflect.DeepEqual(got, value[0]) {
+			t.Fatalf("mismatch before submitting to commit queue: %v %v", got, value[0])
+		}
+
+		commit_queue <- prop
+
+		got, err = db.GetFromRoot(rev, key[0])
+		if err != nil {
+			t.Fatalf("get from root %v", err)
+		}
+
+		if !reflect.DeepEqual(got, value[0]) {
+			t.Fatalf("mismatch after submitting to commit queue %v %v", got, value[0])
+		}
+		fmt.Println(i)
+	}
 }
