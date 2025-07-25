@@ -349,7 +349,7 @@ impl<T: NodeOptionTrait> Debug for BranchNode<T> {
         write!(f, r#" path="{:?}""#, self.partial_path)?;
 
         for (i, c) in self.children.iter().enumerate() {
-            let c = c.get_child_option();
+            let c: &Option<Child> = c.as_child_option();
             match c {
                 None => {}
                 Some(Child::Node(_)) => {} //TODO
@@ -404,7 +404,7 @@ impl<T: NodeOptionTrait> BranchNode<T> {
             .children
             .get_mut(child_index as usize)
             .expect("child_index is in bounds");
-        child.set_child_option(new_child);
+        child.replace_child_option(new_child);
     }
 
     // Helper to iterate over only valid children
@@ -414,7 +414,7 @@ impl<T: NodeOptionTrait> BranchNode<T> {
         self.children
             .iter()
             .enumerate()
-            .filter_map(|(i, child)| match child.get_child_option() {
+            .filter_map(|(i, child)| match child.as_child_option() {
                 None => None,
                 Some(Child::Node(_)) => unreachable!("TODO make unreachable"),
                 Some(Child::AddressWithHash(address, hash)) => Some((i, (*address, hash))),

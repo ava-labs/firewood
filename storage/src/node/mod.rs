@@ -31,9 +31,9 @@ pub use branch::{BranchConstants, BranchNode, Child};
 use enum_as_inner::EnumAsInner;
 use integer_encoding::{VarInt, VarIntReader as _};
 pub use leaf::LeafNode;
-use triomphe::Arc;
 use std::fmt::Debug;
 use std::io::{Error, Read, Write};
+use triomphe::Arc;
 
 pub mod branch;
 mod leaf;
@@ -51,42 +51,43 @@ pub enum Node<T: NodeOptionTrait> {
     Leaf(LeafNode),
 }
 
-impl <T: NodeOptionTrait> From<&Node<T>> for Arc<Node<Option<Child>>> {
+impl<T: NodeOptionTrait> From<&Node<T>> for Arc<Node<Option<Child>>> {
     fn from(item: &Node<T>) -> Self {
-        return Arc::new(item.convert_child_option());
+        // TODO: This will likely perform some unnessary memory copies
+        //       when T is Option<Child>.
+        return Arc::new(item.into_child_option_node());
     }
 }
 
 /// TODO
 pub trait NodeOptionTrait {
     /// TODO
-    fn get_child_option(&self) -> &Option<Child>;
+    fn as_child_option(&self) -> &Option<Child>;
 
     /// TODO
-    fn get_child_option_mut(&mut self) -> &mut Option<Child>;
+    fn as_mut(&mut self) -> Option<&mut Child>;
 
     /// TODO
-    fn set_child_option(&mut self, child: Option<Child>);
+    fn as_child_option_mut(&mut self) -> &mut Option<Child>;
 
     /// TODO
-    fn perform_as_mut(&mut self) -> Option<&mut Child>;
-    
+    fn replace_child_option(&mut self, child: Option<Child>);
 }
 
 impl NodeOptionTrait for Option<Child> {
-    fn perform_as_mut(&mut self) -> Option<&mut Child> {
+    fn as_mut(&mut self) -> Option<&mut Child> {
         return self.as_mut();
     }
 
-    fn get_child_option_mut(&mut self) -> &mut Option<Child> {
+    fn as_child_option_mut(&mut self) -> &mut Option<Child> {
         return self;
     }
 
-    fn get_child_option(&self) -> &Option<Child> {
+    fn as_child_option(&self) -> &Option<Child> {
         return self;
     }
 
-    fn set_child_option(&mut self, child: Option<Child>) {
+    fn replace_child_option(&mut self, child: Option<Child>) {
         *self = child;
     }
 }
@@ -492,25 +493,18 @@ impl<U: NodeOptionTrait> Node<U> {
         }
     }
 
-    /// Currently very inefficient as we perform this conversation even if
-    /// the original type is already a Node<Option<Child>>.
     ///
-    /// Would implementing From(T) -> Node<Option<Child>> be more efficient
-    pub fn convert_child_option(&self) -> Node<Option<Child>> {
+    pub fn into_child_option_node(&self) -> Node<Option<Child>> {
         match self {
-            Node::Leaf(l) => Node::Leaf(l.clone()),
+            Node::Leaf(l) => Node::Leaf(l.to_owned()),
             Node::Branch(b) => {
                 let mut new_children = [const { None }; BranchConstants::MAX_CHILDREN];
                 for (i, entry) in b.children.iter().enumerate() {
-                    if let Some(c) = entry.get_child_option() {
-                        new_children[i] = Some(c.clone());
-                    } else {
-                        new_children[i] = None;
-                    };
+                    new_children[i] = entry.as_child_option().to_owned();
                 }
                 Node::Branch(Box::new(BranchNode::<Option<Child>> {
-                    partial_path: b.partial_path.clone(),
-                    value: b.value.clone(),
+                    partial_path: b.partial_path.to_owned(),
+                    value: b.value.to_owned(),
                     children: new_children,
                 }))
             }

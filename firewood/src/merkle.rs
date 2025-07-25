@@ -126,12 +126,13 @@ fn get_helper<T: TrieReader, U: NodeOptionTrait>(
         (None, None) => Ok(Some(node.into())), // 1. The node is at `key`
         (Some((child_index, remaining_key)), None) => {
             // 3. The key is below the node (i.e. its descendant)
-            match node.convert_child_option() {
+            match node {
                 Node::Leaf(_) => Ok(None),
                 Node::Branch(node) => match node
                     .children
                     .get(child_index as usize)
                     .expect("index is in bounds")
+                    .as_child_option()
                 {
                     None => Ok(None),
                     Some(Child::Node(child)) => get_helper(nodestore, child, remaining_key),
@@ -511,6 +512,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     where
         Node<Option<Child>>: From<Node<T>>,
         Node<T>: From<Node<Option<Child>>>,
+        //Option<Child>: From<T>,
     {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`
@@ -568,11 +570,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 //    ... (key may be below)       ... (key is below)
                 match node {
                     Node::Branch(ref mut branch) => {
-                        let n = std::mem::take(&mut branch.children[child_index as usize]);
-                        //n.get_child_option();
-
                         #[expect(clippy::indexing_slicing)]
-                        let child: Node<Option<Child>> = match n.get_child_option()
+                        let child: Node<Option<Child>> = match std::mem::take(&mut branch.children[child_index as usize]).as_child_option()
                         //let child = match std::mem::take(&mut branch.children[child_index as usize])
                         {
                             None => {
@@ -691,6 +690,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     where
         Node<Option<Child>>: From<Node<T>>,
         Node<T>: From<Node<Option<Child>>>,
+        Option<firewood_storage::Child>: From<T>,
     {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`
@@ -730,7 +730,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                 .iter_mut()
                                 .enumerate()
                                 .filter_map(|(index, child)| {
-                                    child.perform_as_mut().map(|child| (index, child))
+                                    child.as_mut().map(|child| (index, child))
                                 });
 
                         let (child_index, child) = children_iter
@@ -808,19 +808,16 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                     // we found a non-matching leaf node, so the value does not exist
                     Node::Leaf(_) => Ok((Some(node.into()), None)),
                     Node::Branch(ref mut branch) => {
-                        let n = std::mem::take(&mut branch.children[child_index as usize]);
-
                         #[expect(clippy::indexing_slicing)]
-                        let child: Node<Option<Child>> = match n.get_child_option()
-                        //#[expect(clippy::indexing_slicing)]
-                        //let child = match std::mem::take(&mut branch.children[child_index as usize])
-                        {
+                        let child: Node<Option<Child>> = match <T as Into<Option<Child>>>::into(
+                            std::mem::take(&mut branch.children[child_index as usize]),
+                        ) {
                             None => {
                                 return Ok((Some(node.into()), None));
                             }
                             Some(Child::Node(node)) => node.clone().into(),
                             Some(Child::AddressWithHash(addr, _)) => {
-                                self.nodestore.read_for_update((*addr).into())?
+                                self.nodestore.read_for_update(addr.into())?
                             }
                             Some(Child::MaybePersisted(maybe_persisted, _)) => {
                                 self.nodestore.read_for_update(maybe_persisted.clone())?
@@ -842,7 +839,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                 .iter_mut()
                                 .enumerate()
                                 .filter_map(|(index, child)| {
-                                    child.perform_as_mut().map(|child| (index, child))
+                                    child.as_mut().map(|child| (index, child))
                                 });
 
                         let Some((child_index, child)) = children_iter.next() else {
@@ -971,23 +968,24 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 match node {
                     Node::Leaf(_) => Ok(Some(node.into())),
                     Node::Branch(ref mut branch) => {
-                        let n = std::mem::take(&mut branch.children[child_index as usize]);
+                        //let n = std::mem::take(&mut branch.children[child_index as usize]);
 
                         #[expect(clippy::indexing_slicing)]
-                        let child = match n.get_child_option() {
-                            None => {
-                                return Ok(Some(node.into()));
-                            }
-                            Some(Child::Node(node)) => node,
-                            Some(Child::AddressWithHash(addr, _)) => {
-                                //self.nodestore.read_for_update((*addr).into())?
-
-                                &self.nodestore.read_for_update((*addr).into())?
-                            }
-                            Some(Child::MaybePersisted(maybe_persisted, _)) => {
-                                &self.nodestore.read_for_update(maybe_persisted.clone())?
-                            }
-                        };
+                        let child: Node<Option<Child>> =
+                            match std::mem::take(&mut branch.children[child_index as usize])
+                                .as_child_option()
+                            {
+                                None => {
+                                    return Ok(Some(node.into()));
+                                }
+                                Some(Child::Node(node)) => node.clone(),
+                                Some(Child::AddressWithHash(addr, _)) => {
+                                    self.nodestore.read_for_update((*addr).into())?
+                                }
+                                Some(Child::MaybePersisted(maybe_persisted, _)) => {
+                                    self.nodestore.read_for_update(maybe_persisted.clone())?
+                                }
+                            };
 
                         let child = self.remove_prefix_helper(
                             child.clone().into(),
@@ -1007,7 +1005,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                 .iter_mut()
                                 .enumerate()
                                 .filter_map(|(index, child)| {
-                                    child.perform_as_mut().map(|child| (index, child))
+                                    child.as_mut().map(|child| (index, child))
                                 });
 
                         let Some((child_index, child)) = children_iter.next() else {
@@ -1076,9 +1074,10 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         }
         for children in &mut branch.children {
             // read the child node
-            let child = match children.get_child_option_mut() {
+            let child = match children.as_child_option_mut() {
                 Some(Child::Node(node)) => node,
                 Some(Child::AddressWithHash(addr, _)) => {
+                    //&mut self.nodestore.read_for_update((*addr).into())?
                     &mut self.nodestore.read_for_update((*addr).into())?
                 }
                 Some(Child::MaybePersisted(maybe_persisted, _)) => {
