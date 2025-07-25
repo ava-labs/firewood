@@ -25,7 +25,7 @@ use crate::v2::api;
 use firewood_storage::{
     BranchConstants, BranchNode, Child, FileIoError, HashType, Hashable, HashedNodeReader,
     ImmutableProposal, IntoHashType, LeafNode, MaybePersistedNode, MutableProposal,
-    NibblesIterator, Node, NodeOptionTrait, NodeStore, Path, ReadableStorage, SharedNode,
+    NibblesIterator, Node, ChildOption, NodeStore, Path, ReadableStorage, SharedNode,
     TrieReader, ValueDigest,
 };
 #[cfg(test)]
@@ -101,7 +101,7 @@ macro_rules! write_attributes {
 }
 
 /// Returns the value mapped to by `key` in the subtrie rooted at `node`.
-fn get_helper<T: TrieReader, U: NodeOptionTrait>(
+fn get_helper<T: TrieReader, U: ChildOption>(
     nodestore: &T,
     node: &Node<U>,
     key: &[u8],
@@ -503,7 +503,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Each element of `key` is 1 nibble.
     /// Returns the new root of the subtrie.
     /// Note that the returned root is always a Node<Option<Child>>.
-    pub fn insert_helper<T: NodeOptionTrait + Default>(
+    pub fn insert_helper<T: ChildOption + Default>(
         &mut self,
         mut node: Node<T>,
         key: &[u8],
@@ -681,7 +681,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Returns the new root of the subtrie and the value that was removed, if any.
     /// Each element of `key` is 1 nibble.
     #[expect(clippy::type_complexity)]
-    fn remove_helper<T: NodeOptionTrait + Default>(
+    fn remove_helper<T: ChildOption + Default>(
         &mut self,
         //mut node: Node<Option<Child>>,
         mut node: Node<T>,
@@ -730,7 +730,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                 .iter_mut()
                                 .enumerate()
                                 .filter_map(|(index, child)| {
-                                    child.as_mut().map(|child| (index, child))
+                                    child.as_child_option_mut().as_mut().map(|child| (index, child))
                                 });
 
                         let (child_index, child) = children_iter
@@ -839,7 +839,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                 .iter_mut()
                                 .enumerate()
                                 .filter_map(|(index, child)| {
-                                    child.as_mut().map(|child| (index, child))
+                                    child.as_child_option_mut().as_mut().map(|child| (index, child))
                                 });
 
                         let Some((child_index, child)) = children_iter.next() else {
@@ -914,7 +914,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         Ok(deleted)
     }
 
-    fn remove_prefix_helper<T: NodeOptionTrait + Default>(
+    fn remove_prefix_helper<T: ChildOption + Default>(
         &mut self,
         //mut node: Node<Option<Child>>,
         mut node: Node<T>,
@@ -1005,7 +1005,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                 .iter_mut()
                                 .enumerate()
                                 .filter_map(|(index, child)| {
-                                    child.as_mut().map(|child| (index, child))
+                                    child.as_child_option_mut().as_mut().map(|child| (index, child))
                                 });
 
                         let Some((child_index, child)) = children_iter.next() else {
@@ -1063,7 +1063,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     }
 
     /// Recursively deletes all children of a branch node.
-    fn delete_children<T: NodeOptionTrait>(
+    fn delete_children<T: ChildOption>(
         &mut self,
         branch: &mut BranchNode<T>,
         deleted: &mut usize,

@@ -378,7 +378,7 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
 mod tests {
     use super::*;
     use crate::{
-        linear::memory::MemStore, node::{BranchNode, LeafNode, Node, NodeOptionTrait}, nodestore::MutableProposal, Child, HashType, LinearAddress, NodeStore, Path, SharedNode
+        linear::memory::MemStore, node::{BranchNode, LeafNode, Node, ChildOption}, nodestore::MutableProposal, Child, HashType, LinearAddress, NodeStore, Path, SharedNode
     };
 
     /// Helper to create a test node store with a specific root
@@ -390,7 +390,7 @@ mod tests {
     }
 
     /// Helper to create a leaf node
-    fn create_leaf<T: NodeOptionTrait>(path: &[u8], value: &[u8]) -> Node<T> {
+    fn create_leaf<T: ChildOption>(path: &[u8], value: &[u8]) -> Node<T> {
         Node::Leaf(LeafNode {
             partial_path: Path::from(path),
             value: value.to_vec().into_boxed_slice(),

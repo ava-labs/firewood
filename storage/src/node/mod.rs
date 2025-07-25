@@ -44,14 +44,14 @@ pub mod persist;
 // TODO: explain why Branch is boxed but Leaf is not
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner)]
 #[repr(C)]
-pub enum Node<T: NodeOptionTrait> {
+pub enum Node<T: ChildOption> {
     /// This node is a [`BranchNode`]
     Branch(Box<BranchNode<T>>),
     /// This node is a [`LeafNode`]
     Leaf(LeafNode),
 }
 
-impl<T: NodeOptionTrait> From<&Node<T>> for Arc<Node<Option<Child>>> {
+impl<T: ChildOption> From<&Node<T>> for Arc<Node<Option<Child>>> {
     fn from(item: &Node<T>) -> Self {
         // TODO: This will likely perform some unnessary memory copies
         //       when T is Option<Child>.
@@ -59,26 +59,17 @@ impl<T: NodeOptionTrait> From<&Node<T>> for Arc<Node<Option<Child>>> {
     }
 }
 
-/// TODO
-pub trait NodeOptionTrait {
-    /// TODO
+/// Node takes a ChildOption as a generic parameter. Each child in the
+/// children array in Node contains an Option<Child>. This trait offers
+/// some ways to access the Option<Child> of one of these entries.
+pub trait ChildOption {
+    /// Returns a reference to the internal Option<Child>
     fn as_child_option(&self) -> &Option<Child>;
-
-    /// TODO
-    fn as_mut(&mut self) -> Option<&mut Child>;
-
-    /// TODO
+    /// Returns a mutable reference to the internal Option<Child>
     fn as_child_option_mut(&mut self) -> &mut Option<Child>;
-
-    /// TODO
-    fn replace_child_option(&mut self, child: Option<Child>);
 }
 
-impl NodeOptionTrait for Option<Child> {
-    fn as_mut(&mut self) -> Option<&mut Child> {
-        return self.as_mut();
-    }
-
+impl ChildOption for Option<Child> {
     fn as_child_option_mut(&mut self) -> &mut Option<Child> {
         return self;
     }
@@ -86,13 +77,9 @@ impl NodeOptionTrait for Option<Child> {
     fn as_child_option(&self) -> &Option<Child> {
         return self;
     }
-
-    fn replace_child_option(&mut self, child: Option<Child>) {
-        *self = child;
-    }
 }
 
-impl<T: NodeOptionTrait> Default for Node<T> {
+impl<T: ChildOption> Default for Node<T> {
     fn default() -> Self {
         Node::Leaf(LeafNode {
             partial_path: Path::new(),
@@ -101,13 +88,13 @@ impl<T: NodeOptionTrait> Default for Node<T> {
     }
 }
 
-impl<T: NodeOptionTrait> From<BranchNode<T>> for Node<T> {
+impl<T: ChildOption> From<BranchNode<T>> for Node<T> {
     fn from(branch: BranchNode<T>) -> Self {
         Node::Branch(Box::new(branch))
     }
 }
 
-impl<T: NodeOptionTrait> From<LeafNode> for Node<T> {
+impl<T: ChildOption> From<LeafNode> for Node<T> {
     fn from(leaf: LeafNode) -> Self {
         Node::Leaf(leaf)
     }
@@ -457,7 +444,7 @@ impl Node<Option<Child>> {
     }
 }
 
-impl<U: NodeOptionTrait> Node<U> {
+impl<U: ChildOption> Node<U> {
     /// Returns the partial path of the node.
     #[must_use]
     pub fn partial_path(&self) -> &Path {

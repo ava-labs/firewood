@@ -10,7 +10,7 @@
     reason = "Found 2 occurrences after enabling the lint."
 )]
 
-use crate::node::{ExtendableBytes, NodeOptionTrait};
+use crate::node::{ExtendableBytes, ChildOption};
 use crate::{LeafNode, LinearAddress, MaybePersistedNode, Node, Path, SharedNode};
 use std::fmt::{Debug, Formatter};
 use std::io::Read;
@@ -343,7 +343,7 @@ impl BranchConstants {
     pub const MAX_CHILDREN: usize = 16;
 }
 
-impl<T: NodeOptionTrait> Debug for BranchNode<T> {
+impl<T: ChildOption> Debug for BranchNode<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "[BranchNode")?;
         write!(f, r#" path="{:?}""#, self.partial_path)?;
@@ -377,7 +377,7 @@ impl<T: NodeOptionTrait> Debug for BranchNode<T> {
     }
 }
 
-impl<T: NodeOptionTrait> BranchNode<T> {
+impl<T: ChildOption> BranchNode<T> {
     /* 
     /// The maximum number of children in a [`BranchNode`]
     #[cfg(feature = "branch_factor_256")]
@@ -404,7 +404,7 @@ impl<T: NodeOptionTrait> BranchNode<T> {
             .children
             .get_mut(child_index as usize)
             .expect("child_index is in bounds");
-        child.replace_child_option(new_child);
+        *child.as_child_option_mut() = new_child;
     }
 
     // Helper to iterate over only valid children
