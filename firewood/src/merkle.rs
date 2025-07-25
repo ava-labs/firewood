@@ -154,7 +154,6 @@ fn get_helper<T: TrieReader, U: ChildOption>(
 /// Merkle operations against a nodestore
 pub struct Merkle<T> {
     nodestore: T,
-    //lock: Option<Arc<Mutex<bool>>>,
 }
 
 impl<T> Merkle<T> {
@@ -165,7 +164,6 @@ impl<T> Merkle<T> {
 
 impl<T> From<T> for Merkle<T> {
     fn from(nodestore: T) -> Self {
-        //Merkle { nodestore, lock: Some(Arc::new(Mutex::new(true)))}
         Merkle { nodestore }
     }
 }
@@ -458,7 +456,6 @@ impl<S: ReadableStorage> TryFrom<Merkle<NodeStore<MutableProposal, S>>>
     fn try_from(m: Merkle<NodeStore<MutableProposal, S>>) -> Result<Self, Self::Error> {
         Ok(Merkle {
             nodestore: m.nodestore.try_into()?,
-            //lock: None,
         })
     }
 }
@@ -477,9 +474,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     pub fn insert(&mut self, key: &[u8], value: Box<[u8]>) -> Result<(), FileIoError> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
-        // Acquire root lock before accessing the root node
-        //let root_clone = self.lock.as_ref().unwrap().clone();
-        //let root_guard = root_clone.lock().unwrap();
         let root = self.nodestore.mut_root();
 
         let Some(root_node) = std::mem::take(root) else {
@@ -493,7 +487,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
             return Ok(());
         };
 
-        //let root_node = self.insert_helper(root_node, key.as_ref(), value, Some(root_guard))?;
         let root_node = self.insert_helper(root_node, key.as_ref(), value)?;
         *self.nodestore.mut_root() = root_node.into();
         Ok(())
@@ -518,7 +511,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         // 2. The key is above the node (i.e. its ancestor)
         // 3. The key is below the node (i.e. its descendant)
         // 4. Neither is an ancestor of the other
-
         let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
 
         let unique_key = path_overlap.unique_a;
@@ -554,7 +546,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 
                 // Shorten the node's partial path since it has a new parent.
                 node.update_partial_path(partial_path);
-                //branch.update_child(child_index, Some(Child::Node(node.convert_child_option())));
                 branch.update_child(child_index, Some(Child::Node(node.into())));
                 counter!("firewood.insert", "merkle"=>"above").increment(1);
 
@@ -571,7 +562,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                     Node::Branch(ref mut branch) => {
                         #[expect(clippy::indexing_slicing)]
                         let child: Node<Option<Child>> = match std::mem::take(&mut branch.children[child_index as usize]).as_child_option()
-                        //let child = match std::mem::take(&mut branch.children[child_index as usize])
                         {
                             None => {
                                 // There is no child at this index.
@@ -580,10 +570,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                     value,
                                     partial_path,
                                 });
-                                //branch.update_child(child_index, Some(Child::Node(new_leaf)));
                                 branch.update_child(child_index, Some(Child::Node(new_leaf)));
                                 counter!("firewood.insert", "merkle"=>"below").increment(1);
-                                //return Ok(node.convert_child_option());
                                 return Ok(node.into());
                             }
                             Some(Child::Node(child)) => child.clone(),
@@ -970,8 +958,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 match node {
                     Node::Leaf(_) => Ok(Some(node.into())),
                     Node::Branch(ref mut branch) => {
-                        //let n = std::mem::take(&mut branch.children[child_index as usize]);
-
                         #[expect(clippy::indexing_slicing)]
                         let child: Node<Option<Child>> =
                             match std::mem::take(&mut branch.children[child_index as usize])
@@ -1036,7 +1022,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                     value: Box::default(),
                                     partial_path: Path::new(),
                                 });
-
                                 std::mem::replace(child_node, l)
                             }
 
@@ -1082,7 +1067,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
             let child = match children.as_child_option_mut() {
                 Some(Child::Node(node)) => node,
                 Some(Child::AddressWithHash(addr, _)) => {
-                    //&mut self.nodestore.read_for_update((*addr).into())?
                     &mut self.nodestore.read_for_update((*addr).into())?
                 }
                 Some(Child::MaybePersisted(maybe_persisted, _)) => {
@@ -1215,7 +1199,6 @@ mod tests {
 
         let nodestore = NodeStore::new_empty_proposal(memstore.into());
 
-        //Merkle { nodestore, lock: Some(Arc::new(Mutex::new(true)))}
         Merkle { nodestore }
     }
 
