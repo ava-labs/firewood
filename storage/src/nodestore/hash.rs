@@ -91,14 +91,12 @@ where
                     mut hashed,
                 } = self.ethhash_classify_children(&mut b.children);
                 trace!("hashed {hashed:?} unhashed {unhashed:?}");
-                if hashed.len() == 1 {
+                if let [(child_idx, (child_node, child_hash))] = &mut hashed[..] {
                     // special case:
                     //  - there was only one child in the current account branch when previously hashed
                     //  - but now we are adding more children
                     // we need to rehash the child
-                    let (child_idx, (child_node, child_hash)) =
-                        hashed.first_mut().expect("hashed is not empty");
-                    let addr: crate::LinearAddress = child_node
+                    let addr = child_node
                         .as_linear_address()
                         .expect("hashed node should be persisted");
                     let hashable_node = self.read_node(addr)?.deref().clone();
