@@ -128,13 +128,21 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         progress_bar: Option<&ProgressBar>,
         hash_check: bool,
     ) -> Result<(), CheckerError> {
+        #[cfg(feature = "ethhash")]
         let SubTrieMetadata {
             root_address: subtrie_root_address,
             root_hash: subtrie_root_hash,
             parent,
             mut path_prefix,
-            #[cfg(feature = "ethhash")]
             has_no_peers,
+        } = subtrie;
+
+        #[cfg(not(feature = "ethhash"))]
+        let SubTrieMetadata {
+            root_address: subtrie_root_address,
+            root_hash: subtrie_root_hash,
+            parent,
+            path_prefix,
         } = subtrie;
 
         // check that address is aligned

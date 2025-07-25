@@ -12,12 +12,12 @@ use crate::hashednode::hash_node;
 use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::Node;
-use crate::{
-    Child, HashType, LinearAddress, MaybePersistedNode, NodeStore, Path, ReadableStorage,
-    SharedNode,
-};
+use crate::{Child, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorage, SharedNode};
 
 use super::NodeReader;
+
+#[cfg(feature = "ethhash")]
+use crate::LinearAddress;
 #[cfg(feature = "ethhash")]
 use std::ops::Deref;
 
