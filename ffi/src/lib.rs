@@ -766,6 +766,72 @@ pub unsafe extern "C" fn fwd_free_value(value: Option<&mut Value>) {
     }
 }
 
+#[derive(Debug, Default)]
+#[repr(u8)]
+pub enum ErrorType {
+    #[default]
+    NoError,
+    RequestError,
+    DbError,
+}
+
+/// Proof response!!!!
+#[derive(Debug, Default)]
+#[repr(C)]
+pub struct ProofResponse {
+    pub proof_data: Option<std::ptr::NonNull<Value>>,
+    pub error_type: ErrorType,
+    pub error_str: Option<std::ptr::NonNull<u8>>,
+}
+
+#[unsafe(no_mangle)]
+#[allow(unused_variables)]
+pub unsafe extern "C" fn fwd_get_range_proof(
+    db: Option<&DatabaseHandle<'_>>,
+    root: Value,
+    start: Value,
+    end: Value,
+) -> ProofResponse {
+    ProofResponse::default()
+}
+
+#[unsafe(no_mangle)]
+#[allow(unused_variables)]
+pub unsafe extern "C" fn fwd_commit_range_proof(
+    db: Option<&DatabaseHandle<'_>>,
+    target_root: Value,
+    proof_bytes: Value,
+) -> ProofResponse {
+    ProofResponse::default()
+}
+
+#[unsafe(no_mangle)]
+#[allow(unused_variables)]
+pub unsafe extern "C" fn fwd_get_change_proof(
+    db: Option<&DatabaseHandle<'_>>,
+    start_root: Value,
+    end_root: Value,
+    start_key: Value,
+    end_key: Value,
+) -> ProofResponse {
+    ProofResponse::default()
+}
+
+#[unsafe(no_mangle)]
+#[allow(unused_variables)]
+pub unsafe extern "C" fn fwd_commit_change_proof(
+    db: Option<&DatabaseHandle<'_>>,
+    target_start_root: Value,
+    target_end_root: Value,
+    proof_bytes: Value,
+) -> ProofResponse {
+    ProofResponse::default()
+}
+
+#[unsafe(no_mangle)]
+#[allow(unused_variables)]
+pub unsafe extern "C" fn fwd_free_proof_response(resp: Option<&mut ProofResponse>) {}
+
 /// Struct returned by `fwd_create_db` and `fwd_open_db`
 #[derive(Debug)]
 #[repr(C)]

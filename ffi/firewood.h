@@ -5,6 +5,13 @@
 #include <stdlib.h>
 
 
+enum ErrorType {
+  NoError,
+  RequestError,
+  DbError,
+};
+typedef uint8_t ErrorType;
+
 /**
  * A handle to the database, returned by `fwd_create_db` and `fwd_open_db`.
  *
@@ -40,6 +47,15 @@ typedef struct KeyValue {
   struct Value key;
   struct Value value;
 } KeyValue;
+
+/**
+ * Proof response!!!!
+ */
+typedef struct ProofResponse {
+  struct Value *proof_data;
+  ErrorType error_type;
+  uint8_t *error_str;
+} ProofResponse;
 
 /**
  * Struct returned by `fwd_create_db` and `fwd_open_db`
@@ -161,6 +177,15 @@ void fwd_close_db(struct DatabaseHandle *db);
  */
 struct Value fwd_commit(const struct DatabaseHandle *db, uint32_t proposal_id);
 
+struct ProofResponse fwd_commit_change_proof(const struct DatabaseHandle *db,
+                                             struct Value target_start_root,
+                                             struct Value target_end_root,
+                                             struct Value proof_bytes);
+
+struct ProofResponse fwd_commit_range_proof(const struct DatabaseHandle *db,
+                                            struct Value target_root,
+                                            struct Value proof_bytes);
+
 /**
  * Drops a proposal from the database.
  * The propopsal's data is now inaccessible, and can be freed by the `RevisionManager`.
@@ -198,6 +223,8 @@ struct Value fwd_drop_proposal(const struct DatabaseHandle *db, uint32_t proposa
  */
 void fwd_free_database_error_result(struct DatabaseCreationResult *result);
 
+void fwd_free_proof_response(struct ProofResponse *resp);
+
 /**
  * Frees the memory associated with a `Value`.
  *
@@ -226,6 +253,12 @@ void fwd_free_value(struct Value *value);
  * A `Value` containing {0, "error message"} if unable to get the latest metrics.
  */
 struct Value fwd_gather(void);
+
+struct ProofResponse fwd_get_change_proof(const struct DatabaseHandle *db,
+                                          struct Value start_root,
+                                          struct Value end_root,
+                                          struct Value start_key,
+                                          struct Value end_key);
 
 /**
  * Gets the value associated with the given key from the proposal provided.
@@ -307,6 +340,11 @@ struct Value fwd_get_from_root(const struct DatabaseHandle *db,
  *
  */
 struct Value fwd_get_latest(const struct DatabaseHandle *db, struct Value key);
+
+struct ProofResponse fwd_get_range_proof(const struct DatabaseHandle *db,
+                                         struct Value root,
+                                         struct Value start,
+                                         struct Value end);
 
 /**
  * Open a database with the given cache size and maximum number of revisions

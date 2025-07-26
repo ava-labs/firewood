@@ -10,6 +10,7 @@ import "C"
 
 import (
 	"errors"
+	"fmt"
 	"runtime"
 	"unsafe"
 )
@@ -17,12 +18,50 @@ import (
 var (
 	errNilStruct = errors.New("nil struct pointer cannot be freed")
 	errBadValue  = errors.New("value from cgo formatted incorrectly")
+
+	ErrUnknown = errors.New("unknown error")
+	ErrDB      = errors.New("db error")
+	ErrRequest = errors.New("request error")
 )
 
 // KeyValue is a key-value pair.
 type KeyValue struct {
 	Key   []byte
 	Value []byte
+}
+
+func parseProofResponse(resp *C.struct_ProofResponse) ([]byte, error) {
+	defer runtime.KeepAlive(resp)
+
+	if resp == nil {
+		return nil, errNilStruct
+	}
+
+	defer C.fwd_free_proof_response(resp)
+
+	// Assume value is well-formed.
+	proofBytes, _ := bytesFromValue(resp.proof_data)
+	var errStr string
+	if resp.error_str != nil {
+		errStr = C.GoString((*C.char)(unsafe.Pointer(resp.error_str)))
+	}
+
+	// Parse the error type.
+	var err error
+	switch resp.error_type {
+	case C.DbError:
+		err = fmt.Errorf("%w: %s", ErrDB, errStr)
+	case C.RequestError:
+		err = fmt.Errorf("%w: %s", ErrRequest, errStr)
+	case C.NoError:
+		if errStr != "" {
+			err = errBadValue
+		}
+	default:
+		err = fmt.Errorf("%w: %s", ErrUnknown, errStr)
+	}
+
+	return proofBytes, err
 }
 
 // hashAndIDFromValue converts the cgo `Value` payload into:
