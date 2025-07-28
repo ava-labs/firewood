@@ -44,7 +44,7 @@ pub struct CheckerReport {
     pub free_list_stats: FreeListsStats,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 /// Statistics about the trie
 pub struct TrieStats {
     /// The total number of bytes of compressed trie nodes
@@ -63,7 +63,7 @@ pub struct TrieStats {
     pub low_occupancy_area_count: u64, // TODO
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 /// Statistics about the free list
 pub struct FreeListsStats {
     /// The distribution of area sizes in the free lists
@@ -272,7 +272,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                 // collect kv count
                 trie_stats.kv_count = trie_stats.kv_count.saturating_add(1);
                 // collect kv pair bytes - this is the minimum number of bytes needed to store the data
-                let key_bytes = current_path_prefix.0.len() / 2;
+                let key_bytes = current_path_prefix.0.len().div_ceil(2);
                 let value_bytes = leaf.value.len();
                 trie_stats.kv_bytes = trie_stats
                     .kv_bytes
@@ -476,6 +476,7 @@ mod test {
         high_watermark: u64,
         root_address: LinearAddress,
         root_hash: HashType,
+        stats: TrieStats,
     }
 
     /// Generate a test trie with the following structure:
@@ -493,13 +494,20 @@ mod test {
     #[expect(clippy::arithmetic_side_effects)]
     fn gen_test_trie(nodestore: &mut NodeStore<Committed, MemStore>) -> TestTrie {
         let mut high_watermark = NodeStoreHeader::SIZE;
+        let mut total_bytes_written = 0;
+        let mut area_counts: HashMap<u64, u64> = HashMap::new();
         let leaf = Node::Leaf(LeafNode {
             partial_path: Path::from([4, 5]),
             value: Box::new([6, 7, 8]),
         });
         let leaf_addr = LinearAddress::new(high_watermark).unwrap();
         let leaf_hash = hash_node(&leaf, &Path::from([2, 0, 3, 1]));
-        high_watermark += test_write_new_node(nodestore, &leaf, high_watermark);
+        let (bytes_written, stored_area_size) =
+            test_write_new_node(nodestore, &leaf, high_watermark);
+        high_watermark += stored_area_size;
+        total_bytes_written += bytes_written;
+        let area_count = area_counts.entry(stored_area_size).or_insert(0);
+        *area_count = area_count.saturating_add(1);
 
         let mut branch_children = BranchNode::empty_children();
         branch_children[1] = Some(Child::AddressWithHash(leaf_addr, leaf_hash));
@@ -510,7 +518,12 @@ mod test {
         }));
         let branch_addr = LinearAddress::new(high_watermark).unwrap();
         let branch_hash = hash_node(&branch, &Path::from([2, 0]));
-        high_watermark += test_write_new_node(nodestore, &branch, high_watermark);
+        let (bytes_written, stored_area_size) =
+            test_write_new_node(nodestore, &branch, high_watermark);
+        high_watermark += stored_area_size;
+        total_bytes_written += bytes_written;
+        let area_count = area_counts.entry(stored_area_size).or_insert(0);
+        *area_count = area_count.saturating_add(1);
 
         let mut root_children = BranchNode::empty_children();
         root_children[0] = Some(Child::AddressWithHash(branch_addr, branch_hash));
@@ -521,7 +534,12 @@ mod test {
         }));
         let root_addr = LinearAddress::new(high_watermark).unwrap();
         let root_hash = hash_node(&root, &Path::new());
-        high_watermark += test_write_new_node(nodestore, &root, high_watermark);
+        let (bytes_written, stored_area_size) =
+            test_write_new_node(nodestore, &root, high_watermark);
+        high_watermark += stored_area_size;
+        total_bytes_written += bytes_written;
+        let area_count = area_counts.entry(stored_area_size).or_insert(0);
+        *area_count = area_count.saturating_add(1);
 
         // write the header
         test_write_header(
@@ -531,11 +549,22 @@ mod test {
             FreeLists::default(),
         );
 
+        let trie_stats = TrieStats {
+            trie_bytes: total_bytes_written,
+            kv_count: 1,
+            kv_bytes: 3 + 3,
+            area_counts,
+            branching_factors: HashMap::from([(1, 2)]),
+            depths: HashMap::from([(2, 1)]),
+            low_occupancy_area_count: 0,
+        };
+
         TestTrie {
             nodes: vec![(leaf, leaf_addr), (branch, branch_addr), (root, root_addr)],
             high_watermark,
             root_address: root_addr,
             root_hash,
+            stats: trie_stats,
         }
     }
 
@@ -553,7 +582,7 @@ mod test {
 
         // verify that all of the space is accounted for - since there is no free area
         let mut visited = LinearAddressRangeSet::new(test_trie.high_watermark).unwrap();
-        nodestore
+        let stats = nodestore
             .visit_trie(
                 test_trie.root_address,
                 test_trie.root_hash,
@@ -564,6 +593,7 @@ mod test {
             .unwrap();
         let complement = visited.complement();
         assert_eq!(complement.into_iter().collect::<Vec<_>>(), vec![]);
+        assert_eq!(stats, test_trie.stats);
     }
 
     #[test]
@@ -632,6 +662,7 @@ mod test {
 
         // write free areas
         let mut high_watermark = NodeStoreHeader::SIZE;
+        let mut free_area_counts: HashMap<u64, u64> = HashMap::new();
         let mut freelist = FreeLists::default();
         for (area_index, area_size) in AREA_SIZES.iter().enumerate() {
             let mut next_free_block = None;
@@ -646,18 +677,24 @@ mod test {
                 next_free_block = Some(LinearAddress::new(high_watermark).unwrap());
                 high_watermark += area_size;
             }
-
             freelist[area_index] = next_free_block;
+            if num_free_areas > 0 {
+                free_area_counts.insert(*area_size, num_free_areas);
+            }
         }
+        let expected_free_lists_stats = FreeListsStats {
+            area_counts: free_area_counts,
+        };
 
         // write header
         test_write_header(&mut nodestore, high_watermark, None, freelist);
 
         // test that the we traversed all the free areas
         let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
-        nodestore.visit_freelist(&mut visited, None).unwrap();
+        let actual_free_lists_stats = nodestore.visit_freelist(&mut visited, None).unwrap();
         let complement = visited.complement();
         assert_eq!(complement.into_iter().collect::<Vec<_>>(), vec![]);
+        assert_eq!(actual_free_lists_stats, expected_free_lists_stats);
     }
 
     #[test]
