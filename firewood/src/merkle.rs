@@ -716,7 +716,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
             (_, Some(_)) => {
                 // Case (2) or (4)
                 Ok((Some(node.into()), None))
-                // Bernard: Doesn't replaxe the root, but should still be performed by the main
+                // Bernard: Doesn't replace the root, but should still be performed by the main
                 // thread if this is the first call to remove_helper.
             }
             (None, None) => {
@@ -1022,10 +1022,14 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                     }
                 }
                 Ok(None)
+                // Bernard: Changes the root. Should be done by the main thread and should wait until 
+                // oustanding work has been completed by the worker threads.
             }
             (_, Some(_)) => {
                 // Case (2) or (4)
                 Ok(Some(node.into()))
+                // Bernard: Doesn't change the root, although we should never hit that case on the first
+                // call to remove_prefix from the root node.
             }
             (Some((child_index, child_partial_path)), None) => {
                 // 3. The key is below the node (i.e. its descendant)
@@ -1120,6 +1124,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                         child.update_partial_path(child_partial_path);
 
                         Ok(Some(child))
+                        // Bernard: Changes the root. It may be possible to modify this in the same 
+                        // way as remove_helper to get some parallelism.
                     }
                 }
             }
