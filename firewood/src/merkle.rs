@@ -528,6 +528,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 node.update_value(value);
                 counter!("firewood.insert", "merkle" => "update").increment(1);
                 Ok(node.into())
+                // Bernard: Doesn't modify this node's children. Should still be performed
+                // by the main thread if this is the first call to insert_helper.
             }
             (None, Some((child_index, partial_path))) => {
                 // 2. The key is above the node (i.e. its ancestor)
@@ -549,6 +551,10 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 counter!("firewood.insert", "merkle"=>"above").increment(1);
 
                 Ok(Node::Branch(Box::new(branch)))
+                // Bernard: Should be perform by the main thread if this is the first call to
+                // insert_helper. Returning this from the first call to insert_helper will
+                // change the root, so we must wait until all worker threads are complete
+                // before we do that.
             }
             (Some((child_index, partial_path)), None) => {
                 // 3. The key is below the node (i.e. its descendant)
@@ -560,32 +566,38 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 match node {
                     Node::Branch(ref mut branch) => {
                         #[expect(clippy::indexing_slicing)]
-                        let child: Node<Option<Child>> = match std::mem::take(&mut branch.children[child_index as usize]).as_child_option()
-                        {
-                            None => {
-                                // There is no child at this index.
-                                // Create a new leaf and put it here.
-                                let new_leaf = Node::Leaf(LeafNode {
-                                    value,
-                                    partial_path,
-                                });
-                                branch.update_child(child_index, Some(Child::Node(new_leaf)));
-                                counter!("firewood.insert", "merkle"=>"below").increment(1);
-                                return Ok(node.into());
-                            }
-                            Some(Child::Node(child)) => child.clone(),
-                            Some(Child::AddressWithHash(addr, _)) => {
-                                self.nodestore.read_for_update((*addr).into())?
-                            }
-                            Some(Child::MaybePersisted(maybe_persisted, _)) => {
-                                self.nodestore.read_for_update(maybe_persisted.clone())?
-                            }
-                        };
+                        let child: Node<Option<Child>> =
+                            match std::mem::take(&mut branch.children[child_index as usize])
+                                .as_child_option()
+                            {
+                                None => {
+                                    // There is no child at this index.
+                                    // Create a new leaf and put it here.
+                                    let new_leaf = Node::Leaf(LeafNode {
+                                        value,
+                                        partial_path,
+                                    });
+                                    branch.update_child(child_index, Some(Child::Node(new_leaf)));
+                                    counter!("firewood.insert", "merkle"=>"below").increment(1);
+                                    return Ok(node.into());
+                                    // Bernard: Can be done by a worker thread except for the first call to insert_helper.
+                                }
+                                Some(Child::Node(child)) => child.clone(),
+                                Some(Child::AddressWithHash(addr, _)) => {
+                                    self.nodestore.read_for_update((*addr).into())?
+                                }
+                                Some(Child::MaybePersisted(maybe_persisted, _)) => {
+                                    self.nodestore.read_for_update(maybe_persisted.clone())?
+                                }
+                            };
 
                         let child =
                             self.insert_helper(child.into(), partial_path.as_ref(), value)?;
                         branch.update_child(child_index, Some(Child::Node(child)));
                         Ok(node.into())
+                        // Bernard: Should be performed by the main thread if this is the first call to
+                        // insert_helper. Doesn't replace the root, so the insert_helper above can be
+                        // performed by a worker thread.
                     }
                     Node::Leaf(ref mut leaf) => {
                         // Turn this node into a branch node and put a new leaf as a child.
@@ -604,6 +616,11 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 
                         counter!("firewood.insert", "merkle"=>"split").increment(1);
                         Ok(Node::Branch(Box::new(branch)))
+                        // Bernard: Should be performed by the main thread if this is the first call
+                        // to insert_helper. Returning this from the first call to insert_helper will
+                        // change the root, so we must wait until all worker threads are complete
+                        // before we do that (although since the root is currently a leaf, persumably
+                        // there are no other worker threads running).
                     }
                 }
             }
@@ -632,6 +649,10 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 
                 counter!("firewood.insert", "merkle" => "split").increment(1);
                 Ok(Node::Branch(Box::new(branch)))
+                // Bernard: Should be perform by the main thread if this is the first call to
+                // insert_helper. Returning this from the first call to insert_helper will
+                // change the root, so we must wait until all worker threads are complete
+                // before we do that.
             }
         }
     }
@@ -695,6 +716,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
             (_, Some(_)) => {
                 // Case (2) or (4)
                 Ok((Some(node.into()), None))
+                // Bernard: Doesn't replaxe the root, but should still be performed by the main
+                // thread if this is the first call to remove_helper.
             }
             (None, None) => {
                 // 1. The node is at `key`
@@ -703,6 +726,10 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                         let Some(removed_value) = branch.value.take() else {
                             // The branch has no value. Return the node as is.
                             return Ok((Some(node.into()), None));
+                            // Bernard: Doesn't replace the root. Should still be performed by the main thread
+                            // if this is the first call to remove_helper. (I assume that the key doesn't
+                            // exist in the trie since the branch is an exact match for the key and doesn't have a
+                            // value)
                         };
 
                         // This branch node has a value.
@@ -727,6 +754,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                         if children_iter.next().is_some() {
                             // The branch has more than 1 child so it can't be removed.
                             Ok((Some(node.into()), Some(removed_value)))
+                            // Bernard: Doesn't replace the root. Value has already been taken from this node.
+                            // Should still be performed by the main thread if this is the first call to 
+                            // remove_helper.
                         } else {
                             // The branch's only child becomes the root of this subtrie.
                             let mut child = match child {
@@ -781,11 +811,20 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                             node.update_partial_path(partial_path);
 
                             Ok((Some(child), Some(removed_value)))
+                            // Bernard: Should be perform by the main thread if this is the first call to
+                            // remove_helper. Returning this from the first call to remove_helper will
+                            // change the root, so we must wait until all worker threads are complete
+                            // before we do that. 
                         }
                     }
                     Node::Leaf(leaf) => {
                         let removed_value = std::mem::take(&mut leaf.value);
                         Ok((None, Some(removed_value)))
+                        // Bernard: Should be perform by the main thread if this is the first call to
+                        // remove_helper. Returning this from the first call to remove_helper will
+                        // (trivially) change the root as all entries have been removed with the root
+                        // being a leaf. Wwe must wait until all worker threads are complete we do that, 
+                        // although there should be no other threads running.
                     }
                 }
             }
