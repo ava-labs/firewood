@@ -495,7 +495,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Map `key` to `value` into the subtrie rooted at `node`.
     /// Each element of `key` is 1 nibble.
     /// Returns the new root of the subtrie.
-    /// Note that the returned root is always a Node<Option<Child>>.
     pub fn insert_helper<T: ChildOption + Default>(
         &mut self,
         mut node: Node<T>,

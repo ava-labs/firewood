@@ -116,7 +116,6 @@ impl<'a, T: TrieReader> MerkleNodeStream<'a, T> {
                     match iter_node {
                         IterationNode::Unvisited { key, node } => {
                             match &*node {
-                                //Node::Root(_) => {todo!();}
                                 Node::Leaf(_) => {}
                                 Node::Branch(branch) => {
                                     // `node` is a branch node. Visit its children next.
@@ -252,7 +251,6 @@ fn get_iterator_intial_state<T: TrieReader>(
                 return Ok(NodeStreamState::Iterating { iter_stack });
             }
             Ordering::Equal => match &*node {
-                //Node::Root(_) => { todo!() }
                 Node::Leaf(_) => {
                     iter_stack.push(IterationNode::Unvisited {
                         key: matched_key_nibbles.clone().into_boxed_slice(),

@@ -22,7 +22,6 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-#[cfg(not(feature = "branch_factor_256"))]
 use crate::node::branch::ReadSerializable;
 use crate::{HashType, LinearAddress, Path, SharedNode};
 use bitfield::bitfield;
@@ -54,7 +53,8 @@ pub enum Node<T: ChildOption> {
 impl<T: ChildOption> From<&Node<T>> for Arc<Node<Option<Child>>> {
     fn from(item: &Node<T>) -> Self {
         // TODO: This will likely perform some unnessary memory copies
-        //       when T is Option<Child>.
+        //       when T is Option<Child>. Update with a more efficient
+        //       implementation in that case.
         return Arc::new(item.into_child_option_node());
     }
 }
@@ -351,8 +351,6 @@ impl Node<Option<Child>> {
         }
     }
 
-    // TODO: Currently not sure whether a Node<Option<Child>> should be generated
-    //       or another Node type.
     /// Given a reader, return a [Node] from those bytes
     pub fn from_reader(mut serialized: impl Read) -> Result<Self, Error> {
         match serialized.read_byte()? {

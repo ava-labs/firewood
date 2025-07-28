@@ -36,11 +36,6 @@ pub fn hash_node(node: &Node<Option<Child>>, path_prefix: &Path) -> HashType {
             }
             .into()
         }
-        /*
-        Node::Root(_) => {
-            todo!();
-        }
-        */
         Node::Leaf(node) => NodeAndPrefix {
             node,
             prefix: path_prefix,
