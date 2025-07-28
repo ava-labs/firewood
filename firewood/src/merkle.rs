@@ -823,8 +823,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                         // Bernard: Should be perform by the main thread if this is the first call to
                         // remove_helper. Returning this from the first call to remove_helper will
                         // (trivially) change the root as all entries have been removed with the root
-                        // being a leaf. Wwe must wait until all worker threads are complete we do that, 
-                        // although there should be no other threads running.
+                        // being a leaf. We must wait until all worker threads are complete before we
+                        // remove this node, although there should be no other threads running.
                     }
                 }
             }
@@ -833,6 +833,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 match node {
                     // we found a non-matching leaf node, so the value does not exist
                     Node::Leaf(_) => Ok((Some(node.into()), None)),
+                    // Bernard: Should be perform by the main thread if this is the first call to
+                    // remove_helper.
                     Node::Branch(ref mut branch) => {
                         #[expect(clippy::indexing_slicing)]
                         let child: Node<Option<Child>> = match <T as Into<Option<Child>>>::into(
@@ -880,11 +882,26 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                     partial_path: branch.partial_path.clone(), // TODO remove clone
                                 });
                             return Ok((Some(leaf), removed_value));
+                            // Bernard: Should be perform by the main thread if this is the first call to
+                            // remove_helper. Removed all the children (was previously just a path), making
+                            // this into a leaf. This does change the root, so conservatively we should 
+                            // not allow the above remove_helper run within a worker thread. However, we may
+                            // be able to efficiently handle this special case by delaying the transition
+                            // from branch to leaf for the root (first call to remove_helper) until we are
+                            // required to perform a root update because of some other operation. At that 
+                            // point, before performing the other root update, we perform a check to see if
+                            // the root has no children. If it doesn't have any children, then convert it
+                            // leaf. Alternatively, we may be able to simplify the logic if we don't change
+                            // branches to leaves here for the first call to remove_helper, but instead have
+                            // that be done by remove itself when it merges the changes from the different
+                            // workers.
                         };
 
                         // if there is more than one child or the branch has a value, return it
                         if branch.value.is_some() || children_iter.next().is_some() {
                             return Ok((Some(node.into()), removed_value));
+                            // Bernard: Should be perform by the main thread if this is the first call to
+                            // remove_helper. Doesn't modify the root.
                         }
 
                         // The branch has only 1 child. Remove the branch and return the child.
@@ -917,6 +934,25 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                         child.update_partial_path(child_partial_path);
 
                         Ok((Some(child), removed_value))
+                        // Bernard: Should be perform by the main thread if this is the first call to
+                        // remove_helper. Only one child remaining, and the parent is replaced with 
+                        // the child. As is, this will change the root, and this whole code block must
+                        // not be executed by worker threads. There might be something clever we can
+                        // do where the parent removal is delayed, and we later check if there is only
+                        // one child. This may be trickly. Alternatively, we only allow a worker thread
+                        // to work on this if the root has at least one more children than the number
+                        // of outstanding remove calls (specifically those performing option 3 removes).
+                        // This solution would also work for the above case that eliminates all of the
+                        // children. We can also allow remove_helper to run on worker threads if the root
+                        // node has a value. 
+                        //
+                        // Sketch: At the beginning of a batch, the main thread determines the number of
+                        // children c that the root has, and only allows up to c-1 remove calls before
+                        // it blocks on completion of the batch. A more fine-grained approach is to track
+                        // which "children" entries are not None, and allow removes as long as there is
+                        // at least one non-None entry remaining. This tracking must be done in a separate
+                        // data structure so that we don't need to contend on the locks for each child
+                        // entry in the children array.
                     }
                 }
             }
