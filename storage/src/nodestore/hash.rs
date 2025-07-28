@@ -19,7 +19,40 @@ use super::NodeReader;
 #[cfg(feature = "ethhash")]
 use crate::LinearAddress;
 #[cfg(feature = "ethhash")]
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
+
+struct PathGuard<'a> {
+    path: &'a mut Path,
+    original_length: usize,
+}
+
+impl<'a> PathGuard<'a> {
+    fn new(path: &'a mut Path) -> Self {
+        Self {
+            original_length: path.0.len(),
+            path,
+        }
+    }
+}
+
+impl Drop for PathGuard<'_> {
+    fn drop(&mut self) {
+        self.path.0.truncate(self.original_length);
+    }
+}
+
+impl Deref for PathGuard<'_> {
+    type Target = Path;
+    fn deref(&self) -> &Self::Target {
+        self.path
+    }
+}
+
+impl DerefMut for PathGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.path
+    }
+}
 
 /// Classified children for ethereum hash processing
 #[cfg(feature = "ethhash")]
@@ -97,12 +130,16 @@ where
                     //  - but now we are adding more children
                     // we need to rehash the child
                     let hashable_node = self.read_node(*child_node_addr)?.deref().clone();
-                    let original_length = path_prefix.len();
-                    path_prefix.0.extend(b.partial_path.0.iter().copied());
-                    path_prefix.0.push(*child_idx as u8);
-                    let hash =
-                        Self::compute_node_ethhash(&hashable_node, path_prefix, num_unhashed == 0);
-                    path_prefix.0.truncate(original_length);
+                    let hash = {
+                        let mut path_guard = PathGuard::new(path_prefix);
+                        path_guard.0.extend(b.partial_path.0.iter().copied());
+                        path_guard.0.push(*child_idx as u8);
+                        Self::compute_node_ethhash(
+                            &hashable_node,
+                            &mut path_guard,
+                            num_unhashed == 0,
+                        )
+                    };
                     **child_hash = hash;
                 }
 
@@ -140,19 +177,20 @@ where
 
                 // Hash this child and update
                 // we extend and truncate path_prefix to reduce memory allocations
-                let original_length = path_prefix.len();
-                path_prefix.0.extend(b.partial_path.0.iter().copied());
-                path_prefix.0.push(nibble as u8);
-
-                #[cfg(feature = "ethhash")]
-                let (child_node, child_hash) =
-                    self.hash_helper(child_node, path_prefix, only_one_child)?;
-                #[cfg(not(feature = "ethhash"))]
-                let (child_node, child_hash) = Self::hash_helper(child_node, path_prefix)?;
+                let (child_node, child_hash) = {
+                    let mut path_guard = PathGuard::new(path_prefix);
+                    path_guard.0.extend(b.partial_path.0.iter().copied());
+                    path_guard.0.push(nibble as u8);
+                    #[cfg(feature = "ethhash")]
+                    let node_and_hash =
+                        self.hash_helper(child_node, &mut path_guard, only_one_child)?;
+                    #[cfg(not(feature = "ethhash"))]
+                    let node_and_hash = Self::hash_helper(child_node, path_prefix)?;
+                    node_and_hash
+                };
 
                 *child = Some(Child::MaybePersisted(child_node, child_hash));
                 trace!("child now {child:?}");
-                path_prefix.0.truncate(original_length);
             }
         }
 
