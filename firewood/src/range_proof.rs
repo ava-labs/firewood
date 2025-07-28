@@ -1,45 +1,6 @@
 // Copyright (C) 2024, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-//! Range proof implementation for Merkle tries.
-//!
-//! This module provides the [`RangeProof`] type, which enables efficient cryptographic
-//! proofs for contiguous ranges of key-value pairs within a Merkle trie. Range proofs
-//! are essential for blockchain state synchronization, allowing nodes to verify that
-//! they have received a complete and authentic subset of the trie without downloading
-//! the entire data structure.
-//!
-//! # Overview
-//!
-//! A range proof consists of three components:
-//! 1. **Start proof**: Proves the lower boundary of the range
-//! 2. **End proof**: Proves the upper boundary of the range
-//! 3. **Key-value pairs**: The actual data within the proven range
-//!
-//! Together, these components allow a verifier to confirm that:
-//! - The provided key-value pairs are authentic members of the trie
-//! - No keys have been omitted from within the specified range
-//! - The trie has the expected root hash
-//!
-//! # Use Cases
-//!
-//! Range proofs are particularly valuable for:
-//! - **State sync**: Nodes can download and verify portions of the state trie incrementally
-//! - **Light clients**: Can verify specific account ranges without full trie access
-//! - **Auditing**: Prove the contents of a specific key range at a given block height
-//! - **Sharding**: Verify state partitions across different shards
-//!
-//! # Example
-//!
-//! ```ignore
-//! // Create a range proof for keys from "alice" to "charlie"
-//! let range_proof = RangeProof::new(
-//!     start_proof,  // Proof for "alice" or nearest key before
-//!     end_proof,    // Proof for "charlie" or nearest key after
-//!     key_values,   // Vec of (key, value) pairs in the range
-//! );
-//! ```
-
 use crate::proof::{Proof, ProofCollection};
 
 /// A range proof is a cryptographic proof that demonstrates a contiguous set of key-value pairs
@@ -95,12 +56,6 @@ where
     ///   established by the start and end proofs. The keys should be in lexicographic
     ///   order as they appear in the trie. May be empty if proving the absence of keys
     ///   in a range.
-    ///
-    /// # Example Use Cases
-    ///
-    /// - Proving keys "alice" through "charlie" exist with their values
-    /// - Proving no keys exist between "aardvark" and "apple"
-    /// - Proving all keys starting with a specific prefix
     #[must_use]
     pub const fn new(
         start_proof: Proof<H>,

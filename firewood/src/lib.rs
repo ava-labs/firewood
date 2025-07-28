@@ -139,6 +139,7 @@ pub mod proof;
 // Re-export the proc macro from firewood-macros
 pub use firewood_macros::metrics;
 
+/// Range proof module
 pub mod range_proof;
 
 /// Stream module, for both node and key-value streams

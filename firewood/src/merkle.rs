@@ -330,6 +330,8 @@ impl<T: TrieReader> Merkle<T> {
     ///   - If `Some(n)`, at most n key-value pairs will be included
     ///   - If `None`, all key-value pairs in the range will be included
     ///   - Useful for paginating through large ranges
+    ///   - **NOTE**: avalanchego's limit is based on the entire packet size and not the
+    ///     number of key-value pairs. Currently, we only limit by the number of pairs.
     ///
     /// # Returns
     ///
