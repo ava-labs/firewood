@@ -15,6 +15,7 @@ use crate::{
 use crate::hashednode::hash_node;
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::ops::Range;
 
 use indicatif::ProgressBar;
@@ -28,10 +29,50 @@ pub struct CheckOpt {
     pub progress_bar: Option<ProgressBar>,
 }
 
+#[derive(Debug)]
+/// Report of the checker results.
+pub struct CheckerReport {
+    /// The high watermark of the database
+    pub high_watermark: u64,
+    /// The physical number of bytes in the database returned through `stat`
+    pub physical_bytes: u64,
+    /// Statistics about the trie
+    pub trie_stats: TrieStats,
+    /// Statistics about the free list
+    pub free_list_stats: FreeListsStats,
+}
+
+#[derive(Debug, Default)]
+/// Statistics about the trie
+pub struct TrieStats {
+    /// The total number of bytes of compressed trie nodes
+    pub trie_bytes: u64, // TODO
+    /// The number of key-value pairs stored in the trie
+    pub kv_count: u64,
+    /// The total number of bytes of for key-value pairs stored in the trie
+    pub kv_bytes: u64,
+    /// Branching factor distribution of each branch node
+    pub branching_factors: HashMap<usize, u64>,
+    /// Depth distribution of each leaf node
+    pub depths: HashMap<usize, u64>,
+    /// The distribution of area sizes in the trie
+    pub area_counts: HashMap<u64, u64>,
+    /// The stored areas whose content can fit into a smaller area
+    pub low_occupancy_area_count: u64, // TODO
+}
+
+#[derive(Debug, Default)]
+/// Statistics about the free list
+pub struct FreeListsStats {
+    /// The distribution of area sizes in the free lists
+    pub area_counts: HashMap<u64, u64>,
+}
+
 struct SubTrieMetadata {
     root_address: LinearAddress,
     root_hash: HashType,
     parent: TrieNodeParent,
+    depth: usize,
     path_prefix: Path,
     #[cfg(feature = "ethhash")]
     has_peers: bool,
@@ -49,7 +90,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// # Errors
     /// Returns a [`CheckerError`] if the database is inconsistent.
     // TODO: report all errors, not just the first one
-    pub fn check(&self, opt: CheckOpt) -> Result<(), CheckerError> {
+    pub fn check(&self, opt: CheckOpt) -> Result<CheckerReport, CheckerError> {
         // 1. Check the header
         let db_size = self.size();
 
@@ -60,7 +101,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             progress_bar.set_length(db_size);
             progress_bar.set_message("Traversing the trie...");
         }
-        if let (Some(root), Some(root_hash)) =
+        let trie_stats = if let (Some(root), Some(root_hash)) =
             (self.root_as_maybe_persisted_node(), self.root_hash())
         {
             // the database is not empty, and has a physical address, so traverse the trie
@@ -75,17 +116,19 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                     &mut visited,
                     opt.progress_bar.as_ref(),
                     opt.hash_check,
-                )?;
+                )?
             } else {
                 return Err(CheckerError::UnpersistedRoot);
             }
-        }
+        } else {
+            TrieStats::default()
+        };
 
         // 3. check the free list - this can happen in parallel with the trie traversal
         if let Some(progress_bar) = &opt.progress_bar {
             progress_bar.set_message("Traversing free lists...");
         }
-        self.visit_freelist(&mut visited, opt.progress_bar.as_ref())?;
+        let free_list_stats = self.visit_freelist(&mut visited, opt.progress_bar.as_ref())?;
 
         // 4. check leaked areas - what are the spaces between trie nodes and free lists we have traversed?
         if let Some(progress_bar) = &opt.progress_bar {
@@ -98,7 +141,12 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         let _leaked_areas = self.split_all_leaked_ranges(leaked_ranges, opt.progress_bar.as_ref());
         // TODO: add leaked areas to the free list
 
-        Ok(())
+        Ok(CheckerReport {
+            high_watermark: db_size,
+            physical_bytes: self.physical_size()?,
+            trie_stats,
+            free_list_stats,
+        })
     }
 
     fn visit_trie(
@@ -108,16 +156,19 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         visited: &mut LinearAddressRangeSet,
         progress_bar: Option<&ProgressBar>,
         hash_check: bool,
-    ) -> Result<(), CheckerError> {
+    ) -> Result<TrieStats, CheckerError> {
         let trie = SubTrieMetadata {
             root_address,
             root_hash,
             parent: TrieNodeParent::Root,
+            depth: 0,
             path_prefix: Path::new(),
             #[cfg(feature = "ethhash")]
             has_peers: false,
         };
-        self.visit_trie_helper(trie, visited, progress_bar, hash_check)
+        let mut trie_stats = TrieStats::default();
+        self.visit_trie_helper(trie, visited, &mut trie_stats, progress_bar, hash_check)?;
+        Ok(trie_stats)
     }
 
     /// Recursively traverse the trie from the given root node.
@@ -125,6 +176,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         &self,
         subtrie: SubTrieMetadata,
         visited: &mut LinearAddressRangeSet,
+        trie_stats: &mut TrieStats,
         progress_bar: Option<&ProgressBar>,
         hash_check: bool,
     ) -> Result<(), CheckerError> {
@@ -132,6 +184,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             root_address: subtrie_root_address,
             root_hash: subtrie_root_hash,
             parent,
+            depth,
             path_prefix,
             #[cfg(feature = "ethhash")]
             has_peers,
@@ -148,26 +201,61 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             StoredAreaParent::TrieNode(parent),
         )?;
 
+        // update the area count
+        let area_count = trie_stats.area_counts.entry(area_size).or_insert(0);
+        *area_count = area_count.saturating_add(1);
+
         // read the node and iterate over the children if branch node
         let node = self.read_node(subtrie_root_address)?;
-        if let Node::Branch(branch) = node.as_ref() {
-            // this is an internal node, traverse the children
-            #[cfg(feature = "ethhash")]
-            let num_children = branch.children_iter().count();
-            for (nibble, (address, hash)) in branch.children_iter() {
-                let parent = TrieNodeParent::Parent(subtrie_root_address, nibble);
-                let mut child_path_prefix = path_prefix.clone();
-                child_path_prefix.0.extend_from_slice(node.partial_path());
-                child_path_prefix.0.push(nibble as u8);
-                let child_subtrie = SubTrieMetadata {
-                    root_address: address,
-                    root_hash: hash.clone(),
-                    parent,
-                    path_prefix: child_path_prefix,
-                    #[cfg(feature = "ethhash")]
-                    has_peers: num_children != 1,
-                };
-                self.visit_trie_helper(child_subtrie, visited, progress_bar, hash_check)?;
+        let mut current_path_prefix = path_prefix.clone();
+        current_path_prefix.0.extend_from_slice(node.partial_path());
+
+        match node.as_ref() {
+            Node::Branch(branch) => {
+                // collect the branching factor distribution
+                let num_children = branch.children_iter().count();
+                let branching_factor_count = trie_stats
+                    .branching_factors
+                    .entry(num_children)
+                    .or_insert(0);
+                *branching_factor_count = branching_factor_count.saturating_add(1);
+
+                // this is an internal node, traverse the children
+                for (nibble, (address, hash)) in branch.children_iter() {
+                    let parent = TrieNodeParent::Parent(subtrie_root_address, nibble);
+                    let mut child_path_prefix = current_path_prefix.clone();
+                    child_path_prefix.0.push(nibble as u8);
+                    let child_subtrie = SubTrieMetadata {
+                        root_address: address,
+                        root_hash: hash.clone(),
+                        parent,
+                        depth: depth.saturating_add(1),
+                        path_prefix: child_path_prefix,
+                        #[cfg(feature = "ethhash")]
+                        has_peers: num_children != 1,
+                    };
+                    self.visit_trie_helper(
+                        child_subtrie,
+                        visited,
+                        trie_stats,
+                        progress_bar,
+                        hash_check,
+                    )?;
+                }
+            }
+            Node::Leaf(leaf) => {
+                // collect the depth distribution
+                let depth_count = trie_stats.depths.entry(depth).or_insert(0);
+                *depth_count = depth_count.saturating_add(1);
+                // collect kv count
+                trie_stats.kv_count = trie_stats.kv_count.saturating_add(1);
+                // collect kv pair bytes - this is the minimum number of bytes needed to store the data
+                let key_bytes = current_path_prefix.0.len() / 2;
+                let value_bytes = leaf.value.len();
+                trie_stats.kv_bytes = trie_stats
+                    .kv_bytes
+                    .saturating_add(key_bytes as u64)
+                    .saturating_add(value_bytes as u64);
             }
         }
 
@@ -200,7 +288,9 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         &self,
         visited: &mut LinearAddressRangeSet,
         progress_bar: Option<&ProgressBar>,
-    ) -> Result<(), CheckerError> {
+    ) -> Result<FreeListsStats, CheckerError> {
+        let mut free_list_dist: HashMap<u64, u64> = HashMap::new();
+
         let mut free_list_iter = self.free_list_iter(0);
         while let Some(free_area) = free_list_iter.next_with_metadata() {
             let FreeAreaWithMetadata {
@@ -221,9 +311,13 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                 });
             }
             visited.insert_area(addr, area_size, StoredAreaParent::FreeList(parent))?;
+            let area_count = free_list_dist.entry(area_size).or_insert(0);
+            *area_count = area_count.saturating_add(1);
             update_progress_bar(progress_bar, visited);
         }
-        Ok(())
+        Ok(FreeListsStats {
+            area_counts: free_list_dist,
+        })
     }
 
     const fn check_area_aligned(

@@ -684,6 +684,10 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
 
         Ok((index, size))
     }
+
+    pub(crate) fn physical_size(&self) -> Result<u64, FileIoError> {
+        self.storage.size()
+    }
 }
 
 impl<N> HashedNodeReader for Arc<N>
