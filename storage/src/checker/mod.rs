@@ -5,10 +5,12 @@ mod range_set;
 pub(crate) use range_set::LinearAddressRangeSet;
 
 use crate::logger::warn;
-use crate::nodestore::alloc::{AREA_SIZES, AreaIndex, FreeAreaWithMetadata, size_from_area_index};
+use crate::nodestore::alloc::{
+    AREA_SIZES, AreaIndex, FreeAreaWithMetadata, area_size_to_index, size_from_area_index,
+};
 use crate::{
     CheckerError, Committed, HashType, HashedNodeReader, IntoHashType, LinearAddress, Node,
-    NodeReader, NodeStore, Path, RootReader, StoredAreaParent, TrieNodeParent, WritableStorage,
+    NodeStore, Path, RootReader, StoredAreaParent, TrieNodeParent, WritableStorage,
 };
 
 #[cfg(not(feature = "ethhash"))]
@@ -194,7 +196,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         self.check_area_aligned(subtrie_root_address, StoredAreaParent::TrieNode(parent))?;
 
         // check that the area is within bounds and does not intersect with other areas
-        let (_, area_size) = self.area_index_and_size(subtrie_root_address)?;
+        let (area_index, area_size) = self.area_index_and_size(subtrie_root_address)?;
         visited.insert_area(
             subtrie_root_address,
             area_size,
@@ -205,20 +207,40 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         let area_count = trie_stats.area_counts.entry(area_size).or_insert(0);
         *area_count = area_count.saturating_add(1);
 
-        // read the node and iterate over the children if branch node
-        let node = self.read_node(subtrie_root_address)?;
+        // read the node from the disk - we avoid cache since we will never visit the same node twice
+        let (node, node_bytes) = self.read_node_with_num_bytes_from_disk(subtrie_root_address)?;
+        {
+            // collect the trie bytes
+
+            trie_stats.trie_bytes = trie_stats.trie_bytes.saturating_add(node_bytes);
+            // collect low occupancy area count
+            let smallest_area_index = area_size_to_index(node_bytes).map_err(|e| {
+                self.file_io_error(
+                    e,
+                    subtrie_root_address.get(),
+                    Some("area_size_to_index".to_string()),
+                )
+            })?;
+            if smallest_area_index < area_index {
+                trie_stats.low_occupancy_area_count =
+                    trie_stats.low_occupancy_area_count.saturating_add(1);
+            }
+        }
+
         let mut current_path_prefix = path_prefix.clone();
         current_path_prefix.0.extend_from_slice(node.partial_path());
 
         match node.as_ref() {
             Node::Branch(branch) => {
-                // collect the branching factor distribution
                 let num_children = branch.children_iter().count();
-                let branching_factor_count = trie_stats
-                    .branching_factors
-                    .entry(num_children)
-                    .or_insert(0);
-                *branching_factor_count = branching_factor_count.saturating_add(1);
+                {
+                    // collect the branching factor distribution
+                    let branching_factor_count = trie_stats
+                        .branching_factors
+                        .entry(num_children)
+                        .or_insert(0);
+                    *branching_factor_count = branching_factor_count.saturating_add(1);
+                }
 
                 // this is an internal node, traverse the children
                 for (nibble, (address, hash)) in branch.children_iter() {
@@ -311,8 +333,11 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                 });
             }
             visited.insert_area(addr, area_size, StoredAreaParent::FreeList(parent))?;
-            let area_count = free_list_dist.entry(area_size).or_insert(0);
-            *area_count = area_count.saturating_add(1);
+            {
+                // collect the free lists area distribution
+                let area_count = free_list_dist.entry(area_size).or_insert(0);
+                *area_count = area_count.saturating_add(1);
+            }
             update_progress_bar(progress_bar, visited);
         }
         Ok(FreeListsStats {
