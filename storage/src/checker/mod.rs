@@ -201,7 +201,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         visited: &mut LinearAddressRangeSet,
         progress_bar: Option<&ProgressBar>,
     ) -> Result<(), CheckerError> {
-        let mut free_list_iter = self.free_list_iter(0);
+        let mut free_list_iter = self.free_list_iter(Into::into(0));
         while let Some(free_area) = free_list_iter.next_with_metadata() {
             let FreeAreaWithMetadata {
                 addr,
@@ -307,7 +307,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                     .advance(*area_size)
                     .expect("address overflow is impossible");
                 if next_addr <= leaked_range.end {
-                    leaked.push((current_addr, area_index as AreaIndex));
+                    leaked.push((current_addr, AreaIndex::new(area_index)));
                     if let Some(progress_bar) = progress_bar {
                         progress_bar.inc(*area_size);
                     }
@@ -521,7 +521,7 @@ mod test {
                 test_write_free_area(
                     &nodestore,
                     next_free_block,
-                    area_index as u8,
+                    AreaIndex::new(area_index),
                     high_watermark,
                 );
                 next_free_block = Some(LinearAddress::new(high_watermark).unwrap());
@@ -565,10 +565,10 @@ mod test {
             test_write_free_area(
                 &nodestore,
                 None,
-                area_size_index as AreaIndex,
+                AreaIndex::new(area_size_index),
                 high_watermark,
             );
-            stored_areas.push((area_addr, area_size_index as AreaIndex, *area_size));
+            stored_areas.push((area_addr, area_size_index, *area_size));
             high_watermark += *area_size;
         }
         test_write_header(&mut nodestore, high_watermark, None, FreeLists::default());
@@ -580,7 +580,7 @@ mod test {
         for (area_start, area_size_index, area_size) in &stored_areas {
             if rng.random::<f64>() < 0.5 {
                 // we free this area
-                expected_free_areas.insert(*area_start, *area_size_index);
+                expected_free_areas.insert(*area_start, AreaIndex::new(*area_size_index));
                 let area_to_free_start = area_to_free.map_or(*area_start, |(start, _)| start);
                 let area_to_free_end = area_start.checked_add(*area_size).unwrap();
                 area_to_free = Some((area_to_free_start, area_to_free_end));
@@ -645,7 +645,13 @@ mod test {
 
         // assert that all leaked areas end up on the free list
         assert_eq!(leaked_areas_offsets, expected_offsets);
-        assert_eq!(leaked_area_size_indices, expected_leaked_area_indices);
+        assert_eq!(
+            leaked_area_size_indices,
+            expected_leaked_area_indices
+                .into_iter()
+                .map(AreaIndex::from)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -656,15 +662,15 @@ mod test {
 
         // write two free areas
         let mut high_watermark = NodeStoreHeader::SIZE;
-        test_write_free_area(&nodestore, None, 8, high_watermark); // 1024
+        test_write_free_area(&nodestore, None, AreaIndex::from(8), high_watermark); // 1024
         high_watermark += AREA_SIZES[8];
-        test_write_free_area(&nodestore, None, 7, high_watermark); // 768
+        test_write_free_area(&nodestore, None, AreaIndex::from(7), high_watermark); // 768
         high_watermark += AREA_SIZES[7];
         // write an zeroed area
         test_write_zeroed_area(&nodestore, 768, high_watermark);
         high_watermark += 768;
         // write another free area
-        test_write_free_area(&nodestore, None, 8, high_watermark); // 1024
+        test_write_free_area(&nodestore, None, AreaIndex::from(8), high_watermark); // 1024
         high_watermark += AREA_SIZES[8];
 
         let expected_indices = vec![8, 7, 8, 7];
@@ -691,6 +697,12 @@ mod test {
                 .unzip();
 
         assert_eq!(leaked_areas_offsets, expected_offsets);
-        assert_eq!(leaked_area_size_indices, expected_indices);
+        assert_eq!(
+            leaked_area_size_indices,
+            expected_indices
+                .into_iter()
+                .map(AreaIndex::from)
+                .collect::<Vec<_>>()
+        );
     }
 }

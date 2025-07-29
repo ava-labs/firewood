@@ -646,7 +646,7 @@ mod test_linear_address_range_set {
         let start2_addr = LinearAddress::new(start2).unwrap();
 
         let parent1 = StoredAreaParent::TrieNode(TrieNodeParent::Parent(start1_addr, 5));
-        let parent2 = StoredAreaParent::FreeList(FreeListParent::FreeListHead(3));
+        let parent2 = StoredAreaParent::FreeList(FreeListParent::FreeListHead(Into::into(3)));
 
         let mut visited = LinearAddressRangeSet::new(0x1000).unwrap();
         visited

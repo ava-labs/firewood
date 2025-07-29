@@ -255,7 +255,7 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
 
             let (persisted_address, area_size_index) =
                 allocator.allocate_node(serialized.as_slice())?;
-            *serialized.get_mut(0).expect("byte was reserved") = area_size_index;
+            *serialized.get_mut(0).expect("byte was reserved") = area_size_index.into();
             self.storage
                 .write(persisted_address.get(), serialized.as_slice())?;
             node.persist_at(persisted_address);
