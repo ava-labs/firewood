@@ -9,6 +9,8 @@
 use crate::merkle::{Key, Value};
 use crate::v2::api;
 
+use crate::stream::NodeStreamState::StartFromKey;
+use crate::v2::api::Error;
 use firewood_storage::{
     BranchNode, Child, FileIoError, NibblesIterator, Node, PathIterItem, SharedNode, TrieReader,
 };
@@ -52,8 +54,11 @@ impl std::fmt::Debug for IterationNode {
     }
 }
 
+// TODO: we expose NodeStreamState here because FFI uses it, maybe there is
+// a better way?
 #[derive(Debug)]
-enum NodeStreamState {
+#[doc(hidden)]
+pub enum NodeStreamState {
     /// The iterator state is lazily initialized when `poll_next` is called
     /// for the first time. The iteration start key is stored here.
     StartFromKey(Key),
@@ -96,6 +101,10 @@ impl<'a, T: TrieReader> MerkleNodeStream<'a, T> {
             state: NodeStreamState::from(key),
             merkle,
         }
+    }
+
+    pub(super) const fn from(merkle: &'a T, state: NodeStreamState) -> Self {
+        Self { state, merkle }
     }
 
     /// Internal function that handles the core iteration logic shared between Iterator and Stream implementations.
@@ -351,6 +360,57 @@ impl<'a, T: TrieReader> MerkleKeyValueStream<'a, T> {
         Self {
             state: MerkleKeyValueStreamState::from(key.as_ref()),
             merkle,
+        }
+    }
+
+    /// Construct a [`MerkleKeyValueStream`] from prior internal state
+    pub const fn from_internal_state(merkle: &'a T, state: NodeStreamState) -> Self {
+        Self {
+            state: MerkleKeyValueStreamState::Initialized {
+                node_iter: MerkleNodeStream::from(merkle, state),
+            },
+            merkle,
+        }
+    }
+
+    /// retrieve the internal state of the stream
+    #[must_use]
+    pub fn internal_state(self) -> NodeStreamState {
+        match self.state {
+            MerkleKeyValueStreamState::Initialized { node_iter } => node_iter.state,
+            MerkleKeyValueStreamState::_Uninitialized(k) => StartFromKey(k),
+        }
+    }
+
+    /// gets the next value synchronously
+    // TODO: Maybe Just impl Iterator? Caller would need to explicitly use Stream::next, Iteartor::next
+    pub fn next_sync(&mut self) -> Option<Result<(Key, Value), Error>> {
+        loop {
+            match &mut self.state {
+                MerkleKeyValueStreamState::_Uninitialized(key) => {
+                    let iter = MerkleNodeStream::new(self.merkle, key.clone());
+                    self.state = MerkleKeyValueStreamState::Initialized { node_iter: iter };
+                    // Continue to the next node.
+                }
+                MerkleKeyValueStreamState::Initialized { node_iter } => {
+                    match Iterator::next(node_iter) {
+                        Some(Ok((key, node))) => match &*node {
+                            Node::Branch(branch) => {
+                                if let Some(value) = branch.value.as_ref() {
+                                    return Some(Ok((key, value.to_vec())));
+                                }
+                                // This node doesn't have a value to return.
+                                // Continue to the next node.
+                            }
+                            Node::Leaf(leaf) => {
+                                return Some(Ok((key, leaf.value.to_vec())));
+                            }
+                        },
+                        Some(Err(e)) => return Some(Err(e.into())),
+                        None => return None,
+                    }
+                }
+            }
         }
     }
 }
@@ -1482,6 +1542,36 @@ mod tests {
         }
 
         check_stream_is_done(stream).await;
+    }
+
+    #[tokio::test]
+    async fn internal_state_stream() {
+        let merkle = created_populated_merkle();
+        let mut it = merkle.key_value_iter();
+        let next = it.next().await.unwrap().unwrap();
+        println!("{:?}", next);
+        let state = it.internal_state();
+        let mut n_it = MerkleKeyValueStream::from_internal_state(merkle.nodestore(), state);
+        let next = n_it.next().await.unwrap().unwrap();
+        println!("{:?}", next);
+    }
+
+    #[tokio::test]
+    async fn loop_stream() {
+        let merkle = created_populated_merkle();
+        let mut it = merkle.key_value_iter();
+        loop {
+            let next = it.next().await;
+            if next.is_none() {
+                break;
+            }
+            let next = next.unwrap();
+            if next.is_err() {
+                break;
+            }
+            let next = next.unwrap();
+            println!("{:?}", next);
+        }
     }
 
     async fn check_stream_is_done<S>(mut stream: S)

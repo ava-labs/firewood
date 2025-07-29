@@ -144,6 +144,47 @@ func bytesFromValue(v *C.struct_Value) ([]byte, error) {
 	return nil, errBadValue
 }
 
+func kvFromKeyValue(v *C.struct_KeyValue) (*KeyValue, error) {
+	// Pin the returned value to prevent it from being garbage collected.
+	defer runtime.KeepAlive(v)
+
+	if v == nil {
+		return nil, errNilStruct
+	}
+
+	kb, e := bytesFromValue(&v.key)
+	if e != nil {
+		return nil, e
+	}
+
+	vb, e := bytesFromValue(&v.value)
+	if e != nil {
+		return nil, e
+	}
+
+	if kb == nil {
+		// TODO: free
+		//C.fwd_free_value(v)
+		return nil, errors.New(string(vb))
+	}
+
+	return &KeyValue{Key: kb, Value: vb}, nil
+}
+
+func iteratorFromResult(result *C.struct_IteratorCreationResult) (*C.IteratorHandle, error) {
+	if result == nil {
+		return nil, errNilStruct
+	}
+
+	if result.error_str != nil {
+		errStr := C.GoString((*C.char)(unsafe.Pointer(result.error_str)))
+		C.fwd_free_iterator_error_result(result)
+		runtime.KeepAlive(result)
+		return nil, errors.New(errStr)
+	}
+	return result.iterator, nil
+}
+
 func databaseFromResult(result *C.struct_DatabaseCreationResult) (*C.DatabaseHandle, error) {
 	if result == nil {
 		return nil, errNilStruct

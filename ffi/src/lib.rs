@@ -23,11 +23,11 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-use firewood::db::{
-    BatchOp as DbBatchOp, Db, DbConfig, DbViewSync as _, DbViewSyncBytes, Proposal,
-};
+use firewood::db::{BatchOp as DbBatchOp, Db, DbConfig, DbViewSync, DbViewSyncBytes, Proposal};
 use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
 
+use firewood::merkle::Merkle;
+use firewood::stream::{MerkleKeyValueStream, NodeStreamState};
 use firewood::v2::api::HashKey;
 use metrics::counter;
 
@@ -66,6 +66,16 @@ pub struct DatabaseHandle<'p> {
 
     /// The database
     db: Db,
+}
+
+/// A handle to the iterator, returned and used by `fwd_iter_*`.
+///
+/// These handles are passed to the other FFI functions.
+///
+#[derive(Debug)]
+pub struct IteratorHandle {
+    /// Internal state of the iterator
+    state: Mutex<Box<Option<NodeStreamState>>>,
 }
 
 impl From<Db> for DatabaseHandle<'_> {
@@ -142,6 +152,123 @@ fn get_latest(db: Option<&DatabaseHandle<'_>>, key: &Value) -> Result<Value, Str
         .map_err(|e| e.to_string())?
         .ok_or("")?;
     Ok(value.into())
+}
+
+/// Return an iterator optionally starting from a key in database
+///
+/// # Arguments
+///
+/// * `db` - The database handle returned by `open_db`
+/// * `key` - The key to start from, in `Value` form
+///
+/// # Returns
+///
+/// An iterator handle, or an error
+///
+/// # Safety
+///
+/// The caller must:
+///  * ensure that `db` is a valid pointer returned by `open_db`
+///  * ensure that `key` is a valid pointer to a `Value` struct
+///  * TODO: Handle freeing the iterator handle
+///
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_iter_latest(
+    db: Option<&DatabaseHandle<'_>>,
+    key: Value,
+) -> IteratorCreationResult {
+    iter_latest(db, &key).into()
+}
+
+/// Internal call for `fwd_iter_latest` to remove error handling from the C API
+#[doc(hidden)]
+fn iter_latest(db: Option<&DatabaseHandle<'_>>, key: &Value) -> Result<IteratorHandle, String> {
+    let db = db.ok_or("db should be non-null")?;
+
+    // Find root hash.
+    // Matches `hash` function but we use the TrieHash type here
+    let Some(root) = db.root_hash_sync().map_err(|e| e.to_string())? else {
+        todo!()
+    };
+
+    // Find revision associated with root.
+    let rev = db.revision_sync(root).map_err(|e| e.to_string())?;
+    let mk = Merkle::from(&rev);
+
+    let mkv = if key.len == 0 {
+        mk.key_value_iter()
+    } else {
+        mk.key_value_iter_from_key(key.as_slice())
+    };
+
+    Ok(IteratorHandle {
+        state: Mutex::new(Box::new(Some(mkv.internal_state()))),
+    })
+}
+
+/// Retreives the next item from the iterator
+///
+/// # Arguments
+///
+/// * `db` - The database handle returned by `open_db`
+/// * `it` - The database handle returned by `fwd_iter_*`
+///
+/// # Returns
+///
+/// A `KeyValue` containing the next pair of (key, value) on the iterator.
+/// A `KeyValue` containing with key {0, ""}, and value with an error message if failed.
+///
+/// # Safety
+///
+/// The caller must:
+///  * ensure that `db` is a valid pointer returned by `open_db`
+///  * ensure that `it` is a valid pointer returned by `fwd_iter_*`
+///  * call `free_key_value` to free the memory associated with the returned `KeyValue`
+///
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_iter_next(
+    db: Option<&DatabaseHandle<'_>>,
+    it: Option<&IteratorHandle>,
+) -> KeyValue {
+    iter_next(db, it).unwrap_or_else(Into::into)
+}
+
+/// Internal call for `fwd_iter_next` to remove error handling from the C API
+#[doc(hidden)]
+fn iter_next(
+    db: Option<&DatabaseHandle<'_>>,
+    iterator_handle: Option<&IteratorHandle>,
+) -> Result<KeyValue, String> {
+    let db = db.ok_or("db should be non-null")?;
+    let iterator_handle = iterator_handle.ok_or("iterator_handle should be non-null")?;
+
+    // Find root hash.
+    // Matches `hash` function but we use the TrieHash type here
+    let Some(root) = db.root_hash_sync().map_err(|e| e.to_string())? else {
+        return Ok(KeyValue::default());
+    };
+    // Find revision associated with root.
+    let rev = db.revision_sync(root).map_err(|e| e.to_string())?;
+
+    let merkle = Merkle::from(&rev);
+    let mut state = iterator_handle.state.lock().expect("iterator_handle lock is poisoned");
+    let inner_state = state.take();
+    let Some(inner_state) =  inner_state else {
+        return Ok(KeyValue::default());
+    };
+    let mut stream =
+        MerkleKeyValueStream::from_internal_state(merkle.nodestore(), inner_state);
+    let next = stream.next_sync();
+
+    if let Some(next) = next {
+        let (k, v) = next.map_err(|e| e.to_string())?;
+        **state = Some(stream.internal_state());
+        let key: Value = k.into();
+        let value: Value = v.as_slice().into();
+        Ok(KeyValue { key, value })
+    } else {
+        Ok(KeyValue::default())
+    }
 }
 
 /// Gets the value associated with the given key from the proposal provided.
@@ -271,6 +398,7 @@ fn view_sync_from_root(
 }
 
 /// A `KeyValue` represents a key-value pair, passed to the FFI.
+#[derive(Debug, Default)]
 #[repr(C)]
 pub struct KeyValue {
     key: Value,
@@ -713,6 +841,15 @@ impl From<String> for Value {
     }
 }
 
+impl From<String> for KeyValue {
+    fn from(s: String) -> Self {
+        KeyValue {
+            key: Value::default(),
+            value: s.into(),
+        }
+    }
+}
+
 impl From<u32> for Value {
     fn from(v: u32) -> Self {
         // WARNING: This should only be called with values >= 1.
@@ -810,6 +947,62 @@ impl From<Result<Db, String>> for DatabaseCreationResult {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_free_database_error_result(
     result: Option<&mut DatabaseCreationResult>,
+) {
+    let result = result.expect("result should be non-null");
+    // Free the error string if it exists
+    if let Some(nonnull) = result.error_str {
+        let raw_str = nonnull.cast::<c_char>().as_ptr();
+        let cstr = unsafe { CString::from_raw(raw_str) };
+        drop(cstr);
+    }
+    // Note: we don't free the db pointer as it's managed by the caller
+}
+
+/// Struct returned by `fwd_iter_*`
+#[derive(Debug)]
+#[repr(C)]
+pub struct IteratorCreationResult {
+    pub iterator: Option<Box<IteratorHandle>>,
+    pub error_str: Option<std::ptr::NonNull<u8>>,
+}
+
+impl From<Result<IteratorHandle, String>> for IteratorCreationResult {
+    fn from(result: Result<IteratorHandle, String>) -> Self {
+        match result {
+            Ok(handle) => IteratorCreationResult {
+                iterator: Some(Box::new(handle)),
+                error_str: None,
+            },
+            Err(error_msg) => {
+                let error_cstring = CString::new(error_msg).unwrap_or_default().into_raw();
+                IteratorCreationResult {
+                    iterator: None,
+                    error_str: std::ptr::NonNull::new(error_cstring.cast::<u8>()),
+                }
+            }
+        }
+    }
+}
+
+/// Frees the memory associated with a `IteratorCreationResult`.
+/// This only needs to be called if the `error_str` field is non-null.
+///
+/// # Arguments
+///
+/// * `result` - The `IteratorCreationResult` to free, previously returned from `fwd_iter_*`.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers.
+/// The caller must ensure that `result` is a valid pointer.
+///
+/// # Panics
+///
+/// This function panics if `result` is `null`.
+///
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_free_iterator_error_result(
+    result: Option<&mut IteratorCreationResult>,
 ) {
     let result = result.expect("result should be non-null");
     // Free the error string if it exists

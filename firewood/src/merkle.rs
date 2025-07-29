@@ -17,7 +17,6 @@
 use crate::proof::{Proof, ProofError, ProofNode};
 #[cfg(test)]
 use crate::range_proof::RangeProof;
-#[cfg(test)]
 use crate::stream::MerkleKeyValueStream;
 use crate::stream::PathIterator;
 #[cfg(test)]
@@ -171,8 +170,8 @@ impl<T: TrieReader> Merkle<T> {
         self.nodestore.root_node()
     }
 
-    #[cfg(test)]
-    pub(crate) const fn nodestore(&self) -> &T {
+    /// retrieve the underlying nodestore
+    pub const fn nodestore(&self) -> &T {
         &self.nodestore
     }
 
@@ -237,17 +236,13 @@ impl<T: TrieReader> Merkle<T> {
     ) -> Result<PathIterator<'_, 'a, T>, FileIoError> {
         PathIterator::new(&self.nodestore, key)
     }
-
-    #[cfg(test)]
-    pub(super) fn key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
+    /// get an iterator on key values starting from beginning
+    pub fn key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
         MerkleKeyValueStream::from(&self.nodestore)
     }
 
-    #[cfg(test)]
-    pub(super) fn key_value_iter_from_key<K: AsRef<[u8]>>(
-        &self,
-        key: K,
-    ) -> MerkleKeyValueStream<'_, T> {
+    /// get an iterator on key values starting from key
+    pub fn key_value_iter_from_key<K: AsRef<[u8]>>(&self, key: K) -> MerkleKeyValueStream<'_, T> {
         // TODO danlaine: change key to &[u8]
         MerkleKeyValueStream::from_key(&self.nodestore, key.as_ref())
     }

@@ -7,6 +7,10 @@ compose-dev.yaml
 # ignore test databases
 *_db
 
+# ignore env and local
+.env
+.local_ws
+
 #### Below sections are auto-generated ####
 
 # Created by https://www.toptal.com/developers/gitignore/api/rust,visualstudiocode,vim,macos
