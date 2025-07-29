@@ -887,7 +887,13 @@ mod test {
         }
 
         // save the last proposal root hash for comparison with the final database root hash
-        let last_proposal_root_hash = proposals.last().unwrap().root_hash().await.unwrap().unwrap();
+        let last_proposal_root_hash = proposals
+            .last()
+            .unwrap()
+            .root_hash()
+            .await
+            .unwrap()
+            .unwrap();
 
         // commit the proposals
         for proposal in proposals {
