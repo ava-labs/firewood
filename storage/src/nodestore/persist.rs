@@ -391,7 +391,7 @@ impl NodeStore<Committed, FileBacked> {
             shared_node.as_bytes(0, &mut serialized);
             let (persisted_address, area_size_index) =
                 node_allocator.allocate_node(serialized.as_slice())?;
-            *serialized.get_mut(0).expect("byte was reserved") = area_size_index;
+            *serialized.get_mut(0).expect("byte was reserved") = area_size_index.into();
             let mut serialized = serialized.into_boxed_slice();
 
             loop {
