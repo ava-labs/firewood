@@ -662,15 +662,16 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
                     .file_io_error(e, actual_addr, Some("read_node_from_disk".to_string()))
             })?
             .into();
-        let length =
-            area_stream
-                .offset()
-                .checked_sub(offset_before)
-                .ok_or(self.storage.file_io_error(
+        let length = area_stream
+            .offset()
+            .checked_sub(offset_before)
+            .ok_or_else(|| {
+                self.file_io_error(
                     Error::other("Reader offset went backwards"),
                     actual_addr,
                     Some("read_node_with_num_bytes_from_disk".to_string()),
-                ))?;
+                )
+            })?;
         Ok((node, length))
     }
 
@@ -709,6 +710,7 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
         self.storage.size()
     }
 
+    #[cold]
     pub(crate) fn file_io_error(
         &self,
         error: Error,

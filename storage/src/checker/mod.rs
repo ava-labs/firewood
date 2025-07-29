@@ -95,6 +95,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     pub fn check(&self, opt: CheckOpt) -> Result<CheckerReport, CheckerError> {
         // 1. Check the header
         let db_size = self.size();
+        let physical_bytes = self.physical_size()?;
 
         let mut visited = LinearAddressRangeSet::new(db_size)?;
 
@@ -145,7 +146,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
         Ok(CheckerReport {
             high_watermark: db_size,
-            physical_bytes: self.physical_size()?,
+            physical_bytes,
             trie_stats,
             free_list_stats,
         })
