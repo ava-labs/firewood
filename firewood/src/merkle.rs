@@ -28,6 +28,7 @@ use firewood_storage::{
     MutableProposal, NibblesIterator, Node, NodeStore, Path, ReadableStorage, SharedNode,
     TrieReader, ValueDigest,
 };
+use futures::channel::mpsc::Receiver;
 //#[cfg(test)]
 //use futures::{StreamExt, TryStreamExt};
 use metrics::counter;
@@ -552,23 +553,26 @@ impl<S: ReadableStorage> TryFrom<Merkle<NodeStore<MutableProposal, S>>>
 /// Attach a threadpool to this Merkle structure
 fn attach_threadpool<S: ReadableStorage + 'static>(
     merkle: Arc<Merkle<NodeStore<MutableProposal, S>>>,
-) -> (Sender<MerkleOp>, JoinHandle<()>) {
+) -> (Sender<MerkleOp>, mpsc::Receiver<Result<Node<Option<Child>>, FileIoError>>, JoinHandle<()>) {
     //let a = self;
     //match m_param.worker_thread {
     //    None => {
     // Just create one for now
-    let (sender, receiver) = mpsc::channel::<MerkleOp>();
+    let (host_sender, thread_receiver) = mpsc::channel::<MerkleOp>();
+    let (thread_sender, host_receiver) = mpsc::channel::<Result<Node<Option<Child>>, FileIoError>>();
+
     //let merkle: Option<Arc<Mutex<Merkle<NodeStore<MutableProposal, S>>>>> = None;
     //let m = merkle.clone();
 
     let handle = thread::spawn(move || {
         loop {
-            let Ok(v) = receiver.recv() else {
+            let Ok(v) = thread_receiver.recv() else {
                 return; // Thread is unable to recv data from parent
             };
             match v {
                 MerkleOp::InsertData(node, key, value) => {
-                    let _ = merkle.insert_helper(node, &key, value);
+                    let a = merkle.insert_helper(node, &key, value);
+                    thread_sender.send(a);
                 }
                 MerkleOp::Terminate => {
                     break;
@@ -576,7 +580,7 @@ fn attach_threadpool<S: ReadableStorage + 'static>(
             }
         }
     });
-    return (sender, handle);
+    return (host_sender, host_receiver, handle);
 }
 
 ///
@@ -588,7 +592,7 @@ pub fn insert_tp<S: ReadableStorage + 'static>(
     let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
     let merkle_clone = merkle.clone();
-    let (a, b) = attach_threadpool(merkle_clone);
+    let (a, receiver, b) = attach_threadpool(merkle_clone);
 
     //let root = self.nodestore.mut_root();
     let mut guard = merkle.nodestore.lock().unwrap();
@@ -611,12 +615,15 @@ pub fn insert_tp<S: ReadableStorage + 'static>(
 
     let root_node = merkle.root().unwrap().as_ref().clone();
     let _ = a.send(MerkleOp::InsertData(root_node, Box::new([2]), Box::new([2])));
+
+    let receive = receiver.recv().unwrap()?;
+
     let _ = a.send(MerkleOp::Terminate);
     b.join().unwrap();
 
     // TODO: Need to get updated root back
     //*self.nodestore.mut_root() = root_node.into();
-    //*merkle.nodestore.lock().unwrap().as_mut().unwrap().mut_root() = root_node.into();
+    *merkle.nodestore.lock().unwrap().as_mut().unwrap().mut_root() = receive.into();
     Ok(())
 }
 
@@ -1503,7 +1510,7 @@ mod tests {
         let merkle_clone = merkle.clone();
         //let merkle = merkle.unwrap().clone();
 
-        let (a, b) = attach_threadpool(merkle_clone);
+        let (a, receiver, b) = attach_threadpool(merkle_clone);
 
         merkle.insert(&[0], Box::new([0])).unwrap();
         assert_eq!(merkle.get_value(&[0]).unwrap(), Some(Box::from([0])));
