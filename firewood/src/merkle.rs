@@ -28,7 +28,6 @@ use firewood_storage::{
     MutableProposal, NibblesIterator, Node, NodeStore, Path, ReadableStorage, SharedNode,
     TrieReader, ValueDigest,
 };
-use futures::channel::mpsc::Receiver;
 //#[cfg(test)]
 //use futures::{StreamExt, TryStreamExt};
 use metrics::counter;
@@ -572,7 +571,7 @@ fn attach_threadpool<S: ReadableStorage + 'static>(
             match v {
                 MerkleOp::InsertData(node, key, value) => {
                     let a = merkle.insert_helper(node, &key, value);
-                    thread_sender.send(a);
+                    let _ = thread_sender.send(a);
                 }
                 MerkleOp::Terminate => {
                     break;
