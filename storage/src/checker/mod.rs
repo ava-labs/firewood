@@ -34,7 +34,7 @@ struct SubTrieMetadata {
     parent: TrieNodeParent,
     path_prefix: Path,
     #[cfg(feature = "ethhash")]
-    has_no_peers: bool,
+    num_peers: usize, // include this node
 }
 
 /// [`NodeStore`] checker
@@ -115,7 +115,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             parent: TrieNodeParent::Root,
             path_prefix: Path::new(),
             #[cfg(feature = "ethhash")]
-            has_no_peers: false,
+            num_peers: 1,
         };
         self.visit_trie_helper(trie, visited, progress_bar, hash_check)
     }
@@ -134,7 +134,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             root_hash: subtrie_root_hash,
             parent,
             mut path_prefix,
-            has_no_peers,
+            num_peers,
         } = subtrie;
 
         #[cfg(not(feature = "ethhash"))]
@@ -173,7 +173,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                     parent,
                     path_prefix: child_path_prefix,
                     #[cfg(feature = "ethhash")]
-                    has_no_peers: num_children == 1,
+                    num_peers: num_children,
                 };
                 self.visit_trie_helper(child_subtrie, visited, progress_bar, hash_check)?;
             }
@@ -182,7 +182,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         // hash check - at this point all children hashes have been verified
         if hash_check {
             #[cfg(feature = "ethhash")]
-            let hash = Self::compute_node_ethhash(&node, &mut path_prefix, has_no_peers);
+            let hash = Self::compute_node_ethhash(&node, &mut path_prefix, num_peers);
             #[cfg(not(feature = "ethhash"))]
             let hash = hash_node(&node, &path_prefix);
             if hash != subtrie_root_hash {

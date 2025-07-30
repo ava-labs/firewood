@@ -20,13 +20,21 @@ use super::NodeReader;
 use crate::LinearAddress;
 use std::ops::{Deref, DerefMut};
 
+#[derive(Debug)]
 struct PathGuard<'a> {
     path: &'a mut Path,
     original_length: usize,
 }
 
 impl<'a> PathGuard<'a> {
-    fn new(path: &'a mut Path) -> Self {
+    fn new(path: &'a mut PathGuard<'_>) -> Self {
+        Self {
+            original_length: path.0.len(),
+            path: &mut path.path,
+        }
+    }
+
+    fn from_path(path: &'a mut Path) -> Self {
         Self {
             original_length: path.0.len(),
             path,
@@ -107,17 +115,28 @@ where
     /// Returns the hashed node and its hash.
     pub(super) fn hash_helper(
         #[cfg(feature = "ethhash")] &self,
+        node: Node,
+    ) -> Result<(MaybePersistedNode, HashType), FileIoError> {
+        let mut root_path = Path::new();
+        #[cfg(not(feature = "ethhash"))]
+        let res = Self::hash_helper_inner(node, PathGuard::from_path(&mut root_path))?;
+        #[cfg(feature = "ethhash")]
+        let res = self.hash_helper_inner(node, PathGuard::from_path(&mut root_path), 1)?;
+        Ok(res)
+    }
+
+    fn hash_helper_inner(
+        #[cfg(feature = "ethhash")] &self,
         mut node: Node,
-        path_prefix: &mut Path,
-        #[cfg(feature = "ethhash")] account_child_no_peers: bool,
+        mut path_prefix: PathGuard<'_>,
+        #[cfg(feature = "ethhash")] num_peers: usize,
     ) -> Result<(MaybePersistedNode, HashType), FileIoError> {
         // If this is a branch, find all unhashed children and recursively hash them.
         trace!("hashing {node:?} at {path_prefix:?}");
         if let Node::Branch(ref mut b) = node {
             #[cfg(feature = "ethhash")]
             // special case for ethhash at the account level
-            let only_one_child = if path_prefix.0.len().saturating_add(b.partial_path.0.len()) == 64
-            {
+            let num_children = if path_prefix.0.len().saturating_add(b.partial_path.0.len()) == 64 {
                 let ClassifiedChildren {
                     num_unhashed,
                     mut hashed,
@@ -130,13 +149,17 @@ where
                     // we need to rehash the child
                     let hashable_node = self.read_node(*child_node_addr)?.deref().clone();
                     let hash = {
-                        let mut path_guard = PathGuard::new(path_prefix);
+                        let mut path_guard = PathGuard::new(&mut path_prefix);
                         path_guard.0.extend(b.partial_path.0.iter().copied());
                         path_guard.0.push(*child_idx as u8);
+                        #[expect(
+                            clippy::arithmetic_side_effects,
+                            reason = "hashed and unhashed can have at most 16 elements"
+                        )]
                         Self::compute_node_ethhash(
                             &hashable_node,
                             &mut path_guard,
-                            num_unhashed == 0,
+                            1 + num_unhashed, // hashed.len() = 1
                         )
                     };
                     **child_hash = hash;
@@ -147,11 +170,11 @@ where
                         clippy::arithmetic_side_effects,
                         reason = "hashed and unhashed can have at most 16 elements"
                     )]
-                    hashed.len() + num_unhashed == 1
+                    hashed.len() + num_unhashed
                 }
             } else {
-                // not an account branch
-                false
+                // not an account branch - does not matter what we return here
+                0
             };
 
             // branch children cases:
@@ -177,14 +200,14 @@ where
                 // Hash this child and update
                 // we extend and truncate path_prefix to reduce memory allocations
                 let (child_node, child_hash) = {
-                    let mut path_guard = PathGuard::new(path_prefix);
-                    path_guard.0.extend(b.partial_path.0.iter().copied());
-                    path_guard.0.push(nibble as u8);
+                    let mut child_path_prefix = PathGuard::new(&mut path_prefix);
+                    child_path_prefix.0.extend(b.partial_path.0.iter().copied());
+                    child_path_prefix.0.push(nibble as u8);
                     #[cfg(feature = "ethhash")]
                     let node_and_hash =
-                        self.hash_helper(child_node, &mut path_guard, only_one_child)?;
+                        self.hash_helper_inner(child_node, child_path_prefix, num_children)?;
                     #[cfg(not(feature = "ethhash"))]
-                    let node_and_hash = Self::hash_helper(child_node, &mut path_guard)?;
+                    let node_and_hash = Self::hash_helper_inner(child_node, child_path_prefix)?;
                     node_and_hash
                 };
 
@@ -196,23 +219,24 @@ where
         // At this point, we either have a leaf or a branch with all children hashed.
         // if the encoded child hash <32 bytes then we use that RLP
         #[cfg(feature = "ethhash")]
-        let hash = Self::compute_node_ethhash(&node, path_prefix, account_child_no_peers);
+        let hash = Self::compute_node_ethhash(&node, &mut path_prefix, num_peers);
         #[cfg(not(feature = "ethhash"))]
-        let hash = hash_node(&node, path_prefix);
+        let hash = hash_node(&node, &*path_prefix);
 
         Ok((SharedNode::new(node).into(), hash))
     }
 
     #[cfg(feature = "ethhash")]
     /// This function computes the ethhash of a single node assuming all its children are hashed.
+    /// Note that `num_peers` is the number of children of the parent node, which includes this node.
     /// The function appends to `path_prefix` and then truncate it back to the original length - we only reuse the memory space to avoid allocations
     pub(crate) fn compute_node_ethhash(
         node: &Node,
         path_prefix: &mut Path,
-        account_child_no_peers: bool,
+        num_peers: usize,
     ) -> HashType {
-        if path_prefix.0.len() == 65 && account_child_no_peers {
-            // This is the special case when this node is the only child of an account
+        if path_prefix.0.len() == 65 && num_peers == 1 {
+            // This is the special case when this node is the only child of an account branch node
             //  - 64 nibbles for account + 1 nibble for its position in account branch node
             let mut fake_root = node.clone();
             let extra_nibble = path_prefix.0.pop().expect("path_prefix not empty");
