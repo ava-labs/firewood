@@ -20,6 +20,7 @@ use firewood_storage::{
 };
 use metrics::{counter, describe_counter};
 use std::io::Write;
+//use std::ops::{Deref, DerefMut};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -208,7 +209,11 @@ where
         drop(span);
         let span = fastrace::Span::enter_with_local_parent("freeze");
 
-        let nodestore = merkle.into_inner();
+        //let nodestore = merkle.into_inner();
+        let nodestore_arc = merkle.into_arc_mutex_inner();
+        let nodestore = nodestore_arc.lock().unwrap().take().unwrap();
+
+
         let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
             Arc::new(nodestore.try_into()?);
 
@@ -299,9 +304,13 @@ impl Db {
                 }
             }
         }
-        let nodestore = merkle.into_inner();
+        //let nodestore = merkle.into_inner();
+        let a = merkle.into_arc_mutex_inner();
+        let b = a.lock().unwrap().take().unwrap();
+
         let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
-            Arc::new(nodestore.try_into()?);
+            Arc::new(b.try_into()?);
+            //Arc::new(nodestore.try_into()?);
         self.manager.add_proposal(immutable.clone());
 
         self.metrics.proposals.increment(1);
@@ -458,9 +467,12 @@ impl Proposal<'_> {
                 }
             }
         }
-        let nodestore = merkle.into_inner();
+        //let nodestore = merkle.into_inner();
+        let a = merkle.into_arc_mutex_inner();
+        let b = a.lock().unwrap().take().unwrap();
         let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
-            Arc::new(nodestore.try_into()?);
+            Arc::new(b.try_into()?);
+            //Arc::new(nodestore.try_into()?);
         self.db.manager.add_proposal(immutable.clone());
 
         Ok(Self {

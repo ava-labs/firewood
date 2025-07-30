@@ -86,7 +86,7 @@ fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criter
                     (merkle, keys)
                 },
                 #[expect(clippy::unwrap_used)]
-                |(mut merkle, keys)| {
+                |(merkle, keys)| {
                     for key in keys {
                         merkle.insert(&key, Box::new(*b"v")).unwrap();
                     }
