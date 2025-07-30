@@ -18,7 +18,6 @@ use super::NodeReader;
 
 #[cfg(feature = "ethhash")]
 use crate::LinearAddress;
-#[cfg(feature = "ethhash")]
 use std::ops::{Deref, DerefMut};
 
 struct PathGuard<'a> {
@@ -185,7 +184,7 @@ where
                     let node_and_hash =
                         self.hash_helper(child_node, &mut path_guard, only_one_child)?;
                     #[cfg(not(feature = "ethhash"))]
-                    let node_and_hash = Self::hash_helper(child_node, path_prefix)?;
+                    let node_and_hash = Self::hash_helper(child_node, &mut path_guard)?;
                     node_and_hash
                 };
 
