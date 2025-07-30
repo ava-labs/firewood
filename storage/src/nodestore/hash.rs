@@ -142,6 +142,11 @@ where
                     mut hashed,
                 } = self.ethhash_classify_children(&mut b.children);
                 trace!("hashed {hashed:?} unhashed {num_unhashed:?}");
+                #[expect(
+                    clippy::arithmetic_side_effects,
+                    reason = "hashed and unhashed can have at most 16 elements"
+                )]
+                let num_children = hashed.len() + num_unhashed;
                 if let [(child_idx, (child_node_addr, child_hash))] = &mut hashed[..] {
                     // special case:
                     //  - there was only one child in the current account branch when previously hashed
@@ -152,26 +157,12 @@ where
                         let mut path_guard = PathGuard::new(&mut path_prefix);
                         path_guard.0.extend(b.partial_path.0.iter().copied());
                         path_guard.0.push(*child_idx as u8);
-                        #[expect(
-                            clippy::arithmetic_side_effects,
-                            reason = "hashed and unhashed can have at most 16 elements"
-                        )]
-                        Self::compute_node_ethhash(
-                            &hashable_node,
-                            &mut path_guard,
-                            1 + num_unhashed, // hashed.len() = 1
-                        )
+                        Self::compute_node_ethhash(&hashable_node, &mut path_guard, num_children)
                     };
                     **child_hash = hash;
                 }
 
-                {
-                    #![expect(
-                        clippy::arithmetic_side_effects,
-                        reason = "hashed and unhashed can have at most 16 elements"
-                    )]
-                    hashed.len() + num_unhashed
-                }
+                num_children
             } else {
                 // not an account branch - does not matter what we return here
                 0
@@ -221,7 +212,7 @@ where
         #[cfg(feature = "ethhash")]
         let hash = Self::compute_node_ethhash(&node, &mut path_prefix, num_peers);
         #[cfg(not(feature = "ethhash"))]
-        let hash = hash_node(&node, &*path_prefix);
+        let hash = hash_node(&node, &path_prefix);
 
         Ok((SharedNode::new(node).into(), hash))
     }
