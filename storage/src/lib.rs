@@ -261,6 +261,20 @@ pub enum CheckerError {
     #[error("The checker can only check persisted nodestores")]
     UnpersistedRoot,
 
+    #[cfg(feature = "ethhash")]
+    #[error(
+        "The node {key:?} at {address:#x} (parent: {parent:#x}) has a value but its path is not 32 or 64 bytes long"
+    )]
+    /// With ethhash, a value corresponds to a key that is not 32 or 64 bytes long
+    EthKeySize {
+        /// The key found, or equivalently the path of the node that stores the value
+        key: Path,
+        /// Address of the node
+        address: LinearAddress,
+        /// Parent of the node
+        parent: TrieNodeParent,
+    },
+
     /// IO error
     #[error("IO error")]
     #[derive_where(skip_inner)]

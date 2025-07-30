@@ -150,14 +150,26 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
         // read the node and iterate over the children if branch node
         let node = self.read_node(subtrie_root_address)?;
+        let mut current_node_path = path_prefix.clone();
+        current_node_path.0.extend_from_slice(node.partial_path());
+        #[cfg(feature = "ethhash")]
+        if node.value().is_some()
+            && current_node_path.0.len() != 32
+            && current_node_path.0.len() != 64
+        {
+            return Err(CheckerError::EthKeySize {
+                key: current_node_path,
+                address: subtrie_root_address,
+                parent,
+            });
+        }
         if let Node::Branch(branch) = node.as_ref() {
             // this is an internal node, traverse the children
             #[cfg(feature = "ethhash")]
             let num_children = branch.children_iter().count();
             for (nibble, (address, hash)) in branch.children_iter() {
                 let parent = TrieNodeParent::Parent(subtrie_root_address, nibble);
-                let mut child_path_prefix = path_prefix.clone();
-                child_path_prefix.0.extend_from_slice(node.partial_path());
+                let mut child_path_prefix = current_node_path.clone();
                 child_path_prefix.0.push(nibble as u8);
                 let child_subtrie = SubTrieMetadata {
                     root_address: address,
