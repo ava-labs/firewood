@@ -995,13 +995,10 @@ func TestIterBasic(t *testing.T) {
 	handle, err := db.Iter(keys[3])
 	r.NoError(err)
 
-	kv, err := handle.Next()
-	r.NoError(err)
-	r.Equal(keys[3], kv.Key)
-	r.Equal(vals[3], kv.Value)
-
-	kv, err = handle.Next()
-	r.NoError(err)
-	r.Equal(keys[4], kv.Key)
-	r.Equal(vals[4], kv.Value)
+	for i := 3; handle.Next(); i += 1 {
+		t.Logf("%s => %s", string(handle.Key()), string(handle.Value()))
+		r.Equal(keys[i], handle.Key())
+		r.Equal(vals[i], handle.Value())
+	}
+	r.NoError(handle.Err())
 }

@@ -54,11 +54,9 @@ impl std::fmt::Debug for IterationNode {
     }
 }
 
-// TODO: we expose NodeStreamState here because FFI uses it, maybe there is
-// a better way?
 #[derive(Debug)]
 #[doc(hidden)]
-pub enum NodeStreamState {
+enum NodeStreamState {
     /// The iterator state is lazily initialized when `poll_next` is called
     /// for the first time. The iteration start key is stored here.
     StartFromKey(Key),
@@ -79,9 +77,14 @@ pub struct MerkleNodeStream<'a, T> {
     merkle: &'a T,
 }
 
+#[derive(Debug)]
+#[doc(hidden)]
+/// Internal state of the stream, for use in FFI
+pub struct InternalStreamState(NodeStreamState);
+
 impl From<Key> for NodeStreamState {
     fn from(key: Key) -> Self {
-        Self::StartFromKey(key)
+        StartFromKey(key)
     }
 }
 
@@ -103,7 +106,7 @@ impl<'a, T: TrieReader> MerkleNodeStream<'a, T> {
         }
     }
 
-    pub(super) const fn from(merkle: &'a T, state: NodeStreamState) -> Self {
+    const fn from(merkle: &'a T, state: NodeStreamState) -> Self {
         Self { state, merkle }
     }
 
@@ -364,10 +367,10 @@ impl<'a, T: TrieReader> MerkleKeyValueStream<'a, T> {
     }
 
     /// Construct a [`MerkleKeyValueStream`] from prior internal state
-    pub const fn from_internal_state(merkle: &'a T, state: NodeStreamState) -> Self {
+    pub fn from_internal_state(merkle: &'a T, state: InternalStreamState) -> Self {
         Self {
             state: MerkleKeyValueStreamState::Initialized {
-                node_iter: MerkleNodeStream::from(merkle, state),
+                node_iter: MerkleNodeStream::from(merkle, state.0),
             },
             merkle,
         }
@@ -375,11 +378,12 @@ impl<'a, T: TrieReader> MerkleKeyValueStream<'a, T> {
 
     /// retrieve the internal state of the stream
     #[must_use]
-    pub fn internal_state(self) -> NodeStreamState {
-        match self.state {
+    pub fn internal_state(self) -> InternalStreamState {
+        let node_state = match self.state {
             MerkleKeyValueStreamState::Initialized { node_iter } => node_iter.state,
             MerkleKeyValueStreamState::_Uninitialized(k) => StartFromKey(k),
-        }
+        };
+        InternalStreamState(node_state)
     }
 
     /// gets the next value synchronously

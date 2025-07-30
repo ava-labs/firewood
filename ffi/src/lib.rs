@@ -27,7 +27,7 @@ use firewood::db::{BatchOp as DbBatchOp, Db, DbConfig, DbViewSync, DbViewSyncByt
 use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
 
 use firewood::merkle::Merkle;
-use firewood::stream::{MerkleKeyValueStream, NodeStreamState};
+use firewood::stream::{InternalStreamState, MerkleKeyValueStream};
 use firewood::v2::api::HashKey;
 use metrics::counter;
 
@@ -75,7 +75,7 @@ pub struct DatabaseHandle<'p> {
 #[derive(Debug)]
 pub struct IteratorHandle {
     /// Internal state of the iterator
-    state: Mutex<Box<Option<NodeStreamState>>>,
+    state: Mutex<Box<Option<InternalStreamState>>>,
 }
 
 impl From<Db> for DatabaseHandle<'_> {
@@ -188,7 +188,7 @@ fn iter_latest(db: Option<&DatabaseHandle<'_>>, key: &Value) -> Result<IteratorH
     // Find root hash.
     // Matches `hash` function but we use the TrieHash type here
     let Some(root) = db.root_hash_sync().map_err(|e| e.to_string())? else {
-        todo!()
+        return Ok(IteratorHandle{ state: Mutex::new(Box::new(None)) });
     };
 
     // Find revision associated with root.
@@ -259,10 +259,10 @@ fn iter_next(
     let mut stream =
         MerkleKeyValueStream::from_internal_state(merkle.nodestore(), inner_state);
     let next = stream.next_sync();
+    **state = Some(stream.internal_state());
 
     if let Some(next) = next {
         let (k, v) = next.map_err(|e| e.to_string())?;
-        **state = Some(stream.internal_state());
         let key: Value = k.into();
         let value: Value = v.as_slice().into();
         Ok(KeyValue { key, value })

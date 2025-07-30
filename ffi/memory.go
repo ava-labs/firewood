@@ -162,9 +162,13 @@ func kvFromKeyValue(v *C.struct_KeyValue) (*KeyValue, error) {
 		return nil, e
 	}
 
+	if kb == nil && vb == nil {
+		return nil, nil
+	}
+
 	if kb == nil {
 		// TODO: free
-		//C.fwd_free_value(v)
+		// C.fwd_free_value(v)
 		return nil, errors.New(string(vb))
 	}
 

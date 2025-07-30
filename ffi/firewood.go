@@ -55,6 +55,8 @@ type Database struct {
 type DbIterator struct {
 	handle   *C.IteratorHandle
 	dbHandle *C.DatabaseHandle
+	data     *KeyValue
+	err      error
 }
 
 // Config configures the opening of a [Database].
@@ -200,10 +202,33 @@ func (db *Database) Iter(key []byte) (*DbIterator, error) {
 	return &DbIterator{handle: it, dbHandle: db.handle}, nil
 }
 
-func (it *DbIterator) Next() (*KeyValue, error) {
+func (it *DbIterator) Next() bool {
 	v := C.fwd_iter_next(it.dbHandle, it.handle)
 	kv, e := kvFromKeyValue(&v)
-	return kv, e
+	it.data = kv
+	it.err = e
+	if kv == nil || e != nil {
+		return false
+	}
+	return true
+}
+
+func (it *DbIterator) Key() []byte {
+	if it.data == nil || it.err != nil {
+		return nil
+	}
+	return it.data.Key
+}
+
+func (it *DbIterator) Value() []byte {
+	if it.data == nil || it.err != nil {
+		return nil
+	}
+	return it.data.Value
+}
+
+func (it *DbIterator) Err() error {
+	return it.err
 }
 
 // GetFromRoot retrieves the value for the given key from a specific root hash.
