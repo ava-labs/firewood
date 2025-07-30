@@ -981,3 +981,24 @@ func TestGetFromRoot(t *testing.T) {
 	_, err = db.GetFromRoot(nonExistentRoot, []byte("key"))
 	r.Error(err, "GetFromRoot with non-existent root should return error")
 }
+
+// Tests that basic iterator functionality works
+func TestIterBasic(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Commit 10 key-value pairs.
+	keys, vals := kvForTest(20)
+	_, err := db.Update(keys[:10], vals[:10])
+	r.NoError(err)
+
+	handle, err := db.Iter(keys[3])
+	r.NoError(err)
+
+	for i := 3; handle.Next(); i += 1 {
+		t.Logf("%s => %s", string(handle.Key()), string(handle.Value()))
+		r.Equal(keys[i], handle.Key())
+		r.Equal(vals[i], handle.Value())
+	}
+	r.NoError(handle.Err())
+}

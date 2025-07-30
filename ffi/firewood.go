@@ -52,6 +52,13 @@ type Database struct {
 	handle *C.DatabaseHandle
 }
 
+type DbIterator struct {
+	handle   *C.IteratorHandle
+	dbHandle *C.DatabaseHandle
+	data     *KeyValue
+	err      error
+}
+
 // Config configures the opening of a [Database].
 type Config struct {
 	Truncate             bool
@@ -179,6 +186,49 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 	}
 
 	return bytes, err
+}
+
+// Iter creates and iterator on database starting from the provided key
+// pass empty slice to start from beginning
+func (db *Database) Iter(key []byte) (*DbIterator, error) {
+	values, cleanup := newValueFactory()
+	defer cleanup()
+
+	itResult := C.fwd_iter_latest(db.handle, values.from(key))
+	it, err := iteratorFromResult(&itResult)
+	if err != nil {
+		return nil, err
+	}
+	return &DbIterator{handle: it, dbHandle: db.handle}, nil
+}
+
+func (it *DbIterator) Next() bool {
+	v := C.fwd_iter_next(it.dbHandle, it.handle)
+	kv, e := kvFromKeyValue(&v)
+	it.data = kv
+	it.err = e
+	if kv == nil || e != nil {
+		return false
+	}
+	return true
+}
+
+func (it *DbIterator) Key() []byte {
+	if it.data == nil || it.err != nil {
+		return nil
+	}
+	return it.data.Key
+}
+
+func (it *DbIterator) Value() []byte {
+	if it.data == nil || it.err != nil {
+		return nil
+	}
+	return it.data.Value
+}
+
+func (it *DbIterator) Err() error {
+	return it.err
 }
 
 // GetFromRoot retrieves the value for the given key from a specific root hash.
