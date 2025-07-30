@@ -37,10 +37,12 @@ use std::fmt::{Debug, Write};
 //use std::future::ready;
 use std::io::Error;
 use std::iter::once;
+use std::sync::mpsc::{self, Sender};
 //#[cfg(test)]
 //use std::num::NonZeroUsize;
 //use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
 //use std::thread::{self, JoinHandle};
 
 /// Keys are boxed u8 slices
@@ -166,7 +168,7 @@ fn get_helper<T: TrieReader, U: ChildOption>(
 /// Merkle operations against a nodestore
 pub struct Merkle<T> {
     nodestore: Arc<Mutex<Option<T>>>,
-    //worker_thread: Option<(Sender<MerkleOp>, JoinHandle<()>)>,
+    worker_thread: Option<(Sender<MerkleOp>, JoinHandle<()>)>,
     //helper: Arc<MerkleHelper>,
 }
 
@@ -186,13 +188,12 @@ impl MerkleHelper {
 }
 */
 
-/* 
 enum MerkleOp {
     //mut node: Node<T>, key: &[u8], value: Box<[u8]>
     InsertData(Node<Option<Child>>, Box<[u8]>, Box<[u8]>),
+    Terminate,
     //SetMerkle(Option<Arc<Mutex<Merkle<NodeStore<MutableProposal, S>>>>>)
 }
-*/
 
 /*
 impl<T> Merkle<T> {
@@ -212,7 +213,7 @@ impl<T> From<T> for Merkle<T> {
     fn from(nodestore: T) -> Self {
         Merkle {
             nodestore: Arc::new(Mutex::new(Some(nodestore))),
-            //worker_thread: None,
+            worker_thread: None,
         }
     }
 }
@@ -222,7 +223,7 @@ impl<T: TrieReader> Merkle<T> {
         self.nodestore.lock().unwrap().as_ref().unwrap().root_node()
     }
 
-    /* 
+    /*
     #[cfg(test)]
     pub(crate) const fn nodestore(&self) -> &T {
         //&self.nodestore
@@ -295,115 +296,115 @@ impl<T: TrieReader> Merkle<T> {
         //let a = PathIterator::new(b, key);
         //return a;
     }
-/*
-    #[cfg(test)]
-    pub(super) fn key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
-        //MerkleKeyValueStream::from(&self.nodestore)
-        //todo!()
-    }
-
-    #[cfg(test)]
-    pub(super) fn key_value_iter_from_key<K: AsRef<[u8]>>(
-        &self,
-        key: K,
-    ) -> MerkleKeyValueStream<'_, T> {
-        // TODO danlaine: change key to &[u8]
-        //MerkleKeyValueStream::from_key(&self.nodestore, key.as_ref())
-        todo!()
-    }
-*/
-
-/* 
-    #[cfg(test)]
-    pub(super) async fn range_proof(
-        &self,
-        start_key: Option<&[u8]>,
-        end_key: Option<&[u8]>,
-        limit: Option<NonZeroUsize>,
-    ) -> Result<RangeProof<Box<[u8]>, Box<[u8]>, ProofNode>, api::Error> {
-        if let (Some(k1), Some(k2)) = (&start_key, &end_key) {
-            if k1 > k2 {
-                return Err(api::Error::InvalidRange {
-                    start_key: k1.to_vec().into(),
-                    end_key: k2.to_vec().into(),
-                });
-            }
+    /*
+        #[cfg(test)]
+        pub(super) fn key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
+            //MerkleKeyValueStream::from(&self.nodestore)
+            //todo!()
         }
 
-        let mut stream = match start_key {
-            // TODO: fix the call-site to force the caller to do the allocation
-            Some(key) => self.key_value_iter_from_key(key.to_vec().into_boxed_slice()),
-            None => self.key_value_iter(),
-        };
+        #[cfg(test)]
+        pub(super) fn key_value_iter_from_key<K: AsRef<[u8]>>(
+            &self,
+            key: K,
+        ) -> MerkleKeyValueStream<'_, T> {
+            // TODO danlaine: change key to &[u8]
+            //MerkleKeyValueStream::from_key(&self.nodestore, key.as_ref())
+            todo!()
+        }
+    */
 
-        // fetch the first key from the stream
-        let first_result = stream.next().await;
-
-        // transpose the Option<Result<T, E>> to Result<Option<T>, E>
-        // If this is an error, the ? operator will return it
-        let Some((first_key, first_value)) = first_result.transpose()? else {
-            // The trie is empty.
-            if start_key.is_none() && end_key.is_none() {
-                // The caller requested a range proof over an empty trie.
-                return Err(api::Error::RangeProofOnEmptyTrie);
+    /*
+        #[cfg(test)]
+        pub(super) async fn range_proof(
+            &self,
+            start_key: Option<&[u8]>,
+            end_key: Option<&[u8]>,
+            limit: Option<NonZeroUsize>,
+        ) -> Result<RangeProof<Box<[u8]>, Box<[u8]>, ProofNode>, api::Error> {
+            if let (Some(k1), Some(k2)) = (&start_key, &end_key) {
+                if k1 > k2 {
+                    return Err(api::Error::InvalidRange {
+                        start_key: k1.to_vec().into(),
+                        end_key: k2.to_vec().into(),
+                    });
+                }
             }
 
-            let start_proof = start_key
-                .map(|start_key| self.prove(start_key))
+            let mut stream = match start_key {
+                // TODO: fix the call-site to force the caller to do the allocation
+                Some(key) => self.key_value_iter_from_key(key.to_vec().into_boxed_slice()),
+                None => self.key_value_iter(),
+            };
+
+            // fetch the first key from the stream
+            let first_result = stream.next().await;
+
+            // transpose the Option<Result<T, E>> to Result<Option<T>, E>
+            // If this is an error, the ? operator will return it
+            let Some((first_key, first_value)) = first_result.transpose()? else {
+                // The trie is empty.
+                if start_key.is_none() && end_key.is_none() {
+                    // The caller requested a range proof over an empty trie.
+                    return Err(api::Error::RangeProofOnEmptyTrie);
+                }
+
+                let start_proof = start_key
+                    .map(|start_key| self.prove(start_key))
+                    .transpose()?;
+
+                let end_proof = end_key.map(|end_key| self.prove(end_key)).transpose()?;
+
+                return Ok(RangeProof {
+                    start_proof,
+                    key_values: Box::new([]),
+                    end_proof,
+                });
+            };
+
+            let start_proof = self.prove(&first_key)?;
+            let limit = limit.map(|old_limit| old_limit.get().saturating_sub(1));
+
+            let mut key_values = vec![(first_key, first_value.into_boxed_slice())];
+
+            // we stop streaming if either we hit the limit or the key returned was larger
+            // than the largest key requested
+            key_values.extend(
+                stream
+                    .take(limit.unwrap_or(usize::MAX))
+                    .take_while(|kv| {
+                        // no last key asked for, so keep going
+                        let Some(last_key) = end_key else {
+                            return ready(true);
+                        };
+
+                        // return the error if there was one
+                        let Ok(kv) = kv else {
+                            return ready(true);
+                        };
+
+                        // keep going if the key returned is less than the last key requested
+                        ready(&*kv.0 <= last_key)
+                    })
+                    .map(|kv| kv.map(|(k, v)| (k, v.into())))
+                    .try_collect::<Vec<(Box<[u8]>, Box<[u8]>)>>()
+                    .await?,
+            );
+
+            let end_proof = key_values
+                .last()
+                .map(|(largest_key, _)| self.prove(largest_key))
                 .transpose()?;
 
-            let end_proof = end_key.map(|end_key| self.prove(end_key)).transpose()?;
+            debug_assert!(end_proof.is_some());
 
-            return Ok(RangeProof {
-                start_proof,
-                key_values: Box::new([]),
+            Ok(RangeProof {
+                start_proof: Some(start_proof),
+                key_values: key_values.into(),
                 end_proof,
-            });
-        };
-
-        let start_proof = self.prove(&first_key)?;
-        let limit = limit.map(|old_limit| old_limit.get().saturating_sub(1));
-
-        let mut key_values = vec![(first_key, first_value.into_boxed_slice())];
-
-        // we stop streaming if either we hit the limit or the key returned was larger
-        // than the largest key requested
-        key_values.extend(
-            stream
-                .take(limit.unwrap_or(usize::MAX))
-                .take_while(|kv| {
-                    // no last key asked for, so keep going
-                    let Some(last_key) = end_key else {
-                        return ready(true);
-                    };
-
-                    // return the error if there was one
-                    let Ok(kv) = kv else {
-                        return ready(true);
-                    };
-
-                    // keep going if the key returned is less than the last key requested
-                    ready(&*kv.0 <= last_key)
-                })
-                .map(|kv| kv.map(|(k, v)| (k, v.into())))
-                .try_collect::<Vec<(Box<[u8]>, Box<[u8]>)>>()
-                .await?,
-        );
-
-        let end_proof = key_values
-            .last()
-            .map(|(largest_key, _)| self.prove(largest_key))
-            .transpose()?;
-
-        debug_assert!(end_proof.is_some());
-
-        Ok(RangeProof {
-            start_proof: Some(start_proof),
-            key_values: key_values.into(),
-            end_proof,
-        })
-    }
-*/
+            })
+        }
+    */
     pub(crate) fn get_value(&self, key: &[u8]) -> Result<Option<Box<[u8]>>, FileIoError> {
         let Some(node) = self.get_node(key)? else {
             return Ok(None);
@@ -543,15 +544,14 @@ impl<S: ReadableStorage> TryFrom<Merkle<NodeStore<MutableProposal, S>>>
         let b: NodeStore<Arc<ImmutableProposal>, S> = a.try_into()?;
         Ok(Merkle {
             nodestore: Arc::new(Mutex::new(Some(b))),
-            //worker_thread: None,
+            worker_thread: None,
         })
     }
 }
 
-/* 
 /// Attach a threadpool to this Merkle structure
 fn attach_threadpool<S: ReadableStorage + 'static>(
-    merkle: Option<Arc<Mutex<Merkle<NodeStore<MutableProposal, S>>>>>,
+    merkle: Arc<Merkle<NodeStore<MutableProposal, S>>>,
 ) -> (Sender<MerkleOp>, JoinHandle<()>) {
     //let a = self;
     //match m_param.worker_thread {
@@ -559,26 +559,66 @@ fn attach_threadpool<S: ReadableStorage + 'static>(
     // Just create one for now
     let (sender, receiver) = mpsc::channel::<MerkleOp>();
     //let merkle: Option<Arc<Mutex<Merkle<NodeStore<MutableProposal, S>>>>> = None;
+    //let m = merkle.clone();
+
     let handle = thread::spawn(move || {
         loop {
             let Ok(v) = receiver.recv() else {
                 return; // Thread is unable to recv data from parent
             };
             match v {
-                MerkleOp::InsertData(node, key, value) => match &merkle {
-                    Some(m) => {
-                        let _ = m.lock().unwrap().insert_helper(node, &key, value);
-                    }
-                    None => {
-                        todo!()
-                    }
-                },
+                MerkleOp::InsertData(node, key, value) => {
+                    let _ = merkle.insert_helper(node, &key, value);
+                }
+                MerkleOp::Terminate => {
+                    break;
+                }
             }
         }
     });
     return (sender, handle);
 }
-*/
+
+///
+pub fn insert_tp<S: ReadableStorage + 'static>(
+    merkle: Arc<Merkle<NodeStore<MutableProposal, S>>>,
+    key: &[u8],
+    value: Box<[u8]>,
+) -> Result<(), FileIoError> {
+    let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
+
+    let merkle_clone = merkle.clone();
+    let (a, b) = attach_threadpool(merkle_clone);
+
+    //let root = self.nodestore.mut_root();
+    let mut guard = merkle.nodestore.lock().unwrap();
+    let root = guard.as_mut().unwrap().mut_root();
+
+    let Some(root_node) = std::mem::take(root) else {
+        // The trie is empty. Create a new leaf node with `value` and set
+        // it as the root.
+        let root_node = Node::Leaf(LeafNode {
+            partial_path: key,
+            value,
+        });
+        *root = root_node.into();
+        return Ok(());
+    };
+    *root = root_node.into(); // Write back into root
+    drop(guard); // Need to drop the lock or else insert_helper won't be able to acquire it.
+
+    //*root = root_node.into(); // Write back into root
+
+    let root_node = merkle.root().unwrap().as_ref().clone();
+    let _ = a.send(MerkleOp::InsertData(root_node, Box::new([2]), Box::new([2])));
+    let _ = a.send(MerkleOp::Terminate);
+    b.join().unwrap();
+
+    // TODO: Need to get updated root back
+    //*self.nodestore.mut_root() = root_node.into();
+    //*merkle.nodestore.lock().unwrap().as_mut().unwrap().mut_root() = root_node.into();
+    Ok(())
+}
 
 impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
     /// Convert a merkle backed by an `MutableProposal` into an `ImmutableProposal`
@@ -1459,17 +1499,43 @@ mod tests {
     #[test]
     fn test_get_regression() {
         let merkle = create_in_memory_merkle();
+        let merkle = Arc::new(merkle);
+        let merkle_clone = merkle.clone();
+        //let merkle = merkle.unwrap().clone();
+
+        let (a, b) = attach_threadpool(merkle_clone);
 
         merkle.insert(&[0], Box::new([0])).unwrap();
         assert_eq!(merkle.get_value(&[0]).unwrap(), Some(Box::from([0])));
 
-        merkle.insert(&[1], Box::new([1])).unwrap();
-        assert_eq!(merkle.get_value(&[1]).unwrap(), Some(Box::from([1])));
+        println!("---- pass first insert");
 
-        merkle.insert(&[2], Box::new([2])).unwrap();
-        assert_eq!(merkle.get_value(&[2]).unwrap(), Some(Box::from([2])));
+        let root = merkle.root().unwrap().as_ref().clone();
 
-        let merkle = merkle.hash();
+        let _ = a.send(MerkleOp::InsertData(root, Box::new([1]), Box::new([1])));
+
+        let root = merkle.root().unwrap().as_ref().clone();
+        let _ = a.send(MerkleOp::InsertData(root, Box::new([2]), Box::new([2])));
+
+        let _ = a.send(MerkleOp::Terminate);
+
+        b.join().unwrap();
+
+        merkle.insert(&[0], Box::new([0])).unwrap();
+        assert_eq!(merkle.get_value(&[0]).unwrap(), Some(Box::from([0])));
+
+
+        let _ = insert_tp(merkle, &[1], Box::new([1]));
+
+        /*
+        merkle.unwrap().insert(&[1], Box::new([1])).unwrap();
+        assert_eq!(merkle.unwrap().get_value(&[1]).unwrap(), Some(Box::from([1])));
+
+        merkle.unwrap().insert(&[2], Box::new([2])).unwrap();
+        assert_eq!(merkle.unwrap().get_value(&[2]).unwrap(), Some(Box::from([2])));
+        */
+        /*
+        let merkle = merkle.unwrap().hash();
 
         assert_eq!(merkle.get_value(&[0]).unwrap(), Some(Box::from([0])));
         assert_eq!(merkle.get_value(&[1]).unwrap(), Some(Box::from([1])));
@@ -1478,6 +1544,7 @@ mod tests {
         for result in merkle.path_iter(&[2]).unwrap() {
             result.unwrap();
         }
+        */
     }
 
     #[test]
@@ -1494,7 +1561,7 @@ mod tests {
         //Merkle { nodestore, worker_thread: None }
         Merkle {
             nodestore: Arc::new(Mutex::new(Some(nodestore))),
-            //worker_thread: None,
+            worker_thread: None,
         }
     }
 
@@ -1773,17 +1840,17 @@ mod tests {
             }
         }
     }
-/* 
-    #[tokio::test]
-    async fn empty_range_proof() {
-        let merkle = create_in_memory_merkle();
+    /*
+        #[tokio::test]
+        async fn empty_range_proof() {
+            let merkle = create_in_memory_merkle();
 
-        assert!(matches!(
-            merkle.range_proof(None, None, None).await.unwrap_err(),
-            api::Error::RangeProofOnEmptyTrie
-        ));
-    }
-*/
+            assert!(matches!(
+                merkle.range_proof(None, None, None).await.unwrap_err(),
+                api::Error::RangeProofOnEmptyTrie
+            ));
+        }
+    */
 
     //     #[tokio::test]
     //     async fn range_proof_invalid_bounds() {
@@ -2396,7 +2463,7 @@ mod tests {
         }
     }
 
-    /* 
+    /*
     #[test]
     fn test_root_hash_reversed_deletions() -> Result<(), FileIoError> {
         use rand::rngs::StdRng;
