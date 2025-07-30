@@ -261,7 +261,6 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
             node.persist_at(persisted_address);
 
             // Decrement gauge immediately after node is written to storage
-            #[expect(clippy::cast_possible_truncation)]
             gauge!("firewood.nodes.unwritten").decrement(1.0);
 
             // Move the arc to a vector of persisted nodes for caching

@@ -19,6 +19,7 @@ use firewood_storage::{
 };
 use metrics::{counter, describe_counter};
 use std::io::Write;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -111,13 +112,19 @@ impl api::DbView for HistoricalRev {
         merkle.prove(key.as_ref()).map_err(api::Error::from)
     }
 
-    async fn range_proof<K: api::KeyType, V>(
+    async fn range_proof<K: api::KeyType>(
         &self,
-        _first_key: Option<K>,
-        _last_key: Option<K>,
-        _limit: Option<usize>,
+        first_key: Option<K>,
+        last_key: Option<K>,
+        limit: Option<NonZeroUsize>,
     ) -> Result<FrozenRangeProof, api::Error> {
-        todo!()
+        Merkle::from(self)
+            .range_proof(
+                first_key.as_ref().map(AsRef::as_ref),
+                last_key.as_ref().map(AsRef::as_ref),
+                limit,
+            )
+            .await
     }
 
     fn iter_option<K: KeyType>(
@@ -389,13 +396,19 @@ impl api::DbView for Proposal<'_> {
         merkle.prove(key.as_ref()).map_err(api::Error::from)
     }
 
-    async fn range_proof<K: KeyType, V>(
+    async fn range_proof<K: KeyType>(
         &self,
-        _first_key: Option<K>,
-        _last_key: Option<K>,
-        _limit: Option<usize>,
+        first_key: Option<K>,
+        last_key: Option<K>,
+        limit: Option<NonZeroUsize>,
     ) -> Result<FrozenRangeProof, api::Error> {
-        todo!()
+        Merkle::from(&self.nodestore)
+            .range_proof(
+                first_key.as_ref().map(AsRef::as_ref),
+                last_key.as_ref().map(AsRef::as_ref),
+                limit,
+            )
+            .await
     }
 
     fn iter_option<K: KeyType>(
@@ -830,6 +843,86 @@ mod test {
                 db.dump(&mut std::io::stdout()).await.unwrap();
                 panic!("error: {e}");
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_deep_propose() {
+        const NUM_KEYS: usize = 2;
+        const NUM_PROPOSALS: usize = 100;
+
+        let db = testdb().await;
+
+        // create NUM_KEYS * NUM_PROPOSALS keys and values
+        let (keys, vals): (Vec<_>, Vec<_>) = (0..NUM_KEYS * NUM_PROPOSALS)
+            .map(|i| {
+                (
+                    format!("key{i}").into_bytes(),
+                    Box::from(format!("value{i}").as_bytes()),
+                )
+            })
+            .unzip();
+
+        // create batches of NUM_KEYS keys and values
+        let batches: Vec<_> = keys
+            .chunks(NUM_KEYS)
+            .zip(vals.chunks(NUM_KEYS))
+            .map(|(k, v)| {
+                k.iter()
+                    .zip(v.iter())
+                    .map(|(k, v)| BatchOp::Put { key: k, value: v })
+                    .collect()
+            })
+            .collect();
+
+        // better be correct
+        assert_eq!(batches.len(), NUM_PROPOSALS);
+
+        // create proposals from the batches. The first one is created from the db, the others are
+        // children
+        let mut batches_iter = batches.into_iter();
+        let mut proposals = vec![db.propose(batches_iter.next().unwrap()).await.unwrap()];
+
+        for batch in batches_iter {
+            let proposal = proposals
+                .last()
+                .unwrap()
+                .clone()
+                .propose(batch)
+                .await
+                .unwrap();
+            proposals.push(proposal);
+        }
+
+        // check that each value is present in the final proposal
+        for (k, v) in keys.iter().zip(vals.iter()) {
+            assert_eq!(&proposals.last().unwrap().val(k).await.unwrap().unwrap(), v);
+        }
+
+        // save the last proposal root hash for comparison with the final database root hash
+        let last_proposal_root_hash = proposals
+            .last()
+            .unwrap()
+            .root_hash()
+            .await
+            .unwrap()
+            .unwrap();
+
+        // commit the proposals
+        for proposal in proposals {
+            proposal.commit().await.unwrap();
+        }
+
+        // get the last committed revision
+        let last_root_hash = db.root_hash().await.unwrap().unwrap();
+        let committed = db.revision(last_root_hash.clone()).await.unwrap();
+
+        // the last root hash should be the same as the last proposal root hash
+        assert_eq!(last_root_hash, last_proposal_root_hash);
+
+        // check that all the keys and values are still present
+        for (k, v) in keys.iter().zip(vals.iter()) {
+            assert_eq!(&committed.val(k).await.unwrap().unwrap(), v);
         }
     }
 
