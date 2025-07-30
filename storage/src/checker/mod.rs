@@ -19,6 +19,8 @@ use std::ops::Range;
 
 use indicatif::ProgressBar;
 
+const VALID_ETH_KEY_SIZES: [usize; 2] = [64, 128]; // in number of nibbles - two nibbles make a byte
+
 /// Options for the checker
 #[derive(Debug)]
 pub struct CheckOpt {
@@ -153,10 +155,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         let mut current_node_path = path_prefix.clone();
         current_node_path.0.extend_from_slice(node.partial_path());
         #[cfg(feature = "ethhash")]
-        if node.value().is_some()
-            && current_node_path.0.len() != 32
-            && current_node_path.0.len() != 64
-        {
+        if node.value().is_some() && !VALID_ETH_KEY_SIZES.contains(&current_node_path.0.len()) {
             return Err(CheckerError::EthKeySize {
                 key: current_node_path,
                 address: subtrie_root_address,
