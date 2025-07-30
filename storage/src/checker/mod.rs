@@ -19,6 +19,7 @@ use std::ops::Range;
 
 use indicatif::ProgressBar;
 
+#[cfg(feature = "ethhash")]
 const VALID_ETH_KEY_SIZES: [usize; 2] = [64, 128]; // in number of nibbles - two nibbles make a byte
 
 /// Options for the checker
