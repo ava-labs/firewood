@@ -188,7 +188,9 @@ fn iter_latest(db: Option<&DatabaseHandle<'_>>, key: &Value) -> Result<IteratorH
     // Find root hash.
     // Matches `hash` function but we use the TrieHash type here
     let Some(root) = db.root_hash_sync().map_err(|e| e.to_string())? else {
-        return Ok(IteratorHandle{ state: Mutex::new(Box::new(None)) });
+        return Ok(IteratorHandle {
+            state: Mutex::new(Box::new(None)),
+        });
     };
 
     // Find revision associated with root.
@@ -251,13 +253,15 @@ fn iter_next(
     let rev = db.revision_sync(root).map_err(|e| e.to_string())?;
 
     let merkle = Merkle::from(&rev);
-    let mut state = iterator_handle.state.lock().expect("iterator_handle lock is poisoned");
+    let mut state = iterator_handle
+        .state
+        .lock()
+        .expect("iterator_handle lock is poisoned");
     let inner_state = state.take();
-    let Some(inner_state) =  inner_state else {
+    let Some(inner_state) = inner_state else {
         return Ok(KeyValue::default());
     };
-    let mut stream =
-        MerkleKeyValueStream::from_internal_state(merkle.nodestore(), inner_state);
+    let mut stream = MerkleKeyValueStream::from_internal_state(merkle.nodestore(), inner_state);
     let next = stream.next_sync();
     **state = Some(stream.internal_state());
 
