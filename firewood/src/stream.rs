@@ -1551,33 +1551,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn internal_state_stream() {
+    async fn recreate_from_internal_state_simple() {
         let merkle = created_populated_merkle();
-        let mut it = merkle.key_value_iter();
-        let next = it.next().await.unwrap().unwrap();
-        println!("{:?}", next);
-        let state = it.internal_state();
-        let mut n_it = MerkleKeyValueStream::from_internal_state(merkle.nodestore(), state);
-        let next = n_it.next().await.unwrap().unwrap();
-        println!("{:?}", next);
-    }
-
-    #[tokio::test]
-    async fn loop_stream() {
-        let merkle = created_populated_merkle();
-        let mut it = merkle.key_value_iter();
-        loop {
-            let next = it.next().await;
-            if next.is_none() {
-                break;
-            }
-            let next = next.unwrap();
-            if next.is_err() {
-                break;
-            }
-            let next = next.unwrap();
-            println!("{:?}", next);
-        }
+        let kv = {
+            let mut it = merkle.key_value_iter();
+            it.next().await.unwrap().unwrap();
+            let state = it.internal_state();
+            let mut n_it = MerkleKeyValueStream::from_internal_state(merkle.nodestore(), state);
+            n_it.next().await.unwrap().unwrap()
+        };
+        let expected_kv = {
+            let mut it = merkle.key_value_iter();
+            it.next().await.unwrap().unwrap();
+            it.next().await.unwrap().unwrap()
+        };
+        assert_eq!(kv, expected_kv);
     }
 
     async fn check_stream_is_done<S>(mut stream: S)
