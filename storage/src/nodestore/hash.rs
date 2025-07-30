@@ -6,24 +6,17 @@
 //! This module contains all node hashing functionality for the nodestore, including
 //! specialized support for Ethereum-compatible hash processing.
 
+#[cfg(feature = "ethhash")]
+use crate::Children;
 use crate::hashednode::hash_node;
 use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::Node;
-use crate::{Child, HashType, Path, ReadableStorage, SharedNode};
+use crate::{Child, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorage, SharedNode};
 
-#[cfg(feature = "ethhash")]
 use super::NodeReader;
 #[cfg(feature = "ethhash")]
-use crate::node::persist::MaybePersistedNode;
-#[cfg(feature = "ethhash")]
 use std::ops::Deref;
-
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use super::alloc::LinearAddress;
-use super::{ImmutableProposal, NodeStore};
 
 /// Classified children for ethereum hash processing
 #[cfg(feature = "ethhash")]
@@ -32,14 +25,17 @@ pub(super) struct ClassifiedChildren<'a> {
     pub(super) hashed: Vec<(usize, (MaybePersistedNode, &'a mut HashType))>,
 }
 
-impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
+impl<T, S: ReadableStorage> NodeStore<T, S>
+where
+    NodeStore<T, S>: NodeReader,
+{
     /// Helper function to classify children for ethereum hash processing
     /// We have some special cases based on the number of children
     /// and whether they are hashed or unhashed, so we need to classify them.
     #[cfg(feature = "ethhash")]
     pub(super) fn ethhash_classify_children<'a>(
         &self,
-        children: &'a mut [Option<Child>; crate::node::BranchNode::MAX_CHILDREN],
+        children: &'a mut Children<Child>,
     ) -> ClassifiedChildren<'a> {
         children.iter_mut().enumerate().fold(
             ClassifiedChildren {
@@ -62,9 +58,10 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                             acc.hashed.push((idx, (maybe_persisted_node, h)));
                         } else {
                             // If not persisted, we need to get the node to hash it
-                            if let Ok(node) = maybe_persisted.as_shared_node(self) {
-                                acc.unhashed.push((idx, node.deref().clone()));
-                            }
+                            let node = maybe_persisted
+                                .as_shared_node(&self)
+                                .expect("will never fail for unpersisted nodes");
+                            acc.unhashed.push((idx, node.deref().clone()));
                         }
                     }
                 }
@@ -74,15 +71,15 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     }
 
     /// Hashes `node`, which is at the given `path_prefix`, and its children recursively.
+    /// The function appends to `path_prefix` and then truncate it back to the original length - we only reuse the memory space to avoid allocations
     /// Returns the hashed node and its hash.
     pub(super) fn hash_helper(
-        &mut self,
+        #[cfg(feature = "ethhash")] &self,
         mut node: Node,
         path_prefix: &mut Path,
-        new_nodes: &mut HashMap<LinearAddress, (u8, SharedNode)>,
         #[cfg(feature = "ethhash")] fake_root_extra_nibble: Option<u8>,
-    ) -> Result<(LinearAddress, HashType), FileIoError> {
-        // If this is a branch, find all unhashed children and recursively call hash_helper on them.
+    ) -> Result<(MaybePersistedNode, HashType), FileIoError> {
+        // If this is a branch, find all unhashed children and recursively hash them.
         trace!("hashing {node:?} at {path_prefix:?}");
         if let Node::Branch(ref mut b) = node {
             // special case code for ethereum hashes at the account level
@@ -98,11 +95,10 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 trace!("hashed {hashed:?} unhashed {unhashed:?}");
                 if hashed.len() == 1 {
                     // we were left with one hashed node that must be rehashed
-                    let invalidated_node = hashed.first_mut().expect("hashed is not empty");
+                    let (invalidated_node_idx, (invalidated_node, invalidated_hash)) =
+                        hashed.first_mut().expect("hashed is not empty");
                     // Extract the address from the MaybePersistedNode
-                    let addr = invalidated_node
-                        .1
-                        .0
+                    let addr: crate::LinearAddress = invalidated_node
                         .as_linear_address()
                         .expect("hashed node should be persisted");
                     let mut hashable_node = self.read_node(addr)?.deref().clone();
@@ -110,15 +106,15 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                     path_prefix.0.extend(b.partial_path.0.iter().copied());
                     if unhashed.is_empty() {
                         hashable_node.update_partial_path(Path::from_nibbles_iterator(
-                            std::iter::once(invalidated_node.0 as u8)
+                            std::iter::once(*invalidated_node_idx as u8)
                                 .chain(hashable_node.partial_path().0.iter().copied()),
                         ));
                     } else {
-                        path_prefix.0.push(invalidated_node.0 as u8);
+                        path_prefix.0.push(*invalidated_node_idx as u8);
                     }
                     let hash = hash_node(&hashable_node, path_prefix);
                     path_prefix.0.truncate(original_length);
-                    *invalidated_node.1.1 = hash;
+                    **invalidated_hash = hash;
                 }
                 // handle the single-child case for an account special below
                 if hashed.is_empty() && unhashed.len() == 1 {
@@ -143,7 +139,7 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 // If this is empty or already hashed, we're done
                 // Empty matches None, and non-Node types match Some(None) here, so we want
                 // Some(Some(node))
-                let Some(Some(child_node)) = child.as_mut().map(|child| child.as_mut_node()) else {
+                let Some(child_node) = child.as_mut().and_then(|child| child.as_mut_node()) else {
                     continue;
                 };
 
@@ -164,13 +160,13 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 path_prefix.0.push(nibble as u8);
 
                 #[cfg(feature = "ethhash")]
-                let (child_addr, child_hash) =
-                    self.hash_helper(child_node, path_prefix, new_nodes, make_fake_root)?;
+                let (child_node, child_hash) =
+                    self.hash_helper(child_node, path_prefix, make_fake_root)?;
                 #[cfg(not(feature = "ethhash"))]
-                let (child_addr, child_hash) =
-                    self.hash_helper(child_node, path_prefix, new_nodes)?;
+                let (child_node, child_hash) = Self::hash_helper(child_node, path_prefix)?;
 
-                *child = Some(Child::AddressWithHash(child_addr, child_hash));
+                *child = Some(Child::MaybePersisted(child_node, child_hash));
+                trace!("child now {child:?}");
                 path_prefix.0.truncate(original_length);
             }
         }
@@ -195,10 +191,30 @@ impl<S: ReadableStorage> NodeStore<Arc<ImmutableProposal>, S> {
         #[cfg(not(feature = "ethhash"))]
         let hash = hash_node(&node, path_prefix);
 
-        let (addr, size) = self.allocate_node(&node)?;
+        Ok((SharedNode::new(node).into(), hash))
+    }
 
-        new_nodes.insert(addr, (size, node.into()));
-
-        Ok((addr, hash))
+    #[cfg(feature = "ethhash")]
+    pub(crate) fn compute_node_ethhash(
+        node: &Node,
+        path_prefix: &Path,
+        have_peers: bool,
+    ) -> HashType {
+        if path_prefix.0.len() == 65 && !have_peers {
+            // This is the special case when this node is the only child of an account
+            //  - 64 nibbles for account + 1 nibble for its position in account branch node
+            let mut fake_root = node.clone();
+            fake_root.update_partial_path(Path::from_nibbles_iterator(
+                path_prefix
+                    .0
+                    .last()
+                    .into_iter()
+                    .chain(fake_root.partial_path().0.iter())
+                    .copied(),
+            ));
+            hash_node(&fake_root, path_prefix)
+        } else {
+            hash_node(node, path_prefix)
+        }
     }
 }

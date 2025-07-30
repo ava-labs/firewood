@@ -27,9 +27,7 @@
 //! - Memory-efficient serialization with pre-allocated buffers
 //! - Ring buffer management for io-uring operations
 
-#[cfg(test)]
 use std::iter::FusedIterator;
-use std::sync::Arc;
 
 use crate::linear::FileIoError;
 use coarsetime::Instant;
@@ -38,16 +36,20 @@ use metrics::counter;
 #[cfg(feature = "io-uring")]
 use crate::logger::trace;
 
-use crate::{FileBacked, WritableStorage};
+use crate::{FileBacked, MaybePersistedNode, NodeReader, WritableStorage};
 
 #[cfg(test)]
-use crate::{MaybePersistedNode, NodeReader, RootReader};
+use crate::RootReader;
 
 #[cfg(feature = "io-uring")]
 use crate::ReadableStorage;
 
+use super::alloc::NodeAllocator;
 use super::header::NodeStoreHeader;
-use super::{ImmutableProposal, NodeStore};
+use super::{Committed, NodeStore};
+
+#[cfg(not(test))]
+use super::RootReader;
 
 impl<T, S: WritableStorage> NodeStore<T, S> {
     /// Persist the header from this proposal to storage.
@@ -75,6 +77,20 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
         self.storage.write(0, &header_bytes)?;
         Ok(())
     }
+
+    /// Persist the freelist from this proposal to storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the free list cannot be written to storage.
+    #[fastrace::trace(short_name = true)]
+    pub fn flush_freelist(&self) -> Result<(), FileIoError> {
+        // Write the free lists to storage
+        let free_list_bytes = bytemuck::bytes_of(self.header.free_lists());
+        let free_list_offset = NodeStoreHeader::free_lists_offset();
+        self.storage.write(free_list_offset, free_list_bytes)?;
+        Ok(())
+    }
 }
 
 /// Iterator that returns unpersisted nodes in depth first order.
@@ -82,17 +98,14 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
 /// This iterator assumes the root node is unpersisted and will return it as the
 /// last item. It looks at each node and traverses the children in depth first order.
 /// A stack of child iterators is maintained to properly handle nested branches.
-#[cfg(test)]
 struct UnPersistedNodeIterator<'a, N> {
     store: &'a N,
     stack: Vec<MaybePersistedNode>,
     child_iter_stack: Vec<Box<dyn Iterator<Item = MaybePersistedNode> + 'a>>,
 }
 
-#[cfg(test)]
 impl<N: NodeReader + RootReader> FusedIterator for UnPersistedNodeIterator<'_, N> {}
 
-#[cfg(test)]
 impl<'a, N: NodeReader + RootReader> UnPersistedNodeIterator<'a, N> {
     /// Creates a new iterator over unpersisted nodes in depth-first order.
     fn new(store: &'a N) -> Self {
@@ -140,7 +153,6 @@ impl<'a, N: NodeReader + RootReader> UnPersistedNodeIterator<'a, N> {
     }
 }
 
-#[cfg(test)]
 impl<N: NodeReader + RootReader> Iterator for UnPersistedNodeIterator<'_, N> {
     type Item = MaybePersistedNode;
 
@@ -186,19 +198,38 @@ impl<N: NodeReader + RootReader> Iterator for UnPersistedNodeIterator<'_, N> {
     }
 }
 
-impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
-    /// Persist the freelist from this proposal to storage.
+impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
+    /// Persist all the nodes of a proposal to storage.
     ///
     /// # Errors
     ///
-    /// Returns a [`FileIoError`] if the free list cannot be written to storage.
+    /// Returns a [`FileIoError`] if any node cannot be written to storage.
     #[fastrace::trace(short_name = true)]
-    pub fn flush_freelist(&self) -> Result<(), FileIoError> {
-        // Write the free lists to storage
-        let free_list_bytes = bytemuck::bytes_of(self.header.free_lists());
-        let free_list_offset = NodeStoreHeader::free_lists_offset();
-        self.storage.write(free_list_offset, free_list_bytes)?;
-        Ok(())
+    pub fn flush_nodes(&mut self) -> Result<NodeStoreHeader, FileIoError> {
+        #[cfg(feature = "io-uring")]
+        if let Some(this) = self.downcast_to_file_backed() {
+            return this.flush_nodes_io_uring();
+        }
+        self.flush_nodes_generic()
+    }
+
+    #[cfg(feature = "io-uring")]
+    #[inline]
+    fn downcast_to_file_backed(&mut self) -> Option<&mut NodeStore<Committed, FileBacked>> {
+        /*
+         * FIXME(rust-lang/rfcs#1210, rust-lang/rust#31844):
+         *
+         * This is a slight hack that exists because rust trait specialization
+         * is not yet stable. If the `io-uring` feature is enabled, we attempt to
+         * downcast `self` into a `NodeStore<Committed, FileBacked>`, and if successful,
+         * we call the specialized `flush_nodes_io_uring` method.
+         *
+         * During monomorphization, this will be completely optimized out as the
+         * type id comparison is done with constants that the compiler can resolve
+         * and use to detect dead branches.
+         */
+        let this = self as &mut dyn std::any::Any;
+        this.downcast_mut::<NodeStore<Committed, FileBacked>>()
     }
 
     /// Persist all the nodes of a proposal to storage.
@@ -206,26 +237,77 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if any node cannot be written to storage.
-    #[fastrace::trace(short_name = true)]
-    #[cfg(not(feature = "io-uring"))]
-    pub fn flush_nodes(&self) -> Result<(), FileIoError> {
+    fn flush_nodes_generic(&self) -> Result<NodeStoreHeader, FileIoError> {
         let flush_start = Instant::now();
 
-        for (addr, (area_size_index, node)) in &self.kind.new {
-            let mut stored_area_bytes = Vec::new();
-            node.as_bytes(*area_size_index, &mut stored_area_bytes);
+        // keep arcs to the allocated nodes to add them to cache
+        let mut cached_nodes = Vec::new();
+
+        // find all the unpersisted nodes
+        let unpersisted_iter = UnPersistedNodeIterator::new(self);
+
+        let mut header = self.header;
+        let mut allocator = NodeAllocator::new(self.storage.as_ref(), &mut header);
+        for node in unpersisted_iter {
+            let shared_node = node.as_shared_node(self).expect("in memory, so no IO");
+            let mut serialized = Vec::new();
+            shared_node.as_bytes(0, &mut serialized);
+
+            let (persisted_address, area_size_index) =
+                allocator.allocate_node(serialized.as_slice())?;
+            *serialized.get_mut(0).expect("byte was reserved") = area_size_index;
             self.storage
-                .write(addr.get(), stored_area_bytes.as_slice())?;
+                .write(persisted_address.get(), serialized.as_slice())?;
+            node.persist_at(persisted_address);
+
+            // Move the arc to a vector of persisted nodes for caching
+            // we save them so we don't have to lock the cache while we write them
+            // If we ever persist out of band, we might have a race condition, so
+            // consider adding each node to the cache as we persist them
+            cached_nodes.push((persisted_address, shared_node));
         }
 
-        self.storage
-            .write_cached_nodes(self.kind.new.iter().map(|(&addr, (_, node))| (addr, node)))?;
+        self.storage.write_cached_nodes(cached_nodes)?;
+
         let flush_time = flush_start.elapsed().as_millis();
         counter!("firewood.flush_nodes").increment(flush_time);
 
+        Ok(header)
+    }
+}
+
+impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
+    /// Persist the entire nodestore to storage.
+    ///
+    /// This method performs a complete persistence operation by:
+    /// 1. Flushing all nodes to storage
+    /// 2. Setting the root address in the header
+    /// 3. Flushing the header to storage
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if any of the persistence operations fail.
+    #[fastrace::trace(short_name = true)]
+    pub fn persist(&mut self) -> Result<(), FileIoError> {
+        // First persist all the nodes
+        self.header = self.flush_nodes()?;
+
+        // Set the root address in the header based on the persisted root
+        let root_address = self
+            .kind
+            .root
+            .as_ref()
+            .and_then(crate::MaybePersistedNode::as_linear_address);
+        self.header.set_root_address(root_address);
+
+        // Finally persist the header
+        self.flush_header()?;
+
         Ok(())
     }
+}
 
+impl NodeStore<Committed, FileBacked> {
     /// Persist all the nodes of a proposal to storage.
     ///
     /// # Errors
@@ -233,7 +315,7 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
     /// Returns a [`FileIoError`] if any node cannot be written to storage.
     #[fastrace::trace(short_name = true)]
     #[cfg(feature = "io-uring")]
-    pub fn flush_nodes(&self) -> Result<(), FileIoError> {
+    fn flush_nodes_io_uring(&mut self) -> Result<NodeStoreHeader, FileIoError> {
         use std::pin::Pin;
 
         #[derive(Clone, Debug)]
@@ -281,6 +363,18 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
 
         let flush_start = Instant::now();
 
+        let mut header = self.header;
+        let mut node_allocator = NodeAllocator::new(self.storage.as_ref(), &mut header);
+
+        // Collect all unpersisted nodes first to avoid mutating self while iterating
+        let unpersisted_nodes: Vec<MaybePersistedNode> = {
+            let unpersisted_iter = UnPersistedNodeIterator::new(self);
+            unpersisted_iter.collect()
+        };
+
+        // Collect addresses and nodes for caching
+        let mut cached_nodes = Vec::new();
+
         let mut ring = self.storage.ring.lock().expect("poisoned lock");
         let mut saved_pinned_buffers = vec![
             PinnedBufferEntry {
@@ -290,9 +384,14 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
             RINGSIZE
         ];
 
-        for (&addr, &(area_size_index, ref node)) in &self.kind.new {
+        // Process each unpersisted node
+        for node in unpersisted_nodes {
+            let shared_node = node.as_shared_node(self).expect("in memory, so no IO");
             let mut serialized = Vec::with_capacity(100); // TODO: better size? we can guess branches are larger
-            node.as_bytes(area_size_index, &mut serialized);
+            shared_node.as_bytes(0, &mut serialized);
+            let (persisted_address, area_size_index) =
+                node_allocator.allocate_node(serialized.as_slice())?;
+            *serialized.get_mut(0).expect("byte was reserved") = area_size_index;
             let mut serialized = serialized.into_boxed_slice();
 
             loop {
@@ -303,12 +402,12 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
                     .find(|(_, pbe)| pbe.offset.is_none())
                 {
                     pbe.pinned_buffer = std::pin::Pin::new(std::mem::take(&mut serialized));
-                    pbe.offset = Some(addr.get());
+                    pbe.offset = Some(persisted_address.get());
 
                     let submission_queue_entry = self
                         .storage
                         .make_op(&pbe.pinned_buffer)
-                        .offset(addr.get())
+                        .offset(persisted_address.get())
                         .build()
                         .user_data(pos as u64);
 
@@ -320,7 +419,7 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
                         ring.submitter().squeue_wait().map_err(|e| {
                             self.storage.file_io_error(
                                 e,
-                                addr.get(),
+                                persisted_address.get(),
                                 Some("io-uring squeue_wait".to_string()),
                             )
                         })?;
@@ -344,6 +443,10 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
                     &mut saved_pinned_buffers,
                 )?;
             }
+
+            // Mark node as persisted and collect for cache
+            node.persist_at(persisted_address);
+            cached_nodes.push((persisted_address, shared_node));
         }
         let pending = saved_pinned_buffers
             .iter()
@@ -362,14 +465,13 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
             saved_pinned_buffers.iter().find(|pbe| pbe.offset.is_some())
         );
 
-        self.storage
-            .write_cached_nodes(self.kind.new.iter().map(|(&addr, (_, node))| (addr, node)))?;
+        self.storage.write_cached_nodes(cached_nodes)?;
         debug_assert!(ring.completion().is_empty());
 
         let flush_time = flush_start.elapsed().as_millis();
         counter!("firewood.flush_nodes").increment(flush_time);
 
-        Ok(())
+        Ok(header)
     }
 }
 
@@ -378,11 +480,23 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
 mod tests {
     use super::*;
     use crate::{
-        Child, HashType, LinearAddress, NodeStore, Path, SharedNode,
+        Child, HashType, ImmutableProposal, LinearAddress, NodeStore, Path, SharedNode,
         linear::memory::MemStore,
         node::{BranchNode, LeafNode, Node},
         nodestore::MutableProposal,
     };
+    use std::sync::Arc;
+
+    fn into_committed(
+        ns: NodeStore<std::sync::Arc<ImmutableProposal>, MemStore>,
+        parent: &NodeStore<Committed, MemStore>,
+    ) -> NodeStore<Committed, MemStore> {
+        ns.flush_freelist().unwrap();
+        ns.flush_header().unwrap();
+        let mut ns = ns.as_committed(parent);
+        ns.flush_nodes().unwrap();
+        ns
+    }
 
     /// Helper to create a test node store with a specific root
     fn create_test_store_with_root(root: Node) -> NodeStore<MutableProposal, MemStore> {
@@ -513,42 +627,38 @@ mod tests {
         //                                -> branch2 -> leaf[2]
         let inner_branch = create_branch(&[10], Some(&[50]), vec![(0, leaves[2].clone())]);
 
+        let mut children = BranchNode::empty_children();
+        for (value, slot) in [
+            // unpersisted leaves
+            Child::MaybePersisted(
+                MaybePersistedNode::from(SharedNode::new(leaves[0].clone())),
+                HashType::default(),
+            ),
+            Child::MaybePersisted(
+                MaybePersistedNode::from(SharedNode::new(leaves[1].clone())),
+                HashType::default(),
+            ),
+            // unpersisted branch
+            Child::MaybePersisted(
+                MaybePersistedNode::from(SharedNode::new(inner_branch.clone())),
+                HashType::default(),
+            ),
+            // persisted branch
+            Child::MaybePersisted(
+                MaybePersistedNode::from(LinearAddress::new(42).unwrap()),
+                HashType::default(),
+            ),
+        ]
+        .into_iter()
+        .zip(children.iter_mut())
+        {
+            slot.replace(value);
+        }
+
         let root_branch: Node = BranchNode {
             partial_path: Path::new(),
             value: None,
-            children: [
-                // unpersisted leaves
-                Some(Child::MaybePersisted(
-                    MaybePersistedNode::from(SharedNode::new(leaves[0].clone())),
-                    HashType::default(),
-                )),
-                Some(Child::MaybePersisted(
-                    MaybePersistedNode::from(SharedNode::new(leaves[1].clone())),
-                    HashType::default(),
-                )),
-                // unpersisted branch
-                Some(Child::MaybePersisted(
-                    MaybePersistedNode::from(SharedNode::new(inner_branch.clone())),
-                    HashType::default(),
-                )),
-                // persisted branch
-                Some(Child::MaybePersisted(
-                    MaybePersistedNode::from(LinearAddress::new(42).unwrap()),
-                    HashType::default(),
-                )),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            ],
+            children,
         }
         .into();
 
@@ -574,5 +684,95 @@ mod tests {
         // inner_branch should come before root_branch
         assert!(leaf3_pos < inner_branch_pos);
         assert!(inner_branch_pos < root_pos);
+    }
+
+    #[test]
+    fn test_into_committed_with_generic_storage() {
+        // Create a base committed store with MemStore
+        let mem_store = MemStore::new(vec![]);
+        let base_committed = NodeStore::new_empty_committed(mem_store.into()).unwrap();
+
+        // Create a mutable proposal from the base
+        let mut mutable_store = NodeStore::new(&base_committed).unwrap();
+
+        // Add some nodes to the mutable store
+        let leaf1 = create_leaf(&[1, 2, 3], b"value1");
+        let leaf2 = create_leaf(&[4, 5, 6], b"value2");
+        let branch = create_branch(
+            &[0],
+            Some(b"branch_value"),
+            vec![(1, leaf1.clone()), (2, leaf2.clone())],
+        );
+
+        mutable_store.mut_root().replace(branch.clone());
+
+        // Convert to immutable proposal
+        let immutable_store: NodeStore<Arc<ImmutableProposal>, _> =
+            mutable_store.try_into().unwrap();
+
+        // Commit the immutable store
+        let committed_store = into_committed(immutable_store, &base_committed);
+
+        // Verify the committed store has the expected values
+        let root = committed_store.kind.root.as_ref().unwrap();
+        let root_node = root.as_shared_node(&committed_store).unwrap();
+        assert_eq!(*root_node.partial_path(), Path::from(&[0]));
+        assert_eq!(root_node.value(), Some(&b"branch_value"[..]));
+        assert!(root_node.is_branch());
+        let root_branch = root_node.as_branch().unwrap();
+        assert_eq!(
+            root_branch.children.iter().filter(|c| c.is_some()).count(),
+            2
+        );
+
+        let child1 = root_branch.children[1].as_ref().unwrap();
+        let child1_node = child1
+            .as_maybe_persisted_node()
+            .as_shared_node(&committed_store)
+            .unwrap();
+        assert_eq!(*child1_node.partial_path(), Path::from(&[1, 2, 3]));
+        assert_eq!(child1_node.value(), Some(&b"value1"[..]));
+
+        let child2 = root_branch.children[2].as_ref().unwrap();
+        let child2_node = child2
+            .as_maybe_persisted_node()
+            .as_shared_node(&committed_store)
+            .unwrap();
+        assert_eq!(*child2_node.partial_path(), Path::from(&[4, 5, 6]));
+        assert_eq!(child2_node.value(), Some(&b"value2"[..]));
+    }
+
+    #[cfg(feature = "io-uring")]
+    #[test]
+    fn test_downcast_to_file_backed() {
+        use nonzero_ext::nonzero;
+
+        use crate::CacheReadStrategy;
+
+        {
+            let tf = tempfile::NamedTempFile::new().unwrap();
+            let path = tf.path().to_owned();
+
+            let fb = Arc::new(
+                FileBacked::new(
+                    path,
+                    nonzero!(10usize),
+                    nonzero!(10usize),
+                    false,
+                    CacheReadStrategy::WritesOnly,
+                )
+                .unwrap(),
+            );
+
+            let mut ns = NodeStore::new_empty_committed(fb.clone()).unwrap();
+
+            assert!(ns.downcast_to_file_backed().is_some());
+        }
+
+        {
+            let ms = Arc::new(MemStore::new(vec![]));
+            let mut ns = NodeStore::new_empty_committed(ms.clone()).unwrap();
+            assert!(ns.downcast_to_file_backed().is_none());
+        }
     }
 }

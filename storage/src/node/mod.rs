@@ -2,10 +2,6 @@
 // See the file LICENSE.md for licensing terms.
 
 #![expect(
-    clippy::arithmetic_side_effects,
-    reason = "Found 4 occurrences after enabling the lint."
-)]
-#![expect(
     clippy::indexing_slicing,
     reason = "Found 1 occurrences after enabling the lint."
 )]
@@ -26,7 +22,7 @@ use crate::node::branch::ReadSerializable;
 use crate::{HashType, LinearAddress, Path, SharedNode};
 use bitfield::bitfield;
 use branch::Serializable as _;
-pub use branch::{BranchNode, Child};
+pub use branch::{BranchNode, Child, Children};
 use enum_as_inner::EnumAsInner;
 use integer_encoding::{VarInt, VarIntReader as _};
 pub use leaf::LeafNode;
@@ -154,38 +150,6 @@ impl ExtendableBytes for Vec<u8> {
     }
 }
 
-pub struct ByteCounter(u64);
-
-impl ByteCounter {
-    pub const fn new() -> Self {
-        ByteCounter(0)
-    }
-
-    pub const fn count(&self) -> u64 {
-        self.0
-    }
-}
-
-impl Write for ByteCounter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0 += buf.len() as u64;
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-impl ExtendableBytes for ByteCounter {
-    fn extend<T: IntoIterator<Item = u8>>(&mut self, other: T) {
-        self.0 += other.into_iter().count() as u64;
-    }
-    fn push(&mut self, _value: u8) {
-        self.0 += 1;
-    }
-}
-
 impl Node {
     /// Returns the partial path of the node.
     #[must_use]
@@ -306,26 +270,20 @@ impl Node {
                 // encode the children
                 if childcount == BranchNode::MAX_CHILDREN {
                     for (_, child) in child_iter {
-                        if let Child::AddressWithHash(address, hash) = child {
-                            encoded.extend_from_slice(&address.get().to_ne_bytes());
-                            hash.write_to(encoded);
-                        } else {
-                            panic!(
-                                "attempt to serialize to persist a branch with a child that is not an AddressWithHash"
-                            );
-                        }
+                        let (address, hash) = child
+                            .persist_info()
+                            .expect("child must be hashed when serializing");
+                        encoded.extend_from_slice(&address.get().to_ne_bytes());
+                        hash.write_to(encoded);
                     }
                 } else {
                     for (position, child) in child_iter {
                         encoded.extend_var_int(position);
-                        if let Child::AddressWithHash(address, hash) = child {
-                            encoded.extend_from_slice(&address.get().to_ne_bytes());
-                            hash.write_to(encoded);
-                        } else {
-                            panic!(
-                                "attempt to serialize to persist a branch with a child that is not an AddressWithHash"
-                            );
-                        }
+                        let (address, hash) = child
+                            .persist_info()
+                            .expect("child must be hashed when serializing");
+                        encoded.extend_from_slice(&address.get().to_ne_bytes());
+                        hash.write_to(encoded);
                     }
                 }
             }
@@ -398,7 +356,7 @@ impl Node {
                     None
                 };
 
-                let mut children = [const { None }; BranchNode::MAX_CHILDREN];
+                let mut children = BranchNode::empty_children();
                 if childcount == 0 {
                     // branch is full of all children
                     for child in &mut children {
