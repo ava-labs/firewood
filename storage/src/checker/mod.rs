@@ -22,6 +22,14 @@ use std::ops::Range;
 
 use indicatif::ProgressBar;
 
+const OS_PAGE_SIZE: u64 = 4096;
+
+#[inline]
+// return u64 since the start address may be 0
+const fn page_start(addr: LinearAddress) -> u64 {
+    addr.get() & !(OS_PAGE_SIZE - 1)
+}
+
 /// Options for the checker
 #[derive(Debug)]
 pub struct CheckOpt {
@@ -48,7 +56,7 @@ pub struct CheckerReport {
 /// Statistics about the trie
 pub struct TrieStats {
     /// The total number of bytes of compressed trie nodes
-    pub trie_bytes: u64, // TODO
+    pub trie_bytes: u64,
     /// The number of key-value pairs stored in the trie
     pub kv_count: u64,
     /// The total number of bytes of for key-value pairs stored in the trie
@@ -60,7 +68,9 @@ pub struct TrieStats {
     /// The distribution of area sizes in the trie
     pub area_counts: HashMap<u64, u64>,
     /// The stored areas whose content can fit into a smaller area
-    pub low_occupancy_area_count: u64, // TODO
+    pub low_occupancy_area_count: u64,
+    /// The number of stored areas that span multiple pages
+    pub multi_page_area_count: u64,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -68,6 +78,8 @@ pub struct TrieStats {
 pub struct FreeListsStats {
     /// The distribution of area sizes in the free lists
     pub area_counts: HashMap<u64, u64>,
+    /// The number of stored areas that span multiple pages
+    pub multi_page_area_count: u64,
 }
 
 struct SubTrieMetadata {
@@ -175,6 +187,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     }
 
     /// Recursively traverse the trie from the given root node.
+    #[expect(clippy::too_many_lines)]
     fn visit_trie_helper(
         &self,
         subtrie: SubTrieMetadata,
@@ -212,7 +225,6 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         let (node, node_bytes) = self.read_node_with_num_bytes_from_disk(subtrie_root_address)?;
         {
             // collect the trie bytes
-
             trie_stats.trie_bytes = trie_stats.trie_bytes.saturating_add(node_bytes);
             // collect low occupancy area count
             let smallest_area_index = area_size_to_index(node_bytes).map_err(|e| {
@@ -225,6 +237,17 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             if smallest_area_index < area_index {
                 trie_stats.low_occupancy_area_count =
                     trie_stats.low_occupancy_area_count.saturating_add(1);
+            }
+            // collect the multi-page area count
+            if page_start(subtrie_root_address)
+                != page_start(
+                    subtrie_root_address
+                        .advance(area_size)
+                        .expect("impossible since we checked in visited.insert_area()"),
+                )
+            {
+                trie_stats.multi_page_area_count =
+                    trie_stats.multi_page_area_count.saturating_add(1);
             }
         }
 
@@ -312,7 +335,8 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         visited: &mut LinearAddressRangeSet,
         progress_bar: Option<&ProgressBar>,
     ) -> Result<FreeListsStats, CheckerError> {
-        let mut free_list_dist: HashMap<u64, u64> = HashMap::new();
+        let mut area_counts: HashMap<u64, u64> = HashMap::new();
+        let mut multi_page_area_count = 0u64;
 
         let mut free_list_iter = self.free_list_iter(0);
         while let Some(free_area) = free_list_iter.next_with_metadata() {
@@ -336,13 +360,23 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             visited.insert_area(addr, area_size, StoredAreaParent::FreeList(parent))?;
             {
                 // collect the free lists area distribution
-                let area_count = free_list_dist.entry(area_size).or_insert(0);
+                let area_count = area_counts.entry(area_size).or_insert(0);
                 *area_count = area_count.saturating_add(1);
+                // collect the multi-page area count
+                if page_start(addr)
+                    != page_start(
+                        addr.advance(area_size)
+                            .expect("impossible since we checked in visited.insert_area()"),
+                    )
+                {
+                    multi_page_area_count = multi_page_area_count.saturating_add(1);
+                }
             }
             update_progress_bar(progress_bar, visited);
         }
         Ok(FreeListsStats {
-            area_counts: free_list_dist,
+            area_counts,
+            multi_page_area_count,
         })
     }
 
@@ -558,6 +592,7 @@ mod test {
             branching_factors: HashMap::from([(1, 2)]),
             depths: HashMap::from([(2, 1)]),
             low_occupancy_area_count: 0,
+            multi_page_area_count: 0,
         };
 
         TestTrie {
@@ -664,6 +699,7 @@ mod test {
         // write free areas
         let mut high_watermark = NodeStoreHeader::SIZE;
         let mut free_area_counts: HashMap<u64, u64> = HashMap::new();
+        let mut multi_page_area_count = 0u64;
         let mut freelist = FreeLists::default();
         for (area_index, area_size) in AREA_SIZES.iter().enumerate() {
             let mut next_free_block = None;
@@ -676,6 +712,11 @@ mod test {
                     high_watermark,
                 );
                 next_free_block = Some(LinearAddress::new(high_watermark).unwrap());
+                let start_addr = LinearAddress::new(high_watermark).unwrap();
+                let end_addr = start_addr.advance(*area_size).unwrap();
+                if page_start(start_addr) != page_start(end_addr) {
+                    multi_page_area_count = multi_page_area_count.saturating_add(1);
+                }
                 high_watermark += area_size;
             }
             freelist[area_index] = next_free_block;
@@ -685,6 +726,7 @@ mod test {
         }
         let expected_free_lists_stats = FreeListsStats {
             area_counts: free_area_counts,
+            multi_page_area_count,
         };
 
         // write header
