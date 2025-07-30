@@ -269,7 +269,7 @@ fn iter_next(
     if let Some(next) = next {
         let (k, v) = next.map_err(|e| e.to_string())?;
         let key: Value = k.into();
-        let value: Value = v.as_slice().into();
+        let value: Value = v.into();
         Ok(KeyValue { key, value })
     } else {
         Ok(KeyValue::default())

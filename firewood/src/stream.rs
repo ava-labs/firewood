@@ -401,13 +401,13 @@ impl<'a, T: TrieReader> MerkleKeyValueStream<'a, T> {
                         Some(Ok((key, node))) => match &*node {
                             Node::Branch(branch) => {
                                 if let Some(value) = branch.value.as_ref() {
-                                    return Some(Ok((key, value.to_vec())));
+                                    return Some(Ok((key, value.clone())));
                                 }
                                 // This node doesn't have a value to return.
                                 // Continue to the next node.
                             }
                             Node::Leaf(leaf) => {
-                                return Some(Ok((key, leaf.value.to_vec())));
+                                return Some(Ok((key, leaf.value.clone())));
                             }
                         },
                         Some(Err(e)) => return Some(Err(e.into())),
