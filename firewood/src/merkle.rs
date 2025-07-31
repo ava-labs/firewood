@@ -106,6 +106,7 @@ macro_rules! write_attributes {
     };
 }
 
+#[expect(clippy::unwrap_used)]
 /// Returns the value mapped to by `key` in the subtrie rooted at `node`.
 fn get_helper<T: TrieReader, U: ChildOption>(
     //nodestore: &T,
@@ -170,7 +171,7 @@ fn get_helper<T: TrieReader, U: ChildOption>(
 /// Merkle operations against a nodestore
 pub struct Merkle<T> {
     nodestore: Arc<Mutex<Option<T>>>,
-    worker_thread: Option<(Sender<MerkleOp>, JoinHandle<()>)>,
+    //worker_thread: Option<(Sender<MerkleOp>, JoinHandle<()>)>,
     //helper: Arc<MerkleHelper>,
 }
 
@@ -197,11 +198,13 @@ enum MerkleOp {
     //SetMerkle(Option<Arc<Mutex<Merkle<NodeStore<MutableProposal, S>>>>>)
 }
 
-
 impl<T> Merkle<T> {
     pub(crate) fn into_inner(self) -> T {
-        let a = self.nodestore.lock().unwrap().take().unwrap();
-        return a;
+        self.nodestore
+            .lock()
+            .expect("failed getting lock")
+            .take()
+            .expect("nodestore is none")
     }
 }
 
@@ -218,7 +221,7 @@ impl<T> From<T> for Merkle<T> {
     fn from(nodestore: T) -> Self {
         Merkle {
             nodestore: Arc::new(Mutex::new(Some(nodestore))),
-            worker_thread: None,
+            //worker_thread: None,
         }
     }
 }
@@ -228,12 +231,10 @@ impl<T: TrieReader> Merkle<T> {
         self.nodestore.lock().unwrap().as_ref().unwrap().root_node()
     }
 
-    
     #[cfg(test)]
     pub(crate) const fn nodestore(&self) -> &Arc<Mutex<Option<T>>> {
         &self.nodestore
     }
-    
 
     /// Returns a proof that the given key has a certain value,
     /// or that the key isn't in the trie.
@@ -300,7 +301,7 @@ impl<T: TrieReader> Merkle<T> {
         //let a = PathIterator::new(b, key);
         //return a;
     }
-    
+
     #[cfg(test)]
     pub(super) fn key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
         MerkleKeyValueStream::from(NodeStoreReference::ArcMutex(self.nodestore.clone()))
@@ -313,10 +314,13 @@ impl<T: TrieReader> Merkle<T> {
         key: K,
     ) -> MerkleKeyValueStream<'_, T> {
         // TODO danlaine: change key to &[u8]
-        MerkleKeyValueStream::from_key(NodeStoreReference::ArcMutex(self.nodestore.clone()), key.as_ref())
+        MerkleKeyValueStream::from_key(
+            NodeStoreReference::ArcMutex(self.nodestore.clone()),
+            key.as_ref(),
+        )
         //todo!()
     }
-    
+
     /*
         #[cfg(test)]
         pub(super) async fn range_proof(
@@ -547,7 +551,7 @@ impl<S: ReadableStorage> TryFrom<Merkle<NodeStore<MutableProposal, S>>>
         let b: NodeStore<Arc<ImmutableProposal>, S> = a.try_into()?;
         Ok(Merkle {
             nodestore: Arc::new(Mutex::new(Some(b))),
-            worker_thread: None,
+            //worker_thread: None,
         })
     }
 }
@@ -590,6 +594,7 @@ fn attach_threadpool<S: ReadableStorage + 'static>(
     return (host_sender, host_receiver, handle);
 }
 
+#[expect(clippy::unwrap_used)]
 ///
 pub fn insert_tp<S: ReadableStorage + 'static>(
     merkle: Arc<Merkle<NodeStore<MutableProposal, S>>>,
@@ -653,6 +658,7 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
         self.try_into().expect("failed to convert")
     }
 
+    #[expect(clippy::unwrap_used)]
     /// Map `key` to `value` in the trie.
     /// Each element of key is 2 nibbles.
     pub fn insert(&self, key: &[u8], value: Box<[u8]>) -> Result<(), FileIoError> {
@@ -1584,7 +1590,7 @@ mod tests {
         //Merkle { nodestore, worker_thread: None }
         Merkle {
             nodestore: Arc::new(Mutex::new(Some(nodestore))),
-            worker_thread: None,
+            //worker_thread: None,
         }
     }
 
