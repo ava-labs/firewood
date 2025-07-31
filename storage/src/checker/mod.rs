@@ -378,7 +378,7 @@ mod test {
     /// graph TD
     ///     Root["Root Node<br/>partial_path: [2]<br/>children: [0] -> Branch"]
     ///     Branch["Branch Node<br/>partial_path: [3]<br/>path: 0x203<br/>children: [1] -> Leaf"]
-    ///     Leaf["Leaf Node<br/>partial_path: [4, 5]<br/>path: 0x20314545454545...45 (32 bytes)<br/>value: [6, 7, 8]"]
+    ///     Leaf["Leaf Node<br/>partial_path: [4, 5]<br/>path: 0x2031454545...45 (32 bytes)<br/>value: [6, 7, 8]"]
     ///
     ///     Root -->|"nibble 0"| Branch
     ///     Branch -->|"nibble 1"| Leaf
