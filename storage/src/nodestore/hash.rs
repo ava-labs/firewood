@@ -112,8 +112,7 @@ where
         )
     }
 
-    /// Hashes `node`, which is at the given `path_prefix`, and its children recursively.
-    /// The function appends to `path_prefix` and then truncate it back to the original length - we only reuse the memory space to avoid allocations
+    /// Hashes the given `node` and the subtree rooted at it.
     /// Returns the hashed node and its hash.
     pub(super) fn hash_helper(
         #[cfg(feature = "ethhash")] &self,
@@ -127,6 +126,10 @@ where
         Ok(res)
     }
 
+    // Recursive helper that hashes the given `node` and the subtree rooted at it.
+    // This function takes a mut `node` to update the hash in place.
+    // The `path_prefix` is also mut because we will extend it to the path of the child we are hashing in recursive calls - it will be restored after the recursive call returns.
+    // The `num_peers` is the number of children of the parent node, which includes this node.
     fn hash_helper_inner(
         #[cfg(feature = "ethhash")] &self,
         mut node: Node,
