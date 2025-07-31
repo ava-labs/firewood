@@ -378,7 +378,7 @@ mod test {
     /// graph TD
     ///     Root["Root Node<br/>partial_path: [2]<br/>children: [0] -> Branch"]
     ///     Branch["Branch Node<br/>partial_path: [3]<br/>path: 0x203<br/>children: [1] -> Leaf"]
-    ///     Leaf["Leaf Node<br/>partial_path: [4, 5]<br/>path: 0x203145<br/>value: [6, 7, 8]"]
+    ///     Leaf["Leaf Node<br/>partial_path: [4, 5]<br/>path: 0x20314545454545...45 (32 bytes)<br/>value: [6, 7, 8]"]
     ///
     ///     Root -->|"nibble 0"| Branch
     ///     Branch -->|"nibble 1"| Leaf
@@ -387,7 +387,7 @@ mod test {
     fn gen_test_trie(nodestore: &mut NodeStore<Committed, MemStore>) -> TestTrie {
         let mut high_watermark = NodeStoreHeader::SIZE;
         let leaf = Node::Leaf(LeafNode {
-            partial_path: Path::from([4, 5]),
+            partial_path: Path::from_nibbles_iterator(std::iter::repeat_n([4, 5], 30).flatten()),
             value: Box::new([6, 7, 8]),
         });
         let leaf_addr = LinearAddress::new(high_watermark).unwrap();
