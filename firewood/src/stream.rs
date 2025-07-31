@@ -349,6 +349,7 @@ impl<T: TrieReader> MerkleKeyValueStreamState<'_, T> {
     }
 }
 #[derive(Debug)]
+///
 pub enum NodeStoreReference<'a, T> {
     ArcMutex(Arc<Mutex<Option<T>>>),
     Reference(&'a T),
@@ -1275,7 +1276,7 @@ mod tests {
         );
     }
 
-/* 
+
     #[tokio::test]
     async fn key_value_start_at_key_not_in_trie() {
         let mut merkle = create_test_merkle();
@@ -1556,7 +1557,7 @@ mod tests {
 
         check_stream_is_done(stream).await;
     }
-    */
+    
 
     async fn check_stream_is_done<S>(mut stream: S)
     where
