@@ -552,13 +552,18 @@ impl<S: ReadableStorage> TryFrom<Merkle<NodeStore<MutableProposal, S>>>
 /// Attach a threadpool to this Merkle structure
 fn attach_threadpool<S: ReadableStorage + 'static>(
     merkle: Arc<Merkle<NodeStore<MutableProposal, S>>>,
-) -> (Sender<MerkleOp>, mpsc::Receiver<Result<Node<Option<Child>>, FileIoError>>, JoinHandle<()>) {
+) -> (
+    Sender<MerkleOp>,
+    mpsc::Receiver<Result<Node<Option<Child>>, FileIoError>>,
+    JoinHandle<()>,
+) {
     //let a = self;
     //match m_param.worker_thread {
     //    None => {
     // Just create one for now
     let (host_sender, thread_receiver) = mpsc::channel::<MerkleOp>();
-    let (thread_sender, host_receiver) = mpsc::channel::<Result<Node<Option<Child>>, FileIoError>>();
+    let (thread_sender, host_receiver) =
+        mpsc::channel::<Result<Node<Option<Child>>, FileIoError>>();
 
     //let merkle: Option<Arc<Mutex<Merkle<NodeStore<MutableProposal, S>>>>> = None;
     //let m = merkle.clone();
@@ -613,7 +618,11 @@ pub fn insert_tp<S: ReadableStorage + 'static>(
     //*root = root_node.into(); // Write back into root
 
     let root_node = merkle.root().unwrap().as_ref().clone();
-    let _ = a.send(MerkleOp::InsertData(root_node, Box::new([2]), Box::new([2])));
+    let _ = a.send(MerkleOp::InsertData(
+        root_node,
+        Box::new([2]),
+        Box::new([2]),
+    ));
 
     let receive = receiver.recv().unwrap()?;
 
@@ -622,7 +631,13 @@ pub fn insert_tp<S: ReadableStorage + 'static>(
 
     // TODO: Need to get updated root back
     //*self.nodestore.mut_root() = root_node.into();
-    *merkle.nodestore.lock().unwrap().as_mut().unwrap().mut_root() = receive.into();
+    *merkle
+        .nodestore
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .mut_root() = receive.into();
     Ok(())
 }
 
@@ -1529,7 +1544,6 @@ mod tests {
 
         merkle.insert(&[0], Box::new([0])).unwrap();
         assert_eq!(merkle.get_value(&[0]).unwrap(), Some(Box::from([0])));
-
 
         let _ = insert_tp(merkle, &[1], Box::new([1]));
 
