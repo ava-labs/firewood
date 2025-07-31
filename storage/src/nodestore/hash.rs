@@ -21,6 +21,8 @@ use crate::LinearAddress;
 use std::ops::{Deref, DerefMut};
 
 #[derive(Debug)]
+// Wrapper around a path that makes sure we truncate what gets extended to the path after it goes out of scope
+// This allows the same memory space to be reused for different path prefixes
 struct PathGuard<'a> {
     path: &'a mut Path,
     original_length: usize,
@@ -147,11 +149,8 @@ where
                     reason = "hashed and unhashed can have at most 16 elements"
                 )]
                 let num_children = hashed.len() + num_unhashed;
+                // If there was only one child in the current account branch when previously hashed, we need to rehash it
                 if let [(child_idx, (child_node_addr, child_hash))] = &mut hashed[..] {
-                    // special case:
-                    //  - there was only one child in the current account branch when previously hashed
-                    //  - but now we are adding more children
-                    // we need to rehash the child
                     let hashable_node = self.read_node(*child_node_addr)?.deref().clone();
                     let hash = {
                         let mut path_guard = PathGuard::new(&mut path_prefix);
@@ -179,8 +178,6 @@ where
             // general case: recusively hash unhashed children
             for (nibble, child) in b.children.iter_mut().enumerate() {
                 // If this is empty or already hashed, we're done
-                // Empty matches None, and non-Node types match Some(None) here, so we want
-                // Some(Some(node))
                 let Some(child_node) = child.as_mut().and_then(|child| child.as_mut_node()) else {
                     continue;
                 };
@@ -189,7 +186,6 @@ where
                 let child_node = std::mem::take(child_node);
 
                 // Hash this child and update
-                // we extend and truncate path_prefix to reduce memory allocations
                 let (child_node, child_hash) = {
                     let mut child_path_prefix = PathGuard::new(&mut path_prefix);
                     child_path_prefix.0.extend(b.partial_path.0.iter().copied());
