@@ -110,9 +110,7 @@ impl<'a, T: TrieReader> MerkleNodeStream<'a, T> {
                     NodeStoreReference::ArcMutex(n) => {
                         get_iterator_intial_state(n.lock().unwrap().as_ref().unwrap(), key)
                     }
-                    NodeStoreReference::Reference(n) => {
-                        get_iterator_intial_state(*n, key)
-                    }
+                    NodeStoreReference::Reference(n) => get_iterator_intial_state(*n, key),
                 };
                 match initial_state {
                     Ok(state) => self.state = state,
@@ -156,21 +154,18 @@ impl<'a, T: TrieReader> MerkleNodeStream<'a, T> {
                                         NodeStoreReference::ArcMutex(m) => {
                                             m.lock().unwrap().as_ref().unwrap().read_node(addr)
                                         }
-                                        NodeStoreReference::Reference(m) => {
-                                            m.read_node(addr)
-                                        }
+                                        NodeStoreReference::Reference(m) => m.read_node(addr),
                                     };
                                     match read_data {
                                         Ok(node) => node,
                                         Err(e) => return Some(Err(e)),
                                     }
-                                },
+                                }
                                 Child::Node(node) => node.clone().into(),
                                 Child::MaybePersisted(maybe_persisted, _) => {
                                     let shared_node = match merkle {
-                                        NodeStoreReference::ArcMutex(m) => {
-                                            maybe_persisted.as_shared_node(m.lock().unwrap().as_ref().unwrap())
-                                        }
+                                        NodeStoreReference::ArcMutex(m) => maybe_persisted
+                                            .as_shared_node(m.lock().unwrap().as_ref().unwrap()),
                                         NodeStoreReference::Reference(m) => {
                                             maybe_persisted.as_shared_node(*m)
                                         }
@@ -355,7 +350,7 @@ pub enum NodeStoreReference<'a, T> {
     Reference(&'a T),
 }
 
-impl <'a, T> Clone for NodeStoreReference<'a, T> {
+impl<'a, T> Clone for NodeStoreReference<'a, T> {
     fn clone(&self) -> Self {
         match self {
             NodeStoreReference::ArcMutex(s) => NodeStoreReference::ArcMutex(s.clone()),
@@ -473,7 +468,10 @@ pub struct PathIterator<'a, 'b, T> {
 
 impl<'a, 'b, T: TrieReader> PathIterator<'a, 'b, T> {
     //pub(super) fn new(merkle: &'a T, key: &'b [u8]) -> Result<Self, FileIoError> {
-    pub(super) fn new(merkle: &'a Arc<Mutex<Option<T>>>, key: &'b [u8]) -> Result<Self, FileIoError> {
+    pub(super) fn new(
+        merkle: &'a Arc<Mutex<Option<T>>>,
+        key: &'b [u8],
+    ) -> Result<Self, FileIoError> {
         let guard = merkle.lock().unwrap();
         let Some(root) = guard.as_ref().unwrap().root_node() else {
             return Ok(Self {
@@ -567,11 +565,12 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                                     Some(Child::AddressWithHash(child_addr, _)) => {
                                         //let child = match merkle.read_node(*child_addr) {
                                         let child = match merkle
-                                                                                    .lock()
-                                                                                    .unwrap()
-                                                                                    .as_ref()
-                                                                                    .unwrap()
-                                                                                    .read_node(*child_addr) {
+                                            .lock()
+                                            .unwrap()
+                                            .as_ref()
+                                            .unwrap()
+                                            .read_node(*child_addr)
+                                        {
                                             Ok(child) => child,
                                             Err(e) => return Some(Err(e)),
                                         };
@@ -602,7 +601,9 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                                         }))
                                     }
                                     Some(Child::MaybePersisted(maybe_persisted, _)) => {
-                                        let child = match maybe_persisted.as_shared_node(merkle.lock().unwrap().as_ref().unwrap()) {
+                                        let child = match maybe_persisted.as_shared_node(
+                                            merkle.lock().unwrap().as_ref().unwrap(),
+                                        ) {
                                             Ok(child) => child,
                                             Err(e) => return Some(Err(e)),
                                         };
@@ -660,7 +661,9 @@ where
 
 /// Returns an iterator that returns (`pos`,`child`) for each non-empty child of `branch`,
 /// where `pos` is the position of the child in `branch`'s children array.
-fn as_enumerated_children_iter(branch: &BranchNode<Option<Child>>) -> impl Iterator<Item = (u8, Child)> + use<> {
+fn as_enumerated_children_iter(
+    branch: &BranchNode<Option<Child>>,
+) -> impl Iterator<Item = (u8, Child)> + use<> {
     branch
         .children
         .clone()
@@ -855,32 +858,30 @@ mod tests {
         assert!(stream.next().is_none());
     }
 
-    
     #[tokio::test]
     async fn key_value_iterate_empty() {
         let merkle = create_test_merkle();
         let stream = merkle.key_value_iter_from_key(b"x".to_vec().into_boxed_slice());
         check_stream_is_done(stream).await;
     }
-    
 
-    /* 
+    
     #[tokio::test]
     async fn node_iterate_empty() {
         let merkle = create_test_merkle();
-        let stream = MerkleNodeStream::new(merkle.nodestore(), Box::new([]));
+        let stream = MerkleNodeStream::new(NodeStoreReference::ArcMutex(merkle.nodestore().clone()), Box::new([]));
         check_stream_is_done(stream).await;
     }
-    */
+    
 
-    /* 
+    
     #[tokio::test]
     async fn node_iterate_root_only() {
         let mut merkle = create_test_merkle();
 
         merkle.insert(&[0x00], Box::new([0x00])).unwrap();
 
-        let mut stream = MerkleNodeStream::new(merkle.nodestore(), Box::new([]));
+        let mut stream = MerkleNodeStream::new(NodeStoreReference::ArcMutex(merkle.nodestore().clone()), Box::new([]));
 
         let (key, node) = futures::StreamExt::next(&mut stream)
             .await
@@ -892,8 +893,7 @@ mod tests {
 
         check_stream_is_done(stream).await;
     }
-    */
-
+    
     /// Returns a new [Merkle] with the following key-value pairs:
     /// Note each hex symbol in the keys below is a nibble (not two nibbles).
     /// Each hex symbol in the values below is a byte.
@@ -937,12 +937,14 @@ mod tests {
         merkle
     }
 
-    /* 
     #[tokio::test]
     async fn node_iterator_no_start_key() {
         let merkle = created_populated_merkle();
 
-        let mut stream = MerkleNodeStream::new(merkle.nodestore(), Box::new([]));
+        let mut stream = MerkleNodeStream::new(
+            NodeStoreReference::ArcMutex(merkle.nodestore().clone()),
+            Box::new([]),
+        );
 
         // Covers case of branch with no value
         let (key, node) = futures::StreamExt::next(&mut stream)
@@ -999,13 +1001,12 @@ mod tests {
         check_stream_is_done(stream).await;
     }
 
-
     #[tokio::test]
     async fn node_iterator_start_key_between_nodes() {
         let merkle = created_populated_merkle();
 
         let mut stream = MerkleNodeStream::new(
-            merkle.nodestore(),
+            NodeStoreReference::ArcMutex(merkle.nodestore().clone()),
             vec![0x00, 0x00, 0x01].into_boxed_slice(),
         );
 
@@ -1038,7 +1039,7 @@ mod tests {
         let merkle = created_populated_merkle();
 
         let mut stream = MerkleNodeStream::new(
-            merkle.nodestore(),
+            NodeStoreReference::ArcMutex(merkle.nodestore().clone()),
             vec![0x00, 0xD0, 0xD0].into_boxed_slice(),
         );
 
@@ -1070,11 +1071,13 @@ mod tests {
     async fn node_iterator_start_key_after_last_key() {
         let merkle = created_populated_merkle();
 
-        let stream = MerkleNodeStream::new(merkle.nodestore(), vec![0xFF].into_boxed_slice());
+        let stream = MerkleNodeStream::new(
+            NodeStoreReference::ArcMutex(merkle.nodestore().clone()),
+            vec![0xFF].into_boxed_slice(),
+        );
 
         check_stream_is_done(stream).await;
     }
-    */
 
     #[test_case(Some(&[u8::MIN]); "Starting at first key")]
     #[test_case(None; "No start specified")]
@@ -1109,14 +1112,11 @@ mod tests {
         check_stream_is_done(stream).await;
     }
 
-    
-
     #[tokio::test]
     async fn key_value_fused_empty() {
         let merkle = create_test_merkle();
         check_stream_is_done(merkle.key_value_iter()).await;
     }
-
 
     #[tokio::test]
     async fn key_value_table_test() {
@@ -1254,7 +1254,6 @@ mod tests {
         //merkle = Merkle::from(NodeStore::new(&Arc::new(immutable_merkle.into_inner())).unwrap());
         merkle = Merkle::from(NodeStore::new(&Arc::new(b)).unwrap());
 
-
         let mut stream = merkle.key_value_iter();
 
         assert_eq!(
@@ -1275,7 +1274,6 @@ mod tests {
             )
         );
     }
-
 
     #[tokio::test]
     async fn key_value_start_at_key_not_in_trie() {
@@ -1314,7 +1312,6 @@ mod tests {
 
         check_stream_is_done(stream).await;
     }
-
 
     #[tokio::test]
     async fn key_value_start_at_key_on_branch_with_no_value() {
@@ -1557,7 +1554,6 @@ mod tests {
 
         check_stream_is_done(stream).await;
     }
-    
 
     async fn check_stream_is_done<S>(mut stream: S)
     where
@@ -1566,6 +1562,4 @@ mod tests {
         assert!(stream.next().await.is_none());
         assert!(stream.is_terminated());
     }
-    
 }
-    
