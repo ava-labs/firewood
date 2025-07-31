@@ -407,7 +407,7 @@ impl<'a, T: TrieReader> Stream for MerkleKeyValueStream<'a, T> {
         // destructuring is necessary here because we need mutable access to `key_state`
         // at the same time as immutable access to `merkle`
         let Self { state, merkle } = &mut *self;
-        
+
         match state {
             MerkleKeyValueStreamState::_Uninitialized(key) => {
                 let iter = MerkleNodeStream::new(merkle.clone(), key.clone());
@@ -691,15 +691,15 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
 #[cfg(test)]
 #[expect(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
-    //use std::{ops::Deref, sync::Arc};
-    use std::{sync::Arc};
+    use std::{ops::Deref, sync::Arc};
+    //use std::{sync::Arc};
 
-    //use firewood_storage::{ImmutableProposal, MemStore, MutableProposal, NodeStore};
-    use firewood_storage::{MemStore, MutableProposal, NodeStore};
+    use firewood_storage::{ImmutableProposal, MemStore, MutableProposal, NodeStore};
+    //use firewood_storage::{MemStore, MutableProposal, NodeStore};
 
     use crate::merkle::Merkle;
 
-    //use super::*;
+    use super::*;
     use test_case::test_case;
 
     pub(super) fn create_test_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
@@ -854,14 +854,14 @@ mod tests {
         assert!(stream.next().is_none());
     }
 
-    /*
+    
     #[tokio::test]
     async fn key_value_iterate_empty() {
         let merkle = create_test_merkle();
         let stream = merkle.key_value_iter_from_key(b"x".to_vec().into_boxed_slice());
         check_stream_is_done(stream).await;
     }
-    */
+    
 
     /* 
     #[tokio::test]
@@ -1075,8 +1075,6 @@ mod tests {
     }
     */
 
-    /* 
-
     #[test_case(Some(&[u8::MIN]); "Starting at first key")]
     #[test_case(None; "No start specified")]
     #[test_case(Some(&[128u8]); "Starting in middle")]
@@ -1110,8 +1108,8 @@ mod tests {
         check_stream_is_done(stream).await;
     }
 
-    */
-/* 
+    
+
     #[tokio::test]
     async fn key_value_fused_empty() {
         let merkle = create_test_merkle();
@@ -1276,7 +1274,7 @@ mod tests {
             )
         );
     }
-*/
+
 /* 
     #[tokio::test]
     async fn key_value_start_at_key_not_in_trie() {
@@ -1558,6 +1556,7 @@ mod tests {
 
         check_stream_is_done(stream).await;
     }
+    */
 
     async fn check_stream_is_done<S>(mut stream: S)
     where
@@ -1566,6 +1565,6 @@ mod tests {
         assert!(stream.next().await.is_none());
         assert!(stream.is_terminated());
     }
-    */
+    
 }
     
