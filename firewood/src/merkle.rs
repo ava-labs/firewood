@@ -205,12 +205,14 @@ impl<T> Merkle<T> {
     }
 }
 
+/*
 // TODO: See if this is necessary of if we can just use into_inner.
 impl<T> Merkle<T> {
     pub(crate) fn into_arc_mutex_inner(self) -> Arc<Mutex<Option<T>>> {
         self.nodestore
     }
 }
+*/
 
 impl<T> From<T> for Merkle<T> {
     fn from(nodestore: T) -> Self {
@@ -1525,7 +1527,7 @@ mod tests {
         let merkle_clone = merkle.clone();
         //let merkle = merkle.unwrap().clone();
 
-        let (a, receiver, b) = attach_threadpool(merkle_clone);
+        let (a, _, b) = attach_threadpool(merkle_clone);
 
         merkle.insert(&[0], Box::new([0])).unwrap();
         assert_eq!(merkle.get_value(&[0]).unwrap(), Some(Box::from([0])));

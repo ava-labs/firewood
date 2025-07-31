@@ -210,9 +210,9 @@ where
         drop(span);
         let span = fastrace::Span::enter_with_local_parent("freeze");
 
-        //let nodestore = merkle.into_inner();
-        let nodestore_arc = merkle.into_arc_mutex_inner();
-        let nodestore = nodestore_arc.lock().unwrap().take().unwrap();
+        let nodestore = merkle.into_inner();
+        //let nodestore_arc = merkle.into_arc_mutex_inner();
+        //let nodestore = nodestore_arc.lock().unwrap().take().unwrap();
 
 
         let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
@@ -305,12 +305,12 @@ impl Db {
                 }
             }
         }
-        //let nodestore = merkle.into_inner();
-        let a = merkle.into_arc_mutex_inner();
-        let b = a.lock().unwrap().take().unwrap();
+        let nodestore = merkle.into_inner();
+        //let a = merkle.into_arc_mutex_inner();
+        //let b = a.lock().unwrap().take().unwrap();
 
         let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
-            Arc::new(b.try_into()?);
+            Arc::new(nodestore.try_into()?);
             //Arc::new(nodestore.try_into()?);
         self.manager.add_proposal(immutable.clone());
 
@@ -468,11 +468,11 @@ impl Proposal<'_> {
                 }
             }
         }
-        //let nodestore = merkle.into_inner();
-        let a = merkle.into_arc_mutex_inner();
-        let b = a.lock().unwrap().take().unwrap();
+        let nodestore = merkle.into_inner();
+        //let a = merkle.into_arc_mutex_inner();
+        //let b = a.lock().unwrap().take().unwrap();
         let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
-            Arc::new(b.try_into()?);
+            Arc::new(nodestore.try_into()?);
             //Arc::new(nodestore.try_into()?);
         self.db.manager.add_proposal(immutable.clone());
 
