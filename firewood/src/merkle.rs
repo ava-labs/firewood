@@ -17,8 +17,10 @@
 use crate::proof::{Proof, ProofError, ProofNode};
 //#[cfg(test)]
 //use crate::range_proof::RangeProof;
-//#[cfg(test)]
-//use crate::stream::MerkleKeyValueStream;
+#[cfg(test)]
+use crate::stream::MerkleKeyValueStream;
+#[cfg(test)]
+use crate::stream::NodeStoreReference;
 use crate::stream::PathIterator;
 //#[cfg(test)]
 //use crate::v2::api;
@@ -195,14 +197,15 @@ enum MerkleOp {
     //SetMerkle(Option<Arc<Mutex<Merkle<NodeStore<MutableProposal, S>>>>>)
 }
 
-/*
+
 impl<T> Merkle<T> {
     pub(crate) fn into_inner(self) -> T {
-        self.nodestore
+        let a = self.nodestore.lock().unwrap().take().unwrap();
+        return a;
     }
 }
-*/
 
+// TODO: See if this is necessary of if we can just use into_inner.
 impl<T> Merkle<T> {
     pub(crate) fn into_arc_mutex_inner(self) -> Arc<Mutex<Option<T>>> {
         self.nodestore
@@ -223,13 +226,12 @@ impl<T: TrieReader> Merkle<T> {
         self.nodestore.lock().unwrap().as_ref().unwrap().root_node()
     }
 
-    /*
+    
     #[cfg(test)]
-    pub(crate) const fn nodestore(&self) -> &T {
-        //&self.nodestore
-        todo!()
+    pub(crate) const fn nodestore(&self) -> &Arc<Mutex<Option<T>>> {
+        &self.nodestore
     }
-    */
+    
 
     /// Returns a proof that the given key has a certain value,
     /// or that the key isn't in the trie.
@@ -296,24 +298,23 @@ impl<T: TrieReader> Merkle<T> {
         //let a = PathIterator::new(b, key);
         //return a;
     }
-    /*
-        #[cfg(test)]
-        pub(super) fn key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
-            //MerkleKeyValueStream::from(&self.nodestore)
-            //todo!()
-        }
+    
+    #[cfg(test)]
+    pub(super) fn key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
+        MerkleKeyValueStream::from(NodeStoreReference::ArcMutex(self.nodestore.clone()))
+        //todo!()
+    }
 
-        #[cfg(test)]
-        pub(super) fn key_value_iter_from_key<K: AsRef<[u8]>>(
-            &self,
-            key: K,
-        ) -> MerkleKeyValueStream<'_, T> {
-            // TODO danlaine: change key to &[u8]
-            //MerkleKeyValueStream::from_key(&self.nodestore, key.as_ref())
-            todo!()
-        }
-    */
-
+    #[cfg(test)]
+    pub(super) fn key_value_iter_from_key<K: AsRef<[u8]>>(
+        &self,
+        key: K,
+    ) -> MerkleKeyValueStream<'_, T> {
+        // TODO danlaine: change key to &[u8]
+        MerkleKeyValueStream::from_key(NodeStoreReference::ArcMutex(self.nodestore.clone()), key.as_ref())
+        //todo!()
+    }
+    
     /*
         #[cfg(test)]
         pub(super) async fn range_proof(

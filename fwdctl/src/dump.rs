@@ -9,7 +9,7 @@
 use clap::Args;
 use firewood::db::{Db, DbConfig};
 use firewood::merkle::Key;
-use firewood::stream::MerkleKeyValueStream;
+use firewood::stream::{MerkleKeyValueStream, NodeStoreReference};
 use firewood::v2::api::{self, Db as _};
 use futures_util::StreamExt;
 use std::borrow::Cow;
@@ -140,7 +140,8 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     let stop_key = opts.stop_key.clone().or(opts.stop_key_hex.clone());
     let mut key_count: u32 = 0;
 
-    let mut stream = MerkleKeyValueStream::from_key(&latest_rev, start_key);
+    let m = NodeStoreReference::Reference(&latest_rev);
+    let mut stream = MerkleKeyValueStream::from_key(m, start_key);
     let mut output_handler = create_output_handler(opts).expect("Error creating output handler");
 
     while let Some(item) = stream.next().await {

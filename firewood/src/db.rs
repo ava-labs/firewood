@@ -9,7 +9,7 @@
 use crate::merkle::Merkle;
 use crate::proof::{Proof, ProofNode};
 use crate::range_proof::RangeProof;
-use crate::stream::MerkleKeyValueStream;
+use crate::stream::{MerkleKeyValueStream, NodeStoreReference};
 use crate::v2::api::{self, KeyType, ValueType};
 pub use crate::v2::api::{Batch, BatchOp};
 
@@ -125,13 +125,14 @@ impl api::DbView for HistoricalRev {
         todo!()
     }
 
+    
     fn iter_option<K: KeyType>(
         &self,
         first_key: Option<K>,
     ) -> Result<Self::Stream<'_>, api::Error> {
         match first_key {
-            Some(key) => Ok(MerkleKeyValueStream::from_key(self, key)),
-            None => Ok(MerkleKeyValueStream::from(self)),
+            Some(key) => Ok(MerkleKeyValueStream::from_key(NodeStoreReference::Reference(self), key)),
+            None => Ok(MerkleKeyValueStream::from(NodeStoreReference::Reference(self))),
         }
     }
 }

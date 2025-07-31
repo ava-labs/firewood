@@ -72,7 +72,7 @@ enum NodeStreamState {
 /// A stream of nodes in order starting from a specific point in the trie.
 pub struct MerkleNodeStream<'a, T> {
     state: NodeStreamState,
-    merkle: &'a T,
+    merkle: NodeStoreReference<'a, T>,
 }
 
 impl From<Key> for NodeStreamState {
@@ -92,7 +92,7 @@ impl<T: TrieReader> FusedStream for MerkleNodeStream<'_, T> {
 impl<'a, T: TrieReader> MerkleNodeStream<'a, T> {
     /// Returns a new iterator that will iterate over all the nodes in `merkle`
     /// with keys greater than or equal to `key`.
-    pub(super) fn new(merkle: &'a T, key: Key) -> Self {
+    pub(super) fn new(merkle: NodeStoreReference<'a, T>, key: Key) -> Self {
         Self {
             state: NodeStreamState::from(key),
             merkle,
@@ -106,7 +106,15 @@ impl<'a, T: TrieReader> MerkleNodeStream<'a, T> {
 
         match state {
             NodeStreamState::StartFromKey(key) => {
-                match get_iterator_intial_state(*merkle, key) {
+                let initial_state = match merkle {
+                    NodeStoreReference::ArcMutex(n) => {
+                        get_iterator_intial_state(n.lock().unwrap().as_ref().unwrap(), key)
+                    }
+                    NodeStoreReference::Reference(n) => {
+                        get_iterator_intial_state(*n, key)
+                    }
+                };
+                match initial_state {
                     Ok(state) => self.state = state,
                     Err(e) => return Some(Err(e)),
                 }
@@ -143,14 +151,32 @@ impl<'a, T: TrieReader> MerkleNodeStream<'a, T> {
                             };
 
                             let child = match child {
-                                Child::AddressWithHash(addr, _) => match merkle.read_node(addr) {
-                                    Ok(node) => node,
-                                    Err(e) => return Some(Err(e)),
+                                Child::AddressWithHash(addr, _) => {
+                                    let read_data = match merkle {
+                                        NodeStoreReference::ArcMutex(m) => {
+                                            m.lock().unwrap().as_ref().unwrap().read_node(addr)
+                                        }
+                                        NodeStoreReference::Reference(m) => {
+                                            m.read_node(addr)
+                                        }
+                                    };
+                                    match read_data {
+                                        Ok(node) => node,
+                                        Err(e) => return Some(Err(e)),
+                                    }
                                 },
                                 Child::Node(node) => node.clone().into(),
                                 Child::MaybePersisted(maybe_persisted, _) => {
+                                    let shared_node = match merkle {
+                                        NodeStoreReference::ArcMutex(m) => {
+                                            maybe_persisted.as_shared_node(m.lock().unwrap().as_ref().unwrap())
+                                        }
+                                        NodeStoreReference::Reference(m) => {
+                                            maybe_persisted.as_shared_node(*m)
+                                        }
+                                    };
                                     // For MaybePersisted, we need to get the node
-                                    match maybe_persisted.as_shared_node(merkle) {
+                                    match shared_node {
                                         Ok(node) => node,
                                         Err(e) => return Some(Err(e)),
                                     }
@@ -322,16 +348,30 @@ impl<T: TrieReader> MerkleKeyValueStreamState<'_, T> {
         Self::_Uninitialized(Box::new([]))
     }
 }
+#[derive(Debug)]
+pub enum NodeStoreReference<'a, T> {
+    ArcMutex(Arc<Mutex<Option<T>>>),
+    Reference(&'a T),
+}
+
+impl <'a, T> Clone for NodeStoreReference<'a, T> {
+    fn clone(&self) -> Self {
+        match self {
+            NodeStoreReference::ArcMutex(s) => NodeStoreReference::ArcMutex(s.clone()),
+            NodeStoreReference::Reference(v) => NodeStoreReference::Reference(*v),
+        }
+    }
+}
 
 #[derive(Debug)]
 /// A stream of key-value pairs in order starting from a specific point in the trie.
 pub struct MerkleKeyValueStream<'a, T> {
     state: MerkleKeyValueStreamState<'a, T>,
-    merkle: &'a T,
+    merkle: NodeStoreReference<'a, T>,
 }
 
-impl<'a, T: TrieReader> From<&'a T> for MerkleKeyValueStream<'a, T> {
-    fn from(merkle: &'a T) -> Self {
+impl<'a, T: TrieReader> From<NodeStoreReference<'a, T>> for MerkleKeyValueStream<'a, T> {
+    fn from(merkle: NodeStoreReference<'a, T>) -> Self {
         Self {
             state: MerkleKeyValueStreamState::_new(),
             merkle,
@@ -339,7 +379,7 @@ impl<'a, T: TrieReader> From<&'a T> for MerkleKeyValueStream<'a, T> {
     }
 }
 
-impl<T: TrieReader> FusedStream for MerkleKeyValueStream<'_, T> {
+impl<'a, T: TrieReader> FusedStream for MerkleKeyValueStream<'a, T> {
     fn is_terminated(&self) -> bool {
         matches!(&self.state, MerkleKeyValueStreamState::Initialized { node_iter } if node_iter.is_terminated())
     }
@@ -348,7 +388,8 @@ impl<T: TrieReader> FusedStream for MerkleKeyValueStream<'_, T> {
 impl<'a, T: TrieReader> MerkleKeyValueStream<'a, T> {
     /// Construct a [`MerkleKeyValueStream`] that will iterate over all the key-value pairs in `merkle`
     /// starting from a particular key
-    pub fn from_key<K: AsRef<[u8]>>(merkle: &'a T, key: K) -> Self {
+    //pub fn from_key<K: AsRef<[u8]>>(merkle: Arc<Mutex<Option<T>>>, key: K) -> Self {
+    pub fn from_key<K: AsRef<[u8]>>(merkle: NodeStoreReference<'a, T>, key: K) -> Self {
         Self {
             state: MerkleKeyValueStreamState::from(key.as_ref()),
             merkle,
@@ -356,7 +397,7 @@ impl<'a, T: TrieReader> MerkleKeyValueStream<'a, T> {
     }
 }
 
-impl<T: TrieReader> Stream for MerkleKeyValueStream<'_, T> {
+impl<'a, T: TrieReader> Stream for MerkleKeyValueStream<'a, T> {
     type Item = Result<(Key, Value), api::Error>;
 
     fn poll_next(
@@ -366,10 +407,10 @@ impl<T: TrieReader> Stream for MerkleKeyValueStream<'_, T> {
         // destructuring is necessary here because we need mutable access to `key_state`
         // at the same time as immutable access to `merkle`
         let Self { state, merkle } = &mut *self;
-
+        
         match state {
             MerkleKeyValueStreamState::_Uninitialized(key) => {
-                let iter = MerkleNodeStream::new(*merkle, key.clone());
+                let iter = MerkleNodeStream::new(merkle.clone(), key.clone());
                 self.state = MerkleKeyValueStreamState::Initialized { node_iter: iter };
                 self.poll_next(_cx)
             }
