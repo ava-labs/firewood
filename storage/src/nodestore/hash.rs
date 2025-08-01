@@ -121,12 +121,12 @@ where
     // Recursive helper that hashes the given `node` and the subtree rooted at it.
     // This function takes a mut `node` to update the hash in place.
     // The `path_prefix` is also mut because we will extend it to the path of the child we are hashing in recursive calls - it will be restored after the recursive call returns.
-    // The `num_peers` is the number of children of the parent node, which includes this node.
+    // The `num_siblings` is the number of children of the parent node, which includes this node.
     fn hash_helper_inner(
         #[cfg(feature = "ethhash")] &self,
         mut node: Node,
         mut path_prefix: PathGuard<'_>,
-        #[cfg(feature = "ethhash")] num_peers: usize,
+        #[cfg(feature = "ethhash")] num_siblings: usize,
     ) -> Result<(MaybePersistedNode, HashType, usize), FileIoError> {
         // If this is a branch, find all unhashed children and recursively hash them.
         trace!("hashing {node:?} at {path_prefix:?}");
@@ -212,7 +212,7 @@ where
         // At this point, we either have a leaf or a branch with all children hashed.
         // if the encoded child hash <32 bytes then we use that RLP
         #[cfg(feature = "ethhash")]
-        let hash = Self::compute_node_ethhash(&node, &mut path_prefix, num_peers);
+        let hash = Self::compute_node_ethhash(&node, &mut path_prefix, num_siblings);
         #[cfg(not(feature = "ethhash"))]
         let hash = hash_node(&node, &path_prefix);
 
@@ -221,14 +221,14 @@ where
 
     #[cfg(feature = "ethhash")]
     /// This function computes the ethhash of a single node assuming all its children are hashed.
-    /// Note that `num_peers` is the number of children of the parent node, which includes this node.
+    /// Note that `num_siblings` is the number of children of the parent node, which includes this node.
     /// The function appends to `path_prefix` and then truncate it back to the original length - we only reuse the memory space to avoid allocations
     pub(crate) fn compute_node_ethhash(
         node: &Node,
         path_prefix: &mut Path,
-        num_peers: usize,
+        num_siblings: usize,
     ) -> HashType {
-        if path_prefix.0.len() == 65 && num_peers == 1 {
+        if path_prefix.0.len() == 65 && num_siblings == 1 {
             // This is the special case when this node is the only child of an account branch node
             //  - 64 nibbles for account + 1 nibble for its position in account branch node
             let mut fake_root = node.clone();
