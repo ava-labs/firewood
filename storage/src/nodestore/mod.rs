@@ -249,7 +249,7 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
         self.kind
             .deleted
             .lock()
-            .expect("failed lock acquire")
+            .expect("lock acquire failed")
             .as_mut()
             .expect("none option")
             .push(node);
