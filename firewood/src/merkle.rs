@@ -627,7 +627,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Each element of `key` is 1 nibble.
     /// Returns the new root of the subtrie.
     pub fn insert_helper(
-        &mut self,
+        &self,
         mut node: Node,
         key: &[u8],
         value: Value,
@@ -793,7 +793,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Each element of `key` is 1 nibble.
     #[expect(clippy::too_many_lines)]
     fn remove_helper(
-        &mut self,
+        &self,
         mut node: Node,
         key: &[u8],
     ) -> Result<(Option<Node>, Option<Value>), FileIoError> {
@@ -1019,7 +1019,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     }
 
     fn remove_prefix_helper(
-        &mut self,
+        &self,
         mut node: Node,
         key: &[u8],
         deleted: &mut usize,
@@ -1154,7 +1154,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 
     /// Recursively deletes all children of a branch node.
     fn delete_children(
-        &mut self,
+        &self,
         branch: &mut BranchNode,
         deleted: &mut usize,
     ) -> Result<(), FileIoError> {
