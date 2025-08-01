@@ -33,7 +33,10 @@ use std::iter::FusedIterator;
 use std::num::NonZeroU64;
 
 use crate::node::ExtendableBytes;
-use crate::{FreeListParent, MaybePersistedNode, ReadableStorage, TrieHash, WritableStorage, firewood_counter};
+use crate::{
+    FreeListParent, MaybePersistedNode, ReadableStorage, TrieHash, WritableStorage,
+    firewood_counter,
+};
 
 /// Returns the maximum size needed to encode a `VarInt`.
 const fn var_int_max_size<VI>() -> usize {
