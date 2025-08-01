@@ -123,6 +123,28 @@ pub struct Options {
 pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     log::debug!("dump database {opts:?}");
 
+    // Check if dot format is used with unsupported options
+    if opts.output_format == "dot" {
+        if opts.start_key.is_some() || opts.start_key_hex.is_some() {
+            return Err(api::Error::InternalError(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Dot format does not support --start-key or --start-key-hex options",
+            ))));
+        }
+        if opts.stop_key.is_some() || opts.stop_key_hex.is_some() {
+            return Err(api::Error::InternalError(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Dot format does not support --stop-key or --stop-key-hex options",
+            ))));
+        }
+        if opts.max_key_count.is_some() {
+            return Err(api::Error::InternalError(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Dot format does not support --max-key-count option",
+            ))));
+        }
+    }
+
     let cfg = DbConfig::builder().truncate(false);
     let db = Db::new(opts.db.clone(), cfg.build()).await?;
     let latest_hash = db.root_hash().await?;
