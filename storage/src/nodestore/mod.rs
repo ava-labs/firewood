@@ -229,7 +229,7 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
         };
         let kind = MutableProposal {
             root,
-            deleted: Mutex::new(Some(deleted)),
+            deleted: Mutex::new(deleted),
             parent: parent.kind.as_nodestore_parent(),
         };
         Ok(NodeStore {
@@ -243,15 +243,13 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     ///
     /// # Panics
     ///
-    /// Will panic if deleted is None
+    /// Will panic if it is unable to acquire the lock on deleted.
     pub fn delete_node(&self, node: MaybePersistedNode) {
         trace!("Pending delete at {node:?}");
         self.kind
             .deleted
             .lock()
             .expect("lock acquire failed")
-            .as_mut()
-            .expect("none option")
             .push(node);
     }
 
@@ -291,7 +289,7 @@ impl<S: WritableStorage> NodeStore<MutableProposal, S> {
             header,
             kind: MutableProposal {
                 root: None,
-                deleted: Mutex::new(Some(Vec::default())),
+                deleted: Mutex::new(Vec::default()),
                 parent: NodeStoreParent::Committed(None),
             },
             storage,
@@ -448,7 +446,7 @@ pub struct MutableProposal {
     /// The root of the trie in this proposal.
     root: Option<Node>,
     /// Nodes that have been deleted in this proposal.
-    deleted: Mutex<Option<Vec<MaybePersistedNode>>>,
+    deleted: Mutex<Vec<MaybePersistedNode>>,
     parent: NodeStoreParent,
 }
 
@@ -460,7 +458,7 @@ impl<T: Into<NodeStoreParent>, S: ReadableStorage> From<NodeStore<T, S>>
             header: val.header,
             kind: MutableProposal {
                 root: None,
-                deleted: Mutex::new(Some(Vec::default())),
+                deleted: Mutex::new(Vec::default()),
                 parent: val.kind.into(),
             },
             storage: val.storage,
@@ -528,10 +526,8 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
             kind: Arc::new(ImmutableProposal {
                 deleted: kind
                     .deleted
-                    .lock()
-                    .expect("lock acquire failed")
-                    .take()
-                    .expect("none option")
+                    .into_inner()
+                    .expect("error with into_inner on mutex")
                     .into(),
                 parent: Arc::new(ArcSwap::new(Arc::new(kind.parent))),
                 root_hash: None,
