@@ -12,12 +12,12 @@ use crate::hashednode::hash_node;
 use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::Node;
+#[cfg(feature = "ethhash")]
+use crate::node::branch::NodeRefWithHashMut;
 use crate::{Child, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorage, SharedNode};
 
 use super::NodeReader;
 
-#[cfg(feature = "ethhash")]
-use crate::LinearAddress;
 use std::ops::{Deref, DerefMut};
 
 #[derive(Debug)]
@@ -66,8 +66,8 @@ impl DerefMut for PathGuard<'_> {
 /// Classified children for ethereum hash processing
 #[cfg(feature = "ethhash")]
 pub(super) struct ClassifiedChildren<'a> {
-    pub(super) num_unhashed: usize,
-    pub(super) hashed: Vec<(usize, (LinearAddress, &'a mut HashType))>,
+    pub num_unhashed: usize,
+    pub hashed: Vec<(usize, NodeRefWithHashMut<'a>)>,
 }
 
 impl<T, S: ReadableStorage> NodeStore<T, S>
@@ -85,31 +85,23 @@ where
     pub(super) fn ethhash_classify_children<'a>(
         &self,
         children: &'a mut Children<Child>,
-    ) -> ClassifiedChildren<'a> {
-        children.iter_mut().enumerate().fold(
-            ClassifiedChildren {
-                num_unhashed: 0,
-                hashed: Vec::new(),
-            },
-            |mut acc, (idx, child)| {
-                match child {
-                    None => {}
-                    Some(Child::AddressWithHash(a, h)) => {
-                        // Convert address to MaybePersistedNode
-                        acc.hashed.push((idx, (*a, h)));
-                    }
-                    Some(Child::Node(_)) => acc.num_unhashed += 1,
-                    Some(Child::MaybePersisted(maybe_persisted, h)) => {
-                        // For MaybePersisted, we need to get the address if it's persisted
-                        match maybe_persisted.as_linear_address() {
-                            Some(addr) => acc.hashed.push((idx, (addr, h))),
-                            None => acc.num_unhashed += 1,
-                        }
-                    }
-                }
-                acc
-            },
-        )
+    ) -> Result<ClassifiedChildren<'a>, FileIoError> {
+        let mut num_unhashed = 0;
+        let mut hashed = Vec::new();
+        for (idx, child) in children.iter_mut().enumerate() {
+            match child {
+                None => {}
+                Some(child) => match child.node_ref_and_hash_mut(self)? {
+                    Some(node_ref_with_hash) => hashed.push((idx, node_ref_with_hash)),
+                    None => num_unhashed += 1,
+                },
+            }
+        }
+
+        Ok(ClassifiedChildren {
+            num_unhashed,
+            hashed,
+        })
     }
 
     /// Hashes the given `node` and the subtree rooted at it.
@@ -145,7 +137,7 @@ where
                 let ClassifiedChildren {
                     num_unhashed,
                     mut hashed,
-                } = self.ethhash_classify_children(&mut b.children);
+                } = self.ethhash_classify_children(&mut b.children)?;
                 trace!("hashed {hashed:?} unhashed {num_unhashed:?}");
                 #[expect(
                     clippy::arithmetic_side_effects,
@@ -153,13 +145,21 @@ where
                 )]
                 let num_children = hashed.len() + num_unhashed;
                 // If there was only one child in the current account branch when previously hashed, we need to rehash it
-                if let [(child_idx, (child_node_addr, child_hash))] = &mut hashed[..] {
-                    let hashable_node = self.read_node(*child_node_addr)?.deref().clone();
+                if let [
+                    (
+                        child_idx,
+                        NodeRefWithHashMut {
+                            node_ref: child_node,
+                            hash: child_hash,
+                        },
+                    ),
+                ] = &mut hashed[..]
+                {
                     let hash = {
                         let mut path_guard = PathGuard::new(&mut path_prefix);
                         path_guard.0.extend(b.partial_path.0.iter().copied());
                         path_guard.0.push(*child_idx as u8);
-                        Self::compute_node_ethhash(&hashable_node, &mut path_guard, num_children)
+                        Self::compute_node_ethhash(child_node, &mut path_guard, num_children)
                     };
                     **child_hash = hash;
                 }
