@@ -154,8 +154,12 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     };
     let latest_rev = db.revision(latest_hash).await?;
 
-    let mut output_handler =
-        create_output_handler(opts, &db).expect("Error creating output handler");
+    let Some(mut output_handler) =
+        create_output_handler(opts, &db).expect("Error creating output handler")
+    else {
+        // dot format is generated in the handler
+        return Ok(());
+    };
 
     let start_key = opts
         .start_key
@@ -308,7 +312,7 @@ impl OutputHandler for StdoutOutputHandler {
 fn create_output_handler(
     opts: &Options,
     db: &Db,
-) -> Result<Box<dyn OutputHandler + Send + Sync>, Box<dyn Error>> {
+) -> Result<Option<Box<dyn OutputHandler + Send + Sync>>, Box<dyn Error>> {
     let hex = opts.hex;
     let mut file_name = opts.output_file_name.clone();
     file_name.set_extension(opts.output_format.as_str());
@@ -316,29 +320,28 @@ fn create_output_handler(
         "csv" => {
             println!("Dumping to {}", file_name.display());
             let file = File::create(file_name)?;
-            Ok(Box::new(CsvOutputHandler {
+            Ok(Some(Box::new(CsvOutputHandler {
                 writer: csv::Writer::from_writer(file),
                 hex,
-            }))
+            })))
         }
         "json" => {
             println!("Dumping to {}", file_name.display());
             let file = File::create(file_name)?;
-            Ok(Box::new(JsonOutputHandler {
+            Ok(Some(Box::new(JsonOutputHandler {
                 writer: BufWriter::new(file),
                 hex,
                 is_first: true,
-            }))
+            })))
         }
-        "stdout" => Ok(Box::new(StdoutOutputHandler { hex })),
+        "stdout" => Ok(Some(Box::new(StdoutOutputHandler { hex }))),
         "dot" => {
             println!("Dumping to {}", file_name.display());
             let file = File::create(file_name)?;
             let mut writer = BufWriter::new(file);
             // For dot format, we generate the output immediately since it doesn't use streaming
             db.dump_sync(&mut writer)?;
-            // Return a no-op handler since the work is already done
-            Ok(Box::new(StdoutOutputHandler { hex: false }))
+            Ok(None)
         }
         _ => unreachable!(),
     }
