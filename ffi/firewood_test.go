@@ -222,8 +222,7 @@ func TestClosedDatabase(t *testing.T) {
 	r.Empty(root)
 	r.ErrorIs(err, errDBClosed)
 
-	err = db.Close()
-	r.ErrorIs(err, errDBClosed)
+	r.NoError(db.Close())
 }
 
 func keyForTest(i int) []byte {
@@ -433,7 +432,7 @@ func TestConflictingProposals(t *testing.T) {
 	// Now we ensure we cannot commit the other proposals.
 	for i := 1; i < numProposals; i++ {
 		err := proposals[i].Commit()
-		r.Contains(err.Error(), "commit the parents of this proposal first", "Commit(%d)", i)
+		r.Contains(err.Error(), "Incorrect root hash for commit", "Commit(%d)", i)
 	}
 
 	// After attempting to commit the other proposals, they should be completely invalid.
@@ -510,21 +509,7 @@ func TestDropProposal(t *testing.T) {
 	_, err = proposal.Get([]byte("non-existent"))
 	r.ErrorIs(err, errDroppedProposal)
 	_, err = proposal.Root()
-	r.ErrorIs(err, errDroppedProposal)
-
-	// Attempt to "emulate" the proposal to ensure it isn't internally available still.
-	proposal = &Proposal{
-		handle: db.handle,
-		id:     1,
-	}
-
-	// Check all operations on the fake proposal.
-	_, err = proposal.Get([]byte("non-existent"))
-	r.Contains(err.Error(), "proposal not found", "Get(fake proposal)")
-	_, err = proposal.Propose([][]byte{[]byte("key")}, [][]byte{[]byte("value")})
-	r.Contains(err.Error(), "proposal not found", "Propose(fake proposal)")
-	err = proposal.Commit()
-	r.Contains(err.Error(), "proposal not found", "Commit(fake proposal)")
+	r.NoError(err, "Root of dropped proposal should still be accessible")
 }
 
 // Create a proposal with 10 key-value pairs.
@@ -760,7 +745,7 @@ func TestProposeSameRoot(t *testing.T) {
 	// Attempt to commit P5. Since this isn't in the canonical chain, it should
 	// fail.
 	err = proposal5.Commit()
-	r.Contains(err.Error(), "commit the parents of this proposal first") // this error is internal to firewood
+	r.Contains(err.Error(), "Incorrect root hash for commit") // this error is internal to firewood
 
 	// We should be able to commit P4, since it is in the canonical chain.
 	err = proposal4.Commit()

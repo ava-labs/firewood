@@ -56,8 +56,7 @@ pub use nodestore::{
 pub use linear::filebacked::FileBacked;
 pub use linear::memory::MemStore;
 pub use node::persist::MaybePersistedNode;
-
-pub use trie_hash::TrieHash;
+pub use trie_hash::{InvalidTrieHashLength, TrieHash};
 
 /// A shared node, which is just a triophe Arc of a node
 pub type SharedNode = triomphe::Arc<Node>;
@@ -66,7 +65,7 @@ pub type SharedNode = triomphe::Arc<Node>;
 /// from the storage layer. Generally, we only want to
 /// cache write operations, but for some read-heavy workloads
 /// you can enable caching of branch reads or all reads.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CacheReadStrategy {
     /// Only cache writes (no reads will be cached)
     WritesOnly,
