@@ -29,48 +29,26 @@ pub type Key = Box<[u8]>;
 /// Values are boxed u8 slices
 pub type Value = Box<[u8]>;
 
-// convert a set of nibbles into a printable string
-// panics if there is a non-nibble byte in the set
-// TODO: This is more efficient than the LowerHex implementation for Path
-// so combine them.
-#[cfg(not(feature = "branch_factor_256"))]
-fn nibbles_formatter<X: IntoIterator<Item = u8>>(nib: X) -> String {
-    nib.into_iter()
-        .map(|c| {
-            *b"0123456789abcdef"
-                .get(c as usize)
-                .expect("requires nibbles") as char
-        })
-        .collect::<String>()
-}
-
-#[cfg(feature = "branch_factor_256")]
-fn nibbles_formatter<X: IntoIterator<Item = u8>>(nib: X) -> String {
-    let collected: Box<[u8]> = nib.into_iter().collect();
-    hex::encode(&collected)
-}
-
 macro_rules! write_attributes {
     ($writer:ident, $node:expr, $value:expr) => {
         if !$node.partial_path.0.is_empty() {
-            let pp_str = format!(" pp={}", nibbles_formatter($node.partial_path.0.clone()));
-            $writer
-                .write_all(pp_str.as_bytes())
+            write!($writer, " pp={:x}", $node.partial_path)
                 .map_err(|e| FileIoError::from_generic_no_file(e, "write attributes"))?;
         }
         if !$value.is_empty() {
             match std::str::from_utf8($value) {
                 Ok(string) if string.chars().all(char::is_alphanumeric) => {
-                    let val_str = format!(" val={}", string);
-                    $writer
-                        .write_all(val_str.as_bytes())
+                    write!($writer, " val={:.6}", string)
                         .map_err(|e| FileIoError::from_generic_no_file(e, "write attributes"))?;
+                    if string.len() > 6 {
+                        $writer.write_all(b"...").map_err(|e| {
+                            FileIoError::from_generic_no_file(e, "write attributes")
+                        })?;
+                    }
                 }
                 _ => {
                     let hex = hex::encode($value);
-                    let val_str = format!(" val={:.6}", hex);
-                    $writer
-                        .write_all(val_str.as_bytes())
+                    write!($writer, " val={:.6}", hex)
                         .map_err(|e| FileIoError::from_generic_no_file(e, "write attributes"))?;
                     if hex.len() > 6 {
                         $writer.write_all(b"...").map_err(|e| {
@@ -562,15 +540,13 @@ impl<T: HashedNodeReader> Merkle<T> {
 
         Ok(())
     }
-
-    /// Dump the trie to a string (for testing purposes).
+    /// Dump the trie to a string (for testing or logging).
     ///
     /// This is a convenience function for tests that need the dot output as a string.
     ///
     /// # Errors
     ///
     /// Returns an error if writing to the string fails.
-    #[cfg(test)]
     pub(crate) fn dump_to_string(&self) -> Result<String, Error> {
         let mut buffer = Vec::new();
         self.dump(&mut buffer)?;

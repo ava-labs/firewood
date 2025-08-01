@@ -234,11 +234,8 @@ impl RevisionManager {
 
         if crate::logger::trace_enabled() {
             let merkle = Merkle::from(committed);
-            let mut buffer = Vec::new();
-            if let Ok(()) = merkle.dump(&mut buffer) {
-                if let Ok(s) = String::from_utf8(buffer) {
-                    trace!("{s}");
-                }
+            if let Ok(s) = merkle.dump_to_string() {
+                trace!("{s}");
             }
         }
 
