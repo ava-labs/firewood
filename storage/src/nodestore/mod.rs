@@ -243,7 +243,7 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     /// 
     /// # Panics
     ///
-    /// Will panic if the deleted array is None
+    /// Will panic if deleted is None
     pub fn delete_node(&self, node: MaybePersistedNode) {
         trace!("Pending delete at {node:?}");
         self.kind.deleted
