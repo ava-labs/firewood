@@ -36,6 +36,9 @@ use crate::nodestore::AreaIndex;
 /// Logger module for handling logging functionality
 pub mod logger;
 
+#[macro_use]
+/// Macros module for defining macros used in the storage module
+pub mod macros;
 // re-export these so callers don't need to know where they are
 pub use checker::CheckOpt;
 pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
@@ -260,6 +263,21 @@ pub enum CheckerError {
     /// The root is not persisted
     #[error("The checker can only check persisted nodestores")]
     UnpersistedRoot,
+
+    #[error(
+        "The node {key:#x} at {address:#x} (parent: {parent:#x}) has a value but its path is not 32 or 64 bytes long"
+    )]
+    /// A value is found corresponding to an invalid key.
+    /// With ethhash, keys must be 32 or 64 bytes long.
+    /// Without ethhash, keys cannot contain half-bytes (i.e., odd number of nibbles).
+    InvalidKey {
+        /// The key found, or equivalently the path of the node that stores the value
+        key: Path,
+        /// Address of the node
+        address: LinearAddress,
+        /// Parent of the node
+        parent: TrieNodeParent,
+    },
 
     /// IO error
     #[error("IO error")]
