@@ -285,7 +285,7 @@ impl Db {
     pub fn propose_sync<K: KeyType, V: ValueType>(
         &'_ self,
         batch: Batch<K, V>,
-    ) -> Result<Arc<Proposal<'_>>, api::Error> {
+    ) -> Result<Proposal<'_>, api::Error> {
         let parent = self.manager.current_revision();
         let proposal = NodeStore::new(&parent)?;
         let mut merkle = Merkle::from(proposal);
@@ -309,11 +309,11 @@ impl Db {
 
         self.metrics.proposals.increment(1);
 
-        Ok(Arc::new(Proposal {
+        Ok(Proposal {
             nodestore: immutable,
             db: self,
             committed: AtomicBool::new(false),
-        }))
+        })
     }
 
     /// Dump the Trie of the latest revision.
@@ -439,7 +439,7 @@ impl<'a> api::Proposal for Proposal<'a> {
 
 impl Proposal<'_> {
     /// Commit a proposal synchronously
-    pub fn commit_sync(self: Arc<Self>) -> Result<(), api::Error> {
+    pub fn commit_sync(self) -> Result<(), api::Error> {
         self.start_commit()?;
         Ok(self.db.manager.commit(self.nodestore.clone())?)
     }
@@ -448,8 +448,8 @@ impl Proposal<'_> {
     pub fn propose_sync<K: KeyType, V: ValueType>(
         &self,
         batch: api::Batch<K, V>,
-    ) -> Result<Arc<Self>, api::Error> {
-        Ok(self.create_proposal(batch)?.into())
+    ) -> Result<Self, api::Error> {
+        self.create_proposal(batch)
     }
 
     #[crate::metrics("firewood.proposal.create", "database proposal creation")]
