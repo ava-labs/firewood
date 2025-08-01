@@ -91,16 +91,16 @@ pub struct Options {
     pub max_key_count: Option<u32>,
 
     /// The output format of database dump.
-    /// Possible Values: ["csv", "json", "stdout"].
+    /// Possible Values: ["csv", "json", "stdout", "dot"].
     /// Defaults to "stdout"
     #[arg(
         short = 'o',
         long,
         required = false,
         value_name = "OUTPUT_FORMAT",
-        value_parser = ["csv", "json", "stdout"],
+        value_parser = ["csv", "json", "stdout", "dot"],
         default_value = "stdout",
-        help = "Output format of database dump, default to stdout. CSV and JSON formats are available."
+        help = "Output format of database dump, default to stdout. CSV, JSON, and DOT formats are available."
     )]
     pub output_format: String,
 
@@ -132,6 +132,9 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     };
     let latest_rev = db.revision(latest_hash).await?;
 
+    let mut output_handler =
+        create_output_handler(opts, &db).expect("Error creating output handler");
+
     let start_key = opts
         .start_key
         .clone()
@@ -141,7 +144,6 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     let mut key_count: u32 = 0;
 
     let mut stream = MerkleKeyValueStream::from_key(&latest_rev, start_key);
-    let mut output_handler = create_output_handler(opts).expect("Error creating output handler");
 
     while let Some(item) = stream.next().await {
         match item {
@@ -283,6 +285,7 @@ impl OutputHandler for StdoutOutputHandler {
 
 fn create_output_handler(
     opts: &Options,
+    db: &Db,
 ) -> Result<Box<dyn OutputHandler + Send + Sync>, Box<dyn Error>> {
     let hex = opts.hex;
     let mut file_name = opts.output_file_name.clone();
@@ -306,6 +309,15 @@ fn create_output_handler(
             }))
         }
         "stdout" => Ok(Box::new(StdoutOutputHandler { hex })),
+        "dot" => {
+            println!("Dumping to {}", file_name.display());
+            let file = File::create(file_name)?;
+            let mut writer = BufWriter::new(file);
+            // For dot format, we generate the output immediately since it doesn't use streaming
+            db.dump_sync(&mut writer)?;
+            // Return a no-op handler since the work is already done
+            Ok(Box::new(StdoutOutputHandler { hex: false }))
+        }
         _ => unreachable!(),
     }
 }
