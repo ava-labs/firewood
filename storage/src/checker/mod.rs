@@ -20,7 +20,15 @@ use std::ops::Range;
 use indicatif::ProgressBar;
 
 #[cfg(feature = "ethhash")]
-const VALID_ETH_KEY_SIZES: [usize; 2] = [64, 128]; // in number of nibbles - two nibbles make a byte
+fn is_valid_key(key: &Path) -> bool {
+    const VALID_ETH_KEY_SIZES: [usize; 2] = [64, 128]; // in number of nibbles - two nibbles make a byte
+    VALID_ETH_KEY_SIZES.contains(&key.0.len())
+}
+
+#[cfg(not(feature = "ethhash"))]
+fn is_valid_key(key: &Path) -> bool {
+    key.0.len() % 2 == 0
+}
 
 /// Options for the checker
 #[derive(Debug)]
@@ -155,9 +163,8 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         let node = self.read_node(subtrie_root_address)?;
         let mut current_node_path = path_prefix.clone();
         current_node_path.0.extend_from_slice(node.partial_path());
-        #[cfg(feature = "ethhash")]
-        if node.value().is_some() && !VALID_ETH_KEY_SIZES.contains(&current_node_path.0.len()) {
-            return Err(CheckerError::EthKeySize {
+        if node.value().is_some() && !is_valid_key(&current_node_path) {
+            return Err(CheckerError::InvalidKey {
                 key: current_node_path,
                 address: subtrie_root_address,
                 parent,
