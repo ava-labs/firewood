@@ -82,7 +82,7 @@ pub use header::NodeStoreHeader;
 /// ```
 use std::mem::take;
 use std::ops::Deref;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::hashednode::hash_node;
 use crate::node::Node;
@@ -231,7 +231,7 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
         };
         let kind = MutableProposal {
             root,
-            deleted,
+            deleted: Mutex::new(Some(deleted)),
             parent: parent.kind.as_nodestore_parent(),
         };
         Ok(NodeStore {
@@ -242,9 +242,10 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     }
 
     /// Marks the node at `addr` as deleted in this proposal.
-    pub fn delete_node(&mut self, node: MaybePersistedNode) {
+    pub fn delete_node(&self, node: MaybePersistedNode) {
         trace!("Pending delete at {node:?}");
-        self.kind.deleted.push(node);
+        self.kind.deleted.lock().expect("failed lock acquire").as_mut().expect("none option").push(node);
+        //self.kind.deleted.push(node);
     }
 
     /// Reads a node for update, marking it as deleted in this proposal.
@@ -254,7 +255,7 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the node cannot be read.
-    pub fn read_for_update(&mut self, node: MaybePersistedNode) -> Result<Node<Option<Child>>, FileIoError> {
+    pub fn read_for_update(&self, node: MaybePersistedNode) -> Result<Node<Option<Child>>, FileIoError> {
         let arc_wrapped_node = node.as_shared_node(self)?;
         self.delete_node(node);
         Ok((*arc_wrapped_node).clone())
@@ -283,7 +284,7 @@ impl<S: WritableStorage> NodeStore<MutableProposal, S> {
             header,
             kind: MutableProposal {
                 root: None,
-                deleted: Vec::default(),
+                deleted: Mutex::new(Some(Vec::default())),
                 parent: NodeStoreParent::Committed(None),
             },
             storage,
@@ -486,7 +487,8 @@ pub struct MutableProposal {
     /// The root of the trie in this proposal.
     root: Option<Node<Option<Child>>>,
     /// Nodes that have been deleted in this proposal.
-    deleted: Vec<MaybePersistedNode>,
+    //deleted: Vec<MaybePersistedNode>,
+    deleted: Mutex<Option<Vec<MaybePersistedNode>>>,
     parent: NodeStoreParent,
 }
 
@@ -517,7 +519,7 @@ impl<T: ReadInMemoryNode + Into<NodeStoreParent>, S: ReadableStorage> From<NodeS
             header: val.header,
             kind: MutableProposal {
                 root: None,
-                deleted: Vec::default(),
+                deleted: Mutex::new(Some(Vec::default())),
                 parent: val.kind.into(),
             },
             storage: val.storage,
@@ -565,6 +567,7 @@ impl NodeStore<Arc<ImmutableProposal>, FileBacked> {
     }
 }
 
+
 impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
     for NodeStore<Arc<ImmutableProposal>, S>
 {
@@ -577,11 +580,13 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
             storage,
         } = val;
 
+        let deleted_vec = kind.deleted.lock().expect("lock acquire failed").take().expect("none option");
+
         let mut nodestore = NodeStore {
             header,
             kind: Arc::new(ImmutableProposal {
                 new: HashMap::new(),
-                deleted: kind.deleted.into(),
+                deleted: deleted_vec.into(),
                 parent: Arc::new(ArcSwap::new(Arc::new(kind.parent))),
                 root_hash: None,
                 root: None,
