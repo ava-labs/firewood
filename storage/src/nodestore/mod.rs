@@ -240,13 +240,14 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     }
 
     /// Marks the node at `addr` as deleted in this proposal.
-    /// 
+    ///
     /// # Panics
     ///
     /// Will panic if deleted is None
     pub fn delete_node(&self, node: MaybePersistedNode) {
         trace!("Pending delete at {node:?}");
-        self.kind.deleted
+        self.kind
+            .deleted
             .lock()
             .expect("failed lock acquire")
             .as_mut()
@@ -522,16 +523,16 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
             storage,
         } = val;
 
-        let deleted = kind
-            .deleted
-            .lock()
-            .expect("lock acquire failed")
-            .take()
-            .expect("none option");
         let mut nodestore = NodeStore {
             header,
             kind: Arc::new(ImmutableProposal {
-                deleted: deleted.into(),
+                deleted: kind
+                    .deleted
+                    .lock()
+                    .expect("lock acquire failed")
+                    .take()
+                    .expect("none option")
+                    .into(),
                 parent: Arc::new(ArcSwap::new(Arc::new(kind.parent))),
                 root_hash: None,
                 root: None,
