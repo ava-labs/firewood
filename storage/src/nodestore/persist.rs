@@ -31,9 +31,9 @@
 
 use std::iter::FusedIterator;
 
+use crate::{firewood_counter, firewood_gauge};
 use crate::linear::FileIoError;
 use coarsetime::Instant;
-use metrics::{counter, gauge};
 
 #[cfg(feature = "io-uring")]
 use crate::logger::trace;
@@ -263,7 +263,7 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
             node.persist_at(persisted_address);
 
             // Decrement gauge immediately after node is written to storage
-            gauge!("firewood.nodes.unwritten").decrement(1.0);
+            firewood_gauge!("firewood.nodes.unwritten").decrement(1.0);
 
             // Move the arc to a vector of persisted nodes for caching
             // we save them so we don't have to lock the cache while we write them
@@ -275,7 +275,7 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
         self.storage.write_cached_nodes(cached_nodes)?;
 
         let flush_time = flush_start.elapsed().as_millis();
-        counter!("firewood.flush_nodes").increment(flush_time);
+        firewood_counter!("firewood.flush_nodes", "flushed node amount").increment(flush_time);
 
         Ok(header)
     }
@@ -437,13 +437,13 @@ impl NodeStore<Committed, FileBacked> {
                             )
                         })?;
                         trace!("submission queue is full");
-                        counter!("ring.full").increment(1);
+                        firewood_counter!("ring.full", "amount of full ring").increment(1);
                     }
                     break;
                 }
                 // if we get here, that means we couldn't find a place to queue the request, so wait for at least one operation
                 // to complete, then handle the completion queue
-                counter!("ring.full").increment(1);
+                firewood_counter!("ring.full", "amount of full ring").increment(1);
                 ring.submit_and_wait(1).map_err(|e| {
                     self.storage
                         .file_io_error(e, 0, Some("io-uring submit_and_wait".to_string()))
@@ -459,7 +459,7 @@ impl NodeStore<Committed, FileBacked> {
                 // Decrement gauge for writes that have actually completed
                 if completed_writes > 0 {
                     #[expect(clippy::cast_precision_loss)]
-                    gauge!("firewood.nodes.unwritten").decrement(completed_writes as f64);
+                    firewood_gauge!("firewood.nodes.unwritten").decrement(completed_writes as f64);
                 }
             }
 
@@ -482,7 +482,7 @@ impl NodeStore<Committed, FileBacked> {
         // Decrement gauge for final batch of writes that completed
         if final_completed_writes > 0 {
             #[expect(clippy::cast_precision_loss)]
-            gauge!("firewood.nodes.unwritten").decrement(final_completed_writes as f64);
+            firewood_gauge!("firewood.nodes.unwritten").decrement(final_completed_writes as f64);
         }
 
         debug_assert!(
@@ -495,7 +495,7 @@ impl NodeStore<Committed, FileBacked> {
         debug_assert!(ring.completion().is_empty());
 
         let flush_time = flush_start.elapsed().as_millis();
-        counter!("firewood.flush_nodes").increment(flush_time);
+        firewood_counter!("firewood.flush_nodes", "amount flushed nodes").increment(flush_time);
 
         Ok(header)
     }
