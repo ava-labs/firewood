@@ -6,17 +6,14 @@
     reason = "Found 12 occurrences after enabling the lint."
 )]
 
-use crate::merkle::{Merkle, Value};
-use crate::stream::MerkleKeyValueStream;
-use crate::v2::api::{self, FrozenProof, FrozenRangeProof, KeyType, ValueType};
+use crate::merkle::{Key, Merkle, Value};
+use crate::stream::{InternalStreamState, MerkleKeyValueStream};
+use crate::v2::api::{self, Error, FrozenProof, FrozenRangeProof, KeyType, ValueType};
 pub use crate::v2::api::{Batch, BatchOp};
 
 use crate::manager::{RevisionManager, RevisionManagerConfig};
 use async_trait::async_trait;
-use firewood_storage::{
-    CheckOpt, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore,
-    TrieHash,
-};
+use firewood_storage::{CheckOpt, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore, TrieHash, TrieReader};
 use metrics::{counter, describe_counter};
 use std::io::Write;
 use std::path::Path;
@@ -47,6 +44,13 @@ impl std::fmt::Debug for DbMetrics {
     }
 }
 
+#[derive(Debug)]
+pub enum IterationState {
+    StartFromKey(Option<Box<[u8]>>),
+    ContinueFromState(InternalStreamState),
+    Done,
+}
+
 /// A synchronous view of the database.
 pub trait DbViewSync {
     /// find a value synchronously
@@ -57,6 +61,8 @@ pub trait DbViewSync {
 pub trait DbViewSyncBytes: std::fmt::Debug {
     /// find a value synchronously using raw bytes
     fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError>;
+
+    fn iterate(&self, state: IterationState) -> Result<(Option<(Key, Value)>, IterationState), Error>;
 }
 
 // Provide blanket implementation for DbViewSync using DbViewSyncBytes
@@ -72,6 +78,36 @@ impl DbViewSyncBytes for Arc<HistoricalRev> {
         let value = merkle.get_value(key)?;
         Ok(value)
     }
+
+    fn iterate(&self, state: IterationState) -> Result<(Option<(Key, Value)>, IterationState), Error> {
+        if let IterationState::Done = state {
+            return Ok((None, state));
+        }
+        let merkle = Merkle::from(self);
+        iterate_internal(&merkle, state)
+    }
+}
+
+fn iterate_internal<T: TrieReader>(merkle: &Merkle<T>, state: IterationState) -> Result<(Option<(Key, Value)>, IterationState), Error> {
+    let mut it = match state {
+        IterationState::StartFromKey(key) => {
+            if let Some(key) = key {
+                merkle.key_value_iter_from_key(key)
+            } else {
+                merkle.key_value_iter()
+            }
+        }
+        IterationState::ContinueFromState(state) => {
+            MerkleKeyValueStream::from_internal_state(merkle.nodestore(), state)
+        }
+        IterationState::Done => unreachable!(),
+    };
+    let kv = it.next_sync();
+    if kv.is_none() {
+        return Ok((None, IterationState::Done));
+    }
+    let kv = kv.unwrap()?;
+    Ok((Some(kv), IterationState::ContinueFromState(it.internal_state())))
 }
 
 impl DbViewSyncBytes for Proposal<'_> {
@@ -79,6 +115,14 @@ impl DbViewSyncBytes for Proposal<'_> {
         let merkle = Merkle::from(self.nodestore.clone());
         let value = merkle.get_value(key)?;
         Ok(value)
+    }
+
+    fn iterate(&self, state: IterationState) -> Result<(Option<(Key, Value)>, IterationState), Error> {
+        if let IterationState::Done = state {
+            return Ok((None, state));
+        }
+        let merkle = Merkle::from(self.nodestore.clone());
+        iterate_internal(&merkle, state)
     }
 }
 
@@ -88,7 +132,16 @@ impl DbViewSyncBytes for Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> {
         let value = merkle.get_value(key)?;
         Ok(value)
     }
+
+    fn iterate(&self, state: IterationState) -> Result<(Option<(Key, Value)>, IterationState), Error> {
+        if let IterationState::Done = state {
+            return Ok((None, state));
+        }
+        let merkle = Merkle::from(self.clone());
+        iterate_internal(&merkle, state)
+    }
 }
+
 
 #[async_trait]
 impl api::DbView for HistoricalRev {

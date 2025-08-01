@@ -367,7 +367,7 @@ struct Value fwd_get_latest(const struct DatabaseHandle *db, struct Value key);
 struct IteratorCreationResult fwd_iter_latest(const struct DatabaseHandle *db, struct Value key);
 
 /**
- * Retreives the next item from the iterator
+ * Retrieves the next item from the iterator
  *
  * # Arguments
  *
@@ -388,6 +388,30 @@ struct IteratorCreationResult fwd_iter_latest(const struct DatabaseHandle *db, s
  *
  */
 struct KeyValue fwd_iter_next(const struct DatabaseHandle *db, const struct IteratorHandle *it);
+
+/**
+ * Return an iterator optionally starting from a key in database
+ *
+ * # Arguments
+ *
+ * * `db` - The database handle returned by `open_db`
+ * * `key` - The key to start from, in `Value` form
+ *
+ * # Returns
+ *
+ * An iterator handle, or an error
+ *
+ * # Safety
+ *
+ * The caller must:
+ *  * ensure that `db` is a valid pointer returned by `open_db`
+ *  * ensure that `key` is a valid pointer to a `Value` struct
+ *  * TODO: Handle freeing the iterator handle
+ *
+ */
+struct IteratorCreationResult fwd_iter_on_root(const struct DatabaseHandle *db,
+                                               struct Value root,
+                                               struct Value key);
 
 /**
  * Open a database with the given cache size and maximum number of revisions

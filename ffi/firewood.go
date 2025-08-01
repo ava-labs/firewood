@@ -191,10 +191,38 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 // Iter creates and iterator on database starting from the provided key
 // pass empty slice to start from beginning
 func (db *Database) Iter(key []byte) (*DbIterator, error) {
+	if db.handle == nil {
+		return nil, errDBClosed
+	}
+
 	values, cleanup := newValueFactory()
 	defer cleanup()
 
 	itResult := C.fwd_iter_latest(db.handle, values.from(key))
+	it, err := iteratorFromResult(&itResult)
+	if err != nil {
+		return nil, err
+	}
+	return &DbIterator{handle: it, dbHandle: db.handle}, nil
+}
+
+// IterOnRoot creates and iterator starting from the provided key on a specific root hash.
+// If the root is not found, it returns as an error.
+// pass empty slice to start from beginning
+func (db *Database) IterOnRoot(root, key []byte) (*DbIterator, error) {
+	if db.handle == nil {
+		return nil, errDBClosed
+	}
+
+	// If the root is empty, the database is empty.
+	if len(root) == 0 || bytes.Equal(root, EmptyRoot) {
+		return nil, nil
+	}
+
+	values, cleanup := newValueFactory()
+	defer cleanup()
+	itResult := C.fwd_iter_on_root(db.handle, values.from(root), values.from(key))
+
 	it, err := iteratorFromResult(&itResult)
 	if err != nil {
 		return nil, err

@@ -24,11 +24,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-use firewood::db::{BatchOp as DbBatchOp, Db, DbConfig, DbViewSync, DbViewSyncBytes, Proposal};
+use firewood::db::{BatchOp as DbBatchOp, Db, DbConfig, DbViewSync, DbViewSyncBytes, IterationState, Proposal};
 use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
-
-use firewood::merkle::Merkle;
-use firewood::stream::{InternalStreamState, MerkleKeyValueStream};
 use firewood::v2::api::HashKey;
 use metrics::counter;
 
@@ -76,7 +73,9 @@ pub struct DatabaseHandle<'p> {
 #[derive(Debug)]
 pub struct IteratorHandle {
     /// Internal state of the iterator
-    state: Mutex<Box<Option<InternalStreamState>>>,
+    state: Mutex<Box<Option<IterationState>>>,
+    /// Iterator target root
+    target: Option<HashKey>,
 }
 
 impl From<Db> for DatabaseHandle<'_> {
@@ -186,30 +185,65 @@ pub unsafe extern "C" fn fwd_iter_latest(
 fn iter_latest(db: Option<&DatabaseHandle<'_>>, key: &Value) -> Result<IteratorHandle, String> {
     let db = db.ok_or("db should be non-null")?;
 
-    // Find root hash.
-    // Matches `hash` function but we use the TrieHash type here
     let Some(root) = db.root_hash_sync().map_err(|e| e.to_string())? else {
         return Ok(IteratorHandle {
             state: Mutex::new(Box::new(None)),
+            target: None,
         });
     };
 
-    // Find revision associated with root.
-    let rev = db.revision_sync(root).map_err(|e| e.to_string())?;
-    let mk = Merkle::from(&rev);
-
-    let mkv = if key.len == 0 {
-        mk.key_value_iter()
-    } else {
-        mk.key_value_iter_from_key(key.as_slice())
-    };
+    let key: Option<Box<[u8]>> = if key.len != 0 { Some(key.as_slice().into()) } else { None };
 
     Ok(IteratorHandle {
-        state: Mutex::new(Box::new(Some(mkv.internal_state()))),
+        state: Mutex::new(Box::new(Some(IterationState::StartFromKey(key)))),
+        target: Some(root),
     })
 }
 
-/// Retreives the next item from the iterator
+
+/// Return an iterator optionally starting from a key in database
+///
+/// # Arguments
+///
+/// * `db` - The database handle returned by `open_db`
+/// * `key` - The key to start from, in `Value` form
+///
+/// # Returns
+///
+/// An iterator handle, or an error
+///
+/// # Safety
+///
+/// The caller must:
+///  * ensure that `db` is a valid pointer returned by `open_db`
+///  * ensure that `key` is a valid pointer to a `Value` struct
+///  * TODO: Handle freeing the iterator handle
+///
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_iter_on_root(
+    db: Option<&DatabaseHandle<'_>>,
+    root: Value,
+    key: Value,
+) -> IteratorCreationResult {
+    iter_on_root(db, &root, &key).into()
+}
+
+/// Internal call for `fwd_iter_on_root` to remove error handling from the C API
+#[doc(hidden)]
+fn iter_on_root(db: Option<&DatabaseHandle<'_>>, root: &Value, key: &Value) -> Result<IteratorHandle, String> {
+    let _ = db.ok_or("db should be non-null")?;
+
+    let requested_root = root.as_slice().try_into()?;
+    let key: Option<Box<[u8]>> = if key.len == 0 { Some(key.as_slice().into()) } else { None };
+
+    Ok(IteratorHandle {
+        state: Mutex::new(Box::new(Some(IterationState::StartFromKey(key)))),
+        target: Some(requested_root),
+    })
+}
+
+
+/// Retrieves the next item from the iterator
 ///
 /// # Arguments
 ///
@@ -245,15 +279,14 @@ fn iter_next(
     let db = db.ok_or("db should be non-null")?;
     let iterator_handle = iterator_handle.ok_or("iterator_handle should be non-null")?;
 
-    // Find root hash.
-    // Matches `hash` function but we use the TrieHash type here
     let Some(root) = db.root_hash_sync().map_err(|e| e.to_string())? else {
         return Ok(KeyValue::default());
     };
-    // Find revision associated with root.
-    let rev = db.revision_sync(root).map_err(|e| e.to_string())?;
 
-    let merkle = Merkle::from(&rev);
+    let Some(requested_root) = &iterator_handle.target else {
+        return Ok(KeyValue::default());
+    };
+
     let mut state = iterator_handle
         .state
         .lock()
@@ -262,12 +295,35 @@ fn iter_next(
     let Some(inner_state) = inner_state else {
         return Ok(KeyValue::default());
     };
-    let mut stream = MerkleKeyValueStream::from_internal_state(merkle.nodestore(), inner_state);
-    let next = stream.next_sync();
-    **state = Some(stream.internal_state());
+
+    let (next, new_state) = if root == *requested_root {
+        // no cache check, get the latest revision
+        let rev = db.revision_sync(root).map_err(|e| e.to_string())?;
+        rev.iterate(inner_state).map_err(|e| e.to_string())?
+    } else {
+        let mut cached_view = db.cached_view.lock().expect("cached_view lock is poisoned");
+        let state = match cached_view.as_ref() {
+            Some((root_hash, view)) if root_hash == requested_root => {
+                // TODO: should this have same the metric?
+                // counter!("firewood.ffi.cached_view.hit").increment(1);
+                view.iterate(inner_state).map_err(|e| e.to_string())?
+            }
+            _ => {
+                // TODO: should this have same the metric?
+                // counter!("firewood.ffi.cached_view.miss").increment(1);
+                let rev = db.view_sync(requested_root.clone()).map_err(|e| e.to_string())?;
+                let result = rev.iterate(inner_state).map_err(|e| e.to_string())?;
+                *cached_view = Some((requested_root.clone(), rev));
+                result
+            }
+        };
+        state
+    };
+
+    **state = Some(new_state);
 
     if let Some(next) = next {
-        let (k, v) = next.map_err(|e| e.to_string())?;
+        let (k, v) = next;
         let key: Value = k.into();
         let value: Value = v.into();
         Ok(KeyValue { key, value })
