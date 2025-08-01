@@ -22,7 +22,6 @@ use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use thiserror::Error;
 use typed_builder::TypedBuilder;
 
@@ -223,7 +222,6 @@ where
         Ok(Self::Proposal {
             nodestore: immutable,
             db: self,
-            committed: AtomicBool::new(false),
         }
         .into())
     }
@@ -312,7 +310,6 @@ impl Db {
         Ok(Proposal {
             nodestore: immutable,
             db: self,
-            committed: AtomicBool::new(false),
         })
     }
 
@@ -347,21 +344,9 @@ impl Db {
 pub struct Proposal<'p> {
     nodestore: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>,
     db: &'p Db,
-    committed: AtomicBool,
 }
 
 impl Proposal<'_> {
-    /// Get the root hash of the proposal synchronously
-    pub fn start_commit(&self) -> Result<(), api::Error> {
-        if self
-            .committed
-            .swap(true, std::sync::atomic::Ordering::Relaxed)
-        {
-            return Err(api::Error::AlreadyCommitted);
-        }
-        Ok(())
-    }
-
     /// Get the root hash of the proposal synchronously
     pub fn root_hash_sync(&self) -> Result<Option<api::HashKey>, api::Error> {
         #[cfg(not(feature = "ethhash"))]
@@ -432,7 +417,6 @@ impl<'a> api::Proposal for Proposal<'a> {
     }
 
     async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
-        self.start_commit()?;
         Ok(self.db.manager.commit(self.nodestore.clone())?)
     }
 }
@@ -440,7 +424,6 @@ impl<'a> api::Proposal for Proposal<'a> {
 impl Proposal<'_> {
     /// Commit a proposal synchronously
     pub fn commit_sync(self) -> Result<(), api::Error> {
-        self.start_commit()?;
         Ok(self.db.manager.commit(self.nodestore.clone())?)
     }
 
@@ -481,7 +464,6 @@ impl Proposal<'_> {
         Ok(Self {
             nodestore: immutable,
             db: self.db,
-            committed: AtomicBool::new(false),
         })
     }
 }
