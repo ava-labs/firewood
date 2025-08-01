@@ -562,6 +562,20 @@ impl<T: HashedNodeReader> Merkle<T> {
 
         Ok(())
     }
+
+    /// Dump the trie to a string (for testing purposes).
+    ///
+    /// This is a convenience function for tests that need the dot output as a string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if writing to the string fails.
+    #[cfg(test)]
+    pub(crate) fn dump_to_string(&self) -> Result<String, Error> {
+        let mut buffer = Vec::new();
+        self.dump(&mut buffer)?;
+        String::from_utf8(buffer).map_err(Error::other)
+    }
 }
 
 impl<F: Parentable, S: ReadableStorage> Merkle<NodeStore<F, S>> {
