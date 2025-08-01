@@ -19,8 +19,8 @@
 //!
 //! A [`NodeStore`] is backed by a [`ReadableStorage`] which is persisted storage.
 
+use std::fmt::{Display, Formatter, LowerHex, Result};
 use std::ops::Range;
-use thiserror::Error;
 
 mod checker;
 mod hashednode;
@@ -45,7 +45,7 @@ pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use node::path::{NibblesIterator, Path};
 pub use node::{
-    BranchNode, Child, LeafNode, Node, PathIterItem,
+    BranchNode, Child, Children, LeafNode, Node, PathIterItem,
     branch::{HashType, IntoHashType},
 };
 pub use nodestore::{
@@ -78,8 +78,8 @@ pub enum CacheReadStrategy {
     All,
 }
 
-impl std::fmt::Display for CacheReadStrategy {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for CacheReadStrategy {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         write!(f, "{self:?}")
     }
 }
@@ -103,7 +103,7 @@ pub fn empty_trie_hash() -> TrieHash {
 }
 
 /// This enum encapsulates what points to the stored area.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum StoredAreaParent {
     /// The stored area is a trie node
     TrieNode(TrieNodeParent),
@@ -112,7 +112,7 @@ pub enum StoredAreaParent {
 }
 
 /// This enum encapsulates what points to the stored area allocated for a trie node.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum TrieNodeParent {
     /// The stored area is the root of the trie, so the header points to it
     Root,
@@ -121,7 +121,7 @@ pub enum TrieNodeParent {
 }
 
 /// This enum encapsulates what points to the stored area allocated for a free list.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum FreeListParent {
     /// The stored area is the head of the free list, so the header points to it
     FreeListHead(AreaIndex),
@@ -129,8 +129,45 @@ pub enum FreeListParent {
     PrevFreeArea(LinearAddress),
 }
 
+impl LowerHex for StoredAreaParent {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        match self {
+            StoredAreaParent::TrieNode(trie_parent) => LowerHex::fmt(trie_parent, f),
+            StoredAreaParent::FreeList(free_list_parent) => LowerHex::fmt(free_list_parent, f),
+        }
+    }
+}
+
+impl LowerHex for TrieNodeParent {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        match self {
+            TrieNodeParent::Root => f.write_str("Root"),
+            TrieNodeParent::Parent(addr, index) => {
+                f.write_str("TrieNode@")?;
+                LowerHex::fmt(addr, f)?;
+                f.write_fmt(format_args!("[{index}]"))
+            }
+        }
+    }
+}
+
+impl LowerHex for FreeListParent {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        match self {
+            FreeListParent::FreeListHead(index) => f.write_fmt(format_args!("FreeLists[{index}]")),
+            FreeListParent::PrevFreeArea(addr) => {
+                f.write_str("FreeArea@")?;
+                LowerHex::fmt(addr, f)
+            }
+        }
+    }
+}
+
+use derive_where::derive_where;
+
 /// Errors returned by the checker
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
+#[derive_where(PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CheckerError {
     /// The file size is not valid
@@ -144,13 +181,15 @@ pub enum CheckerError {
 
     /// Hash mismatch for a node
     #[error(
-        "Hash mismatch for node {partial_path:?} at address {address}: parent stored {parent_stored_hash}, computed {computed_hash}"
+        "Hash mismatch for node {path:?} at address {address}: parent stored {parent_stored_hash}, computed {computed_hash}"
     )]
     HashMismatch {
         /// The path of the node
-        partial_path: Path,
+        path: Path,
         /// The address of the node
         address: LinearAddress,
+        /// The parent of the node
+        parent: TrieNodeParent,
         /// The hash value stored in the parent node
         parent_stored_hash: HashType,
         /// The hash value computed for the node
@@ -158,7 +197,9 @@ pub enum CheckerError {
     },
 
     /// The address is out of bounds
-    #[error("stored area at {start} with size {size} is out of bounds ({bounds:?})")]
+    #[error(
+        "stored area at {start:#x} with size {size} (parent: {parent:#x}) is out of bounds ({bounds:#x?})"
+    )]
     AreaOutOfBounds {
         /// Start of the `StoredArea`
         start: LinearAddress,
@@ -166,11 +207,13 @@ pub enum CheckerError {
         size: u64,
         /// Valid range of addresses
         bounds: Range<LinearAddress>,
+        /// The parent of the `StoredArea`
+        parent: StoredAreaParent,
     },
 
     /// Stored areas intersect
     #[error(
-        "stored area at {start} with size {size} intersects with other stored areas: {intersection:?}"
+        "stored area at {start:#x} with size {size} (parent: {parent:#x}) intersects with other stored areas: {intersection:#x?}"
     )]
     AreaIntersects {
         /// Start of the `StoredArea`
@@ -179,11 +222,13 @@ pub enum CheckerError {
         size: u64,
         /// The intersection
         intersection: Vec<Range<LinearAddress>>,
+        /// The parent of the `StoredArea`
+        parent: StoredAreaParent,
     },
 
     /// Freelist area size does not match
     #[error(
-        "Free area {address} of size {size} is found in free list {actual_free_list} but it should be in freelist {expected_free_list}"
+        "Free area {address:#x} of size {size} (parent: {parent:#x}) is found in free list {actual_free_list} but it should be in freelist {expected_free_list}"
     )]
     FreelistAreaSizeMismatch {
         /// Address of the free area
@@ -194,30 +239,49 @@ pub enum CheckerError {
         actual_free_list: AreaIndex,
         /// Expected size of the area
         expected_free_list: AreaIndex,
+        /// The parent of the free area
+        parent: FreeListParent,
     },
 
     /// The start address of a stored area is not a multiple of 16
     #[error(
-        "The start address of a stored area is not a multiple of {}: {address} (parent: {parent_ptr:?})",
+        "The start address of a stored area (parent: {parent:#x}) is not a multiple of {}: {address:#x}",
         nodestore::alloc::LinearAddress::MIN_AREA_SIZE
     )]
     AreaMisaligned {
         /// The start address of the stored area
         address: LinearAddress,
-        /// The start address of the parent that points to the stored area
-        parent_ptr: StoredAreaParent,
+        /// The parent of the `StoredArea`
+        parent: StoredAreaParent,
     },
 
     /// Found leaked areas
-    #[error("Found leaked areas: {0:?}")]
-    AreaLeaks(Vec<Range<LinearAddress>>),
+    #[error("Found leaked areas: {0}")]
+    #[derive_where(skip_inner)]
+    AreaLeaks(checker::LinearAddressRangeSet),
 
     /// The root is not persisted
     #[error("The checker can only check persisted nodestores")]
     UnpersistedRoot,
 
+    #[error(
+        "The node {key:#x} at {address:#x} (parent: {parent:#x}) has a value but its path is not 32 or 64 bytes long"
+    )]
+    /// A value is found corresponding to an invalid key.
+    /// With ethhash, keys must be 32 or 64 bytes long.
+    /// Without ethhash, keys cannot contain half-bytes (i.e., odd number of nibbles).
+    InvalidKey {
+        /// The key found, or equivalently the path of the node that stores the value
+        key: Path,
+        /// Address of the node
+        address: LinearAddress,
+        /// Parent of the node
+        parent: TrieNodeParent,
+    },
+
     /// IO error
     #[error("IO error")]
+    #[derive_where(skip_inner)]
     IO(#[from] FileIoError),
 }
 

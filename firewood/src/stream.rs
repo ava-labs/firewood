@@ -1079,7 +1079,7 @@ mod tests {
                         .unwrap(),
                     (
                         expected_key.into_boxed_slice(),
-                        expected_value.into_boxed_slice()
+                        expected_value.into_boxed_slice(),
                     ),
                     "i: {i}, j: {j}",
                 );
@@ -1100,7 +1100,7 @@ mod tests {
                         .unwrap(),
                     (
                         expected_key.into_boxed_slice(),
-                        expected_value.into_boxed_slice()
+                        expected_value.into_boxed_slice(),
                     ),
                     "i: {i}, j: {j}",
                 );
@@ -1115,7 +1115,7 @@ mod tests {
                         .unwrap(),
                     (
                         vec![i + 1, 0].into_boxed_slice(),
-                        vec![i + 1, 0].into_boxed_slice()
+                        vec![i + 1, 0].into_boxed_slice(),
                     ),
                     "i: {i}",
                 );
@@ -1150,7 +1150,7 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert_eq!(&*next.0, &*next.1);
-            assert_eq!(&*next.1, kv);
+            assert_eq!(&*next.1, &**kv);
         }
 
         check_stream_is_done(stream).await;
@@ -1186,7 +1186,7 @@ mod tests {
         let immutable_merkle: Merkle<NodeStore<Arc<ImmutableProposal>, _>> =
             merkle.try_into().unwrap();
         println!("{}", immutable_merkle.dump().unwrap());
-        merkle = Merkle::from(NodeStore::new(&Arc::new(immutable_merkle.into_inner())).unwrap());
+        merkle = immutable_merkle.fork().unwrap();
 
         let mut stream = merkle.key_value_iter();
 
