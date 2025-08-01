@@ -30,6 +30,17 @@ const fn page_start(addr: LinearAddress) -> u64 {
     addr.get() & !(OS_PAGE_SIZE - 1)
 }
 
+#[cfg(feature = "ethhash")]
+fn is_valid_key(key: &Path) -> bool {
+    const VALID_ETH_KEY_SIZES: [usize; 2] = [64, 128]; // in number of nibbles - two nibbles make a byte
+    VALID_ETH_KEY_SIZES.contains(&key.0.len())
+}
+
+#[cfg(not(feature = "ethhash"))]
+fn is_valid_key(key: &Path) -> bool {
+    key.0.len() % 2 == 0
+}
+
 /// Options for the checker
 #[derive(Debug)]
 pub struct CheckOpt {
@@ -253,6 +264,13 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
         let mut current_path_prefix = path_prefix.clone();
         current_path_prefix.0.extend_from_slice(node.partial_path());
+        if node.value().is_some() && !is_valid_key(&current_path_prefix) {
+            return Err(CheckerError::InvalidKey {
+                key: current_path_prefix,
+                address: subtrie_root_address,
+                parent,
+            });
+        }
 
         match node.as_ref() {
             Node::Branch(branch) => {
@@ -521,7 +539,7 @@ mod test {
     /// graph TD
     ///     Root["Root Node<br/>partial_path: [2]<br/>children: [0] -> Branch"]
     ///     Branch["Branch Node<br/>partial_path: [3]<br/>path: 0x203<br/>children: [1] -> Leaf"]
-    ///     Leaf["Leaf Node<br/>partial_path: [4, 5]<br/>path: 0x203145<br/>value: [6, 7, 8]"]
+    ///     Leaf["Leaf Node<br/>partial_path: [4, 5]<br/>path: 0x2031454545...45 (32 bytes)<br/>value: [6, 7, 8]"]
     ///
     ///     Root -->|"nibble 0"| Branch
     ///     Branch -->|"nibble 1"| Leaf
@@ -532,7 +550,7 @@ mod test {
         let mut total_bytes_written = 0;
         let mut area_counts: HashMap<u64, u64> = HashMap::new();
         let leaf = Node::Leaf(LeafNode {
-            partial_path: Path::from([4, 5]),
+            partial_path: Path::from_nibbles_iterator(std::iter::repeat_n([4, 5], 30).flatten()),
             value: Box::new([6, 7, 8]),
         });
         let leaf_addr = LinearAddress::new(high_watermark).unwrap();
@@ -587,7 +605,7 @@ mod test {
         let trie_stats = TrieStats {
             trie_bytes: total_bytes_written,
             kv_count: 1,
-            kv_bytes: 3 + 3,
+            kv_bytes: 32 + 3, // 32 bytes for the key, 3 bytes for the value
             area_counts,
             branching_factors: HashMap::from([(1, 2)]),
             depths: HashMap::from([(2, 1)]),
