@@ -31,8 +31,8 @@
 
 use std::iter::FusedIterator;
 
-use crate::{firewood_counter, firewood_gauge};
 use crate::linear::FileIoError;
+use crate::{firewood_counter, firewood_gauge};
 use coarsetime::Instant;
 
 #[cfg(feature = "io-uring")]
@@ -263,7 +263,11 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
             node.persist_at(persisted_address);
 
             // Decrement gauge immediately after node is written to storage
-            firewood_gauge!("firewood.nodes.unwritten").decrement(1.0);
+            firewood_gauge!(
+                "firewood.nodes.unwritten",
+                "current number of unwritten nodes"
+            )
+            .decrement(1.0);
 
             // Move the arc to a vector of persisted nodes for caching
             // we save them so we don't have to lock the cache while we write them
@@ -459,7 +463,11 @@ impl NodeStore<Committed, FileBacked> {
                 // Decrement gauge for writes that have actually completed
                 if completed_writes > 0 {
                     #[expect(clippy::cast_precision_loss)]
-                    firewood_gauge!("firewood.nodes.unwritten").decrement(completed_writes as f64);
+                    firewood_gauge!(
+                        "firewood.nodes.unwritten",
+                        "current number of unwritten nodes"
+                    )
+                    .decrement(completed_writes as f64);
                 }
             }
 
@@ -482,7 +490,11 @@ impl NodeStore<Committed, FileBacked> {
         // Decrement gauge for final batch of writes that completed
         if final_completed_writes > 0 {
             #[expect(clippy::cast_precision_loss)]
-            firewood_gauge!("firewood.nodes.unwritten").decrement(final_completed_writes as f64);
+            firewood_gauge!(
+                "firewood.nodes.unwritten",
+                "current number of unwritten nodes"
+            )
+            .decrement(final_completed_writes as f64);
         }
 
         debug_assert!(

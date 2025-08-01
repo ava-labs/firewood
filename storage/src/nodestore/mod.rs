@@ -43,11 +43,11 @@ pub(crate) mod hash;
 pub(crate) mod header;
 pub(crate) mod persist;
 
+use crate::firewood_gauge;
 use crate::logger::trace;
 use crate::node::branch::ReadSerializable as _;
 use arc_swap::ArcSwap;
 use arc_swap::access::DynAccess;
-use metrics::gauge;
 use smallvec::SmallVec;
 use std::fmt::Debug;
 use std::io::{Error, ErrorKind};
@@ -431,7 +431,11 @@ impl Drop for ImmutableProposal {
         // decrement the gauge to reflect that these nodes will never be written
         if self.unwritten_nodes > 0 {
             #[allow(clippy::cast_precision_loss)]
-            gauge!("firewood.nodes.unwritten").decrement(self.unwritten_nodes as f64);
+            firewood_gauge!(
+                "firewood.nodes.unwritten",
+                "current number of unwritten nodes"
+            )
+            .decrement(self.unwritten_nodes as f64);
         }
     }
 }
@@ -596,7 +600,11 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
 
         // Track unwritten nodes in metrics
         #[allow(clippy::cast_precision_loss)]
-        gauge!("firewood.nodes.unwritten").increment(unwritten_count as f64);
+        firewood_gauge!(
+            "firewood.nodes.unwritten",
+            "current number of unwritten nodes"
+        )
+        .increment(unwritten_count as f64);
 
         Ok(nodestore)
     }
