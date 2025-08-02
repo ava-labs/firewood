@@ -154,6 +154,10 @@ pub enum Error {
     /// Revision not found
     #[error("revision not found")]
     RevisionNotFound,
+
+    /// An invalid root hash was provided
+    #[error("provided root hash is not a valid hash key")]
+    InvalidRootHash(#[from] firewood_storage::InvalidTrieHashLength),
 }
 
 impl From<RevisionManagerError> for Error {

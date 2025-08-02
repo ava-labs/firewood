@@ -8,7 +8,7 @@
 
 use crate::merkle::{Merkle, Value};
 use crate::stream::MerkleKeyValueStream;
-use crate::v2::api::{self, FrozenProof, FrozenRangeProof, KeyType, ValueType};
+use crate::v2::api::{self, FrozenProof, FrozenRangeProof, HashKey, KeyType, ValueType};
 pub use crate::v2::api::{Batch, BatchOp};
 
 use crate::manager::{RevisionManager, RevisionManagerConfig};
@@ -97,7 +97,7 @@ impl api::DbView for HistoricalRev {
     where
         Self: 'view;
 
-    async fn root_hash(&self) -> Result<Option<api::HashKey>, api::Error> {
+    async fn root_hash(&self) -> Result<Option<HashKey>, api::Error> {
         Ok(HashedNodeReader::root_hash(self))
     }
 
@@ -165,16 +165,16 @@ impl api::Db for Db {
     where
         Self: 'db;
 
-    async fn revision(&self, root_hash: TrieHash) -> Result<Arc<Self::Historical>, api::Error> {
+    async fn revision(&self, root_hash: HashKey) -> Result<Arc<Self::Historical>, api::Error> {
         let nodestore = self.manager.revision(root_hash)?;
         Ok(nodestore)
     }
 
-    async fn root_hash(&self) -> Result<Option<TrieHash>, api::Error> {
+    async fn root_hash(&self) -> Result<Option<HashKey>, api::Error> {
         self.root_hash_sync()
     }
 
-    async fn all_hashes(&self) -> Result<Vec<TrieHash>, api::Error> {
+    async fn all_hashes(&self) -> Result<Vec<HashKey>, api::Error> {
         Ok(self.manager.all_hashes())
     }
 
@@ -262,13 +262,13 @@ impl Db {
     }
 
     /// Synchronously get a revision from a root hash
-    pub fn revision_sync(&self, root_hash: TrieHash) -> Result<Arc<HistoricalRev>, api::Error> {
+    pub fn revision_sync(&self, root_hash: HashKey) -> Result<Arc<HistoricalRev>, api::Error> {
         let nodestore = self.manager.revision(root_hash)?;
         Ok(nodestore)
     }
 
     /// Synchronously get a view, either committed or proposed
-    pub fn view_sync(&self, root_hash: TrieHash) -> Result<Box<dyn DbViewSyncBytes>, api::Error> {
+    pub fn view_sync(&self, root_hash: HashKey) -> Result<Box<dyn DbViewSyncBytes>, api::Error> {
         let nodestore = self.manager.view(root_hash)?;
         Ok(nodestore)
     }
