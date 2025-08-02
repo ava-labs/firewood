@@ -225,7 +225,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: "false"
-          shared-key: "debug-no-features"
+          shared-key: "debug-no-features${{ matrix.os == 'macos-latest' && '-macos' || '' }}"
       - name: Build Firewood FFI
         working-directory: ffi
         run: cargo build --release
