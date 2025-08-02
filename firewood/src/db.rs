@@ -227,11 +227,8 @@ impl Db {
             proposals: counter!("firewood.proposals"),
         });
         describe_counter!("firewood.proposals", "Number of proposals created");
-        let manager = RevisionManager::new(
-            db_path.as_ref().to_path_buf(),
-            cfg.truncate,
-            cfg.manager.clone(),
-        )?;
+        let manager =
+            RevisionManager::new(db_path.as_ref().to_path_buf(), cfg.truncate, cfg.manager)?;
         let db = Self { metrics, manager };
         Ok(db)
     }
@@ -242,11 +239,8 @@ impl Db {
             proposals: counter!("firewood.proposals"),
         });
         describe_counter!("firewood.proposals", "Number of proposals created");
-        let manager = RevisionManager::new(
-            db_path.as_ref().to_path_buf(),
-            cfg.truncate,
-            cfg.manager.clone(),
-        )?;
+        let manager =
+            RevisionManager::new(db_path.as_ref().to_path_buf(), cfg.truncate, cfg.manager)?;
         let db = Self { metrics, manager };
         Ok(db)
     }
@@ -263,7 +257,7 @@ impl Db {
         Ok(Some(
             self.manager
                 .root_hash()?
-                .unwrap_or_else(firewood_storage::empty_trie_hash),
+                .unwrap_or_else(TrieHash::empty_rlp_hash),
         ))
     }
 
@@ -360,7 +354,7 @@ impl Proposal<'_> {
         Ok(Some(
             self.nodestore
                 .root_hash()
-                .unwrap_or_else(firewood_storage::empty_trie_hash),
+                .unwrap_or_else(api::HashKey::empty_rlp_hash),
         ))
     }
 }

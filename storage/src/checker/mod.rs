@@ -674,12 +674,11 @@ mod test {
             .persist_info()
             .unwrap();
         let computed_hash = computed_hash.clone();
-        root_branch.children[0] = Some(Child::AddressWithHash(branch_addr, HashType::default()));
+        root_branch.children[0] = Some(Child::AddressWithHash(branch_addr, HashType::empty()));
 
         // Replace the branch hash in the root node with a wrong hash
         if let Node::Branch(root_branch) = root_node {
-            root_branch.children[0] =
-                Some(Child::AddressWithHash(branch_addr, HashType::default()));
+            root_branch.children[0] = Some(Child::AddressWithHash(branch_addr, HashType::empty()));
         }
         test_write_new_node(&nodestore, root_node, root_addr.get());
 
@@ -699,7 +698,7 @@ mod test {
             address: branch_addr,
             path: Path::from([2, 0, 3]),
             parent: TrieNodeParent::Parent(*root_addr, 0),
-            parent_stored_hash: HashType::default(),
+            parent_stored_hash: HashType::empty(),
             computed_hash,
         };
         assert_eq!(err, expected_error);
