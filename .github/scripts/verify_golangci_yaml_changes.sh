@@ -51,6 +51,7 @@ EOF
 }
 
 function @download-upstream() {
+    echo "Downloading upstream .golangci.yaml from '$upstream_url'..."
     if ! curl -fsSL -o "$upstream_yaml" "$upstream_url"; then
         @die 2 "Failed to download upstream .golangci.yaml from '$upstream_url'"
     fi
