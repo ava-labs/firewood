@@ -3,9 +3,9 @@ name: expected golangci.yaml diff
 on:
   pull_request:
     paths:
+      - .github/workflows/ci.yaml
       - .github/workflows/expected-golangci-yaml-diff.yaml
       - .github/scripts/verify_golangci_yaml_changes.sh
-      - .github/workflows/ci.yaml.git
       - ffi/.golangci.yaml
       # for good measure, if someone is editing the go.mod or go.sum files then
       # they should make sure the golangci.yaml is up to date
