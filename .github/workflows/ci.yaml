@@ -156,6 +156,7 @@ jobs:
         run: cargo test --verbose ${{ matrix.profile-args }}
 
   examples:
+    needs: build
     strategy:
       matrix:
         include:
