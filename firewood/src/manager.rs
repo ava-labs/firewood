@@ -29,7 +29,7 @@ use firewood_storage::{
     Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore, TrieHash,
 };
 
-#[derive(Clone, Debug, TypedBuilder)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, TypedBuilder)]
 /// Revision manager configuratoin
 pub struct RevisionManagerConfig {
     /// The number of historical revisions to keep in memory.
@@ -71,9 +71,12 @@ pub(crate) enum RevisionManagerError {
     #[error(
         "The proposal cannot be committed since it is not a direct child of the most recent commit"
     )]
-    NotLatest,
+    NotLatest {
+        provided: HashKey,
+        expected: HashKey,
+    },
     #[error("Revision not found")]
-    RevisionNotFound,
+    RevisionNotFound { provided: HashKey },
     #[error("An IO error occurred during the commit")]
     FileIoError(#[from] FileIoError),
 }
@@ -156,7 +159,10 @@ impl RevisionManager {
         // 1. Commit check
         let current_revision = self.current_revision();
         if !proposal.parent_hash_is(current_revision.root_hash()) {
-            return Err(RevisionManagerError::NotLatest);
+            return Err(RevisionManagerError::NotLatest {
+                provided: proposal.root_hash().unwrap_or_default(),
+                expected: current_revision.root_hash().unwrap_or_default(),
+            });
         }
 
         let mut committed = proposal.as_committed(&current_revision);
@@ -265,7 +271,9 @@ impl RevisionManager {
             .iter()
             .find(|p| p.root_hash().as_ref() == Some(&root_hash))
             .cloned()
-            .ok_or(RevisionManagerError::RevisionNotFound)?;
+            .ok_or(RevisionManagerError::RevisionNotFound {
+                provided: root_hash,
+            })?;
 
         Ok(Box::new(proposal))
     }
@@ -276,7 +284,9 @@ impl RevisionManager {
             .expect("poisoned lock")
             .get(&root_hash)
             .cloned()
-            .ok_or(RevisionManagerError::RevisionNotFound)
+            .ok_or(RevisionManagerError::RevisionNotFound {
+                provided: root_hash,
+            })
     }
 
     pub fn root_hash(&self) -> Result<Option<HashKey>, RevisionManagerError> {

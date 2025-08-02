@@ -10,8 +10,8 @@ package ffi
 import "C"
 
 import (
+	"runtime"
 	"strings"
-	"unsafe"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/expfmt"
@@ -50,8 +50,7 @@ func (Gatherer) Gather() ([]*dto.MetricFamily, error) {
 // An error is returned if this method is called a second time, or if it is
 // called after StartMetricsWithExporter.
 func StartMetrics() error {
-	result := C.fwd_start_metrics()
-	return errorFromValue(&result)
+	return fromVoidResult(C.fwd_start_metrics())
 }
 
 // Start global recorder for metrics along with an HTTP exporter.
@@ -59,20 +58,19 @@ func StartMetrics() error {
 // An error is returned if this method is called a second time, if it is
 // called after StartMetrics, or if the exporter failed to start.
 func StartMetricsWithExporter(metricsPort uint16) error {
-	result := C.fwd_start_metrics_with_exporter(C.uint16_t(metricsPort))
-	return errorFromValue(&result)
+	return fromVoidResult(C.fwd_start_metrics_with_exporter(C.uint16_t(metricsPort)))
 }
 
 // Collect metrics from global recorder
 // Returns an error if the global recorder is not initialized.
 // This method must be called after StartMetrics or StartMetricsWithExporter
 func GatherMetrics() (string, error) {
-	result := C.fwd_gather()
-	b, err := bytesFromValue(&result)
+	bytes, err := fromValueResult(C.fwd_gather())
 	if err != nil {
 		return "", err
 	}
-	return string(b), nil
+
+	return string(bytes), nil
 }
 
 // LogConfig configures logs for this process.
@@ -85,15 +83,13 @@ type LogConfig struct {
 // This function only needs to be called once.
 // An error is returned if this method is called a second time.
 func StartLogs(config *LogConfig) error {
-	args := &C.struct_LogArgs{}
-	if config.Path != "" {
-		args.path = C.CString(config.Path)
-		defer C.free(unsafe.Pointer(args.path))
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	args := C.struct_LogArgs{
+		path:         newBorrowedBytes([]byte(config.Path), &pinner),
+		filter_level: newBorrowedBytes([]byte(config.FilterLevel), &pinner),
 	}
-	if config.FilterLevel != "" {
-		args.filter_level = C.CString(config.FilterLevel)
-		defer C.free(unsafe.Pointer(args.filter_level))
-	}
-	result := C.fwd_start_logs(args)
-	return errorFromValue(&result)
+
+	return fromVoidResult(C.fwd_start_logs(args))
 }

@@ -45,7 +45,7 @@ pub type FrozenProof = Proof<Box<[ProofNode]>>;
 
 /// A key/value pair operation. Only put (upsert) and delete are
 /// supported
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BatchOp<K: KeyType, V: ValueType> {
     /// Upsert a key/value pair
     Put {
@@ -68,19 +68,131 @@ pub enum BatchOp<K: KeyType, V: ValueType> {
     },
 }
 
-/// A list of operations to consist of a batch that
-/// can be proposed
-pub type Batch<K, V> = Vec<BatchOp<K, V>>;
+impl<K: KeyType, V: ValueType> BatchOp<K, V> {
+    /// Get the key of this operation
+    #[must_use]
+    pub const fn key(&self) -> &K {
+        match self {
+            BatchOp::Put { key, .. }
+            | BatchOp::Delete { key }
+            | BatchOp::DeleteRange { prefix: key } => key,
+        }
+    }
 
-/// A convenience implementation to convert a vector of key/value
-/// pairs into a batch of insert operations
-#[must_use]
-pub fn vec_into_batch<K: KeyType, V: ValueType>(value: Vec<(K, V)>) -> Batch<K, V> {
-    value
-        .into_iter()
-        .map(|(key, value)| BatchOp::Put { key, value })
-        .collect()
+    /// Get the value of this operation
+    #[must_use]
+    pub const fn value(&self) -> Option<&V> {
+        match self {
+            BatchOp::Put { value, .. } => Some(value),
+            _ => None,
+        }
+    }
 }
+
+impl<K: KeyType, V: ValueType> PartialOrd for BatchOp<K, V> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        use BatchOp::{Delete, DeleteRange, Put};
+        use std::cmp::Ordering::Equal;
+        match <[u8] as Ord>::cmp(self.key().as_ref(), other.key().as_ref()) {
+            Equal => {}
+            ord => return Some(ord),
+        }
+
+        match (self, other) {
+            (Put { value: v1, .. }, Put { value: v2, .. }) => {
+                Some(<[u8]>::cmp(v1.as_ref(), v2.as_ref()))
+            }
+            (Delete { .. }, Delete { .. }) | (DeleteRange { .. }, DeleteRange { .. }) => {
+                Some(Equal)
+            }
+            // if the keys are the same but the operations differ, we cannot apply a
+            // total ordering, so we return None. Anything attempting to sort two
+            // differently typed operations with the same key must use a stable sort to
+            // ensure that their relative order is preserved, otherwise they should fail.
+            _ => None,
+        }
+    }
+}
+
+impl<K: KeyType, V: ValueType> PartialEq for BatchOp<K, V> {
+    fn eq(&self, other: &Self) -> bool {
+        // unlike ordering, we can always compare two operations with the same key.
+        // they are equivalent if they have the same key and value (or absence of
+        // value). Therefore, Delete and DeleteRange operations are equivalent if
+        // they have the same key, regardless of the operation type.
+        <[u8]>::eq(self.key().as_ref(), other.key().as_ref())
+            && <Option<&[u8]>>::eq(
+                &self.value().map(AsRef::as_ref),
+                &other.value().map(AsRef::as_ref),
+            )
+    }
+}
+
+/// A key/value pair that can be used in a batch.
+pub trait KeyValuePair {
+    /// The key type
+    type Key: KeyType;
+
+    /// The value type
+    type Value: ValueType;
+
+    /// Convert this into a key/value tuple
+    fn into_key_value(self) -> (Self::Key, Self::Value);
+
+    /// Convert this key-value pair into a [`BatchOp`]. Other implementations may
+    /// override this to provide more specific behavior like using [`BatchOp::Delete`]
+    /// when appropriate.
+    #[inline]
+    #[must_use]
+    fn into_batch(self) -> BatchOp<Self::Key, Self::Value>
+    where
+        Self: Sized,
+    {
+        let (key, value) = self.into_key_value();
+        if value.as_ref().is_empty() {
+            BatchOp::DeleteRange { prefix: key }
+        } else {
+            BatchOp::Put { key, value }
+        }
+    }
+}
+
+impl<K: KeyType, V: ValueType> KeyValuePair for (K, V) {
+    type Key = K;
+    type Value = V;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        self
+    }
+}
+
+/// An extension trait for iterators that yield [`KeyValuePair`]s.
+pub trait KeyValuePairIter: Iterator<Item: KeyValuePair> {
+    /// Maps the items of this iterator into [`BatchOp`]s.
+    #[inline]
+    fn map_into_batch(self) -> KeyValuePairIterMapIntoBatch<Self>
+    where
+        Self: Sized,
+        Self::Item: KeyValuePair,
+    {
+        self.map(KeyValuePair::into_batch)
+    }
+}
+
+impl<I: Iterator<Item: KeyValuePair>> KeyValuePairIter for I {}
+
+/// An iterator that converts a [`KeyValuePair`] into a [`BatchOp`] on yielded items.
+// gnarly type-alias instead of a newtype to avoid needing to implement low level
+// iterator traits.
+pub type KeyValuePairIterMapIntoBatch<I> = std::iter::Map<
+    I,
+    fn(
+        <I as Iterator>::Item,
+    ) -> BatchOp<
+        <<I as Iterator>::Item as KeyValuePair>::Key,
+        <<I as Iterator>::Item as KeyValuePair>::Value,
+    >,
+>;
 
 /// Errors returned through the API
 #[derive(thiserror::Error, Debug)]
@@ -94,12 +206,12 @@ pub enum Error {
     },
 
     /// Incorrect root hash for commit
-    #[error("Incorrect root hash for commit: {provided:?} != {current:?}")]
+    #[error("Incorrect root hash for commit: {provided:?} != {expected:?}")]
     IncorrectRootHash {
         /// the provided root hash
         provided: HashKey,
-        /// the current root hash
-        current: HashKey,
+        /// the expected root hash
+        expected: HashKey,
     },
 
     /// Invalid range
@@ -139,10 +251,6 @@ pub enum Error {
     #[error("the latest revision is empty and has no root hash")]
     LatestIsEmpty,
 
-    /// This is not the latest proposal
-    #[error("commit the parents of this proposal first")]
-    NotLatest,
-
     /// Sibling already committed
     #[error("sibling already committed")]
     SiblingCommitted,
@@ -151,17 +259,27 @@ pub enum Error {
     #[error("proof error")]
     ProofError(#[from] ProofError),
 
-    /// Revision not found
-    #[error("revision not found")]
-    RevisionNotFound,
+    /// An invalid root hash was provided
+    #[error("provided root hash is not a valid hash key")]
+    InvalidRootHash(#[from] firewood_storage::InvalidTrieHashLength),
 }
 
 impl From<RevisionManagerError> for Error {
     fn from(err: RevisionManagerError) -> Self {
         match err {
             RevisionManagerError::FileIoError(io_err) => Error::FileIO(io_err),
-            RevisionManagerError::NotLatest => Error::NotLatest,
-            RevisionManagerError::RevisionNotFound => Error::RevisionNotFound,
+            RevisionManagerError::NotLatest { provided, expected } => {
+                Error::IncorrectRootHash { provided, expected }
+            }
+            RevisionManagerError::RevisionNotFound { provided } => Error::HashNotFound { provided },
+        }
+    }
+}
+
+impl From<crate::db::DbError> for Error {
+    fn from(value: crate::db::DbError) -> Self {
+        match value {
+            crate::db::DbError::FileIo(err) => Error::FileIO(err),
         }
     }
 }
@@ -210,7 +328,7 @@ pub trait Db {
     ///
     async fn propose<'db, K: KeyType, V: ValueType>(
         &'db self,
-        data: Batch<K, V>,
+        data: (impl IntoIterator<Item = BatchOp<K, V>> + Send),
     ) -> Result<Self::Proposal<'db>, Error>
     where
         Self: 'db;
@@ -319,6 +437,6 @@ pub trait Proposal: DbView + Send + Sync {
     ///
     async fn propose<K: KeyType, V: ValueType>(
         &self,
-        data: Batch<K, V>,
+        data: (impl IntoIterator<Item = BatchOp<K, V>> + Send),
     ) -> Result<Self::Proposal, Error>;
 }

@@ -7,6 +7,12 @@ use sha2::digest::generic_array::GenericArray;
 use sha2::digest::typenum;
 use std::fmt::{self, Debug, Display, Formatter};
 
+/// An error that occurs when trying to convert a slice to a `TrieHash`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, thiserror::Error)]
+#[error("could not convert slice to TrieHash (an array of 32 bytes)")]
+#[non_exhaustive]
+pub struct InvalidTrieHashLength;
+
 /// A hash value inside a merkle trie
 /// We use the same type as returned by sha2 here to avoid copies
 #[derive(PartialEq, Eq, Clone, Default, Hash)]
@@ -40,22 +46,25 @@ impl Display for TrieHash {
 
 const TRIE_HASH_LEN: usize = std::mem::size_of::<TrieHash>();
 
-impl From<[u8; 32]> for TrieHash {
+impl From<[u8; TRIE_HASH_LEN]> for TrieHash {
     fn from(value: [u8; TRIE_HASH_LEN]) -> Self {
         TrieHash(value.into())
     }
 }
 
+impl From<TrieHash> for [u8; TRIE_HASH_LEN] {
+    fn from(value: TrieHash) -> Self {
+        value.0.into()
+    }
+}
+
 impl TryFrom<&[u8]> for TrieHash {
-    type Error = &'static str;
+    type Error = InvalidTrieHashLength;
 
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        if value.len() == Self::len() {
-            let mut hash = TrieHash::default();
-            hash.0.copy_from_slice(value);
-            Ok(hash)
-        } else {
-            Err("Invalid length")
+        match value.try_into() {
+            Ok(array) => Ok(Self::from_bytes(array)),
+            Err(_) => Err(InvalidTrieHashLength),
         }
     }
 }
@@ -67,16 +76,17 @@ impl From<GenericArray<u8, typenum::U32>> for TrieHash {
 }
 
 impl TrieHash {
-    /// Return the length of a `TrieHash`
-    pub(crate) const fn len() -> usize {
-        std::mem::size_of::<TrieHash>()
-    }
-
     /// Some code needs a `TrieHash` even though it only has a `HashType`.
     /// This function is a no-op, as `HashType` is a `TrieHash` in this context.
     #[must_use]
     pub const fn into_triehash(self) -> Self {
         self
+    }
+
+    /// Creates a new `TrieHash` from an array of bytes.
+    #[must_use]
+    pub fn from_bytes(bytes: [u8; TRIE_HASH_LEN]) -> Self {
+        bytes.into()
     }
 }
 

@@ -8,14 +8,15 @@
 
 use crate::merkle::{Merkle, Value};
 use crate::stream::MerkleKeyValueStream;
-use crate::v2::api::{self, FrozenProof, FrozenRangeProof, KeyType, ValueType};
-pub use crate::v2::api::{Batch, BatchOp};
+pub use crate::v2::api::BatchOp;
+use crate::v2::api::{self, FrozenProof, FrozenRangeProof, HashKey, KeyType, ValueType};
 
 use crate::manager::{RevisionManager, RevisionManagerConfig};
 use async_trait::async_trait;
+pub use firewood_storage::FileIoError;
 use firewood_storage::{
-    CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeStore, TrieHash,
+    CheckOpt, CheckerReport, Committed, FileBacked, HashedNodeReader, ImmutableProposal, NodeStore,
+    TrieHash,
 };
 use metrics::{counter, describe_counter};
 use std::io::Write;
@@ -97,7 +98,7 @@ impl api::DbView for HistoricalRev {
     where
         Self: 'view;
 
-    async fn root_hash(&self) -> Result<Option<api::HashKey>, api::Error> {
+    async fn root_hash(&self) -> Result<Option<HashKey>, api::Error> {
         Ok(HashedNodeReader::root_hash(self))
     }
 
@@ -165,23 +166,23 @@ impl api::Db for Db {
     where
         Self: 'db;
 
-    async fn revision(&self, root_hash: TrieHash) -> Result<Arc<Self::Historical>, api::Error> {
+    async fn revision(&self, root_hash: HashKey) -> Result<Arc<Self::Historical>, api::Error> {
         let nodestore = self.manager.revision(root_hash)?;
         Ok(nodestore)
     }
 
-    async fn root_hash(&self) -> Result<Option<TrieHash>, api::Error> {
+    async fn root_hash(&self) -> Result<Option<HashKey>, api::Error> {
         self.root_hash_sync()
     }
 
-    async fn all_hashes(&self) -> Result<Vec<TrieHash>, api::Error> {
+    async fn all_hashes(&self) -> Result<Vec<HashKey>, api::Error> {
         Ok(self.manager.all_hashes())
     }
 
     #[fastrace::trace(short_name = true)]
     async fn propose<'db, K: KeyType, V: ValueType>(
         &'db self,
-        batch: api::Batch<K, V>,
+        batch: (impl IntoIterator<Item = BatchOp<K, V>> + Send),
     ) -> Result<Self::Proposal<'db>, api::Error> {
         let parent = self.manager.current_revision();
         let proposal = NodeStore::new(&parent)?;
@@ -227,11 +228,8 @@ impl Db {
             proposals: counter!("firewood.proposals"),
         });
         describe_counter!("firewood.proposals", "Number of proposals created");
-        let manager = RevisionManager::new(
-            db_path.as_ref().to_path_buf(),
-            cfg.truncate,
-            cfg.manager.clone(),
-        )?;
+        let manager =
+            RevisionManager::new(db_path.as_ref().to_path_buf(), cfg.truncate, cfg.manager)?;
         let db = Self { metrics, manager };
         Ok(db)
     }
@@ -242,11 +240,8 @@ impl Db {
             proposals: counter!("firewood.proposals"),
         });
         describe_counter!("firewood.proposals", "Number of proposals created");
-        let manager = RevisionManager::new(
-            db_path.as_ref().to_path_buf(),
-            cfg.truncate,
-            cfg.manager.clone(),
-        )?;
+        let manager =
+            RevisionManager::new(db_path.as_ref().to_path_buf(), cfg.truncate, cfg.manager)?;
         let db = Self { metrics, manager };
         Ok(db)
     }
@@ -268,13 +263,13 @@ impl Db {
     }
 
     /// Synchronously get a revision from a root hash
-    pub fn revision_sync(&self, root_hash: TrieHash) -> Result<Arc<HistoricalRev>, api::Error> {
+    pub fn revision_sync(&self, root_hash: HashKey) -> Result<Arc<HistoricalRev>, api::Error> {
         let nodestore = self.manager.revision(root_hash)?;
         Ok(nodestore)
     }
 
     /// Synchronously get a view, either committed or proposed
-    pub fn view_sync(&self, root_hash: TrieHash) -> Result<Box<dyn DbViewSyncBytes>, api::Error> {
+    pub fn view_sync(&self, root_hash: HashKey) -> Result<Box<dyn DbViewSyncBytes>, api::Error> {
         let nodestore = self.manager.view(root_hash)?;
         Ok(nodestore)
     }
@@ -282,7 +277,7 @@ impl Db {
     /// propose a new batch synchronously
     pub fn propose_sync<K: KeyType, V: ValueType>(
         &self,
-        batch: Batch<K, V>,
+        batch: impl IntoIterator<Item = BatchOp<K, V>>,
     ) -> Result<Proposal<'_>, api::Error> {
         let parent = self.manager.current_revision();
         let proposal = NodeStore::new(&parent)?;
@@ -416,7 +411,7 @@ impl<'db> api::Proposal for Proposal<'db> {
     #[fastrace::trace(short_name = true)]
     async fn propose<K: KeyType, V: ValueType>(
         &self,
-        batch: api::Batch<K, V>,
+        batch: (impl IntoIterator<Item = BatchOp<K, V>> + Send),
     ) -> Result<Self::Proposal, api::Error> {
         self.create_proposal(batch)
     }
@@ -435,7 +430,7 @@ impl Proposal<'_> {
     /// Create a new proposal from the current one synchronously
     pub fn propose_sync<K: KeyType, V: ValueType>(
         &self,
-        batch: api::Batch<K, V>,
+        batch: impl IntoIterator<Item = BatchOp<K, V>>,
     ) -> Result<Self, api::Error> {
         self.create_proposal(batch)
     }
@@ -443,7 +438,7 @@ impl Proposal<'_> {
     #[crate::metrics("firewood.proposal.create", "database proposal creation")]
     fn create_proposal<K: KeyType, V: ValueType>(
         &self,
-        batch: api::Batch<K, V>,
+        batch: impl IntoIterator<Item = BatchOp<K, V>>,
     ) -> Result<Self, api::Error> {
         let parent = self.nodestore.clone();
         let proposal = NodeStore::new(&parent)?;
@@ -713,12 +708,10 @@ mod test {
             .iter()
             .zip(vals.iter())
             .map(|(k, v)| BatchOp::Put { key: k, value: v });
-        let batch1 = kviter.by_ref().take(N / 2).collect();
-        let batch2 = kviter.collect();
 
         // create two proposals, second one has a base of the first one
-        let proposal1 = db.propose(batch1).await.unwrap();
-        let proposal2 = proposal1.propose(batch2).await.unwrap();
+        let proposal1 = db.propose(kviter.by_ref().take(N / 2)).await.unwrap();
+        let proposal2 = proposal1.propose(kviter).await.unwrap();
 
         // iterate over the keys and values again, checking that the values are in the correct proposal
         let mut kviter = keys.iter().zip(vals.iter());
@@ -830,23 +823,15 @@ mod test {
             .unzip();
 
         // create batches of NUM_KEYS keys and values
-        let batches: Vec<_> = keys
+        let mut batches_iter = keys
             .chunks(NUM_KEYS)
             .zip(vals.chunks(NUM_KEYS))
             .map(|(k, v)| {
                 k.iter()
                     .zip(v.iter())
                     .map(|(k, v)| BatchOp::Put { key: k, value: v })
-                    .collect()
-            })
-            .collect();
+            });
 
-        // better be correct
-        assert_eq!(batches.len(), NUM_PROPOSALS);
-
-        // create proposals from the batches. The first one is created from the db, the others are
-        // children
-        let mut batches_iter = batches.into_iter();
         let mut proposals = vec![db.propose(batches_iter.next().unwrap()).await.unwrap()];
 
         for batch in batches_iter {
