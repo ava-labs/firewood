@@ -27,7 +27,7 @@ jobs:
             profile-args: "--no-default-features"
           - profile-key: debug-no-features
             profile-args: ""
-          - profile-key: debug-no-features-macos
+          - profile-key: debug-no-features
             profile-args: ""
             os: macos-latest
           - profile-key: debug-ethhash-logger
@@ -75,7 +75,7 @@ jobs:
             profile-args: "--no-default-features"
           - profile-key: debug-no-features
             profile-args: ""
-          - profile-key: debug-no-features-macos
+          - profile-key: debug-no-features
             profile-args: ""
             os: macos-latest
           - profile-key: debug-ethhash-logger
@@ -106,7 +106,7 @@ jobs:
             profile-args: "--no-default-features"
           - profile-key: debug-no-features
             profile-args: ""
-          - profile-key: debug-no-features-macos
+          - profile-key: debug-no-features
             profile-args: ""
             os: macos-latest
           - profile-key: debug-ethhash-logger
@@ -134,7 +134,7 @@ jobs:
             profile-args: "--no-default-features"
           - profile-key: debug-no-features
             profile-args: ""
-          - profile-key: debug-no-features-macos
+          - profile-key: debug-no-features
             profile-args: ""
             os: macos-latest
           - profile-key: debug-ethhash-logger
@@ -163,7 +163,7 @@ jobs:
             profile-args: "--no-default-features"
           - profile-key: debug-no-features
             profile-args: ""
-          - profile-key: debug-no-features-macos
+          - profile-key: debug-no-features
             profile-args: ""
             os: macos-latest
           - profile-key: debug-ethhash-logger
@@ -225,7 +225,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: "false"
-          shared-key: "debug-no-features${{ matrix.os == 'macos-latest' && '-macos' || '' }}"
+          shared-key: "debug-no-features"
       - name: Build Firewood FFI
         working-directory: ffi
         run: cargo build --release
