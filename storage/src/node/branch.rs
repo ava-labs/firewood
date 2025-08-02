@@ -11,9 +11,12 @@
 )]
 
 use crate::node::ExtendableBytes;
-use crate::{LeafNode, LinearAddress, MaybePersistedNode, Node, Path, SharedNode};
+use crate::{
+    FileIoError, LeafNode, LinearAddress, MaybePersistedNode, Node, NodeReader, Path, SharedNode,
+};
 use std::fmt::{Debug, Formatter};
 use std::io::Read;
+use std::ops::Deref;
 
 /// The type of a hash. For ethereum compatible hashes, this might be a RLP encoded
 /// value if it's small enough to fit in less than 32 bytes. For merkledb compatible
@@ -90,6 +93,23 @@ pub(crate) trait ReadSerializable: Read {
 }
 
 impl<T: Read> ReadSerializable for T {}
+
+#[cfg(feature = "ethhash")]
+pub(crate) struct NodeRefWithHashMut<'a> {
+    pub node_ref: Box<dyn Deref<Target = Node> + 'a>,
+    pub hash: &'a mut HashType,
+}
+
+#[cfg(feature = "ethhash")]
+impl std::fmt::Debug for NodeRefWithHashMut<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "NodeRefWithHashMut {{ node_ref: {:?}, hash: {:?} }}",
+            **self.node_ref, self.hash
+        )
+    }
+}
 
 #[derive(PartialEq, Eq, Clone, Debug)]
 #[repr(C)]
@@ -178,6 +198,61 @@ impl Child {
             Child::Node(node) => MaybePersistedNode::from(SharedNode::from(node.clone())),
             Child::AddressWithHash(addr, _) => MaybePersistedNode::from(*addr),
             Child::MaybePersisted(maybe_persisted, _) => maybe_persisted.clone(),
+        }
+    }
+
+    /// Returns a reference to a `Node` by reading from the appropriate source.
+    ///
+    /// If the child is a `Child::Node`, it returns a pointer to its inner node.
+    /// If the child is a `Child::AddressWithHash`, it reads the node from storage using the provided `NodeReader` and returns the shared pointer.
+    /// If the child is a `Child::MaybePersisted`, it delegates to the `MaybePersistedNode`'s `as_shared_node` method.
+    ///
+    /// # Arguments
+    ///
+    /// * `storage` - A reference to a `NodeReader` implementation that can read nodes from storage
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result<Box<dyn Deref<Target = Node> + '_>, FileIoError>` where:
+    /// - `Ok(Box<dyn Deref<Target = Node> + '_>)` contains pointer to the requested node
+    /// - `Err(FileIoError)` if there was an error reading from storage
+    pub fn as_node_ref<S: NodeReader>(
+        &self,
+        storage: &S,
+    ) -> Result<Box<dyn Deref<Target = Node> + '_>, FileIoError> {
+        match self {
+            Child::Node(node) => Ok(Box::new(node)),
+            Child::AddressWithHash(addr, _) => storage
+                .read_node(*addr)
+                .map(|node| Box::new(node) as Box<dyn Deref<Target = Node>>),
+            Child::MaybePersisted(maybe_persisted, _) => maybe_persisted
+                .as_shared_node(storage)
+                .map(|node| Box::new(node) as Box<dyn Deref<Target = Node>>),
+        }
+    }
+
+    // Helper function useful for updating the child hash.
+    #[cfg(feature = "ethhash")]
+    pub(crate) fn node_ref_and_hash_mut<S: NodeReader>(
+        &mut self,
+        storage: &S,
+    ) -> Result<Option<NodeRefWithHashMut<'_>>, FileIoError> {
+        match self {
+            Child::Node(_) => Ok(None),
+            Child::AddressWithHash(addr, hash) => {
+                let node = storage.read_node(*addr)?;
+                Ok(Some(NodeRefWithHashMut {
+                    node_ref: Box::new(node) as Box<dyn Deref<Target = Node>>,
+                    hash,
+                }))
+            }
+            Child::MaybePersisted(maybe_persisted, hash) => {
+                let node = maybe_persisted.as_shared_node(storage)?;
+                Ok(Some(NodeRefWithHashMut {
+                    node_ref: Box::new(node) as Box<dyn Deref<Target = Node>>,
+                    hash,
+                }))
+            }
         }
     }
 }

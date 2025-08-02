@@ -100,7 +100,7 @@ struct SubTrieMetadata {
     depth: usize,
     path_prefix: Path,
     #[cfg(feature = "ethhash")]
-    has_peers: bool,
+    num_peers: usize, // include this node
 }
 
 /// [`NodeStore`] checker
@@ -190,7 +190,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             depth: 0,
             path_prefix: Path::new(),
             #[cfg(feature = "ethhash")]
-            has_peers: false,
+            num_peers: 1,
         };
         let mut trie_stats = TrieStats::default();
         self.visit_trie_helper(trie, visited, &mut trie_stats, progress_bar, hash_check)?;
@@ -207,14 +207,23 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         progress_bar: Option<&ProgressBar>,
         hash_check: bool,
     ) -> Result<(), CheckerError> {
+        #[cfg(feature = "ethhash")]
+        let SubTrieMetadata {
+            root_address: subtrie_root_address,
+            root_hash: subtrie_root_hash,
+            parent,
+            depth,
+            mut path_prefix,
+            num_peers,
+        } = subtrie;
+
+        #[cfg(not(feature = "ethhash"))]
         let SubTrieMetadata {
             root_address: subtrie_root_address,
             root_hash: subtrie_root_hash,
             parent,
             depth,
             path_prefix,
-            #[cfg(feature = "ethhash")]
-            has_peers,
         } = subtrie;
 
         // check that address is aligned
@@ -296,7 +305,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                         depth: depth.saturating_add(1),
                         path_prefix: child_path_prefix,
                         #[cfg(feature = "ethhash")]
-                        has_peers: num_children != 1,
+                        num_peers: num_children,
                     };
                     self.visit_trie_helper(
                         child_subtrie,
@@ -326,7 +335,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         // hash check - at this point all children hashes have been verified
         if hash_check {
             #[cfg(feature = "ethhash")]
-            let hash = Self::compute_node_ethhash(&node, &path_prefix, has_peers);
+            let hash = Self::compute_node_ethhash(&node, &mut path_prefix, num_peers);
             #[cfg(not(feature = "ethhash"))]
             let hash = hash_node(&node, &path_prefix);
             if hash != subtrie_root_hash {
