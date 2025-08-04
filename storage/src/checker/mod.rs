@@ -53,6 +53,8 @@ pub struct CheckOpt {
 #[derive(Debug)]
 /// Report of the checker results.
 pub struct CheckerReport {
+    /// Errors encountered during the check
+    pub errors: Vec<CheckerError>,
     /// The high watermark of the database
     pub high_watermark: u64,
     /// The physical number of bytes in the database returned through `stat`
@@ -115,46 +117,61 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// # Errors
     /// Returns a [`CheckerError`] if the database is inconsistent.
     // TODO: report all errors, not just the first one
-    pub fn check(&self, opt: CheckOpt) -> Result<CheckerReport, CheckerError> {
+    pub fn check(&self, opt: CheckOpt) -> CheckerReport {
         // 1. Check the header
         let db_size = self.size();
-        let physical_bytes = self.physical_size()?;
+        let mut visited = match LinearAddressRangeSet::new(db_size) {
+            Ok(visited) => visited,
+            Err(e) => {
+                return CheckerReport {
+                    errors: vec![e],
+                    high_watermark: db_size,
+                    physical_bytes: 0,
+                    trie_stats: TrieStats::default(),
+                    free_list_stats: FreeListsStats::default(),
+                };
+            }
+        };
 
-        let mut visited = LinearAddressRangeSet::new(db_size)?;
+        let mut errors = Vec::new();
 
         // 2. traverse the trie and check the nodes
         if let Some(progress_bar) = &opt.progress_bar {
             progress_bar.set_length(db_size);
             progress_bar.set_message("Traversing the trie...");
         }
-        let trie_stats = if let (Some(root), Some(root_hash)) =
-            (self.root_as_maybe_persisted_node(), self.root_hash())
-        {
-            // the database is not empty, and has a physical address, so traverse the trie
-            if let Some(root_address) = root.as_linear_address() {
-                self.check_area_aligned(
-                    root_address,
-                    StoredAreaParent::TrieNode(TrieNodeParent::Root),
-                )?;
-                self.visit_trie(
-                    root_address,
-                    root_hash.into_hash_type(),
-                    &mut visited,
-                    opt.progress_bar.as_ref(),
-                    opt.hash_check,
-                )?
-            } else {
-                return Err(CheckerError::UnpersistedRoot);
-            }
-        } else {
-            TrieStats::default()
-        };
+        let trie_stats = self
+            .root_as_maybe_persisted_node()
+            .and_then(|node| self.root_hash().map(|root_hash| (node, root_hash)))
+            .and_then(|(root, root_hash)| {
+                match root
+                    .as_linear_address()
+                    .ok_or(vec![CheckerError::UnpersistedRoot])
+                    .and_then(|root_address| {
+                        self.visit_trie(
+                            root_address,
+                            root_hash.into_hash_type(),
+                            &mut visited,
+                            opt.progress_bar.as_ref(),
+                            opt.hash_check,
+                        )
+                    }) {
+                    Ok(trie_stats) => Some(trie_stats),
+                    Err(e) => {
+                        errors.extend(e);
+                        None
+                    }
+                }
+            })
+            .unwrap_or_default();
 
         // 3. check the free list - this can happen in parallel with the trie traversal
         if let Some(progress_bar) = &opt.progress_bar {
             progress_bar.set_message("Traversing free lists...");
         }
-        let free_list_stats = self.visit_freelist(&mut visited, opt.progress_bar.as_ref())?;
+        let (free_list_stats, free_list_traverse_errors) =
+            self.visit_freelist(&mut visited, opt.progress_bar.as_ref());
+        errors.extend(free_list_traverse_errors);
 
         // 4. check leaked areas - what are the spaces between trie nodes and free lists we have traversed?
         if let Some(progress_bar) = &opt.progress_bar {
@@ -167,12 +184,21 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         let _leaked_areas = self.split_all_leaked_ranges(leaked_ranges, opt.progress_bar.as_ref());
         // TODO: add leaked areas to the free list
 
-        Ok(CheckerReport {
+        let physical_bytes = match self.physical_size() {
+            Ok(physical_bytes) => physical_bytes,
+            Err(e) => {
+                errors.push(e.into());
+                0
+            }
+        };
+
+        CheckerReport {
+            errors,
             high_watermark: db_size,
             physical_bytes,
             trie_stats,
             free_list_stats,
-        })
+        }
     }
 
     fn visit_trie(
@@ -182,7 +208,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         visited: &mut LinearAddressRangeSet,
         progress_bar: Option<&ProgressBar>,
         hash_check: bool,
-    ) -> Result<TrieStats, CheckerError> {
+    ) -> Result<TrieStats, Vec<CheckerError>> {
         let trie = SubTrieMetadata {
             root_address,
             root_hash,
@@ -206,7 +232,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         trie_stats: &mut TrieStats,
         progress_bar: Option<&ProgressBar>,
         hash_check: bool,
-    ) -> Result<(), CheckerError> {
+    ) -> Result<(), Vec<CheckerError>> {
         let SubTrieMetadata {
             root_address: subtrie_root_address,
             root_hash: subtrie_root_hash,
@@ -265,13 +291,32 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         let mut current_path_prefix = path_prefix.clone();
         current_path_prefix.0.extend_from_slice(node.partial_path());
         if node.value().is_some() && !is_valid_key(&current_path_prefix) {
-            return Err(CheckerError::InvalidKey {
+            return Err(vec![CheckerError::InvalidKey {
                 key: current_path_prefix,
                 address: subtrie_root_address,
                 parent,
-            });
+            }]);
         }
 
+        // compute the hash of the node and check it against the stored hash
+        if hash_check {
+            #[cfg(feature = "ethhash")]
+            let hash = Self::compute_node_ethhash(&node, &path_prefix, has_peers);
+            #[cfg(not(feature = "ethhash"))]
+            let hash = hash_node(&node, &path_prefix);
+            if hash != subtrie_root_hash {
+                return Err(vec![CheckerError::HashMismatch {
+                    path: current_path_prefix,
+                    address: subtrie_root_address,
+                    parent,
+                    parent_stored_hash: subtrie_root_hash,
+                    computed_hash: hash,
+                }]);
+            }
+        }
+
+        // recursively traverse the children
+        let mut errors = Vec::new();
         match node.as_ref() {
             Node::Branch(branch) => {
                 let num_children = branch.children_iter().count();
@@ -298,13 +343,15 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                         #[cfg(feature = "ethhash")]
                         has_peers: num_children != 1,
                     };
-                    self.visit_trie_helper(
+                    if let Err(e) = self.visit_trie_helper(
                         child_subtrie,
                         visited,
                         trie_stats,
                         progress_bar,
                         hash_check,
-                    )?;
+                    ) {
+                        errors.extend(e);
+                    }
                 }
             }
             Node::Leaf(leaf) => {
@@ -323,28 +370,13 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             }
         }
 
-        // hash check - at this point all children hashes have been verified
-        if hash_check {
-            #[cfg(feature = "ethhash")]
-            let hash = Self::compute_node_ethhash(&node, &path_prefix, has_peers);
-            #[cfg(not(feature = "ethhash"))]
-            let hash = hash_node(&node, &path_prefix);
-            if hash != subtrie_root_hash {
-                let mut path = path_prefix.clone();
-                path.0.extend_from_slice(node.partial_path());
-                return Err(CheckerError::HashMismatch {
-                    path,
-                    address: subtrie_root_address,
-                    parent,
-                    parent_stored_hash: subtrie_root_hash,
-                    computed_hash: hash,
-                });
-            }
-        }
-
         update_progress_bar(progress_bar, visited);
 
-        Ok(())
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
     }
 
     /// Traverse all the free areas in the freelist
@@ -352,9 +384,10 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         &self,
         visited: &mut LinearAddressRangeSet,
         progress_bar: Option<&ProgressBar>,
-    ) -> Result<FreeListsStats, CheckerError> {
+    ) -> (FreeListsStats, Vec<CheckerError>) {
         let mut area_counts: HashMap<u64, u64> = HashMap::new();
         let mut multi_page_area_count = 0u64;
+        let mut errors = Vec::new();
 
         let mut free_list_iter = self.free_list_iter(0);
         while let Some(free_area) = free_list_iter.next_with_metadata() {
@@ -363,19 +396,41 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                 area_index,
                 free_list_id,
                 parent,
-            } = free_area?;
-            self.check_area_aligned(addr, StoredAreaParent::FreeList(parent))?;
+            } = match free_area {
+                Ok(free_area) => free_area,
+                Err(e) => {
+                    errors.push(CheckerError::IO(e));
+                    continue;
+                }
+            };
+
+            // check that the area is aligned
+            if let Err(e) = self.check_area_aligned(addr, StoredAreaParent::FreeList(parent)) {
+                errors.push(e);
+                continue;
+            }
+
+            // check that the area size matches the free list id (if it is in the correct free list)
             let area_size = size_from_area_index(area_index);
             if free_list_id != area_index {
-                return Err(CheckerError::FreelistAreaSizeMismatch {
+                errors.push(CheckerError::FreelistAreaSizeMismatch {
                     address: addr,
                     size: area_size,
                     actual_free_list: free_list_id,
                     expected_free_list: area_index,
                     parent,
                 });
+                continue;
             }
-            visited.insert_area(addr, area_size, StoredAreaParent::FreeList(parent))?;
+
+            // check the free area is within bounds and does not intersect with other areas
+            if let Err(e) = visited.insert_area(addr, area_size, StoredAreaParent::FreeList(parent))
+            {
+                errors.push(e);
+                continue;
+            }
+
+            // collect the free list stats
             {
                 // collect the free lists area distribution
                 let area_count = area_counts.entry(area_size).or_insert(0);
@@ -392,10 +447,14 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             }
             update_progress_bar(progress_bar, visited);
         }
-        Ok(FreeListsStats {
-            area_counts,
-            multi_page_area_count,
-        })
+
+        (
+            FreeListsStats {
+                area_counts,
+                multi_page_area_count,
+            },
+            errors,
+        )
     }
 
     const fn check_area_aligned(
@@ -657,31 +716,46 @@ mod test {
         let mut nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
 
         let mut test_trie = gen_test_trie(&mut nodestore);
+        let root_addr = test_trie.root_address;
 
         // find the root node and replace the branch hash with an incorrect (default) hash
-        let (root_node, root_addr) = test_trie
+        let (branch_node, branch_addr) = test_trie
             .nodes
             .iter_mut()
-            .find(|(node, _)| matches!(node, Node::Branch(b) if *b.partial_path.0 == [2]))
+            .find(|(node, _)| matches!(node, Node::Branch(b) if *b.partial_path.0 == [3]))
             .unwrap();
 
-        let root_branch = root_node.as_branch_mut().unwrap();
+        let branch = branch_node.as_branch_mut().unwrap();
+        let branch_addr = *branch_addr;
 
-        // Get the branch address and original hash from the root's first child
-        let (branch_addr, computed_hash) = root_branch.children[0]
+        // Replace branch hash with a wrong hash
+        let (leaf_addr, _) = branch.children[1].as_ref().unwrap().persist_info().unwrap();
+        branch.children[1] = Some(Child::AddressWithHash(leaf_addr, HashType::default()));
+        test_write_new_node(&nodestore, branch_node, branch_addr.get());
+
+        // Compute the current branch hash
+        #[cfg(feature = "ethhash")]
+        let computed_hash = NodeStore::<Committed, MemStore>::compute_node_ethhash(
+            branch_node,
+            &Path::from([2, 0]),
+            false,
+        );
+        #[cfg(not(feature = "ethhash"))]
+        let computed_hash = hash_node(branch_node, &Path::from([2, 0]));
+
+        // Get parent stored hash
+        let (root_node, _) = test_trie
+            .nodes
+            .iter()
+            .find(|(node, _)| matches!(node, Node::Branch(b) if *b.partial_path.0 == [2]))
+            .unwrap();
+        let root_branch = root_node.as_branch().unwrap();
+        let (_, parent_stored_hash) = root_branch.children[0]
             .as_ref()
             .unwrap()
             .persist_info()
             .unwrap();
-        let computed_hash = computed_hash.clone();
-        root_branch.children[0] = Some(Child::AddressWithHash(branch_addr, HashType::default()));
-
-        // Replace the branch hash in the root node with a wrong hash
-        if let Node::Branch(root_branch) = root_node {
-            root_branch.children[0] =
-                Some(Child::AddressWithHash(branch_addr, HashType::default()));
-        }
-        test_write_new_node(&nodestore, root_node, root_addr.get());
+        let parent_stored_hash = parent_stored_hash.clone();
 
         // run the checker and verify that it returns the HashMismatch error
         let mut visited = LinearAddressRangeSet::new(test_trie.high_watermark).unwrap();
@@ -698,11 +772,11 @@ mod test {
         let expected_error = CheckerError::HashMismatch {
             address: branch_addr,
             path: Path::from([2, 0, 3]),
-            parent: TrieNodeParent::Parent(*root_addr, 0),
-            parent_stored_hash: HashType::default(),
+            parent: TrieNodeParent::Parent(root_addr, 0),
+            parent_stored_hash,
             computed_hash,
         };
-        assert_eq!(err, expected_error);
+        assert_eq!(err, vec![expected_error]);
     }
 
     #[test]
@@ -752,10 +826,12 @@ mod test {
 
         // test that the we traversed all the free areas
         let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
-        let actual_free_lists_stats = nodestore.visit_freelist(&mut visited, None).unwrap();
+        let (actual_free_lists_stats, free_list_errors) =
+            nodestore.visit_freelist(&mut visited, None);
         let complement = visited.complement();
         assert_eq!(complement.into_iter().collect::<Vec<_>>(), vec![]);
         assert_eq!(actual_free_lists_stats, expected_free_lists_stats);
+        assert_eq!(free_list_errors, vec![]);
     }
 
     #[test]
