@@ -15,7 +15,7 @@ use crate::manager::{RevisionManager, RevisionManagerConfig};
 use async_trait::async_trait;
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeStore, TrieHash, TrieReader,
+    ImmutableProposal, NodeStore, Parentable, ReadableStorage, TrieHash, TrieReader,
 };
 use metrics::{counter, describe_counter};
 use std::io::Write;
@@ -83,7 +83,12 @@ impl<T: DbViewSyncBytes> DbViewSync for T {
     }
 }
 
-impl DbViewSyncBytes for Arc<HistoricalRev> {
+impl<T, S> DbViewSyncBytes for NodeStore<T, S>
+where
+    NodeStore<T, S>: TrieReader,
+    T: Parentable + std::fmt::Debug,
+    S: ReadableStorage,
+{
     fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
         let merkle = Merkle::from(self);
         let value = merkle.get_value(key)?;
@@ -94,76 +99,56 @@ impl DbViewSyncBytes for Arc<HistoricalRev> {
         &self,
         state: IterationState,
     ) -> Result<(Option<(Key, Value)>, IterationState), Error> {
-        if let IterationState::Done = state {
-            return Ok((None, state));
-        }
         let merkle = Merkle::from(self);
-        iterate_internal(&merkle, state)
+        let mut it = match state {
+            IterationState::StartFromKey(key) => {
+                if let Some(key) = key {
+                    merkle.key_value_iter_from_key(key)
+                } else {
+                    merkle.key_value_iter()
+                }
+            }
+            IterationState::ContinueFromState(state) => {
+                MerkleKeyValueStream::from_internal_state(merkle.nodestore(), state)
+            }
+            IterationState::Done => {
+                return Ok((None, state));
+            }
+        };
+        let kv = it.next_internal();
+        let Some(kv) = kv else {
+            return Ok((None, IterationState::Done));
+        };
+        Ok((
+            Some(kv?),
+            IterationState::ContinueFromState(it.internal_state()),
+        ))
     }
 }
 
-fn iterate_internal<T: TrieReader>(
-    merkle: &Merkle<T>,
-    state: IterationState,
-) -> Result<(Option<(Key, Value)>, IterationState), Error> {
-    let mut it = match state {
-        IterationState::StartFromKey(key) => {
-            if let Some(key) = key {
-                merkle.key_value_iter_from_key(key)
-            } else {
-                merkle.key_value_iter()
-            }
-        }
-        IterationState::ContinueFromState(state) => {
-            MerkleKeyValueStream::from_internal_state(merkle.nodestore(), state)
-        }
-        IterationState::Done => unreachable!(),
-    };
-    let kv = it.next_internal();
-    let Some(kv) = kv else {
-        return Ok((None, IterationState::Done));
-    };
-    Ok((
-        Some(kv?),
-        IterationState::ContinueFromState(it.internal_state()),
-    ))
+impl<T: DbViewSyncBytes> DbViewSyncBytes for Arc<T> {
+    fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
+        (**self).val_sync_bytes(key)
+    }
+
+    fn iterate(
+        &self,
+        state: IterationState,
+    ) -> Result<(Option<(Key, Value)>, IterationState), Error> {
+        (**self).iterate(state)
+    }
 }
 
 impl DbViewSyncBytes for Proposal<'_> {
     fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
-        let merkle = Merkle::from(self.nodestore.clone());
-        let value = merkle.get_value(key)?;
-        Ok(value)
+        self.nodestore.val_sync_bytes(key)
     }
 
     fn iterate(
         &self,
         state: IterationState,
     ) -> Result<(Option<(Key, Value)>, IterationState), Error> {
-        if let IterationState::Done = state {
-            return Ok((None, state));
-        }
-        let merkle = Merkle::from(self.nodestore.clone());
-        iterate_internal(&merkle, state)
-    }
-}
-
-impl DbViewSyncBytes for Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> {
-    fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
-        let merkle = Merkle::from(self.clone());
-        let value = merkle.get_value(key)?;
-        Ok(value)
-    }
-
-    fn iterate(
-        &self,
-        state: IterationState,
-    ) -> Result<(Option<(Key, Value)>, IterationState), Error> {
-        if let IterationState::Done = state {
-            return Ok((None, state));
-        }
-        let merkle = Merkle::from(self.clone());
-        iterate_internal(&merkle, state)
+        self.nodestore.iterate(state)
     }
 }
 
