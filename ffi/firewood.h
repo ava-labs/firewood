@@ -14,14 +14,6 @@
 typedef struct DatabaseHandle DatabaseHandle;
 
 /**
- * A handle to the iterator, returned and used by `fwd_iter_*`.
- *
- * These handles are passed to the other FFI functions.
- *
- */
-typedef struct IteratorHandle IteratorHandle;
-
-/**
  * A value returned by the FFI.
  *
  * This is used in several different ways, including:
@@ -56,14 +48,6 @@ typedef struct DatabaseCreationResult {
   struct DatabaseHandle *db;
   uint8_t *error_str;
 } DatabaseCreationResult;
-
-/**
- * Struct returned by `fwd_iter_*`
- */
-typedef struct IteratorCreationResult {
-  struct IteratorHandle *iterator;
-  uint8_t *error_str;
-} IteratorCreationResult;
 
 typedef uint32_t ProposalId;
 
@@ -215,26 +199,6 @@ struct Value fwd_drop_proposal(const struct DatabaseHandle *db, uint32_t proposa
 void fwd_free_database_error_result(struct DatabaseCreationResult *result);
 
 /**
- * Frees the memory associated with a `IteratorCreationResult`.
- * This only needs to be called if the `error_str` field is non-null.
- *
- * # Arguments
- *
- * * `result` - The `IteratorCreationResult` to free, previously returned from `fwd_iter_*`.
- *
- * # Safety
- *
- * This function is unsafe because it dereferences raw pointers.
- * The caller must ensure that `result` is a valid pointer.
- *
- * # Panics
- *
- * This function panics if `result` is `null`.
- *
- */
-void fwd_free_iterator_error_result(struct IteratorCreationResult *result);
-
-/**
  * Frees the memory associated with a `Value`.
  *
  * # Arguments
@@ -343,75 +307,6 @@ struct Value fwd_get_from_root(const struct DatabaseHandle *db,
  *
  */
 struct Value fwd_get_latest(const struct DatabaseHandle *db, struct Value key);
-
-/**
- * Return an iterator optionally starting from a key in database
- *
- * # Arguments
- *
- * * `db` - The database handle returned by `open_db`
- * * `key` - The key to start from, in `Value` form
- *
- * # Returns
- *
- * An iterator handle, or an error
- *
- * # Safety
- *
- * The caller must:
- *  * ensure that `db` is a valid pointer returned by `open_db`
- *  * ensure that `key` is a valid pointer to a `Value` struct
- *  * TODO: Handle freeing the iterator handle
- *
- */
-struct IteratorCreationResult fwd_iter_latest(const struct DatabaseHandle *db, struct Value key);
-
-/**
- * Retrieves the next item from the iterator
- *
- * # Arguments
- *
- * * `db` - The database handle returned by `open_db`
- * * `it` - The database handle returned by `fwd_iter_*`
- *
- * # Returns
- *
- * A `KeyValue` containing the next pair of (key, value) on the iterator.
- * A `KeyValue` containing with key {0, ""}, and value with an error message if failed.
- *
- * # Safety
- *
- * The caller must:
- *  * ensure that `db` is a valid pointer returned by `open_db`
- *  * ensure that `it` is a valid pointer returned by `fwd_iter_*`
- *  * call `free_key_value` to free the memory associated with the returned `KeyValue`
- *
- */
-struct KeyValue fwd_iter_next(const struct DatabaseHandle *db, const struct IteratorHandle *it);
-
-/**
- * Return an iterator optionally starting from a key in database
- *
- * # Arguments
- *
- * * `db` - The database handle returned by `open_db`
- * * `key` - The key to start from, in `Value` form
- *
- * # Returns
- *
- * An iterator handle, or an error
- *
- * # Safety
- *
- * The caller must:
- *  * ensure that `db` is a valid pointer returned by `open_db`
- *  * ensure that `key` is a valid pointer to a `Value` struct
- *  * TODO: Handle freeing the iterator handle
- *
- */
-struct IteratorCreationResult fwd_iter_on_root(const struct DatabaseHandle *db,
-                                               struct Value root,
-                                               struct Value key);
 
 /**
  * Open a database with the given cache size and maximum number of revisions
