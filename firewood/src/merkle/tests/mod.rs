@@ -196,7 +196,8 @@ fn test_get_regression() {
 
     let mut merkle = match a {
         Ok(root_node) => {
-            //worker_pool.clear_merkle();
+            // In this initial implementation, we want to clear the merkle every time
+            worker_pool.clear_merkle(); 
             println!("Strong count: {}", Arc::strong_count(&merkle_arc));
             let mut m = Arc::into_inner(merkle_arc).unwrap();
             *m.nodestore.mut_root() = root_node;

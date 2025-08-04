@@ -605,9 +605,14 @@ pub enum MerkleOp<S> {
     //SetMerkle(Option<Arc<Mutex<Merkle<NodeStore<MutableProposal, S>>>>>)
 }
 
-type HostReceiver = std::sync::mpsc::Receiver<Result<Node, FileIoError>>;
+//type HostReceiver = std::sync::mpsc::Receiver<Result<Node, FileIoError>>;
+type HostReceiver = std::sync::mpsc::Receiver<WorkerReturn>;
 
-#[allow(dead_code)]
+enum WorkerReturn {
+    NodeResult(Result<Node, FileIoError>),
+    MerkleClearComplete,
+}
+
 #[derive(Debug)]
 /// Worker pool to issue concurrent inserts to a Merkle trie
 pub struct WorkerPool<S> {
@@ -625,7 +630,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
     pub fn new(merkle: Arc<Merkle<NodeStore<MutableProposal, S>>>) -> Self {
         // Create a single thread and a single channel to the thread for now
         let (host_sender, thread_receiver) = mpsc::channel::<MerkleOp<S>>();
-        let (thread_sender, host_receiver) = mpsc::channel::<Result<Node, FileIoError>>();
+        let (thread_sender, host_receiver) = mpsc::channel::<WorkerReturn>();
         let mut m: Option<Arc<Merkle<NodeStore<MutableProposal, S>>>> = Some(merkle);
         let handle = thread::spawn(move || {
             loop {
@@ -639,15 +644,17 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
                         let a: Arc<Merkle<NodeStore<MutableProposal, S>>> =
                             m.expect("Merkle is not set before insert");
                         let b = a.insert_helper(node, &key, value);
-                        m = None; // Decrement the Arc counter
+                        m = Some(a); // Put it back
+                        //m = None; // Decrement the Arc counter
                         //let _ = Arc::into_inner(a);
-                        let _ = thread_sender.send(b);
+                        let _ = thread_sender.send(WorkerReturn::NodeResult(b));
                     }
                     MerkleOp::Terminate => {
                         break;
                     }
                     MerkleOp::ClearMerkle => {
-                        m.take();
+                        m = None; // Decrement the Arc counter
+                        let _ = thread_sender.send(WorkerReturn::MerkleClearComplete);
                         // TODO: Needs to send a message to the host
                     }
                     MerkleOp::SetMerkle(merkle) => {
@@ -668,7 +675,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
     ///
     /// Can panic if workerpool vector is incorrectly initialized.
     ///
-    /// ### Errors
+    /// ## Errors
     ///
     /// ``FileIOError`` from reading a node.
     pub fn insert(&self, node: Node, key: &[u8], value: Value) -> Result<Node, FileIoError> {
@@ -688,15 +695,24 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
             }
         }
 
-        // Just blocks until result completes for now in this initial prototype.
-        self.worker_data
+        // Blocks until result completes for now in this initial prototype.
+        let WorkerReturn::NodeResult(result) = self.worker_data
             .first()
             .expect("empty vector")
             .1
             .recv()
-            .expect("recv error")
+            .expect("recv error") 
+        else {
+            panic!("received unexpected value from worker");
+        };
+        result
     }
 
+    /// Clears the Merkle trie so that it can be moved out of the Arc
+    /// 
+    /// ## Panics
+    /// 
+    /// Can panic if workerpool vector is incorrectly initialized.
     pub fn clear_merkle(&self) {
         let _ = self
             .worker_data
