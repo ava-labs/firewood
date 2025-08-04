@@ -95,20 +95,16 @@ pub(crate) trait ReadSerializable: Read {
 impl<T: Read> ReadSerializable for T {}
 
 #[cfg(feature = "ethhash")]
-pub(crate) struct NodeRefWithHashMut<'a> {
-    pub node_ref: Box<dyn Deref<Target = Node> + 'a>,
-    pub hash: &'a mut HashType,
-}
+pub(crate) trait NodeRef: std::ops::Deref<Target = Node> + std::fmt::Debug {}
 
 #[cfg(feature = "ethhash")]
-impl std::fmt::Debug for NodeRefWithHashMut<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "NodeRefWithHashMut {{ node_ref: {:?}, hash: {:?} }}",
-            **self.node_ref, self.hash
-        )
-    }
+impl<T> NodeRef for T where T: std::ops::Deref<Target = Node> + std::fmt::Debug {}
+
+#[cfg(feature = "ethhash")]
+#[derive(Debug)]
+pub(crate) struct NodeRefWithHashMut<'a> {
+    pub node_ref: Box<dyn NodeRef + 'a>,
+    pub hash: &'a mut HashType,
 }
 
 #[derive(PartialEq, Eq, Clone, Debug)]
@@ -242,14 +238,14 @@ impl Child {
             Child::AddressWithHash(addr, hash) => {
                 let node = storage.read_node(*addr)?;
                 Ok(Some(NodeRefWithHashMut {
-                    node_ref: Box::new(node) as Box<dyn Deref<Target = Node>>,
+                    node_ref: Box::new(node) as Box<dyn NodeRef>,
                     hash,
                 }))
             }
             Child::MaybePersisted(maybe_persisted, hash) => {
                 let node = maybe_persisted.as_shared_node(storage)?;
                 Ok(Some(NodeRefWithHashMut {
-                    node_ref: Box::new(node) as Box<dyn Deref<Target = Node>>,
+                    node_ref: Box::new(node) as Box<dyn NodeRef>,
                     hash,
                 }))
             }
