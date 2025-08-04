@@ -15,7 +15,7 @@ use crate::manager::{RevisionManager, RevisionManagerConfig};
 use async_trait::async_trait;
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeStore, TrieHash,
+    ImmutableProposal, NodeStore, TrieHash, TrieReader,
 };
 use metrics::{counter, describe_counter};
 use std::io::Write;
@@ -70,7 +70,10 @@ pub trait DbViewSyncBytes: std::fmt::Debug {
     fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError>;
 
     /// iterate on this view starting from given iteration state
-    fn iterate(&self, state: IterationState) -> Result<(Option<(Key, Value)>, IterationState), Error>;
+    fn iterate(
+        &self,
+        state: IterationState,
+    ) -> Result<(Option<(Key, Value)>, IterationState), Error>;
 }
 
 // Provide blanket implementation for DbViewSync using DbViewSyncBytes
@@ -87,7 +90,10 @@ impl DbViewSyncBytes for Arc<HistoricalRev> {
         Ok(value)
     }
 
-    fn iterate(&self, state: IterationState) -> Result<(Option<(Key, Value)>, IterationState), Error> {
+    fn iterate(
+        &self,
+        state: IterationState,
+    ) -> Result<(Option<(Key, Value)>, IterationState), Error> {
         if let IterationState::Done = state {
             return Ok((None, state));
         }
@@ -96,7 +102,10 @@ impl DbViewSyncBytes for Arc<HistoricalRev> {
     }
 }
 
-fn iterate_internal<T: TrieReader>(merkle: &Merkle<T>, state: IterationState) -> Result<(Option<(Key, Value)>, IterationState), Error> {
+fn iterate_internal<T: TrieReader>(
+    merkle: &Merkle<T>,
+    state: IterationState,
+) -> Result<(Option<(Key, Value)>, IterationState), Error> {
     let mut it = match state {
         IterationState::StartFromKey(key) => {
             if let Some(key) = key {
@@ -114,7 +123,10 @@ fn iterate_internal<T: TrieReader>(merkle: &Merkle<T>, state: IterationState) ->
     let Some(kv) = kv else {
         return Ok((None, IterationState::Done));
     };
-    Ok((Some(kv?), IterationState::ContinueFromState(it.internal_state())))
+    Ok((
+        Some(kv?),
+        IterationState::ContinueFromState(it.internal_state()),
+    ))
 }
 
 impl DbViewSyncBytes for Proposal<'_> {
@@ -124,7 +136,10 @@ impl DbViewSyncBytes for Proposal<'_> {
         Ok(value)
     }
 
-    fn iterate(&self, state: IterationState) -> Result<(Option<(Key, Value)>, IterationState), Error> {
+    fn iterate(
+        &self,
+        state: IterationState,
+    ) -> Result<(Option<(Key, Value)>, IterationState), Error> {
         if let IterationState::Done = state {
             return Ok((None, state));
         }
@@ -140,7 +155,10 @@ impl DbViewSyncBytes for Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> {
         Ok(value)
     }
 
-    fn iterate(&self, state: IterationState) -> Result<(Option<(Key, Value)>, IterationState), Error> {
+    fn iterate(
+        &self,
+        state: IterationState,
+    ) -> Result<(Option<(Key, Value)>, IterationState), Error> {
         if let IterationState::Done = state {
             return Ok((None, state));
         }
@@ -148,7 +166,6 @@ impl DbViewSyncBytes for Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> {
         iterate_internal(&merkle, state)
     }
 }
-
 
 #[async_trait]
 impl api::DbView for HistoricalRev {
@@ -544,7 +561,7 @@ mod test {
     use rand::rng;
 
     use crate::db::{Batch, Db, IterationState};
-    use crate::v2::api::{Db as _, DbView as _, Error, Proposal as _};
+    use crate::v2::api::{Db as _, DbView as _, Proposal as _};
 
     use super::{BatchOp, DbConfig};
 
@@ -783,10 +800,10 @@ mod test {
         let _ = (kv1, kv2);
         let mut i = 0;
 
-        while !(matches!(state1, IterationState::Done) || matches!(state2, IterationState::Done)){
+        while !(matches!(state1, IterationState::Done) || matches!(state2, IterationState::Done)) {
             (kv1, state1) = historical_view.iterate(state1).unwrap();
             (kv2, state2) = proposal_view.iterate(state2).unwrap();
-            if kv1.is_none() && kv2.is_none(){
+            if kv1.is_none() && kv2.is_none() {
                 break;
             }
             let (key1, value1) = kv1.unwrap();

@@ -133,8 +133,7 @@ impl<T: TrieReader> Merkle<T> {
         self.nodestore.root_node()
     }
 
-    /// retrieve the underlying nodestore
-    pub const fn nodestore(&self) -> &T {
+    pub(crate) const fn nodestore(&self) -> &T {
         &self.nodestore
     }
 

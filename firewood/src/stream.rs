@@ -1,7 +1,6 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-
 use crate::merkle::{Key, Value};
 use crate::v2::api;
 
@@ -9,8 +8,8 @@ use crate::v2::api::Error;
 use firewood_storage::{
     BranchNode, Child, FileIoError, NibblesIterator, Node, PathIterItem, SharedNode, TrieReader,
 };
-use futures::stream::FusedStream;
 use futures::Stream;
+use futures::stream::FusedStream;
 use std::cmp::Ordering;
 use std::iter::once;
 use std::task::Poll;
@@ -361,10 +360,10 @@ impl<'a, T: TrieReader> MerkleKeyValueStream<'a, T> {
     pub(super) fn from_internal_state(merkle: &'a T, state: InternalStreamState) -> Self {
         Self {
             state: MerkleKeyValueStreamState::Initialized {
-                node_iter: MerkleNodeStream{
+                node_iter: MerkleNodeStream {
                     merkle,
                     state: state.0,
-                }
+                },
             },
             merkle,
         }
@@ -670,8 +669,8 @@ mod tests {
     use crate::merkle::Merkle;
 
     use super::*;
-    use test_case::test_case;
     use futures::StreamExt;
+    use test_case::test_case;
 
     pub(super) fn create_test_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
         let memstore = MemStore::new(vec![]);
