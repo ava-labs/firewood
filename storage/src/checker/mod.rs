@@ -144,23 +144,19 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             .root_as_maybe_persisted_node()
             .and_then(|node| self.root_hash().map(|root_hash| (node, root_hash)))
             .and_then(|(root, root_hash)| {
-                match root
-                    .as_linear_address()
-                    .ok_or(vec![CheckerError::UnpersistedRoot])
-                    .and_then(|root_address| {
-                        self.visit_trie(
-                            root_address,
-                            root_hash.into_hash_type(),
-                            &mut visited,
-                            opt.progress_bar.as_ref(),
-                            opt.hash_check,
-                        )
-                    }) {
-                    Ok(trie_stats) => Some(trie_stats),
-                    Err(e) => {
-                        errors.extend(e);
-                        None
-                    }
+                if let Some(root_address) = root.as_linear_address() {
+                    let (trie_stats, trie_errors) = self.visit_trie(
+                        root_address,
+                        root_hash.into_hash_type(),
+                        &mut visited,
+                        opt.progress_bar.as_ref(),
+                        opt.hash_check,
+                    );
+                    errors.extend(trie_errors);
+                    Some(trie_stats)
+                } else {
+                    errors.push(CheckerError::UnpersistedRoot);
+                    None
                 }
             })
             .unwrap_or_default();
@@ -208,7 +204,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         visited: &mut LinearAddressRangeSet,
         progress_bar: Option<&ProgressBar>,
         hash_check: bool,
-    ) -> Result<TrieStats, Vec<CheckerError>> {
+    ) -> (TrieStats, Vec<CheckerError>) {
         let trie = SubTrieMetadata {
             root_address,
             root_hash,
@@ -219,8 +215,11 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             has_peers: false,
         };
         let mut trie_stats = TrieStats::default();
-        self.visit_trie_helper(trie, visited, &mut trie_stats, progress_bar, hash_check)?;
-        Ok(trie_stats)
+        let errors = self
+            .visit_trie_helper(trie, visited, &mut trie_stats, progress_bar, hash_check)
+            .err()
+            .unwrap_or_default();
+        (trie_stats, errors)
     }
 
     /// Recursively traverse the trie from the given root node.
@@ -695,18 +694,17 @@ mod test {
 
         // verify that all of the space is accounted for - since there is no free area
         let mut visited = LinearAddressRangeSet::new(test_trie.high_watermark).unwrap();
-        let stats = nodestore
-            .visit_trie(
-                test_trie.root_address,
-                test_trie.root_hash,
-                &mut visited,
-                None,
-                true,
-            )
-            .unwrap();
+        let (stats, errors) = nodestore.visit_trie(
+            test_trie.root_address,
+            test_trie.root_hash,
+            &mut visited,
+            None,
+            true,
+        );
         let complement = visited.complement();
         assert_eq!(complement.into_iter().collect::<Vec<_>>(), vec![]);
         assert_eq!(stats, test_trie.stats);
+        assert_eq!(errors, vec![]);
     }
 
     #[test]
@@ -759,15 +757,13 @@ mod test {
 
         // run the checker and verify that it returns the HashMismatch error
         let mut visited = LinearAddressRangeSet::new(test_trie.high_watermark).unwrap();
-        let err = nodestore
-            .visit_trie(
-                test_trie.root_address,
-                test_trie.root_hash,
-                &mut visited,
-                None,
-                true,
-            )
-            .unwrap_err();
+        let (_, errors) = nodestore.visit_trie(
+            test_trie.root_address,
+            test_trie.root_hash,
+            &mut visited,
+            None,
+            true,
+        );
 
         let expected_error = CheckerError::HashMismatch {
             address: branch_addr,
@@ -776,7 +772,7 @@ mod test {
             parent_stored_hash,
             computed_hash,
         };
-        assert_eq!(err, vec![expected_error]);
+        assert_eq!(errors, vec![expected_error]);
     }
 
     #[test]
