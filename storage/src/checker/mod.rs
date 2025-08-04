@@ -100,7 +100,7 @@ struct SubTrieMetadata {
     depth: usize,
     path_prefix: Path,
     #[cfg(feature = "ethhash")]
-    num_peers: usize, // include this node
+    num_siblings: usize, // include this node
 }
 
 /// [`NodeStore`] checker
@@ -190,7 +190,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             depth: 0,
             path_prefix: Path::new(),
             #[cfg(feature = "ethhash")]
-            num_peers: 1,
+            num_siblings: 1,
         };
         let mut trie_stats = TrieStats::default();
         self.visit_trie_helper(trie, visited, &mut trie_stats, progress_bar, hash_check)?;
@@ -214,7 +214,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             parent,
             depth,
             mut path_prefix,
-            num_peers,
+            num_siblings,
         } = subtrie;
 
         #[cfg(not(feature = "ethhash"))]
@@ -305,7 +305,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                         depth: depth.saturating_add(1),
                         path_prefix: child_path_prefix,
                         #[cfg(feature = "ethhash")]
-                        num_peers: num_children,
+                        num_siblings: num_children,
                     };
                     self.visit_trie_helper(
                         child_subtrie,
@@ -335,7 +335,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         // hash check - at this point all children hashes have been verified
         if hash_check {
             #[cfg(feature = "ethhash")]
-            let hash = Self::compute_node_ethhash(&node, &mut path_prefix, num_peers);
+            let hash = Self::compute_node_ethhash(&node, &mut path_prefix, num_siblings);
             #[cfg(not(feature = "ethhash"))]
             let hash = hash_node(&node, &path_prefix);
             if hash != subtrie_root_hash {
@@ -543,7 +543,7 @@ mod test {
 
     /// Generate a test trie with the following structure:
     ///
-    #[cfg_attr(doc, aquamarine::aquamarine)]
+    #[cfg_attr(doc, aquamarine)]
     /// ```mermaid
     /// graph TD
     ///     Root["Root Node<br/>partial_path: [2]<br/>children: [0] -> Branch"]
