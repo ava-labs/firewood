@@ -771,15 +771,15 @@ mod test {
 
         let batch1: Batch<Vec<u8>, Vec<u8>> = (0..10)
             .map(|i| BatchOp::Put {
-                key: format!("key_{}", i).into_bytes(),
-                value: format!("value_{}", i).into_bytes(),
+                key: format!("key_{i}").into_bytes(),
+                value: format!("value_{i}").into_bytes(),
             })
             .collect();
 
         let batch2: Batch<Vec<u8>, Vec<u8>> = (10..20)
             .map(|i| BatchOp::Put {
                 key: format!("key_{}", i - 10).into_bytes(),
-                value: format!("value_{}", i).into_bytes(),
+                value: format!("value_{i}").into_bytes(),
             })
             .collect();
 
@@ -810,7 +810,7 @@ mod test {
             let (key2, value2) = kv2.unwrap();
 
             assert_eq!(key1, key2);
-            assert_eq!(&*value1, format!("value_{}", i).as_bytes());
+            assert_eq!(&*value1, format!("value_{i}").as_bytes());
             assert_eq!(&*value2, format!("value_{}", i + 10).as_bytes());
             i += 1;
         }
