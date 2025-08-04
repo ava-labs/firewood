@@ -90,24 +90,40 @@ fn get_helper<T: TrieReader>(
     node: &Node,
     key: &[u8],
 ) -> Result<Option<SharedNode>, FileIoError> {
+    println!("In get_helper: node {:?}, key {:?}", node, key);
+
     // 4 possibilities for the position of the `key` relative to `node`:
     // 1. The node is at `key`
     // 2. The key is above the node (i.e. its ancestor)
     // 3. The key is below the node (i.e. its descendant)
     // 4. Neither is an ancestor of the other
+    println!(
+        "Key: {:?} Node partial path: {:?}",
+        key,
+        node.partial_path()
+    );
     let path_overlap = PrefixOverlap::from(key, node.partial_path());
     let unique_key = path_overlap.unique_a;
     let unique_node = path_overlap.unique_b;
+
+    println!(
+        "path overlap {:?} unique_key {:?} unique_node {:?}",
+        path_overlap, unique_key, unique_node
+    );
 
     match (
         unique_key.split_first().map(|(index, path)| (*index, path)),
         unique_node.split_first(),
     ) {
         (_, Some(_)) => {
+            println!("Case 2 or 4");
             // Case (2) or (4)
             Ok(None)
         }
-        (None, None) => Ok(Some(node.clone().into())), // 1. The node is at `key`
+        (None, None) => {
+            println!("Node is at key");
+            Ok(Some(node.clone().into()))
+        } // 1. The node is at `key`
         (Some((child_index, remaining_key)), None) => {
             // 3. The key is below the node (i.e. its descendant)
             match node {
@@ -634,6 +650,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
         let (host_sender, thread_receiver) = mpsc::channel::<MerkleOp<S>>();
         let (thread_sender, host_receiver) = mpsc::channel::<WorkerReturn>();
         let mut m: Option<Arc<Merkle<NodeStore<MutableProposal, S>>>> = Some(merkle);
+
         let handle = thread::spawn(move || {
             let mut inserted_root = None;
             loop {
@@ -644,15 +661,41 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
                 match v {
                     MerkleOp::InsertData(node_opt, key, value) => {
                         println!("In insert data");
+
+                        #[allow(clippy::manual_let_else)]
+                        #[allow(clippy::single_match_else)]
                         let node = match node_opt {
                             Some(n) => n,
-                            None => inserted_root.expect("no previous insert"),
+                            None => match inserted_root {
+                                Some(root) => {
+                                    root
+                                }
+                                None => {
+                                    println!("InsertData key: {:?}", key);
+                                    let path_key = Path::from_nibbles_iterator(
+                                        NibblesIterator::new(key.as_ref()),
+                                    );
+                                    println!("inserted partial_path: {:?}", path_key);
+                                    inserted_root = Some(Node::Leaf(LeafNode {
+                                        partial_path: path_key,
+                                        value,
+                                    }));
+                                    continue;
+                                }
+                            },
                         };
+
+                        //println!("-----> Not reached here");
+                        println!("2: InsertData key: {:?} and value {:?}. Node is {:?}", key, value, node);
+                        let path_key = Path::from_nibbles_iterator(NibblesIterator::new(&key));
                         let a: Arc<Merkle<NodeStore<MutableProposal, S>>> =
                             m.expect("Merkle is not set before insert");
-                        let insert_result = a.insert_helper(node, &key, value);
+                        let insert_result = a.insert_helper(node, path_key.as_ref(), value);
                         match insert_result {
-                            Ok(n) => inserted_root = Some(n),
+                            Ok(n) => {
+                                println!("******** node n {:?}", n);
+                                inserted_root = Some(n);
+                            },
                             Err(_) => panic!("insert helper returned error"),
                         }
                         m = Some(a); // Put it back
@@ -666,7 +709,8 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
                     MerkleOp::ClearMerkle => {
                         m = None; // Decrement the Arc counter
                         //let _ = thread_sender.send(WorkerReturn::MerkleClearComplete);
-                        let _ = thread_sender.send(WorkerReturn::NodeResult(Ok(inserted_root.unwrap())));
+                        let _ = thread_sender
+                            .send(WorkerReturn::NodeResult(Ok(inserted_root.unwrap())));
                         inserted_root = None;
                         // TODO: Needs to send a message to the host
                     }
@@ -691,16 +735,21 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
     /// ## Errors
     ///
     /// ``FileIOError`` from reading a node.
-    pub fn insert(&self, node: Node, key: &[u8], value: Value) -> Result<(), SendError<MerkleOp<S>>> {
+    pub fn insert(
+        &self,
+        node: Option<Node>,
+        key: &[u8],
+        value: Value,
+    ) -> Result<(), SendError<MerkleOp<S>>> {
         println!("In workerpool insert");
         let a = self
             .worker_data
             .first()
             .expect("empty vector")
             .0
-            .send(MerkleOp::InsertData(Some(node), key.into(), value));
+            .send(MerkleOp::InsertData(node, key.into(), value));
         a
-        /* 
+        /*
         match a {
             Ok(()) => {
                 println!("Sent okay");
@@ -710,25 +759,25 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
             }
         }
         */
-/* 
-        // Blocks until result completes for now in this initial prototype.
-        let WorkerReturn::NodeResult(result) = self.worker_data
-            .first()
-            .expect("empty vector")
-            .1
-            .recv()
-            .expect("recv error") 
-        else {
-            panic!("received unexpected value from worker");
-        };
-        result
-*/
+        /*
+                // Blocks until result completes for now in this initial prototype.
+                let WorkerReturn::NodeResult(result) = self.worker_data
+                    .first()
+                    .expect("empty vector")
+                    .1
+                    .recv()
+                    .expect("recv error")
+                else {
+                    panic!("received unexpected value from worker");
+                };
+                result
+        */
     }
 
     /// Clears the Merkle trie so that it can be moved out of the Arc
-    /// 
+    ///
     /// ## Panics
-    /// 
+    ///
     /// Can panic if workerpool vector is incorrectly initialized.
     pub fn clear_merkle(&self) -> Result<Node, FileIoError> {
         let _ = self
@@ -739,27 +788,28 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
             .send(MerkleOp::ClearMerkle);
 
         // Blocks until result completes for now in this initial prototype.
-        let WorkerReturn::NodeResult(result) = self.worker_data
-            .first()
-            .expect("empty vector")
-            .1
-            .recv()
-            .expect("recv error") 
-        else {
-            panic!("received unexpected value from worker");
-        };
-        result
-
-/* 
-        // Just blocks until result completes for now in this initial prototype.
-        let _ = self
+        let WorkerReturn::NodeResult(result) = self
             .worker_data
             .first()
             .expect("empty vector")
             .1
             .recv()
-            .expect("recv error");
-*/
+            .expect("recv error")
+        else {
+            panic!("received unexpected value from worker");
+        };
+        result
+
+        /*
+                // Just blocks until result completes for now in this initial prototype.
+                let _ = self
+                    .worker_data
+                    .first()
+                    .expect("empty vector")
+                    .1
+                    .recv()
+                    .expect("recv error");
+        */
     }
 }
 
@@ -785,11 +835,13 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
         key: &[u8],
         value: Value,
     ) -> Result<(), SendError<MerkleOp<T>>> {
-        let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
+        //let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
+        //println!("In insert_worker_pool: {:?}", key);
 
         //let root = self.nodestore.mut_root();
 
         //let Some(root_node) = std::mem::take(root) else {
+        /*
         let Some(root_node) = root else {
             // The trie is empty. Create a new leaf node with `value` and set
             // it as the root.
@@ -800,11 +852,12 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
             // TODO: This needs to be done by the worker thread
             return Ok(());
 
-            //*root = root_node.into();
+            // *root = root_node.into();
             //return Ok(());
         };
+        */
 
-        worker_pool.insert(root_node, key.as_ref(), value)?;
+        worker_pool.insert(root, key, value)?;
         //let root_node = self.insert_helper(root_node, key.as_ref(), value)?;
         Ok(())
     }
@@ -846,10 +899,13 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
         // 2. The key is above the node (i.e. its ancestor)
         // 3. The key is below the node (i.e. its descendant)
         // 4. Neither is an ancestor of the other
+        println!("-------- key {:?} partial_path {:?}", key, node.partial_path().as_ref());
         let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
 
         let unique_key = path_overlap.unique_a;
         let unique_node = path_overlap.unique_b;
+
+        println!("path {:?}, unique_key {:?}, unique_node {:?}", path_overlap, unique_key, unique_node);
 
         match (
             unique_key
@@ -860,6 +916,7 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                 .map(|(index, path)| (*index, path.into())),
         ) {
             (None, None) => {
+                println!("###### Branch 1");
                 // 1. The node is at `key`
                 node.update_value(value);
                 counter!("firewood.insert", "merkle" => "update").increment(1);
@@ -873,12 +930,12 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                 //    node               key
                 //                        |
                 //                       node
+                println!("###### Branch 2");
                 let mut branch = BranchNode {
                     partial_path: path_overlap.shared.into(),
                     value: Some(value),
                     children: BranchNode::empty_children(),
                 };
-
                 // Shorten the node's partial path since it has a new parent.
                 node.update_partial_path(partial_path);
                 branch.update_child(child_index, Some(Child::Node(node)));
@@ -893,6 +950,7 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                 //    node         -->            node
                 //     |                           |
                 //    ... (key may be below)       ... (key is below)
+                println!("###### Branch 3");
                 match node {
                     Node::Branch(ref mut branch) => {
                         #[expect(clippy::indexing_slicing)]
@@ -950,6 +1008,7 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                 //     |                           |    \
                 //                               node   key
                 // Make a branch node that has both the current node and a new leaf node as children.
+                println!("###### Branch 4");
                 let mut branch = BranchNode {
                     partial_path: path_overlap.shared.into(),
                     value: None,
@@ -964,6 +1023,9 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                     partial_path: key_partial_path,
                 });
                 branch.update_child(key_index, Some(Child::Node(new_leaf)));
+
+
+                println!("--------------------- Returning branch: {:?}", branch);
 
                 counter!("firewood.insert", "merkle" => "split").increment(1);
                 Ok(Node::Branch(Box::new(branch)))

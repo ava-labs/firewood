@@ -184,15 +184,19 @@ fn decrease_key(key: &[u8; 32]) -> [u8; 32] {
 fn test_get_regression() {
     let mut merkle: Merkle<NodeStore<MutableProposal, MemStore>> = create_in_memory_merkle();
 
-    merkle.insert(&[1], Box::new([1])).unwrap();
-    assert_eq!(merkle.get_value(&[1]).unwrap(), Some(Box::from([1])));
+    //merkle.insert(&[0], Box::new([0])).unwrap();
+    //assert_eq!(merkle.get_value(&[0]).unwrap(), Some(Box::from([0])));
 
-    let root = merkle.nodestore.mut_root();
-    let root_node = std::mem::take(root);
+    //let root = merkle.nodestore.mut_root();
+    //let root_node = std::mem::take(root);
+
+   
     let merkle_arc = Arc::new(merkle);
     let worker_pool: WorkerPool<MemStore>= WorkerPool::new(merkle_arc.clone());
 
-    let a = merkle_arc.insert_worker_pool(root_node, &worker_pool, &[0], Box::new([0]));
+    let _ = merkle_arc.insert_worker_pool(None, &worker_pool, &[0], Box::new([0]));
+    let _ = merkle_arc.insert_worker_pool(None, &worker_pool, &[1], Box::new([1]));
+    //let _ = merkle_arc.insert_worker_pool(None, &worker_pool, &[2], Box::new([2]));
 
     let mut merkle = match worker_pool.clear_merkle() {
         Ok(root_node) => {
@@ -206,13 +210,17 @@ fn test_get_regression() {
         Err(_) => panic!("unable to retrieve result from worker pool"),
     };
 
+
+
+    //assert_eq!(merkle.get_value(&[0]).unwrap(), Some(Box::from([0])));
     //let mut merkle: Merkle<NodeStore<MutableProposal, MemStore>> = Arc::try_unwrap(merkle_arc).unwrap();
 
     //merkle.insert(&[0], Box::new([0])).unwrap();
+    //merkle.insert(&[1], Box::new([1])).unwrap();
     assert_eq!(merkle.get_value(&[0]).unwrap(), Some(Box::from([0])));
 
     //merkle.insert(&[1], Box::new([1])).unwrap();
-    //assert_eq!(merkle.get_value(&[1]).unwrap(), Some(Box::from([1])));
+    assert_eq!(merkle.get_value(&[1]).unwrap(), Some(Box::from([1])));
 
     merkle.insert(&[2], Box::new([2])).unwrap();
     assert_eq!(merkle.get_value(&[2]).unwrap(), Some(Box::from([2])));
