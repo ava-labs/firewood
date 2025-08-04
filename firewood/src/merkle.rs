@@ -13,6 +13,7 @@ use firewood_storage::{
     LeafNode, MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore, Parentable,
     Path, ReadableStorage, SharedNode, TrieHash, TrieReader, ValueDigest,
 };
+
 use futures::{StreamExt, TryStreamExt};
 use metrics::counter;
 use std::collections::HashSet;
@@ -21,7 +22,7 @@ use std::future::ready;
 use std::io::Error;
 use std::iter::once;
 use std::num::NonZeroUsize;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{SendError, Sender};
 use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 
@@ -592,7 +593,7 @@ impl<S: ReadableStorage> TryFrom<Merkle<NodeStore<MutableProposal, S>>>
 /// Different operations that can be sent to the worker pool
 pub enum MerkleOp<S> {
     /// Operaiton to call ``insert_helper`` at the specified node.
-    InsertData(Node, Box<[u8]>, Box<[u8]>),
+    InsertData(Option<Node>, Box<[u8]>, Box<[u8]>),
 
     /// Operation to termine the worker threads in the thread pool.
     Terminate,
@@ -627,34 +628,46 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
     ///
     /// Test
     #[must_use]
+    #[allow(clippy::match_wild_err_arm)]
     pub fn new(merkle: Arc<Merkle<NodeStore<MutableProposal, S>>>) -> Self {
         // Create a single thread and a single channel to the thread for now
         let (host_sender, thread_receiver) = mpsc::channel::<MerkleOp<S>>();
         let (thread_sender, host_receiver) = mpsc::channel::<WorkerReturn>();
         let mut m: Option<Arc<Merkle<NodeStore<MutableProposal, S>>>> = Some(merkle);
         let handle = thread::spawn(move || {
+            let mut inserted_root = None;
             loop {
                 let Ok(v) = thread_receiver.recv() else {
                     return; // Thread is unable to recv data from parent
                 };
                 println!("Received data");
                 match v {
-                    MerkleOp::InsertData(node, key, value) => {
+                    MerkleOp::InsertData(node_opt, key, value) => {
                         println!("In insert data");
+                        let node = match node_opt {
+                            Some(n) => n,
+                            None => inserted_root.expect("no previous insert"),
+                        };
                         let a: Arc<Merkle<NodeStore<MutableProposal, S>>> =
                             m.expect("Merkle is not set before insert");
-                        let b = a.insert_helper(node, &key, value);
+                        let insert_result = a.insert_helper(node, &key, value);
+                        match insert_result {
+                            Ok(n) => inserted_root = Some(n),
+                            Err(_) => panic!("insert helper returned error"),
+                        }
                         m = Some(a); // Put it back
                         //m = None; // Decrement the Arc counter
                         //let _ = Arc::into_inner(a);
-                        let _ = thread_sender.send(WorkerReturn::NodeResult(b));
+                        //let _ = thread_sender.send(WorkerReturn::NodeResult(b));
                     }
                     MerkleOp::Terminate => {
                         break;
                     }
                     MerkleOp::ClearMerkle => {
                         m = None; // Decrement the Arc counter
-                        let _ = thread_sender.send(WorkerReturn::MerkleClearComplete);
+                        //let _ = thread_sender.send(WorkerReturn::MerkleClearComplete);
+                        let _ = thread_sender.send(WorkerReturn::NodeResult(Ok(inserted_root.unwrap())));
+                        inserted_root = None;
                         // TODO: Needs to send a message to the host
                     }
                     MerkleOp::SetMerkle(merkle) => {
@@ -678,14 +691,16 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
     /// ## Errors
     ///
     /// ``FileIOError`` from reading a node.
-    pub fn insert(&self, node: Node, key: &[u8], value: Value) -> Result<Node, FileIoError> {
+    pub fn insert(&self, node: Node, key: &[u8], value: Value) -> Result<(), SendError<MerkleOp<S>>> {
         println!("In workerpool insert");
         let a = self
             .worker_data
             .first()
             .expect("empty vector")
             .0
-            .send(MerkleOp::InsertData(node, key.into(), value));
+            .send(MerkleOp::InsertData(Some(node), key.into(), value));
+        a
+        /* 
         match a {
             Ok(()) => {
                 println!("Sent okay");
@@ -694,6 +709,34 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
                 println!("Error sending {e}");
             }
         }
+        */
+/* 
+        // Blocks until result completes for now in this initial prototype.
+        let WorkerReturn::NodeResult(result) = self.worker_data
+            .first()
+            .expect("empty vector")
+            .1
+            .recv()
+            .expect("recv error") 
+        else {
+            panic!("received unexpected value from worker");
+        };
+        result
+*/
+    }
+
+    /// Clears the Merkle trie so that it can be moved out of the Arc
+    /// 
+    /// ## Panics
+    /// 
+    /// Can panic if workerpool vector is incorrectly initialized.
+    pub fn clear_merkle(&self) -> Result<Node, FileIoError> {
+        let _ = self
+            .worker_data
+            .first()
+            .expect("empty vector")
+            .0
+            .send(MerkleOp::ClearMerkle);
 
         // Blocks until result completes for now in this initial prototype.
         let WorkerReturn::NodeResult(result) = self.worker_data
@@ -706,21 +749,8 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
             panic!("received unexpected value from worker");
         };
         result
-    }
 
-    /// Clears the Merkle trie so that it can be moved out of the Arc
-    /// 
-    /// ## Panics
-    /// 
-    /// Can panic if workerpool vector is incorrectly initialized.
-    pub fn clear_merkle(&self) {
-        let _ = self
-            .worker_data
-            .first()
-            .expect("empty vector")
-            .0
-            .send(MerkleOp::ClearMerkle);
-
+/* 
         // Just blocks until result completes for now in this initial prototype.
         let _ = self
             .worker_data
@@ -729,6 +759,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
             .1
             .recv()
             .expect("recv error");
+*/
     }
 }
 
@@ -753,7 +784,7 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
         worker_pool: &WorkerPool<T>,
         key: &[u8],
         value: Value,
-    ) -> Result<Option<Node>, FileIoError> {
+    ) -> Result<(), SendError<MerkleOp<T>>> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
         //let root = self.nodestore.mut_root();
@@ -766,15 +797,16 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                 partial_path: key,
                 value,
             });
-            return Ok(root_node.into());
+            // TODO: This needs to be done by the worker thread
+            return Ok(());
 
             //*root = root_node.into();
             //return Ok(());
         };
 
-        let root_node = worker_pool.insert(root_node, key.as_ref(), value)?;
+        worker_pool.insert(root_node, key.as_ref(), value)?;
         //let root_node = self.insert_helper(root_node, key.as_ref(), value)?;
-        Ok(root_node.into())
+        Ok(())
     }
 
     /// Map `key` to `value` in the trie.
