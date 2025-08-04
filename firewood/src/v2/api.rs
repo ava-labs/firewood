@@ -52,6 +52,7 @@ pub trait OptionalHashKeyExt: Sized {
 #[cfg(not(feature = "ethhash"))]
 impl HashKeyExt for HashKey {
     /// Creates a new `HashKey` representing the empty root hash.
+    #[inline]
     fn default_root_hash() -> Option<HashKey> {
         None
     }
@@ -59,6 +60,7 @@ impl HashKeyExt for HashKey {
 
 #[cfg(feature = "ethhash")]
 impl HashKeyExt for HashKey {
+    #[inline]
     fn default_root_hash() -> Option<HashKey> {
         const EMPTY_RLP_HASH: [u8; size_of::<TrieHash>()] = [
             // "56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421"
@@ -72,6 +74,7 @@ impl HashKeyExt for HashKey {
 }
 
 impl OptionalHashKeyExt for Option<HashKey> {
+    #[inline]
     fn or_default_root_hash(self) -> Option<HashKey> {
         self.or_else(HashKey::default_root_hash)
     }
