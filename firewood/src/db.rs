@@ -8,14 +8,16 @@
 
 use crate::merkle::{Merkle, Value};
 use crate::stream::MerkleKeyValueStream;
-use crate::v2::api::{self, FrozenProof, FrozenRangeProof, HashKey, KeyType, ValueType};
+use crate::v2::api::{
+    self, FrozenProof, FrozenRangeProof, HashKey, KeyType, OptionalHashKeyExt, ValueType,
+};
 pub use crate::v2::api::{Batch, BatchOp};
 
 use crate::manager::{RevisionManager, RevisionManagerConfig};
 use async_trait::async_trait;
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeStore, TrieHash,
+    ImmutableProposal, NodeStore,
 };
 use metrics::{counter, describe_counter};
 use std::io::Write;
@@ -246,19 +248,8 @@ impl Db {
     }
 
     /// Synchronously get the root hash of the latest revision.
-    #[cfg(not(feature = "ethhash"))]
-    pub fn root_hash_sync(&self) -> Result<Option<TrieHash>, api::Error> {
-        self.manager.root_hash().map_err(api::Error::from)
-    }
-
-    /// Synchronously get the root hash of the latest revision.
-    #[cfg(feature = "ethhash")]
-    pub fn root_hash_sync(&self) -> Result<Option<TrieHash>, api::Error> {
-        Ok(Some(
-            self.manager
-                .root_hash()?
-                .unwrap_or_else(TrieHash::empty_rlp_hash),
-        ))
+    pub fn root_hash_sync(&self) -> Result<Option<HashKey>, api::Error> {
+        Ok(self.manager.root_hash()?.or_default_root_hash())
     }
 
     /// Synchronously get a revision from a root hash
@@ -342,20 +333,9 @@ pub struct Proposal<'db> {
 }
 
 impl Proposal<'_> {
-    /// Get the root hash of the proposal synchronously
-    #[cfg(not(feature = "ethhash"))]
-    pub fn root_hash_sync(&self) -> Result<Option<api::HashKey>, api::Error> {
-        Ok(self.nodestore.root_hash())
-    }
-
-    /// Get the root hash of the proposal synchronously
-    #[cfg(feature = "ethhash")]
-    pub fn root_hash_sync(&self) -> Result<Option<api::HashKey>, api::Error> {
-        Ok(Some(
-            self.nodestore
-                .root_hash()
-                .unwrap_or_else(api::HashKey::empty_rlp_hash),
-        ))
+    /// Synchronously get the root hash of the latest revision.
+    pub fn root_hash_sync(&self) -> Result<Option<HashKey>, api::Error> {
+        Ok(self.nodestore.root_hash().or_default_root_hash())
     }
 }
 

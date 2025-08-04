@@ -219,24 +219,6 @@ mod ethhash {
             TrieHash::empty().into()
         }
 
-        /// The hash of an empty trie, which is the Keccak256 hash of the RLP encoding
-        /// of an empty byte array. This is used for ethhash compatibility.
-        ///
-        /// ```
-        /// # use sha3::Digest as _;
-        /// assert_eq!(
-        ///     firewood_storage::HashType::empty_rlp_hash(),
-        ///     sha3::Keccak256::digest(rlp::NULL_RLP)
-        ///             .as_slice()
-        ///             .try_into()
-        ///             .expect("empty trie hash is 32 bytes"),
-        /// )
-        /// ```
-        #[must_use]
-        pub fn empty_rlp_hash() -> Self {
-            TrieHash::empty_rlp_hash().into()
-        }
-
         pub fn as_slice(&self) -> &[u8] {
             self
         }
