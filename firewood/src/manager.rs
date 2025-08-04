@@ -20,7 +20,7 @@ use metrics::gauge;
 use typed_builder::TypedBuilder;
 
 use crate::merkle::Merkle;
-use crate::v2::api::HashKey;
+use crate::v2::api::{HashKey, OptionalHashKeyExt};
 
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
@@ -96,10 +96,7 @@ impl RevisionManager {
             // committing_proposals: Default::default(),
         };
 
-        if let Some(hash) = nodestore
-            .root_hash()
-            .or_else(|| cfg!(feature = "ethhash").then(TrieHash::empty_rlp_hash))
-        {
+        if let Some(hash) = nodestore.root_hash().or_default() {
             manager
                 .by_hash
                 .write()
@@ -119,19 +116,13 @@ impl RevisionManager {
             .read()
             .expect("poisoned lock")
             .iter()
-            .filter_map(|r| {
-                r.root_hash()
-                    .or_else(|| cfg!(feature = "ethhash").then(TrieHash::empty_rlp_hash))
-            })
+            .filter_map(|r| r.root_hash().or_default())
             .chain(
                 self.proposals
                     .lock()
                     .expect("poisoned lock")
                     .iter()
-                    .filter_map(|p| {
-                        p.root_hash()
-                            .or_else(|| cfg!(feature = "ethhash").then(TrieHash::empty_rlp_hash))
-                    }),
+                    .filter_map(|p| p.root_hash().or_default()),
             )
             .collect()
     }
@@ -175,10 +166,7 @@ impl RevisionManager {
                 .expect("poisoned lock")
                 .pop_front()
                 .expect("must be present");
-            if let Some(oldest_hash) = oldest
-                .root_hash()
-                .or_else(|| cfg!(feature = "ethhash").then(TrieHash::empty_rlp_hash))
-            {
+            if let Some(oldest_hash) = oldest.root_hash().or_default() {
                 self.by_hash
                     .write()
                     .expect("poisoned lock")
@@ -217,10 +205,7 @@ impl RevisionManager {
             .write()
             .expect("poisoned lock")
             .push_back(committed.clone());
-        if let Some(hash) = committed
-            .root_hash()
-            .or_else(|| cfg!(feature = "ethhash").then(TrieHash::empty_rlp_hash))
-        {
+        if let Some(hash) = committed.root_hash().or_default() {
             self.by_hash
                 .write()
                 .expect("poisoned lock")

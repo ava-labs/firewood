@@ -7,14 +7,6 @@ use sha2::digest::generic_array::GenericArray;
 use sha2::digest::typenum;
 use std::fmt::{self, Debug, Display, Formatter};
 
-const EMPTY_HASH: [u8; TRIE_HASH_LEN] = [0; TRIE_HASH_LEN];
-
-const EMPTY_RLP_HASH: [u8; TRIE_HASH_LEN] = [
-    // "56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421"
-    0x56, 0xe8, 0x1f, 0x17, 0x1b, 0xcc, 0x55, 0xa6, 0xff, 0x83, 0x45, 0xe6, 0x92, 0xc0, 0xf8, 0x6e,
-    0x5b, 0x48, 0xe0, 0x1b, 0x99, 0x6c, 0xad, 0xc0, 0x01, 0x62, 0x2f, 0xb5, 0xe3, 0x63, 0xb4, 0x21,
-];
-
 /// An error that occurs when trying to convert a slice to a `TrieHash`
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, thiserror::Error)]
 #[error("could not convert slice to TrieHash (an array of 32 bytes)")]
@@ -42,25 +34,7 @@ impl TrieHash {
     /// ```
     #[must_use]
     pub fn empty() -> Self {
-        TrieHash(EMPTY_HASH.into())
-    }
-
-    /// The hash of an empty trie, which is the Keccak256 hash of the RLP encoding
-    /// of an empty byte array. This is used for ethhash compatibility.
-    ///
-    /// ```
-    /// # use sha3::Digest as _;
-    /// assert_eq!(
-    ///     firewood_storage::TrieHash::empty_rlp_hash(),
-    ///     sha3::Keccak256::digest(rlp::NULL_RLP)
-    ///             .as_slice()
-    ///             .try_into()
-    ///             .expect("empty trie hash is 32 bytes"),
-    /// )
-    /// ```
-    #[must_use]
-    pub fn empty_rlp_hash() -> Self {
-        TrieHash(EMPTY_RLP_HASH.into())
+        TrieHash([0; TRIE_HASH_LEN].into())
     }
 }
 
