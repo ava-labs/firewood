@@ -1,21 +1,16 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![expect(
-    clippy::used_underscore_binding,
-    reason = "Found 3 occurrences after enabling the lint."
-)]
 
 use crate::merkle::{Key, Value};
 use crate::v2::api;
 
-use crate::stream::NodeStreamState::StartFromKey;
 use crate::v2::api::Error;
 use firewood_storage::{
     BranchNode, Child, FileIoError, NibblesIterator, Node, PathIterItem, SharedNode, TrieReader,
 };
 use futures::stream::FusedStream;
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use std::cmp::Ordering;
 use std::iter::once;
 use std::task::Poll;
@@ -84,7 +79,7 @@ pub struct InternalStreamState(NodeStreamState);
 
 impl From<Key> for NodeStreamState {
     fn from(key: Key) -> Self {
-        StartFromKey(key)
+        Self::StartFromKey(key)
     }
 }
 
@@ -104,10 +99,6 @@ impl<'a, T: TrieReader> MerkleNodeStream<'a, T> {
             state: NodeStreamState::from(key),
             merkle,
         }
-    }
-
-    const fn from(merkle: &'a T, state: NodeStreamState) -> Self {
-        Self { state, merkle }
     }
 
     /// Internal function that handles the core iteration logic shared between Iterator and Stream implementations.
@@ -367,10 +358,13 @@ impl<'a, T: TrieReader> MerkleKeyValueStream<'a, T> {
     }
 
     /// Construct a [`MerkleKeyValueStream`] from prior internal state
-    pub fn from_internal_state(merkle: &'a T, state: InternalStreamState) -> Self {
+    pub(super) fn from_internal_state(merkle: &'a T, state: InternalStreamState) -> Self {
         Self {
             state: MerkleKeyValueStreamState::Initialized {
-                node_iter: MerkleNodeStream::from(merkle, state.0),
+                node_iter: MerkleNodeStream{
+                    merkle,
+                    state: state.0,
+                }
             },
             merkle,
         }
@@ -378,17 +372,16 @@ impl<'a, T: TrieReader> MerkleKeyValueStream<'a, T> {
 
     /// retrieve the internal state of the stream
     #[must_use]
-    pub fn internal_state(self) -> InternalStreamState {
+    pub(super) fn internal_state(self) -> InternalStreamState {
         let node_state = match self.state {
             MerkleKeyValueStreamState::Initialized { node_iter } => node_iter.state,
-            MerkleKeyValueStreamState::_Uninitialized(k) => StartFromKey(k),
+            MerkleKeyValueStreamState::_Uninitialized(k) => NodeStreamState::StartFromKey(k),
         };
         InternalStreamState(node_state)
     }
 
     /// gets the next value synchronously
-    // TODO: Maybe Just impl Iterator? Caller would need to explicitly use Stream::next, Iteartor::next
-    pub fn next_sync(&mut self) -> Option<Result<(Key, Value), Error>> {
+    pub(super) fn next_internal(&mut self) -> Option<Result<(Key, Value), Error>> {
         loop {
             match &mut self.state {
                 MerkleKeyValueStreamState::_Uninitialized(key) => {
@@ -426,38 +419,7 @@ impl<T: TrieReader> Stream for MerkleKeyValueStream<'_, T> {
         mut self: std::pin::Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        // destructuring is necessary here because we need mutable access to `key_state`
-        // at the same time as immutable access to `merkle`
-        let Self { state, merkle } = &mut *self;
-
-        match state {
-            MerkleKeyValueStreamState::_Uninitialized(key) => {
-                let iter = MerkleNodeStream::new(*merkle, key.clone());
-                self.state = MerkleKeyValueStreamState::Initialized { node_iter: iter };
-                self.poll_next(_cx)
-            }
-            MerkleKeyValueStreamState::Initialized { node_iter: iter } => {
-                match iter.poll_next_unpin(_cx) {
-                    Poll::Ready(node) => match node {
-                        Some(Ok((key, node))) => match &*node {
-                            Node::Branch(branch) => {
-                                let Some(value) = branch.value.as_ref() else {
-                                    // This node doesn't have a value to return.
-                                    // Continue to the next node.
-                                    return self.poll_next(_cx);
-                                };
-
-                                Poll::Ready(Some(Ok((key, value.clone()))))
-                            }
-                            Node::Leaf(leaf) => Poll::Ready(Some(Ok((key, leaf.value.clone())))),
-                        },
-                        Some(Err(e)) => Poll::Ready(Some(Err(e.into()))),
-                        None => Poll::Ready(None),
-                    },
-                    Poll::Pending => Poll::Pending,
-                }
-            }
-        }
+        Poll::Ready(self.next_internal())
     }
 }
 
@@ -709,6 +671,7 @@ mod tests {
 
     use super::*;
     use test_case::test_case;
+    use futures::StreamExt;
 
     pub(super) fn create_test_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
         let memstore = MemStore::new(vec![]);

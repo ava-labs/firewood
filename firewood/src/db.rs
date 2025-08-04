@@ -44,10 +44,14 @@ impl std::fmt::Debug for DbMetrics {
     }
 }
 
+/// State of an iteration on a revision, view, or proposal
 #[derive(Debug)]
 pub enum IterationState {
+    /// iteration hasn't started yet and can be started from given key (or beginning if not provided)
     StartFromKey(Option<Box<[u8]>>),
+    /// iteration can continue from internal state of stream
     ContinueFromState(InternalStreamState),
+    /// iteration is done
     Done,
 }
 
@@ -62,6 +66,7 @@ pub trait DbViewSyncBytes: std::fmt::Debug {
     /// find a value synchronously using raw bytes
     fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError>;
 
+    /// iterate on this view starting from given iteration state
     fn iterate(&self, state: IterationState) -> Result<(Option<(Key, Value)>, IterationState), Error>;
 }
 
@@ -102,12 +107,11 @@ fn iterate_internal<T: TrieReader>(merkle: &Merkle<T>, state: IterationState) ->
         }
         IterationState::Done => unreachable!(),
     };
-    let kv = it.next_sync();
-    if kv.is_none() {
+    let kv = it.next_internal();
+    let Some(kv) = kv else {
         return Ok((None, IterationState::Done));
-    }
-    let kv = kv.unwrap()?;
-    Ok((Some(kv), IterationState::ContinueFromState(it.internal_state())))
+    };
+    Ok((Some(kv?), IterationState::ContinueFromState(it.internal_state())))
 }
 
 impl DbViewSyncBytes for Proposal<'_> {
@@ -540,7 +544,7 @@ mod test {
     use firewood_storage::CheckOpt;
     use rand::rng;
 
-    use crate::db::Db;
+    use crate::db::{Batch, Db, IterationState};
     use crate::v2::api::{Db as _, DbView as _, Error, Proposal as _};
 
     use super::{BatchOp, DbConfig};
@@ -759,6 +763,59 @@ mod test {
             .unwrap()
             .unwrap();
         assert_eq!(&*value, b"proposal_value");
+    }
+
+    /// Tests if iterate works correctly both on a proposal and historical revisions
+    #[tokio::test]
+    async fn test_iterate() {
+        let db = testdb().await;
+
+        let batch1: Batch<Vec<u8>, Vec<u8>> = (0..10)
+            .map(|i| BatchOp::Put {
+                key: format!("key_{}", i).into_bytes(),
+                value: format!("value_{}", i).into_bytes(),
+            })
+            .collect();
+
+        let batch2: Batch<Vec<u8>, Vec<u8>> = (10..20)
+            .map(|i| BatchOp::Put {
+                key: format!("key_{}", i - 10).into_bytes(),
+                value: format!("value_{}", i).into_bytes(),
+            })
+            .collect();
+
+        let proposal = db.propose(batch1).await.unwrap();
+        let historical_hash = proposal.root_hash().await.unwrap().unwrap();
+        proposal.commit().await.unwrap();
+
+        // Create a new proposal (uncommitted)
+        let proposal = db.propose(batch2).await.unwrap();
+        let proposal_hash = proposal.root_hash().await.unwrap().unwrap();
+
+        // Test that view_sync can find the historical revision
+        let historical_view = db.view_sync(historical_hash).unwrap();
+        let proposal_view = db.view_sync(proposal_hash).unwrap();
+        let (mut kv1, mut state1) = (None, IterationState::StartFromKey(None));
+        let (mut kv2, mut state2) = (None, IterationState::StartFromKey(None));
+        // suppress overwritten warning
+        let _ = (kv1, kv2);
+        let mut i = 0;
+
+        while !(matches!(state1, IterationState::Done) || matches!(state2, IterationState::Done)){
+            (kv1, state1) = historical_view.iterate(state1).unwrap();
+            (kv2, state2) = proposal_view.iterate(state2).unwrap();
+            if kv1.is_none() && kv2.is_none(){
+                break;
+            }
+            let (key1, value1) = kv1.unwrap();
+            let (key2, value2) = kv2.unwrap();
+
+            assert_eq!(key1, key2);
+            assert_eq!(&*value1, format!("value_{}", i).as_bytes());
+            assert_eq!(&*value2, format!("value_{}", i + 10).as_bytes());
+            i += 1;
+        }
+        assert_eq!(i, 10);
     }
 
     /// Test that proposing on a proposal works as expected
