@@ -543,7 +543,7 @@ mod test {
 
     /// Generate a test trie with the following structure:
     ///
-    #[cfg_attr(doc, aquamarine)]
+    #[cfg_attr(doc, aquamarine::aquamarine)]
     /// ```mermaid
     /// graph TD
     ///     Root["Root Node<br/>partial_path: [2]<br/>children: [0] -> Branch"]
