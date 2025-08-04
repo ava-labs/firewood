@@ -249,7 +249,7 @@ impl Db {
 
     /// Synchronously get the root hash of the latest revision.
     pub fn root_hash_sync(&self) -> Result<Option<HashKey>, api::Error> {
-        Ok(self.manager.root_hash()?.or_default())
+        Ok(self.manager.root_hash()?.or_default_root_hash())
     }
 
     /// Synchronously get a revision from a root hash
@@ -335,7 +335,7 @@ pub struct Proposal<'db> {
 impl Proposal<'_> {
     /// Synchronously get the root hash of the latest revision.
     pub fn root_hash_sync(&self) -> Result<Option<HashKey>, api::Error> {
-        Ok(self.nodestore.root_hash().or_default())
+        Ok(self.nodestore.root_hash().or_default_root_hash())
     }
 }
 

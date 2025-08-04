@@ -46,7 +46,7 @@ pub trait HashKeyExt: Sized {
 /// An extension trait for an optional `HashKey` type to provide additional methods.
 pub trait OptionalHashKeyExt: Sized {
     /// Returns the default root hash if the current value is [`None`].
-    fn or_default(self) -> Option<HashKey>;
+    fn or_default_root_hash(self) -> Option<HashKey>;
 }
 
 #[cfg(not(feature = "ethhash"))]
@@ -72,7 +72,7 @@ impl HashKeyExt for HashKey {
 }
 
 impl OptionalHashKeyExt for Option<HashKey> {
-    fn or_default(self) -> Option<HashKey> {
+    fn or_default_root_hash(self) -> Option<HashKey> {
         self.or_else(HashKey::default_root_hash)
     }
 }

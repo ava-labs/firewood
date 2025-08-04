@@ -96,7 +96,7 @@ impl RevisionManager {
             // committing_proposals: Default::default(),
         };
 
-        if let Some(hash) = nodestore.root_hash().or_default() {
+        if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
             manager
                 .by_hash
                 .write()
@@ -116,13 +116,13 @@ impl RevisionManager {
             .read()
             .expect("poisoned lock")
             .iter()
-            .filter_map(|r| r.root_hash().or_default())
+            .filter_map(|r| r.root_hash().or_default_root_hash())
             .chain(
                 self.proposals
                     .lock()
                     .expect("poisoned lock")
                     .iter()
-                    .filter_map(|p| p.root_hash().or_default()),
+                    .filter_map(|p| p.root_hash().or_default_root_hash()),
             )
             .collect()
     }
@@ -166,7 +166,7 @@ impl RevisionManager {
                 .expect("poisoned lock")
                 .pop_front()
                 .expect("must be present");
-            if let Some(oldest_hash) = oldest.root_hash().or_default() {
+            if let Some(oldest_hash) = oldest.root_hash().or_default_root_hash() {
                 self.by_hash
                     .write()
                     .expect("poisoned lock")
@@ -205,7 +205,7 @@ impl RevisionManager {
             .write()
             .expect("poisoned lock")
             .push_back(committed.clone());
-        if let Some(hash) = committed.root_hash().or_default() {
+        if let Some(hash) = committed.root_hash().or_default_root_hash() {
             self.by_hash
                 .write()
                 .expect("poisoned lock")
