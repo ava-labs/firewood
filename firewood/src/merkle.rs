@@ -766,6 +766,16 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
     }
 }
 
+#[derive(Debug)]
+/// Return value for calling `insert_helper_parallel`.
+pub enum ParallelInsertReturn {
+    /// Return this if operation cannot be performed while there are other operations outstanding.
+    RetryNonThreaded(Node),
+
+    /// Return this if operation was performed in paralle.
+    Performed(Node),
+}
+
 #[expect(clippy::missing_errors_doc)]
 impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
     /// Convert a merkle backed by an `MutableProposal` into an `ImmutableProposal`
@@ -836,6 +846,116 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
         let root_node = self.insert_helper(root_node, key.as_ref(), value)?;
         *self.nodestore.mut_root() = root_node.into();
         Ok(())
+    }
+
+    /// Map `key` to `value` into the subtrie rooted at `node`.
+    /// Each element of `key` is 1 nibble.
+    /// Returns the new root of the subtrie.
+    pub fn insert_helper_for_parallel(
+        &self,
+        mut node: Node,
+        key: &[u8],
+        value: Value,
+    ) -> Result<ParallelInsertReturn, FileIoError> {
+        // 4 possibilities for the position of the `key` relative to `node`:
+        // 1. The node is at `key`
+        // 2. The key is above the node (i.e. its ancestor)
+        // 3. The key is below the node (i.e. its descendant)
+        // 4. Neither is an ancestor of the other
+        let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
+
+        let unique_key = path_overlap.unique_a;
+        let unique_node = path_overlap.unique_b;
+
+        match (
+            unique_key
+                .split_first()
+                .map(|(index, path)| (*index, path.into())),
+            unique_node
+                .split_first()
+                .map(|(index, path)| (*index, <&[u8] as std::convert::Into<Path>>::into(path))),
+                //.map(|(index, path)| (*index, path.into())),
+        ) {
+            (None, None) => {
+                // 1. The node is at `key`
+                node.update_value(value);
+                counter!("firewood.insert", "merkle" => "update").increment(1);
+                Ok(ParallelInsertReturn::Performed(node))
+            }
+            (None, Some((_child_index, _partial_path))) => {
+                // Rotates the root. Should not be applied until the outstanding operations
+                // have been merged into the root. Return a special type to tell the caller
+                // to block until all operations are done and then perform a non-threaded
+                // insert for this key/value
+                Ok(ParallelInsertReturn::RetryNonThreaded(node))
+            }
+            (Some((child_index, partial_path)), None) => {
+                // 3. The key is below the node (i.e. its descendant)
+                //    ...                         ...
+                //     |                           |
+                //    node         -->            node
+                //     |                           |
+                //    ... (key may be below)       ... (key is below)
+                match node {
+                    Node::Branch(ref mut branch) => {
+                        #[expect(clippy::indexing_slicing)]
+                        let child = match std::mem::take(&mut branch.children[child_index as usize])
+                        {
+                            None => {
+                                // TODO: Send a None to the worker pool? Or just perform the insert here?
+                                // There is no child at this index.
+                                // Create a new leaf and put it here.
+                                let new_leaf = Node::Leaf(LeafNode {
+                                    value,
+                                    partial_path,
+                                });
+                                branch.update_child(child_index, Some(Child::Node(new_leaf)));
+                                counter!("firewood.insert", "merkle"=>"below").increment(1);
+                                return Ok(ParallelInsertReturn::Performed(node));
+                            }
+                            Some(Child::Node(child)) => child,
+                            Some(Child::AddressWithHash(addr, _)) => {
+                                // TODO: Send this address to the worker pool.
+                                self.nodestore.read_for_update(addr.into())?
+                            }
+                            Some(Child::MaybePersisted(maybe_persisted, _)) => {
+                                // TODO: send this maybe_persisted to the worker pool.
+                                self.nodestore.read_for_update(maybe_persisted.clone())?
+                            }
+                        };
+
+                        // TODO: Send to the worker pool. Don't need to update the child
+                        let child = self.insert_helper(child, partial_path.as_ref(), value)?;
+                        branch.update_child(child_index, Some(Child::Node(child)));
+                        Ok(ParallelInsertReturn::Performed(node))
+                    }
+                    Node::Leaf(ref mut _leaf) => {
+                        // Rotates the root. Should not be applied until the outstanding operations
+                        // have been merged into the root. Return a special type to tell the caller
+                        // to block until all operations are done and then perform a non-threaded
+                        // insert for this key/value
+                        Ok(ParallelInsertReturn::RetryNonThreaded(node))
+                    }
+                }
+            }
+            (Some((_key_index, _key_partial_path)), Some((_node_index, _node_partial_path))) => {
+                // 4. Neither is an ancestor of the other
+                //    ...                         ...
+                //     |                           |
+                //    node         -->            branch
+                //     |                           |    \
+                //                               node   key
+                // Make a branch node that has both the current node and a new leaf node as children.
+                // (When called from the root): Rotates the root. Should block until all parallel
+                // operations have completed.
+                //
+                // Rotates the root. Should not be applied until the outstanding operations
+                // have been merged into the root. Return a special type to tell the caller
+                // to block until all operations are done and then perform a non-threaded
+                // insert for this key/value
+                Ok(ParallelInsertReturn::RetryNonThreaded(node))
+            }
+        }
     }
 
     /// Map `key` to `value` into the subtrie rooted at `node`.
