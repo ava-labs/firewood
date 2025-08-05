@@ -90,40 +90,24 @@ fn get_helper<T: TrieReader>(
     node: &Node,
     key: &[u8],
 ) -> Result<Option<SharedNode>, FileIoError> {
-    println!("In get_helper: node {:?}, key {:?}", node, key);
-
     // 4 possibilities for the position of the `key` relative to `node`:
     // 1. The node is at `key`
     // 2. The key is above the node (i.e. its ancestor)
     // 3. The key is below the node (i.e. its descendant)
     // 4. Neither is an ancestor of the other
-    println!(
-        "Key: {:?} Node partial path: {:?}",
-        key,
-        node.partial_path()
-    );
     let path_overlap = PrefixOverlap::from(key, node.partial_path());
     let unique_key = path_overlap.unique_a;
     let unique_node = path_overlap.unique_b;
-
-    println!(
-        "path overlap {:?} unique_key {:?} unique_node {:?}",
-        path_overlap, unique_key, unique_node
-    );
 
     match (
         unique_key.split_first().map(|(index, path)| (*index, path)),
         unique_node.split_first(),
     ) {
         (_, Some(_)) => {
-            println!("Case 2 or 4");
             // Case (2) or (4)
             Ok(None)
         }
-        (None, None) => {
-            println!("Node is at key");
-            Ok(Some(node.clone().into()))
-        } // 1. The node is at `key`
+        (None, None) => Ok(Some(node.clone().into())), // 1. The node is at `key`
         (Some((child_index, remaining_key)), None) => {
             // 3. The key is below the node (i.e. its descendant)
             match node {
@@ -660,10 +644,44 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
                 println!("Received data");
                 match v {
                     MerkleOp::InsertData(node_opt, key, value) => {
-                        println!("In insert data");
+                        // There are four possible cases to consider here.
+                        // 1.   inserted_root is None and node_opt is None. This means that we need to
+                        //      create a sub-trie. We create a Leaf node and set it to inserted_root and
+                        //      continue from the loop.
+                        // 2.   inserted_root is None and node_opt is not None. This means we are adding
+                        //      to an existing trie rooted at node_opt. We set node to the inner of
+                        //      node_opt.
+                        // 3.   inserted_root is not None and node_opt is None. Same as case 2 except
+                        //      we are adding to the sub-trie rooted at inserted_root.
+                        // 4.   Both insert_root and node_opt are not None. This indicates a misuse
+                        //      of the interface and should be logged.
 
-                        #[allow(clippy::manual_let_else)]
-                        #[allow(clippy::single_match_else)]
+                        let node = match node_opt {
+                            Some(node) => {
+                                if inserted_root.is_some() {
+                                    continue;  // TODO: add logging here. Just skip for now
+                                }
+                                node
+                            }
+                            None => {
+                                if let Some(node) = inserted_root {
+                                    node
+                                } else {
+                                    println!("InsertData key: {key:?}");
+                                    let path_key = Path::from_nibbles_iterator(
+                                        NibblesIterator::new(key.as_ref()),
+                                    );
+                                    println!("inserted partial_path: {path_key:?}");
+                                    inserted_root = Some(Node::Leaf(LeafNode {
+                                        partial_path: path_key,
+                                        value,
+                                    }));
+                                    continue;
+                                }
+                            }
+                        };
+
+                        /*
                         let node = match node_opt {
                             Some(n) => n,
                             None => match inserted_root {
@@ -684,9 +702,12 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
                                 }
                             },
                         };
+                        */
 
                         //println!("-----> Not reached here");
-                        println!("2: InsertData key: {:?} and value {:?}. Node is {:?}", key, value, node);
+                        println!(
+                            "2: InsertData key: {key:?} and value {value:?}. Node is {node:?}"
+                        );
                         let path_key = Path::from_nibbles_iterator(NibblesIterator::new(&key));
                         let a: Arc<Merkle<NodeStore<MutableProposal, S>>> =
                             m.expect("Merkle is not set before insert");
@@ -695,7 +716,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
                             Ok(n) => {
                                 println!("******** node n {:?}", n);
                                 inserted_root = Some(n);
-                            },
+                            }
                             Err(_) => panic!("insert helper returned error"),
                         }
                         m = Some(a); // Put it back
@@ -899,13 +920,20 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
         // 2. The key is above the node (i.e. its ancestor)
         // 3. The key is below the node (i.e. its descendant)
         // 4. Neither is an ancestor of the other
-        println!("-------- key {:?} partial_path {:?}", key, node.partial_path().as_ref());
+        println!(
+            "-------- key {:?} partial_path {:?}",
+            key,
+            node.partial_path().as_ref()
+        );
         let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
 
         let unique_key = path_overlap.unique_a;
         let unique_node = path_overlap.unique_b;
 
-        println!("path {:?}, unique_key {:?}, unique_node {:?}", path_overlap, unique_key, unique_node);
+        println!(
+            "path {:?}, unique_key {:?}, unique_node {:?}",
+            path_overlap, unique_key, unique_node
+        );
 
         match (
             unique_key
@@ -1023,7 +1051,6 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                     partial_path: key_partial_path,
                 });
                 branch.update_child(key_index, Some(Child::Node(new_leaf)));
-
 
                 println!("--------------------- Returning branch: {:?}", branch);
 
