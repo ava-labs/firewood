@@ -15,7 +15,7 @@ use crate::manager::{RevisionManager, RevisionManagerConfig};
 use async_trait::async_trait;
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeStore, Parentable, ReadableStorage, TrieHash, TrieReader,
+    ImmutableProposal, NodeStore, ReadableStorage, TrieHash, TrieReader,
 };
 use metrics::{counter, describe_counter};
 use std::io::Write;
@@ -86,7 +86,7 @@ impl<T: DbViewSyncBytes> DbViewSync for T {
 impl<T, S> DbViewSyncBytes for NodeStore<T, S>
 where
     NodeStore<T, S>: TrieReader,
-    T: Parentable + std::fmt::Debug,
+    T: std::fmt::Debug,
     S: ReadableStorage,
 {
     fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
@@ -539,16 +539,17 @@ impl Proposal<'_> {
 mod test {
     #![expect(clippy::unwrap_used)]
 
+    use firewood_storage::{CheckOpt, MemStore, MutableProposal, NodeStore};
+    use rand::rng;
     use std::ops::{Deref, DerefMut};
     use std::path::PathBuf;
+    use std::sync::Arc;
 
-    use firewood_storage::CheckOpt;
-    use rand::rng;
-
-    use crate::db::{Batch, Db, IterationState};
-    use crate::v2::api::{Db as _, DbView as _, Proposal as _};
+    use crate::db::{Batch, Db, DbViewSyncBytes, IterationState};
+    use crate::v2::api::{Db as _, DbView as _, HashKey, Proposal as _};
 
     use super::{BatchOp, DbConfig};
+    use test_case::test_case;
 
     #[tokio::test]
     async fn test_proposal_reads() {
@@ -749,34 +750,77 @@ mod test {
         assert_eq!(&*value, b"proposal_value");
     }
 
+    /// Tests if iterate works correctly on an empty node store and also if calling next on done state works
+    #[tokio::test]
+    async fn test_iterate_empty_and_next() {
+        let nodestore = create_test_nodestore();
+        let state = assert_iterator_next_done(&nodestore, IterationState::StartFromKey(None));
+        assert_iterator_next_done(&nodestore, state);
+    }
+
+    /// Tests if iterate works correctly with one key
+    #[tokio::test]
+    async fn test_iterate_single() {
+        let db = testdb().await;
+
+        let batch = batch_data(1, 0, 0);
+        let root_hash = propose_on_testdb(&db, batch, true).await;
+        let view = db.view_sync(root_hash).unwrap();
+        let state = assert_iterator_next_is(
+            view.as_ref(),
+            IterationState::StartFromKey(None),
+            b"key0",
+            b"value0",
+        );
+        assert_iterator_next_done(view.as_ref(), state);
+
+        assert_iterator_next_done(
+            view.as_ref(),
+            IterationState::StartFromKey(Some(b"key1".as_slice().into())),
+        );
+    }
+
+    /// Tests if iterate works correctly starting from different keys
+    #[test_case(0; "key before all keys")]
+    #[test_case(1; "first key")]
+    #[test_case(3; "key in middle")]
+    #[test_case(7; "last key")]
+    #[test_case(8; "key after last key")]
+    #[tokio::test]
+    async fn test_iterate_start_from(from: u32) {
+        let db = testdb().await;
+
+        let batch = batch_data(6, 1, 1);
+        let expected = (1..7).filter(|i| i >= &from).collect::<Vec<u32>>();
+
+        let root_hash = propose_on_testdb(&db, batch, true).await;
+        let view = db.view_sync(root_hash).unwrap();
+        let mut state =
+            IterationState::StartFromKey(Some(format!("key{from}").into_bytes().into()));
+
+        for expected_k in expected {
+            state = assert_iterator_next_is(
+                view.as_ref(),
+                state,
+                format!("key{expected_k}").as_bytes(),
+                format!("value{expected_k}").as_bytes(),
+            );
+        }
+
+        assert_iterator_next_done(view.as_ref(), state);
+    }
+
     /// Tests if iterate works correctly both on a proposal and historical revisions
     #[tokio::test]
     async fn test_iterate() {
         let db = testdb().await;
 
-        let batch1: Batch<Vec<u8>, Vec<u8>> = (0..10)
-            .map(|i| BatchOp::Put {
-                key: format!("key_{i}").into_bytes(),
-                value: format!("value_{i}").into_bytes(),
-            })
-            .collect();
+        let batch1 = batch_data(10, 0, 0);
+        let batch2 = batch_data(10, 0, 10);
 
-        let batch2: Batch<Vec<u8>, Vec<u8>> = (10..20)
-            .map(|i| BatchOp::Put {
-                key: format!("key_{}", i - 10).into_bytes(),
-                value: format!("value_{i}").into_bytes(),
-            })
-            .collect();
+        let historical_hash = propose_on_testdb(&db, batch1, true).await;
+        let proposal_hash = propose_on_testdb(&db, batch2, false).await;
 
-        let proposal = db.propose(batch1).await.unwrap();
-        let historical_hash = proposal.root_hash().await.unwrap().unwrap();
-        proposal.commit().await.unwrap();
-
-        // Create a new proposal (uncommitted)
-        let proposal = db.propose(batch2).await.unwrap();
-        let proposal_hash = proposal.root_hash().await.unwrap().unwrap();
-
-        // Test that view_sync can find the historical revision
         let historical_view = db.view_sync(historical_hash).unwrap();
         let proposal_view = db.view_sync(proposal_hash).unwrap();
         let (mut kv1, mut state1) = (None, IterationState::StartFromKey(None));
@@ -795,8 +839,8 @@ mod test {
             let (key2, value2) = kv2.unwrap();
 
             assert_eq!(key1, key2);
-            assert_eq!(&*value1, format!("value_{i}").as_bytes());
-            assert_eq!(&*value2, format!("value_{}", i + 10).as_bytes());
+            assert_eq!(&*value1, format!("value{i}").as_bytes());
+            assert_eq!(&*value2, format!("value{}", i + 10).as_bytes());
             i += 1;
         }
         assert_eq!(i, 10);
@@ -999,6 +1043,57 @@ mod test {
         for (k, v) in keys.iter().zip(vals.iter()) {
             assert_eq!(&committed.val(k).await.unwrap().unwrap(), v);
         }
+    }
+
+    fn create_test_nodestore() -> NodeStore<MutableProposal, MemStore> {
+        let memstore = MemStore::new(vec![]);
+        let memstore = Arc::new(memstore);
+        NodeStore::new_empty_proposal(memstore)
+    }
+
+    fn assert_iterator_next_is(
+        view: &dyn DbViewSyncBytes,
+        state: IterationState,
+        expected_key: &[u8],
+        expected_value: &[u8],
+    ) -> IterationState {
+        let (kv, state) = view.iterate(state).unwrap();
+        let (key, value) = kv.unwrap();
+        assert_eq!(&*key, expected_key);
+        assert_eq!(&*value, expected_value);
+        state
+    }
+
+    fn assert_iterator_next_done(
+        view: &dyn DbViewSyncBytes,
+        state: IterationState,
+    ) -> IterationState {
+        let (kv, state) = view.iterate(state).unwrap();
+        assert!(kv.is_none());
+        assert!(matches!(state, IterationState::Done));
+        state
+    }
+
+    fn batch_data(n: u32, key_start: u32, value_start: u32) -> Batch<Vec<u8>, Vec<u8>> {
+        (0..n)
+            .map(|i| BatchOp::Put {
+                key: format!("key{}", key_start.saturating_add(i)).into_bytes(),
+                value: format!("value{}", value_start.saturating_add(i)).into_bytes(),
+            })
+            .collect()
+    }
+
+    async fn propose_on_testdb(
+        db: &TestDb,
+        batch: Batch<Vec<u8>, Vec<u8>>,
+        commit: bool,
+    ) -> HashKey {
+        let proposal = db.propose(batch).await.unwrap();
+        let hash = proposal.root_hash().await.unwrap().unwrap();
+        if commit {
+            proposal.commit().await.unwrap();
+        }
+        hash
     }
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
