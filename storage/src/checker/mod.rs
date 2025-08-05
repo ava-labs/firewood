@@ -245,48 +245,11 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         // check that address is aligned
         self.check_area_aligned(subtrie_root_address, StoredAreaParent::TrieNode(parent))?;
 
-        // check that the area is within bounds and does not intersect with other areas
-        let (area_index, area_size) = self.area_index_and_size(subtrie_root_address)?;
-        visited.insert_area(
-            subtrie_root_address,
-            area_size,
-            StoredAreaParent::TrieNode(parent),
-        )?;
-
-        // update the area count
-        let area_count = trie_stats.area_counts.entry(area_size).or_insert(0);
-        *area_count = area_count.saturating_add(1);
-
         // read the node from the disk - we avoid cache since we will never visit the same node twice
+        let (area_index, area_size) = self.area_index_and_size(subtrie_root_address)?;
         let (node, node_bytes) = self.read_node_with_num_bytes_from_disk(subtrie_root_address)?;
-        {
-            // collect the trie bytes
-            trie_stats.trie_bytes = trie_stats.trie_bytes.saturating_add(node_bytes);
-            // collect low occupancy area count
-            let smallest_area_index = area_size_to_index(node_bytes).map_err(|e| {
-                self.file_io_error(
-                    e,
-                    subtrie_root_address.get(),
-                    Some("area_size_to_index".to_string()),
-                )
-            })?;
-            if smallest_area_index < area_index {
-                trie_stats.low_occupancy_area_count =
-                    trie_stats.low_occupancy_area_count.saturating_add(1);
-            }
-            // collect the multi-page area count
-            if page_start(subtrie_root_address)
-                != page_start(
-                    subtrie_root_address
-                        .advance(area_size)
-                        .expect("impossible since we checked in visited.insert_area()"),
-                )
-            {
-                trie_stats.multi_page_area_count =
-                    trie_stats.multi_page_area_count.saturating_add(1);
-            }
-        }
 
+        // if the node has a value, check that the key is valid
         let mut current_path_prefix = path_prefix.clone();
         current_path_prefix.0.extend_from_slice(node.partial_path());
         if node.value().is_some() && !is_valid_key(&current_path_prefix) {
@@ -314,7 +277,49 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             }
         }
 
-        // recursively traverse the children
+        // check that the area is within bounds and does not intersect with other areas and mark it as visiteds
+        visited.insert_area(
+            subtrie_root_address,
+            area_size,
+            StoredAreaParent::TrieNode(parent),
+        )?;
+
+        // at this point we have checked this area is correct - update progress bar, collect stats, and recursively traverse the children
+        update_progress_bar(progress_bar, visited);
+
+        // collect trie stats
+        {
+            // update the area count
+            let area_count = trie_stats.area_counts.entry(area_size).or_insert(0);
+            *area_count = area_count.saturating_add(1);
+            // collect the trie bytes
+            trie_stats.trie_bytes = trie_stats.trie_bytes.saturating_add(node_bytes);
+            // collect low occupancy area count
+            let smallest_area_index = area_size_to_index(node_bytes).map_err(|e| {
+                self.file_io_error(
+                    e,
+                    subtrie_root_address.get(),
+                    Some("area_size_to_index".to_string()),
+                )
+            })?;
+            if smallest_area_index < area_index {
+                trie_stats.low_occupancy_area_count =
+                    trie_stats.low_occupancy_area_count.saturating_add(1);
+            }
+            // collect the multi-page area count
+            if page_start(subtrie_root_address)
+                != page_start(
+                    subtrie_root_address
+                        .advance(area_size)
+                        .expect("impossible since we checked in visited.insert_area()"),
+                )
+            {
+                trie_stats.multi_page_area_count =
+                    trie_stats.multi_page_area_count.saturating_add(1);
+            }
+        }
+
+        // collect more stats and recursively traverse the children
         let mut errors = Vec::new();
         match node.as_ref() {
             Node::Branch(branch) => {
@@ -368,8 +373,6 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                     .saturating_add(value_bytes as u64);
             }
         }
-
-        update_progress_bar(progress_bar, visited);
 
         if errors.is_empty() {
             Ok(())
