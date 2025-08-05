@@ -9,9 +9,8 @@ use crate::nodestore::alloc::{
     AREA_SIZES, AreaIndex, FreeAreaWithMetadata, area_size_to_index, size_from_area_index,
 };
 use crate::{
-    CheckerError, Committed, FreeListParent, HashType, HashedNodeReader, IntoHashType,
-    LinearAddress, Node, NodeStore, Path, RootReader, StoredAreaParent, TrieNodeParent,
-    WritableStorage,
+    CheckerError, Committed, HashType, HashedNodeReader, IntoHashType, LinearAddress, Node,
+    NodeStore, Path, RootReader, StoredAreaParent, TrieNodeParent, WritableStorage,
 };
 
 #[cfg(not(feature = "ethhash"))]
@@ -587,7 +586,7 @@ mod test {
         test_write_free_area, test_write_header, test_write_new_node, test_write_zeroed_area,
     };
     use crate::nodestore::alloc::{AREA_SIZES, FreeLists};
-    use crate::{BranchNode, Child, LeafNode, NodeStore, Path, hash_node};
+    use crate::{BranchNode, Child, FreeListParent, LeafNode, NodeStore, Path, hash_node};
 
     #[derive(Debug)]
     struct TestTrie {
