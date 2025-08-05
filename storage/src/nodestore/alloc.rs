@@ -772,9 +772,7 @@ impl<'a, S: ReadableStorage> FreeListsIterator<'a, S> {
         }
     }
 
-    // TODO: this function will be used by the checker to ignore free areas pointed by an invalid parent free area
-    #[allow(dead_code)]
-    fn move_to_next_free_list(&mut self) {
+    pub(crate) fn move_to_next_free_list(&mut self) {
         let (current_free_list_id, next_free_list_head) = match self.free_lists_iter.next() {
             Some((id, head)) => (id as AreaIndex, *head),
             None => (NUM_AREA_SIZES as AreaIndex, None), // skip unvisited free areas in the current iterator
