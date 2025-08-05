@@ -1,15 +1,6 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![expect(
-    clippy::iter_not_returning_iterator,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-#![expect(
-    clippy::missing_errors_doc,
-    reason = "Found 3 occurrences after enabling the lint."
-)]
-
 use crate::manager::RevisionManagerError;
 use crate::merkle::{Key, Value};
 use crate::proof::{Proof, ProofError, ProofNode};
@@ -18,6 +9,7 @@ use async_trait::async_trait;
 use firewood_storage::{FileIoError, TrieHash};
 use futures::Stream;
 use std::fmt::Debug;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
@@ -29,7 +21,7 @@ impl<T> KeyType for T where T: AsRef<[u8]> + Send + Sync + Debug {}
 
 /// A `ValueType` is the same as a `KeyType`. However, these could
 /// be a different type from the `KeyType` on a given API call.
-/// For example, you might insert {key: "key", value: vec!\[0u8\]}
+/// For example, you might insert `{key: "key", value: [0u8]}`
 /// This also means that the type of all the keys for a single
 /// API call must be the same, as well as the type of all values
 /// must be the same.
@@ -184,9 +176,9 @@ pub trait Db {
     type Historical: DbView;
 
     /// The type of a proposal
-    type Proposal<'p>: DbView + Proposal
+    type Proposal<'db>: DbView + Proposal
     where
-        Self: 'p;
+        Self: 'db;
 
     /// Get a reference to a specific view based on a hash
     ///
@@ -216,12 +208,12 @@ pub trait Db {
     /// * `data` - A batch consisting of [BatchOp::Put] and
     ///            [BatchOp::Delete] operations to apply
     ///
-    async fn propose<'p, K: KeyType, V: ValueType>(
-        &'p self,
+    async fn propose<'db, K: KeyType, V: ValueType>(
+        &'db self,
         data: Batch<K, V>,
-    ) -> Result<Arc<Self::Proposal<'p>>, Error>
+    ) -> Result<Self::Proposal<'db>, Error>
     where
-        Self: 'p;
+        Self: 'db;
 }
 
 /// A view of the database at a specific time.
@@ -235,9 +227,9 @@ pub trait Db {
 #[async_trait]
 pub trait DbView {
     /// The type of a stream of key/value pairs
-    type Stream<'a>: Stream<Item = Result<(Key, Value), Error>>
+    type Stream<'view>: Stream<Item = Result<(Key, Value), Error>>
     where
-        Self: 'a;
+        Self: 'view;
 
     /// Get the root hash for the current DbView
     ///
@@ -261,11 +253,11 @@ pub trait DbView {
     /// * `last_key` - If None, continue to the end of the database
     /// * `limit` - The maximum number of keys in the range proof
     ///
-    async fn range_proof<K: KeyType, V: Send + Sync>(
+    async fn range_proof<K: KeyType>(
         &self,
         first_key: Option<K>,
         last_key: Option<K>,
-        limit: Option<usize>,
+        limit: Option<NonZeroUsize>,
     ) -> Result<FrozenRangeProof, Error>;
 
     /// Obtain a stream over the keys/values of this view, using an optional starting point
@@ -279,14 +271,18 @@ pub trait DbView {
     /// If you always want to start at the beginning, [DbView::iter] is easier to use
     /// If you always provide a key, [DbView::iter_from] is easier to use
     ///
+    #[expect(clippy::missing_errors_doc)]
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Stream<'_>, Error>;
 
     /// Obtain a stream over the keys/values of this view, starting from the beginning
+    #[expect(clippy::missing_errors_doc)]
+    #[expect(clippy::iter_not_returning_iterator)]
     fn iter(&self) -> Result<Self::Stream<'_>, Error> {
         self.iter_option(Option::<Key>::None)
     }
 
     /// Obtain a stream over the key/values, starting at a specific key
+    #[expect(clippy::missing_errors_doc)]
     fn iter_from<K: KeyType + 'static>(&self, first_key: K) -> Result<Self::Stream<'_>, Error> {
         self.iter_option(Some(first_key))
     }
@@ -309,7 +305,7 @@ pub trait Proposal: DbView + Send + Sync {
     type Proposal: DbView + Proposal;
 
     /// Commit this revision
-    async fn commit(self: Arc<Self>) -> Result<(), Error>;
+    async fn commit(self) -> Result<(), Error>;
 
     /// Propose a new revision on top of an existing proposal
     ///
@@ -319,10 +315,10 @@ pub trait Proposal: DbView + Send + Sync {
     ///
     /// # Return value
     ///
-    /// A reference to a new proposal
+    /// A new proposal
     ///
     async fn propose<K: KeyType, V: ValueType>(
-        self: Arc<Self>,
+        &self,
         data: Batch<K, V>,
-    ) -> Result<Arc<Self::Proposal>, Error>;
+    ) -> Result<Self::Proposal, Error>;
 }
