@@ -755,19 +755,10 @@ impl<'a, S: ReadableStorage> FreeListsIterator<'a, S> {
                 return Some(next);
             }
 
-            match self.free_lists_iter.next() {
-                Some((current_free_list_id, next_free_list_head)) => {
-                    self.current_free_list_id = current_free_list_id as AreaIndex;
-                    self.free_list_iter = FreeListIterator::new(
-                        self.storage,
-                        *next_free_list_head,
-                        FreeListParent::FreeListHead(self.current_free_list_id),
-                    );
-                }
-                None => {
-                    // no more free lists to iterate over
-                    return None;
-                }
+            self.move_to_next_free_list();
+            if self.current_free_list_id == NUM_AREA_SIZES as AreaIndex {
+                // no more free lists to iterate over
+                return None;
             }
         }
     }
