@@ -593,7 +593,7 @@ impl<S: ReadableStorage> TryFrom<Merkle<NodeStore<MutableProposal, S>>>
 /// Different operations that can be sent to the worker pool
 pub enum MerkleOp<S> {
     /// Operaiton to call ``insert_helper`` at the specified node.
-    InsertData(Option<Node>, Box<[u8]>, Box<[u8]>),
+    InsertData(Box<Option<Node>>, Box<[u8]>, Box<[u8]>),
 
     /// Operation to termine the worker threads in the thread pool.
     Terminate,
@@ -602,7 +602,7 @@ pub enum MerkleOp<S> {
     ClearMerkle,
 
     /// Setting Merkle Arc
-    SetMerkle(Arc<Merkle<NodeStore<MutableProposal, S>>>),
+    SetMerkle(Box<Arc<Merkle<NodeStore<MutableProposal, S>>>>),
     //SetMerkle(Option<Arc<Mutex<Merkle<NodeStore<MutableProposal, S>>>>>)
 }
 
@@ -654,7 +654,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
                         //      we are adding to the sub-trie rooted at inserted_root.
                         // 4.   Both insert_root and node_opt are not None. This indicates a misuse
                         //      of the interface and should be logged.
-                        let node = match node_opt {
+                        let node = match *node_opt {
                             Some(node) => {
                                 if inserted_root.is_some() {
                                     continue;  // TODO: add logging here. Just skip for now
@@ -703,7 +703,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
                         inserted_root = None;
                     }
                     MerkleOp::SetMerkle(m) => {
-                        merkle = Some(m);
+                        merkle = Some(*m);
                     }
                 }
             }
@@ -730,13 +730,13 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
         value: Value,
     ) -> Result<(), SendError<MerkleOp<S>>> {
         println!("In workerpool insert");
-        let a = self
+        self
             .worker_data
             .first()
             .expect("empty vector")
             .0
-            .send(MerkleOp::InsertData(node, key.into(), value));
-        a
+            .send(MerkleOp::InsertData(Box::new(node), key.into(), value))
+        
         /*
         match a {
             Ok(()) => {
@@ -767,6 +767,10 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
     /// ## Panics
     ///
     /// Can panic if workerpool vector is incorrectly initialized.
+    /// 
+    /// ## Errors
+    /// 
+    /// Can return a `FileIoError` that came from a previous insert.
     pub fn clear_merkle(&self) -> Result<Option<Node>, FileIoError> {
         let _ = self
             .worker_data
@@ -782,10 +786,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
             .expect("empty vector")
             .1
             .recv()
-            .expect("recv error")
-        else {
-            panic!("received unexpected value from worker");
-        };
+            .expect("recv error");
         result
 
         /*
@@ -887,20 +888,10 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
         // 2. The key is above the node (i.e. its ancestor)
         // 3. The key is below the node (i.e. its descendant)
         // 4. Neither is an ancestor of the other
-        println!(
-            "-------- key {:?} partial_path {:?}",
-            key,
-            node.partial_path().as_ref()
-        );
         let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
 
         let unique_key = path_overlap.unique_a;
         let unique_node = path_overlap.unique_b;
-
-        println!(
-            "path {:?}, unique_key {:?}, unique_node {:?}",
-            path_overlap, unique_key, unique_node
-        );
 
         match (
             unique_key
@@ -1018,8 +1009,6 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                     partial_path: key_partial_path,
                 });
                 branch.update_child(key_index, Some(Child::Node(new_leaf)));
-
-                println!("--------------------- Returning branch: {:?}", branch);
 
                 counter!("firewood.insert", "merkle" => "split").increment(1);
                 Ok(Node::Branch(Box::new(branch)))

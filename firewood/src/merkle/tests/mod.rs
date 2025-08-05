@@ -182,7 +182,7 @@ fn decrease_key(key: &[u8; 32]) -> [u8; 32] {
 #[allow(clippy::match_wild_err_arm)]
 #[test]
 fn test_get_regression() {
-    let mut merkle: Merkle<NodeStore<MutableProposal, MemStore>> = create_in_memory_merkle();
+    let merkle: Merkle<NodeStore<MutableProposal, MemStore>> = create_in_memory_merkle();
 
     //merkle.insert(&[0], Box::new([0])).unwrap();
     //assert_eq!(merkle.get_value(&[0]).unwrap(), Some(Box::from([0])));
@@ -196,12 +196,10 @@ fn test_get_regression() {
 
     let _ = merkle_arc.insert_worker_pool(None, &worker_pool, &[0], Box::new([0]));
     let _ = merkle_arc.insert_worker_pool(None, &worker_pool, &[1], Box::new([1]));
-    //let _ = merkle_arc.insert_worker_pool(None, &worker_pool, &[2], Box::new([2]));
+    let _ = merkle_arc.insert_worker_pool(None, &worker_pool, &[2], Box::new([2]));
 
-    let mut merkle = match worker_pool.clear_merkle() {
+    let merkle = match worker_pool.clear_merkle() {
         Ok(root_node) => {
-            // In this initial implementation, we want to clear the merkle every time
-            //worker_pool.clear_merkle(); 
             println!("Strong count: {}", Arc::strong_count(&merkle_arc));
             let mut m = Arc::into_inner(merkle_arc).unwrap();
             *m.nodestore.mut_root() = root_node;
@@ -222,7 +220,7 @@ fn test_get_regression() {
     //merkle.insert(&[1], Box::new([1])).unwrap();
     assert_eq!(merkle.get_value(&[1]).unwrap(), Some(Box::from([1])));
 
-    merkle.insert(&[2], Box::new([2])).unwrap();
+    //merkle.insert(&[2], Box::new([2])).unwrap();
     assert_eq!(merkle.get_value(&[2]).unwrap(), Some(Box::from([2])));
 
     let merkle = merkle.hash();
