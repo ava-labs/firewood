@@ -808,7 +808,7 @@ mod test {
                 );
                 next_free_block = Some(LinearAddress::new(high_watermark).unwrap());
                 let start_addr = LinearAddress::new(high_watermark).unwrap();
-                let end_addr = start_addr.advance(*area_size).unwrap();
+                let end_addr = start_addr.advance(*area_size - 1).unwrap();
                 if page_start(start_addr) != page_start(end_addr) {
                     multi_page_area_count = multi_page_area_count.saturating_add(1);
                 }
@@ -833,8 +833,8 @@ mod test {
             nodestore.visit_freelist(&mut visited, None);
         let complement = visited.complement();
         assert_eq!(complement.into_iter().collect::<Vec<_>>(), vec![]);
-        assert_eq!(actual_free_lists_stats, expected_free_lists_stats);
         assert_eq!(free_list_errors, vec![]);
+        assert_eq!(actual_free_lists_stats, expected_free_lists_stats);
     }
 
     #[test]
