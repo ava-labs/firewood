@@ -204,7 +204,7 @@ fn test_get_regression() {
             //worker_pool.clear_merkle(); 
             println!("Strong count: {}", Arc::strong_count(&merkle_arc));
             let mut m = Arc::into_inner(merkle_arc).unwrap();
-            *m.nodestore.mut_root() = Some(root_node);
+            *m.nodestore.mut_root() = root_node;
             m
         }
         Err(_) => panic!("unable to retrieve result from worker pool"),

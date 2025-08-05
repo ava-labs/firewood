@@ -610,8 +610,8 @@ pub enum MerkleOp<S> {
 type HostReceiver = std::sync::mpsc::Receiver<WorkerReturn>;
 
 enum WorkerReturn {
-    NodeResult(Result<Node, FileIoError>),
-    MerkleClearComplete,
+    NodeResult(Result<Option<Node>, FileIoError>),
+    //MerkleClearComplete,
 }
 
 #[derive(Debug)]
@@ -628,12 +628,11 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
     ///
     /// Test
     #[must_use]
-    #[allow(clippy::match_wild_err_arm)]
     pub fn new(merkle: Arc<Merkle<NodeStore<MutableProposal, S>>>) -> Self {
         // Create a single thread and a single channel to the thread for now
         let (host_sender, thread_receiver) = mpsc::channel::<MerkleOp<S>>();
         let (thread_sender, host_receiver) = mpsc::channel::<WorkerReturn>();
-        let mut m: Option<Arc<Merkle<NodeStore<MutableProposal, S>>>> = Some(merkle);
+        let mut merkle: Option<Arc<Merkle<NodeStore<MutableProposal, S>>>> = Some(merkle);
 
         let handle = thread::spawn(move || {
             let mut inserted_root = None;
@@ -641,7 +640,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
                 let Ok(v) = thread_receiver.recv() else {
                     return; // Thread is unable to recv data from parent
                 };
-                println!("Received data");
+                //println!("Received data");
                 match v {
                     MerkleOp::InsertData(node_opt, key, value) => {
                         // There are four possible cases to consider here.
@@ -655,7 +654,6 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
                         //      we are adding to the sub-trie rooted at inserted_root.
                         // 4.   Both insert_root and node_opt are not None. This indicates a misuse
                         //      of the interface and should be logged.
-
                         let node = match node_opt {
                             Some(node) => {
                                 if inserted_root.is_some() {
@@ -669,7 +667,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
                                 } else {
                                     println!("InsertData key: {key:?}");
                                     let path_key = Path::from_nibbles_iterator(
-                                        NibblesIterator::new(key.as_ref()),
+                                        NibblesIterator::new(&key),
                                     );
                                     println!("inserted partial_path: {path_key:?}");
                                     inserted_root = Some(Node::Leaf(LeafNode {
@@ -681,62 +679,31 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
                             }
                         };
 
-                        /*
-                        let node = match node_opt {
-                            Some(n) => n,
-                            None => match inserted_root {
-                                Some(root) => {
-                                    root
-                                }
-                                None => {
-                                    println!("InsertData key: {:?}", key);
-                                    let path_key = Path::from_nibbles_iterator(
-                                        NibblesIterator::new(key.as_ref()),
-                                    );
-                                    println!("inserted partial_path: {:?}", path_key);
-                                    inserted_root = Some(Node::Leaf(LeafNode {
-                                        partial_path: path_key,
-                                        value,
-                                    }));
-                                    continue;
-                                }
-                            },
-                        };
-                        */
-
-                        //println!("-----> Not reached here");
-                        println!(
-                            "2: InsertData key: {key:?} and value {value:?}. Node is {node:?}"
-                        );
                         let path_key = Path::from_nibbles_iterator(NibblesIterator::new(&key));
-                        let a: Arc<Merkle<NodeStore<MutableProposal, S>>> =
-                            m.expect("Merkle is not set before insert");
-                        let insert_result = a.insert_helper(node, path_key.as_ref(), value);
-                        match insert_result {
-                            Ok(n) => {
-                                println!("******** node n {:?}", n);
-                                inserted_root = Some(n);
-                            }
-                            Err(_) => panic!("insert helper returned error"),
-                        }
-                        m = Some(a); // Put it back
-                        //m = None; // Decrement the Arc counter
-                        //let _ = Arc::into_inner(a);
-                        //let _ = thread_sender.send(WorkerReturn::NodeResult(b));
+
+                        let merkle_arc: Arc<Merkle<NodeStore<MutableProposal, S>>> =
+                            merkle.expect("Merkle is not set before insert");
+
+                        let insert_result = merkle_arc.insert_helper(node, path_key.as_ref(), value);
+                        inserted_root = match insert_result {
+                            Ok(n) => Some(n),
+                             // TODO: Send back error message to the main thread. Currently just breaks out of this
+                             //       loop and termintes the thread.
+                            Err(_) => { break; },
+                        };
+                        merkle = Some(merkle_arc);
                     }
                     MerkleOp::Terminate => {
                         break;
                     }
                     MerkleOp::ClearMerkle => {
-                        m = None; // Decrement the Arc counter
-                        //let _ = thread_sender.send(WorkerReturn::MerkleClearComplete);
+                        merkle = None; // Decrement the Arc counter
                         let _ = thread_sender
-                            .send(WorkerReturn::NodeResult(Ok(inserted_root.unwrap())));
+                            .send(WorkerReturn::NodeResult(Ok(inserted_root)));
                         inserted_root = None;
-                        // TODO: Needs to send a message to the host
                     }
-                    MerkleOp::SetMerkle(merkle) => {
-                        m = Some(merkle);
+                    MerkleOp::SetMerkle(m) => {
+                        merkle = Some(m);
                     }
                 }
             }
@@ -800,7 +767,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
     /// ## Panics
     ///
     /// Can panic if workerpool vector is incorrectly initialized.
-    pub fn clear_merkle(&self) -> Result<Node, FileIoError> {
+    pub fn clear_merkle(&self) -> Result<Option<Node>, FileIoError> {
         let _ = self
             .worker_data
             .first()
