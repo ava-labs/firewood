@@ -179,18 +179,12 @@ fn decrease_key(key: &[u8; 32]) -> [u8; 32] {
     new_key
 }
 
-#[allow(clippy::match_wild_err_arm)]
 #[test]
 fn test_get_regression() {
     let merkle: Merkle<NodeStore<MutableProposal, MemStore>> = create_in_memory_merkle();
 
-    //merkle.insert(&[0], Box::new([0])).unwrap();
-    //assert_eq!(merkle.get_value(&[0]).unwrap(), Some(Box::from([0])));
-
     //let root = merkle.nodestore.mut_root();
-    //let root_node = std::mem::take(root);
-
-   
+    //let root_node = std::mem::take(root); 
     let merkle_arc = Arc::new(merkle);
     let worker_pool: WorkerPool<MemStore>= WorkerPool::new(merkle_arc.clone());
 
@@ -198,23 +192,15 @@ fn test_get_regression() {
     let _ = merkle_arc.insert_worker_pool(None, &worker_pool, &[1], Box::new([1]));
     let _ = merkle_arc.insert_worker_pool(None, &worker_pool, &[2], Box::new([2]));
 
-    let merkle = match worker_pool.clear_merkle() {
-        Ok(root_node) => {
-            println!("Strong count: {}", Arc::strong_count(&merkle_arc));
-            let mut m = Arc::into_inner(merkle_arc).unwrap();
-            *m.nodestore.mut_root() = root_node;
-            m
-        }
-        Err(_) => panic!("unable to retrieve result from worker pool"),
-    };
+    // Wait until all of the previous inserts are complete
+    let new_root = worker_pool.clear_merkle();
 
-
-
-    //assert_eq!(merkle.get_value(&[0]).unwrap(), Some(Box::from([0])));
-    //let mut merkle: Merkle<NodeStore<MutableProposal, MemStore>> = Arc::try_unwrap(merkle_arc).unwrap();
+    // All but one of the references to merkle_arc should be gone. Extract
+    // the inner Merkle should we can perform a mut operations on it.
+    let mut merkle = Arc::into_inner(merkle_arc).unwrap();
+    *merkle.nodestore.mut_root() = new_root.unwrap();
 
     //merkle.insert(&[0], Box::new([0])).unwrap();
-    //merkle.insert(&[1], Box::new([1])).unwrap();
     assert_eq!(merkle.get_value(&[0]).unwrap(), Some(Box::from([0])));
 
     //merkle.insert(&[1], Box::new([1])).unwrap();
