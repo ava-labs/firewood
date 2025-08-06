@@ -48,7 +48,7 @@ use crate::ReadableStorage;
 
 use super::alloc::NodeAllocator;
 use super::header::NodeStoreHeader;
-use super::{Committed, LinearAddress, NodeStore};
+use super::{Committed, NodeStore};
 
 #[cfg(not(test))]
 use super::RootReader;

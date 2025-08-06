@@ -999,7 +999,7 @@ func TestGetFromRootParallel(t *testing.T) {
 
 	// Create a proposal
 	p, err := db.Propose(allKeys, allVals)
-	r.NoError(err, "Propose single key-value pair")
+	r.NoError(err, "Propose key-value pairs")
 
 	root, err := p.Root()
 	r.NoError(err, "Root of proposal")
@@ -1012,7 +1012,6 @@ func TestGetFromRootParallel(t *testing.T) {
 
 	readLots := func(readerID int) error {
 		for j := 0; ; j++ {
-			t.Log("Reader", readerID, "iteration", j)
 			got, err := db.GetFromRoot(root, key)
 			if err != nil {
 				return fmt.Errorf("reader %d, iteration %d: GetFromRoot error: %w", readerID, j, err)
