@@ -259,8 +259,8 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         let (area_index, area_size) = self.area_index_and_size(subtrie_root_address)?;
         let (node, node_bytes) = self.read_node_with_num_bytes_from_disk(subtrie_root_address)?;
 
-        // check if the node fits in the area
-        if node_bytes > area_size {
+        // check if the node fits in the area, equal is not allowed due to 1-byte area size index
+        if node_bytes >= area_size {
             return Err(vec![CheckerError::NodeLargerThanArea {
                 area_start: subtrie_root_address,
                 area_size,
