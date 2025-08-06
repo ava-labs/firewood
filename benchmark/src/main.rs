@@ -6,35 +6,43 @@
     clippy::arithmetic_side_effects,
     reason = "Found 2 occurrences after enabling the lint."
 )]
-#![expect(
-    clippy::match_same_arms,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
 #![doc = include_str!("../README.md")]
 
+mod create;
+mod single;
+mod tenkrandom;
+mod zipf;
+
+use std::borrow::Cow;
+use std::iter::Map;
+use std::net::{Ipv6Addr, SocketAddr};
+use std::num::{NonZeroU64, NonZeroUsize};
+use std::ops::Range;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
+use fastrace::collector::Config;
 use fastrace_opentelemetry::OpenTelemetryReporter;
-use firewood::logger::trace;
-use log::LevelFilter;
+use firewood::db::{BatchOp, Db, DbConfig};
+use firewood::logger::debug;
+use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
+use log::{LevelFilter, trace};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use metrics_util::MetricKindMask;
-use sha2::{Digest, Sha256};
-use std::borrow::Cow;
-use std::error::Error;
-use std::fmt::Display;
-use std::net::{Ipv6Addr, SocketAddr};
-use std::num::NonZeroUsize;
-use std::path::PathBuf;
-use std::time::Duration;
-
-use firewood::db::{BatchOp, Db, DbConfig};
-use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
-
-use fastrace::collector::Config;
-
 use opentelemetry::InstrumentationScope;
 use opentelemetry_otlp::{SpanExporter, WithExportConfig};
 use opentelemetry_sdk::Resource;
+use pretty_duration::pretty_duration;
+use sha2::{Digest, Sha256};
+
+const ONE: NonZeroU64 = const { NonZeroU64::new(1).unwrap() };
+const FOUR: NonZeroU64 = const { NonZeroU64::new(4).unwrap() };
+const ONE_K: NonZeroU64 = const { NonZeroU64::new(1_000).unwrap() };
+const TEN_K: NonZeroU64 = const { NonZeroU64::new(10_000).unwrap() };
+const DEFAULT_CACHE_SIZE: NonZeroUsize = const { NonZeroUsize::new(1_500_000).unwrap() };
+const DEFAULT_REVISIONS: NonZeroUsize = const { NonZeroUsize::new(128).unwrap() };
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -54,14 +62,14 @@ struct GlobalOpts {
         help = "Enable telemetry server reporting"
     )]
     telemetry_server: bool,
-    #[arg(short, long, default_value_t = 10000)]
-    batch_size: u64,
-    #[arg(short, long, default_value_t = 1000)]
-    number_of_batches: u64,
-    #[arg(short, long, default_value_t = NonZeroUsize::new(1500000).expect("is non-zero"))]
+    #[arg(short, long, default_value_t = TEN_K)]
+    batch_size: NonZeroU64,
+    #[arg(short, long, default_value_t = ONE_K)]
+    number_of_batches: NonZeroU64,
+    #[arg(short, long, default_value_t = DEFAULT_CACHE_SIZE)]
     cache_size: NonZeroUsize,
-    #[arg(short, long, default_value_t = 128)]
-    revisions: usize,
+    #[arg(short, long, default_value_t = DEFAULT_REVISIONS)]
+    revisions: NonZeroUsize,
     #[arg(
         short = 'p',
         long,
@@ -109,25 +117,43 @@ struct GlobalOpts {
         short = 'C',
         required = false,
         help = "Read cache strategy",
+        value_enum,
         default_value_t = ArgCacheReadStrategy::WritesOnly
     )]
     cache_read_strategy: ArgCacheReadStrategy,
 }
+
+impl GlobalOpts {
+    #[must_use]
+    const fn duration(&self) -> Duration {
+        Duration::from_secs(self.duration_minutes * 60)
+    }
+
+    const fn key_range(&self) -> Option<Range<u64>> {
+        match self.number_of_batches.checked_mul(self.batch_size) {
+            Some(count) => Some(0..count.get()),
+            None => None,
+        }
+    }
+
+    const fn key_range_batches(&self) -> Option<SplitRange> {
+        match self.key_range() {
+            Some(range) => Some(SplitRange {
+                range,
+                size: self.batch_size,
+            }),
+            None => None,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, ValueEnum, Clone)]
 pub enum ArgCacheReadStrategy {
     WritesOnly,
     BranchReads,
     All,
 }
-impl Display for ArgCacheReadStrategy {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ArgCacheReadStrategy::WritesOnly => write!(f, "writes-only"),
-            ArgCacheReadStrategy::BranchReads => write!(f, "branch-reads"),
-            ArgCacheReadStrategy::All => write!(f, "all"),
-        }
-    }
-}
+
 impl From<ArgCacheReadStrategy> for CacheReadStrategy {
     fn from(arg: ArgCacheReadStrategy) -> Self {
         match arg {
@@ -138,46 +164,33 @@ impl From<ArgCacheReadStrategy> for CacheReadStrategy {
     }
 }
 
-mod create;
-mod single;
-mod tenkrandom;
-mod zipf;
-
-#[derive(Debug, Subcommand, PartialEq)]
+#[derive(Debug, Subcommand)]
 enum TestName {
     /// Create a database
-    Create,
+    Create(create::Create),
 
     /// Insert batches of random keys
-    TenKRandom,
+    TenKRandom(tenkrandom::TenKRandom),
 
     /// Insert batches of keys following a Zipf distribution
-    Zipf(zipf::Args),
+    Zipf(zipf::Zipf),
 
     /// Repeatedly update a single row
-    Single,
+    Single(single::Single),
 }
 
 trait TestRunner {
-    async fn run(&self, db: &Db, args: &Args) -> Result<(), Box<dyn Error>>;
+    async fn run(&self, db: &Db, args: &GlobalOpts) -> anyhow::Result<()>;
+}
 
-    fn generate_inserts(
-        start: u64,
-        count: u64,
-    ) -> impl Iterator<Item = BatchOp<Box<[u8]>, Box<[u8]>>> {
-        (start..start + count)
-            .map(|inner_key| {
-                let digest: Box<[u8]> = Sha256::digest(inner_key.to_ne_bytes())[..].into();
-                trace!(
-                    "inserting {:?} with digest {}",
-                    inner_key,
-                    hex::encode(&digest),
-                );
-                (digest.clone(), digest)
-            })
-            .map(|(key, value)| BatchOp::Put { key, value })
-            .collect::<Vec<_>>()
-            .into_iter()
+impl TestRunner for TestName {
+    async fn run(&self, db: &Db, args: &GlobalOpts) -> anyhow::Result<()> {
+        match self {
+            TestName::Create(runner) => runner.run(db, args).await,
+            TestName::TenKRandom(runner) => runner.run(db, args).await,
+            TestName::Zipf(runner) => runner.run(db, args).await,
+            TestName::Single(runner) => runner.run(db, args).await,
+        }
     }
 }
 
@@ -186,8 +199,8 @@ trait TestRunner {
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 #[tokio::main(flavor = "multi_thread")]
-async fn main() -> Result<(), Box<dyn Error>> {
-    let args = Args::parse();
+async fn main() -> anyhow::Result<()> {
+    let mut args = Args::parse();
 
     if args.global_opts.telemetry_server {
         let reporter = OpenTelemetryReporter::new(
@@ -210,20 +223,32 @@ async fn main() -> Result<(), Box<dyn Error>> {
         fastrace::set_reporter(reporter, Config::default());
     }
 
-    assert!(
-        !(args.test_name == TestName::Single && args.global_opts.batch_size > 1000),
-        "Single test is not designed to handle batch sizes > 1000"
-    );
+    // set the number of batches to 1 for single tests (this influcences the key range)
+    if matches!(args.test_name, TestName::Single(_)) {
+        args.global_opts.number_of_batches = ONE;
+        args.global_opts.batch_size = Ord::min(args.global_opts.batch_size, ONE_K);
+    }
 
     env_logger::Builder::new()
-        .filter_level(match args.global_opts.log_level.as_str() {
-            "debug" => LevelFilter::Debug,
-            "info" => LevelFilter::Info,
-            "trace" => LevelFilter::Trace,
-            "none" => LevelFilter::Off,
-            _ => LevelFilter::Info,
-        })
+        .filter(None, LevelFilter::Info)
+        .write_style(env_logger::WriteStyle::Always)
+        .target(env_logger::Target::Stderr)
+        .filter_level(
+            args.global_opts
+                .log_level
+                .as_str()
+                .parse()
+                .unwrap_or_else(|err| {
+                    // cannot `warn!` because the logger is not set up yet
+                    eprintln!(
+                        "{err}: '{}'. Defaulting to 'info'",
+                        args.global_opts.log_level
+                    );
+                    LevelFilter::Info
+                }),
+        )
         .init();
+    debug!("logging initialized");
 
     // Manually set up prometheus
     let builder = PrometheusBuilder::new();
@@ -247,13 +272,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mgrcfg = RevisionManagerConfig::builder()
         .node_cache_size(args.global_opts.cache_size)
         .free_list_cache_size(
-            NonZeroUsize::new(4 * args.global_opts.batch_size as usize).expect("batch size > 0"),
+            args.global_opts
+                .batch_size
+                .checked_mul(const { NonZeroU64::new(4).unwrap() })
+                .expect("batch_size * 4 should not overflow")
+                .try_into()
+                .expect("batch_size * 4 should fit in usize"),
         )
         .cache_read_strategy(args.global_opts.cache_read_strategy.clone().into())
-        .max_revisions(args.global_opts.revisions)
+        .max_revisions(args.global_opts.revisions.get())
         .build();
     let cfg = DbConfig::builder()
-        .truncate(matches!(args.test_name, TestName::Create))
+        .truncate(matches!(args.test_name, TestName::Create(_)))
         .manager(mgrcfg)
         .build();
 
@@ -261,24 +291,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await
         .expect("db initiation should succeed");
 
-    match args.test_name {
-        TestName::Create => {
-            let runner = create::Create;
-            runner.run(&db, &args).await?;
-        }
-        TestName::TenKRandom => {
-            let runner = tenkrandom::TenKRandom;
-            runner.run(&db, &args).await?;
-        }
-        TestName::Zipf(_) => {
-            let runner = zipf::Zipf;
-            runner.run(&db, &args).await?;
-        }
-        TestName::Single => {
-            let runner = single::Single;
-            runner.run(&db, &args).await?;
-        }
-    }
+    args.test_name.run(&db, &args.global_opts).await?;
 
     if args.global_opts.stats_dump {
         println!("{}", prometheus_handle.render());
@@ -287,4 +300,331 @@ async fn main() -> Result<(), Box<dyn Error>> {
     fastrace::flush();
 
     Ok(())
+}
+
+type Sha256Digest = sha2::digest::Output<Sha256>;
+
+fn keygen(idx: u64) -> (u64, Sha256Digest) {
+    use std::cell::RefCell;
+
+    struct HashCache<const N: usize> {
+        cache: [Option<(u64, Sha256Digest)>; N],
+    }
+
+    impl<const N: usize> HashCache<N> {
+        const fn new() -> Self {
+            Self {
+                cache: [const { None }; N],
+            }
+        }
+
+        #[expect(clippy::indexing_slicing)]
+        fn get(&mut self, key: u64) -> (u64, Sha256Digest) {
+            #[inline]
+            fn hash_idx(idx: u64) -> Sha256Digest {
+                Sha256::digest(idx.to_ne_bytes())
+            }
+
+            // so we can test without caching
+            if N == 0 {
+                return (key, hash_idx(key));
+            }
+
+            let slot = (key as usize) % N;
+            if let Some((cached_key, digest)) = self.cache[slot] {
+                if cached_key == key {
+                    return (cached_key, digest);
+                }
+            }
+
+            let digest = hash_idx(key);
+            self.cache[slot] = Some((key, digest));
+            (key, digest)
+        }
+    }
+
+    std::thread_local! {
+        static CACHE: RefCell<HashCache<1024>> = const { RefCell::new(HashCache::new()) };
+    }
+
+    CACHE.with_borrow_mut(move |cache| cache.get(idx))
+}
+
+async fn repeat_for(
+    duration: Duration,
+    mut factory: impl AsyncFnMut(u64) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    const ONE_MINUTE: Duration = Duration::from_secs(60);
+
+    let start = Instant::now();
+    let mut last = start;
+    let deadline = start + duration;
+    for batch_id in (0..=u64::MAX).cycle() {
+        factory(batch_id)
+            .await
+            .with_context(|| format!("failed to run batch {batch_id}"))?;
+
+        let now = Instant::now();
+
+        let elpased_1k = now.duration_since(last);
+        if batch_id > 0
+            && log::log_enabled!(log::Level::Debug)
+            && (batch_id % 1000 == 0 || elpased_1k >= ONE_MINUTE)
+        {
+            let elapsed_all = now.duration_since(start);
+            debug!(
+                "completed {batch_id} batches in {} ({} total)",
+                pretty_duration(&elpased_1k, None),
+                pretty_duration(&elapsed_all, None),
+            );
+
+            last = now;
+        }
+
+        if now >= deadline {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+type Keygen = fn(u64) -> (u64, Sha256Digest);
+
+trait KeygenExt: Sized {
+    fn into_insert_op(self) -> BatchOp<Sha256Digest, Sha256Digest>;
+
+    fn into_delete_op(self) -> BatchOp<Sha256Digest, Sha256Digest>;
+
+    fn into_update_op(self, value: Sha256Digest) -> BatchOp<Sha256Digest, Sha256Digest>;
+}
+
+impl KeygenExt for (u64, Sha256Digest) {
+    fn into_insert_op(self) -> BatchOp<Sha256Digest, Sha256Digest> {
+        let (key, digest) = self;
+        trace!("inserting {key} with digest {digest:064x}");
+        BatchOp::Put {
+            key: digest,
+            value: digest,
+        }
+    }
+
+    fn into_delete_op(self) -> BatchOp<Sha256Digest, Sha256Digest> {
+        let (key, digest) = self;
+        trace!("deleting {key} with digest {digest:064x}");
+        BatchOp::Delete { key: digest }
+    }
+
+    fn into_update_op(self, value: Sha256Digest) -> BatchOp<Sha256Digest, Sha256Digest> {
+        let (key, digest) = self;
+        trace!("updating {key} with digest {digest:064x} to {value:064x}");
+        BatchOp::Put { key: digest, value }
+    }
+}
+
+impl KeygenExt for &(u64, Sha256Digest) {
+    fn into_insert_op(self) -> BatchOp<Sha256Digest, Sha256Digest> {
+        (*self).into_insert_op()
+    }
+
+    fn into_delete_op(self) -> BatchOp<Sha256Digest, Sha256Digest> {
+        (*self).into_delete_op()
+    }
+
+    fn into_update_op(self, value: Sha256Digest) -> BatchOp<Sha256Digest, Sha256Digest> {
+        (*self).into_update_op(value)
+    }
+}
+
+impl KeygenExt for u64 {
+    fn into_insert_op(self) -> BatchOp<Sha256Digest, Sha256Digest> {
+        keygen(self).into_insert_op()
+    }
+
+    fn into_delete_op(self) -> BatchOp<Sha256Digest, Sha256Digest> {
+        keygen(self).into_delete_op()
+    }
+
+    fn into_update_op(self, value: Sha256Digest) -> BatchOp<Sha256Digest, Sha256Digest> {
+        keygen(self).into_update_op(value)
+    }
+}
+
+impl KeygenExt for &u64 {
+    fn into_insert_op(self) -> BatchOp<Sha256Digest, Sha256Digest> {
+        (*self).into_insert_op()
+    }
+
+    fn into_delete_op(self) -> BatchOp<Sha256Digest, Sha256Digest> {
+        (*self).into_delete_op()
+    }
+
+    fn into_update_op(self, value: Sha256Digest) -> BatchOp<Sha256Digest, Sha256Digest> {
+        (*self).into_update_op(value)
+    }
+}
+
+trait KeygenIterExt: Iterator<Item: KeygenExt> {
+    fn iter_insert_ops(self) -> impl Iterator<Item = BatchOp<Sha256Digest, Sha256Digest>>
+    where
+        Self: Sized,
+    {
+        self.map(KeygenExt::into_insert_op)
+    }
+
+    fn iter_delete_ops(self) -> impl Iterator<Item = BatchOp<Sha256Digest, Sha256Digest>>
+    where
+        Self: Sized,
+    {
+        self.map(KeygenExt::into_delete_op)
+    }
+
+    fn iter_update_ops(
+        self,
+        value: Sha256Digest,
+    ) -> impl Iterator<Item = BatchOp<Sha256Digest, Sha256Digest>>
+    where
+        Self: Sized,
+    {
+        self.map(move |keygen| keygen.into_update_op(value))
+    }
+}
+
+impl<I: Iterator<Item: KeygenExt>> KeygenIterExt for I {}
+
+trait RangeExt {
+    fn into_range(self) -> Range<u64>;
+
+    #[inline]
+    fn split(self, size: NonZeroU64) -> SplitRange
+    where
+        Self: Sized,
+    {
+        SplitRange {
+            range: self.into_range(),
+            size,
+        }
+    }
+
+    #[inline]
+    fn hashed_key_range(self) -> Map<Range<u64>, Keygen>
+    where
+        Self: Sized,
+    {
+        self.into_range().map(keygen)
+    }
+
+    fn random_batch<D, R>(self, size: NonZeroU64, dist: D, rng: R) -> RandomBatch<D, R>
+    where
+        Self: Sized,
+        D: rand::distr::Distribution<u64>,
+        R: rand::Rng,
+    {
+        let range = self.into_range();
+        let range_len = range
+            .end
+            .checked_sub(range.start)
+            .and_then(NonZeroU64::new)
+            .expect("range must not be empty");
+        RandomBatch {
+            range,
+            range_len,
+            size: (size.get() - 1) as usize,
+            dist,
+            rng,
+        }
+    }
+}
+
+impl RangeExt for Range<u64> {
+    #[inline]
+    fn into_range(self) -> Range<u64> {
+        self
+    }
+}
+
+impl RangeExt for &Range<u64> {
+    #[inline]
+    fn into_range(self) -> Range<u64> {
+        self.clone()
+    }
+}
+
+struct RandomBatch<D, R> {
+    range: Range<u64>,
+    range_len: NonZeroU64,
+    size: usize,
+    dist: D,
+    rng: R,
+}
+
+impl<D, R> Iterator for RandomBatch<D, R>
+where
+    D: rand::distr::Distribution<u64>,
+    R: rand::Rng,
+{
+    type Item = (u64, Sha256Digest);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.size = self.size.checked_sub(1)?;
+        let key = (self.dist.sample(&mut self.rng) % self.range_len) + self.range.start;
+        Some(keygen(key))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.size;
+        (len, Some(len))
+    }
+}
+
+#[derive(Clone)]
+struct SplitRange {
+    range: Range<u64>,
+    size: NonZeroU64,
+}
+
+impl SplitRange {
+    const fn len(&self) -> usize {
+        macro_rules! ok {
+            ($val:expr) => {
+                match $val {
+                    Some(val) => val,
+                    None => return 0,
+                }
+            };
+        }
+
+        let len = ok!(self.range.end.checked_sub(self.range.start));
+        let len = ok!(NonZeroU64::new(len));
+        let len = ok!(len.get().checked_div(self.size.get()));
+
+        len as usize
+    }
+}
+
+impl Iterator for SplitRange {
+    type Item = Range<u64>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let len = self
+            .range
+            .end
+            .checked_sub(self.range.start)
+            .and_then(NonZeroU64::new)?;
+        let size = Ord::min(len, self.size).get();
+        let result = self.range.start..self.range.start.checked_add(size)?;
+        self.range.start = result.end;
+        Some(result)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+        (len, Some(len))
+    }
+}
+
+impl ExactSizeIterator for SplitRange {
+    fn len(&self) -> usize {
+        self.len()
+    }
 }

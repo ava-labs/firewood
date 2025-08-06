@@ -1,109 +1,82 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![expect(
-    clippy::arithmetic_side_effects,
-    reason = "Found 2 occurrences after enabling the lint."
-)]
-#![expect(
-    clippy::cast_precision_loss,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-#![expect(
-    clippy::cast_sign_loss,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-#![expect(
-    clippy::unwrap_used,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
+// #![expect(
+//     clippy::cast_precision_loss,
+//     reason = "Found 1 occurrences after enabling the lint."
+// )]
 
-use crate::TestRunner;
+use crate::{GlobalOpts, KeygenIterExt, RangeExt, TestRunner};
+use anyhow::Context;
 use firewood::db::{BatchOp, Db};
 use firewood::v2::api::{Db as _, Proposal as _};
-use log::{debug, trace};
-use pretty_duration::pretty_duration;
+use log::debug;
 use rand::prelude::*;
-use sha2::{Digest, Sha256};
 use std::collections::HashSet;
-use std::error::Error;
-use std::time::Instant;
+use std::num::NonZeroU64;
 
-#[derive(clap::Args, Debug, PartialEq)]
-pub struct Args {
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, clap::Args)]
+pub struct Zipf {
     #[arg(short, long, help = "zipf exponent", default_value_t = 1.2)]
     exponent: f64,
 }
 
-#[derive(Clone)]
-pub struct Zipf;
+#[inline]
+const fn f_to_u(f: f64) -> u64 {
+    #![expect(clippy::cast_sign_loss)]
+
+    f as u64
+}
+
+#[inline]
+const fn u_to_f(u: u64) -> f64 {
+    #![expect(clippy::cast_precision_loss)]
+
+    u as f64
+}
 
 impl TestRunner for Zipf {
-    async fn run(&self, db: &Db, args: &crate::Args) -> Result<(), Box<dyn Error>> {
-        let exponent = if let crate::TestName::Zipf(args) = &args.test_name {
-            args.exponent
-        } else {
-            unreachable!()
-        };
-        let rows = (args.global_opts.number_of_batches * args.global_opts.batch_size) as f64;
-        let zipf = rand_distr::Zipf::new(rows, exponent).unwrap();
-        let start = Instant::now();
-        let mut batch_id = 0;
+    async fn run(&self, db: &Db, args: &GlobalOpts) -> anyhow::Result<()> {
+        let exponent = self.exponent;
 
-        while start.elapsed().as_secs() / 60 < args.global_opts.duration_minutes {
-            let batch: Vec<BatchOp<_, _>> =
-                generate_updates(batch_id, args.global_opts.batch_size as usize, zipf).collect();
-            if log::log_enabled!(log::Level::Debug) {
-                let mut distinct = HashSet::new();
-                for op in &batch {
-                    match op {
-                        BatchOp::Put { key, value: _ } => {
-                            distinct.insert(key);
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-                debug!(
-                    "inserting batch {} with {} distinct data values",
-                    batch_id,
-                    distinct.len()
-                );
-            }
-            let proposal = db.propose(batch).await.expect("proposal should succeed");
-            proposal.commit().await?;
+        let range = &args.key_range().context("key range overflows u64")?;
+        let rows = range
+            .end
+            .checked_sub(range.start)
+            .and_then(NonZeroU64::new)
+            .context("key range is negative or zero")?
+            .get();
+
+        let dist = rand_distr::Zipf::<f64>::new(u_to_f(rows), exponent)?.map(f_to_u);
+        let mut rng = rand::rng();
+
+        crate::repeat_for(args.duration(), async |batch_id| {
+            let (_, value) = crate::keygen(batch_id);
+            let batch = range
+                .random_batch(args.batch_size, &dist, &mut rng)
+                .iter_update_ops(value)
+                .collect::<Vec<_>>();
 
             if log::log_enabled!(log::Level::Debug) {
-                debug!(
-                    "completed batch {} in {}",
-                    batch_id,
-                    pretty_duration(&start.elapsed(), None)
-                );
+                let distinct = batch
+                    .iter()
+                    .map(BatchOp::key)
+                    .copied()
+                    .collect::<HashSet<_>>()
+                    .len();
+
+                debug!("inserting batch {batch_id} with {distinct} distinct data values");
             }
-            batch_id += 1;
-        }
-        Ok(())
-    }
-}
-fn generate_updates(
-    batch_id: u32,
-    batch_size: usize,
-    zipf: rand_distr::Zipf<f64>,
-) -> impl Iterator<Item = BatchOp<Vec<u8>, Vec<u8>>> {
-    let hash_of_batch_id = Sha256::digest(batch_id.to_ne_bytes()).to_vec();
-    let rng = rand::rng();
-    zipf.sample_iter(rng)
-        .take(batch_size)
-        .map(|inner_key| {
-            let digest = Sha256::digest((inner_key as u64).to_ne_bytes()).to_vec();
-            trace!(
-                "updating {:?} with digest {} to {}",
-                inner_key,
-                hex::encode(&digest),
-                hex::encode(&hash_of_batch_id)
-            );
-            (digest, hash_of_batch_id.clone())
+
+            db.propose(batch)
+                .await
+                .context("failed to build proposal")?
+                .commit()
+                .await
+                .context("failed to commit proposal")?;
+
+            Ok(())
         })
-        .map(|(key, value)| BatchOp::Put { key, value })
-        .collect::<Vec<_>>()
-        .into_iter()
+        .await
+    }
 }

@@ -23,7 +23,6 @@ clap = { workspace = true, features = ['string'] }
 env_logger.workspace = true
 fastrace = { workspace = true, features = ["enable"] }
 firewood.workspace = true
-hex.workspace = true
 log.workspace = true
 metrics.workspace = true
 metrics-util.workspace = true
@@ -32,6 +31,7 @@ rand_distr.workspace = true
 sha2.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "macros", "rt-multi-thread"] }
 # Regular dependencies
+anyhow = { version = "1.0.98", features = ["backtrace"] }
 fastrace-opentelemetry = { version = "0.13.0" }
 metrics-exporter-prometheus = "0.17.2"
 opentelemetry = "0.30.0"

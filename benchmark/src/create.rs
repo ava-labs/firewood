@@ -1,14 +1,9 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![expect(
-    clippy::arithmetic_side_effects,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-
-use std::error::Error;
 use std::time::Instant;
 
+use anyhow::Context;
 use fastrace::prelude::SpanContext;
 use fastrace::{Span, func_path};
 use firewood::db::Db;
@@ -17,30 +12,48 @@ use log::info;
 
 use pretty_duration::pretty_duration;
 
-use crate::{Args, TestRunner};
+use crate::{GlobalOpts, KeygenIterExt, TestRunner};
 
-#[derive(Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, clap::Args)]
 pub struct Create;
 
 impl TestRunner for Create {
-    async fn run(&self, db: &Db, args: &Args) -> Result<(), Box<dyn Error>> {
-        let keys = args.global_opts.batch_size;
+    async fn run(&self, db: &Db, args: &GlobalOpts) -> anyhow::Result<()> {
+        let root = Span::root(func_path!(), SpanContext::random());
+
         let start = Instant::now();
-
-        for key in 0..args.global_opts.number_of_batches {
-            let root = Span::root(func_path!(), SpanContext::random());
+        for (batch_id, range) in args
+            .key_range_batches()
+            .context("key range overflows u64")?
+            .enumerate()
+        {
             let _guard = root.set_local_parent();
+            let start = Instant::now();
+            let batch = range.clone().iter_insert_ops();
 
-            let batch = Self::generate_inserts(key * keys, args.global_opts.batch_size);
+            db.propose(batch)
+                .await
+                .context("failed to build proposal")?
+                .commit()
+                .await
+                .context("failed to commit proposal")?;
 
-            let proposal = db.propose(batch).await.expect("proposal should succeed");
-            proposal.commit().await?;
+            if log::log_enabled!(log::Level::Debug) {
+                let elapsed = start.elapsed();
+                log::debug!(
+                    "created batch ({batch_id}/{}) with {} keys in {}",
+                    args.number_of_batches.get(),
+                    range.size_hint().0,
+                    pretty_duration(&elapsed, None)
+                );
+            }
         }
-        let duration = start.elapsed();
+
         info!(
-            "Generated and inserted {} batches of size {keys} in {}",
-            args.global_opts.number_of_batches,
-            pretty_duration(&duration, None)
+            "Generated and inserted {} batches of size {} in {}",
+            args.number_of_batches.get(),
+            args.batch_size.get(),
+            pretty_duration(&start.elapsed(), None)
         );
 
         Ok(())

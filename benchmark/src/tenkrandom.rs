@@ -1,74 +1,61 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![expect(
-    clippy::arithmetic_side_effects,
-    reason = "Found 7 occurrences after enabling the lint."
-)]
-
-use std::error::Error;
-use std::time::Instant;
-
-use firewood::db::{BatchOp, Db};
-use firewood::logger::debug;
+use anyhow::Context;
+use firewood::db::Db;
 use firewood::v2::api::{Db as _, Proposal as _};
 
-use crate::{Args, TestRunner};
-use sha2::{Digest, Sha256};
+use crate::{GlobalOpts, KeygenIterExt, RangeExt, TestRunner};
 
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, clap::Args)]
 pub struct TenKRandom;
 
 impl TestRunner for TenKRandom {
-    async fn run(&self, db: &Db, args: &Args) -> Result<(), Box<dyn Error>> {
-        let mut low = 0;
-        let mut high = args.global_opts.number_of_batches * args.global_opts.batch_size;
-        let twenty_five_pct = args.global_opts.batch_size / 4;
+    async fn run(&self, db: &Db, args: &GlobalOpts) -> anyhow::Result<()> {
+        let key_range = args.key_range().context("key range overflows u64")?;
 
-        let start = Instant::now();
+        // segments of 25% of a batch
+        let mut segments = key_range
+            .split(
+                args.batch_size
+                    .checked_mul(crate::FOUR)
+                    .context("batch size overflows u64")?,
+            )
+            .cycle();
 
-        while start.elapsed().as_secs() / 60 < args.global_opts.duration_minutes {
-            let batch: Vec<BatchOp<_, _>> = Self::generate_inserts(high, twenty_five_pct)
-                .chain(generate_deletes(low, twenty_five_pct))
-                .chain(generate_updates(low + high / 2, twenty_five_pct * 2, low))
-                .collect();
-            let proposal = db.propose(batch).await.expect("proposal should succeed");
-            proposal.commit().await?;
-            low += twenty_five_pct;
-            high += twenty_five_pct;
-        }
-        Ok(())
+        let batch = segments.clone().take(3).flatten().iter_insert_ops();
+        db.propose(batch)
+            .await
+            .context("failed to build proposal")?
+            .commit()
+            .await
+            .context("failed to commit proposal")?;
+
+        crate::repeat_for(args.duration(), async |batch_id| {
+            let (_, value) = crate::keygen(batch_id);
+
+            let deletes = segments.next().into_iter().flatten().iter_delete_ops();
+
+            // clone the base iterator before we take any more segments so the
+            // next `repeat_for` iteration starts from this point. This is cheap
+            // since it's 48 bytes (size_of::<u64>() * 3 (SplitRange) * 2 (Cycle))
+            let mut segments = segments.clone().take(3);
+
+            let update1 = segments.next().into_iter().flatten().iter_update_ops(value);
+            let update2 = segments.next().into_iter().flatten().iter_update_ops(value);
+            let inserts = segments.next().into_iter().flatten().iter_insert_ops();
+
+            let batch = inserts.chain(deletes).chain(update1).chain(update2);
+
+            db.propose(batch)
+                .await
+                .context("failed to build proposal")?
+                .commit()
+                .await
+                .context("failed to commit proposal")?;
+
+            anyhow::Ok(())
+        })
+        .await
     }
-}
-fn generate_updates(
-    start: u64,
-    count: u64,
-    low: u64,
-) -> impl Iterator<Item = BatchOp<Box<[u8]>, Box<[u8]>>> {
-    let hash_of_low: Box<[u8]> = Sha256::digest(low.to_ne_bytes())[..].into();
-    (start..start + count)
-        .map(|inner_key| {
-            let digest = Sha256::digest(inner_key.to_ne_bytes())[..].into();
-            debug!(
-                "updating {:?} with digest {} to {}",
-                inner_key,
-                hex::encode(&digest),
-                hex::encode(&hash_of_low)
-            );
-            (digest, hash_of_low.clone())
-        })
-        .map(|(key, value)| BatchOp::Put { key, value })
-        .collect::<Vec<_>>()
-        .into_iter()
-}
-fn generate_deletes(start: u64, count: u64) -> impl Iterator<Item = BatchOp<Box<[u8]>, Box<[u8]>>> {
-    (start..start + count)
-        .map(|key| {
-            let digest = Sha256::digest(key.to_ne_bytes())[..].into();
-            debug!("deleting {:?} with digest {}", key, hex::encode(&digest));
-            digest
-        })
-        .map(|key| BatchOp::Delete { key })
-        .collect::<Vec<_>>()
-        .into_iter()
 }

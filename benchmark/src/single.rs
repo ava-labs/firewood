@@ -1,52 +1,35 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![expect(
-    clippy::arithmetic_side_effects,
-    reason = "Found 2 occurrences after enabling the lint."
-)]
-#![expect(
-    clippy::cast_sign_loss,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-
-use crate::TestRunner;
-use firewood::db::{BatchOp, Db};
+use crate::{GlobalOpts, KeygenIterExt, RangeExt, TestRunner};
+use anyhow::Context;
+use firewood::db::Db;
 use firewood::v2::api::{Db as _, Proposal as _};
-use log::debug;
-use pretty_duration::pretty_duration;
-use sha2::{Digest, Sha256};
-use std::error::Error;
-use std::time::Instant;
 
-#[derive(Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, clap::Args)]
 pub struct Single;
 
 impl TestRunner for Single {
-    async fn run(&self, db: &Db, args: &crate::Args) -> Result<(), Box<dyn Error>> {
-        let start = Instant::now();
-        let inner_keys: Vec<_> = (0..args.global_opts.batch_size)
-            .map(|i| Sha256::digest(i.to_ne_bytes()))
-            .collect();
-        let mut batch_id = 0;
+    async fn run(&self, db: &Db, args: &GlobalOpts) -> anyhow::Result<()> {
+        let keys = args
+            .key_range()
+            .context("key range overflows u64")?
+            .hashed_key_range()
+            .collect::<Vec<_>>();
 
-        while start.elapsed().as_secs() / 60 < args.global_opts.duration_minutes {
-            let batch = inner_keys.iter().map(|key| BatchOp::Put {
-                key,
-                value: vec![batch_id as u8],
-            });
-            let proposal = db.propose(batch).await.expect("proposal should succeed");
-            proposal.commit().await?;
+        crate::repeat_for(args.duration(), async |batch_id| {
+            let (_, digest) = crate::keygen(batch_id);
+            let batch = keys.iter().iter_update_ops(digest);
 
-            if log::log_enabled!(log::Level::Debug) && batch_id % 1000 == 999 {
-                debug!(
-                    "completed {} batches in {}",
-                    1 + batch_id,
-                    pretty_duration(&start.elapsed(), None)
-                );
-            }
-            batch_id += 1;
-        }
-        Ok(())
+            db.propose(batch)
+                .await
+                .context("failed to build proposal")?
+                .commit()
+                .await
+                .context("failed to commit proposal")?;
+
+            Ok(())
+        })
+        .await
     }
 }
