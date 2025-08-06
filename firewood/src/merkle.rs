@@ -748,8 +748,19 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
     }
 
     /// Setting the Merkle trie for the woker pool. Must be cleared first.
+    /// 
+    /// ## Panics
+    /// 
+    /// Can panic if workerpool trie is incorrectly initialized.
     pub fn set_merkle(&self, merkle: Arc<Merkle<NodeStore<MutableProposal, S>>>) {
-
+        for i in 0..BranchNode::MAX_CHILDREN {
+            let _ = self
+                .workers_data
+                .get(i)
+                .expect("empty vector")
+                .0
+                .send(MerkleOp::SetMerkle(Box::new(merkle.clone())));
+        }
     }
 
     /// Clears the Merkle trie so that it can be moved out of the Arc
@@ -761,7 +772,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
     /// ## Errors
     ///
     /// Can return a `FileIoError` that came from a previous insert.
-    pub fn clear_merkle(&self) -> Result<Option<Node>, FileIoError> {
+    pub fn clear_merkle(&self) -> Result<Vec<Option<Node>>, FileIoError> {
         for i in 0..BranchNode::MAX_CHILDREN {
             let _ = self
                 .workers_data
@@ -771,18 +782,23 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
                 .send(MerkleOp::ClearMerkle);
         }
 
+        let mut ret_vec = vec![];
+
         // TODO: This is just to clear the threads for now. will change later.
-        for i in 1..BranchNode::MAX_CHILDREN {
+        for i in 0..BranchNode::MAX_CHILDREN {
             // Blocks until result completes for now in this initial prototype.
-            let WorkerReturn::NodeResult(_result) = self
+            let WorkerReturn::NodeResult(result) = self
                 .workers_data
                 .get(i)
                 .expect("empty vector")
                 .1
                 .recv()
                 .expect("recv error");
+            // TODO: Handle this error better
+            ret_vec.push(result.expect("File IO error"));
         }
-
+        Ok(ret_vec)
+/* 
         let WorkerReturn::NodeResult(result) = self
             .workers_data
             .first()
@@ -791,6 +807,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
             .recv()
             .expect("recv error");
         result
+*/
     }
 }
 

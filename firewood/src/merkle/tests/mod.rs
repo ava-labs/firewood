@@ -13,7 +13,6 @@ mod unvalidated;
 use std::collections::HashMap;
 
 use super::*;
-use clap::value_parser;
 use firewood_storage::{Committed, MemStore, MutableProposal, NodeStore, RootReader, TrieHash};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng, rng};
@@ -203,15 +202,33 @@ fn test_get_regression() {
     let key = [0];
     let insert_result = merkle_arc.insert_parallel(root_node, &worker_pool, &key, Box::new([0]));
     match insert_result.unwrap() {
-        ParallelInsertReturn::Performed(node) => root_node = Some(node), 
-        ParallelInsertReturn::RetryNonThreaded(node, value ) => {
-            // TODO: Block until done
-            let new_root = worker_pool.clear_merkle();
+        ParallelInsertReturn::Performed(node) => {
+            println!("--> Performed {node:?}");
+            root_node = Some(node);
+        },
+        ParallelInsertReturn::RetryNonThreaded(mut node, value ) => {
+            // TODO: Need to update clear merkle
+            let mut child_nodes: Vec<Option<Node>> = worker_pool.clear_merkle().expect("file io error");
+            for (i, cur_node) in child_nodes.iter_mut().enumerate() {
+                // If child_nodes is not empty, then node must be a branch
+                if cur_node.is_none() {
+                    continue;
+                }
+
+                match node {
+                    Node::Branch(ref mut branch_node) => {
+                        //let (_path, _key, child_array) = *branch_node;
+                        let a = cur_node.take().unwrap();
+                        branch_node.children[i] = Some(Child::Node(a));
+                    },
+                    Node::Leaf(_) => {}
+                }
+            }
 
             // All but one of the references to merkle_arc should be gone. Extract
             // the inner Merkle should we can perform a mut operations on it.
             let mut merkle = Arc::into_inner(merkle_arc).unwrap();
-            *merkle.nodestore.mut_root() = new_root.unwrap();
+            *merkle.nodestore.mut_root() = Some(node);
             merkle.insert(&key, value).unwrap();
 
             let root = merkle.nodestore.mut_root();
@@ -224,16 +241,41 @@ fn test_get_regression() {
     
     //merkle_arc.insert_parallel(&worker_pool, &[0], Box::new([0]));
     //merkle_arc.insert_parallel(&worker_pool, &[0], Box::new([0]));
-    
 
-    // Wait until all of the previous inserts are complete
-    let new_root = worker_pool.clear_merkle();
+
+    let mut node = root_node.unwrap();
+    let mut child_nodes: Vec<Option<Node>> = worker_pool.clear_merkle().expect("file io error");
+    for (i, cur_node) in child_nodes.iter_mut().enumerate() {
+        // If child_nodes is not empty, then node must be a branch
+        if cur_node.is_none() {
+            continue;
+        }
+
+        match node {
+            Node::Branch(ref mut branch_node) => {
+                //let (_path, _key, child_array) = *branch_node;
+                let a = cur_node.take().unwrap();
+                branch_node.children[i] = Some(Child::Node(a));
+            },
+            Node::Leaf(_) => {}
+        }
+    }
 
     // All but one of the references to merkle_arc should be gone. Extract
     // the inner Merkle should we can perform a mut operations on it.
     let mut merkle = Arc::into_inner(merkle_arc).unwrap();
+    *merkle.nodestore.mut_root() = Some(node);
+
+    
+
+    // Wait until all of the previous inserts are complete
+    //let new_root = worker_pool.clear_merkle();
+
+    // All but one of the references to merkle_arc should be gone. Extract
+    // the inner Merkle should we can perform a mut operations on it.
+    //let mut merkle = Arc::into_inner(merkle_arc).unwrap();
     //*merkle.nodestore.mut_root() = new_root.unwrap();
-    *merkle.nodestore.mut_root() = root_node;
+    //*merkle.nodestore.mut_root() = root_node;
 
     merkle.insert(&[1], Box::new([1])).unwrap();
     merkle.insert(&[2], Box::new([2])).unwrap();
