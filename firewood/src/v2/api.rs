@@ -199,7 +199,7 @@ pub enum Error {
     RevisionNotFound,
 
     /// An invalid root hash was provided
-    #[error("provided root hash is not a valid hash key")]
+    #[error(transparent)]
     InvalidRootHash(#[from] firewood_storage::InvalidTrieHashLength),
 }
 

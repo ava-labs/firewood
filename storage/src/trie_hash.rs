@@ -9,9 +9,9 @@ use std::fmt::{self, Debug, Display, Formatter};
 
 /// An error that occurs when trying to convert a slice to a `TrieHash`
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, thiserror::Error)]
-#[error("could not convert slice to TrieHash (an array of 32 bytes)")]
+#[error("could not convert a slice of {0} bytes to TrieHash (an array of 32 bytes)")]
 #[non_exhaustive]
-pub struct InvalidTrieHashLength;
+pub struct InvalidTrieHashLength(pub usize);
 
 /// A hash value inside a merkle trie
 /// We use the same type as returned by sha2 here to avoid copies
@@ -84,7 +84,7 @@ impl TryFrom<&[u8]> for TrieHash {
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         match value.try_into() {
             Ok(array) => Ok(Self::from_bytes(array)),
-            Err(_) => Err(InvalidTrieHashLength),
+            Err(_) => Err(InvalidTrieHashLength(value.len())),
         }
     }
 }
