@@ -6,16 +6,16 @@
     reason = "Found 12 occurrences after enabling the lint."
 )]
 
-use crate::merkle::{Merkle, Value};
-use crate::stream::MerkleKeyValueStream;
-use crate::v2::api::{self, FrozenProof, FrozenRangeProof, KeyType, ValueType};
+use crate::merkle::{Key, Merkle, Value};
+use crate::stream::{InternalStreamState, MerkleKeyValueStream};
+use crate::v2::api::{self, Error, FrozenProof, FrozenRangeProof, KeyType, ValueType};
 pub use crate::v2::api::{Batch, BatchOp};
 
 use crate::manager::{RevisionManager, RevisionManagerConfig};
 use async_trait::async_trait;
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeStore, TrieHash,
+    ImmutableProposal, NodeStore, ReadableStorage, TrieHash, TrieReader,
 };
 use metrics::{counter, describe_counter};
 use std::io::Write;
@@ -47,6 +47,17 @@ impl std::fmt::Debug for DbMetrics {
     }
 }
 
+/// State of an iteration on a revision, view, or proposal
+#[derive(Debug)]
+pub enum IterationState {
+    /// iteration hasn't started yet and can be started from given key (or beginning if not provided)
+    StartFromKey(Option<Box<[u8]>>),
+    /// iteration can continue from internal state of stream
+    ContinueFromState(InternalStreamState),
+    /// iteration is done
+    Done,
+}
+
 /// A synchronous view of the database.
 pub trait DbViewSync {
     /// find a value synchronously
@@ -57,6 +68,12 @@ pub trait DbViewSync {
 pub trait DbViewSyncBytes: std::fmt::Debug {
     /// find a value synchronously using raw bytes
     fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError>;
+
+    /// iterate on this view starting from given iteration state
+    fn iterate(
+        &self,
+        state: IterationState,
+    ) -> Result<(Option<(Key, Value)>, IterationState), Error>;
 }
 
 // Provide blanket implementation for DbViewSync using DbViewSyncBytes
@@ -66,27 +83,72 @@ impl<T: DbViewSyncBytes> DbViewSync for T {
     }
 }
 
-impl DbViewSyncBytes for Arc<HistoricalRev> {
+impl<T, S> DbViewSyncBytes for NodeStore<T, S>
+where
+    NodeStore<T, S>: TrieReader,
+    T: std::fmt::Debug,
+    S: ReadableStorage,
+{
     fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
         let merkle = Merkle::from(self);
         let value = merkle.get_value(key)?;
         Ok(value)
     }
+
+    fn iterate(
+        &self,
+        state: IterationState,
+    ) -> Result<(Option<(Key, Value)>, IterationState), Error> {
+        let merkle = Merkle::from(self);
+        let mut it = match state {
+            IterationState::StartFromKey(key) => {
+                if let Some(key) = key {
+                    merkle.key_value_iter_from_key(key)
+                } else {
+                    merkle.key_value_iter()
+                }
+            }
+            IterationState::ContinueFromState(state) => {
+                MerkleKeyValueStream::from_internal_state(merkle.nodestore(), state)
+            }
+            IterationState::Done => {
+                return Ok((None, state));
+            }
+        };
+        let kv = it.next_internal();
+        let Some(kv) = kv else {
+            return Ok((None, IterationState::Done));
+        };
+        Ok((
+            Some(kv?),
+            IterationState::ContinueFromState(it.internal_state()),
+        ))
+    }
+}
+
+impl<T: DbViewSyncBytes> DbViewSyncBytes for Arc<T> {
+    fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
+        (**self).val_sync_bytes(key)
+    }
+
+    fn iterate(
+        &self,
+        state: IterationState,
+    ) -> Result<(Option<(Key, Value)>, IterationState), Error> {
+        (**self).iterate(state)
+    }
 }
 
 impl DbViewSyncBytes for Proposal<'_> {
     fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
-        let merkle = Merkle::from(self.nodestore.clone());
-        let value = merkle.get_value(key)?;
-        Ok(value)
+        self.nodestore.val_sync_bytes(key)
     }
-}
 
-impl DbViewSyncBytes for Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> {
-    fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
-        let merkle = Merkle::from(self.clone());
-        let value = merkle.get_value(key)?;
-        Ok(value)
+    fn iterate(
+        &self,
+        state: IterationState,
+    ) -> Result<(Option<(Key, Value)>, IterationState), Error> {
+        self.nodestore.iterate(state)
     }
 }
 
@@ -474,16 +536,18 @@ impl Proposal<'_> {
 mod test {
     #![expect(clippy::unwrap_used)]
 
+    use firewood_storage::{CheckOpt, MemStore, MutableProposal, NodeStore};
+    use rand::{Rng, rng};
     use std::ops::{Deref, DerefMut};
     use std::path::PathBuf;
+    use std::sync::Arc;
 
-    use firewood_storage::CheckOpt;
-    use rand::rng;
-
-    use crate::db::Db;
-    use crate::v2::api::{Db as _, DbView as _, Proposal as _};
+    use crate::db::{Batch, Db, DbViewSyncBytes, IterationState};
+    use crate::v2::api::{Db as _, DbView as _, HashKey, Proposal as _};
 
     use super::{BatchOp, DbConfig};
+    use crate::merkle::{Key, Value};
+    use test_case::test_case;
 
     #[tokio::test]
     async fn test_proposal_reads() {
@@ -684,6 +748,105 @@ mod test {
         assert_eq!(&*value, b"proposal_value");
     }
 
+    /// Tests if iterate works correctly on an empty node store and also if calling next on done state works
+    #[tokio::test]
+    async fn test_iterate_empty_and_next() {
+        let nodestore = create_test_nodestore();
+        let state = assert_iterator_next_done(&nodestore, IterationState::StartFromKey(None));
+        assert_iterator_next_done(&nodestore, state);
+    }
+
+    /// Tests if iterate works correctly with one key
+    #[tokio::test]
+    async fn test_iterate_single() {
+        let db = testdb().await;
+
+        let batch = batch_data(1, 0, 0);
+        let root_hash = propose_on_testdb(&db, batch, true).await;
+        let view = db.view_sync(root_hash).unwrap();
+        let state = assert_iterator_next_is(
+            view.as_ref(),
+            IterationState::StartFromKey(None),
+            b"key0",
+            b"value0",
+        );
+        assert_iterator_next_done(view.as_ref(), state);
+
+        assert_iterator_next_done(
+            view.as_ref(),
+            IterationState::StartFromKey(Some(b"key1".as_slice().into())),
+        );
+    }
+
+    /// Tests if iterate works correctly starting from different keys
+    #[test_case(0; "key before all keys")]
+    #[test_case(1; "first key")]
+    #[test_case(3; "key in middle")]
+    #[test_case(7; "last key")]
+    #[test_case(8; "key after last key")]
+    #[tokio::test]
+    async fn test_iterate_start_from(from: u32) {
+        let db = testdb().await;
+
+        let batch = batch_data(6, 1, 1);
+        let expected = (1..7).filter(|i| i >= &from).collect::<Vec<u32>>();
+
+        let root_hash = propose_on_testdb(&db, batch, true).await;
+        let view = db.view_sync(root_hash).unwrap();
+        let mut state =
+            IterationState::StartFromKey(Some(format!("key{from}").into_bytes().into()));
+
+        for expected_k in expected {
+            state = assert_iterator_next_is(
+                view.as_ref(),
+                state,
+                format!("key{expected_k}").as_bytes(),
+                format!("value{expected_k}").as_bytes(),
+            );
+        }
+
+        assert_iterator_next_done(view.as_ref(), state);
+    }
+
+    /// Tests if iterate works correctly both on a proposal and historical revisions
+    #[tokio::test]
+    async fn test_iterate() {
+        let db = testdb().await;
+
+        let batch1 = batch_data(10, 0, 0);
+        let batch2 = batch_data(10, 0, 10);
+
+        let historical_hash = propose_on_testdb(&db, batch1, true).await;
+        let proposal_hash = propose_on_testdb(&db, batch2, false).await;
+
+        let historical_view = db.view_sync(historical_hash).unwrap();
+        let proposal_view = db.view_sync(proposal_hash).unwrap();
+        let (mut state1, mut state2) = (
+            IterationState::StartFromKey(None),
+            IterationState::StartFromKey(None),
+        );
+        let mut kv1: Option<(Key, Value)>;
+        let mut kv2: Option<(Key, Value)>;
+
+        let mut i = 0;
+
+        while !(matches!(state1, IterationState::Done) || matches!(state2, IterationState::Done)) {
+            (kv1, state1) = historical_view.iterate(state1).unwrap();
+            (kv2, state2) = proposal_view.iterate(state2).unwrap();
+            if kv1.is_none() && kv2.is_none() {
+                break;
+            }
+            let (key1, value1) = kv1.unwrap();
+            let (key2, value2) = kv2.unwrap();
+
+            assert_eq!(key1, key2);
+            assert_eq!(&*value1, format!("value{i}").as_bytes());
+            assert_eq!(&*value2, format!("value{}", i + 10).as_bytes());
+            i += 1;
+        }
+        assert_eq!(i, 10);
+    }
+
     /// Test that proposing on a proposal works as expected
     ///
     /// Test creates two batches and proposes them, and verifies that the values are in the correct proposal.
@@ -753,6 +916,45 @@ mod test {
         }
     }
 
+    fn rng_seed() -> u64 {
+        std::env::var("FIREWOOD_TEST_SEED")
+            .ok()
+            .map_or_else(
+                || None,
+                |s| Some(str::parse(&s).expect("couldn't parse FIREWOOD_TEST_SEED; must be a u64")),
+            )
+            .unwrap_or_else(|| rng().random())
+    }
+
+    fn random_batch(
+        rng: &mut impl Rng,
+        n: u32,
+        key_len: usize,
+        value_len: usize,
+        addon_len: usize,
+        addon_ratio: (u32, u32),
+    ) -> Batch<Vec<u8>, Vec<u8>> {
+        (0..n).fold(vec![], |mut batch, _| {
+            let mut key = vec![0u8; key_len];
+            let mut value = vec![0u8; value_len];
+            rng.fill(key.as_mut_slice());
+            rng.fill(value.as_mut_slice());
+            batch.push(BatchOp::Put {
+                key: key.clone(),
+                value,
+            });
+            if rng.random_ratio(addon_ratio.0, addon_ratio.1) {
+                let mut addon = vec![0u8; addon_len];
+                rng.fill(addon.as_mut_slice());
+                let key = [key, addon].concat();
+                let mut value = vec![0u8; value_len];
+                rng.fill(value.as_mut_slice());
+                batch.push(BatchOp::Put { key, value });
+            }
+            batch
+        })
+    }
+
     #[tokio::test]
     async fn fuzz_checker() {
         use rand::rngs::StdRng;
@@ -760,14 +962,7 @@ mod test {
 
         let _ = env_logger::Builder::new().is_test(true).try_init();
 
-        let seed = std::env::var("FIREWOOD_TEST_SEED")
-            .ok()
-            .map_or_else(
-                || None,
-                |s| Some(str::parse(&s).expect("couldn't parse FIREWOOD_TEST_SEED; must be a u64")),
-            )
-            .unwrap_or_else(|| rng().random());
-
+        let seed = rng_seed();
         eprintln!("Seed {seed}: to rerun with this data, export FIREWOOD_TEST_SEED={seed}");
         let rng = std::cell::RefCell::new(StdRng::seed_from_u64(seed));
 
@@ -776,23 +971,8 @@ mod test {
         // takes about 0.3s on a mac to run 50 times
         for _ in 0..50 {
             // create a batch of 10 random key-value pairs
-            let batch = (0..10).fold(vec![], |mut batch, _| {
-                let key: [u8; 32] = rng.borrow_mut().random();
-                let value: [u8; 8] = rng.borrow_mut().random();
-                batch.push(BatchOp::Put {
-                    key: key.to_vec(),
-                    value,
-                });
-                if rng.borrow_mut().random_range(0..5) == 0 {
-                    let addon: [u8; 32] = rng.borrow_mut().random();
-                    let key = [key, addon].concat();
-                    let value: [u8; 8] = rng.borrow_mut().random();
-                    batch.push(BatchOp::Put { key, value });
-                }
-                batch
-            });
-            let proposal = db.propose(batch).await.unwrap();
-            proposal.commit().await.unwrap();
+            let batch = random_batch(&mut rng.borrow_mut(), 10, 32, 8, 32, (1, 5));
+            propose_on_testdb(&db, batch, true).await;
 
             // check the database for consistency, sometimes checking the hashes
             let hash_check = rng.borrow_mut().random();
@@ -805,6 +985,64 @@ mod test {
             if !report.errors.is_empty() {
                 db.dump(&mut std::io::stdout()).await.unwrap();
                 panic!("error: {:?}", report.errors);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn fuzz_iterate() {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        let _ = env_logger::Builder::new().is_test(true).try_init();
+
+        let seed = rng_seed();
+        eprintln!("Seed {seed}: to rerun with this data, export FIREWOOD_TEST_SEED={seed}");
+        let rng = std::cell::RefCell::new(StdRng::seed_from_u64(seed));
+
+        // takes about 0.8s on a Mac to run 20 times
+        for _ in 0..20 {
+            let db = testdb().await;
+            // create a batch of 100 random key-value pairs
+            let batch = random_batch(&mut rng.borrow_mut(), 100, 32, 8, 32, (1, 5));
+            let root_hash = propose_on_testdb(&db, batch.clone(), true).await;
+            let view = db.view_sync(root_hash).unwrap();
+
+            // generate 100 random start keys
+            let start_keys = (0..100).fold(vec![], |mut keys, _| {
+                let key_len: usize = rng.borrow_mut().random_range(0..33);
+                let mut key = vec![0u8; key_len];
+                rng.borrow_mut().fill(key.as_mut_slice());
+                keys.push(key);
+                keys
+            });
+
+            for start_key in start_keys {
+                let mut expected: Vec<(Vec<u8>, Vec<u8>)> = batch
+                    .iter()
+                    .filter_map(|op| match op {
+                        BatchOp::Put { key, value } if key >= &start_key => {
+                            Some((key.clone(), value.clone()))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                expected.sort_by(|a, b| a.0.cmp(&b.0));
+                let mut state = IterationState::StartFromKey(Some(start_key.into()));
+                let mut kv: Option<(Key, Value)>;
+
+                for (expected_k, expected_v) in expected {
+                    (kv, state) = view.iterate(state).unwrap();
+                    let (key, value) = kv.unwrap();
+                    if *key != expected_k || *value != expected_v {
+                        db.dump(&mut std::io::stdout()).await.unwrap();
+                        panic!(
+                            "expected: {:?}, got: {:?}",
+                            (expected_k, expected_v),
+                            (key, value)
+                        );
+                    }
+                }
             }
         }
     }
@@ -881,6 +1119,57 @@ mod test {
         for (k, v) in keys.iter().zip(vals.iter()) {
             assert_eq!(&committed.val(k).await.unwrap().unwrap(), v);
         }
+    }
+
+    fn create_test_nodestore() -> NodeStore<MutableProposal, MemStore> {
+        let memstore = MemStore::new(vec![]);
+        let memstore = Arc::new(memstore);
+        NodeStore::new_empty_proposal(memstore)
+    }
+
+    fn assert_iterator_next_is(
+        view: &dyn DbViewSyncBytes,
+        state: IterationState,
+        expected_key: &[u8],
+        expected_value: &[u8],
+    ) -> IterationState {
+        let (kv, state) = view.iterate(state).unwrap();
+        let (key, value) = kv.unwrap();
+        assert_eq!(&*key, expected_key);
+        assert_eq!(&*value, expected_value);
+        state
+    }
+
+    fn assert_iterator_next_done(
+        view: &dyn DbViewSyncBytes,
+        state: IterationState,
+    ) -> IterationState {
+        let (kv, state) = view.iterate(state).unwrap();
+        assert!(kv.is_none());
+        assert!(matches!(state, IterationState::Done));
+        state
+    }
+
+    fn batch_data(n: u32, key_start: u32, value_start: u32) -> Batch<Vec<u8>, Vec<u8>> {
+        (0..n)
+            .map(|i| BatchOp::Put {
+                key: format!("key{}", key_start.saturating_add(i)).into_bytes(),
+                value: format!("value{}", value_start.saturating_add(i)).into_bytes(),
+            })
+            .collect()
+    }
+
+    async fn propose_on_testdb(
+        db: &TestDb,
+        batch: Batch<Vec<u8>, Vec<u8>>,
+        commit: bool,
+    ) -> HashKey {
+        let proposal = db.propose(batch).await.unwrap();
+        let hash = proposal.root_hash().await.unwrap().unwrap();
+        if commit {
+            proposal.commit().await.unwrap();
+        }
+        hash
     }
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
