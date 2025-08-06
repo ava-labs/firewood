@@ -261,6 +261,16 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         let (area_index, area_size) = self.area_index_and_size(subtrie_root_address)?;
         let (node, node_bytes) = self.read_node_with_num_bytes_from_disk(subtrie_root_address)?;
 
+        // check if the node fits in the area
+        if node_bytes > area_size {
+            return Err(vec![CheckerError::NodeLargerThanArea {
+                area_start: subtrie_root_address,
+                area_size,
+                node_bytes,
+                parent,
+            }]);
+        }
+
         // if the node has a value, check that the key is valid
         let mut current_path_prefix = path_prefix.clone();
         current_path_prefix.0.extend_from_slice(node.partial_path());
