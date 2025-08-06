@@ -721,94 +721,6 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
             .collect();
 
         WorkerPool { workers_data }
-
-        //let (host_sender, host_receiver, handle) = WorkerPool::create_one_worker(merkle);
-
-        /*
-                // Create a single thread and a single channel to the thread for now
-                let (host_sender, thread_receiver) = mpsc::channel::<MerkleOp<S>>();
-                let (thread_sender, host_receiver) = mpsc::channel::<WorkerReturn>();
-                let mut merkle: Option<Arc<Merkle<NodeStore<MutableProposal, S>>>> = Some(merkle.clone());
-
-                let handle = thread::spawn(move || {
-                    let mut inserted_root = None;
-                    loop {
-                        let Ok(v) = thread_receiver.recv() else {
-                            return; // Thread is unable to recv data from parent
-                        };
-                        match v {
-                            MerkleOp::InsertData(sub_trie_root, key, value) => {
-                                // There are four possible cases to consider here.
-                                // 1.   inserted_root is None and node_opt is None. This means that we need to
-                                //      create a sub-trie. We create a Leaf node and set it to inserted_root and
-                                //      continue from the loop.
-                                // 2.   inserted_root is None and node_opt is not None. This means we are adding
-                                //      to an existing trie rooted at node_opt. We set node to the inner of
-                                //      node_opt.
-                                // 3.   inserted_root is not None and node_opt is None. Same as case 2 except
-                                //      we are adding to the sub-trie rooted at inserted_root.
-                                // 4.   Both insert_root and node_opt are not None. In this case, it is because
-                                //      node_opt has not been updated yet. We should use insert_root.
-                                let node = match *sub_trie_root {
-                                    Some(node_from_sub_trie_root) => {
-                                        if let Some(node_from_inserted) = inserted_root {
-                                            node_from_inserted
-                                        } else {
-                                            node_from_sub_trie_root
-                                        }
-                                    }
-                                    None => {
-                                        if let Some(node_from_inserted) = inserted_root {
-                                            node_from_inserted
-                                        } else {
-                                            println!("InsertData key: {key:?}");
-                                            let path_key =
-                                                Path::from_nibbles_iterator(NibblesIterator::new(&key));
-                                            println!("inserted partial_path: {path_key:?}");
-                                            inserted_root = Some(Node::Leaf(LeafNode {
-                                                partial_path: path_key,
-                                                value,
-                                            }));
-                                            continue;
-                                        }
-                                    }
-                                };
-
-                                let path_key = Path::from_nibbles_iterator(NibblesIterator::new(&key));
-
-                                let merkle_arc: Arc<Merkle<NodeStore<MutableProposal, S>>> =
-                                    merkle.expect("Merkle is not set before insert");
-
-                                let insert_result =
-                                    merkle_arc.insert_helper(node, path_key.as_ref(), value);
-                                inserted_root = match insert_result {
-                                    Ok(n) => Some(n),
-                                    // TODO: Send back error message to the main thread. Currently just breaks out of this
-                                    //       loop and termintes the thread.
-                                    Err(_) => {
-                                        break;
-                                    }
-                                };
-                                merkle = Some(merkle_arc);
-                            }
-                            MerkleOp::Terminate => {
-                                break;
-                            }
-                            MerkleOp::ClearMerkle => {
-                                merkle = None; // Decrement the Arc counter
-                                let _ = thread_sender.send(WorkerReturn::NodeResult(Ok(inserted_root)));
-                                inserted_root = None;
-                            }
-                            MerkleOp::SetMerkle(m) => {
-                                merkle = Some(*m);
-                            }
-                        }
-                    }
-                });
-        */
-        //WorkerPool {
-        //    workers_data: vec![(host_sender, host_receiver, handle)],
-        //}
     }
 
     /// Send an insert to the worker threads
@@ -833,6 +745,11 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
             .expect("out of bounds on vector")
             .0
             .send(MerkleOp::InsertData(Box::new(node), key.into(), value))
+    }
+
+    /// Setting the Merkle trie for the woker pool. Must be cleared first.
+    pub fn set_merkle(&self, merkle: Arc<Merkle<NodeStore<MutableProposal, S>>>) {
+
     }
 
     /// Clears the Merkle trie so that it can be moved out of the Arc
@@ -881,7 +798,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
 /// Return value for calling `insert_helper_parallel`.
 pub enum ParallelInsertReturn {
     /// Return this if operation cannot be performed while there are other operations outstanding.
-    RetryNonThreaded(Node),
+    RetryNonThreaded(Node, Value),
 
     /// Return this if operation was performed in paralle.
     Performed(Node),
@@ -937,9 +854,7 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
         Ok(())
     }
 
-    /// Map `key` to `value` in the trie.
-    /// Each element of key is 2 nibbles.
-    pub fn insert(&mut self, key: &[u8], value: Value) -> Result<(), FileIoError> {
+    fn fetch_or_create_root(&mut self, key: &[u8], value: Value) -> Option<(Node, Path, Value)> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
         let root = self.nodestore.mut_root();
@@ -952,12 +867,61 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                 value,
             });
             *root = root_node.into();
-            return Ok(());
+            return None;
         };
+        Some((root_node, key, value))
+    }
 
-        let root_node = self.insert_helper(root_node, key.as_ref(), value)?;
-        *self.nodestore.mut_root() = root_node.into();
+    /// Map `key` to `value` in the trie.
+    /// Each element of key is 2 nibbles.
+    pub fn insert(&mut self, key: &[u8], value: Value) -> Result<(), FileIoError> {
+        if let Some(root_tuple) = self.fetch_or_create_root(key, value) {
+            let (node, key, value) = root_tuple;
+            let root_node = self.insert_helper(node, key.as_ref(), value)?;
+            *self.nodestore.mut_root() = root_node.into();
+        }
         Ok(())
+    }
+
+    /// Parallel insertion
+    pub fn insert_parallel(
+        &self,
+        root: Option<Node>,
+        worker_pool: &WorkerPool<S>,
+        key: &[u8],
+        value: Value,
+    ) -> Result<ParallelInsertReturn, FileIoError> {
+        // If root is None, create the root node and return.
+        let path_key = Path::from_nibbles_iterator(NibblesIterator::new(key));
+        let Some(root_node) = root else {
+            //let path_key = Path::from_nibbles_iterator(NibblesIterator::new(key));
+            println!("inserted partial_path: {path_key:?}");
+            return Ok(ParallelInsertReturn::Performed(Node::Leaf(LeafNode {
+                partial_path: path_key,
+                value,
+            })));
+        };
+        let insert_return = self.insert_helper_for_parallel(worker_pool, root_node, path_key.as_ref(), value)?;
+        Ok(insert_return)
+
+        /*
+        if let Some(root_tuple) = self.fetch_or_create_root(key, value) {
+            let (node, path_key, value) = root_tuple;
+            let parallel_insert_return =
+                self.insert_helper_for_parallel(worker_pool, node, path_key.as_ref(), value)?;
+            match parallel_insert_return {
+                ParallelInsertReturn::Performed(root_node) => {
+                    *self.nodestore.mut_root() = root_node.into();
+                }
+                ParallelInsertReturn::RetryNonThreaded(root_node, value) => {
+                    *self.nodestore.mut_root() = root_node.into();
+                    // TODO: Wait for all threads to complete
+                    return self.insert(key, value);
+                }
+            }
+        }
+        */
+        //Ok(())
     }
 
     /// Map `key` to `value` into the subtrie rooted at `node`.
@@ -1000,7 +964,7 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                 // have been merged into the root. Return a special type to tell the caller
                 // to block until all operations are done and then perform a non-threaded
                 // insert for this key/value
-                Ok(ParallelInsertReturn::RetryNonThreaded(node))
+                Ok(ParallelInsertReturn::RetryNonThreaded(node, value))
             }
             (Some((child_index, partial_path)), None) => {
                 // 3. The key is below the node (i.e. its descendant)
@@ -1049,7 +1013,7 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                         // have been merged into the root. Return a special type to tell the caller
                         // to block until all operations are done and then perform a non-threaded
                         // insert for this key/value
-                        Ok(ParallelInsertReturn::RetryNonThreaded(node))
+                        Ok(ParallelInsertReturn::RetryNonThreaded(node, value))
                     }
                 }
             }
@@ -1068,7 +1032,7 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                 // have been merged into the root. Return a special type to tell the caller
                 // to block until all operations are done and then perform a non-threaded
                 // insert for this key/value
-                Ok(ParallelInsertReturn::RetryNonThreaded(node))
+                Ok(ParallelInsertReturn::RetryNonThreaded(node, value))
             }
         }
     }

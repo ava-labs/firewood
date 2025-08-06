@@ -13,6 +13,7 @@ mod unvalidated;
 use std::collections::HashMap;
 
 use super::*;
+use clap::value_parser;
 use firewood_storage::{Committed, MemStore, MutableProposal, NodeStore, RootReader, TrieHash};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng, rng};
@@ -181,17 +182,49 @@ fn decrease_key(key: &[u8; 32]) -> [u8; 32] {
 
 #[test]
 fn test_get_regression() {
-    let merkle: Merkle<NodeStore<MutableProposal, MemStore>> = create_in_memory_merkle();
+    let mut merkle: Merkle<NodeStore<MutableProposal, MemStore>> = create_in_memory_merkle();
 
-    //let root = merkle.nodestore.mut_root();
-    //let root_node = std::mem::take(root); 
-    let merkle_arc = Arc::new(merkle);
+    let root = merkle.nodestore.mut_root();
+    let mut root_node = std::mem::take(root); 
+    let mut merkle_arc = Arc::new(merkle);
     let worker_pool: WorkerPool<MemStore>= WorkerPool::new(merkle_arc.clone());
+/* 
+    let _ = worker_pool.insert(None, 0, &[0], Box::new([0]));
+
+
 
     // For now just send it to index 0
     let _ = merkle_arc.insert_worker_pool(None, &worker_pool, 0, &[0], Box::new([0]));
     let _ = merkle_arc.insert_worker_pool(None, &worker_pool, 0, &[1], Box::new([1]));
     let _ = merkle_arc.insert_worker_pool(None, &worker_pool, 0, &[2], Box::new([2]));
+*/
+    
+
+    let key = [0];
+    let insert_result = merkle_arc.insert_parallel(root_node, &worker_pool, &key, Box::new([0]));
+    match insert_result.unwrap() {
+        ParallelInsertReturn::Performed(node) => root_node = Some(node), 
+        ParallelInsertReturn::RetryNonThreaded(node, value ) => {
+            // TODO: Block until done
+            let new_root = worker_pool.clear_merkle();
+
+            // All but one of the references to merkle_arc should be gone. Extract
+            // the inner Merkle should we can perform a mut operations on it.
+            let mut merkle = Arc::into_inner(merkle_arc).unwrap();
+            *merkle.nodestore.mut_root() = new_root.unwrap();
+            merkle.insert(&key, value).unwrap();
+
+            let root = merkle.nodestore.mut_root();
+            root_node = std::mem::take(root); 
+
+            merkle_arc = Arc::new(merkle);
+            worker_pool.set_merkle(merkle_arc.clone());
+        }
+    }
+    
+    //merkle_arc.insert_parallel(&worker_pool, &[0], Box::new([0]));
+    //merkle_arc.insert_parallel(&worker_pool, &[0], Box::new([0]));
+    
 
     // Wait until all of the previous inserts are complete
     let new_root = worker_pool.clear_merkle();
@@ -199,7 +232,11 @@ fn test_get_regression() {
     // All but one of the references to merkle_arc should be gone. Extract
     // the inner Merkle should we can perform a mut operations on it.
     let mut merkle = Arc::into_inner(merkle_arc).unwrap();
-    *merkle.nodestore.mut_root() = new_root.unwrap();
+    //*merkle.nodestore.mut_root() = new_root.unwrap();
+    *merkle.nodestore.mut_root() = root_node;
+
+    merkle.insert(&[1], Box::new([1])).unwrap();
+    merkle.insert(&[2], Box::new([2])).unwrap();
 
     //merkle.insert(&[0], Box::new([0])).unwrap();
     assert_eq!(merkle.get_value(&[0]).unwrap(), Some(Box::from([0])));
