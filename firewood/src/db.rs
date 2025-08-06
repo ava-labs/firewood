@@ -883,10 +883,11 @@ mod test {
 
         // check that all the keys and values are still present
         for (k, v) in &ops {
+            let found = committed.val(k).await.unwrap();
             assert_eq!(
-                committed.val(k).await.unwrap().as_deref(),
+                found.as_deref(),
                 Some(v.as_bytes()),
-                "Value for key {k:?} should be {v:?}",
+                "Value for key {k:?} should be {v:?} but was {found:?}",
             );
         }
     }
