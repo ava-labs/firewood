@@ -376,7 +376,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "ethhash")]
-    fn test_default_root_hash() {
+    fn test_ethhash_compat_default_root_hash_equals_empty_rlp_hash() {
         use sha3::Digest as _;
 
         assert_eq!(
@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     #[cfg(not(feature = "ethhash"))]
-    fn test_default_root_hash() {
+    fn test_firewood_default_root_hash_equals_none() {
         assert_eq!(TrieHash::default_root_hash(), None);
     }
 }
