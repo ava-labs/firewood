@@ -198,44 +198,46 @@ fn test_get_regression() {
     let _ = merkle_arc.insert_worker_pool(None, &worker_pool, 0, &[2], Box::new([2]));
 */
     
+    for j in 0..10 {
+        let key = [j];
+        let insert_result = merkle_arc.insert_parallel(root_node, &worker_pool, &key, Box::new([j]));
+        match insert_result.unwrap() {
+            ParallelInsertReturn::Performed(node) => {
+                println!("--> Performed {node:?}");
+                root_node = Some(node);
+            },
+            ParallelInsertReturn::RetryNonThreaded(mut node, value ) => {
+                // TODO: Need to update clear merkle
+                let mut child_nodes: Vec<Option<Node>> = worker_pool.clear_merkle().expect("file io error");
+                for (i, cur_node) in child_nodes.iter_mut().enumerate() {
+                    // If child_nodes is not empty, then node must be a branch
+                    if cur_node.is_none() {
+                        continue;
+                    }
 
-    let key = [0];
-    let insert_result = merkle_arc.insert_parallel(root_node, &worker_pool, &key, Box::new([0]));
-    match insert_result.unwrap() {
-        ParallelInsertReturn::Performed(node) => {
-            println!("--> Performed {node:?}");
-            root_node = Some(node);
-        },
-        ParallelInsertReturn::RetryNonThreaded(mut node, value ) => {
-            // TODO: Need to update clear merkle
-            let mut child_nodes: Vec<Option<Node>> = worker_pool.clear_merkle().expect("file io error");
-            for (i, cur_node) in child_nodes.iter_mut().enumerate() {
-                // If child_nodes is not empty, then node must be a branch
-                if cur_node.is_none() {
-                    continue;
+                    match node {
+                        Node::Branch(ref mut branch_node) => {
+                            //let (_path, _key, child_array) = *branch_node;
+                            let a = cur_node.take().unwrap();
+                            branch_node.children[i] = Some(Child::Node(a));
+                        },
+                        Node::Leaf(_) => {}
+                    }
                 }
 
-                match node {
-                    Node::Branch(ref mut branch_node) => {
-                        //let (_path, _key, child_array) = *branch_node;
-                        let a = cur_node.take().unwrap();
-                        branch_node.children[i] = Some(Child::Node(a));
-                    },
-                    Node::Leaf(_) => {}
-                }
+                // All but one of the references to merkle_arc should be gone. Extract
+                // the inner Merkle should we can perform a mut operations on it.
+                let mut merkle = Arc::into_inner(merkle_arc).unwrap();
+                *merkle.nodestore.mut_root() = Some(node);
+                println!("----> Falling back to serialized Merkle insert");
+                merkle.insert(&key, value).unwrap();
+
+                let root = merkle.nodestore.mut_root();
+                root_node = std::mem::take(root); 
+
+                merkle_arc = Arc::new(merkle);
+                worker_pool.set_merkle(merkle_arc.clone());
             }
-
-            // All but one of the references to merkle_arc should be gone. Extract
-            // the inner Merkle should we can perform a mut operations on it.
-            let mut merkle = Arc::into_inner(merkle_arc).unwrap();
-            *merkle.nodestore.mut_root() = Some(node);
-            merkle.insert(&key, value).unwrap();
-
-            let root = merkle.nodestore.mut_root();
-            root_node = std::mem::take(root); 
-
-            merkle_arc = Arc::new(merkle);
-            worker_pool.set_merkle(merkle_arc.clone());
         }
     }
     
@@ -277,10 +279,15 @@ fn test_get_regression() {
     //*merkle.nodestore.mut_root() = new_root.unwrap();
     //*merkle.nodestore.mut_root() = root_node;
 
-    merkle.insert(&[1], Box::new([1])).unwrap();
-    merkle.insert(&[2], Box::new([2])).unwrap();
+    //merkle.insert(&[1], Box::new([1])).unwrap();
+    //merkle.insert(&[2], Box::new([2])).unwrap();
 
     //merkle.insert(&[0], Box::new([0])).unwrap();
+
+    for j in 0..10 {
+        assert_eq!(merkle.get_value(&[j]).unwrap(), Some(Box::from([j])));
+    }
+    
     assert_eq!(merkle.get_value(&[0]).unwrap(), Some(Box::from([0])));
 
     //merkle.insert(&[1], Box::new([1])).unwrap();
