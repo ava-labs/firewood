@@ -823,13 +823,14 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
     pub fn insert(
         &self,
         node: Option<Node>,
+        child_index: usize,
         key: &[u8],
         value: Value,
     ) -> Result<(), SendError<MerkleOp<S>>> {
         println!("In workerpool insert");
         self.workers_data
-            .first()
-            .expect("empty vector")
+            .get(child_index)
+            .expect("out of bounds on vector")
             .0
             .send(MerkleOp::InsertData(Box::new(node), key.into(), value))
     }
@@ -856,7 +857,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
         // TODO: This is just to clear the threads for now. will change later.
         for i in 1..BranchNode::MAX_CHILDREN {
             // Blocks until result completes for now in this initial prototype.
-            let WorkerReturn::NodeResult(result) = self
+            let WorkerReturn::NodeResult(_result) = self
                 .workers_data
                 .get(i)
                 .expect("empty vector")
@@ -905,6 +906,7 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
         &self,
         root: Option<Node>,
         worker_pool: &WorkerPool<T>,
+        child_index: usize,
         key: &[u8],
         value: Value,
     ) -> Result<(), SendError<MerkleOp<T>>> {
@@ -930,7 +932,7 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
         };
         */
 
-        worker_pool.insert(root, key, value)?;
+        worker_pool.insert(root, child_index, key, value)?;
         //let root_node = self.insert_helper(root_node, key.as_ref(), value)?;
         Ok(())
     }
@@ -1039,7 +1041,7 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                         //branch.update_child(child_index, Some(Child::Node(child)));
                         // TODO: Currently there is only one thread. Once we go multi-thread, we
                         //       should have child_index as a parameter to insert.
-                        let _ = worker_pool.insert(Some(child), key, value);
+                        let _ = worker_pool.insert(Some(child), child_index as usize, key, value);
                         Ok(ParallelInsertReturn::Performed(node))
                     }
                     Node::Leaf(ref mut _leaf) => {

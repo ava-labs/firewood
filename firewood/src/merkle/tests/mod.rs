@@ -188,9 +188,10 @@ fn test_get_regression() {
     let merkle_arc = Arc::new(merkle);
     let worker_pool: WorkerPool<MemStore>= WorkerPool::new(merkle_arc.clone());
 
-    let _ = merkle_arc.insert_worker_pool(None, &worker_pool, &[0], Box::new([0]));
-    let _ = merkle_arc.insert_worker_pool(None, &worker_pool, &[1], Box::new([1]));
-    let _ = merkle_arc.insert_worker_pool(None, &worker_pool, &[2], Box::new([2]));
+    // For now just send it to index 0
+    let _ = merkle_arc.insert_worker_pool(None, &worker_pool, 0, &[0], Box::new([0]));
+    let _ = merkle_arc.insert_worker_pool(None, &worker_pool, 0, &[1], Box::new([1]));
+    let _ = merkle_arc.insert_worker_pool(None, &worker_pool, 0, &[2], Box::new([2]));
 
     // Wait until all of the previous inserts are complete
     let new_root = worker_pool.clear_merkle();
