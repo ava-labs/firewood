@@ -45,7 +45,7 @@ pub type FrozenProof = Proof<Box<[ProofNode]>>;
 
 /// A key/value pair operation. Only put (upsert) and delete are
 /// supported
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BatchOp<K: KeyType, V: ValueType> {
     /// Upsert a key/value pair
     Put {

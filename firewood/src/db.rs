@@ -537,7 +537,7 @@ mod test {
     #![expect(clippy::unwrap_used)]
 
     use firewood_storage::{CheckOpt, MemStore, MutableProposal, NodeStore};
-    use rand::rng;
+    use rand::{Rng, rng};
     use std::ops::{Deref, DerefMut};
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -546,6 +546,7 @@ mod test {
     use crate::v2::api::{Db as _, DbView as _, HashKey, Proposal as _};
 
     use super::{BatchOp, DbConfig};
+    use crate::merkle::{Key, Value};
     use test_case::test_case;
 
     #[tokio::test]
@@ -820,10 +821,13 @@ mod test {
 
         let historical_view = db.view_sync(historical_hash).unwrap();
         let proposal_view = db.view_sync(proposal_hash).unwrap();
-        let (mut kv1, mut state1) = (None, IterationState::StartFromKey(None));
-        let (mut kv2, mut state2) = (None, IterationState::StartFromKey(None));
-        // suppress overwritten warning
-        let _ = (kv1, kv2);
+        let (mut state1, mut state2) = (
+            IterationState::StartFromKey(None),
+            IterationState::StartFromKey(None),
+        );
+        let mut kv1: Option<(Key, Value)>;
+        let mut kv2: Option<(Key, Value)>;
+
         let mut i = 0;
 
         while !(matches!(state1, IterationState::Done) || matches!(state2, IterationState::Done)) {
@@ -912,6 +916,45 @@ mod test {
         }
     }
 
+    fn rng_seed() -> u64 {
+        std::env::var("FIREWOOD_TEST_SEED")
+            .ok()
+            .map_or_else(
+                || None,
+                |s| Some(str::parse(&s).expect("couldn't parse FIREWOOD_TEST_SEED; must be a u64")),
+            )
+            .unwrap_or_else(|| rng().random())
+    }
+
+    fn random_batch(
+        rng: &mut impl Rng,
+        n: u32,
+        key_len: usize,
+        value_len: usize,
+        addon_len: usize,
+        addon_ratio: (u32, u32),
+    ) -> Batch<Vec<u8>, Vec<u8>> {
+        (0..n).fold(vec![], |mut batch, _| {
+            let mut key = vec![0u8; key_len];
+            let mut value = vec![0u8; value_len];
+            rng.fill(key.as_mut_slice());
+            rng.fill(value.as_mut_slice());
+            batch.push(BatchOp::Put {
+                key: key.clone(),
+                value,
+            });
+            if rng.random_ratio(addon_ratio.0, addon_ratio.1) {
+                let mut addon = vec![0u8; addon_len];
+                rng.fill(addon.as_mut_slice());
+                let key = [key, addon].concat();
+                let mut value = vec![0u8; value_len];
+                rng.fill(value.as_mut_slice());
+                batch.push(BatchOp::Put { key, value });
+            }
+            batch
+        })
+    }
+
     #[tokio::test]
     async fn fuzz_checker() {
         use rand::rngs::StdRng;
@@ -919,14 +962,7 @@ mod test {
 
         let _ = env_logger::Builder::new().is_test(true).try_init();
 
-        let seed = std::env::var("FIREWOOD_TEST_SEED")
-            .ok()
-            .map_or_else(
-                || None,
-                |s| Some(str::parse(&s).expect("couldn't parse FIREWOOD_TEST_SEED; must be a u64")),
-            )
-            .unwrap_or_else(|| rng().random());
-
+        let seed = rng_seed();
         eprintln!("Seed {seed}: to rerun with this data, export FIREWOOD_TEST_SEED={seed}");
         let rng = std::cell::RefCell::new(StdRng::seed_from_u64(seed));
 
@@ -935,23 +971,8 @@ mod test {
         // takes about 0.3s on a mac to run 50 times
         for _ in 0..50 {
             // create a batch of 10 random key-value pairs
-            let batch = (0..10).fold(vec![], |mut batch, _| {
-                let key: [u8; 32] = rng.borrow_mut().random();
-                let value: [u8; 8] = rng.borrow_mut().random();
-                batch.push(BatchOp::Put {
-                    key: key.to_vec(),
-                    value,
-                });
-                if rng.borrow_mut().random_range(0..5) == 0 {
-                    let addon: [u8; 32] = rng.borrow_mut().random();
-                    let key = [key, addon].concat();
-                    let value: [u8; 8] = rng.borrow_mut().random();
-                    batch.push(BatchOp::Put { key, value });
-                }
-                batch
-            });
-            let proposal = db.propose(batch).await.unwrap();
-            proposal.commit().await.unwrap();
+            let batch = random_batch(&mut rng.borrow_mut(), 10, 32, 8, 32, (1, 5));
+            propose_on_testdb(&db, batch, true).await;
 
             // check the database for consistency, sometimes checking the hashes
             let hash_check = rng.borrow_mut().random();
@@ -964,6 +985,64 @@ mod test {
             if !report.errors.is_empty() {
                 db.dump(&mut std::io::stdout()).await.unwrap();
                 panic!("error: {:?}", report.errors);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn fuzz_iterate() {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        let _ = env_logger::Builder::new().is_test(true).try_init();
+
+        let seed = rng_seed();
+        eprintln!("Seed {seed}: to rerun with this data, export FIREWOOD_TEST_SEED={seed}");
+        let rng = std::cell::RefCell::new(StdRng::seed_from_u64(seed));
+
+        // takes about 0.8s on a Mac to run 20 times
+        for _ in 0..20 {
+            let db = testdb().await;
+            // create a batch of 100 random key-value pairs
+            let batch = random_batch(&mut rng.borrow_mut(), 100, 32, 8, 32, (1, 5));
+            let root_hash = propose_on_testdb(&db, batch.clone(), true).await;
+            let view = db.view_sync(root_hash).unwrap();
+
+            // generate 100 random start keys
+            let start_keys = (0..100).fold(vec![], |mut keys, _| {
+                let key_len: usize = rng.borrow_mut().random_range(0..33);
+                let mut key = vec![0u8; key_len];
+                rng.borrow_mut().fill(key.as_mut_slice());
+                keys.push(key);
+                keys
+            });
+
+            for start_key in start_keys {
+                let mut expected: Vec<(Vec<u8>, Vec<u8>)> = batch
+                    .iter()
+                    .filter_map(|op| match op {
+                        BatchOp::Put { key, value } if key >= &start_key => {
+                            Some((key.clone(), value.clone()))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                expected.sort_by(|a, b| a.0.cmp(&b.0));
+                let mut state = IterationState::StartFromKey(Some(start_key.into()));
+                let mut kv: Option<(Key, Value)>;
+
+                for (expected_k, expected_v) in expected {
+                    (kv, state) = view.iterate(state).unwrap();
+                    let (key, value) = kv.unwrap();
+                    if *key != expected_k || *value != expected_v {
+                        db.dump(&mut std::io::stdout()).await.unwrap();
+                        panic!(
+                            "expected: {:?}, got: {:?}",
+                            (expected_k, expected_v),
+                            (key, value)
+                        );
+                    }
+                }
             }
         }
     }
