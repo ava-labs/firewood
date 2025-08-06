@@ -114,7 +114,6 @@ struct SubTrieMetadata {
 }
 
 /// [`NodeStore`] checker
-// TODO: S needs to be writeable if we ask checker to fix the issues
 #[expect(clippy::result_large_err)]
 impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Go through the filebacked storage and check for any inconsistencies. It proceeds in the following steps:
@@ -124,7 +123,6 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// 4. check leaked areas - what are the spaces between trie nodes and free lists we have traversed?
     /// # Errors
     /// Returns a [`CheckerError`] if the database is inconsistent.
-    // TODO: report all errors, not just the first one
     pub fn check(&self, opt: CheckOpt) -> CheckerReport {
         // 1. Check the header
         let db_size = self.size();
@@ -317,18 +315,13 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             // collect the trie bytes
             trie_stats.trie_bytes = trie_stats.trie_bytes.saturating_add(node_bytes);
             // collect low occupancy area count
-            let smallest_area_index = area_size_to_index(node_bytes).map_err(|e| {
-                self.file_io_error(
-                    e,
-                    subtrie_root_address.get(),
-                    Some("area_size_to_index".to_string()),
-                )
-            })?;
+            let smallest_area_index = area_size_to_index(node_bytes)
+                .expect("impossible since we checked that node_bytes <= area_size");
             if smallest_area_index < area_index {
                 trie_stats.low_occupancy_area_count =
                     trie_stats.low_occupancy_area_count.saturating_add(1);
             }
-            // collect the multi-page area count
+            // collect the number of areas that requires reading an extra page due to not being aligned
             if extra_read_pages(subtrie_root_address, area_size)
                 .expect("impossible since we checked in visited.insert_area()")
                 > 0
