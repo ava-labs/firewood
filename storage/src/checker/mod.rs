@@ -316,7 +316,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             trie_stats.trie_bytes = trie_stats.trie_bytes.saturating_add(node_bytes);
             // collect low occupancy area count
             let smallest_area_index = area_size_to_index(node_bytes)
-                .expect("impossible since we checked that node_bytes <= area_size");
+                .expect("impossible since we checked that node_bytes < area_size");
             if smallest_area_index < area_index {
                 trie_stats.low_occupancy_area_count =
                     trie_stats.low_occupancy_area_count.saturating_add(1);
