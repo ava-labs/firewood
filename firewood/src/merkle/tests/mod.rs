@@ -190,158 +190,8 @@ fn test_get_regression() {
     }
     let merkle = merkle_par.wait();
 
-/* 
-    let root = merkle.nodestore.mut_root();
-    let mut root_node = std::mem::take(root); 
-    let mut merkle_arc = Arc::new(merkle);
-    let worker_pool: WorkerPool<MemStore>= WorkerPool::new(merkle_arc.clone());
-*/
-
-/* 
-    let _ = worker_pool.insert(None, 0, &[0], Box::new([0]));
-
-
-
-    // For now just send it to index 0
-    let _ = merkle_arc.insert_worker_pool(None, &worker_pool, 0, &[0], Box::new([0]));
-    let _ = merkle_arc.insert_worker_pool(None, &worker_pool, 0, &[1], Box::new([1]));
-    let _ = merkle_arc.insert_worker_pool(None, &worker_pool, 0, &[2], Box::new([2]));
-*/
-
-/* 
-    //let key_range = 255;
-    for j in (0..key_range).rev() {
-        let key = [j];
-        let insert_result = merkle_arc.insert_parallel(root_node, &worker_pool, &key, Box::new([j]));
-        match insert_result.unwrap() {
-            ParallelInsertReturn::Performed(node) => {
-                println!("--> Performed {node:?}");
-                root_node = Some(node);
-            },
-            ParallelInsertReturn::RetryNonThreaded(mut node, value ) => {
-                // TODO: Need to update clear merkle
-                let mut child_nodes: Vec<Option<Node>> = worker_pool.clear_merkle().expect("file io error");
-                println!("-----------*** Current root: {node:?}");
-
-                for (i, cur_node) in child_nodes.iter_mut().enumerate() {
-                    // If child_nodes is not empty, then node must be a branch
-                    if cur_node.is_none() {
-                        println!("Skipping index: {i}");
-
-                        match node {
-                            Node::Branch(ref mut branch_node) => {
-                                //let (_path, _key, child_array) = *branch_node;
-                                //let a = cur_node.take().unwrap();
-                                //branch_node.children[i] = Some(Child::Node(a));
-                                println!("Branch node children at index {i} is {:?}", branch_node.children[i]);
-                            },
-                            Node::Leaf(_) => {}
-                        }
-                        continue;
-                    }
-
-                    println!("RetryNonThreaded: index: {i} child root: {cur_node:?}");
-
-                    match node {
-                        Node::Branch(ref mut branch_node) => {
-                            //let (_path, _key, child_array) = *branch_node;
-                            let a = cur_node.take().unwrap();
-                            branch_node.children[i] = Some(Child::Node(a));
-                        },
-                        Node::Leaf(_) => {}
-                    }
-                }
-
-                // All but one of the references to merkle_arc should be gone. Extract
-                // the inner Merkle should we can perform a mut operations on it.
-                let mut merkle = Arc::into_inner(merkle_arc).unwrap();
-                *merkle.nodestore.mut_root() = Some(node);
-                println!("^^^^^^^^^^^^^^^^^^^^ Falling back to serialized Merkle insert for {key:?}");
-                merkle.insert(&key, value).unwrap();
-
-                let root = merkle.nodestore.mut_root();
-                root_node = std::mem::take(root); 
-
-
-                println!("-----------*** Current root: {root_node:?}");
-
-                let root = root_node.unwrap();
-
-                match root.clone() {
-                    Node::Branch(mut node) => {
-                        for (i, cur_node) in node.children.iter_mut().enumerate() {
-                            // If child_nodes is not empty, then node must be a branch
-                            println!("Iterating root children: at index {i} is {cur_node:?}");
-                        }
-                    }
-                    Node::Leaf(_) => {}
-                }
-                root_node = Some(root);
-
-                merkle_arc = Arc::new(merkle);
-                worker_pool.set_merkle(merkle_arc.clone());
-            }
-        }
-    }
-    
-    //merkle_arc.insert_parallel(&worker_pool, &[0], Box::new([0]));
-    //merkle_arc.insert_parallel(&worker_pool, &[0], Box::new([0]));
-
-
-    let mut node = root_node.unwrap();
-    println!("-----------*** END: Current root: {node:?}");
-    let mut child_nodes: Vec<Option<Node>> = worker_pool.clear_merkle().expect("file io error");
-    for (i, cur_node) in child_nodes.iter_mut().enumerate() {
-        // If child_nodes is not empty, then node must be a branch
-        if cur_node.is_none() {
-            println!("Skipping index: {i}");
-
-            match node {
-                Node::Branch(ref mut branch_node) => {
-                    //let (_path, _key, child_array) = *branch_node;
-                    //let a = cur_node.take().unwrap();
-                    //branch_node.children[i] = Some(Child::Node(a));
-                    println!("Branch node children at index {i} is {:?}", branch_node.children[i]);
-                },
-                Node::Leaf(_) => {}
-            }
-            continue;
-        }
-
-        println!("END Children: index: {i} child root: {cur_node:?}");
-        match node {
-            Node::Branch(ref mut branch_node) => {
-                //let (_path, _key, child_array) = *branch_node;
-                let a = cur_node.take().unwrap();
-                branch_node.children[i] = Some(Child::Node(a));
-            },
-            Node::Leaf(_) => {}
-        }
-    }
-
-    // All but one of the references to merkle_arc should be gone. Extract
-    // the inner Merkle should we can perform a mut operations on it.
-    let mut merkle = Arc::into_inner(merkle_arc).unwrap();
-    *merkle.nodestore.mut_root() = Some(node);
-*/
-    
-
-    // Wait until all of the previous inserts are complete
-    //let new_root = worker_pool.clear_merkle();
-
-    // All but one of the references to merkle_arc should be gone. Extract
-    // the inner Merkle should we can perform a mut operations on it.
-    //let mut merkle = Arc::into_inner(merkle_arc).unwrap();
-    //*merkle.nodestore.mut_root() = new_root.unwrap();
-    //*merkle.nodestore.mut_root() = root_node;
-
-    //merkle.insert(&[1], Box::new([1])).unwrap();
-    //merkle.insert(&[2], Box::new([2])).unwrap();
-
-    //merkle.insert(&[0], Box::new([0])).unwrap();
-
-    for j in 0..key_range {
-        assert_eq!(merkle.get_value(&[j]).unwrap(), Some(Box::from([j])));
+    for i in 0..key_range {
+        assert_eq!(merkle.get_value(&[i]).unwrap(), Some(Box::from([i])));
     }
 
     assert_eq!(merkle.get_value(&[0]).unwrap(), Some(Box::from([0])));
@@ -354,9 +204,15 @@ fn test_get_regression() {
 
     let merkle = merkle.hash();
 
+    for i in 0..key_range {
+        assert_eq!(merkle.get_value(&[i]).unwrap(), Some(Box::from([i])));
+    }
+
+    /* 
     assert_eq!(merkle.get_value(&[0]).unwrap(), Some(Box::from([0])));
     assert_eq!(merkle.get_value(&[1]).unwrap(), Some(Box::from([1])));
     assert_eq!(merkle.get_value(&[2]).unwrap(), Some(Box::from([2])));
+    */
 
     for result in merkle.path_iter(&[2]).unwrap() {
         result.unwrap();
