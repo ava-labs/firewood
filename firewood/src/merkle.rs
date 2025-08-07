@@ -134,6 +134,79 @@ fn get_helper<T: TrieReader>(
 }
 
 #[derive(Debug)]
+/// Parallel compatible wrapper for a Merkle trie
+pub struct MerkleParallel<T, S> {
+    merkle_arc: Option<Arc<T>>,
+    root_node: Option<Node>,
+    worker_pool: WorkerPool<S>,
+}
+
+impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutableProposal, S>>, S> {
+
+    /// Constructor for `MerkleParallel`.
+    pub fn new(mut m: Merkle<NodeStore<MutableProposal, S>>) -> Self {
+        let root = m.nodestore.mut_root();
+        let root_node = std::mem::take(root);
+        let merkle_arc = Arc::new(m);
+        let worker_pool = WorkerPool::new(merkle_arc.clone());
+        MerkleParallel {
+            merkle_arc: Some(merkle_arc),
+            root_node,
+            worker_pool,
+        }
+    }
+
+    /// Paralle insert
+    /// 
+    /// ## Panics
+    /// 
+    /// Can panic if `merkle_arc` is None or `insert_parallel` returns an error (TODO: handle this correctly)
+    pub fn insert(&mut self, key: &[u8], value: Value) {
+        let mut merkle_arc = self.merkle_arc.take().expect("merkle arc option is none");
+        let insert_result =
+            merkle_arc.insert_parallel(self.root_node.take(), &self.worker_pool, key, value);
+
+        // TODO: handle error
+        match insert_result.expect("insert_parallel returned an error") {
+            ParallelInsertReturn::Performed(node) => {
+                self.root_node = Some(node);
+            }
+            ParallelInsertReturn::RetryNonThreaded(mut node, value) => {
+                let mut child_nodes: Vec<Option<Node>> =
+                    self.worker_pool.clear_merkle().expect("file io error");
+                for (i, child_node_opt) in child_nodes.iter_mut().enumerate() {
+                    // If child_nodes is not empty, then node must be a branch
+                    if let Some(_child_node) = child_node_opt {
+                        match node {
+                            Node::Branch(ref mut branch_node) => {
+                                let child = branch_node.children.get_mut(i).expect("index error");
+                                *child = Some(Child::Node(child_node_opt.take().expect("child_node_opt should not be none")));
+                            }
+                            Node::Leaf(_) => {}  // TODO: assert or log error
+                        }
+                    }
+                }
+                // All but one of the references to merkle_arc should be gone. Extract
+                // the inner Merkle should we can perform a mut operations on it.
+                let mut merkle = Arc::into_inner(merkle_arc).expect("merkle_arc reference count is not 1");
+                *merkle.nodestore.mut_root() = Some(node);
+
+                // Perform non-parallel Merkle insert
+                // TODO: Handle error
+                merkle.insert(key, value).expect("merkle insert returned an error");
+
+
+                // Set all of the parameters that were taken previously.
+                self.root_node = std::mem::take(merkle.nodestore.mut_root());
+                merkle_arc = Arc::new(merkle);
+                self.worker_pool.set_merkle(merkle_arc.clone());
+                self.merkle_arc = Some(merkle_arc);
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
 /// Merkle operations against a nodestore
 pub struct Merkle<T> {
     nodestore: T,
@@ -987,7 +1060,7 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
             unique_node
                 .split_first()
                 .map(|(index, path)| (*index, <&[u8] as std::convert::Into<Path>>::into(path))),
-                //.map(|(index, path)| (*index, path.into())),
+            //.map(|(index, path)| (*index, path.into())),
         ) {
             (None, None) => {
                 //Ok(ParallelInsertReturn::RetryNonThreaded(node, value))
