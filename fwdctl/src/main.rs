@@ -25,7 +25,7 @@ pub struct DatabasePath {
         short = 'd',
         required = false,
         value_name = "DB_NAME",
-        default_missing_value_os = default_db_path(),
+        default_value_os_t = default_db_path(),
         help = "Name of the database"
     )]
     pub dbpath: PathBuf,
