@@ -227,13 +227,17 @@ impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutablePropos
     /// Can panic if root node is none
     pub fn wait(&mut self) -> Merkle<NodeStore<MutableProposal, S>> {
         let merkle_arc = self.merkle_arc.take().expect("merkle arc option is none");
-        // TODO: Need to handle the case where the trie is empty and root is none.
-        //       If root is None, then there should not be any outstanding requests,
-        //       and it should be safe to just return. This requires the invariant
-        //       (which is currnelyt true) that we must call wait prior to any 
-        //       remove requests that might remove the root.
-        let node = self.root_node.take().expect("root is none");
-        self.wait_params(node, merkle_arc)
+        // The root can be None if the trie is empty. In this case, there should not be any
+        // outstanding requests being handled by workers as long as the invariant that the
+        // root cannot be removed while there are workers active. For this case, we just 
+        // convert the merkle_arc back to a merkle and return it back to the caller.
+        if let Some(node) = self.root_node.take() {
+            self.wait_params(node, merkle_arc)
+        } else {
+            // TODO: Add counter to verify that there are no outstanding requests.
+            let merkle_arc = self.merkle_arc.take().expect("merkle_arc is None");
+            Arc::into_inner(merkle_arc).expect("merkle_arc reference count is not 1")
+        }
     }
 }
 
