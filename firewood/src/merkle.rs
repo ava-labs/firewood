@@ -162,7 +162,7 @@ impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutablePropos
     /// 
     /// Can panic if `merkle_arc` is None or `insert_parallel` returns an error (TODO: handle this correctly)
     pub fn insert(&mut self, key: &[u8], value: Value) {
-        let mut merkle_arc = self.merkle_arc.take().expect("merkle arc option is none");
+        let mut merkle_arc: Arc<Merkle<NodeStore<MutableProposal, S>>> = self.merkle_arc.take().expect("merkle arc option is none");
         let insert_result =
             merkle_arc.insert_parallel(self.root_node.take(), &self.worker_pool, key, value);
 
@@ -171,7 +171,8 @@ impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutablePropos
             ParallelInsertReturn::Performed(node) => {
                 self.root_node = Some(node);
             }
-            ParallelInsertReturn::RetryNonThreaded(mut node, value) => {
+            ParallelInsertReturn::RetryNonThreaded(node, value) => {
+                /* 
                 let mut child_nodes: Vec<Option<Node>> =
                     self.worker_pool.clear_merkle().expect("file io error");
                 for (i, child_node_opt) in child_nodes.iter_mut().enumerate() {
@@ -190,6 +191,9 @@ impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutablePropos
                 // the inner Merkle should we can perform a mut operations on it.
                 let mut merkle = Arc::into_inner(merkle_arc).expect("merkle_arc reference count is not 1");
                 *merkle.nodestore.mut_root() = Some(node);
+                */
+
+                let mut merkle = self.wait_params(node, merkle_arc);
 
                 // Perform non-parallel Merkle insert
                 // TODO: Handle error
@@ -204,6 +208,42 @@ impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutablePropos
             }
         }
     }
+
+
+    fn wait_params(&mut self, mut node: Node, merkle_arc: Arc<Merkle<NodeStore<MutableProposal, S>>>) -> Merkle<NodeStore<MutableProposal, S>> {
+        let mut child_nodes: Vec<Option<Node>> = 
+            self.worker_pool.clear_merkle().expect("file io error");
+        for (i, child_node_opt) in child_nodes.iter_mut().enumerate() {
+            // If child_nodes is not empty, then node must be a branch
+            if let Some(_child_node) = child_node_opt {
+                match node {
+                    Node::Branch(ref mut branch_node) => {
+                        let child = branch_node.children.get_mut(i).expect("index error");
+                        *child = Some(Child::Node(child_node_opt.take().expect("child_node_opt should not be none")));
+                    }
+                    Node::Leaf(_) => {}  // TODO: assert or log error
+                }
+            }
+        }
+        // All but one of the references to merkle_arc should be gone. Extract
+        // the inner Merkle should we can perform a mut operations on it.
+        let mut merkle = Arc::into_inner(merkle_arc).expect("merkle_arc reference count is not 1");
+        *merkle.nodestore.mut_root() = Some(node);
+        merkle
+    }
+
+
+    /// Wait until workers have completed
+    /// 
+    /// ## Panics
+    /// 
+    /// Can panic if root node is none
+    pub fn wait(&mut self) -> Merkle<NodeStore<MutableProposal, S>> {
+        let merkle_arc = self.merkle_arc.take().expect("merkle arc option is none");
+        let node = self.root_node.take().expect("root is none");
+        self.wait_params(node, merkle_arc)
+    }
+
 }
 
 #[derive(Debug)]
