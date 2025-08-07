@@ -107,7 +107,7 @@ pub enum FreeListParent {
     /// The stored area is the head of the free list, so the header points to it
     FreeListHead(AreaIndex),
     /// The stored area is not the head of the free list, so a previous free area points to it
-    PrevFreeArea(LinearAddress),
+    PrevFreeArea(LinearAddress, AreaIndex),
 }
 
 impl LowerHex for StoredAreaParent {
@@ -136,8 +136,8 @@ impl LowerHex for FreeListParent {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
             FreeListParent::FreeListHead(index) => f.write_fmt(format_args!("FreeLists[{index}]")),
-            FreeListParent::PrevFreeArea(addr) => {
-                f.write_str("FreeArea@")?;
+            FreeListParent::PrevFreeArea(addr, area_index) => {
+                f.write_fmt(format_args!("FreeArea({area_index})@"))?;
                 LowerHex::fmt(addr, f)
             }
         }
