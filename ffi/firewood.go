@@ -183,10 +183,6 @@ func (db *Database) GetFromRoot(root, key []byte) ([]byte, error) {
 		return nil, nil // Empty root is treated as no data
 	}
 
-	if len(root) != RootLength {
-		return nil, errInvalidRootLength
-	}
-
 	rootKey, err := NewHashKey(root)
 	if err != nil {
 		return nil, fmt.Errorf("invalid root hash: %w", err)
