@@ -195,6 +195,10 @@ pub enum Error {
     /// An invalid root hash was provided
     #[error(transparent)]
     InvalidRootHash(#[from] firewood_storage::InvalidTrieHashLength),
+
+    /// Checker Failed to Run
+    #[error("checker failed to run")]
+    CheckerFailedToRun,
 }
 
 impl From<RevisionManagerError> for Error {

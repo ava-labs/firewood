@@ -31,6 +31,15 @@ pub struct Options {
         help = "Should perform hash check"
     )]
     pub hash_check: bool,
+
+    /// Whether to fix observed inconsistencies
+    #[arg(
+        long,
+        required = false,
+        default_value_t = false,
+        help = "Should fix observed inconsistencies"
+    )]
+    pub fix: bool,
 }
 
 pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
@@ -58,6 +67,7 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     let report = NodeStore::open(storage)?.check(CheckOpt {
         hash_check: opts.hash_check,
         progress_bar: Some(progress_bar),
+        fix: opts.fix,
     });
 
     print_checker_report(report);

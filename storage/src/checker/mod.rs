@@ -56,13 +56,17 @@ pub struct CheckOpt {
     pub hash_check: bool,
     /// Optional progress bar to show the checker progress
     pub progress_bar: Option<ProgressBar>,
+    /// Whether the checker should fix observed inconsistencies
+    pub fix: bool,
 }
 
 #[derive(Debug)]
 /// Report of the checker results.
 pub struct CheckerReport {
-    /// Errors encountered during the check
-    pub errors: Vec<CheckerError>,
+    /// Errors encountered during the check that can be fixed
+    pub fixable_errors: Vec<CheckerError>,
+    /// Errors encountered during the check that cannot be fixed
+    pub fatal_errors: Vec<CheckerError>,
     /// The high watermark of the database
     pub high_watermark: u64,
     /// The physical number of bytes in the database returned through `stat`
@@ -123,14 +127,15 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// 4. check leaked areas - what are the spaces between trie nodes and free lists we have traversed?
     /// # Errors
     /// Returns a [`CheckerError`] if the database is inconsistent.
-    pub fn check(&self, opt: CheckOpt) -> CheckerReport {
+    pub fn check(&mut self, opt: CheckOpt) -> CheckerReport {
         // 1. Check the header
         let db_size = self.size();
         let mut visited = match LinearAddressRangeSet::new(db_size) {
             Ok(visited) => visited,
             Err(e) => {
                 return CheckerReport {
-                    errors: vec![e],
+                    fixable_errors: vec![],
+                    fatal_errors: vec![e],
                     high_watermark: db_size,
                     physical_bytes: 0,
                     trie_stats: TrieStats::default(),
@@ -138,34 +143,40 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                 };
             }
         };
-
-        let mut errors = Vec::new();
+        let mut fixable_errors = Vec::new();
+        let mut fatal_errors = Vec::new();
 
         // 2. traverse the trie and check the nodes
         if let Some(progress_bar) = &opt.progress_bar {
             progress_bar.set_length(db_size);
             progress_bar.set_message("Traversing the trie...");
         }
-        let trie_stats = self
+        let (trie_stats, trie_errors) = self
             .root_as_maybe_persisted_node()
             .and_then(|node| self.root_hash().map(|root_hash| (node, root_hash)))
-            .and_then(|(root, root_hash)| {
-                if let Some(root_address) = root.as_linear_address() {
-                    let (trie_stats, trie_errors) = self.visit_trie(
-                        root_address,
-                        root_hash.into_hash_type(),
-                        &mut visited,
-                        opt.progress_bar.as_ref(),
-                        opt.hash_check,
-                    );
-                    errors.extend(trie_errors);
-                    Some(trie_stats)
-                } else {
-                    errors.push(CheckerError::UnpersistedRoot);
-                    None
-                }
-            })
-            .unwrap_or_default();
+            .map_or_else(
+                || {
+                    // this is when the root is none (we have an empty trie)
+                    (None, vec![])
+                },
+                |(root, root_hash)| {
+                    if let Some(root_address) = root.as_linear_address() {
+                        let (trie_stats, trie_errors) = self.visit_trie(
+                            root_address,
+                            root_hash.into_hash_type(),
+                            &mut visited,
+                            opt.progress_bar.as_ref(),
+                            opt.hash_check,
+                        );
+                        (Some(trie_stats), trie_errors)
+                    } else {
+                        // the root exists but is not persisted yet
+                        (None, vec![CheckerError::UnpersistedRoot])
+                    }
+                },
+            );
+        let trie_stats = trie_stats.unwrap_or_default();
+        fatal_errors.extend(trie_errors); // TODO: fix trie errors
 
         // 3. check the free list - this can happen in parallel with the trie traversal
         if let Some(progress_bar) = &opt.progress_bar {
@@ -173,7 +184,22 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         }
         let (free_list_stats, free_list_traverse_errors) =
             self.visit_freelist(&mut visited, opt.progress_bar.as_ref());
-        errors.extend(free_list_traverse_errors);
+        for error in free_list_traverse_errors {
+            if let Some(parent) = error.free_list_parent() {
+                if opt.fix {
+                    // TODO: fix the error
+                    if let Err(e) = self.truncate_free_list(parent) {
+                        fatal_errors.push(CheckerError::IO {
+                            error: e,
+                            parent: Some(StoredAreaParent::FreeList(*parent)),
+                        });
+                    }
+                }
+                fixable_errors.push(error);
+            } else {
+                fatal_errors.push(error);
+            }
+        }
 
         // 4. check leaked areas - what are the spaces between trie nodes and free lists we have traversed?
         if let Some(progress_bar) = &opt.progress_bar {
@@ -187,13 +213,13 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                 let _leaked_areas =
                     self.split_all_leaked_ranges(&leaked_ranges, opt.progress_bar.as_ref());
             }
-            errors.push(CheckerError::AreaLeaks(leaked_ranges));
+            fatal_errors.push(CheckerError::AreaLeaks(leaked_ranges));
         }
 
         let physical_bytes = match self.physical_size() {
             Ok(physical_bytes) => physical_bytes,
             Err(e) => {
-                errors.push(CheckerError::IO {
+                fatal_errors.push(CheckerError::IO {
                     error: e,
                     parent: None,
                 });
@@ -202,7 +228,8 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         };
 
         CheckerReport {
-            errors,
+            fixable_errors,
+            fatal_errors,
             high_watermark: db_size,
             physical_bytes,
             trie_stats,

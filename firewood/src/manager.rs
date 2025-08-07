@@ -48,6 +48,41 @@ pub struct RevisionManagerConfig {
 type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
 type ProposedRevision = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>;
 
+pub(crate) struct CommittedRevisionMut<'a> {
+    rev: Arc<NodeStore<Committed, FileBacked>>,
+    manager: &'a mut RevisionManager,
+}
+
+impl std::ops::Deref for CommittedRevisionMut<'_> {
+    type Target = NodeStore<Committed, FileBacked>;
+    fn deref(&self) -> &Self::Target {
+        self.rev.as_ref()
+    }
+}
+
+impl std::ops::DerefMut for CommittedRevisionMut<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Arc::get_mut(&mut self.rev).expect("should be a unique reference")
+    }
+}
+
+impl Drop for CommittedRevisionMut<'_> {
+    fn drop(&mut self) {
+        self.manager
+            .historical
+            .get_mut()
+            .expect("poisoned lock")
+            .push_back(self.rev.clone());
+        if let Some(hash) = self.rev.root_hash().or_default_root_hash() {
+            self.manager
+                .by_hash
+                .get_mut()
+                .expect("poisoned lock")
+                .insert(hash, self.rev.clone());
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct RevisionManager {
     /// Maximum number of revisions to keep on disk
@@ -293,6 +328,23 @@ impl RevisionManager {
             .back()
             .expect("there is always one revision")
             .clone()
+    }
+
+    pub(crate) fn current_revision_mut(&mut self) -> Option<CommittedRevisionMut<'_>> {
+        let mut rev = self
+            .historical
+            .get_mut()
+            .expect("poisoned lock")
+            .pop_back()
+            .expect("there is always one revision");
+        if let Some(hash) = rev.root_hash().or_default_root_hash() {
+            self.by_hash.get_mut().expect("poisoned lock").remove(&hash);
+        }
+        if Arc::get_mut(&mut rev).is_some() {
+            Some(CommittedRevisionMut { rev, manager: self })
+        } else {
+            None
+        }
     }
 }
 

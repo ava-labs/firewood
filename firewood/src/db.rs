@@ -316,9 +316,11 @@ impl Db {
     }
 
     /// Check the database for consistency
-    pub async fn check(&self, opt: CheckOpt) -> CheckerReport {
-        let latest_rev_nodestore = self.manager.current_revision();
-        latest_rev_nodestore.check(opt)
+    pub async fn check(&mut self, opt: CheckOpt) -> Result<CheckerReport, api::Error> {
+        let latest_rev_nodestore = self.manager.current_revision_mut();
+        latest_rev_nodestore
+            .map(|mut rev| rev.check(opt))
+            .ok_or(api::Error::CheckerFailedToRun)
     }
 }
 
@@ -745,7 +747,7 @@ mod test {
         eprintln!("Seed {seed}: to rerun with this data, export FIREWOOD_TEST_SEED={seed}");
         let rng = std::cell::RefCell::new(StdRng::seed_from_u64(seed));
 
-        let db = testdb().await;
+        let mut db = testdb().await;
 
         // takes about 0.3s on a mac to run 50 times
         for _ in 0..50 {
@@ -774,17 +776,23 @@ mod test {
                 .check(CheckOpt {
                     hash_check,
                     progress_bar: None,
+                    fix: false,
                 })
-                .await;
-            if report
-                .errors
+                .await
+                .unwrap();
+            let errors = report
+                .fixable_errors
+                .iter()
+                .chain(report.fatal_errors.iter())
+                .collect::<Vec<_>>();
+            if errors
                 .iter()
                 .filter(|e| !matches!(e, CheckerError::AreaLeaks(_)))
                 .count()
                 != 0
             {
                 db.dump(&mut std::io::stdout()).await.unwrap();
-                panic!("error: {:?}", report.errors);
+                panic!("error: {errors:?}");
             }
         }
     }

@@ -785,6 +785,27 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
     }
 }
 
+impl<T, S: WritableStorage> NodeStore<T, S> {
+    #[expect(clippy::indexing_slicing)]
+    pub(crate) fn truncate_free_list(
+        &mut self,
+        parent: &FreeListParent,
+    ) -> Result<(), FileIoError> {
+        let mut stored_area_bytes = Vec::new();
+        match parent {
+            FreeListParent::FreeListHead(area_index) => {
+                self.header.free_lists_mut()[*area_index as usize] = None;
+            }
+            FreeListParent::PrevFreeArea(addr) => {
+                let (area_index, _) = self.area_index_and_size(*addr)?; // TODO: this is an extra disk read that can be avoided
+                FreeArea::new(None).as_bytes(area_index, &mut stored_area_bytes);
+                self.storage.write(addr.get(), &stored_area_bytes)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 fn read_bincode_varint_u64_le(reader: &mut impl Read) -> std::io::Result<u64> {
     // See https://github.com/ava-labs/firewood/issues/1146 for full details.
     // emulate this behavior: https://github.com/bincode-org/bincode/blob/c44b5e364e7084cdbabf9f94b63a3c7f32b8fb68/src/config/int.rs#L241-L258
