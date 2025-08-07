@@ -932,10 +932,7 @@ mod test {
             start: free_list1_area2,
             size: area_size1,
             intersection: vec![intersection_start..intersection_end],
-            parent: StoredAreaParent::FreeList(FreeListParent::PrevFreeArea(
-                free_list1_area1,
-                area_index1,
-            )),
+            parent: StoredAreaParent::FreeList(FreeListParent::PrevFreeArea(free_list1_area1)),
         }];
         let expected_free_lists_stats = FreeListsStats {
             area_counts: HashMap::from([(area_size1, 1), (area_size2, 2)]),

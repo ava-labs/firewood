@@ -668,7 +668,7 @@ impl<S: ReadableStorage> Iterator for FreeListIterator<'_, S> {
         };
 
         // update the next address to the next free block
-        self.parent = FreeListParent::PrevFreeArea(next_addr, stored_area_index);
+        self.parent = FreeListParent::PrevFreeArea(next_addr);
         self.next_addr = free_area.next_free_block();
         Some(Ok((next_addr, stored_area_index)))
     }
@@ -1033,7 +1033,7 @@ mod tests {
                     area_index: area_index1,
                     free_list_id: area_index1,
                 },
-                FreeListParent::PrevFreeArea(free_list1_area1, area_index1),
+                FreeListParent::PrevFreeArea(free_list1_area1),
             ),
         ];
 
@@ -1052,7 +1052,7 @@ mod tests {
                     area_index: area_index2,
                     free_list_id: area_index2,
                 },
-                FreeListParent::PrevFreeArea(free_list2_area1, area_index2),
+                FreeListParent::PrevFreeArea(free_list2_area1),
             ),
         ];
 
