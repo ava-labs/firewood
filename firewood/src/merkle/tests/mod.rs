@@ -197,7 +197,7 @@ fn test_get_regression() {
     let _ = merkle_arc.insert_worker_pool(None, &worker_pool, 0, &[1], Box::new([1]));
     let _ = merkle_arc.insert_worker_pool(None, &worker_pool, 0, &[2], Box::new([2]));
 */
-    let key_range = 100;
+    let key_range = 255;
     for j in 0..key_range {
         let key = [j];
         let insert_result = merkle_arc.insert_parallel(root_node, &worker_pool, &key, Box::new([j]));
