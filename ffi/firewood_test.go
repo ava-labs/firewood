@@ -226,8 +226,7 @@ func TestClosedDatabase(t *testing.T) {
 	r.Empty(root)
 	r.ErrorIs(err, errDBClosed)
 
-	err = db.Close()
-	r.ErrorIs(err, errDBClosed)
+	r.NoError(db.Close())
 }
 
 func keyForTest(i int) []byte {
@@ -514,21 +513,7 @@ func TestDropProposal(t *testing.T) {
 	_, err = proposal.Get([]byte("non-existent"))
 	r.ErrorIs(err, errDroppedProposal)
 	_, err = proposal.Root()
-	r.ErrorIs(err, errDroppedProposal)
-
-	// Attempt to "emulate" the proposal to ensure it isn't internally available still.
-	proposal = &Proposal{
-		handle: db.handle,
-		id:     1,
-	}
-
-	// Check all operations on the fake proposal.
-	_, err = proposal.Get([]byte("non-existent"))
-	r.Contains(err.Error(), "proposal not found", "Get(fake proposal)")
-	_, err = proposal.Propose([][]byte{[]byte("key")}, [][]byte{[]byte("value")})
-	r.Contains(err.Error(), "proposal not found", "Propose(fake proposal)")
-	err = proposal.Commit()
-	r.Contains(err.Error(), "proposal not found", "Commit(fake proposal)")
+	r.NoError(err, "Root of dropped proposal should still be accessible")
 }
 
 // Create a proposal with 10 key-value pairs.

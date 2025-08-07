@@ -30,14 +30,12 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
-	"strings"
 )
 
 // These constants are used to identify errors returned by the Firewood Rust FFI.
 // These must be changed if the Rust FFI changes - should be reported by tests.
 const (
-	RootLength       = 32
-	rootHashNotFound = "IO error: Root hash not found"
+	RootLength = 32
 )
 
 var (
@@ -74,16 +72,14 @@ func DefaultConfig() *Config {
 }
 
 // A CacheStrategy represents the caching strategy used by a [Database].
-type CacheStrategy uint8
+type CacheStrategy C.CacheReadStrategy
 
 const (
-	OnlyCacheWrites CacheStrategy = iota
-	CacheBranchReads
-	CacheAllReads
+	OnlyCacheWrites  CacheStrategy = C.CacheReadStrategy_WritesOnly
+	CacheBranchReads CacheStrategy = C.CacheReadStrategy_BranchReads
+	CacheAllReads    CacheStrategy = C.CacheReadStrategy_All
 
-	// invalidCacheStrategy MUST be the final value in the iota block to make it
-	// the smallest value greater than all valid values.
-	invalidCacheStrategy
+	invalidCacheStrategy = CacheAllReads + 1
 )
 
 // New opens or creates a new Firewood database with the given configuration. If
@@ -108,22 +104,16 @@ func New(filePath string, conf *Config) (*Database, error) {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
-	args := C.struct_CreateOrOpenArgs{
+	args := C.struct_DatabaseHandleArgs{
 		path:                 newBorrowedBytes([]byte(filePath), &pinner),
 		cache_size:           C.size_t(conf.NodeCacheEntries),
 		free_list_cache_size: C.size_t(conf.FreeListCacheEntries),
 		revisions:            C.size_t(conf.Revisions),
-		strategy:             C.uint8_t(conf.ReadCacheStrategy),
+		strategy:             C.CacheReadStrategy(conf.ReadCacheStrategy),
 		truncate:             C.bool(conf.Truncate),
 	}
 
-	dbResult := C.fwd_open_db(args)
-	db, err := databaseFromResult(&dbResult)
-	if err != nil {
-		return nil, err
-	}
-
-	return &Database{handle: db}, nil
+	return fromHandleResult(C.fwd_open_db(args))
 }
 
 // Update applies a batch of updates to the database, returning the hash of the
@@ -144,8 +134,7 @@ func (db *Database) Update(keys, vals [][]byte) ([]byte, error) {
 		return nil, err
 	}
 
-	hash := C.fwd_batch(db.handle, kvp)
-	return bytesFromValue(&hash)
+	return fromHashResult(C.fwd_batch(db.handle, kvp))
 }
 
 func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
@@ -161,8 +150,7 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 		return nil, err
 	}
 
-	val := C.fwd_propose_on_db(db.handle, kvp)
-	return newProposal(db.handle, &val)
+	return fromProposalResult(C.fwd_propose_on_db(db.handle, kvp), db)
 }
 
 // Get retrieves the value for the given key. It always returns a nil error.
@@ -175,15 +163,12 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
-	val := C.fwd_get_latest(db.handle, newBorrowedBytes(key, &pinner))
-	bytes, err := bytesFromValue(&val)
-
-	// If the root hash is not found, return nil.
-	if err != nil && strings.Contains(err.Error(), rootHashNotFound) {
+	val, err := fromValueResult(C.fwd_get_latest(db.handle, newBorrowedBytes(key, &pinner)))
+	if errors.Is(err, errRevisionNotFound) {
 		return nil, nil
 	}
 
-	return bytes, err
+	return val, err
 }
 
 // GetFromRoot retrieves the value for the given key from a specific root hash.
@@ -194,21 +179,27 @@ func (db *Database) GetFromRoot(root, key []byte) ([]byte, error) {
 		return nil, errDBClosed
 	}
 
-	// If the root is empty, the database is empty.
 	if len(root) == 0 || bytes.Equal(root, EmptyRoot) {
-		return nil, nil
+		return nil, nil // Empty root is treated as no data
+	}
+
+	if len(root) != RootLength {
+		return nil, errInvalidRootLength
+	}
+
+	rootKey, err := NewHashKey(root)
+	if err != nil {
+		return nil, fmt.Errorf("invalid root hash: %w", err)
 	}
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
-	val := C.fwd_get_from_root(
+	return fromValueResult(C.fwd_get_from_root(
 		db.handle,
-		newBorrowedBytes(root, &pinner),
+		rootKey.toC(),
 		newBorrowedBytes(key, &pinner),
-	)
-
-	return bytesFromValue(&val)
+	))
 }
 
 // Root returns the current root hash of the trie.
@@ -217,28 +208,39 @@ func (db *Database) Root() ([]byte, error) {
 	if db.handle == nil {
 		return nil, errDBClosed
 	}
-	hash := C.fwd_root_hash(db.handle)
-	bytes, err := bytesFromValue(&hash)
+
+	hash, err := fromHashResult(C.fwd_root_hash(db.handle))
+	if err != nil {
+		return nil, err
+	}
 
 	// If the root hash is not found, return a zeroed slice.
-	if err == nil && bytes == nil {
-		bytes = EmptyRoot
+	if len(hash) == 0 {
+		return EmptyRoot, nil
 	}
-	return bytes, err
+
+	return hash, nil
 }
 
 // Revision returns a historical revision of the database.
 func (db *Database) Revision(root []byte) (*Revision, error) {
-	return newRevision(db.handle, root)
+	if root == nil || len(root) != RootLength {
+		return nil, errInvalidRootLength
+	}
+
+	// Attempt to get any value from the root.
+	// This will verify that the root is valid and accessible.
+	// If the root is not valid, this will return an error.
+	_, err := db.GetFromRoot(root, []byte{})
+	if err != nil {
+		return nil, err
+	}
+
+	return &Revision{database: db, root: root}, nil
 }
 
 // Close closes the database and releases all held resources.
 // Returns an error if already closed.
 func (db *Database) Close() error {
-	if db.handle == nil {
-		return errDBClosed
-	}
-	C.fwd_close_db(db.handle)
-	db.handle = nil
-	return nil
+	return db.free(true)
 }
