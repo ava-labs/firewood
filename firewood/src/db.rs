@@ -449,6 +449,9 @@ impl Proposal<'_> {
 mod test {
     #![expect(clippy::unwrap_used)]
 
+    use core::iter::Take;
+    use std::iter::Peekable;
+    use std::num::NonZeroUsize;
     use std::ops::{Deref, DerefMut};
     use std::path::PathBuf;
 
@@ -459,6 +462,42 @@ mod test {
     use crate::v2::api::{Db as _, DbView as _, KeyValuePairIter, Proposal as _};
 
     use super::{BatchOp, DbConfig};
+
+    /// A chunk of an iterator, provided by [`IterExt::async_chunk_fold`] to the folding
+    /// function.
+    type Chunk<'chunk, 'base, T> = &'chunk mut Take<&'base mut Peekable<T>>;
+
+    trait IterExt: Iterator {
+        /// Asynchronously folds the iterator with chunks of a specified size. The last
+        /// chunk may be smaller than the specified size.
+        ///
+        /// The folding function is an async closure that takes an accumulator and a
+        /// chunk of the underlying iterator, and returns a new accumulator.
+        ///
+        /// # Panics
+        ///
+        /// If the folding function does not consume the entire chunk, it will panic.
+        ///
+        /// If the folding function panics, the iterator will be dropped (because this
+        /// method consumes `self`).
+        async fn async_chunk_fold<B, F>(self, chunk_size: NonZeroUsize, init: B, mut f: F) -> B
+        where
+            Self: Sized,
+            F: for<'a, 'b> AsyncFnMut(B, Chunk<'a, 'b, Self>) -> B,
+        {
+            let chunk_size = chunk_size.get();
+            let mut iter = self.peekable();
+            let mut acc = init;
+            while iter.peek().is_some() {
+                let mut chunk = iter.by_ref().take(chunk_size);
+                acc = f(acc, chunk.by_ref()).await;
+                assert!(chunk.next().is_none(), "entire chunk was not consumed");
+            }
+            acc
+        }
+    }
+
+    impl<T: Iterator> IterExt for T {}
 
     #[tokio::test]
     async fn test_proposal_reads() {
@@ -785,67 +824,20 @@ mod test {
         }
     }
 
-    struct Fuse<I>(Option<I>);
-
-    impl<I: Iterator> Iterator for Fuse<I> {
-        type Item = I::Item;
-
-        fn next(&mut self) -> Option<Self::Item> {
-            match &mut self.0 {
-                Some(iter) => {
-                    let opt = iter.next();
-                    if opt.is_none() {
-                        self.0 = None; // consume the iterator
-                    }
-                    opt
-                }
-                None => None,
-            }
-        }
-
-        fn size_hint(&self) -> (usize, Option<usize>) {
-            match &self.0 {
-                Some(iter) => iter.size_hint(),
-                None => (0, Some(0)),
-            }
-        }
-    }
-
-    trait IterExt: Iterator {
-        async fn chunk_fold<B, F>(self, chunk_size: usize, init: B, mut f: F) -> B
-        where
-            Self: Sized,
-            F: for<'a, 'b> AsyncFnMut(B, &'b mut core::iter::Take<&'a mut Fuse<Self>>) -> B,
-        {
-            let mut iter = Fuse(Some(self));
-            let mut acc = init;
-            while iter.0.is_some() {
-                let mut chunk = iter.by_ref().take(chunk_size);
-                acc = f(acc, chunk.by_ref()).await;
-                for _ in chunk {
-                    // consume the chunk
-                }
-            }
-            acc
-        }
-    }
-
-    impl<T: Iterator> IterExt for T {}
-
     #[tokio::test]
     async fn test_deep_propose() {
-        const NUM_KEYS: usize = 2;
+        const NUM_KEYS: NonZeroUsize = const { NonZeroUsize::new(2).unwrap() };
         const NUM_PROPOSALS: usize = 100;
 
         let db = testdb().await;
 
-        let ops = (0..(NUM_KEYS * NUM_PROPOSALS))
+        let ops = (0..(NUM_KEYS.get() * NUM_PROPOSALS))
             .map(|i| (format!("key{i}"), format!("value{i}")))
             .collect::<Vec<_>>();
 
         let proposals = ops
             .iter()
-            .chunk_fold(
+            .async_chunk_fold(
                 NUM_KEYS,
                 Vec::<Proposal<'_>>::with_capacity(NUM_PROPOSALS),
                 async |mut proposals, ops| {
