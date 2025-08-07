@@ -141,9 +141,9 @@ impl FileBacked {
 }
 
 impl ReadableStorage for FileBacked {
-    fn stream_from(&self, addr: u64) -> Result<Box<dyn OffsetReader + '_>, FileIoError> {
+    fn stream_from(&self, addr: u64) -> Result<impl OffsetReader, FileIoError> {
         counter!("firewood.read_node", "from" => "file").increment(1);
-        Ok(Box::new(PredictiveReader::new(self, addr)))
+        Ok(PredictiveReader::new(self, addr))
     }
 
     fn size(&self) -> Result<u64, FileIoError> {
@@ -304,7 +304,7 @@ impl Read for PredictiveReader<'_> {
 
 impl OffsetReader for PredictiveReader<'_> {
     fn offset(&self) -> u64 {
-        self.offset
+        self.offset - self.len as u64 + self.pos as u64
     }
 }
 
