@@ -181,12 +181,22 @@ fn decrease_key(key: &[u8; 32]) -> [u8; 32] {
 
 #[test]
 fn test_get_regression() {
-    let mut merkle: Merkle<NodeStore<MutableProposal, MemStore>> = create_in_memory_merkle();
+    let merkle: Merkle<NodeStore<MutableProposal, MemStore>> = create_in_memory_merkle();
+    let mut merkle_par = MerkleParallel::new(merkle);
 
+    let key_range = 255;
+    for i in (0..key_range).rev() {
+        merkle_par.insert(&[i], Box::new([i]));
+    }
+    let merkle = merkle_par.wait();
+
+/* 
     let root = merkle.nodestore.mut_root();
     let mut root_node = std::mem::take(root); 
     let mut merkle_arc = Arc::new(merkle);
     let worker_pool: WorkerPool<MemStore>= WorkerPool::new(merkle_arc.clone());
+*/
+
 /* 
     let _ = worker_pool.insert(None, 0, &[0], Box::new([0]));
 
@@ -197,7 +207,9 @@ fn test_get_regression() {
     let _ = merkle_arc.insert_worker_pool(None, &worker_pool, 0, &[1], Box::new([1]));
     let _ = merkle_arc.insert_worker_pool(None, &worker_pool, 0, &[2], Box::new([2]));
 */
-    let key_range = 255;
+
+/* 
+    //let key_range = 255;
     for j in (0..key_range).rev() {
         let key = [j];
         let insert_result = merkle_arc.insert_parallel(root_node, &worker_pool, &key, Box::new([j]));
@@ -311,7 +323,7 @@ fn test_get_regression() {
     // the inner Merkle should we can perform a mut operations on it.
     let mut merkle = Arc::into_inner(merkle_arc).unwrap();
     *merkle.nodestore.mut_root() = Some(node);
-
+*/
     
 
     // Wait until all of the previous inserts are complete

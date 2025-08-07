@@ -170,6 +170,7 @@ impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutablePropos
         match insert_result.expect("insert_parallel returned an error") {
             ParallelInsertReturn::Performed(node) => {
                 self.root_node = Some(node);
+                self.merkle_arc = Some(merkle_arc);
             }
             ParallelInsertReturn::RetryNonThreaded(node, value) => {
                 /* 
