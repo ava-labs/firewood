@@ -37,6 +37,49 @@ impl<T> ValueType for T where T: AsRef<[u8]> + Send + Sync + Debug {}
 ///    proof
 pub type HashKey = firewood_storage::TrieHash;
 
+/// An extension trait for the [`HashKey`] type to provide additional methods.
+pub trait HashKeyExt: Sized {
+    /// Default root hash for an empty database.
+    fn default_root_hash() -> Option<HashKey>;
+}
+
+/// An extension trait for an optional `HashKey` type to provide additional methods.
+pub trait OptionalHashKeyExt: Sized {
+    /// Returns the default root hash if the current value is [`None`].
+    fn or_default_root_hash(self) -> Option<HashKey>;
+}
+
+#[cfg(not(feature = "ethhash"))]
+impl HashKeyExt for HashKey {
+    /// Creates a new `HashKey` representing the empty root hash.
+    #[inline]
+    fn default_root_hash() -> Option<HashKey> {
+        None
+    }
+}
+
+#[cfg(feature = "ethhash")]
+impl HashKeyExt for HashKey {
+    #[inline]
+    fn default_root_hash() -> Option<HashKey> {
+        const EMPTY_RLP_HASH: [u8; size_of::<TrieHash>()] = [
+            // "56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421"
+            0x56, 0xe8, 0x1f, 0x17, 0x1b, 0xcc, 0x55, 0xa6, 0xff, 0x83, 0x45, 0xe6, 0x92, 0xc0,
+            0xf8, 0x6e, 0x5b, 0x48, 0xe0, 0x1b, 0x99, 0x6c, 0xad, 0xc0, 0x01, 0x62, 0x2f, 0xb5,
+            0xe3, 0x63, 0xb4, 0x21,
+        ];
+
+        Some(EMPTY_RLP_HASH.into())
+    }
+}
+
+impl OptionalHashKeyExt for Option<HashKey> {
+    #[inline]
+    fn or_default_root_hash(self) -> Option<HashKey> {
+        self.or_else(HashKey::default_root_hash)
+    }
+}
+
 /// A frozen proof is a proof that is stored in immutable memory.
 pub type FrozenRangeProof = RangeProof<Key, Value, Box<[ProofNode]>>;
 
@@ -87,19 +130,21 @@ pub fn vec_into_batch<K: KeyType, V: ValueType>(value: Vec<(K, V)>) -> Batch<K, 
 #[non_exhaustive]
 pub enum Error {
     /// A given hash key is not available in the database
-    #[error("Hash not found for key: {provided:?}")]
-    HashNotFound {
+    #[error("Revision for {provided:?} not found")]
+    RevisionNotFound {
         /// the provided hash key
-        provided: HashKey,
+        provided: Option<HashKey>,
     },
 
     /// Incorrect root hash for commit
-    #[error("Incorrect root hash for commit: {provided:?} != {current:?}")]
-    IncorrectRootHash {
+    #[error(
+        "The proposal cannot be committed since it is not a direct child of the most recent commit. Proposal parent: {provided:?}, current root: {expected:?}"
+    )]
+    ParentNotLatest {
         /// the provided root hash
-        provided: HashKey,
-        /// the current root hash
-        current: HashKey,
+        provided: Option<HashKey>,
+        /// the expected root hash
+        expected: Option<HashKey>,
     },
 
     /// Invalid range
@@ -139,10 +184,6 @@ pub enum Error {
     #[error("the latest revision is empty and has no root hash")]
     LatestIsEmpty,
 
-    /// This is not the latest proposal
-    #[error("commit the parents of this proposal first")]
-    NotLatest,
-
     /// Sibling already committed
     #[error("sibling already committed")]
     SiblingCommitted,
@@ -151,24 +192,35 @@ pub enum Error {
     #[error("proof error")]
     ProofError(#[from] ProofError),
 
-    /// Revision not found
-    #[error("revision not found")]
-    RevisionNotFound,
+    /// An invalid root hash was provided
+    #[error(transparent)]
+    InvalidRootHash(#[from] firewood_storage::InvalidTrieHashLength),
 }
 
 impl From<RevisionManagerError> for Error {
     fn from(err: RevisionManagerError) -> Self {
+        use RevisionManagerError::{FileIoError, NotLatest, RevisionNotFound};
         match err {
-            RevisionManagerError::FileIoError(io_err) => Error::FileIO(io_err),
-            RevisionManagerError::NotLatest => Error::NotLatest,
-            RevisionManagerError::RevisionNotFound => Error::RevisionNotFound,
+            NotLatest { provided, expected } => Self::ParentNotLatest { provided, expected },
+            RevisionNotFound { provided } => Self::RevisionNotFound {
+                provided: Some(provided),
+            },
+            FileIoError(io_err) => Self::FileIO(io_err),
+        }
+    }
+}
+
+impl From<crate::db::DbError> for Error {
+    fn from(value: crate::db::DbError) -> Self {
+        match value {
+            crate::db::DbError::FileIo(err) => Error::FileIO(err),
         }
     }
 }
 
 /// The database interface. The methods here operate on the most
 /// recently committed revision, and allow the creation of a new
-/// [Proposal] or a new [DbView] based on a specific historical
+/// [`Proposal`] or a new [`DbView`] based on a specific historical
 /// revision.
 #[async_trait]
 pub trait Db {
@@ -205,8 +257,8 @@ pub trait Db {
     ///
     /// # Arguments
     ///
-    /// * `data` - A batch consisting of [BatchOp::Put] and
-    ///            [BatchOp::Delete] operations to apply
+    /// * `data` - A batch consisting of [`BatchOp::Put`] and
+    ///            [`BatchOp::Delete`] operations to apply
     ///
     async fn propose<'db, K: KeyType, V: ValueType>(
         &'db self,
@@ -218,12 +270,12 @@ pub trait Db {
 
 /// A view of the database at a specific time.
 ///
-/// There are a few ways to create a [DbView]:
-/// 1. From [Db::revision] which gives you a view for a specific
+/// There are a few ways to create a [`DbView`]:
+/// 1. From [`Db::revision`] which gives you a view for a specific
 ///    historical revision
-/// 2. From [Db::propose] which is a view on top of the most recently
+/// 2. From [`Db::propose`] which is a view on top of the most recently
 ///    committed revision with changes applied; or
-/// 3. From [Proposal::propose] which is a view on top of another proposal.
+/// 3. From [`Proposal::propose`] which is a view on top of another proposal.
 #[async_trait]
 pub trait DbView {
     /// The type of a stream of key/value pairs
@@ -231,7 +283,7 @@ pub trait DbView {
     where
         Self: 'view;
 
-    /// Get the root hash for the current DbView
+    /// Get the root hash for the current [`DbView`]
     ///
     /// # Note
     ///
@@ -268,8 +320,8 @@ pub trait DbView {
     ///
     /// # Note
     ///
-    /// If you always want to start at the beginning, [DbView::iter] is easier to use
-    /// If you always provide a key, [DbView::iter_from] is easier to use
+    /// If you always want to start at the beginning, [`DbView::iter`] is easier to use
+    /// If you always provide a key, [`DbView::iter_from`] is easier to use
     ///
     #[expect(clippy::missing_errors_doc)]
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Stream<'_>, Error>;
@@ -291,13 +343,13 @@ pub trait DbView {
 /// A proposal for a new revision of the database.
 ///
 /// A proposal may be committed, which consumes the
-/// [Proposal] and return the generic type T, which
-/// is the same thing you get if you call [Db::root_hash]
+/// [`Proposal`] and return the generic type `T`, which
+/// is the same thing you get if you call [`Db::root_hash`]
 /// immediately after committing, and then call
-/// [Db::revision] with the returned revision.
+/// [`Db::revision`] with the returned revision.
 ///
 /// A proposal type must also implement everything in a
-/// [DbView], which means you can fetch values from it or
+/// [`DbView`], which means you can fetch values from it or
 /// obtain proofs.
 #[async_trait]
 pub trait Proposal: DbView + Send + Sync {
@@ -321,4 +373,29 @@ pub trait Proposal: DbView + Send + Sync {
         &self,
         data: Batch<K, V>,
     ) -> Result<Self::Proposal, Error>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(feature = "ethhash")]
+    fn test_ethhash_compat_default_root_hash_equals_empty_rlp_hash() {
+        use sha3::Digest as _;
+
+        assert_eq!(
+            TrieHash::default_root_hash(),
+            sha3::Keccak256::digest(rlp::NULL_RLP)
+                .as_slice()
+                .try_into()
+                .ok(),
+        );
+    }
+
+    #[test]
+    #[cfg(not(feature = "ethhash"))]
+    fn test_firewood_default_root_hash_equals_none() {
+        assert_eq!(TrieHash::default_root_hash(), None);
+    }
 }

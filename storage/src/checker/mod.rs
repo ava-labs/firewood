@@ -26,8 +26,16 @@ const OS_PAGE_SIZE: u64 = 4096;
 
 #[inline]
 // return u64 since the start address may be 0
-const fn page_start(addr: LinearAddress) -> u64 {
-    addr.get() & !(OS_PAGE_SIZE - 1)
+const fn page_number(addr: LinearAddress) -> u64 {
+    addr.get() / OS_PAGE_SIZE
+}
+
+fn extra_read_pages(addr: LinearAddress, page_size: u64) -> Option<u64> {
+    let start_page = page_number(addr);
+    let end_page = page_number(addr.advance(page_size.saturating_sub(1))?);
+    let pages_read = end_page.saturating_sub(start_page);
+    let min_pages = page_size / OS_PAGE_SIZE;
+    Some(pages_read.saturating_sub(min_pages))
 }
 
 #[cfg(feature = "ethhash")]
@@ -92,7 +100,7 @@ pub struct FreeListsStats {
     /// The distribution of area sizes in the free lists
     pub area_counts: HashMap<u64, u64>,
     /// The number of stored areas that span multiple pages
-    pub multi_page_area_count: u64,
+    pub extra_unaligned_page_read: u64,
 }
 
 struct SubTrieMetadata {
@@ -106,7 +114,6 @@ struct SubTrieMetadata {
 }
 
 /// [`NodeStore`] checker
-// TODO: S needs to be writeable if we ask checker to fix the issues
 #[expect(clippy::result_large_err)]
 impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Go through the filebacked storage and check for any inconsistencies. It proceeds in the following steps:
@@ -116,7 +123,6 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// 4. check leaked areas - what are the spaces between trie nodes and free lists we have traversed?
     /// # Errors
     /// Returns a [`CheckerError`] if the database is inconsistent.
-    // TODO: report all errors, not just the first one
     pub fn check(&self, opt: CheckOpt) -> CheckerReport {
         // 1. Check the header
         let db_size = self.size();
@@ -176,9 +182,13 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         let leaked_ranges = visited.complement();
         if !leaked_ranges.is_empty() {
             warn!("Found leaked ranges: {leaked_ranges}");
+            {
+                // TODO: add leaked areas to the free list
+                let _leaked_areas =
+                    self.split_all_leaked_ranges(&leaked_ranges, opt.progress_bar.as_ref());
+            }
+            errors.push(CheckerError::AreaLeaks(leaked_ranges));
         }
-        let _leaked_areas = self.split_all_leaked_ranges(leaked_ranges, opt.progress_bar.as_ref());
-        // TODO: add leaked areas to the free list
 
         let physical_bytes = match self.physical_size() {
             Ok(physical_bytes) => physical_bytes,
@@ -258,6 +268,16 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         let (area_index, area_size) = self.area_index_and_size(subtrie_root_address)?;
         let (node, node_bytes) = self.read_node_with_num_bytes_from_disk(subtrie_root_address)?;
 
+        // check if the node fits in the area, equal is not allowed due to 1-byte area size index
+        if node_bytes >= area_size {
+            return Err(vec![CheckerError::NodeLargerThanArea {
+                area_start: subtrie_root_address,
+                area_size,
+                node_bytes,
+                parent,
+            }]);
+        }
+
         // if the node has a value, check that the key is valid
         let mut current_path_prefix = path_prefix.clone();
         current_path_prefix.0.extend_from_slice(node.partial_path());
@@ -305,25 +325,17 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             *area_count = area_count.saturating_add(1);
             // collect the trie bytes
             trie_stats.trie_bytes = trie_stats.trie_bytes.saturating_add(node_bytes);
-            // collect low occupancy area count
-            let smallest_area_index = area_size_to_index(node_bytes).map_err(|e| {
-                self.file_io_error(
-                    e,
-                    subtrie_root_address.get(),
-                    Some("area_size_to_index".to_string()),
-                )
-            })?;
+            // collect low occupancy area count, add 1 for the area size index byte
+            let smallest_area_index = area_size_to_index(node_bytes.saturating_add(1))
+                .expect("impossible since we checked that node_bytes < area_size");
             if smallest_area_index < area_index {
                 trie_stats.low_occupancy_area_count =
                     trie_stats.low_occupancy_area_count.saturating_add(1);
             }
-            // collect the multi-page area count
-            if page_start(subtrie_root_address)
-                != page_start(
-                    subtrie_root_address
-                        .advance(area_size)
-                        .expect("impossible since we checked in visited.insert_area()"),
-                )
+            // collect the number of areas that requires reading an extra page due to not being aligned
+            if extra_read_pages(subtrie_root_address, area_size)
+                .expect("impossible since we checked in visited.insert_area()")
+                > 0
             {
                 trie_stats.multi_page_area_count =
                     trie_stats.multi_page_area_count.saturating_add(1);
@@ -454,11 +466,9 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                 let area_count = area_counts.entry(area_size).or_insert(0);
                 *area_count = area_count.saturating_add(1);
                 // collect the multi-page area count
-                if page_start(addr)
-                    != page_start(
-                        addr.advance(area_size.saturating_sub(1))   // subtract 1 to get the last byte of the area
-                            .expect("impossible since we checked in visited.insert_area()"),
-                    )
+                if extra_read_pages(addr, area_size)
+                    .expect("impossible since we checked in visited.insert_area()")
+                    > 0
                 {
                     multi_page_area_count = multi_page_area_count.saturating_add(1);
                 }
@@ -468,7 +478,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         (
             FreeListsStats {
                 area_counts,
-                multi_page_area_count,
+                extra_unaligned_page_read: multi_page_area_count,
             },
             errors,
         )
@@ -486,9 +496,9 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     }
 
     /// Wrapper around `split_into_leaked_areas` that iterates over a collection of ranges.
-    fn split_all_leaked_ranges(
+    fn split_all_leaked_ranges<'a>(
         &self,
-        leaked_ranges: impl IntoIterator<Item = Range<LinearAddress>>,
+        leaked_ranges: impl IntoIterator<Item = Range<&'a LinearAddress>>,
         progress_bar: Option<&ProgressBar>,
     ) -> impl Iterator<Item = (LinearAddress, AreaIndex)> {
         leaked_ranges
@@ -501,11 +511,11 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Returns error if the last leaked area extends beyond the end of the range.
     fn split_range_into_leaked_areas(
         &self,
-        leaked_range: Range<LinearAddress>,
+        leaked_range: Range<&LinearAddress>,
         progress_bar: Option<&ProgressBar>,
     ) -> Vec<(LinearAddress, AreaIndex)> {
         let mut leaked = Vec::new();
-        let mut current_addr = leaked_range.start;
+        let mut current_addr = *leaked_range.start;
 
         // First attempt to read the valid stored areas from the leaked range
         loop {
@@ -520,7 +530,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             let next_addr = current_addr
                 .advance(area_size)
                 .expect("address overflow is impossible");
-            match next_addr.cmp(&leaked_range.end) {
+            match next_addr.cmp(leaked_range.end) {
                 Ordering::Equal => {
                     // we have reached the end of the leaked area, done
                     leaked.push((current_addr, area_index));
@@ -554,7 +564,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                 let next_addr = current_addr
                     .advance(*area_size)
                     .expect("address overflow is impossible");
-                if next_addr <= leaked_range.end {
+                if next_addr <= *leaked_range.end {
                     leaked.push((current_addr, area_index as AreaIndex));
                     if let Some(progress_bar) = progress_bar {
                         progress_bar.inc(*area_size);
@@ -567,7 +577,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         }
 
         // we assume that all areas are aligned to `MIN_AREA_SIZE`, in which case leaked ranges can always be split into free areas perfectly
-        debug_assert!(current_addr == leaked_range.end);
+        debug_assert!(current_addr == *leaked_range.end);
         leaked
     }
 }
@@ -746,7 +756,7 @@ mod test {
 
         // Replace branch hash with a wrong hash
         let (leaf_addr, _) = branch.children[1].as_ref().unwrap().persist_info().unwrap();
-        branch.children[1] = Some(Child::AddressWithHash(leaf_addr, HashType::default()));
+        branch.children[1] = Some(Child::AddressWithHash(leaf_addr, HashType::empty()));
         test_write_new_node(&nodestore, branch_node, branch_addr.get());
 
         // Compute the current branch hash
@@ -819,8 +829,7 @@ mod test {
                 );
                 next_free_block = Some(LinearAddress::new(high_watermark).unwrap());
                 let start_addr = LinearAddress::new(high_watermark).unwrap();
-                let end_addr = start_addr.advance(*area_size - 1).unwrap();
-                if page_start(start_addr) != page_start(end_addr) {
+                if extra_read_pages(start_addr, *area_size).unwrap() > 0 {
                     multi_page_area_count = multi_page_area_count.saturating_add(1);
                 }
                 high_watermark += area_size;
@@ -832,7 +841,7 @@ mod test {
         }
         let expected_free_lists_stats = FreeListsStats {
             area_counts: free_area_counts,
-            multi_page_area_count,
+            extra_unaligned_page_read: multi_page_area_count,
         };
 
         // write header
@@ -850,7 +859,7 @@ mod test {
 
     #[test]
     // Free list 1: 2048 bytes
-    // Free list 2: 4096 bytes
+    // Free list 2: 8192 bytes
     // ---------------------------------------------------------------------------------------------------------------------------
     // | header | empty | free_list1_area3 | free_list1_area2 | overlap | free_list1_area1 | free_list2_area1 | free_list2_area2 |
     // ---------------------------------------------------------------------------------------------------------------------------
@@ -889,7 +898,7 @@ mod test {
         free_lists[area_index1 as usize] = next_free_block1;
 
         // second free list
-        let area_index2 = 10; // 4096
+        let area_index2 = 12; // 16384
         let area_size2 = AREA_SIZES[area_index2 as usize];
         let mut next_free_block2 = None;
 
@@ -919,7 +928,7 @@ mod test {
         }];
         let expected_free_lists_stats = FreeListsStats {
             area_counts: HashMap::from([(area_size1, 1), (area_size2, 2)]),
-            multi_page_area_count: 0,
+            extra_unaligned_page_read: 0,
         };
 
         // test that the we traversed all the free areas
@@ -987,7 +996,12 @@ mod test {
         }
 
         // check the leaked areas
-        let leaked_areas: HashMap<_, _> = nodestore.split_all_leaked_ranges(leaked, None).collect();
+        let leaked_ranges = leaked
+            .iter()
+            .map(|Range { start, end }| Range { start, end });
+        let leaked_areas: HashMap<_, _> = nodestore
+            .split_all_leaked_ranges(leaked_ranges, None)
+            .collect();
 
         // assert that all leaked areas end up on the free list
         assert_eq!(leaked_areas, expected_free_areas);
@@ -1020,8 +1034,8 @@ mod test {
         test_write_zeroed_area(&nodestore, leaked_range_size, NodeStoreHeader::SIZE);
 
         // check the leaked areas
-        let leaked_range = nonzero!(NodeStoreHeader::SIZE).into()
-            ..LinearAddress::new(
+        let leaked_range = &nonzero!(NodeStoreHeader::SIZE).into()
+            ..&LinearAddress::new(
                 NodeStoreHeader::SIZE
                     .checked_add(leaked_range_size)
                     .unwrap(),
@@ -1073,7 +1087,7 @@ mod test {
 
         // check the leaked areas
         let leaked_range =
-            nonzero!(NodeStoreHeader::SIZE).into()..LinearAddress::new(high_watermark).unwrap();
+            &nonzero!(NodeStoreHeader::SIZE).into()..&LinearAddress::new(high_watermark).unwrap();
         let (leaked_areas_offsets, leaked_area_size_indices): (Vec<LinearAddress>, Vec<AreaIndex>) =
             nodestore
                 .split_range_into_leaked_areas(leaked_range, None)
