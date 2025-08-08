@@ -59,7 +59,6 @@ firewood-triehash.workspace = true
 hex-literal.workspace = true
 pprof = { workspace = true, features = ["flamegraph"] }
 rand.workspace = true
-rand_distr.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "macros", "rt-multi-thread"] }
 # Regular dependencies
