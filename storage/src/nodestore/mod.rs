@@ -849,7 +849,6 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 mod tests {
 
     use crate::LeafNode;
-    use crate::area_index;
     use crate::linear::memory::MemStore;
     use arc_swap::access::DynGuard;
 

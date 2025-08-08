@@ -708,6 +708,7 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
 /// Iterator over free lists in the nodestore
 struct FreeListIterator<'a, S: ReadableStorage> {
     storage: &'a S,
+    id: AreaIndex,
     next_addr: Option<LinearAddress>,
     parent: FreeListParent,
 }
@@ -715,29 +716,29 @@ struct FreeListIterator<'a, S: ReadableStorage> {
 impl<'a, S: ReadableStorage> FreeListIterator<'a, S> {
     const fn new(
         storage: &'a S,
+        free_list_id: AreaIndex,
         next_addr: Option<LinearAddress>,
         src_ptr: FreeListParent,
     ) -> Self {
         Self {
             storage,
+            id: free_list_id,
             next_addr,
             parent: src_ptr,
         }
     }
 
-    #[expect(
-        clippy::type_complexity,
-        reason = "TODO: we need some additional newtypes here"
-    )]
-    fn next_with_parent(
+    fn next_with_metadata(
         &mut self,
-    ) -> Option<(
-        Result<(LinearAddress, AreaIndex), FileIoError>,
-        FreeListParent,
-    )> {
+    ) -> Option<(Result<FreeAreaWithMetadata, FileIoError>, FreeListParent)> {
         let parent = self.parent;
         let next_addr = self.next()?;
-        Some((next_addr, parent))
+        let next_with_metadata = next_addr.map(|(addr, area_index)| FreeAreaWithMetadata {
+            addr,
+            area_index,
+            free_list_id: self.id,
+        });
+        Some((next_with_metadata, parent))
     }
 }
 
@@ -778,8 +779,7 @@ pub(crate) struct FreeListsIterator<'a, S: ReadableStorage> {
     free_lists_iter: std::iter::Skip<
         std::iter::Enumerate<std::slice::Iter<'a, std::option::Option<LinearAddress>>>,
     >,
-    current_free_list_id: AreaIndex,
-    free_list_iter: FreeListIterator<'a, S>,
+    current_free_list: Option<(AreaIndex, FreeListIterator<'a, S>)>,
 }
 
 impl<'a, S: ReadableStorage> FreeListsIterator<'a, S> {
@@ -792,37 +792,27 @@ impl<'a, S: ReadableStorage> FreeListsIterator<'a, S> {
             .iter()
             .enumerate()
             .skip(start_area_index.as_usize());
-        let (current_free_list_id, free_list_head) = match free_lists_iter.next() {
-            Some((id, head)) => (AreaIndex::from(id), *head),
-            None => (AreaIndex::from(AreaIndex::NUM_AREA_SIZES), None),
-        };
-        let start_iterator = FreeListIterator::new(
-            storage,
-            free_list_head,
-            FreeListParent::FreeListHead(current_free_list_id),
-        );
+        let current_free_list = free_lists_iter.next().map(|(id, head)| {
+            let free_list_id = AreaIndex::from(id);
+            let free_list_iter = FreeListIterator::new(
+                storage,
+                free_list_id,
+                *head,
+                FreeListParent::FreeListHead(free_list_id),
+            );
+            (free_list_id, free_list_iter)
+        });
         Self {
             storage,
             free_lists_iter,
-            current_free_list_id,
-            free_list_iter: start_iterator,
+            current_free_list,
         }
     }
 
     pub(crate) fn next_with_metadata(
         &mut self,
     ) -> Option<(Result<FreeAreaWithMetadata, FileIoError>, FreeListParent)> {
-        self.next_inner(FreeListIterator::next_with_parent)
-            .map(|(next, parent)| {
-                (
-                    next.map(|(addr, area_index)| FreeAreaWithMetadata {
-                        addr,
-                        area_index,
-                        free_list_id: self.current_free_list_id,
-                    }),
-                    parent,
-                )
-            })
+        self.next_inner(FreeListIterator::next_with_metadata)
     }
 
     fn next_inner<T, F: FnMut(&mut FreeListIterator<'a, S>) -> Option<T>>(
@@ -830,30 +820,31 @@ impl<'a, S: ReadableStorage> FreeListsIterator<'a, S> {
         mut next_fn: F,
     ) -> Option<T> {
         loop {
-            if let Some(next) = next_fn(&mut self.free_list_iter) {
+            let Some((_, free_list_iter)) = &mut self.current_free_list else {
+                return None;
+            };
+            if let Some(next) = next_fn(free_list_iter) {
                 // the current free list is not exhausted, return the next free area
                 return Some(next);
             }
 
             self.move_to_next_free_list();
-            if self.current_free_list_id == AreaIndex::from(AreaIndex::NUM_AREA_SIZES) {
-                // no more free lists to iterate over
-                return None;
-            }
         }
     }
 
     pub(crate) fn move_to_next_free_list(&mut self) {
-        let (current_free_list_id, next_free_list_head) = match self.free_lists_iter.next() {
-            Some((id, head)) => (AreaIndex::from(id), *head),
-            None => (AreaIndex::from(AreaIndex::NUM_AREA_SIZES), None), // skip unvisited free areas in the current iterator
+        let Some((next_free_list_id, next_free_list_head)) = self.free_lists_iter.next() else {
+            self.current_free_list = None;
+            return;
         };
-        self.current_free_list_id = current_free_list_id;
-        self.free_list_iter = FreeListIterator::new(
+        let next_free_list_id = AreaIndex::from(next_free_list_id);
+        let next_free_list_iter = FreeListIterator::new(
             self.storage,
-            next_free_list_head,
-            FreeListParent::FreeListHead(self.current_free_list_id),
+            next_free_list_id,
+            *next_free_list_head,
+            FreeListParent::FreeListHead(next_free_list_id),
         );
+        self.current_free_list = Some((next_free_list_id, next_free_list_iter));
     }
 }
 
@@ -1016,6 +1007,7 @@ mod tests {
         let nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
 
         let area_index = rng.random_range(0..AreaIndex::NUM_AREA_SIZES as u8);
+        let area_index_type = AreaIndex::from(area_index);
         let area_size = AREA_SIZES[area_index as usize];
 
         // create a random free list scattered across the storage
@@ -1026,14 +1018,14 @@ mod tests {
             test_utils::test_write_free_area(
                 &nodestore,
                 Some(LinearAddress::new(*next).unwrap()),
-                AreaIndex::from(area_index),
+                area_index_type,
                 *cur,
             );
         }
         test_utils::test_write_free_area(
             &nodestore,
             None,
-            AreaIndex::from(area_index),
+            area_index_type,
             *offsets.last().unwrap(),
         );
 
@@ -1043,24 +1035,19 @@ mod tests {
         let start = iterator.next().unwrap();
         let mut free_list_iter = FreeListIterator::new(
             nodestore.storage.as_ref(),
+            area_index_type,
             LinearAddress::new(start),
-            FreeListParent::FreeListHead(AreaIndex::from(area_index)),
+            FreeListParent::FreeListHead(area_index_type),
         );
         assert_eq!(
             free_list_iter.next().unwrap().unwrap(),
-            (
-                LinearAddress::new(start).unwrap(),
-                AreaIndex::from(area_index)
-            )
+            (LinearAddress::new(start).unwrap(), area_index_type)
         );
 
         for offset in iterator {
             assert_eq!(
                 free_list_iter.next().unwrap().unwrap(),
-                (
-                    LinearAddress::new(offset).unwrap(),
-                    AreaIndex::from(area_index)
-                )
+                (LinearAddress::new(offset).unwrap(), area_index_type)
             );
         }
 
@@ -1193,6 +1180,7 @@ mod tests {
 
     #[test]
     #[expect(clippy::arithmetic_side_effects)]
+    #[expect(clippy::too_many_lines)]
     fn free_lists_iter_skip_to_next_free_list() {
         use test_utils::{test_write_free_area, test_write_header};
 
@@ -1265,7 +1253,10 @@ mod tests {
         let mut free_list_iter = nodestore.free_list_iter(AreaIndex::MIN);
 
         // start at the first free list
-        assert_eq!(free_list_iter.current_free_list_id, AreaIndex::MIN);
+        assert_eq!(
+            free_list_iter.current_free_list.as_ref().unwrap().0,
+            AreaIndex::MIN
+        );
         let (next, next_parent) = free_list_iter.next_with_metadata().unwrap();
         assert_eq!(
             next.unwrap(),
@@ -1281,13 +1272,13 @@ mod tests {
         );
         // `next_with_metadata` moves the iterator to the first free list that is not empty
         assert_eq!(
-            free_list_iter.current_free_list_id,
+            free_list_iter.current_free_list.as_ref().unwrap().0,
             area_index!(AREA_INDEX1)
         );
         free_list_iter.move_to_next_free_list();
         // `move_to_next_free_list` moves the iterator to the next free list
         assert_eq!(
-            free_list_iter.current_free_list_id,
+            free_list_iter.current_free_list.as_ref().unwrap().0,
             area_index!(AREA_INDEX1 + 1)
         );
         let (next, next_parent) = free_list_iter.next_with_metadata().unwrap();
@@ -1305,27 +1296,21 @@ mod tests {
         );
         // `next_with_metadata` moves the iterator to the first free list that is not empty
         assert_eq!(
-            free_list_iter.current_free_list_id,
-            area_index!(AREA_INDEX2 + 1)
+            free_list_iter.current_free_list.as_ref().unwrap().0,
+            area_index!(AREA_INDEX2)
         );
         free_list_iter.move_to_next_free_list();
         // `move_to_next_free_list` moves the iterator to the next free list
         assert_eq!(
-            free_list_iter.current_free_list_id,
+            free_list_iter.current_free_list.as_ref().unwrap().0,
             area_index!(AREA_INDEX2 + 1)
         );
         assert!(free_list_iter.next_with_metadata().is_none());
         // since no more non-empty free lists, `move_to_next_free_list` moves the iterator to the end
-        assert_eq!(
-            free_list_iter.current_free_list_id,
-            AreaIndex::from(AreaIndex::NUM_AREA_SIZES)
-        );
+        assert!(free_list_iter.current_free_list.is_none());
         free_list_iter.move_to_next_free_list();
         // `move_to_next_free_list` will do nothing since we are already at the end
-        assert_eq!(
-            free_list_iter.current_free_list_id,
-            AreaIndex::from(AreaIndex::NUM_AREA_SIZES)
-        );
+        assert!(free_list_iter.current_free_list.is_none());
         assert!(free_list_iter.next_with_metadata().is_none());
     }
 
