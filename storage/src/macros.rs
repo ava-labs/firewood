@@ -80,10 +80,9 @@ macro_rules! firewood_gauge {
 macro_rules! area_index {
     ($v:expr) => {
         const {
-            if $v >= $crate::nodestore::alloc::AreaIndex::NUM_AREA_SIZES {
-                panic!("Constant area index out of bounds");
-            } else {
-                $crate::nodestore::alloc::AreaIndex::from_u8_unchecked($v as u8)
+            match $crate::nodestore::primitives::AreaIndex::new($v as u8) {
+                Some(v) => v,
+                None => panic!("Constant area index out of bounds"),
             }
         }
     };

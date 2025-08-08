@@ -32,6 +32,7 @@
 use std::iter::FusedIterator;
 
 use crate::linear::FileIoError;
+use crate::nodestore::AreaIndex;
 use crate::{firewood_counter, firewood_gauge};
 use coarsetime::Instant;
 
@@ -250,7 +251,7 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
         for node in UnPersistedNodeIterator::new(self) {
             let shared_node = node.as_shared_node(self).expect("in memory, so no IO");
             let mut serialized = Vec::new();
-            shared_node.as_bytes(0, &mut serialized);
+            shared_node.as_bytes(AreaIndex::MIN, &mut serialized);
 
             let (persisted_address, area_size_index) =
                 allocator.allocate_node(serialized.as_slice())?;

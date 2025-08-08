@@ -5,7 +5,8 @@ mod range_set;
 pub(crate) use range_set::LinearAddressRangeSet;
 
 use crate::logger::warn;
-use crate::nodestore::alloc::{AREA_SIZES, AreaIndex, FreeAreaWithMetadata, size_from_area_index};
+use crate::nodestore::alloc::FreeAreaWithMetadata;
+use crate::nodestore::primitives::{AreaIndex, area_size_iter};
 use crate::{
     CheckerError, Committed, HashType, HashedNodeReader, IntoHashType, LinearAddress, Node,
     NodeStore, Path, RootReader, StoredAreaParent, TrieNodeParent, WritableStorage,
@@ -444,7 +445,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             }
 
             // check that the area size matches the free list id (if it is in the correct free list)
-            let area_size = size_from_area_index(area_index);
+            let area_size = area_index.size();
             if free_list_id != area_index {
                 errors.push(CheckerError::FreelistAreaSizeMismatch {
                     address: addr,
@@ -565,15 +566,15 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
         // We encountered an error, split the rest of the leaked range into areas using heuristics
         // The heuristic is to split the leaked range into areas of the largest size possible - we assume `AREA_SIZE` is in ascending order
-        for (area_index, area_size) in AREA_SIZES.iter().enumerate().rev() {
+        for (area_index, area_size) in area_size_iter().rev() {
             loop {
                 let next_addr = current_addr
-                    .advance(*area_size)
+                    .advance(area_size)
                     .expect("address overflow is impossible");
                 if next_addr <= *leaked_range.end {
-                    leaked.push((current_addr, AreaIndex::from(area_index)));
+                    leaked.push((current_addr, area_index));
                     if let Some(progress_bar) = progress_bar {
-                        progress_bar.inc(*area_size);
+                        progress_bar.inc(area_size);
                     }
                     current_addr = next_addr;
                 } else {
@@ -609,10 +610,11 @@ mod test {
     use super::*;
     use crate::linear::memory::MemStore;
     use crate::nodestore::NodeStoreHeader;
+    use crate::nodestore::alloc::FreeLists;
     use crate::nodestore::alloc::test_utils::{
         test_write_free_area, test_write_header, test_write_new_node, test_write_zeroed_area,
     };
-    use crate::nodestore::alloc::{AREA_SIZES, FreeLists};
+    use crate::nodestore::primitives::area_size_iter;
     use crate::{
         BranchNode, Child, FreeListParent, LeafNode, NodeStore, Path, area_index, hash_node,
     };
@@ -825,26 +827,21 @@ mod test {
         let mut free_area_counts: HashMap<u64, u64> = HashMap::new();
         let mut multi_page_area_count = 0u64;
         let mut freelist = FreeLists::default();
-        for (area_index, area_size) in AREA_SIZES.iter().enumerate() {
+        for (area_index, area_size) in area_size_iter() {
             let mut next_free_block = None;
             let num_free_areas = rng.random_range(0..4);
             for _ in 0..num_free_areas {
-                test_write_free_area(
-                    &nodestore,
-                    next_free_block,
-                    AreaIndex::from(area_index),
-                    high_watermark,
-                );
+                test_write_free_area(&nodestore, next_free_block, area_index, high_watermark);
                 next_free_block = Some(LinearAddress::new(high_watermark).unwrap());
                 let start_addr = LinearAddress::new(high_watermark).unwrap();
-                if extra_read_pages(start_addr, *area_size).unwrap() > 0 {
+                if extra_read_pages(start_addr, area_size).unwrap() > 0 {
                     multi_page_area_count = multi_page_area_count.saturating_add(1);
                 }
                 high_watermark += area_size;
             }
-            freelist[area_index] = next_free_block;
+            freelist[area_index.as_usize()] = next_free_block;
             if num_free_areas > 0 {
-                free_area_counts.insert(*area_size, num_free_areas);
+                free_area_counts.insert(area_size, num_free_areas);
             }
         }
         let expected_free_lists_stats = FreeListsStats {
@@ -875,8 +872,8 @@ mod test {
     //              ^ 16 empty bytes to ensure that free_list1_area1, free_list1_area2, and free_list2_area1 are page-aligned
     #[expect(clippy::arithmetic_side_effects)]
     fn traverse_freelist_should_skip_offspring_of_incorrect_areas() {
-        const AREA_INDEX1: usize = 9; // 2048
-        const AREA_INDEX2: usize = 12; // 16384
+        const AREA_INDEX1: AreaIndex = area_index!(9); // 2048
+        const AREA_INDEX2: AreaIndex = area_index!(12); // 16384
 
         let memstore = MemStore::new(vec![]);
         let mut nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
@@ -885,25 +882,15 @@ mod test {
         let mut high_watermark = NodeStoreHeader::SIZE + 16; // + 16 to create overlap
 
         // first free list
-        let area_size1 = AREA_SIZES[AREA_INDEX1];
+        let area_size1 = AREA_INDEX1.size();
         let mut next_free_block1 = None;
 
-        test_write_free_area(
-            &nodestore,
-            next_free_block1,
-            area_index!(AREA_INDEX1),
-            high_watermark,
-        );
+        test_write_free_area(&nodestore, next_free_block1, AREA_INDEX1, high_watermark);
         let free_list1_area3 = LinearAddress::new(high_watermark).unwrap();
         next_free_block1 = Some(free_list1_area3);
         high_watermark += area_size1;
 
-        test_write_free_area(
-            &nodestore,
-            next_free_block1,
-            area_index!(AREA_INDEX1),
-            high_watermark,
-        );
+        test_write_free_area(&nodestore, next_free_block1, AREA_INDEX1, high_watermark);
         let free_list1_area2 = LinearAddress::new(high_watermark).unwrap();
         next_free_block1 = Some(free_list1_area2);
         high_watermark += area_size1;
@@ -911,48 +898,33 @@ mod test {
         let intersection_end = LinearAddress::new(high_watermark).unwrap();
         high_watermark -= 16; // create an overlap with free_list1_area2 and restore to page-aligned address
         let intersection_start = LinearAddress::new(high_watermark).unwrap();
-        test_write_free_area(
-            &nodestore,
-            next_free_block1,
-            area_index!(AREA_INDEX1),
-            high_watermark,
-        );
+        test_write_free_area(&nodestore, next_free_block1, AREA_INDEX1, high_watermark);
         let free_list1_area1 = LinearAddress::new(high_watermark).unwrap();
         next_free_block1 = Some(free_list1_area1);
         high_watermark += area_size1;
 
-        free_lists[AREA_INDEX1] = next_free_block1;
+        free_lists[AREA_INDEX1.as_usize()] = next_free_block1;
 
         // second free list
-        let area_size2 = AREA_SIZES[AREA_INDEX2];
+        let area_size2 = AREA_INDEX2.size();
         let mut next_free_block2 = None;
 
-        test_write_free_area(
-            &nodestore,
-            next_free_block2,
-            area_index!(AREA_INDEX2),
-            high_watermark,
-        );
+        test_write_free_area(&nodestore, next_free_block2, AREA_INDEX2, high_watermark);
         let free_list2_area2 = LinearAddress::new(high_watermark).unwrap();
         next_free_block2 = Some(free_list2_area2);
         high_watermark += area_size2;
 
-        test_write_free_area(
-            &nodestore,
-            next_free_block2,
-            area_index!(AREA_INDEX2),
-            high_watermark,
-        );
+        test_write_free_area(&nodestore, next_free_block2, AREA_INDEX2, high_watermark);
         let free_list2_area1 = LinearAddress::new(high_watermark).unwrap();
         next_free_block2 = Some(free_list2_area1);
         high_watermark += area_size2;
 
-        free_lists[AREA_INDEX2] = next_free_block2;
+        free_lists[AREA_INDEX2.as_usize()] = next_free_block2;
 
         // write header
         test_write_header(&mut nodestore, high_watermark, None, free_lists);
 
-        let expected_start_addr = free_lists[AREA_INDEX1].unwrap();
+        let expected_start_addr = free_lists[AREA_INDEX1.as_usize()].unwrap();
         let expected_end_addr = LinearAddress::new(high_watermark).unwrap();
         let expected_free_areas = vec![expected_start_addr..expected_end_addr];
         let expected_freelist_errors = vec![CheckerError::AreaIntersects {
@@ -993,17 +965,11 @@ mod test {
         let mut high_watermark = NodeStoreHeader::SIZE;
         let mut stored_areas = Vec::new();
         for _ in 0..num_areas {
-            let (area_size_index, area_size) =
-                AREA_SIZES.iter().enumerate().choose(&mut rng).unwrap();
+            let (area_size_index, area_size) = area_size_iter().choose(&mut rng).unwrap();
             let area_addr = LinearAddress::new(high_watermark).unwrap();
-            test_write_free_area(
-                &nodestore,
-                None,
-                AreaIndex::from(area_size_index),
-                high_watermark,
-            );
-            stored_areas.push((area_addr, AreaIndex::from(area_size_index), *area_size));
-            high_watermark += *area_size;
+            test_write_free_area(&nodestore, None, area_size_index, high_watermark);
+            stored_areas.push((area_addr, area_size_index, area_size));
+            high_watermark += area_size;
         }
         test_write_header(&mut nodestore, high_watermark, None, FreeLists::default());
 
@@ -1059,7 +1025,7 @@ mod test {
         ];
         let expected_leaked_area_sizes = expected_leaked_area_indices
             .iter()
-            .map(|i| AREA_SIZES[i.as_usize()])
+            .map(|i| i.size())
             .collect::<Vec<_>>();
         assert_eq!(expected_leaked_area_sizes, vec![1024, 768, 128, 64, 16]);
         let expected_offsets = expected_leaked_area_sizes
@@ -1104,15 +1070,15 @@ mod test {
         // write two free areas
         let mut high_watermark = NodeStoreHeader::SIZE;
         test_write_free_area(&nodestore, None, area_index!(8), high_watermark); // 1024
-        high_watermark += AREA_SIZES[8];
+        high_watermark += area_index!(8).size();
         test_write_free_area(&nodestore, None, area_index!(7), high_watermark); // 768
-        high_watermark += AREA_SIZES[7];
+        high_watermark += area_index!(7).size();
         // write an zeroed area
         test_write_zeroed_area(&nodestore, 768, high_watermark);
         high_watermark += 768;
         // write another free area
         test_write_free_area(&nodestore, None, area_index!(8), high_watermark); // 1024
-        high_watermark += AREA_SIZES[8];
+        high_watermark += area_index!(8).size();
 
         let expected_indices = vec![
             area_index!(8),
@@ -1122,7 +1088,7 @@ mod test {
         ];
         let expected_sizes = expected_indices
             .iter()
-            .map(|i| AREA_SIZES[i.as_usize()])
+            .map(|i| i.size())
             .collect::<Vec<_>>();
         let expected_offsets = expected_sizes
             .iter()
