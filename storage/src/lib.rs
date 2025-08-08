@@ -292,6 +292,32 @@ impl From<CheckerError> for Vec<CheckerError> {
     }
 }
 
+impl CheckerError {
+    #[must_use]
+    const fn free_list_parent(&self) -> Option<&FreeListParent> {
+        match self {
+            CheckerError::AreaIntersects {
+                parent: StoredAreaParent::FreeList(parent),
+                ..
+            }
+            | CheckerError::AreaOutOfBounds {
+                parent: StoredAreaParent::FreeList(parent),
+                ..
+            }
+            | CheckerError::FreelistAreaSizeMismatch { parent, .. }
+            | CheckerError::AreaMisaligned {
+                parent: StoredAreaParent::FreeList(parent),
+                ..
+            }
+            | CheckerError::IO {
+                parent: Some(StoredAreaParent::FreeList(parent)),
+                ..
+            } => Some(parent),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod test_utils {
     use rand::rngs::StdRng;
