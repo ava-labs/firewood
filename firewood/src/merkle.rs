@@ -157,7 +157,7 @@ pub enum ParallelInsertErrors<S> {
 
 impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutableProposal, S>>, S> {
     /// Constructor for `MerkleParallel`.
-    #[must_use] 
+    #[must_use]
     pub fn new(mut m: Merkle<NodeStore<MutableProposal, S>>) -> Self {
         let root_node = std::mem::take(m.nodestore.mut_root());
         let merkle_arc = Arc::new(m);
@@ -852,10 +852,10 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
                         // exiting the thread here, but that still leaves the system in a bad state.
                         let _ = thread_sender.send(WorkerReturn::NodeResult(Ok((
                             inserted_root,
-                            thread_deleted.clone(),
+                            thread_deleted,
                         ))));
                         inserted_root = None;
-                        thread_deleted.clear();
+                        thread_deleted = Vec::default();
                     }
                     MerkleOp::SetMerkle(m) => {
                         merkle = Some(*m);
@@ -943,9 +943,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
     /// ## Errors
     ///
     /// Can return a `FileIoError` that came from a previous insert.
-    pub fn clear_merkle(
-        &self,
-    ) -> Result<Vec<NodeWithDeleted>, FileIoError> {
+    pub fn clear_merkle(&self) -> Result<Vec<NodeWithDeleted>, FileIoError> {
         for i in 0..BranchNode::MAX_CHILDREN {
             let _ = self
                 .workers_data
@@ -1107,22 +1105,6 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                         let child = match std::mem::take(&mut branch.children[child_index as usize])
                         {
                             None => {
-                                //return Ok(ParallelInsertReturn::RetryNonThreaded(node, value))
-                                // Not handling this case correctly. Need to send this to the worker thread!!
-
-                                //println!("&&&&& inserted key:{:?} value:{value:?} child_index {child_index:?}", partial_path.as_ref());
-                                /*
-                                // TODO: Send a None to the worker pool? Or just perform the insert here?
-                                // There is no child at this index.
-                                // Create a new leaf and put it here.
-                                let new_leaf = Node::Leaf(LeafNode {
-                                    value,
-                                    partial_path,
-                                });
-                                branch.update_child(child_index, Some(Child::Node(new_leaf)));
-                                counter!("firewood.insert", "merkle"=>"below").increment(1);
-                                return Ok(ParallelInsertReturn::Performed(node));
-                                */
                                 let _ = worker_pool.insert(
                                     None,
                                     child_index as usize,
@@ -1130,17 +1112,21 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                                     value,
                                     deleted,
                                 );
-                                //let _ = worker_pool.insert(None, child_index as usize, key, value);
                                 return Ok(ParallelInsertReturn::Performed(node));
                             }
                             Some(Child::Node(child)) => child,
                             Some(Child::AddressWithHash(addr, _)) => {
-                                // TODO: Send this address to the worker pool.
+                                // TODO: WorkerPool can be modified such that it accepts an addr
+                                //       which would allow this I/O operation to be performed
+                                //       on a separate thread. However, this optimization would
+                                //       only be helpful when the root's children have not been
+                                //       read from storage.
                                 self.nodestore
                                     .read_for_update_ext_deleted(addr.into(), &mut deleted)?
                             }
                             Some(Child::MaybePersisted(maybe_persisted, _)) => {
-                                // TODO: send this maybe_persisted to the worker pool.
+                                // TODO: Same as the previous block, but instead of sending an addr,
+                                //       we can instead send a maybe_persisted to the worker thread.
                                 self.nodestore.read_for_update_ext_deleted(
                                     maybe_persisted.clone(),
                                     &mut deleted,
@@ -1148,16 +1134,6 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                             }
                         };
 
-                        //Ok(ParallelInsertReturn::RetryNonThreaded(node, value))
-
-                        //println!(
-                        //    "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! inserting key {key:?} at child_index {child_index:?} with partial path {:?}",
-                        //    partial_path.as_ref()
-                        //);
-                        //let child = self.insert_helper(child, partial_path.as_ref(), value)?;
-                        //branch.update_child(child_index, Some(Child::Node(child)));
-                        // TODO: Currently there is only one thread. Once we go multi-thread, we
-                        //       should have child_index as a parameter to insert.
                         let _ = worker_pool.insert(
                             Some(child),
                             child_index as usize,
@@ -1277,11 +1253,14 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                                 return Ok((node, deleted));
                             }
                             Some(Child::Node(child)) => child,
-                            Some(Child::AddressWithHash(addr, _)) => {
-                                self.nodestore.read_for_update_ext_deleted(addr.into(), &mut deleted)?
-                            }
+                            Some(Child::AddressWithHash(addr, _)) => self
+                                .nodestore
+                                .read_for_update_ext_deleted(addr.into(), &mut deleted)?,
                             Some(Child::MaybePersisted(maybe_persisted, _)) => {
-                                self.nodestore.read_for_update_ext_deleted(maybe_persisted.clone(), &mut deleted)?
+                                self.nodestore.read_for_update_ext_deleted(
+                                    maybe_persisted.clone(),
+                                    &mut deleted,
+                                )?
                             }
                         };
 
