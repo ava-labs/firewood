@@ -93,7 +93,6 @@ pub struct Options {
     pub max_key_count: Option<u32>,
 
     /// The output format of database dump.
-    /// Possible Values: ["csv", "json", "stdout", "dot"].
     /// Defaults to "stdout"
     #[arg(
         short = 'o',
