@@ -22,7 +22,7 @@ use std::future::ready;
 use std::io::Error;
 use std::iter::once;
 use std::num::NonZeroUsize;
-use std::sync::mpsc::{Receiver, SendError, Sender};
+use std::sync::mpsc::{Receiver, RecvError, SendError, Sender};
 use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 
@@ -143,7 +143,7 @@ pub struct MerkleParallel<T, S> {
 
 #[derive(Debug)]
 /// Error type that can return from calling parallel insert.
-pub enum ParallelInsertErrors<S> {
+pub enum ParallelInsertError<S> {
     /// Error from calling `insert_helper` or `insert`
     Io(FileIoError),
 
@@ -153,6 +153,19 @@ pub enum ParallelInsertErrors<S> {
     /// Merkle structure has been cleared. This should only happen if insert is called after
     /// insert is called after `clear_merkle` but before `set_merkle`.
     MerkleUnset,
+}
+
+#[derive(Debug)]
+/// Error types that can return from `clear_merkle`.
+pub enum ClearMerkleError<S> {
+    /// Error from sending to a worker channel
+    SendError(SendError<MerkleOp<S>>),
+
+    /// Error from receiving from a worker channel
+    RecvError(RecvError),
+
+    /// Error from calling `insert_helper` or `insert`
+    Io(FileIoError),
 }
 
 impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutableProposal, S>>, S> {
@@ -176,9 +189,9 @@ impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutablePropos
     /// Can return a `ParallelInsertError` which could be due to a `FileIoError` from calling `insert_helper`
     /// or `insert`, a channel error from sending to a worker, or a None merkle, which means the merkle
     /// structure has been cleared without re-setting it to a new merkle structure.
-    pub fn insert(&mut self, key: &[u8], value: Value) -> Result<(), ParallelInsertErrors<S>> {
+    pub fn insert(&mut self, key: &[u8], value: Value) -> Result<(), ParallelInsertError<S>> {
         let Some(mut merkle_arc) = self.merkle_arc.take() else {
-            return Err(ParallelInsertErrors::MerkleUnset);
+            return Err(ParallelInsertError::MerkleUnset);
         };
 
         // Perform the actual paralle insert
@@ -190,7 +203,7 @@ impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutablePropos
         ) {
             Ok(parallel_result) => parallel_result,
             Err(err) => {
-                return Err(ParallelInsertErrors::Io(err));
+                return Err(ParallelInsertError::Io(err));
             }
         };
 
@@ -204,14 +217,14 @@ impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutablePropos
 
                 // Fallback to calling non-parallel insert.
                 if let Err(err) = merkle.insert(key, value) {
-                    return Err(ParallelInsertErrors::Io(err));
+                    return Err(ParallelInsertError::Io(err));
                 }
 
                 // Set all of the parameters that were taken previously.
                 self.root_node = std::mem::take(merkle.nodestore.mut_root());
                 merkle_arc = Arc::new(merkle);
                 if let Err(err) = self.worker_pool.set_merkle(merkle_arc.clone()) {
-                    return Err(ParallelInsertErrors::Channel(err));
+                    return Err(ParallelInsertError::Channel(err));
                 }
                 self.merkle_arc = Some(merkle_arc);
             }
@@ -866,11 +879,8 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
         (host_sender, host_receiver, handle)
     }
 
-    /// Test
-    ///
-    /// ## Panics
-    ///
-    /// Test
+    /// Constructor for `WorkerPool` that takes the Arc of a Merkle struct as a parameter.
+    /// Creates one worker thread for each possible child for the root node.
     #[must_use]
     pub fn new(merkle: Arc<Merkle<NodeStore<MutableProposal, S>>>) -> Self {
         let workers_data: Vec<WorkerData<S>> = (0..BranchNode::MAX_CHILDREN)
@@ -883,7 +893,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
     ///
     /// ## Panics
     ///
-    /// Can panic if workerpool vector is incorrectly initialized.
+    /// Can panic if an incorrect child index is passed as a parameter.
     ///
     /// ## Errors
     ///
@@ -911,10 +921,6 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
     /// Setting the Merkle trie for the worker pool. The worker pool must be cleared first
     /// before calling this function.
     ///
-    /// ## Panics
-    ///
-    /// Can panic if workerpool trie is incorrectly initialized.
-    ///
     /// ## Errors
     ///
     /// `SendError` from sending a message to one of the worker channels.
@@ -922,12 +928,8 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
         &self,
         merkle: Arc<Merkle<NodeStore<MutableProposal, S>>>,
     ) -> Result<(), SendError<MerkleOp<S>>> {
-        for i in 0..BranchNode::MAX_CHILDREN {
-            // Sending SetMerkle to each worker. The send should not fail under
-            // normal operation.
-            self.workers_data
-                .get(i)
-                .expect("empty vector")
+        for worker in &self.workers_data {
+            worker
                 .0
                 .send(MerkleOp::SetMerkle(Box::new(merkle.clone())))?;
         }
@@ -936,36 +938,39 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
 
     /// Clears the Merkle trie so that it can be moved out of the Arc
     ///
-    /// ## Panics
-    ///
-    /// Can panic if workerpool vector is incorrectly initialized.
-    ///
     /// ## Errors
     ///
-    /// Can return a `FileIoError` that came from a previous insert.
-    pub fn clear_merkle(&self) -> Result<Vec<NodeWithDeleted>, FileIoError> {
-        for i in 0..BranchNode::MAX_CHILDREN {
-            let _ = self
-                .workers_data
-                .get(i)
-                .expect("empty vector")
-                .0
-                .send(MerkleOp::ClearMerkle);
+    /// Can return a `ClearMerkleError` which can either be due to errors
+    /// sending or receiving from a channel, or a `FileIoError` from a 
+    /// previous insert.
+    pub fn clear_merkle(&self) -> Result<Vec<NodeWithDeleted>, ClearMerkleError<S>> {
+        // Send ClearMerkle to all of the worker threads. The worker threadds will then
+        // send back results that were collected by each worker.
+        for worker in &self.workers_data {
+            if let Err(err) = worker.0.send(MerkleOp::ClearMerkle) {
+                return Err(ClearMerkleError::SendError(err));
+            }
         }
 
-        //let mut ret_vec = vec![];
+        // Collect the results from the worker threads.
         let mut ret_vec = Vec::with_capacity(BranchNode::MAX_CHILDREN);
-        for i in 0..BranchNode::MAX_CHILDREN {
-            // Blocks until result completes for now in this initial prototype.
-            let WorkerReturn::NodeResult(result) = self
-                .workers_data
-                .get(i)
-                .expect("empty vector")
-                .1
-                .recv()
-                .expect("recv error");
-            // TODO: Handle this error better
-            ret_vec.push(result.expect("File IO error"));
+        for worker in &self.workers_data {
+            // Block on receive. Should not return a RecvError during normal operation.
+            match worker.1.recv() {
+                Ok(result) => match result {
+                    // Check to see if the workers encounter any errors from previous insert operations
+                    WorkerReturn::NodeResult(result) => match result {
+                        // No errors. Add to the return vector.
+                        Ok(result) => ret_vec.push(result),
+                        Err(err) => {
+                            return Err(ClearMerkleError::Io(err));
+                        }
+                    },
+                },
+                Err(err) => {
+                    return Err(ClearMerkleError::RecvError(err));
+                }
+            }
         }
         Ok(ret_vec)
     }
