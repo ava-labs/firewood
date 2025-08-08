@@ -26,7 +26,7 @@ pub type BorrowedBytes<'a> = BorrowedSlice<'a, u8>;
 pub type BorrowedKeyValuePairs<'a> = BorrowedSlice<'a, KeyValuePair<'a>>;
 
 /// A borrowed byte slice. Used to represent data that was passed in from C
-/// callers and will not be freed by Rust code.
+/// callers and will not be freed or retained by Rust code.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct BorrowedSlice<'a, T> {

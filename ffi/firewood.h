@@ -41,7 +41,7 @@ typedef struct Value {
 
 /**
  * A borrowed byte slice. Used to represent data that was passed in from C
- * callers and will not be freed by Rust code.
+ * callers and will not be freed or retained by Rust code.
  */
 typedef struct BorrowedSlice_u8 {
   /**
@@ -87,7 +87,7 @@ typedef struct KeyValuePair {
 
 /**
  * A borrowed byte slice. Used to represent data that was passed in from C
- * callers and will not be freed by Rust code.
+ * callers and will not be freed or retained by Rust code.
  */
 typedef struct BorrowedSlice_KeyValuePair {
   /**

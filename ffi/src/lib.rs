@@ -4,8 +4,8 @@
 // HINT WHEN REFERENCING TYPES OUTSIDE THIS LIBRARY:
 // - Anything that is outside the crate must be included as a `type` alias (not just
 //   a `use`) in order for cbindgen to generate an opaque forward declaration. The type
-//   alias can have a doc comment which will be encluded in the generated header file.
-// - The value must be boxed, or otherwise returned via a pointer. This is because only
+//   alias can have a doc comment which will be included in the generated header file.
+// - The value must be boxed, or otherwise used via a pointer. This is because only
 //   a forward declaration is generated and callers will be unable to instantiate the
 //   type without a complete definition.
 
