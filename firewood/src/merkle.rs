@@ -229,7 +229,7 @@ impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutablePropos
         let merkle_arc = self.merkle_arc.take().expect("merkle arc option is none");
         // The root can be None if the trie is empty. In this case, there should not be any
         // outstanding requests being handled by workers as long as the invariant that the
-        // root cannot be removed while there are workers active. For this case, we just 
+        // root cannot be removed while there are workers active. For this case, we just
         // convert the merkle_arc back to a merkle and return it back to the caller.
         if let Some(node) = self.root_node.take() {
             self.wait_params(node, merkle_arc)
@@ -734,7 +734,6 @@ pub struct WorkerPool<S> {
 impl<S: ReadableStorage + 'static> WorkerPool<S> {
     fn create_one_worker(
         merkle: Arc<Merkle<NodeStore<MutableProposal, S>>>,
-        //index: usize,
     ) -> (Sender<MerkleOp<S>>, Receiver<WorkerReturn>, JoinHandle<()>) {
         let (host_sender, thread_receiver) = mpsc::channel::<MerkleOp<S>>();
         let (thread_sender, host_receiver) = mpsc::channel::<WorkerReturn>();
@@ -742,10 +741,12 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
 
         let handle = thread::spawn(move || {
             let mut inserted_root = None;
-            //let thread_id = thread::current().id();
             loop {
                 let Ok(v) = thread_receiver.recv() else {
-                    return; // Thread is unable to recv data from parent
+                    // Thread is unable to recv data from parent. This should never happen during normal
+                    // operation. Currently just break to terminate the thread.
+                    // TODO: Consider logging this error or trying to send a message to the parent
+                    break;
                 };
                 match v {
                     MerkleOp::InsertData(sub_trie_root, key, value) => {
@@ -767,14 +768,6 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
                                     "inserted_root should be None if sub_trie_root is not None"
                                 );
                                 node_from_sub_trie_root
-                                /*
-                                if let Some(node_from_inserted) = inserted_root {
-                                    println!("############### Do we every get to this case? ###############");
-                                    node_from_inserted
-                                } else {
-                                    node_from_sub_trie_root
-                                }
-                                */
                             }
                             None => {
                                 if let Some(node_from_inserted) = inserted_root {
@@ -794,12 +787,15 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
 
                         let path: Path = key.into();
                         let insert_result = merkle_arc.insert_helper(node, path.as_ref(), value);
+
+                        // Keep the returned node as the inserted_root for this sub-trie.
                         inserted_root = match insert_result {
                             Ok(n) => Some(n),
-                            // TODO: Send back error message to the main thread. Currently just breaks out of this
-                            //       loop and termintes the thread. Should there be a separate error channel, or
-                            //       should the same channel be used for sending errors?
-                            Err(_) => {
+                            Err(err) => {
+                                // Send back error messsage to the main thread and then exit. Ignore any
+                                // errors when sending to the channel since we are exiting, although we
+                                // may want to add some logging in that case.
+                                let _ = thread_sender.send(WorkerReturn::NodeResult(Err(err)));
                                 break;
                             }
                         };
@@ -810,6 +806,8 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
                     }
                     MerkleOp::ClearMerkle => {
                         merkle = None; // Decrement the Arc counter
+                        // Ignore sending errors here (should not happen during normal operation). May consider
+                        // exiting the thread here, but that still leaves the system in a bad state.
                         let _ = thread_sender.send(WorkerReturn::NodeResult(Ok(inserted_root)));
                         inserted_root = None;
                     }
@@ -832,7 +830,6 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
         let workers_data: Vec<WorkerData<S>> = (0..BranchNode::MAX_CHILDREN)
             .map(|_| WorkerPool::create_one_worker(merkle.clone()))
             .collect();
-
         WorkerPool { workers_data }
     }
 
