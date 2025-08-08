@@ -247,7 +247,7 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
                 *free_stored_area_addr = free_head;
             } else {
                 let (free_head, read_index) = FreeArea::from_storage(self.storage, address)?;
-                debug_assert_eq!(read_index.as_usize(), index.as_usize());
+                debug_assert_eq!(read_index, index);
 
                 // Update the free list to point to the next free block.
                 *free_stored_area_addr = free_head.next_free_block;

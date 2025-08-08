@@ -42,6 +42,8 @@ const AREA_SIZES: [u64; 23] = [
     1024 << 14,
 ];
 
+/// Returns an iterator over all valid area sizes.
+// TODO: return a named iterator
 pub fn area_size_iter() -> impl DoubleEndedIterator<Item = (AreaIndex, u64)> {
     AREA_SIZES
         .iter()
