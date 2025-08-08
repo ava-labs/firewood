@@ -1,6 +1,8 @@
 name: Label pull requests
 
-on: pull_request_target
+on:
+  pull_request_target:
+  pull_request:
 
 jobs:
   add_label:
