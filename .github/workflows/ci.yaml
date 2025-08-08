@@ -7,6 +7,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: full
 
 jobs:
   build:
@@ -183,9 +184,9 @@ jobs:
           save-if: "false"
           shared-key: ${{ matrix.profile-key }}
       - name: Run benchmark example
-        run: RUST_BACKTRACE=1 cargo run ${{ matrix.profile-args }} --bin benchmark -- --number-of-batches 100 --batch-size 1000 create
+        run: cargo run ${{ matrix.profile-args }} --bin benchmark -- --number-of-batches 100 --batch-size 1000 create
       - name: Run insert example
-        run: RUST_BACKTRACE=1 cargo run ${{ matrix.profile-args }} --features test_utils --example insert
+        run: cargo run ${{ matrix.profile-args }} --features test_utils --example insert
 
   docs:
     needs: build
