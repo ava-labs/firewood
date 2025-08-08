@@ -43,8 +43,10 @@ default = []
 nightly = []
 io-uring = ["firewood-storage/io-uring"]
 logger = ["firewood-storage/logger"]
-branch_factor_256 = [ "firewood-storage/branch_factor_256" ]
-ethhash = [ "firewood-storage/ethhash" ]
+branch_factor_256 = ["firewood-storage/branch_factor_256"]
+ethhash = ["firewood-storage/ethhash"]
+# test_utils feature is required by the `insert` example
+test_utils = ["firewood-storage/test_utils"]
 
 [dev-dependencies]
 # Workspace dependencies
@@ -52,6 +54,7 @@ clap = { workspace = true, features = ['derive'] }
 criterion = { workspace = true, features = ["async_tokio"] }
 env_logger.workspace = true
 ethereum-types.workspace = true
+firewood-storage = { workspace = true, features = ["test_utils"] }
 firewood-triehash.workspace = true
 hex-literal.workspace = true
 pprof = { workspace = true, features = ["flamegraph"] }
@@ -65,6 +68,10 @@ plain_hasher = "0.2.3"
 rlp = "0.6.1"
 sha3 = "0.10.8"
 tokio-scoped = "0.2.0"
+
+[[example]]
+name = "insert"
+required-features = ["test_utils"]
 
 [[bench]]
 name = "hashops"

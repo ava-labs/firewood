@@ -1,0 +1,3 @@
+disallowed-methods = [
+  { path = "rand::rng", reason = "Use firewood_storage::seeded_rng or StdRng::from_os_rng instead", allow-invalid = true },
+]
