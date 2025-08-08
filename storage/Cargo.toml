@@ -25,7 +25,7 @@ hex.workspace = true
 metrics.workspace = true
 nonzero_ext.workspace = true
 sha2.workspace = true
-smallvec = { workspace = true, features = ["write", "union"] }
+smallvec.workspace = true
 thiserror.workspace = true
 # Regular dependencies
 arc-swap = "1.7.1"
