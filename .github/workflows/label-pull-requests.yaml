@@ -15,10 +15,10 @@ jobs:
         id: check_is_form
         run: |
           if [[ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]]; then
-            echo '::set-output name=is_fork::true'
+            echo "is_fork=true" >> "$GITHUB_OUTPUT"
           else
-            echo '::set-output name=is_fork::false'
-            fi
+            echo "is_fork=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Debug context
         uses: actions/github-script@v7
         with:
