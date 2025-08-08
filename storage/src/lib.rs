@@ -58,14 +58,6 @@ pub use linear::memory::MemStore;
 pub use node::persist::MaybePersistedNode;
 pub use trie_hash::{InvalidTrieHashLength, TrieHash};
 
-#[macro_export]
-/// Creates a `LinearAddress` from a literal value in a const context.
-macro_rules! linear_addr {
-    ($v:literal) => {
-        const { $crate::nodestore::alloc::LinearAddress::new($v).unwrap() }
-    };
-}
-
 /// A shared node, which is just a triophe Arc of a node
 pub type SharedNode = triomphe::Arc<Node>;
 
