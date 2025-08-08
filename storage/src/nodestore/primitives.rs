@@ -1,3 +1,12 @@
+// Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
+// See the file LICENSE.md for licensing terms.
+
+//! # Primitives Module
+//!
+//! This module contains the primitives for the nodestore, including a list of valid
+//! area sizes, `AreaIndex` that uniquely identifies a valid area size, and
+//! `LinearAddress` that points to a specific location in the linear storage space.
+
 use crate::TrieHash;
 
 use sha2::{Digest, Sha256};
@@ -113,6 +122,10 @@ impl AreaIndex {
 
     /// Create an `AreaIndex` from a size in bytes.
     /// Returns the index of the smallest area size >= `n`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the size is too large.
     pub fn from_size(n: u64) -> Result<Self, Error> {
         if n > Self::MAX_AREA_SIZE {
             return Err(Error::new(
