@@ -87,7 +87,7 @@ pub fn area_size_hash() -> TrieHash {
 #[must_use]
 pub const fn size_from_area_index(index: AreaIndex) -> u64 {
     #[expect(clippy::indexing_slicing)]
-    AREA_SIZES[index as usize]
+    AREA_SIZES[index.as_usize()]
 }
 
 // TODO: automate this, must stay in sync with above
@@ -121,41 +121,125 @@ pub const fn index_name(index: usize) -> &'static str {
 }
 
 /// The type of an index into the [`AREA_SIZES`] array
-/// This is not usize because we can store this as a single byte
-pub type AreaIndex = u8;
+/// This is not usize because we store this as a single byte
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct AreaIndex(u8);
 
-const NUM_AREA_SIZES: usize = AREA_SIZES.len();
-const MIN_AREA_SIZE: u64 = AREA_SIZES[0];
-const MAX_AREA_SIZE: u64 = AREA_SIZES[NUM_AREA_SIZES - 1];
+impl AreaIndex {
+    /// The number of different area sizes available.
+    pub const NUM_AREA_SIZES: usize = AREA_SIZES.len();
 
-#[inline]
-pub fn new_area_index(n: usize) -> AreaIndex {
-    n.try_into().expect("Area index out of bounds")
-}
+    /// The minimum area index (0).
+    pub const MIN: AreaIndex = AreaIndex(0);
 
-/// Returns the index in `BLOCK_SIZES` of the smallest block size >= `n`.
-pub fn area_size_to_index(n: u64) -> Result<AreaIndex, Error> {
-    if n > MAX_AREA_SIZE {
-        return Err(Error::new(
-            ErrorKind::InvalidData,
-            format!("Node size {n} is too large"),
-        ));
+    /// The minimum area size available for allocation.
+    pub const MIN_AREA_SIZE: u64 = AREA_SIZES[0];
+
+    /// The maximum area size available for allocation.
+    pub const MAX_AREA_SIZE: u64 = AREA_SIZES[Self::NUM_AREA_SIZES - 1];
+
+    /// Create a new `AreaIndex` from a u8 value, returns None if value is out of range.
+    #[inline]
+    #[must_use]
+    pub const fn new(index: u8) -> Option<Self> {
+        if index < Self::NUM_AREA_SIZES as u8 {
+            Some(AreaIndex(index))
+        } else {
+            None
+        }
     }
 
-    if n <= MIN_AREA_SIZE {
-        return Ok(0);
-    }
-
-    AREA_SIZES
-        .iter()
-        .position(|&size| size >= n)
-        .map(new_area_index)
-        .ok_or_else(|| {
-            Error::new(
+    /// Create an `AreaIndex` from a size in bytes.
+    /// Returns the index of the smallest area size >= `n`.
+    pub fn from_size(n: u64) -> Result<Self, Error> {
+        if n > Self::MAX_AREA_SIZE {
+            return Err(Error::new(
                 ErrorKind::InvalidData,
                 format!("Node size {n} is too large"),
-            )
-        })
+            ));
+        }
+
+        if n <= Self::MIN_AREA_SIZE {
+            return Ok(AreaIndex(0));
+        }
+
+        AREA_SIZES
+            .iter()
+            .position(|&size| size >= n)
+            .map(|index| AreaIndex(index as u8))
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::InvalidData,
+                    format!("Node size {n} is too large"),
+                )
+            })
+    }
+
+    /// Get the underlying index as u8.
+    #[inline]
+    #[must_use]
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+
+    /// Get the underlying index as usize.
+    #[inline]
+    #[must_use]
+    pub const fn as_usize(self) -> usize {
+        self.0 as usize
+    }
+
+    /// Returns the number of different area sizes available.
+    #[inline]
+    #[must_use]
+    pub const fn num_area_sizes() -> usize {
+        Self::NUM_AREA_SIZES
+    }
+
+    /// Create an `AreaIndex` from a u8 value without bounds checking.
+    #[inline]
+    #[must_use]
+    #[cfg(test)]
+    pub const fn from_u8_unchecked(index: u8) -> Self {
+        AreaIndex(index)
+    }
+}
+
+impl From<u8> for AreaIndex {
+    fn from(index: u8) -> Self {
+        AreaIndex::new(index).expect("Area index out of bounds")
+    }
+}
+
+impl From<AreaIndex> for u8 {
+    fn from(area_index: AreaIndex) -> Self {
+        area_index.get()
+    }
+}
+
+impl From<usize> for AreaIndex {
+    fn from(index: usize) -> Self {
+        assert!(
+            (index < Self::NUM_AREA_SIZES),
+            "Area index out of bounds: {} >= {}",
+            index,
+            Self::NUM_AREA_SIZES
+        );
+        AreaIndex(index as u8)
+    }
+}
+
+impl From<AreaIndex> for usize {
+    fn from(area_index: AreaIndex) -> Self {
+        area_index.as_usize()
+    }
+}
+
+impl fmt::Display for AreaIndex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        std::fmt::Display::fmt(&self.get(), f)
+    }
 }
 
 /// A linear address in the nodestore storage.
@@ -407,14 +491,17 @@ impl FreeArea {
         const RESERVE_SIZE: usize = size_of::<u8>() + var_int_max_size::<u64>();
 
         encoded.reserve(RESERVE_SIZE);
-        encoded.push(area_index);
+        encoded.push(area_index.get());
         self.write_to(encoded);
     }
 
     fn from_storage_reader(mut reader: impl Read) -> std::io::Result<(Self, AreaIndex)> {
         let area_index = reader.read_byte()?;
         let free_area = reader.next_value()?;
-        Ok((free_area, area_index))
+        Ok((
+            free_area,
+            AreaIndex::new(area_index).expect("area_index should be valid"),
+        ))
     }
 }
 
@@ -445,16 +532,17 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
     ) -> Result<(AreaIndex, u64), FileIoError> {
         let mut area_stream = self.storage.stream_from(addr.get())?;
 
-        let index: AreaIndex = area_stream.read_byte().map_err(|e| {
+        let index: AreaIndex = AreaIndex::new(area_stream.read_byte().map_err(|e| {
             self.storage.file_io_error(
                 Error::new(ErrorKind::InvalidData, e),
                 addr.get(),
                 Some("deserialize".to_string()),
             )
-        })?;
+        })?)
+        .expect("area index should be valid");
 
         let size = *AREA_SIZES
-            .get(index as usize)
+            .get(index.as_usize())
             .ok_or(self.storage.file_io_error(
                 Error::other(format!("Invalid area size index {index}")),
                 addr.get(),
@@ -475,7 +563,7 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
         n: u64,
     ) -> Result<Option<(LinearAddress, AreaIndex)>, FileIoError> {
         // Find the smallest free list that can fit this size.
-        let index_wanted = area_size_to_index(n).map_err(|e| {
+        let index_wanted = AreaIndex::from_size(n).map_err(|e| {
             self.storage
                 .file_io_error(e, 0, Some("allocate_from_freed".to_string()))
         })?;
@@ -485,7 +573,7 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
             .free_lists_mut()
             .iter_mut()
             .enumerate()
-            .skip(index_wanted as usize)
+            .skip(index_wanted.as_usize())
             .find(|item| item.1.is_some())
         {
             let address = free_stored_area_addr
@@ -497,7 +585,7 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
                 *free_stored_area_addr = free_head;
             } else {
                 let (free_head, read_index) = FreeArea::from_storage(self.storage, address)?;
-                debug_assert_eq!(read_index as usize, index);
+                debug_assert_eq!(read_index.as_usize(), index);
 
                 // Update the free list to point to the next free block.
                 *free_stored_area_addr = free_head.next_free_block;
@@ -518,26 +606,26 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
 
             // Return the address of the newly allocated block.
             trace!("Allocating from free list: addr: {address:?}, size: {index}");
-            return Ok(Some((address, index as AreaIndex)));
+            return Ok(Some((address, AreaIndex::from(index))));
         }
 
         trace!("No free blocks of sufficient size {index_wanted} found");
         firewood_counter!(
             "firewood.space.from_end",
             "Space allocated from end of nodestore",
-            "index" => index_name(index_wanted as usize)
+            "index" => index_name(index_wanted.as_usize())
         )
-        .increment(AREA_SIZES[index_wanted as usize]);
+        .increment(AREA_SIZES[index_wanted.as_usize()]);
         Ok(None)
     }
 
     #[expect(clippy::indexing_slicing)]
     fn allocate_from_end(&mut self, n: u64) -> Result<(LinearAddress, AreaIndex), FileIoError> {
-        let index = area_size_to_index(n).map_err(|e| {
+        let index = AreaIndex::from_size(n).map_err(|e| {
             self.storage
                 .file_io_error(e, 0, Some("allocate_from_end".to_string()))
         })?;
-        let area_size = AREA_SIZES[index as usize];
+        let area_size = AREA_SIZES[index.as_usize()];
         let addr = LinearAddress::new(self.header.size()).expect("node store size can't be 0");
         self.header
             .set_size(self.header.size().saturating_add(area_size));
@@ -590,28 +678,28 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
         firewood_counter!(
             "firewood.delete_node",
             "Nodes deleted",
-            "index" => index_name(area_size_index as usize)
+            "index" => index_name(area_size_index.as_usize())
         )
         .increment(1);
         firewood_counter!(
             "firewood.space.freed",
             "Bytes freed in nodestore",
-            "index" => index_name(area_size_index as usize)
+            "index" => index_name(area_size_index.as_usize())
         )
-        .increment(AREA_SIZES[area_size_index as usize]);
+        .increment(AREA_SIZES[area_size_index.as_usize()]);
 
         // The area that contained the node is now free.
         let mut stored_area_bytes = Vec::new();
-        FreeArea::new(self.header.free_lists()[area_size_index as usize])
+        FreeArea::new(self.header.free_lists()[area_size_index.as_usize()])
             .as_bytes(area_size_index, &mut stored_area_bytes);
 
         self.storage.write(addr.into(), &stored_area_bytes)?;
 
         self.storage
-            .add_to_free_list_cache(addr, self.header.free_lists()[area_size_index as usize]);
+            .add_to_free_list_cache(addr, self.header.free_lists()[area_size_index.as_usize()]);
 
         // The newly freed block is now the head of the free list.
-        self.header.free_lists_mut()[area_size_index as usize] = Some(addr);
+        self.header.free_lists_mut()[area_size_index.as_usize()] = Some(addr);
 
         Ok(())
     }
@@ -703,10 +791,10 @@ impl<'a, S: ReadableStorage> FreeListsIterator<'a, S> {
         let mut free_lists_iter = free_lists
             .iter()
             .enumerate()
-            .skip(start_area_index as usize);
+            .skip(start_area_index.as_usize());
         let (current_free_list_id, free_list_head) = match free_lists_iter.next() {
-            Some((id, head)) => (id as AreaIndex, *head),
-            None => (NUM_AREA_SIZES as AreaIndex, None),
+            Some((id, head)) => (AreaIndex::from(id), *head),
+            None => (AreaIndex::from(AreaIndex::NUM_AREA_SIZES), None),
         };
         let start_iterator = FreeListIterator::new(
             storage,
@@ -748,7 +836,7 @@ impl<'a, S: ReadableStorage> FreeListsIterator<'a, S> {
             }
 
             self.move_to_next_free_list();
-            if self.current_free_list_id == NUM_AREA_SIZES as AreaIndex {
+            if self.current_free_list_id == AreaIndex::from(AreaIndex::NUM_AREA_SIZES) {
                 // no more free lists to iterate over
                 return None;
             }
@@ -757,8 +845,8 @@ impl<'a, S: ReadableStorage> FreeListsIterator<'a, S> {
 
     pub(crate) fn move_to_next_free_list(&mut self) {
         let (current_free_list_id, next_free_list_head) = match self.free_lists_iter.next() {
-            Some((id, head)) => (id as AreaIndex, *head),
-            None => (NUM_AREA_SIZES as AreaIndex, None), // skip unvisited free areas in the current iterator
+            Some((id, head)) => (AreaIndex::from(id), *head),
+            None => (AreaIndex::from(AreaIndex::NUM_AREA_SIZES), None), // skip unvisited free areas in the current iterator
         };
         self.current_free_list_id = current_free_list_id;
         self.free_list_iter = FreeListIterator::new(
@@ -840,9 +928,9 @@ pub mod test_utils {
         let mut encoded_node = Vec::new();
         node.as_bytes(0, &mut encoded_node);
         let encoded_node_len = encoded_node.len() as u64;
-        let area_size_index = area_size_to_index(encoded_node_len).unwrap();
+        let area_size_index = AreaIndex::from_size(encoded_node_len).unwrap();
         let mut stored_area_bytes = Vec::new();
-        node.as_bytes(area_size_index, &mut stored_area_bytes);
+        node.as_bytes(area_size_index.get(), &mut stored_area_bytes);
         let bytes_written = (stored_area_bytes.len() as u64)
             .checked_sub(1)
             .expect("serialized node should be at least 1 byte"); // -1 for area size index
@@ -850,7 +938,7 @@ pub mod test_utils {
             .storage
             .write(offset, stored_area_bytes.as_slice())
             .unwrap();
-        (bytes_written, AREA_SIZES[area_size_index as usize])
+        (bytes_written, AREA_SIZES[area_size_index.as_usize()])
     }
 
     // Helper function to write a free area to the given offset.
@@ -896,20 +984,21 @@ pub mod test_utils {
 #[expect(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+    use crate::area_index;
     use crate::linear::memory::MemStore;
     use crate::test_utils::seeded_rng;
     use rand::Rng;
     use rand::seq::IteratorRandom;
     use test_case::test_case;
 
-    #[test_case(&[0x01, 0x01, 0x01, 0x2a], Some((1, 42)); "old format")]
+    #[test_case(&[0x01, 0x01, 0x01, 0x2a], Some((area_index!(1), 42)); "old format")]
     // StoredArea::new(12, Area::<Node, _>::Free(FreeArea::new(None)));
-    #[test_case(&[0x02, 0x01, 0x00], Some((2, 0)); "none")]
-    #[test_case(&[0x03, 0xff, 0x2b], Some((3, 43)); "new format")]
+    #[test_case(&[0x02, 0x01, 0x00], Some((area_index!(2), 0)); "none")]
+    #[test_case(&[0x03, 0xff, 0x2b], Some((area_index!(3), 43)); "new format")]
     #[test_case(&[0x03, 0x44, 0x55], None; "garbage")]
     #[test_case(
         &[0x03, 0x01, 0x01, 0xfd, 0xe0, 0xa2, 0x6d, 0x27, 0x6e, 0x00, 0x00, 0x00, 0x0d, 0x09, 0x03, 0x00],
-        Some((3, 0x6e_276d_a2e0));
+        Some((area_index!(3), 0x6e_276d_a2e0));
         "old format with u64 address (issue #1146)"
     )]
     fn test_free_list_format(reader: &[u8], expected: Option<(AreaIndex, u64)>) {
@@ -926,7 +1015,7 @@ mod tests {
         let memstore = MemStore::new(vec![]);
         let nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
 
-        let area_index = rng.random_range(0..NUM_AREA_SIZES as u8);
+        let area_index = rng.random_range(0..AreaIndex::NUM_AREA_SIZES as u8);
         let area_size = AREA_SIZES[area_index as usize];
 
         // create a random free list scattered across the storage
@@ -937,11 +1026,16 @@ mod tests {
             test_utils::test_write_free_area(
                 &nodestore,
                 Some(LinearAddress::new(*next).unwrap()),
-                area_index,
+                AreaIndex::from(area_index),
                 *cur,
             );
         }
-        test_utils::test_write_free_area(&nodestore, None, area_index, *offsets.last().unwrap());
+        test_utils::test_write_free_area(
+            &nodestore,
+            None,
+            AreaIndex::from(area_index),
+            *offsets.last().unwrap(),
+        );
 
         // test iterator from a random starting point
         let skip = rng.random_range(0..offsets.len());
@@ -950,17 +1044,23 @@ mod tests {
         let mut free_list_iter = FreeListIterator::new(
             nodestore.storage.as_ref(),
             LinearAddress::new(start),
-            FreeListParent::FreeListHead(area_index),
+            FreeListParent::FreeListHead(AreaIndex::from(area_index)),
         );
         assert_eq!(
             free_list_iter.next().unwrap().unwrap(),
-            (LinearAddress::new(start).unwrap(), area_index)
+            (
+                LinearAddress::new(start).unwrap(),
+                AreaIndex::from(area_index)
+            )
         );
 
         for offset in iterator {
             assert_eq!(
                 free_list_iter.next().unwrap().unwrap(),
-                (LinearAddress::new(offset).unwrap(), area_index)
+                (
+                    LinearAddress::new(offset).unwrap(),
+                    AreaIndex::from(area_index)
+                )
             );
         }
 
@@ -970,6 +1070,7 @@ mod tests {
     // Create two free lists and check that `free_list_iter_with_metadata` correctly returns the free areas and their parents
     #[test]
     fn free_lists_iter_with_metadata() {
+        use test_utils::{test_write_free_area, test_write_header};
         let mut rng = seeded_rng();
         let memstore = MemStore::new(vec![]);
         let mut nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
@@ -978,46 +1079,59 @@ mod tests {
         let mut offset = NodeStoreHeader::SIZE;
 
         // first free list
-        let area_index1 = rng.random_range(0..NUM_AREA_SIZES as u8);
-        let area_size1 = AREA_SIZES[area_index1 as usize];
+        let area_index1 = AreaIndex::from(rng.random_range(0..AreaIndex::NUM_AREA_SIZES as u8));
+        let area_size1 = AREA_SIZES[area_index1.as_usize()];
         let mut next_free_block1 = None;
 
-        test_utils::test_write_free_area(&nodestore, next_free_block1, area_index1, offset);
+        test_write_free_area(&nodestore, next_free_block1, area_index1, offset);
         let free_list1_area2 = LinearAddress::new(offset).unwrap();
         next_free_block1 = Some(free_list1_area2);
         offset += area_size1;
 
-        test_utils::test_write_free_area(&nodestore, next_free_block1, area_index1, offset);
+        test_write_free_area(&nodestore, next_free_block1, area_index1, offset);
         let free_list1_area1 = LinearAddress::new(offset).unwrap();
         next_free_block1 = Some(free_list1_area1);
         offset += area_size1;
 
-        free_lists[area_index1 as usize] = next_free_block1;
+        free_lists[area_index1.as_usize()] = next_free_block1;
 
         // second free list
-        let area_index2 =
-            (area_index1 + rng.random_range(1..NUM_AREA_SIZES as u8)) % NUM_AREA_SIZES as u8; // make sure the second free list is different from the first
+        let area_index2 = AreaIndex::new(
+            (area_index1.get() + rng.random_range(1..AreaIndex::NUM_AREA_SIZES as u8))
+                % AreaIndex::NUM_AREA_SIZES as u8,
+        )
+        .unwrap(); // make sure the second free list is different from the first
         assert_ne!(area_index1, area_index2);
-        let area_size2 = AREA_SIZES[area_index2 as usize];
+        let area_size2 = AREA_SIZES[area_index2.as_usize()];
         let mut next_free_block2 = None;
 
-        test_utils::test_write_free_area(&nodestore, next_free_block2, area_index2, offset);
+        test_write_free_area(
+            &nodestore,
+            next_free_block2,
+            AreaIndex::from(area_index2.as_usize()),
+            offset,
+        );
         let free_list2_area2 = LinearAddress::new(offset).unwrap();
         next_free_block2 = Some(free_list2_area2);
         offset += area_size2;
 
-        test_utils::test_write_free_area(&nodestore, next_free_block2, area_index2, offset);
+        test_write_free_area(
+            &nodestore,
+            next_free_block2,
+            AreaIndex::from(area_index2.as_usize()),
+            offset,
+        );
         let free_list2_area1 = LinearAddress::new(offset).unwrap();
         next_free_block2 = Some(free_list2_area1);
         offset += area_size2;
 
-        free_lists[area_index2 as usize] = next_free_block2;
+        free_lists[area_index2.as_usize()] = next_free_block2;
 
         // write header
-        test_utils::test_write_header(&mut nodestore, offset, None, free_lists);
+        test_write_header(&mut nodestore, offset, None, free_lists);
 
         // test iterator
-        let mut free_list_iter = nodestore.free_list_iter(0);
+        let mut free_list_iter = nodestore.free_list_iter(AreaIndex::MIN);
 
         // expected
         let expected_free_list1 = vec![
@@ -1078,7 +1192,13 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::arithmetic_side_effects)]
     fn free_lists_iter_skip_to_next_free_list() {
+        use test_utils::{test_write_free_area, test_write_header};
+
+        const AREA_INDEX1: usize = 3;
+        const AREA_INDEX2: usize = 5;
+
         let memstore = MemStore::new(vec![]);
         let mut nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
 
@@ -1086,91 +1206,139 @@ mod tests {
         let mut offset = NodeStoreHeader::SIZE;
 
         // first free list
-        let area_index1 = 3;
-        let area_size1 = AREA_SIZES[area_index1 as usize];
+        let area_size1 = AREA_SIZES[AREA_INDEX1];
         let mut next_free_block1 = None;
 
-        test_utils::test_write_free_area(&nodestore, next_free_block1, area_index1, offset);
+        test_write_free_area(
+            &nodestore,
+            next_free_block1,
+            area_index!(AREA_INDEX1),
+            offset,
+        );
         let free_list1_area2 = LinearAddress::new(offset).unwrap();
         next_free_block1 = Some(free_list1_area2);
         offset += area_size1;
 
-        test_utils::test_write_free_area(&nodestore, next_free_block1, area_index1, offset);
+        test_write_free_area(
+            &nodestore,
+            next_free_block1,
+            area_index!(AREA_INDEX1),
+            offset,
+        );
         let free_list1_area1 = LinearAddress::new(offset).unwrap();
         next_free_block1 = Some(free_list1_area1);
         offset += area_size1;
 
-        free_lists[area_index1 as usize] = next_free_block1;
+        free_lists[AREA_INDEX1] = next_free_block1;
 
         // second free list
-        let area_index2 = 5;
-        assert_ne!(area_index1, area_index2);
-        let area_size2 = AREA_SIZES[area_index2 as usize];
+        assert_ne!(AREA_INDEX1, AREA_INDEX2);
+        let area_size2 = AREA_SIZES[AREA_INDEX2];
         let mut next_free_block2 = None;
 
-        test_utils::test_write_free_area(&nodestore, next_free_block2, area_index2, offset);
+        test_write_free_area(
+            &nodestore,
+            next_free_block2,
+            area_index!(AREA_INDEX2),
+            offset,
+        );
         let free_list2_area2 = LinearAddress::new(offset).unwrap();
         next_free_block2 = Some(free_list2_area2);
         offset += area_size2;
 
-        test_utils::test_write_free_area(&nodestore, next_free_block2, area_index2, offset);
+        test_write_free_area(
+            &nodestore,
+            next_free_block2,
+            area_index!(AREA_INDEX2),
+            offset,
+        );
         let free_list2_area1 = LinearAddress::new(offset).unwrap();
         next_free_block2 = Some(free_list2_area1);
         offset += area_size2;
 
-        free_lists[area_index2 as usize] = next_free_block2;
+        free_lists[AREA_INDEX2] = next_free_block2;
 
         // write header
-        test_utils::test_write_header(&mut nodestore, offset, None, free_lists);
+        test_write_header(&mut nodestore, offset, None, free_lists);
 
         // test iterator
-        let mut free_list_iter = nodestore.free_list_iter(0);
+        let mut free_list_iter = nodestore.free_list_iter(AreaIndex::MIN);
 
         // start at the first free list
-        assert_eq!(free_list_iter.current_free_list_id, 0);
+        assert_eq!(free_list_iter.current_free_list_id, AreaIndex::MIN);
         let (next, next_parent) = free_list_iter.next_with_metadata().unwrap();
         assert_eq!(
             next.unwrap(),
             FreeAreaWithMetadata {
                 addr: free_list1_area1,
-                area_index: area_index1,
-                free_list_id: area_index1,
+                area_index: area_index!(AREA_INDEX1),
+                free_list_id: area_index!(AREA_INDEX1),
             },
         );
-        assert_eq!(next_parent, FreeListParent::FreeListHead(area_index1));
+        assert_eq!(
+            next_parent,
+            FreeListParent::FreeListHead(area_index!(AREA_INDEX1))
+        );
         // `next_with_metadata` moves the iterator to the first free list that is not empty
-        assert_eq!(free_list_iter.current_free_list_id, area_index1);
+        assert_eq!(
+            free_list_iter.current_free_list_id,
+            area_index!(AREA_INDEX1)
+        );
         free_list_iter.move_to_next_free_list();
         // `move_to_next_free_list` moves the iterator to the next free list
-        assert_eq!(free_list_iter.current_free_list_id, area_index1 + 1);
+        assert_eq!(
+            free_list_iter.current_free_list_id,
+            area_index!(AREA_INDEX1 + 1)
+        );
         let (next, next_parent) = free_list_iter.next_with_metadata().unwrap();
         assert_eq!(
             next.unwrap(),
             FreeAreaWithMetadata {
                 addr: free_list2_area1,
-                area_index: area_index2,
-                free_list_id: area_index2,
+                area_index: area_index!(AREA_INDEX2),
+                free_list_id: area_index!(AREA_INDEX2),
             },
         );
-        assert_eq!(next_parent, FreeListParent::FreeListHead(area_index2));
+        assert_eq!(
+            next_parent,
+            FreeListParent::FreeListHead(area_index!(AREA_INDEX2))
+        );
         // `next_with_metadata` moves the iterator to the first free list that is not empty
-        assert_eq!(free_list_iter.current_free_list_id, area_index2);
+        assert_eq!(
+            free_list_iter.current_free_list_id,
+            area_index!(AREA_INDEX2 + 1)
+        );
         free_list_iter.move_to_next_free_list();
         // `move_to_next_free_list` moves the iterator to the next free list
-        assert_eq!(free_list_iter.current_free_list_id, area_index2 + 1);
+        assert_eq!(
+            free_list_iter.current_free_list_id,
+            area_index!(AREA_INDEX2 + 1)
+        );
         assert!(free_list_iter.next_with_metadata().is_none());
         // since no more non-empty free lists, `move_to_next_free_list` moves the iterator to the end
-        assert_eq!(free_list_iter.current_free_list_id, NUM_AREA_SIZES as u8);
+        assert_eq!(
+            free_list_iter.current_free_list_id,
+            AreaIndex::from(AreaIndex::NUM_AREA_SIZES)
+        );
         free_list_iter.move_to_next_free_list();
         // `move_to_next_free_list` will do nothing since we are already at the end
-        assert_eq!(free_list_iter.current_free_list_id, NUM_AREA_SIZES as u8);
+        assert_eq!(
+            free_list_iter.current_free_list_id,
+            AreaIndex::from(AreaIndex::NUM_AREA_SIZES)
+        );
         assert!(free_list_iter.next_with_metadata().is_none());
     }
 
     #[test]
-    const fn const_expr_tests() {
+    const fn la_const_expr_tests() {
         // these are const expr
         let _ = const { LinearAddress::new(0) };
         let _ = const { LinearAddress::new(1).unwrap().advance(1u64) };
+    }
+
+    #[test]
+    const fn ai_const_expr_tests() {
+        let _ = const { AreaIndex::new(1) };
+        let _ = const { area_index!(1) };
     }
 }

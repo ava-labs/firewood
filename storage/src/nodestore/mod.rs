@@ -742,22 +742,28 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the area cannot be read.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the area index on disk is out of bounds.
+    /// TODO: This should not panic
     pub fn area_index_and_size(
         &self,
         addr: LinearAddress,
     ) -> Result<(AreaIndex, u64), FileIoError> {
         let mut area_stream = self.storage.stream_from(addr.get())?;
 
-        let index: AreaIndex = area_stream.read_byte().map_err(|e| {
+        let index: AreaIndex = AreaIndex::new(area_stream.read_byte().map_err(|e| {
             self.storage.file_io_error(
                 Error::new(ErrorKind::InvalidData, e),
                 addr.get(),
                 Some("area_index_and_size".to_string()),
             )
-        })?;
+        })?)
+        .expect("area index should be valid");
 
         let size = *AREA_SIZES
-            .get(index as usize)
+            .get(index.as_usize())
             .ok_or(self.storage.file_io_error(
                 Error::other(format!("Invalid area size index {index}")),
                 addr.get(),
@@ -843,16 +849,17 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 mod tests {
 
     use crate::LeafNode;
+    use crate::area_index;
     use crate::linear::memory::MemStore;
     use arc_swap::access::DynGuard;
 
     use super::*;
-    use alloc::{AREA_SIZES, area_size_to_index};
+    use alloc::AREA_SIZES;
 
     #[test]
     fn area_sizes_aligned() {
         for area_size in &AREA_SIZES {
-            assert_eq!(area_size % LinearAddress::MIN_AREA_SIZE, 0);
+            assert_eq!(area_size % AreaIndex::MIN_AREA_SIZE, 0);
         }
     }
 
@@ -861,27 +868,30 @@ mod tests {
         // TODO: rustify using: for size in AREA_SIZES
         for (i, &area_size) in AREA_SIZES.iter().enumerate() {
             // area size is at top of range
-            assert_eq!(area_size_to_index(area_size).unwrap(), i as AreaIndex);
+            assert_eq!(AreaIndex::from_size(area_size).unwrap(), AreaIndex::from(i));
 
             if i > 0 {
                 // 1 less than top of range stays in range
-                assert_eq!(area_size_to_index(area_size - 1).unwrap(), i as AreaIndex);
+                assert_eq!(
+                    AreaIndex::from_size(area_size - 1).unwrap(),
+                    AreaIndex::from(i)
+                );
             }
 
-            if i < LinearAddress::num_area_sizes() - 1 {
+            if i < AreaIndex::num_area_sizes() - 1 {
                 // 1 more than top of range goes to next range
                 assert_eq!(
-                    area_size_to_index(area_size + 1).unwrap(),
-                    (i + 1) as AreaIndex
+                    AreaIndex::from_size(area_size + 1).unwrap(),
+                    AreaIndex::from(i + 1)
                 );
             }
         }
 
-        for i in 0..=LinearAddress::MIN_AREA_SIZE {
-            assert_eq!(area_size_to_index(i).unwrap(), 0);
+        for i in 0..=AreaIndex::MIN_AREA_SIZE {
+            assert_eq!(AreaIndex::from_size(i).unwrap(), AreaIndex::MIN);
         }
 
-        assert!(area_size_to_index(LinearAddress::MAX_AREA_SIZE + 1).is_err());
+        assert!(AreaIndex::from_size(AreaIndex::MAX_AREA_SIZE + 1).is_err());
     }
 
     #[test]

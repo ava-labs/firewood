@@ -242,7 +242,7 @@ pub enum CheckerError {
     /// The start address of a stored area is not a multiple of 16
     #[error(
         "The start address of a stored area (parent: {parent:#x}) is not a multiple of {}: {address:#x}",
-        nodestore::alloc::LinearAddress::MIN_AREA_SIZE
+        nodestore::alloc::AreaIndex::MIN_AREA_SIZE
     )]
     AreaMisaligned {
         /// The start address of the stored area
