@@ -14,7 +14,7 @@ use std::fmt;
 use std::io::{Error, ErrorKind};
 use std::num::NonZeroU64;
 
-/// [`NodeStore`] divides the linear store into blocks of different sizes.
+/// [`super::NodeStore`] divides the linear store into blocks of different sizes.
 /// [`AREA_SIZES`] is every valid block size.
 const AREA_SIZES: [u64; 23] = [
     16, // Min block size
@@ -87,7 +87,7 @@ pub const fn index_name(index: AreaIndex) -> &'static str {
     }
 }
 
-/// The type of an index into the [`AREA_SIZES`] array
+/// The type that uniquely identifies a valid area size.
 /// This is not usize because we store this as a single byte
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
