@@ -185,7 +185,7 @@ jobs:
       - name: Run benchmark example
         run: RUST_BACKTRACE=1 cargo run ${{ matrix.profile-args }} --bin benchmark -- --number-of-batches 100 --batch-size 1000 create
       - name: Run insert example
-        run: RUST_BACKTRACE=1 cargo run ${{ matrix.profile-args }} --example insert
+        run: RUST_BACKTRACE=1 cargo run ${{ matrix.profile-args }} --features test_utils --example insert
 
   docs:
     needs: build
