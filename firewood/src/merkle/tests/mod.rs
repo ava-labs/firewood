@@ -186,7 +186,7 @@ fn test_get_regression() {
 
     let key_range = 255;
     for i in (0..key_range).rev() {
-        merkle_par.insert(&[i], Box::new([i]));
+        let _ = merkle_par.insert(&[i], Box::new([i]));
     }
     let merkle = merkle_par.wait();
 

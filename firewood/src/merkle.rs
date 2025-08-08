@@ -141,6 +141,20 @@ pub struct MerkleParallel<T, S> {
     worker_pool: WorkerPool<S>,
 }
 
+#[derive(Debug)]
+/// Error type that can return from calling parallel insert.
+pub enum ParallelInsertErrors<S> {
+    /// Error from calling `insert_helper` or `insert`
+    Io(FileIoError),
+
+    /// Error from sending to a worker channel
+    Channel(SendError<MerkleOp<S>>),
+
+    /// Merkle structure has been cleared. This should only happen if insert is called after
+    /// insert is called after `clear_merkle` but before `set_merkle`.
+    MerkleUnset,
+}
+
 impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutableProposal, S>>, S> {
     /// Constructor for `MerkleParallel`.
     pub fn new(mut m: Merkle<NodeStore<MutableProposal, S>>) -> Self {
@@ -154,19 +168,32 @@ impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutablePropos
         }
     }
 
-    /// Paralle insert
-    ///
-    /// ## Panics
-    ///
-    /// Can panic if `merkle_arc` is None or `insert_parallel` returns an error (TODO: handle this correctly)
-    pub fn insert(&mut self, key: &[u8], value: Value) {
-        let mut merkle_arc: Arc<Merkle<NodeStore<MutableProposal, S>>> =
-            self.merkle_arc.take().expect("merkle arc option is none");
-        let insert_result =
-            merkle_arc.insert_parallel(self.root_node.take(), &self.worker_pool, key, value);
+    /// Parallel insert into the Merkle trie.
+    /// 
+    /// ## Errors
+    /// 
+    /// Can return a `ParallelInsertError` which could be due to a `FileIoError` from calling `insert_helper`
+    /// or `insert`, a channel error from sending to a worker, or a None merkle, which means the merkle
+    /// structure has been cleared without re-setting it to a new merkle structure.
+    pub fn insert(&mut self, key: &[u8], value: Value) -> Result<(), ParallelInsertErrors<S>> {
+        let Some(mut merkle_arc) = self.merkle_arc.take() else {
+            return Err(ParallelInsertErrors::MerkleUnset);
+        };
+        
+        // Perform the actual paralle insert
+        let insert_result = match merkle_arc.insert_parallel(
+            self.root_node.take(),
+            &self.worker_pool,
+            key,
+            value,
+        ) {
+            Ok(parallel_result) => parallel_result,
+            Err(err) => {
+                return Err(ParallelInsertErrors::Io(err));
+            }
+        };
 
-        // TODO: handle error
-        match insert_result.expect("insert_parallel returned an error") {
+        match insert_result {
             ParallelInsertReturn::Performed(node) => {
                 self.root_node = Some(node);
                 self.merkle_arc = Some(merkle_arc);
@@ -174,19 +201,21 @@ impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutablePropos
             ParallelInsertReturn::RetryNonThreaded(node, value) => {
                 let mut merkle = self.wait_params(node, merkle_arc);
 
-                // Perform non-parallel Merkle insert
-                // TODO: Handle error
-                merkle
-                    .insert(key, value)
-                    .expect("merkle insert returned an error");
+                // Fallback to calling non-parallel insert.
+                if let Err(err) = merkle.insert(key, value) {
+                    return Err(ParallelInsertErrors::Io(err));
+                }
 
                 // Set all of the parameters that were taken previously.
                 self.root_node = std::mem::take(merkle.nodestore.mut_root());
                 merkle_arc = Arc::new(merkle);
-                self.worker_pool.set_merkle(merkle_arc.clone());
+                if let Err(err) = self.worker_pool.set_merkle(merkle_arc.clone()) {
+                    return Err(ParallelInsertErrors::Channel(err));
+                }
                 self.merkle_arc = Some(merkle_arc);
             }
         }
+        Ok(())
     }
 
     fn wait_params(
@@ -698,9 +727,11 @@ impl<S: ReadableStorage> TryFrom<Merkle<NodeStore<MutableProposal, S>>>
 }
 
 #[derive(Debug)]
-/// Different operations that can be sent to the worker pool
+/// Operations that can be sent to a worker in the worker pool
 pub enum MerkleOp<S> {
-    /// Operaiton to call ``insert_helper`` at the specified node.
+    /// Operation to call ``insert_helper`` on a sub-trie that is rooted at node.
+    /// Specifying None for node tells the worker to create a leaf node for a new
+    /// sub-trie.
     InsertData(Box<Option<Node>>, Box<[u8]>, Box<[u8]>),
 
     /// Operation to termine the worker threads in the thread pool.
@@ -714,24 +745,24 @@ pub enum MerkleOp<S> {
     //SetMerkle(Option<Arc<Mutex<Merkle<NodeStore<MutableProposal, S>>>>>)
 }
 
-//type HostReceiver = std::sync::mpsc::Receiver<Result<Node, FileIoError>>;
-//type HostReceiver = std::sync::mpsc::Receiver<WorkerReturn>;
-
+/// Data that the worker pool keeps for each worker.
 type WorkerData<S> = (Sender<MerkleOp<S>>, Receiver<WorkerReturn>, JoinHandle<()>);
 
+/// Value returned by a worker thread in a channel. Currently the only value type
+/// is `NodeResult`. May remove this if no other types are needed.
 enum WorkerReturn {
     NodeResult(Result<Option<Node>, FileIoError>),
-    //MerkleClearComplete,
 }
 
 #[derive(Debug)]
-/// Worker pool to issue concurrent inserts to a Merkle trie
+/// Worker pool used to issue concurrent inserts to a Merkle trie
 pub struct WorkerPool<S> {
-    //merkle: Arc<Merkle<NodeStore<MutableProposal, S>>>,
     workers_data: Vec<WorkerData<S>>,
 }
 
 impl<S: ReadableStorage + 'static> WorkerPool<S> {
+    /// Create one worker for the worker pool. This function is only called by the `WorkerPool`
+    /// constructor to create workers.
     fn create_one_worker(
         merkle: Arc<Merkle<NodeStore<MutableProposal, S>>>,
     ) -> (Sender<MerkleOp<S>>, Receiver<WorkerReturn>, JoinHandle<()>) {
@@ -833,7 +864,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
         WorkerPool { workers_data }
     }
 
-    /// Send an insert to the worker threads
+    /// Issue an insert request to a worker in the worker pool.
     ///
     /// ## Panics
     ///
@@ -841,7 +872,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
     ///
     /// ## Errors
     ///
-    /// ``FileIOError`` from reading a node.
+    /// `SendError` from sending the message to the channel.
     pub fn insert(
         &self,
         node: Option<Node>,
@@ -849,7 +880,6 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
         key: &[u8],
         value: Value,
     ) -> Result<(), SendError<MerkleOp<S>>> {
-        //println!("In workerpool insert");
         self.workers_data
             .get(child_index)
             .expect("out of bounds on vector")
@@ -857,20 +887,30 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
             .send(MerkleOp::InsertData(Box::new(node), key.into(), value))
     }
 
-    /// Setting the Merkle trie for the woker pool. Must be cleared first.
+    /// Setting the Merkle trie for the worker pool. The worker pool must be cleared first
+    /// before calling this function.
     ///
     /// ## Panics
     ///
     /// Can panic if workerpool trie is incorrectly initialized.
-    pub fn set_merkle(&self, merkle: Arc<Merkle<NodeStore<MutableProposal, S>>>) {
+    ///
+    /// ## Errors
+    ///
+    /// `SendError` from sending a message to one of the worker channels.
+    pub fn set_merkle(
+        &self,
+        merkle: Arc<Merkle<NodeStore<MutableProposal, S>>>,
+    ) -> Result<(), SendError<MerkleOp<S>>> {
         for i in 0..BranchNode::MAX_CHILDREN {
-            let _ = self
-                .workers_data
+            // Sending SetMerkle to each worker. The send should not fail under
+            // normal operation.
+            self.workers_data
                 .get(i)
                 .expect("empty vector")
                 .0
-                .send(MerkleOp::SetMerkle(Box::new(merkle.clone())));
+                .send(MerkleOp::SetMerkle(Box::new(merkle.clone())))?;
         }
+        Ok(())
     }
 
     /// Clears the Merkle trie so that it can be moved out of the Arc
@@ -916,7 +956,7 @@ pub enum ParallelInsertReturn {
     /// Return this if operation cannot be performed while there are other operations outstanding.
     RetryNonThreaded(Node, Value),
 
-    /// Return this if operation was performed in paralle.
+    /// Return this if operation was performed by a worker.
     Performed(Node),
 }
 
@@ -933,22 +973,6 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
     pub fn hash(self) -> Merkle<NodeStore<Arc<ImmutableProposal>, S>> {
         self.try_into().expect("failed to convert")
     }
-
-    /*
-    /// Insert using a worker pool
-    pub fn insert_worker_pool<T: ReadableStorage + 'static>(
-        &self,
-        root: Option<Node>,
-        worker_pool: &WorkerPool<T>,
-        child_index: usize,
-        key: &[u8],
-        value: Value,
-    ) -> Result<(), SendError<MerkleOp<T>>> {
-        worker_pool.insert(root, child_index, key, value)?;
-        //let root_node = self.insert_helper(root_node, key.as_ref(), value)?;
-        Ok(())
-    }
-    */
 
     fn fetch_or_create_root(&mut self, key: &[u8], value: Value) -> Option<(Node, Path, Value)> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
