@@ -88,6 +88,17 @@ pub type FrozenRangeProof = RangeProof<Key, Value, Box<[ProofNode]>>;
 /// A frozen proof uses an immutable collection of proof nodes.
 pub type FrozenProof = Proof<Box<[ProofNode]>>;
 
+/// The reason why a hash is invalid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, thiserror::Error)]
+pub enum InvalidHashReason {
+    /// The parent of the current proposal is not the latest committed revision
+    #[error("The parent of the current proposal is not the latest committed revision")]
+    ParentNotLatest,
+    /// The constructed root hash from a proof did not match the expected root hash
+    #[error("The constructed root hash from a proof did not match the expected root hash")]
+    MismatchedHash,
+}
+
 /// Errors returned through the API
 #[derive(thiserror::Error, Debug)]
 #[non_exhaustive]
@@ -100,12 +111,12 @@ pub enum Error {
     },
 
     /// Incorrect root hash for commit
-    #[error(
-        "The proposal cannot be committed since it is not a direct child of the most recent commit. Proposal parent: {provided:?}, current root: {expected:?}"
-    )]
-    ParentNotLatest {
+    #[error("Invalid hash: {invalid:?}; {reason}; Expected: {expected:?}")]
+    InvalidHash {
+        /// Why the hash is invalid
+        reason: InvalidHashReason,
         /// the provided root hash
-        provided: Option<HashKey>,
+        invalid: Option<HashKey>,
         /// the expected root hash
         expected: Option<HashKey>,
     },
@@ -164,7 +175,11 @@ impl From<RevisionManagerError> for Error {
     fn from(err: RevisionManagerError) -> Self {
         use RevisionManagerError::{FileIoError, NotLatest, RevisionNotFound};
         match err {
-            NotLatest { provided, expected } => Self::ParentNotLatest { provided, expected },
+            NotLatest { provided, expected } => Self::InvalidHash {
+                reason: InvalidHashReason::ParentNotLatest,
+                invalid: provided,
+                expected,
+            },
             RevisionNotFound { provided } => Self::RevisionNotFound {
                 provided: Some(provided),
             },
@@ -225,7 +240,7 @@ pub trait Db {
     ///
     async fn propose<'db>(
         &'db self,
-        data: (impl IntoIterator<IntoIter: KeyValuePairIter> + Send),
+        data: impl IntoIterator<IntoIter: KeyValuePairIter> + Send,
     ) -> Result<Self::Proposal<'db>, Error>
     where
         Self: 'db;
@@ -334,7 +349,7 @@ pub trait Proposal: DbView + Send + Sync {
     ///
     async fn propose(
         &self,
-        data: (impl IntoIterator<IntoIter: KeyValuePairIter> + Send),
+        data: impl IntoIterator<IntoIter: KeyValuePairIter> + Send,
     ) -> Result<Self::Proposal, Error>;
 }
 

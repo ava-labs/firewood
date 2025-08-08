@@ -29,6 +29,7 @@ fastrace.workspace = true
 firewood-macros.workspace = true
 hex.workspace = true
 metrics.workspace = true
+smallvec.workspace = true
 sha2.workspace = true
 test-case.workspace = true
 thiserror.workspace = true
@@ -43,8 +44,8 @@ default = []
 nightly = []
 io-uring = ["firewood-storage/io-uring"]
 logger = ["firewood-storage/logger"]
-branch_factor_256 = [ "firewood-storage/branch_factor_256" ]
-ethhash = [ "firewood-storage/ethhash" ]
+branch_factor_256 = ["firewood-storage/branch_factor_256"]
+ethhash = ["firewood-storage/ethhash"]
 
 [dev-dependencies]
 # Workspace dependencies

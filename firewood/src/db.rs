@@ -184,7 +184,7 @@ impl api::Db for Db {
     #[fastrace::trace(short_name = true)]
     async fn propose<'db>(
         &'db self,
-        batch: (impl IntoIterator<IntoIter: KeyValuePairIter> + Send),
+        batch: impl IntoIterator<IntoIter: KeyValuePairIter> + Send,
     ) -> Result<Self::Proposal<'db>, api::Error> {
         let parent = self.manager.current_revision();
         let proposal = NodeStore::new(&parent)?;
@@ -388,7 +388,7 @@ impl<'db> api::Proposal for Proposal<'db> {
     #[fastrace::trace(short_name = true)]
     async fn propose(
         &self,
-        batch: (impl IntoIterator<IntoIter: KeyValuePairIter> + Send),
+        batch: impl IntoIterator<IntoIter: KeyValuePairIter> + Send,
     ) -> Result<Self::Proposal, api::Error> {
         self.create_proposal(batch)
     }

@@ -7,7 +7,6 @@ use crate::range_proof::RangeProof;
 type KeyValuePairs = Vec<(Box<[u8]>, Box<[u8]>)>;
 
 #[tokio::test]
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 async fn range_proof_invalid_bounds() {
     let merkle = create_in_memory_merkle().hash();
 
@@ -28,7 +27,6 @@ async fn range_proof_invalid_bounds() {
 }
 
 #[tokio::test]
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 async fn full_range_proof() {
     let merkle = init_merkle((u8::MIN..=u8::MAX).map(|k| ([k], [k])));
 
@@ -42,7 +40,6 @@ async fn full_range_proof() {
 }
 
 #[tokio::test]
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 async fn single_value_range_proof() {
     const RANDOM_KEY: u8 = 42;
 
@@ -57,7 +54,7 @@ async fn single_value_range_proof() {
 }
 
 #[test]
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore]
 fn shared_path_proof() {
     let key1 = b"key1";
     let value1 = b"1";
@@ -71,7 +68,7 @@ fn shared_path_proof() {
 
     let key = key1;
     let proof = merkle.prove(key).unwrap();
-    proof.verify(key, Some(value1), &root_hash).unwrap();
+    proof.verify(key, Some(value1), &root_hash).unwrap(); // called `Result::unwrap()` on an `Err` value: UnexpectedHash
 
     let key = key2;
     let proof = merkle.prove(key).unwrap();
@@ -80,7 +77,6 @@ fn shared_path_proof() {
 
 // this was a specific failing case
 #[test]
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn shared_path_on_insert() {
     init_merkle([
         (
@@ -103,7 +99,6 @@ fn shared_path_on_insert() {
 }
 
 #[test]
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn overwrite_leaf() {
     let key = &[0x00];
     let val = &[1];
@@ -127,7 +122,6 @@ fn overwrite_leaf() {
 }
 
 #[test]
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn single_key_proof_with_one_node() {
     let key = b"key";
     let value = b"value";
@@ -141,7 +135,7 @@ fn single_key_proof_with_one_node() {
 }
 
 #[test]
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore]
 fn two_key_proof_without_shared_path() {
     let key1 = &[0x00];
     let key2 = &[0xff];
@@ -151,14 +145,14 @@ fn two_key_proof_without_shared_path() {
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     let proof = merkle.prove(key1).unwrap();
-    proof.verify(key1, Some(key1), &root_hash).unwrap();
+    proof.verify(key1, Some(key1), &root_hash).unwrap(); // called `Result::unwrap()` on an `Err` value: UnexpectedHash
 
     let proof = merkle.prove(key2).unwrap();
     proof.verify(key2, Some(key2), &root_hash).unwrap();
 }
 
 #[test]
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore]
 fn test_proof() {
     let set = fixed_and_pseudorandom_data(500);
     let mut items = set.iter().collect::<Vec<_>>();
@@ -170,13 +164,13 @@ fn test_proof() {
     for (key, val) in items {
         let proof = merkle.prove(key).unwrap();
         assert!(!proof.is_empty());
-        proof.verify(key, Some(val), &root_hash).unwrap();
+        proof.verify(key, Some(val), &root_hash).unwrap(); // called `Result::unwrap()` on an `Err` value: UnexpectedHash
     }
 }
 
 #[test]
 /// Verify the proofs that end with leaf node with the given key.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore]
 fn test_proof_end_with_leaf() {
     let merkle = init_merkle([
         ("do", "verb"),
@@ -193,12 +187,12 @@ fn test_proof_end_with_leaf() {
     let proof = merkle.prove(key).unwrap();
     assert!(!proof.is_empty());
 
-    proof.verify(key, Some(b"reindeer"), &root_hash).unwrap();
+    proof.verify(key, Some(b"reindeer"), &root_hash).unwrap(); // called `Result::unwrap()` on an `Err` value: UnexpectedHash
 }
 
 #[test]
 /// Verify the proofs that end with branch node with the given key.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore]
 fn test_proof_end_with_branch() {
     let items = [
         ("d", "verb"),
@@ -214,11 +208,11 @@ fn test_proof_end_with_branch() {
     let proof = merkle.prove(key).unwrap();
     assert!(!proof.is_empty());
 
-    proof.verify(key, Some(b"verb"), &root_hash).unwrap();
+    proof.verify(key, Some(b"verb"), &root_hash).unwrap(); // called `Result::unwrap()` on an `Err` value: UnexpectedHash
 }
 
 #[test]
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+// FIXME: 1.895s runtime
 fn test_bad_proof() {
     let set = fixed_and_pseudorandom_data(800);
     let mut items = set.iter().collect::<Vec<_>>();
@@ -242,7 +236,7 @@ fn test_bad_proof() {
 #[test]
 // Tests that missing keys can also be proven. The test explicitly uses a single
 // entry trie and checks for missing keys both before and after the single entry.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore]
 fn test_missing_key_proof() {
     let items = [("k", "v")];
     let merkle = init_merkle(items);
@@ -253,12 +247,11 @@ fn test_missing_key_proof() {
         assert!(!proof.is_empty());
         assert!(proof.len() == 1);
 
-        proof.verify(key, None::<&[u8]>, &root_hash).unwrap();
+        proof.verify(key, None::<&[u8]>, &root_hash).unwrap(); // called `Result::unwrap()` on an `Err` value: UnexpectedHash
     }
 }
 
 #[test]
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_empty_tree_proof() {
     let items: Vec<(&str, &str)> = Vec::new();
     let merkle = init_merkle(items);
@@ -271,7 +264,7 @@ fn test_empty_tree_proof() {
 #[test]
 // Tests normal range proof with both edge proofs as the existent proof.
 // The test cases are generated randomly.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore]
 fn test_range_proof() {
     let set = fixed_and_pseudorandom_data(4096);
     let mut items = set.iter().collect::<Vec<_>>();
@@ -305,14 +298,14 @@ fn test_range_proof() {
                 &root_hash,
                 &range_proof,
             )
-            .unwrap();
+            .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(StateFromOutsideOfRange)
     }
 }
 
 #[test]
 // Tests a few cases which the proof is wrong.
 // The prover is expected to detect the error.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+// FIXME: 30.213s runtime
 fn test_bad_range_proof() {
     let set = fixed_and_pseudorandom_data(4096);
     let mut items = set.iter().collect::<Vec<_>>();
@@ -408,7 +401,7 @@ fn test_bad_range_proof() {
 #[test]
 // Tests normal range proof with two non-existent proofs.
 // The test cases are generated randomly.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore]
 fn test_range_proof_with_non_existent_proof() {
     let set = fixed_and_pseudorandom_data(4096);
     let mut items = set.iter().collect::<Vec<_>>();
@@ -456,7 +449,7 @@ fn test_range_proof_with_non_existent_proof() {
 
         merkle
             .verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof)
-            .unwrap();
+            .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(StateFromOutsideOfRange)
     }
 
     // Special case, two edge proofs for two edge key.
@@ -484,7 +477,7 @@ fn test_range_proof_with_non_existent_proof() {
 // Tests such scenarios:
 // - There exists a gap between the first element and the left edge proof
 // - There exists a gap between the last element and the right edge proof
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+// FIXME: 29.882s runtime
 fn test_range_proof_with_invalid_non_existent_proof() {
     let set = fixed_and_pseudorandom_data(4096);
     let mut items = set.iter().collect::<Vec<_>>();
@@ -554,7 +547,7 @@ fn test_range_proof_with_invalid_non_existent_proof() {
 #[test]
 // Tests the proof with only one element. The first edge proof can be existent one or
 // non-existent one.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore]
 fn test_one_element_range_proof() {
     let set = fixed_and_pseudorandom_data(4096);
     let mut items = set.iter().collect::<Vec<_>>();
@@ -587,7 +580,7 @@ fn test_one_element_range_proof() {
             &root_hash,
             &range_proof,
         )
-        .unwrap();
+        .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(StateFromOutsideOfRange)
 
     // One element with left non-existent edge proof
     let first = decrease_key(items[start].0);
@@ -676,7 +669,7 @@ fn test_one_element_range_proof() {
 #[test]
 // Tests the range proof with all elements.
 // The edge proofs can be nil.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore]
 fn test_all_elements_proof() {
     let set = fixed_and_pseudorandom_data(4096);
     let mut items = set.iter().collect::<Vec<_>>();
@@ -705,7 +698,7 @@ fn test_all_elements_proof() {
 
     merkle
         .verify_range_proof(Some(&empty_key), Some(&empty_key), &root_hash, &range_proof)
-        .unwrap();
+        .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(ExpectedEndProof)
 
     // With edge proofs, it should still work.
     let start = 0;
@@ -752,7 +745,7 @@ fn test_all_elements_proof() {
 #[test]
 // Tests the range proof with "no" element. The first edge proof must
 // be a non-existent proof.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore]
 fn test_empty_range_proof() {
     let set = fixed_and_pseudorandom_data(4096);
     let mut items = set.iter().collect::<Vec<_>>();
@@ -781,7 +774,7 @@ fn test_empty_range_proof() {
         } else {
             merkle
                 .verify_range_proof(Some(&first), Some(&first), &root_hash, &range_proof)
-                .unwrap();
+                .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(ShouldBePrefixOfProvenKey)
         }
     }
 }
@@ -789,7 +782,6 @@ fn test_empty_range_proof() {
 #[test]
 // Focuses on the small trie with embedded nodes. If the gapped
 // node is embedded in the trie, it should be detected too.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_gapped_range_proof() {
     let mut items = Vec::new();
     // Sorted entries
@@ -838,7 +830,7 @@ fn test_gapped_range_proof() {
 
 #[test]
 // Tests the element is not in the range covered by proofs.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+// FIXME: 29.993s runtime
 fn test_same_side_proof() {
     let set = fixed_and_pseudorandom_data(4096);
     let mut items = set.iter().collect::<Vec<_>>();
@@ -892,7 +884,7 @@ fn test_same_side_proof() {
 
 #[test]
 // Tests the range starts from zero.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore]
 fn test_single_side_range_proof() {
     for _ in 0..10 {
         let mut set = HashMap::new();
@@ -924,14 +916,14 @@ fn test_single_side_range_proof() {
 
             merkle
                 .verify_range_proof(Some(start), Some(items[case].0), &root_hash, &range_proof)
-                .unwrap();
+                .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(StateFromOutsideOfRange)
         }
     }
 }
 
 #[test]
 // Tests the range ends with 0xffff...fff.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore]
 fn test_reverse_single_side_range_proof() {
     for _ in 0..10 {
         let mut set = HashMap::new();
@@ -964,14 +956,14 @@ fn test_reverse_single_side_range_proof() {
 
             merkle
                 .verify_range_proof(Some(items[case].0), Some(end), &root_hash, &range_proof)
-                .unwrap();
+                .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(StateFromOutsideOfRange)
         }
     }
 }
 
 #[test]
 // Tests the range starts with zero and ends with 0xffff...fff.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore]
 fn test_both_sides_range_proof() {
     for _ in 0..10 {
         let mut set = HashMap::new();
@@ -1000,7 +992,7 @@ fn test_both_sides_range_proof() {
 
         merkle
             .verify_range_proof(Some(start), Some(end), &root_hash, &range_proof)
-            .unwrap();
+            .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(StateFromOutsideOfRange)
     }
 }
 
@@ -1008,7 +1000,6 @@ fn test_both_sides_range_proof() {
 // Tests normal range proof with both edge proofs
 // as the existent proof, but with an extra empty value included, which is a
 // noop technically, but practically should be rejected.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_empty_value_range_proof() {
     let set = fixed_and_pseudorandom_data(512);
     let mut items = set.iter().collect::<Vec<_>>();
@@ -1054,7 +1045,6 @@ fn test_empty_value_range_proof() {
 // Tests the range proof with all elements,
 // but with an extra empty value included, which is a noop technically, but
 // practically should be rejected.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_all_elements_empty_value_range_proof() {
     let set = fixed_and_pseudorandom_data(512);
     let mut items = set.iter().collect::<Vec<_>>();
@@ -1095,7 +1085,7 @@ fn test_all_elements_empty_value_range_proof() {
 }
 
 #[test]
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore]
 fn test_range_proof_keys_with_shared_prefix() {
     let items = vec![
         (
@@ -1130,13 +1120,13 @@ fn test_range_proof_keys_with_shared_prefix() {
 
     merkle
         .verify_range_proof(Some(&start), Some(&end), &root_hash, &range_proof)
-        .unwrap();
+        .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(StateFromOutsideOfRange)
 }
 
 #[test]
 // Tests a malicious proof, where the proof is more or less the
 // whole trie. This is to match corresponding test in geth.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore]
 fn test_bloadted_range_proof() {
     // Use a small trie
     let mut items = Vec::new();
@@ -1188,5 +1178,5 @@ fn test_bloadted_range_proof() {
             &root_hash,
             &range_proof,
         )
-        .unwrap();
+        .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(StateFromOutsideOfRange)
 }

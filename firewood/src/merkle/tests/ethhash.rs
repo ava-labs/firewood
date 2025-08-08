@@ -122,7 +122,6 @@ fn make_key(hex_str: &str) -> Key {
 }
 
 #[test]
-#[ignore = "broken tests not yet validated"]
 fn test_root_hash_random_deletions() {
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
