@@ -59,7 +59,8 @@ impl<'a, T> BorrowedSlice<'a, T> {
         } else {
             // SAFETY: if the pointer is not null, we are assuming the caller has
             // upheld the invariant that the pointer is valid for the length `len`
-            // `T` aligned elements.
+            // `T` aligned elements. The phantom marker ensures that the lifetime
+            // of the returned slice is the same as the lifetime of the `BorrowedSlice`.
             unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
         }
     }
