@@ -243,15 +243,13 @@ impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutablePropos
             deleted.append(&mut child_node_opt.1);
             // If child_nodes is not empty, then node must be a branch
             if let Some(child_node) = child_node_opt.0.take() {
-                if let Node::Branch(ref mut branch_node) = node {
-                    branch_node.update_child(i as u8, Some(Child::Node(child_node)));
-                } else {
-                    // TODO: assert or log error
-                }
+                node.as_branch_mut()
+                    .expect("must be a branch node")
+                    .update_child(i as u8, Some(Child::Node(child_node)));
             }
         }
-        // All but one of the references to merkle_arc should be gone. Extract
-        // the inner Merkle should we can perform a mut operations on it.
+        // All but one of the references to merkle_arc should be gone. Extract inner Merkle
+        // so we can perform a mut operations on it.
         let mut merkle = Arc::into_inner(merkle_arc).expect("merkle_arc reference count is not 1");
         *merkle.nodestore.mut_root() = Some(node);
         merkle.nodestore.append_deleted(deleted);
@@ -941,7 +939,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
     /// ## Errors
     ///
     /// Can return a `ClearMerkleError` which can either be due to errors
-    /// sending or receiving from a channel, or a `FileIoError` from a 
+    /// sending or receiving from a channel, or a `FileIoError` from a
     /// previous insert.
     pub fn clear_merkle(&self) -> Result<Vec<NodeWithDeleted>, ClearMerkleError<S>> {
         // Send ClearMerkle to all of the worker threads. The worker threadds will then
