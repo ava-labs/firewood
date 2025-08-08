@@ -129,6 +129,12 @@ impl fmt::Display for BorrowedBytes<'_> {
     }
 }
 
+impl fmt::Pointer for BorrowedBytes<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.ptr.fmt(f)
+    }
+}
+
 impl<'a> BorrowedBytes<'a> {
     /// Creates a new [`str`] from this borrowed byte slice.
     ///
