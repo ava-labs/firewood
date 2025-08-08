@@ -1,11 +1,5 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
-
-#![expect(
-    clippy::doc_link_with_quotes,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-
 use clap::Args;
 use firewood::db::{Db, DbConfig};
 use firewood::merkle::{Key, Value};
@@ -99,6 +93,7 @@ pub struct Options {
     pub max_key_count: Option<u32>,
 
     /// The output format of database dump.
+    /// Possible Values: ["csv", "json", "stdout", "dot"].
     /// Defaults to "stdout"
     #[arg(
         short = 'o',
