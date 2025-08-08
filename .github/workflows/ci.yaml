@@ -189,7 +189,7 @@ jobs:
       - name: Run benchmark example
         run: cargo run ${{ matrix.profile-args }} --bin benchmark -- --number-of-batches 100 --batch-size 1000 create
       - name: Run insert example
-        run: cargo run ${{ matrix.profile-args }} --features test_utils --example insert
+        run: cargo run ${{ matrix.profile-args }} --example insert
 
   docs:
     needs: build
