@@ -240,7 +240,7 @@ pub trait Db {
     ///
     async fn propose<'db>(
         &'db self,
-        data: (impl IntoIterator<IntoIter: KeyValuePairIter> + Send),
+        data: impl IntoIterator<IntoIter: KeyValuePairIter> + Send,
     ) -> Result<Self::Proposal<'db>, Error>
     where
         Self: 'db;
@@ -349,7 +349,7 @@ pub trait Proposal: DbView + Send + Sync {
     ///
     async fn propose(
         &self,
-        data: (impl IntoIterator<IntoIter: KeyValuePairIter> + Send),
+        data: impl IntoIterator<IntoIter: KeyValuePairIter> + Send,
     ) -> Result<Self::Proposal, Error>;
 }
 
