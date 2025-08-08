@@ -618,22 +618,19 @@ fn test_root_hash_simple_insertions() -> Result<(), Error> {
 
 #[test]
 fn test_root_hash_fuzz_insertions() -> Result<(), FileIoError> {
-    use rand::rngs::StdRng;
-    use rand::{Rng, SeedableRng};
-    let rng = std::cell::RefCell::new(StdRng::seed_from_u64(42));
+    let rng = firewood_storage::SeededRng::from_option(Some(42));
     let max_len0 = 8;
     let max_len1 = 4;
     let keygen = || {
         let (len0, len1): (usize, usize) = {
-            let mut rng = rng.borrow_mut();
             (
                 rng.random_range(1..=max_len0),
                 rng.random_range(1..=max_len1),
             )
         };
         let key: Vec<u8> = (0..len0)
-            .map(|_| rng.borrow_mut().random_range(0..2))
-            .chain((0..len1).map(|_| rng.borrow_mut().random()))
+            .map(|_| rng.random_range(0..2))
+            .chain((0..len1).map(|_| rng.random()))
             .collect();
         key
     };
@@ -643,7 +640,7 @@ fn test_root_hash_fuzz_insertions() -> Result<(), FileIoError> {
         let mut items = Vec::new();
 
         for _ in 0..100 {
-            let val: Vec<u8> = (0..256).map(|_| rng.borrow_mut().random()).collect();
+            let val: Vec<u8> = (0..256).map(|_| rng.random()).collect();
             items.push((keygen(), val));
         }
 
