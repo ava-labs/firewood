@@ -749,10 +749,14 @@ pub enum MerkleOp<S> {
 /// Data that the worker pool keeps for each worker.
 type WorkerData<S> = (Sender<MerkleOp<S>>, Receiver<WorkerReturn>, JoinHandle<()>);
 
+/// Data type includes a node (that can be None) and the nodes that were deleted for
+/// update to get this node.
+type NodeWithDeleted = (Option<Node>, Vec<MaybePersistedNode>);
+
 /// Value returned by a worker thread in a channel. Currently the only value type
 /// is `NodeResult`. May remove this if no other types are needed.
 enum WorkerReturn {
-    NodeResult(Result<(Option<Node>, Vec<MaybePersistedNode>), FileIoError>),
+    NodeResult(Result<NodeWithDeleted, FileIoError>),
 }
 
 #[derive(Debug)]
@@ -941,7 +945,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
     /// Can return a `FileIoError` that came from a previous insert.
     pub fn clear_merkle(
         &self,
-    ) -> Result<Vec<(Option<Node>, Vec<MaybePersistedNode>)>, FileIoError> {
+    ) -> Result<Vec<NodeWithDeleted>, FileIoError> {
         for i in 0..BranchNode::MAX_CHILDREN {
             let _ = self
                 .workers_data
