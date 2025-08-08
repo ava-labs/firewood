@@ -1,3 +1,6 @@
+# See https://doc.rust-lang.org/clippy/lint_configuration.html
+# for full configuration options.
+
 disallowed-methods = [
-  { path = "rand::rng", reason = "Use firewood_storage::seeded_rng or StdRng::from_os_rng instead", allow-invalid = true },
+  { path = "rand::rng", allow-invalid = true, replacement = "firewood_storage::StdRng::from_env_or_random", reason = "use a prng with a user-defined seed instead" },
 ]
