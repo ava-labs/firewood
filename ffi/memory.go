@@ -19,8 +19,9 @@ import (
 )
 
 var (
-	errNilStruct = errors.New("nil struct pointer cannot be freed")
-	errBadValue  = errors.New("value from cgo formatted incorrectly")
+	errNilStruct     = errors.New("nil struct pointer cannot be freed")
+	errBadValue      = errors.New("value from cgo formatted incorrectly")
+	errKeysAndValues = errors.New("keys and values must have the same length")
 )
 
 // newBorrowedBytes creates a new BorrowedBytes from a Go byte slice.
@@ -80,7 +81,7 @@ func newBorrowedKeyValuePairs(pairs []C.KeyValuePair) C.BorrowedKeyValuePairs {
 // in use.
 func newKeyValuePairs(keys, vals [][]byte) (C.BorrowedKeyValuePairs, error) {
 	if len(keys) != len(vals) {
-		return C.BorrowedKeyValuePairs{}, fmt.Errorf("keys and values must have the same length: %d != %d", len(keys), len(vals))
+		return C.BorrowedKeyValuePairs{}, fmt.Errorf("%w: %d != %d", errKeysAndValues, len(keys), len(vals))
 	}
 
 	pairs := make([]C.KeyValuePair, len(keys))
