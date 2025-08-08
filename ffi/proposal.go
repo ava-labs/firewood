@@ -12,7 +12,6 @@ import "C"
 
 import (
 	"errors"
-	"runtime"
 )
 
 var errDroppedProposal = errors.New("proposal already dropped")
@@ -84,11 +83,8 @@ func (p *Proposal) Get(key []byte) ([]byte, error) {
 		return nil, errDroppedProposal
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
 	// Get the value for the given key.
-	val := C.fwd_get_from_proposal(p.handle, C.uint32_t(p.id), newBorrowedBytes(key, &pinner))
+	val := C.fwd_get_from_proposal(p.handle, C.uint32_t(p.id), newBorrowedBytes(key))
 	return bytesFromValue(&val)
 }
 
@@ -103,10 +99,7 @@ func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
 		return nil, errDroppedProposal
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	kvp, err := newKeyValuePairs(keys, vals, &pinner)
+	kvp, err := newKeyValuePairs(keys, vals)
 	if err != nil {
 		return nil, err
 	}

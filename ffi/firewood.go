@@ -29,7 +29,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"runtime"
 	"strings"
 )
 
@@ -105,11 +104,8 @@ func New(filePath string, conf *Config) (*Database, error) {
 		return nil, fmt.Errorf("%T.FreeListCacheEntries must be >= 1", conf)
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
 	args := C.struct_CreateOrOpenArgs{
-		path:                 newBorrowedBytes([]byte(filePath), &pinner),
+		path:                 newBorrowedBytes([]byte(filePath)),
 		cache_size:           C.size_t(conf.NodeCacheEntries),
 		free_list_cache_size: C.size_t(conf.FreeListCacheEntries),
 		revisions:            C.size_t(conf.Revisions),
@@ -136,10 +132,7 @@ func (db *Database) Update(keys, vals [][]byte) ([]byte, error) {
 		return nil, errDBClosed
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	kvp, err := newKeyValuePairs(keys, vals, &pinner)
+	kvp, err := newKeyValuePairs(keys, vals)
 	if err != nil {
 		return nil, err
 	}
@@ -153,10 +146,7 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 		return nil, errDBClosed
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	kvp, err := newKeyValuePairs(keys, vals, &pinner)
+	kvp, err := newKeyValuePairs(keys, vals)
 	if err != nil {
 		return nil, err
 	}
@@ -172,10 +162,7 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 		return nil, errDBClosed
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	val := C.fwd_get_latest(db.handle, newBorrowedBytes(key, &pinner))
+	val := C.fwd_get_latest(db.handle, newBorrowedBytes(key))
 	bytes, err := bytesFromValue(&val)
 
 	// If the root hash is not found, return nil.
@@ -199,13 +186,10 @@ func (db *Database) GetFromRoot(root, key []byte) ([]byte, error) {
 		return nil, nil
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
 	val := C.fwd_get_from_root(
 		db.handle,
-		newBorrowedBytes(root, &pinner),
-		newBorrowedBytes(key, &pinner),
+		newBorrowedBytes(root),
+		newBorrowedBytes(key),
 	)
 
 	return bytesFromValue(&val)

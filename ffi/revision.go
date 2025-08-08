@@ -40,17 +40,14 @@ func newRevision(handle *C.DatabaseHandle, root []byte) (*Revision, error) {
 		return nil, errInvalidRootLength
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
 	// Attempt to get any value from the root.
 	// This will verify that the root is valid and accessible.
 	// If the root is not valid, this will return an error.
 
 	val := C.fwd_get_from_root(
 		handle,
-		newBorrowedBytes(root, &pinner),
-		newBorrowedBytes(nil, &pinner),
+		newBorrowedBytes(root),
+		newBorrowedBytes(nil),
 	)
 	_, err := bytesFromValue(&val)
 	if err != nil {
@@ -78,8 +75,8 @@ func (r *Revision) Get(key []byte) ([]byte, error) {
 
 	val := C.fwd_get_from_root(
 		r.handle,
-		newBorrowedBytes(r.root, &pinner),
-		newBorrowedBytes(key, &pinner),
+		newBorrowedBytes(r.root),
+		newBorrowedBytes(key),
 	)
 	value, err := bytesFromValue(&val)
 	if err != nil {

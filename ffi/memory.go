@@ -23,15 +23,8 @@ var (
 	errBadValue  = errors.New("value from cgo formatted incorrectly")
 )
 
-type Pinner interface {
-	Pin(ptr any)
-	Unpin()
-}
-
 // newBorrowedBytes creates a new BorrowedBytes from a Go byte slice.
-//
-// Provide a Pinner to ensure the memory is pinned while the BorrowedBytes is in use.
-func newBorrowedBytes(slice []byte, pinner Pinner) C.BorrowedBytes {
+func newBorrowedBytes(slice []byte) C.BorrowedBytes {
 	sliceLen := len(slice)
 	if sliceLen == 0 {
 		return C.BorrowedBytes{ptr: nil, len: 0}
@@ -42,8 +35,6 @@ func newBorrowedBytes(slice []byte, pinner Pinner) C.BorrowedBytes {
 		return C.BorrowedBytes{ptr: nil, len: 0}
 	}
 
-	pinner.Pin(ptr)
-
 	return C.BorrowedBytes{
 		ptr: (*C.uint8_t)(ptr),
 		len: C.size_t(sliceLen),
@@ -53,10 +44,10 @@ func newBorrowedBytes(slice []byte, pinner Pinner) C.BorrowedBytes {
 // newKeyValuePair creates a new KeyValuePair from Go byte slices for key and value.
 //
 // Provide a Pinner to ensure the memory is pinned while the KeyValuePair is in use.
-func newKeyValuePair(key, value []byte, pinner Pinner) C.KeyValuePair {
+func newKeyValuePair(key, value []byte) C.KeyValuePair {
 	return C.KeyValuePair{
-		key:   newBorrowedBytes(key, pinner),
-		value: newBorrowedBytes(value, pinner),
+		key:   newBorrowedBytes(key),
+		value: newBorrowedBytes(value),
 	}
 }
 
@@ -64,7 +55,7 @@ func newKeyValuePair(key, value []byte, pinner Pinner) C.KeyValuePair {
 //
 // Provide a Pinner to ensure the memory is pinned while the BorrowedKeyValuePairs is
 // in use.
-func newBorrowedKeyValuePairs(pairs []C.KeyValuePair, pinner Pinner) C.BorrowedKeyValuePairs {
+func newBorrowedKeyValuePairs(pairs []C.KeyValuePair) C.BorrowedKeyValuePairs {
 	sliceLen := len(pairs)
 	if sliceLen == 0 {
 		return C.BorrowedKeyValuePairs{ptr: nil, len: 0}
@@ -74,8 +65,6 @@ func newBorrowedKeyValuePairs(pairs []C.KeyValuePair, pinner Pinner) C.BorrowedK
 	if ptr == nil {
 		return C.BorrowedKeyValuePairs{ptr: nil, len: 0}
 	}
-
-	pinner.Pin(ptr)
 
 	return C.BorrowedKeyValuePairs{
 		ptr: ptr,
@@ -89,17 +78,17 @@ func newBorrowedKeyValuePairs(pairs []C.KeyValuePair, pinner Pinner) C.BorrowedK
 //
 // Provide a Pinner to ensure the memory is pinned while the BorrowedKeyValuePairs is
 // in use.
-func newKeyValuePairs(keys, vals [][]byte, pinner Pinner) (C.BorrowedKeyValuePairs, error) {
+func newKeyValuePairs(keys, vals [][]byte) (C.BorrowedKeyValuePairs, error) {
 	if len(keys) != len(vals) {
 		return C.BorrowedKeyValuePairs{}, fmt.Errorf("keys and values must have the same length: %d != %d", len(keys), len(vals))
 	}
 
 	pairs := make([]C.KeyValuePair, len(keys))
 	for i := range keys {
-		pairs[i] = newKeyValuePair(keys[i], vals[i], pinner)
+		pairs[i] = newKeyValuePair(keys[i], vals[i])
 	}
 
-	return newBorrowedKeyValuePairs(pairs, pinner), nil
+	return newBorrowedKeyValuePairs(pairs), nil
 }
 
 // hashAndIDFromValue converts the cgo `Value` payload into:
