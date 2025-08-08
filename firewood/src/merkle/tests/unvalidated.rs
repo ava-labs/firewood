@@ -212,6 +212,7 @@ fn test_proof_end_with_branch() {
 }
 
 #[test]
+// FIXME: 1.895s runtime
 fn test_bad_proof() {
     let set = fixed_and_pseudorandom_data(800);
     let mut items = set.iter().collect::<Vec<_>>();
@@ -304,6 +305,7 @@ fn test_range_proof() {
 #[test]
 // Tests a few cases which the proof is wrong.
 // The prover is expected to detect the error.
+// FIXME: 30.213s runtime
 fn test_bad_range_proof() {
     let set = fixed_and_pseudorandom_data(4096);
     let mut items = set.iter().collect::<Vec<_>>();
@@ -475,6 +477,7 @@ fn test_range_proof_with_non_existent_proof() {
 // Tests such scenarios:
 // - There exists a gap between the first element and the left edge proof
 // - There exists a gap between the last element and the right edge proof
+// FIXME: 29.882s runtime
 fn test_range_proof_with_invalid_non_existent_proof() {
     let set = fixed_and_pseudorandom_data(4096);
     let mut items = set.iter().collect::<Vec<_>>();
@@ -827,6 +830,7 @@ fn test_gapped_range_proof() {
 
 #[test]
 // Tests the element is not in the range covered by proofs.
+// FIXME: 29.993s runtime
 fn test_same_side_proof() {
     let set = fixed_and_pseudorandom_data(4096);
     let mut items = set.iter().collect::<Vec<_>>();

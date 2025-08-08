@@ -640,6 +640,7 @@ fn test_root_hash_simple_insertions() -> Result<(), Error> {
 }
 
 #[test]
+// FIXME: 0.842s runtime
 fn test_root_hash_fuzz_insertions() -> Result<(), FileIoError> {
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
