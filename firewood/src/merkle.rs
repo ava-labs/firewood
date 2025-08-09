@@ -142,7 +142,7 @@ pub struct MerkleParallel<T, S> {
 }
 
 #[derive(Debug)]
-/// Error type that can return from calling parallel insert.
+/// Error type that can return from calling parallel insert and its related functions.
 pub enum ParallelInsertError<S> {
     /// Error from calling `insert_helper` or `insert`
     Io(FileIoError),
@@ -153,6 +153,9 @@ pub enum ParallelInsertError<S> {
     /// Merkle structure has been cleared. This should only happen if insert is called after
     /// insert is called after `clear_merkle` but before `set_merkle`.
     MerkleUnset,
+
+    /// Error from wait or `wait_param` that came from calling `clear_merkle`.
+    MerkleError(ClearMerkleError<S>),
 }
 
 #[derive(Debug)]
@@ -194,7 +197,7 @@ impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutablePropos
             return Err(ParallelInsertError::MerkleUnset);
         };
 
-        // Perform the actual paralle insert
+        // Perform the actual parallel insert
         let insert_result = match merkle_arc.insert_parallel(
             self.root_node.take(),
             &self.worker_pool,
@@ -213,7 +216,7 @@ impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutablePropos
                 self.merkle_arc = Some(merkle_arc);
             }
             ParallelInsertReturn::RetryNonThreaded(node, value) => {
-                let mut merkle = self.wait_params(node, merkle_arc);
+                let mut merkle = self.wait_params(node, merkle_arc)?;
 
                 // Fallback to calling non-parallel insert.
                 if let Err(err) = merkle.insert(key, value) {
@@ -232,12 +235,24 @@ impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutablePropos
         Ok(())
     }
 
+    /// Calls `clear_merkle` and then updates the node's children with `clear_merkle`'s return 
+    /// value. This function is only called by wait.
+    ///
+    /// ## Panics
+    ///
+    /// Can panic if `clear_merkle` returns child roots but the root node is not a branch. Can
+    /// also panic if `merkle_arc` is None or if its reference count is not 1.
     fn wait_params(
         &mut self,
         mut node: Node,
         merkle_arc: Arc<Merkle<NodeStore<MutableProposal, S>>>,
-    ) -> Merkle<NodeStore<MutableProposal, S>> {
-        let mut child_nodes = self.worker_pool.clear_merkle().expect("file io error");
+    ) -> Result<Merkle<NodeStore<MutableProposal, S>>, ParallelInsertError<S>> {
+        let mut child_nodes = match self.worker_pool.clear_merkle() {
+            Ok(n) => n,
+            Err(err) => {
+                return Err(ParallelInsertError::MerkleError(err));
+            }
+        };
         let mut deleted = Vec::default();
         for (i, child_node_opt) in child_nodes.iter_mut().enumerate() {
             deleted.append(&mut child_node_opt.1);
@@ -248,20 +263,27 @@ impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutablePropos
                     .update_child(i as u8, Some(Child::Node(child_node)));
             }
         }
-        // All but one of the references to merkle_arc should be gone. Extract inner Merkle
-        // so we can perform a mut operations on it.
+        // All but one of the references to merkle_arc should be gone after a call
+        // to `clear_merkle`. Extract the inner Merkle so we can perform a mutable
+        // operations on it.
         let mut merkle = Arc::into_inner(merkle_arc).expect("merkle_arc reference count is not 1");
         *merkle.nodestore.mut_root() = Some(node);
         merkle.nodestore.append_deleted(deleted);
-        merkle
+        Ok(merkle)
     }
 
     /// Wait until workers have completed
     ///
+    /// ## Errors
+    ///
+    /// Can return a `ClearMerkleError` that
+    ///
     /// ## Panics
     ///
-    /// Can panic if root node is none
-    pub fn wait(&mut self) -> Merkle<NodeStore<MutableProposal, S>> {
+    /// Can panic if `merkle_arc` is None or if its reference count is not 1.
+    pub fn wait(
+        &mut self,
+    ) -> Result<Merkle<NodeStore<MutableProposal, S>>, ParallelInsertError<S>> {
         let merkle_arc = self.merkle_arc.take().expect("merkle arc option is none");
         // The root can be None if the trie is empty. In this case, there should not be any
         // outstanding requests being handled by workers as long as the invariant that the
@@ -272,7 +294,7 @@ impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutablePropos
         } else {
             // TODO: Add counter to verify that there are no outstanding requests.
             let merkle_arc = self.merkle_arc.take().expect("merkle_arc is None");
-            Arc::into_inner(merkle_arc).expect("merkle_arc reference count is not 1")
+            Ok(Arc::into_inner(merkle_arc).expect("merkle_arc reference count is not 1"))
         }
     }
 }

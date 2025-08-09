@@ -188,7 +188,7 @@ fn test_get_regression() {
     for i in (0..key_range).rev() {
         let _ = merkle_par.insert(&[i], Box::new([i]));
     }
-    let merkle = merkle_par.wait();
+    let merkle = merkle_par.wait().unwrap();
 
     for i in 0..key_range {
         assert_eq!(merkle.get_value(&[i]).unwrap(), Some(Box::from([i])));
