@@ -180,7 +180,7 @@ fn decrease_key(key: &[u8; 32]) -> [u8; 32] {
 }
 
 #[test]
-fn test_batch_insert() {
+fn test_parallel_insert() {
     const TEST_SIZE: usize = 100;
 
     let merkle = create_in_memory_merkle();
@@ -214,38 +214,22 @@ fn test_batch_insert() {
 
 #[test]
 fn test_get_regression() {
-    let merkle: Merkle<NodeStore<MutableProposal, MemStore>> = create_in_memory_merkle();
-    let mut merkle_par = MerkleParallel::new(merkle);
+    let mut merkle = create_in_memory_merkle();
 
-    let key_range = 255;
-    for i in (0..key_range).rev() {
-        let _ = merkle_par.insert(&[i], Box::new([i]));
-    }
-    let merkle = merkle_par.wait().unwrap();
-
-    for i in 0..key_range {
-        assert_eq!(merkle.get_value(&[i]).unwrap(), Some(Box::from([i])));
-    }
-
+    merkle.insert(&[0], Box::new([0])).unwrap();
     assert_eq!(merkle.get_value(&[0]).unwrap(), Some(Box::from([0])));
 
-    //merkle.insert(&[1], Box::new([1])).unwrap();
+    merkle.insert(&[1], Box::new([1])).unwrap();
     assert_eq!(merkle.get_value(&[1]).unwrap(), Some(Box::from([1])));
 
-    //merkle.insert(&[2], Box::new([2])).unwrap();
+    merkle.insert(&[2], Box::new([2])).unwrap();
     assert_eq!(merkle.get_value(&[2]).unwrap(), Some(Box::from([2])));
 
     let merkle = merkle.hash();
 
-    for i in 0..key_range {
-        assert_eq!(merkle.get_value(&[i]).unwrap(), Some(Box::from([i])));
-    }
-
-    /* 
     assert_eq!(merkle.get_value(&[0]).unwrap(), Some(Box::from([0])));
     assert_eq!(merkle.get_value(&[1]).unwrap(), Some(Box::from([1])));
     assert_eq!(merkle.get_value(&[2]).unwrap(), Some(Box::from([2])));
-    */
 
     for result in merkle.path_iter(&[2]).unwrap() {
         result.unwrap();

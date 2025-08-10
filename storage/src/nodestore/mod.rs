@@ -269,8 +269,12 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     ///
     /// # Errors
     ///
-    /// Returns a [`FileIoError`] if the node cannot be read. 
-    pub fn read_for_update_ext_deleted(&self, node: MaybePersistedNode, deleted: &mut Vec<MaybePersistedNode>) -> Result<Node, FileIoError> {
+    /// Returns a [`FileIoError`] if the node cannot be read.
+    pub fn read_for_update_ext_deleted(
+        &self,
+        node: MaybePersistedNode,
+        deleted: &mut Vec<MaybePersistedNode>,
+    ) -> Result<Node, FileIoError> {
         let arc_wrapped_node = node.as_shared_node(self)?;
         trace!("Pending delete at {node:?}");
         deleted.push(node);
@@ -535,9 +539,7 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
         let mut nodestore = NodeStore {
             header,
             kind: Arc::new(ImmutableProposal {
-                deleted: kind
-                    .deleted
-                    .into(),
+                deleted: kind.deleted.into(),
                 parent: Arc::new(ArcSwap::new(Arc::new(kind.parent))),
                 root_hash: None,
                 root: None,
