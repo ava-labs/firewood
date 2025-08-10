@@ -180,6 +180,39 @@ fn decrease_key(key: &[u8; 32]) -> [u8; 32] {
 }
 
 #[test]
+fn test_batch_insert() {
+    const TEST_SIZE: usize = 100;
+
+    let merkle = create_in_memory_merkle();
+
+    let seed = std::env::var("FIREWOOD_TEST_SEED")
+        .ok()
+        .map_or_else(
+            || None,
+            |s| Some(str::parse(&s).expect("couldn't parse FIREWOOD_TEST_SEED; must be a u64")),
+        )
+        .unwrap_or_else(|| rng().random());
+
+    let kvs = generate_random_kvs(seed, TEST_SIZE);
+
+    let mut merkle_par = MerkleParallel::new(merkle);
+
+    for (key, val) in &kvs {
+        merkle_par.insert(key, val.clone().into_boxed_slice()).unwrap();
+    }
+
+    let merkle = merkle_par.wait().unwrap();
+    for (key, val) in &kvs {
+        assert_eq!(merkle.get_value(key).unwrap(), Some(Box::from(val.as_slice())));
+    }
+
+    let merkle = merkle.hash();
+    for (key, val) in &kvs {
+        assert_eq!(merkle.get_value(key).unwrap(), Some(Box::from(val.as_slice())));
+    }
+}
+
+#[test]
 fn test_get_regression() {
     let merkle: Merkle<NodeStore<MutableProposal, MemStore>> = create_in_memory_merkle();
     let mut merkle_par = MerkleParallel::new(merkle);
