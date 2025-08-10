@@ -235,7 +235,7 @@ impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutablePropos
         Ok(())
     }
 
-    /// Calls `clear_merkle` and then updates the node's children with `clear_merkle`'s return 
+    /// Calls `clear_merkle` and then updates the node's children with `clear_merkle`'s return
     /// value. This function is only called by wait.
     ///
     /// ## Panics
@@ -814,9 +814,10 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
 
             loop {
                 let Ok(v) = thread_receiver.recv() else {
-                    // Thread is unable to recv data from parent. This should never happen during normal
-                    // operation. Currently just break to terminate the thread.
-                    // TODO: Consider logging this error or trying to send a message to the parent
+                    // Thread is unable to recv data from parent. This should only happen when the worker pool
+                    // gets dropped. Breaking here will terminate the thread. Because this behavior will cleanly
+                    // terminate the thread when the worker pool gets dropped, there is no need to explictly
+                    // send a Terminate message and wait on the thread's join handle to cleanup the thread.
                     break;
                 };
                 match v {
@@ -854,7 +855,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
                         };
 
                         let merkle_arc: Arc<Merkle<NodeStore<MutableProposal, S>>> =
-                            merkle.expect("Merkle is not set before insert");
+                            merkle.expect("Merkle is not set before calling insert");
 
                         let path: Path = key.into();
                         let insert_result =
@@ -877,6 +878,8 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
                         merkle = Some(merkle_arc);
                     }
                     MerkleOp::Terminate => {
+                        // This provides a mechanism to terminate worker pool threads without dropping
+                        // the worker pool. Currently not used.
                         break;
                     }
                     MerkleOp::ClearMerkle => {
@@ -896,6 +899,8 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
                 }
             }
         });
+        // Returns channels that are used to communicate with this thread, and its join handle which
+        // can be used to wait for the thread to terminate. Currently the handle is not used.
         (host_sender, host_receiver, handle)
     }
 
@@ -1071,9 +1076,8 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
         Ok(insert_return)
     }
 
-    /// Map `key` to `value` into the subtrie rooted at `node`.
-    /// Each element of `key` is 1 nibble.
-    /// Returns the new root of the subtrie.
+    /// Parallel version of ``insert_helper``. See ``insert_helper`` for additional comments on each arm in
+    /// the main match statement.
     pub fn insert_parallel_helper(
         &self,
         worker_pool: &WorkerPool<S>,
@@ -1081,31 +1085,23 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
         key: &[u8],
         value: Value,
     ) -> Result<ParallelInsertReturn, FileIoError> {
-        // 4 possibilities for the position of the `key` relative to `node`:
-        // 1. The node is at `key`
-        // 2. The key is above the node (i.e. its ancestor)
-        // 3. The key is below the node (i.e. its descendant)
-        // 4. Neither is an ancestor of the other
         let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
 
         let unique_key = path_overlap.unique_a;
         let unique_node = path_overlap.unique_b;
 
+        // Used to keep track of the deleted nodes in an external vector. This contents of this deleted vector
+        // should be merged with the nodestore's deleted vector after the inserts are complete.
         let mut deleted = Vec::default();
-
         match (
             unique_key
                 .split_first()
-                //.map(|(index, path)| (*index, path.into())),
                 .map(|(index, path)| (*index, <&[u8] as std::convert::Into<Path>>::into(path))),
             unique_node
                 .split_first()
                 .map(|(index, path)| (*index, <&[u8] as std::convert::Into<Path>>::into(path))),
-            //.map(|(index, path)| (*index, path.into())),
         ) {
             (None, None) => {
-                //Ok(ParallelInsertReturn::RetryNonThreaded(node, value))
-                // 1. The node is at `key`
                 node.update_value(value);
                 counter!("firewood.insert", "merkle" => "update").increment(1);
                 Ok(ParallelInsertReturn::Performed(node))
@@ -1118,12 +1114,6 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                 Ok(ParallelInsertReturn::RetryNonThreaded(node, value))
             }
             (Some((child_index, partial_path)), None) => {
-                // 3. The key is below the node (i.e. its descendant)
-                //    ...                         ...
-                //     |                           |
-                //    node         -->            node
-                //     |                           |
-                //    ... (key may be below)       ... (key is below)
                 match node {
                     Node::Branch(ref mut branch) => {
                         #[expect(clippy::indexing_slicing)]
@@ -1169,29 +1159,13 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                         Ok(ParallelInsertReturn::Performed(node))
                     }
                     Node::Leaf(ref mut _leaf) => {
-                        // Rotates the root. Should not be applied until the outstanding operations
-                        // have been merged into the root. Return a special type to tell the caller
-                        // to block until all operations are done and then perform a non-threaded
-                        // insert for this key/value
+                        // Rotates the root.
                         Ok(ParallelInsertReturn::RetryNonThreaded(node, value))
                     }
                 }
             }
             (Some((_key_index, _key_partial_path)), Some((_node_index, _node_partial_path))) => {
-                // 4. Neither is an ancestor of the other
-                //    ...                         ...
-                //     |                           |
-                //    node         -->            branch
-                //     |                           |    \
-                //                               node   key
-                // Make a branch node that has both the current node and a new leaf node as children.
-                // (When called from the root): Rotates the root. Should block until all parallel
-                // operations have completed.
-                //
-                // Rotates the root. Should not be applied until the outstanding operations
-                // have been merged into the root. Return a special type to tell the caller
-                // to block until all operations are done and then perform a non-threaded
-                // insert for this key/value
+                // Rotates the root.
                 Ok(ParallelInsertReturn::RetryNonThreaded(node, value))
             }
         }
