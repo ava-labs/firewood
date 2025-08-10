@@ -1193,7 +1193,6 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                 .map(|(index, path)| (*index, path.into())),
         ) {
             (None, None) => {
-                println!("###### Branch 1");
                 // 1. The node is at `key`
                 node.update_value(value);
                 counter!("firewood.insert", "merkle" => "update").increment(1);
@@ -1207,7 +1206,6 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                 //    node               key
                 //                        |
                 //                       node
-                //println!("###### Branch 2");
                 let mut branch = BranchNode {
                     partial_path: path_overlap.shared.into(),
                     value: Some(value),
@@ -1227,7 +1225,6 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                 //    node         -->            node
                 //     |                           |
                 //    ... (key may be below)       ... (key is below)
-                //println!("###### Branch 3");
                 match node {
                     Node::Branch(ref mut branch) => {
                         #[expect(clippy::indexing_slicing)]
@@ -1289,7 +1286,6 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                 //     |                           |    \
                 //                               node   key
                 // Make a branch node that has both the current node and a new leaf node as children.
-                //println!("###### Branch 4");
                 let mut branch = BranchNode {
                     partial_path: path_overlap.shared.into(),
                     value: None,
