@@ -1,11 +1,5 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
-
-#![expect(
-    clippy::doc_link_with_quotes,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-
 use clap::Args;
 use firewood::db::{Db, DbConfig};
 use firewood::merkle::{Key, Value};
@@ -18,18 +12,22 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
+use crate::DatabasePath;
+
 type KeyFromStream = Option<Result<(Key, Value), api::Error>>;
+
+#[derive(Debug, clap::ValueEnum, Clone, PartialEq)]
+pub enum OutputFormat {
+    Csv,
+    Json,
+    Stdout,
+    Dot,
+}
 
 #[derive(Debug, Args)]
 pub struct Options {
-    /// The database path (if no path is provided, return an error). Defaults to firewood.
-    #[arg(
-        required = true,
-        value_name = "DB_NAME",
-        default_value_t = String::from("firewood"),
-        help = "Name of the database"
-    )]
-    pub db: String,
+    #[command(flatten)]
+    pub database: DatabasePath,
 
     /// The key to start dumping from (if no key is provided, start from the beginning).
     /// Defaults to None.
@@ -91,18 +89,17 @@ pub struct Options {
     pub max_key_count: Option<u32>,
 
     /// The output format of database dump.
-    /// Possible Values: ["csv", "json", "stdout"].
     /// Defaults to "stdout"
     #[arg(
         short = 'o',
         long,
         required = false,
         value_name = "OUTPUT_FORMAT",
-        value_parser = ["csv", "json", "stdout"],
-        default_value = "stdout",
-        help = "Output format of database dump, default to stdout. CSV and JSON formats are available."
+        value_enum,
+        default_value_t = OutputFormat::Stdout,
+        help = "Output format of database dump, default to stdout. CSV, JSON, and DOT formats are available."
     )]
-    pub output_format: String,
+    pub output_format: OutputFormat,
 
     /// The output file name of database dump.
     /// Output format must be set when the file name is set.
@@ -123,14 +120,43 @@ pub struct Options {
 pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     log::debug!("dump database {opts:?}");
 
-    let cfg = DbConfig::builder().truncate(false);
-    let db = Db::new(opts.db.clone(), cfg.build()).await?;
+    // Check if dot format is used with unsupported options
+    if opts.output_format == OutputFormat::Dot {
+        if opts.start_key.is_some() || opts.start_key_hex.is_some() {
+            return Err(api::Error::InternalError(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Dot format does not support --start-key or --start-key-hex options",
+            ))));
+        }
+        if opts.stop_key.is_some() || opts.stop_key_hex.is_some() {
+            return Err(api::Error::InternalError(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Dot format does not support --stop-key or --stop-key-hex options",
+            ))));
+        }
+        if opts.max_key_count.is_some() {
+            return Err(api::Error::InternalError(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Dot format does not support --max-key-count option",
+            ))));
+        }
+    }
+
+    let cfg = DbConfig::builder().create_if_missing(false).truncate(false);
+    let db = Db::new(opts.database.dbpath.clone(), cfg.build()).await?;
     let latest_hash = db.root_hash().await?;
     let Some(latest_hash) = latest_hash else {
         println!("Database is empty");
         return Ok(());
     };
     let latest_rev = db.revision(latest_hash).await?;
+
+    let Some(mut output_handler) =
+        create_output_handler(opts, &db).expect("Error creating output handler")
+    else {
+        // dot format is generated in the handler
+        return Ok(());
+    };
 
     let start_key = opts
         .start_key
@@ -141,7 +167,6 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     let mut key_count: u32 = 0;
 
     let mut stream = MerkleKeyValueStream::from_key(&latest_rev, start_key);
-    let mut output_handler = create_output_handler(opts).expect("Error creating output handler");
 
     while let Some(item) = stream.next().await {
         match item {
@@ -283,29 +308,43 @@ impl OutputHandler for StdoutOutputHandler {
 
 fn create_output_handler(
     opts: &Options,
-) -> Result<Box<dyn OutputHandler + Send + Sync>, Box<dyn Error>> {
+    db: &Db,
+) -> Result<Option<Box<dyn OutputHandler + Send + Sync>>, Box<dyn Error>> {
     let hex = opts.hex;
     let mut file_name = opts.output_file_name.clone();
-    file_name.set_extension(opts.output_format.as_str());
-    match opts.output_format.as_str() {
-        "csv" => {
+    let extension = match opts.output_format {
+        OutputFormat::Csv => "csv",
+        OutputFormat::Json => "json",
+        OutputFormat::Stdout => "txt",
+        OutputFormat::Dot => "dot",
+    };
+    file_name.set_extension(extension);
+    match opts.output_format {
+        OutputFormat::Csv => {
             println!("Dumping to {}", file_name.display());
             let file = File::create(file_name)?;
-            Ok(Box::new(CsvOutputHandler {
+            Ok(Some(Box::new(CsvOutputHandler {
                 writer: csv::Writer::from_writer(file),
                 hex,
-            }))
+            })))
         }
-        "json" => {
+        OutputFormat::Json => {
             println!("Dumping to {}", file_name.display());
             let file = File::create(file_name)?;
-            Ok(Box::new(JsonOutputHandler {
+            Ok(Some(Box::new(JsonOutputHandler {
                 writer: BufWriter::new(file),
                 hex,
                 is_first: true,
-            }))
+            })))
         }
-        "stdout" => Ok(Box::new(StdoutOutputHandler { hex })),
-        _ => unreachable!(),
+        OutputFormat::Stdout => Ok(Some(Box::new(StdoutOutputHandler { hex }))),
+        OutputFormat::Dot => {
+            println!("Dumping to {}", file_name.display());
+            let file = File::create(file_name)?;
+            let mut writer = BufWriter::new(file);
+            // For dot format, we generate the output immediately since it doesn't use streaming
+            db.dump_sync(&mut writer)?;
+            Ok(None)
+        }
     }
 }

@@ -42,17 +42,22 @@ pub(crate) mod alloc;
 pub(crate) mod hash;
 pub(crate) mod header;
 pub(crate) mod persist;
+pub(crate) mod primitives;
 
+use crate::firewood_gauge;
+use crate::linear::OffsetReader;
 use crate::logger::trace;
 use crate::node::branch::ReadSerializable as _;
 use arc_swap::ArcSwap;
 use arc_swap::access::DynAccess;
 use smallvec::SmallVec;
 use std::fmt::Debug;
-use std::io::{Error, ErrorKind};
+use std::io::{Error, ErrorKind, Read};
+use std::sync::atomic::AtomicUsize;
 
 // Re-export types from alloc module
-pub use alloc::{AreaIndex, LinearAddress, NodeAllocator};
+pub use alloc::NodeAllocator;
+pub use primitives::{AreaIndex, LinearAddress};
 
 // Re-export types from header module
 pub use header::NodeStoreHeader;
@@ -86,7 +91,6 @@ use std::sync::Arc;
 use crate::hashednode::hash_node;
 use crate::node::Node;
 use crate::node::persist::MaybePersistedNode;
-use crate::nodestore::alloc::AREA_SIZES;
 use crate::{CacheReadStrategy, FileIoError, Path, ReadableStorage, SharedNode, TrieHash};
 
 use super::linear::WritableStorage;
@@ -121,6 +125,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
                 deleted: Box::default(),
                 root_hash: None,
                 root: header.root_address().map(Into::into),
+                unwritten_nodes: AtomicUsize::new(0),
             },
             storage,
         };
@@ -150,6 +155,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
                 deleted: Box::default(),
                 root_hash: None,
                 root: None,
+                unwritten_nodes: AtomicUsize::new(0),
             },
         })
     }
@@ -373,11 +379,27 @@ pub trait RootReader {
 }
 
 /// A committed revision of a merkle trie.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Committed {
     deleted: Box<[MaybePersistedNode]>,
     root_hash: Option<TrieHash>,
     root: Option<MaybePersistedNode>,
+    /// TODO: No readers of this variable yet - will be used for tracking unwritten nodes in committed revisions
+    unwritten_nodes: AtomicUsize,
+}
+
+impl Clone for Committed {
+    fn clone(&self) -> Self {
+        Self {
+            deleted: self.deleted.clone(),
+            root_hash: self.root_hash.clone(),
+            root: self.root.clone(),
+            unwritten_nodes: AtomicUsize::new(
+                self.unwritten_nodes
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -409,6 +431,8 @@ pub struct ImmutableProposal {
     root_hash: Option<TrieHash>,
     /// The root node, either in memory or on disk
     root: Option<MaybePersistedNode>,
+    /// The number of unwritten nodes in this proposal
+    unwritten_nodes: usize,
 }
 
 impl ImmutableProposal {
@@ -422,6 +446,21 @@ impl ImmutableProposal {
         {
             NodeStoreParent::Committed(root_hash) => *root_hash == hash,
             NodeStoreParent::Proposed(_) => false,
+        }
+    }
+}
+
+impl Drop for ImmutableProposal {
+    fn drop(&mut self) {
+        // When an immutable proposal is dropped without being committed,
+        // decrement the gauge to reflect that these nodes will never be written
+        if self.unwritten_nodes > 0 {
+            #[allow(clippy::cast_precision_loss)]
+            firewood_gauge!(
+                "firewood.nodes.unwritten",
+                "current number of unwritten nodes"
+            )
+            .decrement(self.unwritten_nodes as f64);
         }
     }
 }
@@ -484,14 +523,23 @@ impl<T: Into<NodeStoreParent>, S: ReadableStorage> From<NodeStore<T, S>>
 /// Commit a proposal to a new revision of the trie
 impl<S: WritableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStore<Committed, S> {
     fn from(val: NodeStore<ImmutableProposal, S>) -> Self {
+        let NodeStore {
+            header,
+            kind,
+            storage,
+        } = val;
+        // Use ManuallyDrop to prevent the Drop impl from running since we're committing
+        let kind = std::mem::ManuallyDrop::new(kind);
+
         NodeStore {
-            header: val.header,
+            header,
             kind: Committed {
-                deleted: val.kind.deleted,
-                root_hash: val.kind.root_hash,
-                root: val.kind.root,
+                deleted: kind.deleted.clone(),
+                root_hash: kind.root_hash.clone(),
+                root: kind.root.clone(),
+                unwritten_nodes: AtomicUsize::new(kind.unwritten_nodes),
             },
-            storage: val.storage,
+            storage,
         }
     }
 }
@@ -518,6 +566,7 @@ impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 deleted: self.kind.deleted.clone(),
                 root_hash: self.kind.root_hash.clone(),
                 root: self.kind.root.clone(),
+                unwritten_nodes: AtomicUsize::new(self.kind.unwritten_nodes),
             },
             storage: self.storage.clone(),
         }
@@ -543,6 +592,7 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
                 parent: Arc::new(ArcSwap::new(Arc::new(kind.parent))),
                 root_hash: None,
                 root: None,
+                unwritten_nodes: 0,
             }),
             storage,
         };
@@ -555,19 +605,31 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
 
         // Hashes the trie and returns the address of the new root.
         #[cfg(feature = "ethhash")]
-        let (root, root_hash) = nodestore.hash_helper(root, &mut Path::new(), None)?;
+        let (root, root_hash, unwritten_count) =
+            nodestore.hash_helper(root, &mut Path::new(), None)?;
         #[cfg(not(feature = "ethhash"))]
-        let (root, root_hash) =
+        let (root, root_hash, unwritten_count) =
             NodeStore::<MutableProposal, S>::hash_helper(root, &mut Path::new())?;
 
         let immutable_proposal =
             Arc::into_inner(nodestore.kind).expect("no other references to the proposal");
+        // Use ManuallyDrop to prevent Drop from running since we're replacing the proposal
+        let immutable_proposal = std::mem::ManuallyDrop::new(immutable_proposal);
         nodestore.kind = Arc::new(ImmutableProposal {
-            deleted: immutable_proposal.deleted,
-            parent: immutable_proposal.parent,
+            deleted: immutable_proposal.deleted.clone(),
+            parent: immutable_proposal.parent.clone(),
             root_hash: Some(root_hash.into_triehash()),
             root: Some(root),
+            unwritten_nodes: unwritten_count,
         });
+
+        // Track unwritten nodes in metrics
+        #[allow(clippy::cast_precision_loss)]
+        firewood_gauge!(
+            "firewood.nodes.unwritten",
+            "current number of unwritten nodes"
+        )
+        .increment(unwritten_count as f64);
 
         Ok(nodestore)
     }
@@ -632,6 +694,33 @@ where
     }
 }
 
+// TODO: return only the index since we can easily get the size from the index
+fn area_index_and_size<S: ReadableStorage>(
+    storage: &S,
+    addr: LinearAddress,
+) -> Result<(AreaIndex, u64), FileIoError> {
+    let mut area_stream = storage.stream_from(addr.get())?;
+
+    let index: AreaIndex = AreaIndex::new(area_stream.read_byte().map_err(|e| {
+        storage.file_io_error(
+            Error::new(ErrorKind::InvalidData, e),
+            addr.get(),
+            Some("area_index_and_size".to_string()),
+        )
+    })?)
+    .ok_or_else(|| {
+        storage.file_io_error(
+            Error::new(ErrorKind::InvalidData, "invalid area index"),
+            addr.get(),
+            Some("area_index_and_size".to_string()),
+        )
+    })?;
+
+    let size = index.size();
+
+    Ok((index, size))
+}
+
 impl<T, S: ReadableStorage> NodeStore<T, S> {
     /// Read a [Node] from the provided [`LinearAddress`].
     /// `addr` is the address of a `StoredArea` in the `ReadableStorage`.
@@ -648,21 +737,8 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
             return Ok(node);
         }
 
-        debug_assert!(addr.is_aligned());
+        let (node, _) = self.read_node_with_num_bytes_from_disk(addr)?;
 
-        // saturating because there is no way we can be reading at u64::MAX
-        // and this will fail very soon afterwards
-        let actual_addr = addr.get().saturating_add(1); // skip the length byte
-
-        let _span = fastrace::local::LocalSpan::enter_with_local_parent("read_and_deserialize");
-
-        let area_stream = self.storage.stream_from(actual_addr)?;
-        let node: SharedNode = Node::from_reader(area_stream)
-            .map_err(|e| {
-                self.storage
-                    .file_io_error(e, actual_addr, Some("read_node_from_disk".to_string()))
-            })?
-            .into();
         match self.storage.cache_read_strategy() {
             CacheReadStrategy::All => {
                 self.storage.cache_node(addr, node.clone());
@@ -674,7 +750,41 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
             }
             CacheReadStrategy::WritesOnly => {}
         }
+
         Ok(node)
+    }
+
+    pub(crate) fn read_node_with_num_bytes_from_disk(
+        &self,
+        addr: LinearAddress,
+    ) -> Result<(SharedNode, u64), FileIoError> {
+        debug_assert!(addr.is_aligned());
+
+        // saturating because there is no way we can be reading at u64::MAX
+        // and this will fail very soon afterwards
+        let actual_addr = addr.get().saturating_add(1); // skip the length byte
+
+        let _span = fastrace::local::LocalSpan::enter_with_local_parent("read_and_deserialize");
+
+        let mut area_stream = self.storage.stream_from(actual_addr)?;
+        let offset_before = area_stream.offset();
+        let node: SharedNode = Node::from_reader(&mut area_stream)
+            .map_err(|e| {
+                self.storage
+                    .file_io_error(e, actual_addr, Some("read_node_from_disk".to_string()))
+            })?
+            .into();
+        let length = area_stream
+            .offset()
+            .checked_sub(offset_before)
+            .ok_or_else(|| {
+                self.file_io_error(
+                    Error::other("Reader offset went backwards"),
+                    actual_addr,
+                    Some("read_node_with_num_bytes_from_disk".to_string()),
+                )
+            })?;
+        Ok((node, length))
     }
 
     /// Returns (index, `area_size`) for the stored area at `addr`.
@@ -687,25 +797,21 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
         &self,
         addr: LinearAddress,
     ) -> Result<(AreaIndex, u64), FileIoError> {
-        let mut area_stream = self.storage.stream_from(addr.get())?;
+        area_index_and_size(self.storage.as_ref(), addr)
+    }
 
-        let index: AreaIndex = area_stream.read_byte().map_err(|e| {
-            self.storage.file_io_error(
-                Error::new(ErrorKind::InvalidData, e),
-                addr.get(),
-                Some("area_index_and_size".to_string()),
-            )
-        })?;
+    pub(crate) fn physical_size(&self) -> Result<u64, FileIoError> {
+        self.storage.size()
+    }
 
-        let size = *AREA_SIZES
-            .get(index as usize)
-            .ok_or(self.storage.file_io_error(
-                Error::other(format!("Invalid area size index {index}")),
-                addr.get(),
-                Some("area_index_and_size".to_string()),
-            ))?;
-
-        Ok((index, size))
+    #[cold]
+    pub(crate) fn file_io_error(
+        &self,
+        error: Error,
+        addr: u64,
+        context: Option<String>,
+    ) -> FileIoError {
+        self.storage.file_io_error(error, addr, context)
     }
 }
 
@@ -774,41 +880,41 @@ mod tests {
     use arc_swap::access::DynGuard;
 
     use super::*;
-    use alloc::{AREA_SIZES, area_size_to_index};
+    use primitives::area_size_iter;
 
     #[test]
     fn area_sizes_aligned() {
-        for area_size in &AREA_SIZES {
-            assert_eq!(area_size % LinearAddress::MIN_AREA_SIZE, 0);
+        for (_, area_size) in area_size_iter() {
+            assert_eq!(area_size % AreaIndex::MIN_AREA_SIZE, 0);
         }
     }
 
     #[test]
     fn test_area_size_to_index() {
         // TODO: rustify using: for size in AREA_SIZES
-        for (i, &area_size) in AREA_SIZES.iter().enumerate() {
+        for (i, area_size) in area_size_iter() {
             // area size is at top of range
-            assert_eq!(area_size_to_index(area_size).unwrap(), i as AreaIndex);
+            assert_eq!(AreaIndex::from_size(area_size).unwrap(), i);
 
-            if i > 0 {
+            if i > AreaIndex::MIN {
                 // 1 less than top of range stays in range
-                assert_eq!(area_size_to_index(area_size - 1).unwrap(), i as AreaIndex);
+                assert_eq!(AreaIndex::from_size(area_size - 1).unwrap(), i);
             }
 
-            if i < LinearAddress::num_area_sizes() - 1 {
+            if i < AreaIndex::MAX {
                 // 1 more than top of range goes to next range
                 assert_eq!(
-                    area_size_to_index(area_size + 1).unwrap(),
-                    (i + 1) as AreaIndex
+                    AreaIndex::from_size(area_size + 1).unwrap(),
+                    AreaIndex::try_from(i.as_usize() + 1).unwrap()
                 );
             }
         }
 
-        for i in 0..=LinearAddress::MIN_AREA_SIZE {
-            assert_eq!(area_size_to_index(i).unwrap(), 0);
+        for i in 0..=AreaIndex::MIN_AREA_SIZE {
+            assert_eq!(AreaIndex::from_size(i).unwrap(), AreaIndex::MIN);
         }
 
-        assert!(area_size_to_index(LinearAddress::MAX_AREA_SIZE + 1).is_err());
+        assert!(AreaIndex::from_size(AreaIndex::MAX_AREA_SIZE + 1).is_err());
     }
 
     #[test]
@@ -849,7 +955,7 @@ mod tests {
         let memstore = MemStore::new(vec![]);
         let mut node_store = NodeStore::new_empty_proposal(memstore.into());
 
-        let huge_value = vec![0u8; *AREA_SIZES.last().unwrap() as usize];
+        let huge_value = vec![0u8; AreaIndex::MAX_AREA_SIZE as usize];
 
         let giant_leaf = Node::Leaf(LeafNode {
             partial_path: Path::from([0, 1, 2]),

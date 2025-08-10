@@ -8,21 +8,23 @@
 
 use crate::merkle::{Merkle, Value};
 use crate::stream::MerkleKeyValueStream;
-use crate::v2::api::{self, FrozenProof, FrozenRangeProof, KeyType, ValueType};
-pub use crate::v2::api::{Batch, BatchOp};
+pub use crate::v2::api::BatchOp;
+use crate::v2::api::{
+    self, FrozenProof, FrozenRangeProof, HashKey, KeyType, KeyValuePair, KeyValuePairIter,
+    OptionalHashKeyExt,
+};
 
-use crate::manager::{RevisionManager, RevisionManagerConfig};
+use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use async_trait::async_trait;
 use firewood_storage::{
-    CheckOpt, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore,
-    TrieHash,
+    CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
+    ImmutableProposal, NodeStore,
 };
 use metrics::{counter, describe_counter};
 use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use thiserror::Error;
 use typed_builder::TypedBuilder;
 
@@ -55,7 +57,7 @@ pub trait DbViewSync {
 }
 
 /// A synchronous view of the database with raw byte keys (object-safe version).
-pub trait DbViewSyncBytes: std::fmt::Debug {
+pub trait DbViewSyncBytes: std::fmt::Debug + Send + Sync {
     /// find a value synchronously using raw bytes
     fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError>;
 }
@@ -93,12 +95,12 @@ impl DbViewSyncBytes for Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> {
 
 #[async_trait]
 impl api::DbView for HistoricalRev {
-    type Stream<'a>
-        = MerkleKeyValueStream<'a, Self>
+    type Stream<'view>
+        = MerkleKeyValueStream<'view, Self>
     where
-        Self: 'a;
+        Self: 'view;
 
-    async fn root_hash(&self) -> Result<Option<api::HashKey>, api::Error> {
+    async fn root_hash(&self) -> Result<Option<HashKey>, api::Error> {
         Ok(HashedNodeReader::root_hash(self))
     }
 
@@ -141,6 +143,9 @@ impl api::DbView for HistoricalRev {
 /// Database configuration.
 #[derive(Clone, TypedBuilder, Debug)]
 pub struct DbConfig {
+    /// Whether to create the DB if it doesn't exist.
+    #[builder(default = true)]
+    pub create_if_missing: bool,
     /// Whether to truncate the DB when opening it. If set, the DB will be reset and all its
     /// existing contents will be lost.
     #[builder(default = false)]
@@ -158,43 +163,37 @@ pub struct Db {
 }
 
 #[async_trait]
-impl api::Db for Db
-where
-    for<'p> Proposal<'p>: api::Proposal,
-{
+impl api::Db for Db {
     type Historical = NodeStore<Committed, FileBacked>;
 
-    type Proposal<'p>
-        = Proposal<'p>
+    type Proposal<'db>
+        = Proposal<'db>
     where
-        Self: 'p;
+        Self: 'db;
 
-    async fn revision(&self, root_hash: TrieHash) -> Result<Arc<Self::Historical>, api::Error> {
+    async fn revision(&self, root_hash: HashKey) -> Result<Arc<Self::Historical>, api::Error> {
         let nodestore = self.manager.revision(root_hash)?;
         Ok(nodestore)
     }
 
-    async fn root_hash(&self) -> Result<Option<TrieHash>, api::Error> {
+    async fn root_hash(&self) -> Result<Option<HashKey>, api::Error> {
         self.root_hash_sync()
     }
 
-    async fn all_hashes(&self) -> Result<Vec<TrieHash>, api::Error> {
+    async fn all_hashes(&self) -> Result<Vec<HashKey>, api::Error> {
         Ok(self.manager.all_hashes())
     }
 
     #[fastrace::trace(short_name = true)]
-    async fn propose<'p, K: KeyType, V: ValueType>(
-        &'p self,
-        batch: api::Batch<K, V>,
-    ) -> Result<Arc<Self::Proposal<'p>>, api::Error>
-    where
-        Self: 'p,
-    {
+    async fn propose<'db>(
+        &'db self,
+        batch: (impl IntoIterator<IntoIter: KeyValuePairIter> + Send),
+    ) -> Result<Self::Proposal<'db>, api::Error> {
         let parent = self.manager.current_revision();
         let proposal = NodeStore::new(&parent)?;
         let mut merkle = Merkle::from(proposal);
         let span = fastrace::Span::enter_with_local_parent("merkleops");
-        for op in batch {
+        for op in batch.into_iter().map_into_batch() {
             match op {
                 BatchOp::Put { key, value } => {
                     merkle.insert(key.as_ref(), value.as_ref().into())?;
@@ -223,9 +222,7 @@ where
         Ok(Self::Proposal {
             nodestore: immutable,
             db: self,
-            committed: AtomicBool::new(false),
-        }
-        .into())
+        })
     }
 }
 
@@ -236,11 +233,12 @@ impl Db {
             proposals: counter!("firewood.proposals"),
         });
         describe_counter!("firewood.proposals", "Number of proposals created");
-        let manager = RevisionManager::new(
-            db_path.as_ref().to_path_buf(),
-            cfg.truncate,
-            cfg.manager.clone(),
-        )?;
+        let config_manager = ConfigManager::builder()
+            .create(cfg.create_if_missing)
+            .truncate(cfg.truncate)
+            .manager(cfg.manager)
+            .build();
+        let manager = RevisionManager::new(db_path.as_ref().to_path_buf(), config_manager)?;
         let db = Self { metrics, manager };
         Ok(db)
     }
@@ -251,46 +249,43 @@ impl Db {
             proposals: counter!("firewood.proposals"),
         });
         describe_counter!("firewood.proposals", "Number of proposals created");
-        let manager = RevisionManager::new(
-            db_path.as_ref().to_path_buf(),
-            cfg.truncate,
-            cfg.manager.clone(),
-        )?;
+        let config_manager = ConfigManager::builder()
+            .create(cfg.create_if_missing)
+            .truncate(cfg.truncate)
+            .manager(cfg.manager)
+            .build();
+        let manager = RevisionManager::new(db_path.as_ref().to_path_buf(), config_manager)?;
         let db = Self { metrics, manager };
         Ok(db)
     }
 
     /// Synchronously get the root hash of the latest revision.
-    pub fn root_hash_sync(&self) -> Result<Option<TrieHash>, api::Error> {
-        let hash = self.manager.root_hash()?;
-        #[cfg(not(feature = "ethhash"))]
-        return Ok(hash);
-        #[cfg(feature = "ethhash")]
-        return Ok(Some(hash.unwrap_or_else(firewood_storage::empty_trie_hash)));
+    pub fn root_hash_sync(&self) -> Result<Option<HashKey>, api::Error> {
+        Ok(self.manager.root_hash()?.or_default_root_hash())
     }
 
     /// Synchronously get a revision from a root hash
-    pub fn revision_sync(&self, root_hash: TrieHash) -> Result<Arc<HistoricalRev>, api::Error> {
+    pub fn revision_sync(&self, root_hash: HashKey) -> Result<Arc<HistoricalRev>, api::Error> {
         let nodestore = self.manager.revision(root_hash)?;
         Ok(nodestore)
     }
 
     /// Synchronously get a view, either committed or proposed
-    pub fn view_sync(&self, root_hash: TrieHash) -> Result<Box<dyn DbViewSyncBytes>, api::Error> {
+    pub fn view_sync(&self, root_hash: HashKey) -> Result<Box<dyn DbViewSyncBytes>, api::Error> {
         let nodestore = self.manager.view(root_hash)?;
         Ok(nodestore)
     }
 
     /// propose a new batch synchronously
-    pub fn propose_sync<K: KeyType, V: ValueType>(
-        &'_ self,
-        batch: Batch<K, V>,
-    ) -> Result<Arc<Proposal<'_>>, api::Error> {
+    pub fn propose_sync(
+        &self,
+        batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
+    ) -> Result<Proposal<'_>, api::Error> {
         let parent = self.manager.current_revision();
         let proposal = NodeStore::new(&parent)?;
         let mut merkle = Merkle::from(proposal);
         for op in batch {
-            match op {
+            match op.into_batch() {
                 BatchOp::Put { key, value } => {
                     merkle.insert(key.as_ref(), value.as_ref().into())?;
                 }
@@ -309,11 +304,10 @@ impl Db {
 
         self.metrics.proposals.increment(1);
 
-        Ok(Arc::new(Proposal {
+        Ok(Proposal {
             nodestore: immutable,
             db: self,
-            committed: AtomicBool::new(false),
-        }))
+        })
     }
 
     /// Dump the Trie of the latest revision.
@@ -325,9 +319,7 @@ impl Db {
     pub fn dump_sync(&self, w: &mut dyn Write) -> Result<(), std::io::Error> {
         let latest_rev_nodestore = self.manager.current_revision();
         let merkle = Merkle::from(latest_rev_nodestore);
-        // TODO: This should be a stream
-        let output = merkle.dump()?;
-        write!(w, "{output}")
+        merkle.dump(w).map_err(std::io::Error::other)
     }
 
     /// Get a copy of the database metrics
@@ -336,7 +328,7 @@ impl Db {
     }
 
     /// Check the database for consistency
-    pub async fn check(&self, opt: CheckOpt) -> Result<(), firewood_storage::CheckerError> {
+    pub async fn check(&self, opt: CheckOpt) -> CheckerReport {
         let latest_rev_nodestore = self.manager.current_revision();
         latest_rev_nodestore.check(opt)
     }
@@ -344,46 +336,27 @@ impl Db {
 
 #[derive(Debug)]
 /// A user-visible database proposal
-pub struct Proposal<'p> {
+pub struct Proposal<'db> {
     nodestore: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>,
-    db: &'p Db,
-    committed: AtomicBool,
+    db: &'db Db,
 }
 
 impl Proposal<'_> {
-    /// Get the root hash of the proposal synchronously
-    pub fn start_commit(&self) -> Result<(), api::Error> {
-        if self
-            .committed
-            .swap(true, std::sync::atomic::Ordering::Relaxed)
-        {
-            return Err(api::Error::AlreadyCommitted);
-        }
-        Ok(())
-    }
-
-    /// Get the root hash of the proposal synchronously
-    pub fn root_hash_sync(&self) -> Result<Option<api::HashKey>, api::Error> {
-        #[cfg(not(feature = "ethhash"))]
-        return Ok(self.nodestore.root_hash());
-        #[cfg(feature = "ethhash")]
-        return Ok(Some(
-            self.nodestore
-                .root_hash()
-                .unwrap_or_else(firewood_storage::empty_trie_hash),
-        ));
+    /// Synchronously get the root hash of the latest revision.
+    pub fn root_hash_sync(&self) -> Result<Option<HashKey>, api::Error> {
+        Ok(self.nodestore.root_hash().or_default_root_hash())
     }
 }
 
 #[async_trait]
 impl api::DbView for Proposal<'_> {
-    type Stream<'b>
-        = MerkleKeyValueStream<'b, NodeStore<Arc<ImmutableProposal>, FileBacked>>
+    type Stream<'view>
+        = MerkleKeyValueStream<'view, NodeStore<Arc<ImmutableProposal>, FileBacked>>
     where
-        Self: 'b;
+        Self: 'view;
 
     async fn root_hash(&self) -> Result<Option<api::HashKey>, api::Error> {
-        Ok(self.nodestore.root_hash())
+        self.root_hash_sync()
     }
 
     async fn val<K: KeyType>(&self, key: K) -> Result<Option<Value>, api::Error> {
@@ -420,48 +393,46 @@ impl api::DbView for Proposal<'_> {
 }
 
 #[async_trait]
-impl<'a> api::Proposal for Proposal<'a> {
-    type Proposal = Proposal<'a>;
+impl<'db> api::Proposal for Proposal<'db> {
+    type Proposal = Proposal<'db>;
 
     #[fastrace::trace(short_name = true)]
-    async fn propose<K: KeyType, V: ValueType>(
-        self: Arc<Self>,
-        batch: api::Batch<K, V>,
-    ) -> Result<Arc<Self::Proposal>, api::Error> {
-        Ok(self.create_proposal(batch)?.into())
+    async fn propose(
+        &self,
+        batch: (impl IntoIterator<IntoIter: KeyValuePairIter> + Send),
+    ) -> Result<Self::Proposal, api::Error> {
+        self.create_proposal(batch)
     }
 
-    async fn commit(self: Arc<Self>) -> Result<(), api::Error> {
-        self.start_commit()?;
+    async fn commit(self) -> Result<(), api::Error> {
         Ok(self.db.manager.commit(self.nodestore.clone())?)
     }
 }
 
 impl Proposal<'_> {
     /// Commit a proposal synchronously
-    pub fn commit_sync(self: Arc<Self>) -> Result<(), api::Error> {
-        self.start_commit()?;
+    pub fn commit_sync(self) -> Result<(), api::Error> {
         Ok(self.db.manager.commit(self.nodestore.clone())?)
     }
 
     /// Create a new proposal from the current one synchronously
-    pub fn propose_sync<K: KeyType, V: ValueType>(
+    pub fn propose_sync(
         &self,
-        batch: api::Batch<K, V>,
-    ) -> Result<Arc<Self>, api::Error> {
-        Ok(self.create_proposal(batch)?.into())
+        batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
+    ) -> Result<Self, api::Error> {
+        self.create_proposal(batch)
     }
 
     #[crate::metrics("firewood.proposal.create", "database proposal creation")]
-    fn create_proposal<K: KeyType, V: ValueType>(
+    fn create_proposal(
         &self,
-        batch: api::Batch<K, V>,
+        batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
     ) -> Result<Self, api::Error> {
         let parent = self.nodestore.clone();
         let proposal = NodeStore::new(&parent)?;
         let mut merkle = Merkle::from(proposal);
         for op in batch {
-            match op {
+            match op.into_batch() {
                 BatchOp::Put { key, value } => {
                     merkle.insert(key.as_ref(), value.as_ref().into())?;
                 }
@@ -481,7 +452,6 @@ impl Proposal<'_> {
         Ok(Self {
             nodestore: immutable,
             db: self.db,
-            committed: AtomicBool::new(false),
         })
     }
 }
@@ -489,38 +459,56 @@ impl Proposal<'_> {
 #[cfg(test)]
 mod test {
     #![expect(clippy::unwrap_used)]
-    #![expect(
-        clippy::default_trait_access,
-        reason = "Found 1 occurrences after enabling the lint."
-    )]
 
+    use core::iter::Take;
+    use std::iter::Peekable;
+    use std::num::NonZeroUsize;
     use std::ops::{Deref, DerefMut};
     use std::path::PathBuf;
 
-    use firewood_storage::CheckOpt;
-    use rand::rng;
+    use firewood_storage::{CheckOpt, CheckerError};
+    use tokio::sync::mpsc::{Receiver, Sender};
 
-    use crate::db::Db;
-    use crate::v2::api::{Db as _, DbView as _, Error, Proposal as _};
+    use crate::db::{Db, Proposal};
+    use crate::v2::api::{Db as _, DbView as _, KeyValuePairIter, Proposal as _};
 
     use super::{BatchOp, DbConfig};
 
-    #[tokio::test]
-    async fn test_cloned_proposal_error() {
-        let db = testdb().await;
-        let proposal = db
-            .propose::<Vec<u8>, Vec<u8>>(Default::default())
-            .await
-            .unwrap();
-        let cloned = proposal.clone();
+    /// A chunk of an iterator, provided by [`IterExt::async_chunk_fold`] to the folding
+    /// function.
+    type Chunk<'chunk, 'base, T> = &'chunk mut Take<&'base mut Peekable<T>>;
 
-        // attempt to commit the clone; this should fail
-        let result = cloned.commit().await;
-        assert!(result.is_ok());
-
-        let result = proposal.commit().await;
-        assert!(matches!(result, Err(Error::AlreadyCommitted)), "{result:?}");
+    trait IterExt: Iterator {
+        /// Asynchronously folds the iterator with chunks of a specified size. The last
+        /// chunk may be smaller than the specified size.
+        ///
+        /// The folding function is an async closure that takes an accumulator and a
+        /// chunk of the underlying iterator, and returns a new accumulator.
+        ///
+        /// # Panics
+        ///
+        /// If the folding function does not consume the entire chunk, it will panic.
+        ///
+        /// If the folding function panics, the iterator will be dropped (because this
+        /// method consumes `self`).
+        async fn async_chunk_fold<B, F>(self, chunk_size: NonZeroUsize, init: B, mut f: F) -> B
+        where
+            Self: Sized,
+            F: for<'a, 'b> AsyncFnMut(B, Chunk<'a, 'b, Self>) -> B,
+        {
+            let chunk_size = chunk_size.get();
+            let mut iter = self.peekable();
+            let mut acc = init;
+            while iter.peek().is_some() {
+                let mut chunk = iter.by_ref().take(chunk_size);
+                acc = f(acc, chunk.by_ref()).await;
+                assert!(chunk.next().is_none(), "entire chunk was not consumed");
+            }
+            acc
+        }
     }
+
+    impl<T: Iterator> IterExt for T {}
 
     #[tokio::test]
     async fn test_proposal_reads() {
@@ -646,14 +634,14 @@ mod test {
             key: b"k2",
             value: b"v2",
         }];
-        let proposal2 = proposal1.clone().propose(batch2).await.unwrap();
+        let proposal2 = proposal1.propose(batch2).await.unwrap();
         assert_eq!(&*proposal2.val(b"k2").await.unwrap().unwrap(), b"v2");
 
         let batch3 = vec![BatchOp::Put {
             key: b"k3",
             value: b"v3",
         }];
-        let proposal3 = proposal2.clone().propose(batch3).await.unwrap();
+        let proposal3 = proposal2.propose(batch3).await.unwrap();
         assert_eq!(&*proposal3.val(b"k3").await.unwrap().unwrap(), b"v3");
 
         // the proposal is dropped here, but the underlying
@@ -743,16 +731,11 @@ mod test {
             .unzip();
 
         // create two batches, one with the first half of keys and values, and one with the last half keys and values
-        let mut kviter = keys
-            .iter()
-            .zip(vals.iter())
-            .map(|(k, v)| BatchOp::Put { key: k, value: v });
-        let batch1 = kviter.by_ref().take(N / 2).collect();
-        let batch2 = kviter.collect();
+        let mut kviter = keys.iter().zip(vals.iter()).map_into_batch();
 
         // create two proposals, second one has a base of the first one
-        let proposal1 = db.propose(batch1).await.unwrap();
-        let proposal2 = proposal1.clone().propose(batch2).await.unwrap();
+        let proposal1 = db.propose(kviter.by_ref().take(N / 2)).await.unwrap();
+        let proposal2 = proposal1.propose(kviter).await.unwrap();
 
         // iterate over the keys and values again, checking that the values are in the correct proposal
         let mut kviter = keys.iter().zip(vals.iter());
@@ -792,21 +775,9 @@ mod test {
 
     #[tokio::test]
     async fn fuzz_checker() {
-        use rand::rngs::StdRng;
-        use rand::{Rng, SeedableRng};
-
         let _ = env_logger::Builder::new().is_test(true).try_init();
 
-        let seed = std::env::var("FIREWOOD_TEST_SEED")
-            .ok()
-            .map_or_else(
-                || None,
-                |s| Some(str::parse(&s).expect("couldn't parse FIREWOOD_TEST_SEED; must be a u64")),
-            )
-            .unwrap_or_else(|| rng().random());
-
-        eprintln!("Seed {seed}: to rerun with this data, export FIREWOOD_TEST_SEED={seed}");
-        let rng = std::cell::RefCell::new(StdRng::seed_from_u64(seed));
+        let rng = firewood_storage::SeededRng::from_env_or_random();
 
         let db = testdb().await;
 
@@ -814,16 +785,16 @@ mod test {
         for _ in 0..50 {
             // create a batch of 10 random key-value pairs
             let batch = (0..10).fold(vec![], |mut batch, _| {
-                let key: [u8; 32] = rng.borrow_mut().random();
-                let value: [u8; 8] = rng.borrow_mut().random();
+                let key: [u8; 32] = rng.random();
+                let value: [u8; 8] = rng.random();
                 batch.push(BatchOp::Put {
                     key: key.to_vec(),
                     value,
                 });
-                if rng.borrow_mut().random_range(0..5) == 0 {
-                    let addon: [u8; 32] = rng.borrow_mut().random();
+                if rng.random_range(0..5) == 0 {
+                    let addon: [u8; 32] = rng.random();
                     let key = [key, addon].concat();
-                    let value: [u8; 8] = rng.borrow_mut().random();
+                    let value: [u8; 8] = rng.random();
                     batch.push(BatchOp::Put { key, value });
                 }
                 batch
@@ -832,74 +803,55 @@ mod test {
             proposal.commit().await.unwrap();
 
             // check the database for consistency, sometimes checking the hashes
-            let hash_check = rng.borrow_mut().random();
-            if let Err(e) = db
+            let hash_check = rng.random();
+            let report = db
                 .check(CheckOpt {
                     hash_check,
                     progress_bar: None,
                 })
-                .await
+                .await;
+            if report
+                .errors
+                .iter()
+                .filter(|e| !matches!(e, CheckerError::AreaLeaks(_)))
+                .count()
+                != 0
             {
                 db.dump(&mut std::io::stdout()).await.unwrap();
-                panic!("error: {e}");
+                panic!("error: {:?}", report.errors);
             }
         }
     }
 
     #[tokio::test]
     async fn test_deep_propose() {
-        const NUM_KEYS: usize = 2;
+        const NUM_KEYS: NonZeroUsize = const { NonZeroUsize::new(2).unwrap() };
         const NUM_PROPOSALS: usize = 100;
 
         let db = testdb().await;
 
-        // create NUM_KEYS * NUM_PROPOSALS keys and values
-        let (keys, vals): (Vec<_>, Vec<_>) = (0..NUM_KEYS * NUM_PROPOSALS)
-            .map(|i| {
-                (
-                    format!("key{i}").into_bytes(),
-                    Box::from(format!("value{i}").as_bytes()),
-                )
-            })
-            .unzip();
+        let ops = (0..(NUM_KEYS.get() * NUM_PROPOSALS))
+            .map(|i| (format!("key{i}"), format!("value{i}")))
+            .collect::<Vec<_>>();
 
-        // create batches of NUM_KEYS keys and values
-        let batches: Vec<_> = keys
-            .chunks(NUM_KEYS)
-            .zip(vals.chunks(NUM_KEYS))
-            .map(|(k, v)| {
-                k.iter()
-                    .zip(v.iter())
-                    .map(|(k, v)| BatchOp::Put { key: k, value: v })
-                    .collect()
-            })
-            .collect();
+        let proposals = ops
+            .iter()
+            .async_chunk_fold(
+                NUM_KEYS,
+                Vec::<Proposal<'_>>::with_capacity(NUM_PROPOSALS),
+                async |mut proposals, ops| {
+                    let proposal = if let Some(parent) = proposals.last() {
+                        parent.propose(ops).await.unwrap()
+                    } else {
+                        db.propose(ops).await.unwrap()
+                    };
 
-        // better be correct
-        assert_eq!(batches.len(), NUM_PROPOSALS);
+                    proposals.push(proposal);
+                    proposals
+                },
+            )
+            .await;
 
-        // create proposals from the batches. The first one is created from the db, the others are
-        // children
-        let mut batches_iter = batches.into_iter();
-        let mut proposals = vec![db.propose(batches_iter.next().unwrap()).await.unwrap()];
-
-        for batch in batches_iter {
-            let proposal = proposals
-                .last()
-                .unwrap()
-                .clone()
-                .propose(batch)
-                .await
-                .unwrap();
-            proposals.push(proposal);
-        }
-
-        // check that each value is present in the final proposal
-        for (k, v) in keys.iter().zip(vals.iter()) {
-            assert_eq!(&proposals.last().unwrap().val(k).await.unwrap().unwrap(), v);
-        }
-
-        // save the last proposal root hash for comparison with the final database root hash
         let last_proposal_root_hash = proposals
             .last()
             .unwrap()
@@ -921,9 +873,64 @@ mod test {
         assert_eq!(last_root_hash, last_proposal_root_hash);
 
         // check that all the keys and values are still present
-        for (k, v) in keys.iter().zip(vals.iter()) {
-            assert_eq!(&committed.val(k).await.unwrap().unwrap(), v);
+        for (k, v) in &ops {
+            let found = committed.val(k).await.unwrap();
+            assert_eq!(
+                found.as_deref(),
+                Some(v.as_bytes()),
+                "Value for key {k:?} should be {v:?} but was {found:?}",
+            );
         }
+    }
+
+    /// Test that reading from a proposal during commit works as expected
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_read_during_commit() {
+        use crate::db::Proposal;
+
+        const CHANNEL_CAPACITY: usize = 8;
+
+        let testdb = testdb().await;
+        let db = &testdb.db;
+
+        let (tx, mut rx): (Sender<Proposal<'_>>, Receiver<Proposal<'_>>) =
+            tokio::sync::mpsc::channel(CHANNEL_CAPACITY);
+        let (result_tx, mut result_rx) = tokio::sync::mpsc::channel(CHANNEL_CAPACITY);
+
+        tokio_scoped::scope(|scope| {
+            // Commit task
+            scope.spawn(async move {
+                while let Some(proposal) = rx.recv().await {
+                    let result = proposal.commit().await;
+                    // send result back to the main thread, both for synchronization and stopping the
+                    // test on error
+                    result_tx.send(result).await.unwrap();
+                }
+            });
+            scope.spawn(async move {
+                // Proposal creation
+                for id in 0u32..5000 {
+                    // insert a key of length 32 and a value of length 8,
+                    // rotating between all zeroes through all 255
+                    let batch = vec![BatchOp::Put {
+                        key: [id as u8; 32],
+                        value: [id as u8; 8],
+                    }];
+                    let proposal = db.propose(batch).await.unwrap();
+                    let last_hash = proposal.root_hash().await.unwrap().unwrap();
+                    let view = db.view_sync(last_hash).unwrap();
+
+                    tx.send(proposal).await.unwrap();
+
+                    let key = [id as u8; 32];
+                    let value = view.val_sync_bytes(&key).unwrap().unwrap();
+                    assert_eq!(&*value, &[id as u8; 8]);
+                    result_rx.recv().await.unwrap().unwrap();
+                }
+                // close the channel, which will cause the commit task to exit
+                drop(tx);
+            });
+        });
     }
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear

@@ -1,10 +1,14 @@
-// Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
 #![doc = include_str!("../README.md")]
 #![expect(
     unsafe_code,
     reason = "This is an FFI library, so unsafe code is expected."
+)]
+#![expect(
+    clippy::undocumented_unsafe_blocks,
+    reason = "https://github.com/ava-labs/firewood/pull/1158 will remove"
 )]
 #![cfg_attr(
     not(target_pointer_width = "64"),
@@ -22,14 +26,14 @@ use std::ops::Deref;
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Mutex, RwLock};
 
 use firewood::db::{
     BatchOp as DbBatchOp, Db, DbConfig, DbViewSync as _, DbViewSyncBytes, Proposal,
 };
 use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
 
-use firewood::v2::api::HashKey;
+use firewood::v2::api::{HashKey, KeyValuePairIter};
 use metrics::counter;
 
 #[doc(hidden)]
@@ -60,7 +64,7 @@ pub struct DatabaseHandle<'p> {
     /// List of oustanding proposals, by ID
     // Keep proposals first, as they must be dropped before the database handle is dropped due to lifetime
     // issues.
-    proposals: RwLock<HashMap<ProposalId, Arc<Proposal<'p>>>>,
+    proposals: RwLock<HashMap<ProposalId, Proposal<'p>>>,
 
     /// A single cached view to improve performance of reads while committing
     cached_view: Mutex<Option<(HashKey, Box<dyn DbViewSyncBytes>)>>,
@@ -238,7 +242,7 @@ fn get_from_root(
     key: &Value,
 ) -> Result<Value, String> {
     let db = db.ok_or("db should be non-null")?;
-    let requested_root = root.as_slice().try_into()?;
+    let requested_root = HashKey::try_from(root.as_slice()).map_err(|e| e.to_string())?;
     let mut cached_view = db.cached_view.lock().expect("cached_view lock is poisoned");
     let value = match cached_view.as_ref() {
         // found the cached view, use it
@@ -266,7 +270,7 @@ fn view_sync_from_root(
     root: &Value,
 ) -> Result<Box<dyn DbViewSyncBytes>, String> {
     let rev = db
-        .view_sync(root.as_slice().try_into()?)
+        .view_sync(HashKey::try_from(root.as_slice()).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     Ok(rev)
 }
@@ -322,21 +326,11 @@ pub unsafe extern "C" fn fwd_batch(
 /// * `values` - A slice of `KeyValue` structs
 ///
 /// # Returns
-fn convert_to_batch(values: &[KeyValue]) -> Vec<DbBatchOp<&[u8], &[u8]>> {
-    let mut batch = Vec::with_capacity(values.len());
-    for kv in values {
-        if kv.value.len == 0 {
-            batch.push(DbBatchOp::DeleteRange {
-                prefix: kv.key.as_slice(),
-            });
-        } else {
-            batch.push(DbBatchOp::Put {
-                key: kv.key.as_slice(),
-                value: kv.value.as_slice(),
-            });
-        }
-    }
-    batch
+fn convert_to_batch(values: &[KeyValue]) -> impl IntoIterator<Item = DbBatchOp<&[u8], &[u8]>> {
+    values
+        .iter()
+        .map(|kv| (kv.key.as_slice(), kv.value.as_slice()))
+        .map_into_batch()
 }
 
 /// Internal call for `fwd_batch` to remove error handling from the C API

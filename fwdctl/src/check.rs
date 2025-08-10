@@ -6,22 +6,17 @@ use std::sync::Arc;
 
 use clap::Args;
 use firewood::v2::api;
-use firewood_storage::{CacheReadStrategy, CheckOpt, FileBacked, NodeStore};
+use firewood_storage::{CacheReadStrategy, CheckOpt, CheckerReport, FileBacked, NodeStore};
 use indicatif::{ProgressBar, ProgressFinish, ProgressStyle};
 use nonzero_ext::nonzero;
+
+use crate::DatabasePath;
 
 // TODO: (optionally) add a fix option
 #[derive(Args)]
 pub struct Options {
-    /// The database path (if no path is provided, return an error). Defaults to firewood.
-    #[arg(
-        long,
-        required = false,
-        value_name = "DB_NAME",
-        default_value_t = String::from("firewood"),
-        help = "Name of the database"
-    )]
-    pub db: String,
+    #[command(flatten)]
+    pub database: DatabasePath,
 
     /// Whether to perform hash check
     #[arg(
@@ -34,7 +29,7 @@ pub struct Options {
 }
 
 pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
-    let db_path = PathBuf::from(&opts.db);
+    let db_path = PathBuf::from(&opts.database.dbpath);
     let node_cache_size = nonzero!(1usize);
     let free_list_cache_size = nonzero!(1usize);
 
@@ -43,6 +38,7 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
         node_cache_size,
         free_list_cache_size,
         false,
+        false,                         // don't create if missing
         CacheReadStrategy::WritesOnly, // we scan the database once - no need to cache anything
     )?;
     let storage = Arc::new(fb);
@@ -55,10 +51,36 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
         )
         .with_finish(ProgressFinish::WithMessage("Check Completed!".into()));
 
-    NodeStore::open(storage)?
-        .check(CheckOpt {
-            hash_check: opts.hash_check,
-            progress_bar: Some(progress_bar),
-        })
-        .map_err(|e| api::Error::InternalError(Box::new(e)))
+    let report = NodeStore::open(storage)?.check(CheckOpt {
+        hash_check: opts.hash_check,
+        progress_bar: Some(progress_bar),
+    });
+
+    print_checker_report(report);
+
+    Ok(())
+}
+
+#[expect(clippy::cast_precision_loss)]
+fn print_checker_report(report: CheckerReport) {
+    println!("Raw Report: {report:?}\n");
+
+    println!("Advanced Data: ");
+    let total_trie_area_bytes = report
+        .trie_stats
+        .area_counts
+        .iter()
+        .map(|(area_size, count)| area_size.saturating_mul(*count))
+        .sum::<u64>();
+    println!(
+        "\tStorage Space Utilization: {} / {} = {:.2}%",
+        report.trie_stats.trie_bytes,
+        report.physical_bytes,
+        (report.trie_stats.trie_bytes as f64 / report.physical_bytes as f64) * 100.0
+    );
+    println!(
+        "\tInternal Fragmentation: {} / {total_trie_area_bytes} = {:.2}%",
+        report.trie_stats.trie_bytes,
+        (report.trie_stats.trie_bytes as f64 / total_trie_area_bytes as f64) * 100.0
+    );
 }

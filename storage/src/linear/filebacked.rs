@@ -38,7 +38,7 @@ use metrics::counter;
 
 use crate::{CacheReadStrategy, LinearAddress, MaybePersistedNode, SharedNode};
 
-use super::{FileIoError, ReadableStorage, WritableStorage};
+use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
 
 /// A [`ReadableStorage`] and [`WritableStorage`] backed by a file
 pub struct FileBacked {
@@ -91,13 +91,14 @@ impl FileBacked {
         node_cache_size: NonZero<usize>,
         free_list_cache_size: NonZero<usize>,
         truncate: bool,
+        create: bool,
         cache_read_strategy: CacheReadStrategy,
     ) -> Result<Self, FileIoError> {
         let fd = OpenOptions::new()
             .read(true)
             .write(true)
             .truncate(truncate)
-            .create(true)
+            .create(create)
             .open(&path)
             .map_err(|e| FileIoError {
                 inner: e,
@@ -141,9 +142,9 @@ impl FileBacked {
 }
 
 impl ReadableStorage for FileBacked {
-    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, FileIoError> {
+    fn stream_from(&self, addr: u64) -> Result<impl OffsetReader, FileIoError> {
         counter!("firewood.read_node", "from" => "file").increment(1);
-        Ok(Box::new(PredictiveReader::new(self, addr)))
+        Ok(PredictiveReader::new(self, addr))
     }
 
     fn size(&self) -> Result<u64, FileIoError> {
@@ -214,11 +215,18 @@ impl WritableStorage for FileBacked {
 
     fn write_cached_nodes(
         &self,
-        nodes: impl IntoIterator<Item = (LinearAddress, SharedNode)>,
+        nodes: impl IntoIterator<Item = MaybePersistedNode>,
     ) -> Result<(), FileIoError> {
         let mut guard = self.cache.lock().expect("poisoned lock");
-        for (addr, node) in nodes {
-            guard.put(addr, node);
+        for maybe_persisted_node in nodes {
+            // Since we know the node is in Allocated state, we can get both address and shared node
+            let (addr, shared_node) = maybe_persisted_node
+                .allocated_info()
+                .expect("node should be allocated");
+
+            guard.put(addr, shared_node);
+            // The node can now be read from the general cache, so we can delete the local copy
+            maybe_persisted_node.persist_at(addr);
         }
         Ok(())
     }
@@ -295,6 +303,12 @@ impl Read for PredictiveReader<'_> {
     }
 }
 
+impl OffsetReader for PredictiveReader<'_> {
+    fn offset(&self) -> u64 {
+        self.offset - self.len as u64 + self.pos as u64
+    }
+}
+
 #[cfg(test)]
 mod test {
     #![expect(clippy::unwrap_used)]
@@ -318,6 +332,7 @@ mod test {
             nonzero!(10usize),
             nonzero!(10usize),
             false,
+            true,
             CacheReadStrategy::WritesOnly,
         )
         .unwrap();
@@ -359,6 +374,7 @@ mod test {
             nonzero!(10usize),
             nonzero!(10usize),
             false,
+            true,
             CacheReadStrategy::WritesOnly,
         )
         .unwrap();

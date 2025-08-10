@@ -26,12 +26,15 @@
 //! - Metrics are collected for flush operation timing
 //! - Memory-efficient serialization with pre-allocated buffers
 //! - Ring buffer management for io-uring operations
+//!
+//!
 
 use std::iter::FusedIterator;
 
 use crate::linear::FileIoError;
+use crate::nodestore::AreaIndex;
+use crate::{firewood_counter, firewood_gauge};
 use coarsetime::Instant;
-use metrics::counter;
 
 #[cfg(feature = "io-uring")]
 use crate::logger::trace;
@@ -240,37 +243,38 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
     fn flush_nodes_generic(&self) -> Result<NodeStoreHeader, FileIoError> {
         let flush_start = Instant::now();
 
-        // keep arcs to the allocated nodes to add them to cache
+        // keep MaybePersistedNodes to add them to cache and persist them
         let mut cached_nodes = Vec::new();
-
-        // find all the unpersisted nodes
-        let unpersisted_iter = UnPersistedNodeIterator::new(self);
 
         let mut header = self.header;
         let mut allocator = NodeAllocator::new(self.storage.as_ref(), &mut header);
-        for node in unpersisted_iter {
+        for node in UnPersistedNodeIterator::new(self) {
             let shared_node = node.as_shared_node(self).expect("in memory, so no IO");
             let mut serialized = Vec::new();
-            shared_node.as_bytes(0, &mut serialized);
+            shared_node.as_bytes(AreaIndex::MIN, &mut serialized);
 
             let (persisted_address, area_size_index) =
                 allocator.allocate_node(serialized.as_slice())?;
-            *serialized.get_mut(0).expect("byte was reserved") = area_size_index;
+            *serialized.get_mut(0).expect("byte was reserved") = area_size_index.get();
             self.storage
                 .write(persisted_address.get(), serialized.as_slice())?;
-            node.persist_at(persisted_address);
 
-            // Move the arc to a vector of persisted nodes for caching
-            // we save them so we don't have to lock the cache while we write them
-            // If we ever persist out of band, we might have a race condition, so
-            // consider adding each node to the cache as we persist them
-            cached_nodes.push((persisted_address, shared_node));
+            // Decrement gauge immediately after node is written to storage
+            firewood_gauge!(
+                "firewood.nodes.unwritten",
+                "current number of unwritten nodes"
+            )
+            .decrement(1.0);
+
+            // Allocate the node to store the address, then collect for caching and persistence
+            node.allocate_at(persisted_address);
+            cached_nodes.push(node);
         }
 
         self.storage.write_cached_nodes(cached_nodes)?;
 
         let flush_time = flush_start.elapsed().as_millis();
-        counter!("firewood.flush_nodes").increment(flush_time);
+        firewood_counter!("firewood.flush_nodes", "flushed node amount").increment(flush_time);
 
         Ok(header)
     }
@@ -303,6 +307,11 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
         // Finally persist the header
         self.flush_header()?;
 
+        // Reset unwritten nodes counter to zero since all nodes are now persisted
+        self.kind
+            .unwritten_nodes
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+
         Ok(())
     }
 }
@@ -316,20 +325,23 @@ impl NodeStore<Committed, FileBacked> {
     #[fastrace::trace(short_name = true)]
     #[cfg(feature = "io-uring")]
     fn flush_nodes_io_uring(&mut self) -> Result<NodeStoreHeader, FileIoError> {
+        use crate::LinearAddress;
         use std::pin::Pin;
 
         #[derive(Clone, Debug)]
         struct PinnedBufferEntry {
             pinned_buffer: Pin<Box<[u8]>>,
-            offset: Option<u64>,
+            node: Option<(LinearAddress, MaybePersistedNode)>,
         }
 
         /// Helper function to handle completion queue entries and check for errors
+        /// Returns the number of completed operations
         fn handle_completion_queue(
             storage: &FileBacked,
             completion_queue: io_uring::cqueue::CompletionQueue<'_>,
             saved_pinned_buffers: &mut [PinnedBufferEntry],
-        ) -> Result<(), FileIoError> {
+        ) -> Result<usize, FileIoError> {
+            let mut completed_count = 0usize;
             for entry in completion_queue {
                 let item = entry.user_data() as usize;
                 let pbe = saved_pinned_buffers
@@ -348,15 +360,18 @@ impl NodeStore<Committed, FileBacked> {
                     } else {
                         std::io::Error::from_raw_os_error(0 - entry.result())
                     };
+                    let (addr, _) = pbe.node.as_ref().expect("node should be Some");
                     return Err(storage.file_io_error(
                         error,
-                        pbe.offset.expect("offset should be Some"),
+                        addr.get(),
                         Some("write failure".to_string()),
                     ));
                 }
-                pbe.offset = None;
+                // I/O completed successfully
+                pbe.node = None;
+                completed_count = completed_count.wrapping_add(1);
             }
-            Ok(())
+            Ok(completed_count)
         }
 
         const RINGSIZE: usize = FileBacked::RINGSIZE as usize;
@@ -366,12 +381,6 @@ impl NodeStore<Committed, FileBacked> {
         let mut header = self.header;
         let mut node_allocator = NodeAllocator::new(self.storage.as_ref(), &mut header);
 
-        // Collect all unpersisted nodes first to avoid mutating self while iterating
-        let unpersisted_nodes: Vec<MaybePersistedNode> = {
-            let unpersisted_iter = UnPersistedNodeIterator::new(self);
-            unpersisted_iter.collect()
-        };
-
         // Collect addresses and nodes for caching
         let mut cached_nodes = Vec::new();
 
@@ -379,19 +388,19 @@ impl NodeStore<Committed, FileBacked> {
         let mut saved_pinned_buffers = vec![
             PinnedBufferEntry {
                 pinned_buffer: Pin::new(Box::new([0; 0])),
-                offset: None,
+                node: None,
             };
             RINGSIZE
         ];
 
-        // Process each unpersisted node
-        for node in unpersisted_nodes {
+        // Process each unpersisted node directly from the iterator
+        for node in UnPersistedNodeIterator::new(self) {
             let shared_node = node.as_shared_node(self).expect("in memory, so no IO");
             let mut serialized = Vec::with_capacity(100); // TODO: better size? we can guess branches are larger
-            shared_node.as_bytes(0, &mut serialized);
+            shared_node.as_bytes(AreaIndex::MIN, &mut serialized);
             let (persisted_address, area_size_index) =
                 node_allocator.allocate_node(serialized.as_slice())?;
-            *serialized.get_mut(0).expect("byte was reserved") = area_size_index;
+            *serialized.get_mut(0).expect("byte was reserved") = area_size_index.get();
             let mut serialized = serialized.into_boxed_slice();
 
             loop {
@@ -399,10 +408,10 @@ impl NodeStore<Committed, FileBacked> {
                 if let Some((pos, pbe)) = saved_pinned_buffers
                     .iter_mut()
                     .enumerate()
-                    .find(|(_, pbe)| pbe.offset.is_none())
+                    .find(|(_, pbe)| pbe.node.is_none())
                 {
                     pbe.pinned_buffer = std::pin::Pin::new(std::mem::take(&mut serialized));
-                    pbe.offset = Some(persisted_address.get());
+                    pbe.node = Some((persisted_address, node.clone()));
 
                     let submission_queue_entry = self
                         .storage
@@ -411,10 +420,10 @@ impl NodeStore<Committed, FileBacked> {
                         .build()
                         .user_data(pos as u64);
 
+                    #[expect(unsafe_code)]
                     // SAFETY: the submission_queue_entry's found buffer must not move or go out of scope
                     // until the operation has been completed. This is ensured by having a Some(offset)
                     // and not marking it None until the kernel has said it's done below.
-                    #[expect(unsafe_code)]
                     while unsafe { ring.submission().push(&submission_queue_entry) }.is_err() {
                         ring.submitter().squeue_wait().map_err(|e| {
                             self.storage.file_io_error(
@@ -424,52 +433,73 @@ impl NodeStore<Committed, FileBacked> {
                             )
                         })?;
                         trace!("submission queue is full");
-                        counter!("ring.full").increment(1);
+                        firewood_counter!("ring.full", "amount of full ring").increment(1);
                     }
                     break;
                 }
                 // if we get here, that means we couldn't find a place to queue the request, so wait for at least one operation
                 // to complete, then handle the completion queue
-                counter!("ring.full").increment(1);
+                firewood_counter!("ring.full", "amount of full ring").increment(1);
                 ring.submit_and_wait(1).map_err(|e| {
                     self.storage
                         .file_io_error(e, 0, Some("io-uring submit_and_wait".to_string()))
                 })?;
                 let completion_queue = ring.completion();
                 trace!("competion queue length: {}", completion_queue.len());
-                handle_completion_queue(
+                let completed_writes = handle_completion_queue(
                     &self.storage,
                     completion_queue,
                     &mut saved_pinned_buffers,
                 )?;
+
+                // Decrement gauge for writes that have actually completed
+                if completed_writes > 0 {
+                    #[expect(clippy::cast_precision_loss)]
+                    firewood_gauge!(
+                        "firewood.nodes.unwritten",
+                        "current number of unwritten nodes"
+                    )
+                    .decrement(completed_writes as f64);
+                }
             }
 
-            // Mark node as persisted and collect for cache
-            node.persist_at(persisted_address);
-            cached_nodes.push((persisted_address, shared_node));
+            // Allocate the node to store the address, then collect for caching and persistence
+            node.allocate_at(persisted_address);
+            cached_nodes.push(node);
         }
         let pending = saved_pinned_buffers
             .iter()
-            .filter(|pbe| pbe.offset.is_some())
+            .filter(|pbe| pbe.node.is_some())
             .count();
         ring.submit_and_wait(pending).map_err(|e| {
             self.storage
                 .file_io_error(e, 0, Some("io-uring final submit_and_wait".to_string()))
         })?;
 
-        handle_completion_queue(&self.storage, ring.completion(), &mut saved_pinned_buffers)?;
+        let final_completed_writes =
+            handle_completion_queue(&self.storage, ring.completion(), &mut saved_pinned_buffers)?;
+
+        // Decrement gauge for final batch of writes that completed
+        if final_completed_writes > 0 {
+            #[expect(clippy::cast_precision_loss)]
+            firewood_gauge!(
+                "firewood.nodes.unwritten",
+                "current number of unwritten nodes"
+            )
+            .decrement(final_completed_writes as f64);
+        }
 
         debug_assert!(
-            !saved_pinned_buffers.iter().any(|pbe| pbe.offset.is_some()),
-            "Found entry with offset still set: {:?}",
-            saved_pinned_buffers.iter().find(|pbe| pbe.offset.is_some())
+            !saved_pinned_buffers.iter().any(|pbe| pbe.node.is_some()),
+            "Found entry with node still set: {:?}",
+            saved_pinned_buffers.iter().find(|pbe| pbe.node.is_some())
         );
 
         self.storage.write_cached_nodes(cached_nodes)?;
         debug_assert!(ring.completion().is_empty());
 
         let flush_time = flush_start.elapsed().as_millis();
-        counter!("firewood.flush_nodes").increment(flush_time);
+        firewood_counter!("firewood.flush_nodes", "amount flushed nodes").increment(flush_time);
 
         Ok(header)
     }
@@ -525,7 +555,7 @@ mod tests {
         for (index, child) in children {
             let shared_child = SharedNode::new(child);
             let maybe_persisted = MaybePersistedNode::from(shared_child);
-            let hash = HashType::default();
+            let hash = HashType::empty();
             branch.children[index as usize] = Some(Child::MaybePersisted(maybe_persisted, hash));
         }
 
@@ -632,21 +662,21 @@ mod tests {
             // unpersisted leaves
             Child::MaybePersisted(
                 MaybePersistedNode::from(SharedNode::new(leaves[0].clone())),
-                HashType::default(),
+                HashType::empty(),
             ),
             Child::MaybePersisted(
                 MaybePersistedNode::from(SharedNode::new(leaves[1].clone())),
-                HashType::default(),
+                HashType::empty(),
             ),
             // unpersisted branch
             Child::MaybePersisted(
                 MaybePersistedNode::from(SharedNode::new(inner_branch.clone())),
-                HashType::default(),
+                HashType::empty(),
             ),
             // persisted branch
             Child::MaybePersisted(
                 MaybePersistedNode::from(LinearAddress::new(42).unwrap()),
-                HashType::default(),
+                HashType::empty(),
             ),
         ]
         .into_iter()
@@ -759,6 +789,7 @@ mod tests {
                     nonzero!(10usize),
                     nonzero!(10usize),
                     false,
+                    true,
                     CacheReadStrategy::WritesOnly,
                 )
                 .unwrap(),

@@ -29,15 +29,18 @@ mod iter;
 mod linear;
 mod node;
 mod nodestore;
+#[cfg(any(test, feature = "test_utils"))]
+mod test_utils;
 mod trie_hash;
-
-use crate::nodestore::AreaIndex;
 
 /// Logger module for handling logging functionality
 pub mod logger;
 
+#[macro_use]
+/// Macros module for defining macros used in the storage module
+pub mod macros;
 // re-export these so callers don't need to know where they are
-pub use checker::CheckOpt;
+pub use checker::{CheckOpt, CheckerReport, FreeListsStats, TrieStats};
 pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use node::path::{NibblesIterator, Path};
@@ -46,15 +49,16 @@ pub use node::{
     branch::{HashType, IntoHashType},
 };
 pub use nodestore::{
-    Committed, HashedNodeReader, ImmutableProposal, LinearAddress, MutableProposal, NodeReader,
-    NodeStore, Parentable, RootReader, TrieReader,
+    AreaIndex, Committed, HashedNodeReader, ImmutableProposal, LinearAddress, MutableProposal,
+    NodeReader, NodeStore, Parentable, RootReader, TrieReader,
 };
 
 pub use linear::filebacked::FileBacked;
 pub use linear::memory::MemStore;
 pub use node::persist::MaybePersistedNode;
-
-pub use trie_hash::TrieHash;
+#[cfg(any(test, feature = "test_utils"))]
+pub use test_utils::SeededRng;
+pub use trie_hash::{InvalidTrieHashLength, TrieHash};
 
 /// A shared node, which is just a triophe Arc of a node
 pub type SharedNode = triomphe::Arc<Node>;
@@ -63,7 +67,7 @@ pub type SharedNode = triomphe::Arc<Node>;
 /// from the storage layer. Generally, we only want to
 /// cache write operations, but for some read-heavy workloads
 /// you can enable caching of branch reads or all reads.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CacheReadStrategy {
     /// Only cache writes (no reads will be cached)
     WritesOnly,
@@ -79,24 +83,6 @@ impl Display for CacheReadStrategy {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         write!(f, "{self:?}")
     }
-}
-
-/// Returns the hash of an empty trie, which is the Keccak256 hash of the RLP encoding of an empty byte array.
-///
-/// This function is slow, so callers should cache the result
-#[cfg(feature = "ethhash")]
-#[must_use]
-#[expect(
-    clippy::missing_panics_doc,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-pub fn empty_trie_hash() -> TrieHash {
-    use sha3::Digest as _;
-
-    sha3::Keccak256::digest(rlp::NULL_RLP)
-        .as_slice()
-        .try_into()
-        .expect("empty trie hash is 32 bytes")
 }
 
 /// This enum encapsulates what points to the stored area.
@@ -223,6 +209,21 @@ pub enum CheckerError {
         parent: StoredAreaParent,
     },
 
+    /// Node is larger than the area it is stored in
+    #[error(
+        "stored area at {area_start:#x} with size {area_size} (parent: {parent:#x}) stores a node of size {node_bytes}"
+    )]
+    NodeLargerThanArea {
+        /// Address of the area
+        area_start: LinearAddress,
+        /// Size of the area
+        area_size: u64,
+        /// Size of the node
+        node_bytes: u64,
+        /// The parent of the area
+        parent: TrieNodeParent,
+    },
+
     /// Freelist area size does not match
     #[error(
         "Free area {address:#x} of size {size} (parent: {parent:#x}) is found in free list {actual_free_list} but it should be in freelist {expected_free_list}"
@@ -243,7 +244,7 @@ pub enum CheckerError {
     /// The start address of a stored area is not a multiple of 16
     #[error(
         "The start address of a stored area (parent: {parent:#x}) is not a multiple of {}: {address:#x}",
-        nodestore::alloc::LinearAddress::MIN_AREA_SIZE
+        nodestore::primitives::AreaIndex::MIN_AREA_SIZE
     )]
     AreaMisaligned {
         /// The start address of the stored area
@@ -261,29 +262,34 @@ pub enum CheckerError {
     #[error("The checker can only check persisted nodestores")]
     UnpersistedRoot,
 
+    #[error(
+        "The node {key:#x} at {address:#x} (parent: {parent:#x}) has a value but its path is not 32 or 64 bytes long"
+    )]
+    /// A value is found corresponding to an invalid key.
+    /// With ethhash, keys must be 32 or 64 bytes long.
+    /// Without ethhash, keys cannot contain half-bytes (i.e., odd number of nibbles).
+    InvalidKey {
+        /// The key found, or equivalently the path of the node that stores the value
+        key: Path,
+        /// Address of the node
+        address: LinearAddress,
+        /// Parent of the node
+        parent: TrieNodeParent,
+    },
+
     /// IO error
     #[error("IO error")]
     #[derive_where(skip_inner)]
-    IO(#[from] FileIoError),
+    IO {
+        /// The error
+        error: FileIoError,
+        /// parent of the area
+        parent: Option<StoredAreaParent>,
+    },
 }
 
-#[cfg(test)]
-mod test_utils {
-    use rand::rngs::StdRng;
-    use rand::{Rng, SeedableRng, rng};
-
-    pub fn seeded_rng() -> StdRng {
-        let seed = std::env::var("FIREWOOD_STORAGE_TEST_SEED")
-            .ok()
-            .map_or_else(
-                || rng().random(),
-                |s| {
-                    str::parse(&s)
-                        .expect("couldn't parse FIREWOOD_STORAGE_TEST_SEED; must be a u64")
-                },
-            );
-
-        eprintln!("Seed {seed}: to rerun with this data, export FIREWOOD_STORAGE_TEST_SEED={seed}");
-        StdRng::seed_from_u64(seed)
+impl From<CheckerError> for Vec<CheckerError> {
+    fn from(error: CheckerError) -> Self {
+        vec![error]
     }
 }

@@ -13,8 +13,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::num::NonZero;
 use std::path::PathBuf;
-#[cfg(feature = "ethhash")]
-use std::sync::OnceLock;
 use std::sync::{Arc, Mutex, RwLock};
 
 use firewood_storage::logger::{trace, warn};
@@ -22,14 +20,14 @@ use metrics::gauge;
 use typed_builder::TypedBuilder;
 
 use crate::merkle::Merkle;
-use crate::v2::api::HashKey;
+use crate::v2::api::{HashKey, OptionalHashKeyExt};
 
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
     Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore, TrieHash,
 };
 
-#[derive(Clone, Debug, TypedBuilder)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, TypedBuilder)]
 /// Revision manager configuratoin
 pub struct RevisionManagerConfig {
     /// The number of historical revisions to keep in memory.
@@ -47,6 +45,21 @@ pub struct RevisionManagerConfig {
     cache_read_strategy: CacheReadStrategy,
 }
 
+#[derive(Clone, Debug, TypedBuilder)]
+/// Configuration manager that contains both truncate and revision manager config
+pub struct ConfigManager {
+    /// Whether to create the DB if it doesn't exist.
+    #[builder(default = true)]
+    pub create: bool,
+    /// Whether to truncate the DB when opening it. If set, the DB will be reset and all its
+    /// existing contents will be lost.
+    #[builder(default = false)]
+    pub truncate: bool,
+    /// Revision manager configuration.
+    #[builder(default = RevisionManagerConfig::builder().build())]
+    pub manager: RevisionManagerConfig,
+}
+
 type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
 type ProposedRevision = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>;
 
@@ -61,49 +74,44 @@ pub(crate) struct RevisionManager {
     proposals: Mutex<Vec<ProposedRevision>>,
     // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
     by_hash: RwLock<HashMap<TrieHash, CommittedRevision>>,
-
-    #[cfg(feature = "ethhash")]
-    empty_hash: OnceLock<TrieHash>,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RevisionManagerError {
+    #[error("Revision for {provided:?} not found")]
+    RevisionNotFound { provided: HashKey },
     #[error(
-        "The proposal cannot be committed since it is not a direct child of the most recent commit"
+        "The proposal cannot be committed since it is not a direct child of the most recent commit. Proposal parent: {provided:?}, current root: {expected:?}"
     )]
-    NotLatest,
-    #[error("Revision not found")]
-    RevisionNotFound,
+    NotLatest {
+        provided: Option<HashKey>,
+        expected: Option<HashKey>,
+    },
     #[error("An IO error occurred during the commit")]
     FileIoError(#[from] FileIoError),
 }
 
 impl RevisionManager {
-    pub fn new(
-        filename: PathBuf,
-        truncate: bool,
-        config: RevisionManagerConfig,
-    ) -> Result<Self, FileIoError> {
+    pub fn new(filename: PathBuf, config: ConfigManager) -> Result<Self, FileIoError> {
         let fb = FileBacked::new(
             filename,
-            config.node_cache_size,
-            config.free_list_cache_size,
-            truncate,
-            config.cache_read_strategy,
+            config.manager.node_cache_size,
+            config.manager.free_list_cache_size,
+            config.truncate,
+            config.create,
+            config.manager.cache_read_strategy,
         )?;
         let storage = Arc::new(fb);
         let nodestore = Arc::new(NodeStore::open(storage.clone())?);
         let manager = Self {
-            max_revisions: config.max_revisions,
+            max_revisions: config.manager.max_revisions,
             historical: RwLock::new(VecDeque::from([nodestore.clone()])),
             by_hash: RwLock::new(Default::default()),
             proposals: Mutex::new(Default::default()),
             // committing_proposals: Default::default(),
-            #[cfg(feature = "ethhash")]
-            empty_hash: OnceLock::new(),
         };
 
-        if let Some(hash) = nodestore.root_hash().or_else(|| manager.empty_trie_hash()) {
+        if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
             manager
                 .by_hash
                 .write()
@@ -111,7 +119,7 @@ impl RevisionManager {
                 .insert(hash, nodestore.clone());
         }
 
-        if truncate {
+        if config.truncate {
             nodestore.flush_header_with_padding()?;
         }
 
@@ -123,13 +131,13 @@ impl RevisionManager {
             .read()
             .expect("poisoned lock")
             .iter()
-            .filter_map(|r| r.root_hash().or_else(|| self.empty_trie_hash()))
+            .filter_map(|r| r.root_hash().or_default_root_hash())
             .chain(
                 self.proposals
                     .lock()
                     .expect("poisoned lock")
                     .iter()
-                    .filter_map(|p| p.root_hash().or_else(|| self.empty_trie_hash())),
+                    .filter_map(|p| p.root_hash().or_default_root_hash()),
             )
             .collect()
     }
@@ -156,7 +164,10 @@ impl RevisionManager {
         // 1. Commit check
         let current_revision = self.current_revision();
         if !proposal.parent_hash_is(current_revision.root_hash()) {
-            return Err(RevisionManagerError::NotLatest);
+            return Err(RevisionManagerError::NotLatest {
+                provided: proposal.root_hash(),
+                expected: current_revision.root_hash(),
+            });
         }
 
         let mut committed = proposal.as_committed(&current_revision);
@@ -173,7 +184,7 @@ impl RevisionManager {
                 .expect("poisoned lock")
                 .pop_front()
                 .expect("must be present");
-            if let Some(oldest_hash) = oldest.root_hash().or_else(|| self.empty_trie_hash()) {
+            if let Some(oldest_hash) = oldest.root_hash().or_default_root_hash() {
                 self.by_hash
                     .write()
                     .expect("poisoned lock")
@@ -212,7 +223,7 @@ impl RevisionManager {
             .write()
             .expect("poisoned lock")
             .push_back(committed.clone());
-        if let Some(hash) = committed.root_hash().or_else(|| self.empty_trie_hash()) {
+        if let Some(hash) = committed.root_hash().or_default_root_hash() {
             self.by_hash
                 .write()
                 .expect("poisoned lock")
@@ -234,7 +245,9 @@ impl RevisionManager {
 
         if crate::logger::trace_enabled() {
             let merkle = Merkle::from(committed);
-            trace!("{}", merkle.dump().expect("failed to dump merkle"));
+            if let Ok(s) = merkle.dump_to_string() {
+                trace!("{s}");
+            }
         }
 
         Ok(())
@@ -263,7 +276,9 @@ impl RevisionManager {
             .iter()
             .find(|p| p.root_hash().as_ref() == Some(&root_hash))
             .cloned()
-            .ok_or(RevisionManagerError::RevisionNotFound)?;
+            .ok_or(RevisionManagerError::RevisionNotFound {
+                provided: root_hash,
+            })?;
 
         Ok(Box::new(proposal))
     }
@@ -274,7 +289,9 @@ impl RevisionManager {
             .expect("poisoned lock")
             .get(&root_hash)
             .cloned()
-            .ok_or(RevisionManagerError::RevisionNotFound)
+            .ok_or(RevisionManagerError::RevisionNotFound {
+                provided: root_hash,
+            })
     }
 
     pub fn root_hash(&self) -> Result<Option<HashKey>, RevisionManagerError> {
@@ -288,21 +305,6 @@ impl RevisionManager {
             .back()
             .expect("there is always one revision")
             .clone()
-    }
-    #[cfg(not(feature = "ethhash"))]
-    #[inline]
-    pub const fn empty_trie_hash(&self) -> Option<TrieHash> {
-        None
-    }
-
-    #[cfg(feature = "ethhash")]
-    #[inline]
-    pub fn empty_trie_hash(&self) -> Option<TrieHash> {
-        Some(
-            self.empty_hash
-                .get_or_init(firewood_storage::empty_trie_hash)
-                .clone(),
-        )
     }
 }
 

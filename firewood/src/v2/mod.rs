@@ -4,8 +4,5 @@
 /// The public API
 pub mod api;
 
-/// The proposal
-pub mod propose;
-
-/// An empty database implementation for testing
-pub mod emptydb;
+/// A batch operation and associated types
+mod batch_op;
