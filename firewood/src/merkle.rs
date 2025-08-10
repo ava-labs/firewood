@@ -13,7 +13,6 @@ use firewood_storage::{
     LeafNode, MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore, Parentable,
     Path, ReadableStorage, SharedNode, TrieHash, TrieReader, ValueDigest,
 };
-
 use futures::{StreamExt, TryStreamExt};
 use metrics::counter;
 use std::collections::HashSet;
@@ -1025,7 +1024,9 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
         self.try_into().expect("failed to convert")
     }
 
-    fn fetch_or_create_root(&mut self, key: &[u8], value: Value) -> Option<(Node, Path, Value)> {
+    /// Map `key` to `value` in the trie.
+    /// Each element of key is 2 nibbles.
+    pub fn insert(&mut self, key: &[u8], value: Value) -> Result<(), FileIoError> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
 
         let root = self.nodestore.mut_root();
@@ -1038,20 +1039,12 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                 value,
             });
             *root = root_node.into();
-            return None;
+            return Ok(());
         };
-        Some((root_node, key, value))
-    }
 
-    /// Map `key` to `value` in the trie.
-    /// Each element of key is 2 nibbles.
-    pub fn insert(&mut self, key: &[u8], value: Value) -> Result<(), FileIoError> {
-        if let Some(root_tuple) = self.fetch_or_create_root(key, value) {
-            let (node, key, value) = root_tuple;
-            let root_node = self.insert_helper(node, key.as_ref(), value, Vec::default())?;
-            self.nodestore.append_deleted(root_node.1);
-            *self.nodestore.mut_root() = root_node.0.into();
-        }
+        let root_node = self.insert_helper(root_node, key.as_ref(), value, Vec::default())?;
+        self.nodestore.append_deleted(root_node.1);
+        *self.nodestore.mut_root() = root_node.0.into();
         Ok(())
     }
 
