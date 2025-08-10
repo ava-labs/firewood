@@ -775,7 +775,6 @@ pub enum MerkleOp<S> {
 
     /// Setting Merkle Arc
     SetMerkle(Box<Arc<Merkle<NodeStore<MutableProposal, S>>>>),
-    //SetMerkle(Option<Arc<Mutex<Merkle<NodeStore<MutableProposal, S>>>>>)
 }
 
 /// Data that the worker pool keeps for each worker.
@@ -785,11 +784,8 @@ type WorkerData<S> = (Sender<MerkleOp<S>>, Receiver<WorkerReturn>, JoinHandle<()
 /// update to get this node.
 type NodeWithDeleted = (Option<Node>, Vec<MaybePersistedNode>);
 
-/// Value returned by a worker thread in a channel. Currently the only value type
-/// is `NodeResult`. May remove this if no other types are needed.
-enum WorkerReturn {
-    NodeResult(Result<NodeWithDeleted, FileIoError>),
-}
+/// Value returned by a worker thread in a channel.
+type WorkerReturn = Result<NodeWithDeleted, FileIoError>;
 
 #[derive(Debug)]
 /// Worker pool used to issue concurrent inserts to a Merkle trie
@@ -870,7 +866,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
                                 // Send back error messsage to the main thread and then exit. Ignore any
                                 // errors when sending to the channel since we are exiting, although we
                                 // may want to add some logging in that case.
-                                let _ = thread_sender.send(WorkerReturn::NodeResult(Err(err)));
+                                let _ = thread_sender.send(Err(err));
                                 break;
                             }
                         };
@@ -885,10 +881,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
                         merkle = None; // Decrement the Arc counter
                         // Ignore sending errors here (should not happen during normal operation). May consider
                         // exiting the thread here, but that still leaves the system in a bad state.
-                        let _ = thread_sender.send(WorkerReturn::NodeResult(Ok((
-                            inserted_root,
-                            thread_deleted,
-                        ))));
+                        let _ = thread_sender.send(Ok((inserted_root, thread_deleted)));
                         inserted_root = None;
                         thread_deleted = Vec::default();
                     }
@@ -981,15 +974,13 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
         for worker in &self.workers_data {
             // Block on receive. Should not return a RecvError during normal operation.
             match worker.1.recv() {
+                // Check to see if the workers encounter any errors from previous insert operations
                 Ok(result) => match result {
-                    // Check to see if the workers encounter any errors from previous insert operations
-                    WorkerReturn::NodeResult(result) => match result {
-                        // No errors. Add to the return vector.
-                        Ok(result) => ret_vec.push(result),
-                        Err(err) => {
-                            return Err(ClearMerkleError::Io(err));
-                        }
-                    },
+                    // No errors. Add to the return vector.
+                    Ok(result) => ret_vec.push(result),
+                    Err(err) => {
+                        return Err(ClearMerkleError::Io(err));
+                    }
                 },
                 Err(err) => {
                     return Err(ClearMerkleError::RecvError(err));
