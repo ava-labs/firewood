@@ -169,15 +169,9 @@ fn test_parallel_insert() {
 
     let merkle = create_in_memory_merkle();
 
-    let seed = std::env::var("FIREWOOD_TEST_SEED")
-        .ok()
-        .map_or_else(
-            || None,
-            |s| Some(str::parse(&s).expect("couldn't parse FIREWOOD_TEST_SEED; must be a u64")),
-        )
-        .unwrap_or_else(|| rng().random());
+    let rng = firewood_storage::SeededRng::from_env_or_random();
 
-    let kvs = generate_random_kvs(seed, TEST_SIZE);
+    let kvs = generate_random_kvs(&rng, TEST_SIZE);
 
     let mut merkle_par = MerkleParallel::new(merkle);
 
