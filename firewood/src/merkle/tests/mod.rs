@@ -14,7 +14,9 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use super::*;
-use firewood_storage::{Committed, MemStore, MutableProposal, NodeStore, RootReader, SeededRng, TrieHash};
+use firewood_storage::{
+    Committed, MemStore, MutableProposal, NodeStore, RootReader, SeededRng, TrieHash,
+};
 
 // Returns n random key-value pairs.
 fn generate_random_kvs(rng: &firewood_storage::SeededRng, n: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
@@ -169,7 +171,7 @@ fn test_parallel_insert() {
         let kvs = generate_random_kvs(rng, TEST_SIZE);
         // Only keep unique keys
         let mut kv_map = HashMap::new();
-        for (key, val) in kvs { 
+        for (key, val) in kvs {
             kv_map.insert(key, val);
         }
         kv_map
@@ -180,40 +182,53 @@ fn test_parallel_insert() {
     let merkle = create_in_memory_merkle();
 
     let rng = firewood_storage::SeededRng::from_env_or_random();
-    
+
     // Paralle insert the first batch of unique kv pairs.
     let mut kv_map = create_unique_map(&rng);
     let mut merkle_par = MerkleParallel::new(merkle);
     for (key, val) in &kv_map {
-        merkle_par.insert(key, val.clone().into_boxed_slice()).unwrap();
+        merkle_par
+            .insert(key, val.clone().into_boxed_slice())
+            .unwrap();
     }
     let merkle = merkle_par.wait().unwrap();
 
     // Verify the inserts
     for (key, val) in &kv_map {
-        assert_eq!(merkle.get_value(key).unwrap(), Some(Box::from(val.as_slice())));
+        assert_eq!(
+            merkle.get_value(key).unwrap(),
+            Some(Box::from(val.as_slice()))
+        );
     }
 
     // Parallel insert a second batch on an existing trie
     let kv_map_second = create_unique_map(&rng);
     merkle_par.update_merkle(merkle).unwrap();
     for (key, val) in &kv_map_second {
-        merkle_par.insert(key, val.clone().into_boxed_slice()).unwrap();
+        merkle_par
+            .insert(key, val.clone().into_boxed_slice())
+            .unwrap();
     }
     let merkle = merkle_par.wait().unwrap();
-    
+
     // Combine first and second batches
     kv_map.extend(kv_map_second);
 
     // Verify inserts from both batches
-    for (key, val) in &kv_map{
-        assert_eq!(merkle.get_value(key).unwrap(), Some(Box::from(val.as_slice())));
+    for (key, val) in &kv_map {
+        assert_eq!(
+            merkle.get_value(key).unwrap(),
+            Some(Box::from(val.as_slice()))
+        );
     }
 
     // Generate ImmutableProposal and verify
     let merkle = merkle.hash();
-    for (key, val) in &kv_map{
-        assert_eq!(merkle.get_value(key).unwrap(), Some(Box::from(val.as_slice())));
+    for (key, val) in &kv_map {
+        assert_eq!(
+            merkle.get_value(key).unwrap(),
+            Some(Box::from(val.as_slice()))
+        );
     }
 }
 

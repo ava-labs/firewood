@@ -213,13 +213,16 @@ impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutablePropos
 
     /// Updates the underlying Merkle trie that `MerkleParallel` is wrapping. This should only be
     /// called after calling `wait` or `wait_params`. The main purpose of this function is to allow
-    /// parallel inserts to be performed on a Merkle trie that was previously released or to wrap 
-    /// `MerkleParallel` around a new Merkle trie. 
-    /// 
+    /// parallel inserts to be performed on a Merkle trie that was previously released or to wrap
+    /// `MerkleParallel` around a new Merkle trie.
+    ///
     /// ## Errors
-    /// 
+    ///
     /// Can return a `SendError` from its call to `set_merkle` in `WorkerPool`.
-    pub fn update_merkle(&mut self, mut m: Merkle<NodeStore<MutableProposal, S>>) -> Result<(), SendError<MerkleOp<S>>>{
+    pub fn update_merkle(
+        &mut self,
+        mut m: Merkle<NodeStore<MutableProposal, S>>,
+    ) -> Result<(), SendError<MerkleOp<S>>> {
         self.root_node = std::mem::take(m.nodestore.mut_root());
         let merkle_arc = Arc::new(m);
         self.worker_pool.set_merkle(merkle_arc.clone())?;
