@@ -966,7 +966,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
     /// sending or receiving from a channel, or a `FileIoError` from a
     /// previous insert.
     pub fn clear_merkle(&self) -> Result<Vec<NodeWithDeleted>, ClearMerkleError<S>> {
-        // Send ClearMerkle to all of the worker threads. The worker threadds will then
+        // Send ClearMerkle to all of the worker threads. The worker threads will then
         // send back results that were collected by each worker.
         for worker in &self.workers_data {
             if let Err(err) = worker.0.send(MerkleOp::ClearMerkle) {
