@@ -41,8 +41,109 @@ const fn var_int_max_size<VI>() -> usize {
     const { (size_of::<VI>() * 8 + 7) / 7 }
 }
 
-/// `FreeLists` is an array of `Option<LinearAddress>` for each area size.
-pub type FreeLists = [Option<LinearAddress>; AreaIndex::NUM_AREA_SIZES];
+/// `FreeLists` is a wrapper around an array of `Option<LinearAddress>` for each area size.
+/// It provides safe indexing with `AreaIndex` and similar functionality to `Children<T>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct FreeLists([Option<LinearAddress>; AreaIndex::NUM_AREA_SIZES]);
+
+#[expect(unsafe_code)]
+// SAFETY: FreeLists is a  wrapper around an array of Option<LinearAddress>
+// which is already Pod and Zeroable, so FreeLists is also Pod and Zeroable
+unsafe impl bytemuck::Zeroable for FreeLists {}
+#[expect(unsafe_code)]
+// SAFETY: FreeLists is a wrapper around an array of Option<LinearAddress>
+// which is already Pod and Zeroable, so FreeLists is also Pod and Zeroable
+unsafe impl bytemuck::Pod for FreeLists {}
+
+impl Default for FreeLists {
+    fn default() -> Self {
+        Self([None; AreaIndex::NUM_AREA_SIZES])
+    }
+}
+
+impl std::ops::Index<AreaIndex> for FreeLists {
+    type Output = Option<LinearAddress>;
+
+    fn index(&self, index: AreaIndex) -> &Self::Output {
+        &self.0[index.as_usize()]
+    }
+}
+
+impl std::ops::IndexMut<AreaIndex> for FreeLists {
+    fn index_mut(&mut self, index: AreaIndex) -> &mut Self::Output {
+        &mut self.0[index.as_usize()]
+    }
+}
+
+impl std::ops::Index<usize> for FreeLists {
+    type Output = Option<LinearAddress>;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.0[index]
+    }
+}
+
+impl std::ops::IndexMut<usize> for FreeLists {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.0[index]
+    }
+}
+
+impl FreeLists {
+    /// Create a new `FreeLists` with all entries set to `None`.
+    pub const fn new() -> Self {
+        Self([None; AreaIndex::NUM_AREA_SIZES])
+    }
+
+    /// Get a reference to the underlying array.
+    pub const fn as_array(&self) -> &[Option<LinearAddress>; AreaIndex::NUM_AREA_SIZES] {
+        &self.0
+    }
+
+    /// Get a mutable reference to the underlying array.
+    pub fn as_array_mut(&mut self) -> &mut [Option<LinearAddress>; AreaIndex::NUM_AREA_SIZES] {
+        &mut self.0
+    }
+
+    /// Get an iterator over the free lists.
+    pub fn iter(&self) -> std::slice::Iter<'_, Option<LinearAddress>> {
+        self.0.iter()
+    }
+
+    /// Get a mutable iterator over the free lists.
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, Option<LinearAddress>> {
+        self.0.iter_mut()
+    }
+
+    /// Get the length of the free lists array.
+    pub const fn len(&self) -> usize {
+        AreaIndex::NUM_AREA_SIZES
+    }
+
+    /// Check if the free lists array is empty (always false).
+    pub const fn is_empty(&self) -> bool {
+        false
+    }
+}
+
+impl<'a> IntoIterator for &'a FreeLists {
+    type Item = &'a Option<LinearAddress>;
+    type IntoIter = std::slice::Iter<'a, Option<LinearAddress>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut FreeLists {
+    type Item = &'a mut Option<LinearAddress>;
+    type IntoIter = std::slice::IterMut<'a, Option<LinearAddress>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
+    }
+}
 
 /// A [`FreeArea`] is stored at the start of the area that contained a node that
 /// has been freed.
@@ -351,16 +452,16 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
 
         // The area that contained the node is now free.
         let mut stored_area_bytes = Vec::new();
-        FreeArea::new(self.header.free_lists()[area_size_index.as_usize()])
+        FreeArea::new(self.header.free_lists()[area_size_index])
             .as_bytes(area_size_index, &mut stored_area_bytes);
 
         self.storage.write(addr.into(), &stored_area_bytes)?;
 
         self.storage
-            .add_to_free_list_cache(addr, self.header.free_lists()[area_size_index.as_usize()]);
+            .add_to_free_list_cache(addr, self.header.free_lists()[area_size_index]);
 
         // The newly freed block is now the head of the free list.
-        self.header.free_lists_mut()[area_size_index.as_usize()] = Some(addr);
+        self.header.free_lists_mut()[area_size_index] = Some(addr);
 
         Ok(())
     }
@@ -949,5 +1050,49 @@ mod tests {
     const fn ai_const_expr_tests() {
         let _ = const { AreaIndex::new(1) };
         let _ = const { area_index!(1) };
+    }
+
+    #[test]
+    fn test_freelists_newtype_functionality() {
+        // Test that FreeLists can be indexed with AreaIndex
+        let mut free_lists = FreeLists::new();
+        
+        // Create some test addresses
+        let addr1 = LinearAddress::new(1000).unwrap();
+        let addr2 = LinearAddress::new(2000).unwrap();
+        
+        // Test indexing with AreaIndex
+        let index1 = AreaIndex::MIN;
+        let index2 = AreaIndex::MAX;
+        
+        // Set values using AreaIndex
+        free_lists[index1] = Some(addr1);
+        free_lists[index2] = Some(addr2);
+        
+        // Get values using AreaIndex
+        assert_eq!(free_lists[index1], Some(addr1));
+        assert_eq!(free_lists[index2], Some(addr2));
+        
+        // Test indexing with usize (backward compatibility)
+        free_lists[0] = None;
+        assert_eq!(free_lists[0], None);
+        
+        // Test iterator functionality
+        let mut count = 0;
+        for _ in &free_lists {
+            count += 1;
+        }
+        assert_eq!(count, AreaIndex::NUM_AREA_SIZES);
+        
+        // Test len and is_empty
+        assert_eq!(free_lists.len(), AreaIndex::NUM_AREA_SIZES);
+        assert!(!free_lists.is_empty());
+        
+        // Test default
+        let default_free_lists = FreeLists::default();
+        assert_eq!(default_free_lists.len(), AreaIndex::NUM_AREA_SIZES);
+        for item in &default_free_lists {
+            assert_eq!(item, &None);
+        }
     }
 }
