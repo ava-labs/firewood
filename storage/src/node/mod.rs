@@ -154,7 +154,7 @@ impl ExtendableBytes for Vec<u8> {
 impl Node {
     /// Returns the partial path of the node.
     #[must_use]
-    pub fn partial_path(&self) -> &Path {
+    pub const fn partial_path(&self) -> &Path {
         match self {
             Node::Branch(b) => &b.partial_path,
             Node::Leaf(l) => &l.partial_path,
