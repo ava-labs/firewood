@@ -172,7 +172,7 @@ impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutablePropos
     /// or `insert`, a channel error from sending to a worker, or a None merkle, which means the merkle
     /// structure has been cleared without re-setting it to a new merkle structure.
     pub fn insert(&mut self, key: &[u8], value: Value) -> Result<(), ParallelInsertError<S>> {
-        let Some(mut merkle_arc) = self.merkle_arc.take() else {
+        let Some(merkle_arc) = self.merkle_arc.take() else {
             return Err(ParallelInsertError::MerkleUnset);
         };
 
@@ -203,14 +203,27 @@ impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutablePropos
                 }
 
                 // Set all of the parameters that were taken previously.
-                self.root_node = std::mem::take(merkle.nodestore.mut_root());
-                merkle_arc = Arc::new(merkle);
-                if let Err(err) = self.worker_pool.set_merkle(merkle_arc.clone()) {
+                if let Err(err) = self.update_merkle(merkle) {
                     return Err(ParallelInsertError::Channel(err));
                 }
-                self.merkle_arc = Some(merkle_arc);
             }
         }
+        Ok(())
+    }
+
+    /// Updates the underlying Merkle trie that `MerkleParallel` is wrapping. This should only be
+    /// called after calling `wait` or `wait_params`. The main purpose of this function is to allow
+    /// parallel inserts to be performed on a Merkle trie that was previously released or to wrap 
+    /// `MerkleParallel` around a new Merkle trie. 
+    /// 
+    /// ## Errors
+    /// 
+    /// Can return a `SendError` from its call to `set_merkle` in `WorkerPool`.
+    pub fn update_merkle(&mut self, mut m: Merkle<NodeStore<MutableProposal, S>>) -> Result<(), SendError<MerkleOp<S>>>{
+        self.root_node = std::mem::take(m.nodestore.mut_root());
+        let merkle_arc = Arc::new(m);
+        self.worker_pool.set_merkle(merkle_arc.clone())?;
+        self.merkle_arc = Some(merkle_arc);
         Ok(())
     }
 
@@ -251,7 +264,7 @@ impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutablePropos
         Ok(merkle)
     }
 
-    /// Wait until workers have completed
+    /// Wait until workers have completed. Releases the underlying Merkle trie from `MerkleParallel`.
     ///
     /// ## Errors
     ///
