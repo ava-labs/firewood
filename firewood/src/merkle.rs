@@ -1209,6 +1209,7 @@ impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
                     value: Some(value),
                     children: BranchNode::empty_children(),
                 };
+
                 // Shorten the node's partial path since it has a new parent.
                 node.update_partial_path(partial_path);
                 branch.update_child(child_index, Some(Child::Node(node)));
