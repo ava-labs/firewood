@@ -847,6 +847,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
                                         partial_path: key.into(),
                                         value,
                                     }));
+                                    counter!("firewood.insert", "merkle"=>"below").increment(1);
                                     continue;
                                 }
                             }
