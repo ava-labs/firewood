@@ -279,7 +279,7 @@ impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutablePropos
         let merkle_arc = self.merkle_arc.take().expect("merkle arc option is none");
         // The root can be None if the trie is empty. In this case, there should not be any
         // outstanding requests being handled by workers as long as the invariant that the
-        // root cannot be removed while there are workers active. For this case, we just
+        // root cannot be removed while there are workers active holds. For this case, we just
         // convert the merkle_arc back to a merkle and return it back to the caller.
         if let Some(node) = self.root_node.take() {
             self.wait_params(node, merkle_arc)
