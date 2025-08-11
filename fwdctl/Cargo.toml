@@ -24,7 +24,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Workspace dependencies
-clap = { workspace = true, features = ["cargo"] }
+clap = { workspace = true, features = ["cargo", "string"] }
 env_logger.workspace = true
 firewood.workspace = true
 firewood-storage.workspace = true
@@ -43,6 +43,7 @@ logger = ["firewood/logger"]
 
 [dev-dependencies]
 # Workspace dependencies
+firewood-storage = { workspace = true, features = ["test_utils"] }
 rand.workspace = true
 # Regular dependencies
 anyhow = "1.0.98"
