@@ -802,9 +802,7 @@ pub struct WorkerPool<S> {
 impl<S: ReadableStorage + 'static> WorkerPool<S> {
     /// Create one worker for the worker pool. This function is only called by the `WorkerPool`
     /// constructor to create workers.
-    fn create_one_worker(
-        merkle: Arc<Merkle<NodeStore<MutableProposal, S>>>,
-    ) -> (Sender<MerkleOp<S>>, Receiver<WorkerReturn>, JoinHandle<()>) {
+    fn create_one_worker(merkle: Arc<Merkle<NodeStore<MutableProposal, S>>>) -> WorkerData<S> {
         let (host_sender, thread_receiver) = mpsc::channel::<MerkleOp<S>>();
         let (thread_sender, host_receiver) = mpsc::channel::<WorkerReturn>();
         let mut merkle: Option<Arc<Merkle<NodeStore<MutableProposal, S>>>> = Some(merkle);
@@ -907,7 +905,7 @@ impl<S: ReadableStorage + 'static> WorkerPool<S> {
     /// Creates one worker thread for each possible child for the root node.
     #[must_use]
     pub fn new(merkle: Arc<Merkle<NodeStore<MutableProposal, S>>>) -> Self {
-        let workers_data: Vec<WorkerData<S>> = (0..BranchNode::MAX_CHILDREN)
+        let workers_data = (0..BranchNode::MAX_CHILDREN)
             .map(|_| WorkerPool::create_one_worker(merkle.clone()))
             .collect();
         WorkerPool { workers_data }
