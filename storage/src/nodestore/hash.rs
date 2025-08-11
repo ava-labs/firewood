@@ -7,13 +7,14 @@
 //! specialized support for Ethereum-compatible hash processing.
 
 #[cfg(feature = "ethhash")]
+use triomphe::Arc;
+
+#[cfg(feature = "ethhash")]
 use crate::Children;
 use crate::hashednode::hash_node;
 use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::Node;
-#[cfg(feature = "ethhash")]
-use crate::node::branch::NodeRefWithHashMut;
 use crate::{Child, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorage, SharedNode};
 
 use super::NodeReader;
@@ -67,7 +68,7 @@ impl DerefMut for PathGuard<'_> {
 #[cfg(feature = "ethhash")]
 pub(super) struct ClassifiedChildren<'a> {
     pub num_unhashed: usize,
-    pub hashed: Vec<(usize, NodeRefWithHashMut<'a>)>,
+    pub hashed: Vec<(usize, Arc<Node>, &'a mut HashType)>,
 }
 
 impl<T, S: ReadableStorage> NodeStore<T, S>
@@ -91,10 +92,17 @@ where
         for (idx, child) in children.iter_mut().enumerate() {
             match child {
                 None => {}
-                Some(child) => match child.node_ref_and_hash_mut(self)? {
-                    Some(node_ref_with_hash) => hashed.push((idx, node_ref_with_hash)),
-                    None => num_unhashed += 1,
-                },
+                Some(Child::Node(_)) => {
+                    num_unhashed += 1;
+                }
+                Some(Child::AddressWithHash(addr, hash)) => {
+                    let node = self.read_node(*addr)?;
+                    hashed.push((idx, node, hash));
+                }
+                Some(Child::MaybePersisted(node, hash)) => {
+                    let node = node.as_shared_node(self)?;
+                    hashed.push((idx, node, hash));
+                }
             }
         }
 
@@ -146,16 +154,7 @@ where
                 )]
                 let num_children = hashed.len() + num_unhashed;
                 // If there was only one child in the current account branch when previously hashed, we need to rehash it
-                if let [
-                    (
-                        child_idx,
-                        NodeRefWithHashMut {
-                            node_ref: child_node,
-                            hash: child_hash,
-                        },
-                    ),
-                ] = &mut hashed[..]
-                {
+                if let [(child_idx, child_node, child_hash)] = &mut hashed[..] {
                     let hash = {
                         let mut path_guard = PathGuard::new(&mut path_prefix);
                         path_guard.0.extend(b.partial_path.0.iter().copied());
