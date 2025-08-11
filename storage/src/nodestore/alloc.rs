@@ -66,13 +66,17 @@ impl std::ops::Index<AreaIndex> for FreeLists {
     type Output = Option<LinearAddress>;
 
     fn index(&self, index: AreaIndex) -> &Self::Output {
-        &self.0[index.as_usize()]
+        self.0
+            .get(index.as_usize())
+            .expect("AreaIndex is guaranteed to be within bounds")
     }
 }
 
 impl std::ops::IndexMut<AreaIndex> for FreeLists {
     fn index_mut(&mut self, index: AreaIndex) -> &mut Self::Output {
-        &mut self.0[index.as_usize()]
+        self.0
+            .get_mut(index.as_usize())
+            .expect("AreaIndex is guaranteed to be within bounds")
     }
 }
 
@@ -80,13 +84,13 @@ impl std::ops::Index<usize> for FreeLists {
     type Output = Option<LinearAddress>;
 
     fn index(&self, index: usize) -> &Self::Output {
-        &self.0[index]
+        self.0.get(index).expect("index out of bounds")
     }
 }
 
 impl std::ops::IndexMut<usize> for FreeLists {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.0[index]
+        self.0.get_mut(index).expect("index out of bounds")
     }
 }
 
@@ -428,7 +432,6 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the area cannot be read or written.
-    #[expect(clippy::indexing_slicing)]
     pub fn delete_node(&mut self, node: MaybePersistedNode) -> Result<(), FileIoError> {
         let Some(addr) = node.as_linear_address() else {
             return Ok(());
@@ -733,7 +736,7 @@ pub mod test_utils {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::indexing_slicing)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::area_index;
@@ -1056,38 +1059,38 @@ mod tests {
     fn test_freelists_newtype_functionality() {
         // Test that FreeLists can be indexed with AreaIndex
         let mut free_lists = FreeLists::new();
-        
+
         // Create some test addresses
         let addr1 = LinearAddress::new(1000).unwrap();
         let addr2 = LinearAddress::new(2000).unwrap();
-        
+
         // Test indexing with AreaIndex
         let index1 = AreaIndex::MIN;
         let index2 = AreaIndex::MAX;
-        
+
         // Set values using AreaIndex
         free_lists[index1] = Some(addr1);
         free_lists[index2] = Some(addr2);
-        
+
         // Get values using AreaIndex
         assert_eq!(free_lists[index1], Some(addr1));
         assert_eq!(free_lists[index2], Some(addr2));
-        
+
         // Test indexing with usize (backward compatibility)
         free_lists[0] = None;
         assert_eq!(free_lists[0], None);
-        
+
         // Test iterator functionality
         let mut count = 0;
         for _ in &free_lists {
             count += 1;
         }
         assert_eq!(count, AreaIndex::NUM_AREA_SIZES);
-        
+
         // Test len and is_empty
         assert_eq!(free_lists.len(), AreaIndex::NUM_AREA_SIZES);
         assert!(!free_lists.is_empty());
-        
+
         // Test default
         let default_free_lists = FreeLists::default();
         assert_eq!(default_free_lists.len(), AreaIndex::NUM_AREA_SIZES);

@@ -194,7 +194,7 @@ impl NodeStoreHeader {
             endian_test: 1,
             root_address: None,
             version: Version::new(),
-            free_lists: Default::default(),
+            free_lists: FreeLists::default(),
             area_size_hash: area_size_hash()
                 .as_slice()
                 .try_into()
@@ -339,7 +339,7 @@ mod tests {
         header_stream.read_exact(&mut header_bytes).unwrap();
         let header = NodeStoreHeader::from_bytes(&header_bytes);
         assert_eq!(header.version, Version::new());
-        let empty_free_list: FreeLists = Default::default();
+        let empty_free_list: FreeLists = FreeLists::default();
         assert_eq!(*header.free_lists(), empty_free_list);
     }
 }

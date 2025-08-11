@@ -236,7 +236,8 @@ pub struct LinearAddressRangeSet {
 
 #[expect(clippy::result_large_err)]
 impl LinearAddressRangeSet {
-    const NODE_STORE_START_ADDR: LinearAddress = LinearAddress::new(NodeStoreHeader::SIZE).unwrap();
+    const NODE_STORE_START_ADDR: LinearAddress =
+        LinearAddress::new(NodeStoreHeader::SIZE).expect("NodeStoreHeader::SIZE is non-zero");
 
     pub(super) fn new(db_size: u64) -> Result<Self, CheckerError> {
         if db_size < NodeStoreHeader::SIZE {
