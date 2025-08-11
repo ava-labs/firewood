@@ -95,17 +95,15 @@ fn get_helper<T: TrieReader>(
                     .expect("index is in bounds")
                 {
                     None => Ok(None),
-                    Some(child) => match child {
-                        Child::Node(node) => get_helper(nodestore, node, remaining_key),
-                        Child::AddressWithHash(addr, _) => {
-                            let node = nodestore.read_node(*addr)?;
-                            get_helper(nodestore, node.as_ref(), remaining_key)
-                        }
-                        Child::MaybePersisted(maybe_persisted, _) => {
-                            let node = maybe_persisted.as_shared_node(nodestore)?;
-                            get_helper(nodestore, node.as_ref(), remaining_key)
-                        }
-                    },
+                    Some(Child::Node(child)) => get_helper(nodestore, child, remaining_key),
+                    Some(Child::AddressWithHash(addr, _)) => {
+                        let child = nodestore.read_node(*addr)?;
+                        get_helper(nodestore, &child, remaining_key)
+                    }
+                    Some(Child::MaybePersisted(maybe_persisted, _)) => {
+                        let child = maybe_persisted.as_shared_node(nodestore)?;
+                        get_helper(nodestore, &child, remaining_key)
+                    }
                 },
             }
         }
