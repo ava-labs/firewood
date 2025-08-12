@@ -107,7 +107,7 @@ struct SubTrieMetadata {
     depth: usize,
     path_prefix: Path,
     #[cfg(feature = "ethhash")]
-    has_peers: bool,
+    num_siblings: usize, // include this node
 }
 
 /// [`NodeStore`] checker
@@ -209,7 +209,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             depth: 0,
             path_prefix: Path::new(),
             #[cfg(feature = "ethhash")]
-            has_peers: false,
+            num_siblings: 1,
         };
         let mut trie_stats = TrieStats::default();
         let errors = self
@@ -229,14 +229,23 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         progress_bar: Option<&ProgressBar>,
         hash_check: bool,
     ) -> Result<(), Vec<CheckerError>> {
+        #[cfg(feature = "ethhash")]
+        let SubTrieMetadata {
+            root_address: subtrie_root_address,
+            root_hash: subtrie_root_hash,
+            parent,
+            depth,
+            mut path_prefix,
+            num_siblings,
+        } = subtrie;
+
+        #[cfg(not(feature = "ethhash"))]
         let SubTrieMetadata {
             root_address: subtrie_root_address,
             root_hash: subtrie_root_hash,
             parent,
             depth,
             path_prefix,
-            #[cfg(feature = "ethhash")]
-            has_peers,
         } = subtrie;
 
         // check that address is aligned
@@ -284,10 +293,12 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         // compute the hash of the node and check it against the stored hash
         if hash_check {
             #[cfg(feature = "ethhash")]
-            let hash = Self::compute_node_ethhash(&node, &path_prefix, has_peers);
+            let hash = Self::compute_node_ethhash(&node, &mut path_prefix, num_siblings);
             #[cfg(not(feature = "ethhash"))]
             let hash = hash_node(&node, &path_prefix);
             if hash != subtrie_root_hash {
+                let mut path = path_prefix.clone();
+                path.0.extend_from_slice(node.partial_path());
                 return Err(vec![CheckerError::HashMismatch {
                     path: current_path_prefix,
                     address: subtrie_root_address,
@@ -358,7 +369,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                         depth: depth.saturating_add(1),
                         path_prefix: child_path_prefix,
                         #[cfg(feature = "ethhash")]
-                        has_peers: num_children != 1,
+                        num_siblings: num_children,
                     };
                     if let Err(e) = self.visit_trie_helper(
                         child_subtrie,
@@ -758,8 +769,8 @@ mod test {
         #[cfg(feature = "ethhash")]
         let computed_hash = NodeStore::<Committed, MemStore>::compute_node_ethhash(
             branch_node,
-            &Path::from([2, 0]),
-            false,
+            &mut Path::from([2, 0]),
+            1, // 1 being the node itself
         );
         #[cfg(not(feature = "ethhash"))]
         let computed_hash = hash_node(branch_node, &Path::from([2, 0]));
