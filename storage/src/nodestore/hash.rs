@@ -18,8 +18,8 @@ use super::NodeReader;
 
 use std::ops::{Deref, DerefMut};
 
-// Wrapper around a path that makes sure we truncate what gets extended to the path after it goes out of scope
-// This allows the same memory space to be reused for different path prefixes
+/// Wrapper around a path that makes sure we truncate what gets extended to the path after it goes out of scope
+/// This allows the same memory space to be reused for different path prefixes
 #[derive(Debug)]
 struct PathGuard<'a> {
     path: &'a mut Path,
@@ -127,10 +127,10 @@ where
         Ok(res)
     }
 
-    // Recursive helper that hashes the given `node` and the subtree rooted at it.
-    // This function takes a mut `node` to update the hash in place.
-    // The `path_prefix` is also mut because we will extend it to the path of the child we are hashing in recursive calls - it will be restored after the recursive call returns.
-    // The `num_siblings` is the number of children of the parent node, which includes this node.
+    /// Recursive helper that hashes the given `node` and the subtree rooted at it.
+    /// This function takes a mut `node` to update the hash in place.
+    /// The `path_prefix` is also mut because we will extend it to the path of the child we are hashing in recursive calls - it will be restored after the recursive call returns.
+    /// The `num_siblings` is the number of children of the parent node, which includes this node.
     fn hash_helper_inner(
         #[cfg(feature = "ethhash")] &self,
         mut node: Node,
