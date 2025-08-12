@@ -85,11 +85,6 @@ impl FreeLists {
     pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, Option<LinearAddress>> {
         self.0.iter_mut()
     }
-
-    /// Check if the free lists array is empty (always false).
-    pub const fn is_empty(&self) -> bool {
-        false
-    }
 }
 
 impl<'a> IntoIterator for &'a FreeLists {
