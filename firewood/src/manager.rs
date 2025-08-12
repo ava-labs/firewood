@@ -22,12 +22,12 @@ use metrics::gauge;
 use typed_builder::TypedBuilder;
 
 use crate::merkle::Merkle;
-use crate::v2::api::HashKey;
+use crate::v2::api::{DbView, HashKey};
 
 pub use firewood_storage::CacheReadStrategy;
-use firewood_storage::{
-    Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore, TrieHash,
-};
+use firewood_storage::{Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore, TrieHash, TrieReader};
+// use crate::iter::KVIterator;
+use crate::stream::MerkleKeyValueStream;
 
 #[derive(Clone, Debug, TypedBuilder)]
 /// Revision manager configuratoin
@@ -247,6 +247,10 @@ impl RevisionManager {
     pub fn add_proposal(&self, proposal: ProposedRevision) {
         self.proposals.lock().expect("poisoned lock").push(proposal);
     }
+
+    // pub fn iter(&self, root_hash: HashKey) -> Result<Box<dyn KVIterator>, RevisionManagerError> {
+    //     todo!()
+    // }
 
     pub fn view(
         &self,

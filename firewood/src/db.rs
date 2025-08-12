@@ -8,10 +8,10 @@
 
 use crate::merkle::{Key, Merkle, Value};
 use crate::stream::{InternalStreamState, MerkleKeyValueStream};
-use crate::v2::api::{self, Error, FrozenProof, FrozenRangeProof, KeyType, ValueType};
+use crate::v2::api::{self, Error, FrozenProof, FrozenRangeProof, HashKey, KeyType, ValueType};
 pub use crate::v2::api::{Batch, BatchOp};
 
-use crate::manager::{RevisionManager, RevisionManagerConfig};
+use crate::manager::{RevisionManager, RevisionManagerConfig, RevisionManagerError};
 use async_trait::async_trait;
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
@@ -329,6 +329,9 @@ impl Db {
         ))
     }
 
+    pub fn iter<T>(&self, root_hash: HashKey) -> Result<MerkleKeyValueStream<'_, T>, RevisionManagerError> where T: TrieReader {
+        todo!()
+    }
     /// Synchronously get a revision from a root hash
     pub fn revision_sync(&self, root_hash: TrieHash) -> Result<Arc<HistoricalRev>, api::Error> {
         let nodestore = self.manager.revision(root_hash)?;

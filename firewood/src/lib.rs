@@ -147,6 +147,7 @@ pub mod stream;
 
 /// Version 2 API
 pub mod v2;
+mod iter;
 
 /// Expose the storage logger
 pub use firewood_storage::logger;

@@ -22,14 +22,17 @@ use std::ops::Deref;
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use firewood::db::{
-    BatchOp as DbBatchOp, Db, DbConfig, DbViewSync as _, DbViewSyncBytes, Proposal,
+    BatchOp as DbBatchOp, Db, DbConfig, DbViewSync as _, DbViewSync, DbViewSyncBytes, Proposal,
 };
 use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
 
-use firewood::v2::api::HashKey;
+use firewood::merkle::Merkle;
+use firewood::stream::MerkleKeyValueStream;
+use firewood::v2::api::{DbView, HashKey};
+use firewood_storage::{Committed, FileBacked, ImmutableProposal, NodeStore, TrieReader};
 use metrics::counter;
 
 #[doc(hidden)]
@@ -41,14 +44,23 @@ mod metrics_setup;
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 type ProposalId = u32;
+type IteratorId = u32;
 
 #[doc(hidden)]
 static ID_COUNTER: AtomicU32 = AtomicU32::new(1);
+#[doc(hidden)]
+static ITERATOR_ID_COUNTER: AtomicU32 = AtomicU32::new(1);
 
 /// Atomically retrieves the next proposal ID.
 #[doc(hidden)]
 fn next_id() -> ProposalId {
     ID_COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Atomically retrieves the next iterator ID.
+#[doc(hidden)]
+fn next_iterator_id() -> IteratorId {
+    ITERATOR_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
 /// A handle to the database, returned by `fwd_create_db` and `fwd_open_db`.
@@ -57,16 +69,24 @@ fn next_id() -> ProposalId {
 ///
 #[derive(Debug)]
 pub struct DatabaseHandle<'p> {
-    /// List of oustanding proposals, by ID
+    streams: RwLock<HashMap<ProposalId, MerkleIterator<'p>>>,
+    /// List of outstanding proposals, by ID
     // Keep proposals first, as they must be dropped before the database handle is dropped due to lifetime
     // issues.
     proposals: RwLock<HashMap<ProposalId, Proposal<'p>>>,
-
+    views: RwLock<HashMap<HashKey, Arc<NodeStore<Committed, FileBacked>>>>,
     /// A single cached view to improve performance of reads while committing
     cached_view: Mutex<Option<(HashKey, Box<dyn DbViewSyncBytes>)>>,
-
     /// The database
     db: Db,
+}
+
+#[derive(Debug)]
+enum MerkleIterator<'v> {
+    ViewA(Arc<MerkleKeyValueStream<'v, NodeStore<Committed, FileBacked>>>),
+    View(MerkleKeyValueStream<'v, NodeStore<Committed, FileBacked>>),
+    Proposal(MerkleKeyValueStream<'v, NodeStore<Arc<ImmutableProposal>, FileBacked>>),
+    Dropped,
 }
 
 impl From<Db> for DatabaseHandle<'_> {
@@ -74,6 +94,8 @@ impl From<Db> for DatabaseHandle<'_> {
         Self {
             db,
             proposals: RwLock::new(HashMap::new()),
+            streams: RwLock::new(HashMap::new()),
+            views: RwLock::new(HashMap::new()),
             cached_view: Mutex::new(None),
         }
     }
@@ -135,8 +157,10 @@ fn get_latest(db: Option<&DatabaseHandle<'_>>, key: &Value) -> Result<Value, Str
     };
 
     // Find revision assoicated with root.
-    let rev = db.revision_sync(root).map_err(|e| e.to_string())?;
+    let rev = db.revision_sync(root.clone()).map_err(|e| e.to_string())?;
+    // let jx = db.iter(root).map_err(|e| e.to_string())?;
 
+    let j = MerkleKeyValueStream::from(&rev.clone());
     // Get value associated with key.
     let value = rev
         .val_sync_bytes(key.as_slice())
@@ -145,6 +169,71 @@ fn get_latest(db: Option<&DatabaseHandle<'_>>, key: &Value) -> Result<Value, Str
     Ok(value.into())
 }
 
+/// Internal call for `fwd_iter_latest` to remove error handling from the C API
+#[doc(hidden)]
+fn iter_latest<'v>(db: Option<&'v DatabaseHandle<'v>>, key: &Value) -> Result<String, String> {
+    let db = db.ok_or("db should be non-null")?;
+
+    // Find root hash.
+    // Matches `hash` function but we use the TrieHash type here
+    let Some(root) = db.root_hash_sync().map_err(|e| e.to_string())? else {
+        return Ok("".to_string());
+    };
+
+    // Find revision associated with root.
+    let rev = db.revision_sync(root.clone()).map_err(|e| e.to_string())?;
+
+    // Make sure we have a handle to the view, so it isn't dropped from revision manager
+    db.views
+        .write()
+        .map_err(|_| "stream lock is poisoned")?
+        .insert(root, rev.clone());
+
+    // trick the lifetime
+    let rev_ptr = rev.as_ref() as *const _;
+    let x = unsafe { MerkleKeyValueStream::from(&*rev_ptr) };
+    // let x = MerkleKeyValueStream::from(&*rev_ptr);
+    // let p = Arc::new(MerkleKeyValueStream::from(rev));
+
+    // Store the proposal in the map. We need the write lock instead.
+    let new_id = next_iterator_id(); // Guaranteed to be non-zero
+    db.streams
+        .write()
+        .map_err(|_| "stream lock is poisoned")?
+        // .insert(new_id, MerkleIterator::ViewA(p));
+        .insert(new_id, MerkleIterator::View(x));
+
+    Ok("jj".to_owned())
+}
+
+/// Internal call for `fwd_iter_latest` to remove error handling from the C API
+#[doc(hidden)]
+fn iter_on_proposal<'v>(db: Option<&'v DatabaseHandle<'v>>,
+                        id: ProposalId, key: &Value) -> Result<String, String> {
+    let db = db.ok_or("db should be non-null")?;
+
+    // Get proposal from ID.
+    let proposals = db
+        .proposals
+        .read()
+        .map_err(|_| "proposal lock is poisoned")?;
+    let proposal = proposals.get(&id).ok_or("proposal not found")?;
+
+    // trick the lifetime
+    let x = proposal.iter().map_err(|e| e.to_string())?;
+    let it: MerkleKeyValueStream<'v, NodeStore<Arc<ImmutableProposal>, FileBacked>> = unsafe {
+        std::mem::transmute(x)
+    };
+
+    // Store the iterator in the map. We need the write lock.
+    let new_id = next_iterator_id(); // Guaranteed to be non-zero
+    db.streams
+        .write()
+        .map_err(|_| "stream lock is poisoned")?
+        .insert(new_id, MerkleIterator::Proposal(it));
+
+    Ok("jj".to_owned())
+}
 /// Gets the value associated with the given key from the proposal provided.
 ///
 /// # Arguments
