@@ -32,7 +32,7 @@ const fn page_number(addr: LinearAddress) -> u64 {
 fn extra_read_pages(addr: LinearAddress, page_size: u64) -> Option<u64> {
     let start_page = page_number(addr);
     let end_page = page_number(addr.advance(page_size.saturating_sub(1))?);
-    let pages_read = end_page.saturating_sub(start_page);
+    let pages_read = end_page.saturating_sub(start_page).saturating_add(1); // Include the first page
     let min_pages = page_size.saturating_add(OS_PAGE_SIZE - 1) / OS_PAGE_SIZE; // Round up to the nearest page
     Some(pages_read.saturating_sub(min_pages))
 }
