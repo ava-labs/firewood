@@ -36,6 +36,7 @@ tokio.workspace = true
 async-trait = "0.1.88"
 futures = "0.3.31"
 typed-builder = "0.21.0"
+rayon = "1.10.0"
 
 [features]
 default = []

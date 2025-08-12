@@ -454,6 +454,14 @@ impl Proposal<'_> {
             db: self.db,
         })
     }
+
+    /// Create a new proposal from a nodestore and a database
+    pub const fn new(
+        nodestore: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>,
+        db: &Db,
+    ) -> Proposal<'_> {
+        Proposal { nodestore, db }
+    }
 }
 
 #[cfg(test)]
