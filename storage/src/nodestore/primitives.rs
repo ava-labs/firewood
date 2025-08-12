@@ -278,10 +278,10 @@ impl LinearAddress {
     }
 
     /// The maximum area size available for allocation.
-    pub const MAX_AREA_SIZE: u64 = *AREA_SIZES.last().expect("AREA_SIZES is not empty");
+    pub const MAX_AREA_SIZE: u64 = *AREA_SIZES.last().unwrap();
 
     /// The minimum area size available for allocation.
-    pub const MIN_AREA_SIZE: u64 = *AREA_SIZES.first().expect("AREA_SIZES is not empty");
+    pub const MIN_AREA_SIZE: u64 = *AREA_SIZES.first().unwrap();
 
     /// Returns the number of different area sizes available.
     #[inline]
