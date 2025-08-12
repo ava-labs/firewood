@@ -853,7 +853,7 @@ mod test {
                 }
                 high_watermark += area_size;
             }
-            freelist[area_index.as_usize()] = next_free_block;
+            freelist[area_index] = next_free_block;
             if num_free_areas > 0 {
                 free_area_counts.insert(area_size, num_free_areas);
             }
@@ -917,7 +917,7 @@ mod test {
         next_free_block1 = Some(free_list1_area1);
         high_watermark += area_size1;
 
-        free_lists[AREA_INDEX1.as_usize()] = next_free_block1;
+        free_lists[AREA_INDEX1] = next_free_block1;
 
         // second free list
         let area_size2 = AREA_INDEX2.size();
@@ -933,12 +933,12 @@ mod test {
         next_free_block2 = Some(free_list2_area1);
         high_watermark += area_size2;
 
-        free_lists[AREA_INDEX2.as_usize()] = next_free_block2;
+        free_lists[AREA_INDEX2] = next_free_block2;
 
         // write header
         test_write_header(&mut nodestore, high_watermark, None, free_lists);
 
-        let expected_start_addr = free_lists[AREA_INDEX1.as_usize()].unwrap();
+        let expected_start_addr = free_lists[AREA_INDEX1].unwrap();
         let expected_end_addr = LinearAddress::new(high_watermark).unwrap();
         let expected_free_areas = vec![expected_start_addr..expected_end_addr];
         let expected_freelist_errors = vec![CheckerError::AreaIntersects {

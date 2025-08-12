@@ -28,13 +28,13 @@ use crate::node::branch::{ReadSerializable, Serializable};
 use crate::nodestore::NodeStoreHeader;
 use integer_encoding::VarIntReader;
 
-use std::io::{Error, ErrorKind, Read};
-use std::iter::FusedIterator;
-
 use crate::node::ExtendableBytes;
 use crate::{
     FreeListParent, MaybePersistedNode, ReadableStorage, WritableStorage, firewood_counter,
 };
+use bytemuck_derive::{Pod, Zeroable};
+use std::io::{Error, ErrorKind, Read};
+use std::iter::FusedIterator;
 
 /// Returns the maximum size needed to encode a `VarInt`.
 const fn var_int_max_size<VI>() -> usize {
@@ -43,24 +43,9 @@ const fn var_int_max_size<VI>() -> usize {
 
 /// `FreeLists` is a wrapper around an array of `Option<LinearAddress>` for each area size.
 /// It provides safe indexing with `AreaIndex` and similar functionality to `Children<T>`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Pod, Zeroable, Default)]
 #[repr(transparent)]
 pub struct FreeLists([Option<LinearAddress>; AreaIndex::NUM_AREA_SIZES]);
-
-#[expect(unsafe_code)]
-// SAFETY: FreeLists is a  wrapper around an array of Option<LinearAddress>
-// which is already Pod and Zeroable, so FreeLists is also Pod and Zeroable
-unsafe impl bytemuck::Zeroable for FreeLists {}
-#[expect(unsafe_code)]
-// SAFETY: FreeLists is a wrapper around an array of Option<LinearAddress>
-// which is already Pod and Zeroable, so FreeLists is also Pod and Zeroable
-unsafe impl bytemuck::Pod for FreeLists {}
-
-impl Default for FreeLists {
-    fn default() -> Self {
-        Self([None; AreaIndex::NUM_AREA_SIZES])
-    }
-}
 
 impl std::ops::Index<AreaIndex> for FreeLists {
     type Output = Option<LinearAddress>;
@@ -80,26 +65,7 @@ impl std::ops::IndexMut<AreaIndex> for FreeLists {
     }
 }
 
-impl std::ops::Index<usize> for FreeLists {
-    type Output = Option<LinearAddress>;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        self.0.get(index).expect("index out of bounds")
-    }
-}
-
-impl std::ops::IndexMut<usize> for FreeLists {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        self.0.get_mut(index).expect("index out of bounds")
-    }
-}
-
 impl FreeLists {
-    /// Create a new `FreeLists` with all entries set to `None`.
-    pub const fn new() -> Self {
-        Self([None; AreaIndex::NUM_AREA_SIZES])
-    }
-
     /// Get a reference to the underlying array.
     pub const fn as_array(&self) -> &[Option<LinearAddress>; AreaIndex::NUM_AREA_SIZES] {
         &self.0
@@ -118,11 +84,6 @@ impl FreeLists {
     /// Get a mutable iterator over the free lists.
     pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, Option<LinearAddress>> {
         self.0.iter_mut()
-    }
-
-    /// Get the length of the free lists array.
-    pub const fn len(&self) -> usize {
-        AreaIndex::NUM_AREA_SIZES
     }
 
     /// Check if the free lists array is empty (always false).
@@ -843,7 +804,7 @@ mod tests {
         next_free_block1 = Some(free_list1_area1);
         offset += area_size1;
 
-        free_lists[area_index1.as_usize()] = next_free_block1;
+        free_lists[area_index1] = next_free_block1;
 
         // second free list
         let area_index2 = AreaIndex::new(
@@ -865,7 +826,7 @@ mod tests {
         next_free_block2 = Some(free_list2_area1);
         offset += area_size2;
 
-        free_lists[area_index2.as_usize()] = next_free_block2;
+        free_lists[area_index2] = next_free_block2;
 
         // write header
         test_write_header(&mut nodestore, offset, None, free_lists);
@@ -961,7 +922,7 @@ mod tests {
         next_free_block1 = Some(free_list1_area1);
         offset += area_size1;
 
-        free_lists[AREA_INDEX1.as_usize()] = next_free_block1;
+        free_lists[AREA_INDEX1] = next_free_block1;
 
         // second free list
         assert_ne!(AREA_INDEX1, AREA_INDEX2);
@@ -978,7 +939,7 @@ mod tests {
         next_free_block2 = Some(free_list2_area1);
         offset += area_size2;
 
-        free_lists[AREA_INDEX2.as_usize()] = next_free_block2;
+        free_lists[AREA_INDEX2] = next_free_block2;
 
         // write header
         test_write_header(&mut nodestore, offset, None, free_lists);
@@ -1058,7 +1019,7 @@ mod tests {
     #[test]
     fn test_freelists_newtype_functionality() {
         // Test that FreeLists can be indexed with AreaIndex
-        let mut free_lists = FreeLists::new();
+        let mut free_lists = FreeLists::default();
 
         // Create some test addresses
         let addr1 = LinearAddress::new(1000).unwrap();
@@ -1077,25 +1038,16 @@ mod tests {
         assert_eq!(free_lists[index2], Some(addr2));
 
         // Test indexing with usize (backward compatibility)
-        free_lists[0] = None;
-        assert_eq!(free_lists[0], None);
+        free_lists[AreaIndex::MIN] = None;
+        assert_eq!(free_lists[AreaIndex::MIN], None);
 
-        // Test iterator functionality
-        let mut count = 0;
-        for _ in &free_lists {
-            count += 1;
-        }
-        assert_eq!(count, AreaIndex::NUM_AREA_SIZES);
-
-        // Test len and is_empty
-        assert_eq!(free_lists.len(), AreaIndex::NUM_AREA_SIZES);
-        assert!(!free_lists.is_empty());
+        assert_eq!(free_lists.iter().count(), AreaIndex::NUM_AREA_SIZES);
 
         // Test default
         let default_free_lists = FreeLists::default();
-        assert_eq!(default_free_lists.len(), AreaIndex::NUM_AREA_SIZES);
         for item in &default_free_lists {
             assert_eq!(item, &None);
         }
+        assert_eq!(default_free_lists.iter().find(|item| item.is_some()), None);
     }
 }
