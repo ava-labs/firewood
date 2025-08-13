@@ -257,6 +257,9 @@ where
     }
 
     #[cfg(feature = "ethhash")]
+    /// This function computes the ethhash of a single node assuming all its children are hashed.
+    /// Note that `num_siblings` is the number of children of the parent node, which includes this node.
+    /// The function appends to `path_prefix` and then truncate it back to the original length - we only reuse the memory space to avoid allocations
     pub(crate) fn compute_node_ethhash(
         node: &Node,
         path_prefix: &mut Path,
