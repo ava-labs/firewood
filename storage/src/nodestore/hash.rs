@@ -144,15 +144,21 @@ where
                     mut hashed,
                 } = self.ethhash_classify_children(&mut b.children)?;
                 trace!("hashed {hashed:?} unhashed {unhashed:?}");
-                // hashed and unhashed can have at most 16 elements combined
-                let num_siblings = hashed.len().wrapping_add(unhashed.len());
                 // we were left with one hashed node that must be rehashed
                 if let [(child_idx, (child_node, child_hash))] = &mut hashed[..] {
                     // Extract the address from the MaybePersistedNode
                     let hash = {
                         let mut child_path_prefix = PathGuard::new(&mut current_path);
-                        child_path_prefix.0.push(*child_idx as u8);
-                        Self::compute_node_ethhash(child_node, &mut child_path_prefix, num_siblings)
+                        let mut hashable_node = (**child_node).clone();
+                        if unhashed.is_empty() {
+                            hashable_node.update_partial_path(Path::from_nibbles_iterator(
+                                std::iter::once(*child_idx as u8)
+                                    .chain(hashable_node.partial_path().0.iter().copied()),
+                            ));
+                        } else {
+                            child_path_prefix.0.push(*child_idx as u8);
+                        }
+                        hash_node(&hashable_node, &child_path_prefix)
                     };
                     **child_hash = hash;
                 }
