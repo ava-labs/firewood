@@ -151,6 +151,8 @@ where
                     unhashed,
                     mut hashed,
                 } = self.ethhash_classify_children(&mut b.children);
+                // hashed and unhashed can have at most 16 elements combined
+                let num_siblings = hashed.len().wrapping_add(unhashed.len());
                 trace!("hashed {hashed:?} unhashed {unhashed:?}");
                 // we were left with one hashed node that must be rehashed
                 if let [(child_idx, (child_node, child_hash))] = &mut hashed[..] {
@@ -158,19 +160,12 @@ where
                     let addr: crate::LinearAddress = child_node
                         .as_linear_address()
                         .expect("hashed node should be persisted");
-                    let mut hashable_node = self.read_node(addr)?.deref().clone();
+                    let hashable_node = self.read_node(addr)?.deref().clone();
                     let hash = {
                         let mut path_guard = PathGuard::new(&mut path_prefix);
                         path_guard.0.extend(b.partial_path.0.iter().copied());
-                        if unhashed.is_empty() {
-                            hashable_node.update_partial_path(Path::from_nibbles_iterator(
-                                std::iter::once(*child_idx as u8)
-                                    .chain(hashable_node.partial_path().0.iter().copied()),
-                            ));
-                        } else {
-                            path_guard.0.push(*child_idx as u8);
-                        }
-                        hash_node(&hashable_node, &path_guard)
+                        path_guard.0.push(*child_idx as u8);
+                        Self::compute_node_ethhash(&hashable_node, &mut path_guard, num_siblings)
                     };
                     **child_hash = hash;
                 }
