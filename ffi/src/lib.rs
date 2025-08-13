@@ -42,13 +42,13 @@ use firewood::db::{
 use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
 
 pub use crate::value::*;
+use firewood::merkle;
 use firewood::merkle::Merkle;
 use firewood::stream::MerkleKeyValueStream;
 use firewood::v2::api;
 use firewood::v2::api::{DbView, HashKey, KeyValuePairIter};
 use firewood_storage::{Committed, FileBacked, ImmutableProposal, NodeStore, TrieReader};
 use metrics::counter;
-use firewood::merkle;
 
 #[cfg(unix)]
 #[global_allocator]
@@ -195,8 +195,8 @@ fn get_latest(db: Option<&DatabaseHandle<'_>>, key: &[u8]) -> Result<Value, Stri
 /// # Arguments
 ///
 /// * `db` - The database handle returned by `open_db`
-/// * `root` - The root to iterate on, in `Value` form (Empty for latest revision)
-/// * `key` - The key to start from, in `Value` form
+/// * `root` - The root to iterate on, in `BorrowedBytes` form. Latest revision if not provided/empty.
+/// * `key` - The key to start from, in `BorrowedBytes` form
 ///
 /// # Returns
 ///
@@ -207,41 +207,34 @@ fn get_latest(db: Option<&DatabaseHandle<'_>>, key: &[u8]) -> Result<Value, Stri
 /// The caller must:
 ///  * ensure that `db` is a valid pointer returned by `open_db`
 ///  * ensure that `key` is a valid pointer to a `Value` struct
-///  * TODO: Handle freeing the iterator handle
 ///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_iter_on_root(
     db: Option<&DatabaseHandle<'_>>,
-    root: Value,
-    key: Value,
+    root: BorrowedBytes<'_>,
+    key: BorrowedBytes<'_>,
 ) -> Value {
     iter_on_root(db, &root, &key).unwrap_or_else(Into::into)
 }
 
 /// Internal call for `fwd_iter_on_root` to remove error handling from the C API
 #[doc(hidden)]
-fn iter_on_root(
-    db: Option<&DatabaseHandle<'_>>,
-    root: &Value,
-    key: &Value,
-) -> Result<Value, String> {
+fn iter_on_root(db: Option<&DatabaseHandle<'_>>, root: &[u8], key: &[u8]) -> Result<Value, String> {
     let db = db.ok_or("db should be non-null")?;
-    let root: HashKey = if root.len == 0 {
-        // use latest root hash in case no root is provided
-        let Some(root) = db.root_hash_sync().map_err(|e| e.to_string())? else {
-            return Ok(Value::default());
-        };
-        root
-    } else {
-        HashKey::try_from(root.as_slice()).map_err(|e| e.to_string())?
+
+    let root = match root.is_empty() {
+        true => db.root_hash_sync().map_err(|e| e.to_string())?,
+        false => Some(HashKey::try_from(root).map_err(|e| e.to_string())?),
+    };
+    let Some(root) = root else {
+        return Ok(Value::default());
     };
 
     // Find revision associated with root.
-    let rev = db.revision_sync(root.clone()).map_err(|e| e.to_string())?;
-    let it = if key.len != 0 {
-        MerkleKeyValueStream::owned_from_key(rev, key.as_slice())
-    } else {
-        MerkleKeyValueStream::from(rev)
+    let rev = db.revision_sync(root).map_err(|e| e.to_string())?;
+    let it = match key.is_empty() {
+        true => MerkleKeyValueStream::from(rev),
+        false => MerkleKeyValueStream::owned_from_key(rev, key),
     };
 
     // Store the iterator in the map.
@@ -250,61 +243,6 @@ fn iter_on_root(
         .write()
         .map_err(|_| "stream lock is poisoned")?
         .insert(new_id, MerkleIterator::View(it));
-
-    Ok(new_id.into())
-}
-
-/// Return an iterator on a proposal optionally starting from a key in database
-///
-/// # Arguments
-///
-/// * `db` - The database handle returned by `open_db`
-/// * `key` - The key to start from, in `Value` form
-///
-/// # Returns
-///
-/// An iterator id/handle, or an error
-///
-/// # Safety
-///
-/// The caller must:
-///  * ensure that `db` is a valid pointer returned by `open_db`
-///  * ensure that `key` is a valid pointer to a `Value` struct
-///  * TODO: Handle freeing the iterator handle
-///
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_iter_on_proposal(
-    db: Option<&DatabaseHandle<'_>>,
-    id: ProposalId,
-    key: Value,
-) -> Value {
-    iter_on_proposal(db, id, &key).unwrap_or_else(Into::into)
-}
-/// Internal call for `fwd_iter_latest` to remove error handling from the C API
-#[doc(hidden)]
-fn iter_on_proposal(
-    db: Option<&DatabaseHandle<'_>>,
-    id: ProposalId,
-    key: &Value,
-) -> Result<Value, String> {
-    let db = db.ok_or("db should be non-null")?;
-
-    // Get proposal from ID.
-    let proposals = db
-        .proposals
-        .read()
-        .map_err(|_| "proposal lock is poisoned")?;
-    let proposal = proposals.get(&id).ok_or("proposal not found")?;
-
-    let key = (key.len != 0).then_some(key.as_slice());
-    let it = proposal.iter_owned(key);
-
-    // Store the iterator in the map. We need the write lock.
-    let new_id = next_iterator_id(); // Guaranteed to be non-zero
-    db.streams
-        .write()
-        .map_err(|_| "stream lock is poisoned")?
-        .insert(new_id, MerkleIterator::Proposal(it));
 
     Ok(new_id.into())
 }
@@ -329,19 +267,13 @@ fn iter_on_proposal(
 ///  * call `free_key_value` to free the memory associated with the returned `KeyValue`
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_iter_next(
-    db: Option<&DatabaseHandle<'_>>,
-    it: IteratorId,
-) -> Value {
+pub unsafe extern "C" fn fwd_iter_next(db: Option<&DatabaseHandle<'_>>, it: IteratorId) -> Value {
     iter_next(db, it).unwrap_or_else(Into::into)
 }
 
 /// Internal call for `fwd_iter_next` to remove error handling from the C API
 #[doc(hidden)]
-fn iter_next(
-    db: Option<&DatabaseHandle<'_>>,
-    iterator_id: IteratorId,
-) -> Result<Value, String> {
+fn iter_next(db: Option<&DatabaseHandle<'_>>, iterator_id: IteratorId) -> Result<Value, String> {
     let db = db.ok_or("db should be non-null")?;
 
     let next = {
@@ -356,6 +288,7 @@ fn iter_next(
         None => Ok(Value::default()),
     }
 }
+
 /// Gets the value associated with the given key from the proposal provided.
 ///
 /// # Arguments
