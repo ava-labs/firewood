@@ -1,21 +1,19 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![expect(
-    clippy::used_underscore_binding,
-    reason = "Found 3 occurrences after enabling the lint."
-)]
-
 use crate::merkle::{Key, Value};
 use crate::v2::api;
 
+use crate::v2::api::Error;
 use firewood_storage::{
     BranchNode, Child, FileIoError, NibblesIterator, Node, PathIterItem, SharedNode, TrieReader,
 };
+use futures::Stream;
 use futures::stream::FusedStream;
-use futures::{Stream, StreamExt};
 use std::cmp::Ordering;
 use std::iter::once;
+use std::ops::Deref;
+use std::sync::Arc;
 use std::task::Poll;
 
 /// Represents an ongoing iteration over a node and its children.
@@ -68,10 +66,41 @@ enum NodeStreamState {
 }
 
 #[derive(Debug)]
+pub enum MerkleRef<'a, T> {
+    Borrowed(&'a T),
+    Owned(Arc<T>)
+}
+
+impl<'a, T> Deref for MerkleRef<'a, T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Borrowed(borrowed) => borrowed,
+            Self::Owned(arc) => arc,
+        }
+    }
+}
+
+impl<'a, T> Clone for MerkleRef<'a, T> {
+    fn clone(&self) -> Self {
+        match self {
+            MerkleRef::Borrowed(r) => MerkleRef::Borrowed(r),
+            MerkleRef::Owned(arc) => MerkleRef::Owned(arc.clone()),
+        }
+    }
+}
+
+impl<'a, T> From<&'a T> for MerkleRef<'a, T> {
+    fn from(value: &'a T) -> Self {
+        MerkleRef::Borrowed(value)
+    }
+}
+
+#[derive(Debug)]
 /// A stream of nodes in order starting from a specific point in the trie.
 pub struct MerkleNodeStream<'a, T> {
     state: NodeStreamState,
-    merkle: &'a T,
+    merkle: MerkleRef<'a, T>,
 }
 
 impl From<Key> for NodeStreamState {
@@ -91,7 +120,7 @@ impl<T: TrieReader> FusedStream for MerkleNodeStream<'_, T> {
 impl<'a, T: TrieReader> MerkleNodeStream<'a, T> {
     /// Returns a new iterator that will iterate over all the nodes in `merkle`
     /// with keys greater than or equal to `key`.
-    pub(super) fn new(merkle: &'a T, key: Key) -> Self {
+    pub(super) fn new(merkle: MerkleRef<'a, T>, key: Key) -> Self {
         Self {
             state: NodeStreamState::from(key),
             merkle,
@@ -105,7 +134,7 @@ impl<'a, T: TrieReader> MerkleNodeStream<'a, T> {
 
         match state {
             NodeStreamState::StartFromKey(key) => {
-                match get_iterator_intial_state(*merkle, key) {
+                match get_iterator_intial_state(merkle, key) {
                     Ok(state) => self.state = state,
                     Err(e) => return Some(Err(e)),
                 }
@@ -326,14 +355,23 @@ impl<T: TrieReader> MerkleKeyValueStreamState<'_, T> {
 /// A stream of key-value pairs in order starting from a specific point in the trie.
 pub struct MerkleKeyValueStream<'a, T> {
     state: MerkleKeyValueStreamState<'a, T>,
-    merkle: &'a T,
+    merkle: MerkleRef<'a, T>,
 }
 
 impl<'a, T: TrieReader> From<&'a T> for MerkleKeyValueStream<'a, T> {
     fn from(merkle: &'a T) -> Self {
         Self {
             state: MerkleKeyValueStreamState::_new(),
-            merkle,
+            merkle: MerkleRef::Borrowed(merkle),
+        }
+    }
+}
+
+impl<T: TrieReader> From<Arc<T>> for MerkleKeyValueStream<'_, T> {
+    fn from(merkle: Arc<T>) -> Self {
+        Self {
+            state: MerkleKeyValueStreamState::_new(),
+            merkle: MerkleRef::Owned(merkle),
         }
     }
 }
@@ -350,7 +388,38 @@ impl<'a, T: TrieReader> MerkleKeyValueStream<'a, T> {
     pub fn from_key<K: AsRef<[u8]>>(merkle: &'a T, key: K) -> Self {
         Self {
             state: MerkleKeyValueStreamState::from(key.as_ref()),
-            merkle,
+            merkle: MerkleRef::Borrowed(merkle),
+        }
+    }
+
+    /// gets the next value synchronously
+    pub fn next_sync(&mut self) -> Option<Result<(Key, Value), Error>> {
+        loop {
+            match &mut self.state {
+                MerkleKeyValueStreamState::_Uninitialized(key) => {
+                    let iter = MerkleNodeStream::new(self.merkle.clone(), key.clone());
+                    self.state = MerkleKeyValueStreamState::Initialized { node_iter: iter };
+                    // Continue to the next node.
+                }
+                MerkleKeyValueStreamState::Initialized { node_iter } => {
+                    match Iterator::next(node_iter) {
+                        Some(Ok((key, node))) => match &*node {
+                            Node::Branch(branch) => {
+                                if let Some(value) = branch.value.as_ref() {
+                                    return Some(Ok((key, value.clone())));
+                                }
+                                // This node doesn't have a value to return.
+                                // Continue to the next node.
+                            }
+                            Node::Leaf(leaf) => {
+                                return Some(Ok((key, leaf.value.clone())));
+                            }
+                        },
+                        Some(Err(e)) => return Some(Err(e.into())),
+                        None => return None,
+                    }
+                }
+            }
         }
     }
 }
@@ -362,38 +431,7 @@ impl<T: TrieReader> Stream for MerkleKeyValueStream<'_, T> {
         mut self: std::pin::Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        // destructuring is necessary here because we need mutable access to `key_state`
-        // at the same time as immutable access to `merkle`
-        let Self { state, merkle } = &mut *self;
-
-        match state {
-            MerkleKeyValueStreamState::_Uninitialized(key) => {
-                let iter = MerkleNodeStream::new(*merkle, key.clone());
-                self.state = MerkleKeyValueStreamState::Initialized { node_iter: iter };
-                self.poll_next(_cx)
-            }
-            MerkleKeyValueStreamState::Initialized { node_iter: iter } => {
-                match iter.poll_next_unpin(_cx) {
-                    Poll::Ready(node) => match node {
-                        Some(Ok((key, node))) => match &*node {
-                            Node::Branch(branch) => {
-                                let Some(value) = branch.value.as_ref() else {
-                                    // This node doesn't have a value to return.
-                                    // Continue to the next node.
-                                    return self.poll_next(_cx);
-                                };
-
-                                Poll::Ready(Some(Ok((key, value.clone()))))
-                            }
-                            Node::Leaf(leaf) => Poll::Ready(Some(Ok((key, leaf.value.clone())))),
-                        },
-                        Some(Err(e)) => Poll::Ready(Some(Err(e.into()))),
-                        None => Poll::Ready(None),
-                    },
-                    Poll::Pending => Poll::Pending,
-                }
-            }
-        }
+        Poll::Ready(self.next_sync())
     }
 }
 
@@ -808,7 +846,7 @@ mod tests {
     #[tokio::test]
     async fn node_iterate_empty() {
         let merkle = create_test_merkle();
-        let stream = MerkleNodeStream::new(merkle.nodestore(), Box::new([]));
+        let stream = MerkleNodeStream::new(merkle.nodestore().into(), Box::new([]));
         check_stream_is_done(stream).await;
     }
 
@@ -818,7 +856,7 @@ mod tests {
 
         merkle.insert(&[0x00], Box::new([0x00])).unwrap();
 
-        let mut stream = MerkleNodeStream::new(merkle.nodestore(), Box::new([]));
+        let mut stream = MerkleNodeStream::new(merkle.nodestore().into(), Box::new([]));
 
         let (key, node) = futures::StreamExt::next(&mut stream)
             .await
@@ -878,7 +916,7 @@ mod tests {
     async fn node_iterator_no_start_key() {
         let merkle = created_populated_merkle();
 
-        let mut stream = MerkleNodeStream::new(merkle.nodestore(), Box::new([]));
+        let mut stream = MerkleNodeStream::new(merkle.nodestore().into(), Box::new([]));
 
         // Covers case of branch with no value
         let (key, node) = futures::StreamExt::next(&mut stream)
@@ -940,7 +978,7 @@ mod tests {
         let merkle = created_populated_merkle();
 
         let mut stream = MerkleNodeStream::new(
-            merkle.nodestore(),
+            merkle.nodestore().into(),
             vec![0x00, 0x00, 0x01].into_boxed_slice(),
         );
 
@@ -973,7 +1011,7 @@ mod tests {
         let merkle = created_populated_merkle();
 
         let mut stream = MerkleNodeStream::new(
-            merkle.nodestore(),
+            merkle.nodestore().into(),
             vec![0x00, 0xD0, 0xD0].into_boxed_slice(),
         );
 
@@ -1005,7 +1043,7 @@ mod tests {
     async fn node_iterator_start_key_after_last_key() {
         let merkle = created_populated_merkle();
 
-        let stream = MerkleNodeStream::new(merkle.nodestore(), vec![0xFF].into_boxed_slice());
+        let stream = MerkleNodeStream::new(merkle.nodestore().into(), vec![0xFF].into_boxed_slice());
 
         check_stream_is_done(stream).await;
     }

@@ -69,7 +69,12 @@ impl<T: DbViewSyncBytes> DbViewSync for T {
     }
 }
 
-impl DbViewSyncBytes for Arc<HistoricalRev> {
+impl<T, S> DbViewSyncBytes for NodeStore<T, S>
+where
+    NodeStore<T, S>: TrieReader,
+    T: std::fmt::Debug,
+    S: ReadableStorage,
+{
     fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
         let merkle = Merkle::from(self);
         let value = merkle.get_value(key)?;
@@ -77,19 +82,15 @@ impl DbViewSyncBytes for Arc<HistoricalRev> {
     }
 }
 
-impl DbViewSyncBytes for Proposal<'_> {
+impl<T: DbViewSyncBytes> DbViewSyncBytes for Arc<T> {
     fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
-        let merkle = Merkle::from(self.nodestore.clone());
-        let value = merkle.get_value(key)?;
-        Ok(value)
+        (**self).val_sync_bytes(key)
     }
 }
 
-impl DbViewSyncBytes for Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> {
+impl DbViewSyncBytes for Proposal<'_> {
     fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
-        let merkle = Merkle::from(self.clone());
-        let value = merkle.get_value(key)?;
-        Ok(value)
+        self.nodestore.val_sync_bytes(key)
     }
 }
 
@@ -455,6 +456,13 @@ impl Proposal<'_> {
         })
     }
 }
+
+impl From<&Proposal<'_>> for MerkleKeyValueStream<'_, NodeStore<Arc<ImmutableProposal>, FileBacked>> {
+    fn from(p: &Proposal<'_>) -> Self {
+        MerkleKeyValueStream::from(p.nodestore.clone())
+    }
+}
+
 
 #[cfg(test)]
 mod test {
