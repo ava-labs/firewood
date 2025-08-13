@@ -18,7 +18,7 @@ use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use async_trait::async_trait;
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeStore,
+    ImmutableProposal, NodeStore, ReadableStorage, TrieReader,
 };
 use metrics::{counter, describe_counter};
 use std::io::Write;
@@ -72,7 +72,7 @@ impl<T: DbViewSyncBytes> DbViewSync for T {
 impl<T, S> DbViewSyncBytes for NodeStore<T, S>
 where
     NodeStore<T, S>: TrieReader,
-    T: std::fmt::Debug,
+    T: std::fmt::Debug + Send + Sync,
     S: ReadableStorage,
 {
     fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
@@ -457,12 +457,13 @@ impl Proposal<'_> {
     }
 }
 
-impl From<&Proposal<'_>> for MerkleKeyValueStream<'_, NodeStore<Arc<ImmutableProposal>, FileBacked>> {
+impl From<&Proposal<'_>>
+    for MerkleKeyValueStream<'_, NodeStore<Arc<ImmutableProposal>, FileBacked>>
+{
     fn from(p: &Proposal<'_>) -> Self {
         MerkleKeyValueStream::from(p.nodestore.clone())
     }
 }
-
 
 #[cfg(test)]
 mod test {

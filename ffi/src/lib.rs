@@ -43,7 +43,7 @@ use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
 
 use firewood::merkle::Merkle;
 use firewood::stream::MerkleKeyValueStream;
-use firewood::v2::api::{DbView, HashKey};
+use firewood::v2::api::{DbView, HashKey, KeyValuePairIter};
 use firewood_storage::{Committed, FileBacked, ImmutableProposal, NodeStore, TrieReader};
 use metrics::counter;
 
@@ -212,8 +212,11 @@ fn iter_latest<'v>(db: Option<&'v DatabaseHandle<'v>>, key: &Value) -> Result<St
 
 /// Internal call for `fwd_iter_latest` to remove error handling from the C API
 #[doc(hidden)]
-fn iter_on_proposal<'v>(db: Option<&'v DatabaseHandle<'v>>,
-                        id: ProposalId, key: &Value) -> Result<String, String> {
+fn iter_on_proposal<'v>(
+    db: Option<&'v DatabaseHandle<'v>>,
+    id: ProposalId,
+    key: &Value,
+) -> Result<String, String> {
     let db = db.ok_or("db should be non-null")?;
 
     // Get proposal from ID.

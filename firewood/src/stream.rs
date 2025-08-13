@@ -68,7 +68,7 @@ enum NodeStreamState {
 #[derive(Debug)]
 pub enum MerkleRef<'a, T> {
     Borrowed(&'a T),
-    Owned(Arc<T>)
+    Owned(Arc<T>),
 }
 
 impl<'a, T> Deref for MerkleRef<'a, T> {
@@ -1043,7 +1043,8 @@ mod tests {
     async fn node_iterator_start_key_after_last_key() {
         let merkle = created_populated_merkle();
 
-        let stream = MerkleNodeStream::new(merkle.nodestore().into(), vec![0xFF].into_boxed_slice());
+        let stream =
+            MerkleNodeStream::new(merkle.nodestore().into(), vec![0xFF].into_boxed_slice());
 
         check_stream_is_done(stream).await;
     }
