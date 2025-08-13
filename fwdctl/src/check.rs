@@ -134,6 +134,7 @@ fn print_checker_report(report: CheckerReport) {
         "\tBranches that Can Fit Into Smaller Area (low_occupancy_branch_area): {} ({:.2}%)",
         report.trie_stats.low_occupancy_branch_area_count,
         (report.trie_stats.low_occupancy_branch_area_count as f64 / total_branch_area_count as f64)
+            * 100.0
     );
 
     // Leaf area distribution
