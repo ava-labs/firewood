@@ -455,13 +455,12 @@ impl Proposal<'_> {
             db: self.db,
         })
     }
-}
 
-impl From<&Proposal<'_>>
-    for MerkleKeyValueStream<'_, NodeStore<Arc<ImmutableProposal>, FileBacked>>
-{
-    fn from(p: &Proposal<'_>) -> Self {
-        MerkleKeyValueStream::from(p.nodestore.clone())
+    pub fn iter_owned<'a, K: KeyType>(&self, key: Option<K>) -> MerkleKeyValueStream<'a, NodeStore<Arc<ImmutableProposal>, FileBacked>> {
+        match key {
+            Some(key) => MerkleKeyValueStream::owned_from_key(self.nodestore.clone(), key),
+            None => MerkleKeyValueStream::from(self.nodestore.clone()),
+        }
     }
 }
 

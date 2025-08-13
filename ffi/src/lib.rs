@@ -41,13 +41,14 @@ use firewood::db::{
 };
 use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
 
+pub use crate::value::*;
 use firewood::merkle::Merkle;
 use firewood::stream::MerkleKeyValueStream;
+use firewood::v2::api;
 use firewood::v2::api::{DbView, HashKey, KeyValuePairIter};
 use firewood_storage::{Committed, FileBacked, ImmutableProposal, NodeStore, TrieReader};
 use metrics::counter;
-
-pub use crate::value::*;
+use firewood::merkle;
 
 #[cfg(unix)]
 #[global_allocator]
@@ -80,12 +81,12 @@ fn next_iterator_id() -> IteratorId {
 ///
 #[derive(Debug)]
 pub struct DatabaseHandle<'p> {
-    streams: RwLock<HashMap<ProposalId, MerkleIterator<'p>>>,
+    /// List of iterators, by ID
+    // Order of fields are important, streams must be dropped before proposals, and proposals
+    // should be dropped before database handle to ensure lifetime orders
+    streams: RwLock<HashMap<IteratorId, MerkleIterator<'p>>>,
     /// List of outstanding proposals, by ID
-    // Keep proposals first, as they must be dropped before the database handle is dropped due to lifetime
-    // issues.
     proposals: RwLock<HashMap<ProposalId, Proposal<'p>>>,
-    views: RwLock<HashMap<HashKey, Arc<NodeStore<Committed, FileBacked>>>>,
     /// A single cached view to improve performance of reads while committing
     cached_view: Mutex<Option<(HashKey, Box<dyn DbViewSyncBytes>)>>,
     /// The database
@@ -99,13 +100,23 @@ enum MerkleIterator<'v> {
     Dropped,
 }
 
+impl Iterator for MerkleIterator<'_> {
+    type Item = Result<(merkle::Key, merkle::Value), api::Error>;
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            MerkleIterator::View(iter) => iter.next_sync(),
+            MerkleIterator::Proposal(iter) => iter.next_sync(),
+            MerkleIterator::Dropped => None,
+        }
+    }
+}
+
 impl From<Db> for DatabaseHandle<'_> {
     fn from(db: Db) -> Self {
         Self {
             db,
             proposals: RwLock::new(HashMap::new()),
             streams: RwLock::new(HashMap::new()),
-            views: RwLock::new(HashMap::new()),
             cached_view: Mutex::new(None),
         }
     }
@@ -179,44 +190,103 @@ fn get_latest(db: Option<&DatabaseHandle<'_>>, key: &[u8]) -> Result<Value, Stri
     Ok(value.into())
 }
 
-/// Internal call for `fwd_iter_latest` to remove error handling from the C API
-#[doc(hidden)]
-fn iter_latest<'v>(db: Option<&'v DatabaseHandle<'v>>, key: &Value) -> Result<String, String> {
-    let db = db.ok_or("db should be non-null")?;
+/// Return an iterator optionally starting from a key in database
+///
+/// # Arguments
+///
+/// * `db` - The database handle returned by `open_db`
+/// * `root` - The root to iterate on, in `Value` form (Empty for latest revision)
+/// * `key` - The key to start from, in `Value` form
+///
+/// # Returns
+///
+/// An iterator id/handle, or an error
+///
+/// # Safety
+///
+/// The caller must:
+///  * ensure that `db` is a valid pointer returned by `open_db`
+///  * ensure that `key` is a valid pointer to a `Value` struct
+///  * TODO: Handle freeing the iterator handle
+///
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_iter_on_root(
+    db: Option<&DatabaseHandle<'_>>,
+    root: Value,
+    key: Value,
+) -> Value {
+    iter_on_root(db, &root, &key).unwrap_or_else(Into::into)
+}
 
-    // Find root hash.
-    // Matches `hash` function but we use the TrieHash type here
-    let Some(root) = db.root_hash_sync().map_err(|e| e.to_string())? else {
-        return Ok("".to_string());
+/// Internal call for `fwd_iter_on_root` to remove error handling from the C API
+#[doc(hidden)]
+fn iter_on_root(
+    db: Option<&DatabaseHandle<'_>>,
+    root: &Value,
+    key: &Value,
+) -> Result<Value, String> {
+    let db = db.ok_or("db should be non-null")?;
+    let root: HashKey = if root.len == 0 {
+        // use latest root hash in case no root is provided
+        let Some(root) = db.root_hash_sync().map_err(|e| e.to_string())? else {
+            return Ok(Value::default());
+        };
+        root
+    } else {
+        HashKey::try_from(root.as_slice()).map_err(|e| e.to_string())?
     };
 
     // Find revision associated with root.
     let rev = db.revision_sync(root.clone()).map_err(|e| e.to_string())?;
+    let it = if key.len != 0 {
+        MerkleKeyValueStream::owned_from_key(rev, key.as_slice())
+    } else {
+        MerkleKeyValueStream::from(rev)
+    };
 
-    // Make sure we have a handle to the view, so it isn't dropped from revision manager
-    db.views
-        .write()
-        .map_err(|_| "stream lock is poisoned")?
-        .insert(root, rev.clone());
-
-    let it = MerkleKeyValueStream::from(rev);
-    // Store the iterator in the map. We need the write lock instead.
+    // Store the iterator in the map.
     let new_id = next_iterator_id(); // Guaranteed to be non-zero
     db.streams
         .write()
         .map_err(|_| "stream lock is poisoned")?
         .insert(new_id, MerkleIterator::View(it));
 
-    Ok("jj".to_owned())
+    Ok(new_id.into())
 }
 
+/// Return an iterator on a proposal optionally starting from a key in database
+///
+/// # Arguments
+///
+/// * `db` - The database handle returned by `open_db`
+/// * `key` - The key to start from, in `Value` form
+///
+/// # Returns
+///
+/// An iterator id/handle, or an error
+///
+/// # Safety
+///
+/// The caller must:
+///  * ensure that `db` is a valid pointer returned by `open_db`
+///  * ensure that `key` is a valid pointer to a `Value` struct
+///  * TODO: Handle freeing the iterator handle
+///
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_iter_on_proposal(
+    db: Option<&DatabaseHandle<'_>>,
+    id: ProposalId,
+    key: Value,
+) -> Value {
+    iter_on_proposal(db, id, &key).unwrap_or_else(Into::into)
+}
 /// Internal call for `fwd_iter_latest` to remove error handling from the C API
 #[doc(hidden)]
-fn iter_on_proposal<'v>(
-    db: Option<&'v DatabaseHandle<'v>>,
+fn iter_on_proposal(
+    db: Option<&DatabaseHandle<'_>>,
     id: ProposalId,
     key: &Value,
-) -> Result<String, String> {
+) -> Result<Value, String> {
     let db = db.ok_or("db should be non-null")?;
 
     // Get proposal from ID.
@@ -225,7 +295,9 @@ fn iter_on_proposal<'v>(
         .read()
         .map_err(|_| "proposal lock is poisoned")?;
     let proposal = proposals.get(&id).ok_or("proposal not found")?;
-    let it = MerkleKeyValueStream::from(proposal);
+
+    let key = (key.len != 0).then_some(key.as_slice());
+    let it = proposal.iter_owned(key);
 
     // Store the iterator in the map. We need the write lock.
     let new_id = next_iterator_id(); // Guaranteed to be non-zero
@@ -234,9 +306,56 @@ fn iter_on_proposal<'v>(
         .map_err(|_| "stream lock is poisoned")?
         .insert(new_id, MerkleIterator::Proposal(it));
 
-    Ok("jj".to_owned())
+    Ok(new_id.into())
 }
 
+/// Retrieves the next item from the iterator
+///
+/// # Arguments
+///
+/// * `db` - The database handle returned by `open_db`
+/// * `it` - The database handle returned by `fwd_iter_*`
+///
+/// # Returns
+///
+/// A `KeyValue` containing the next pair of (key, value) on the iterator.
+/// A `KeyValue` containing with key {0, ""}, and value with an error message if failed.
+///
+/// # Safety
+///
+/// The caller must:
+///  * ensure that `db` is a valid pointer returned by `open_db`
+///  * ensure that `it` is a valid pointer returned by `fwd_iter_*`
+///  * call `free_key_value` to free the memory associated with the returned `KeyValue`
+///
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_iter_next(
+    db: Option<&DatabaseHandle<'_>>,
+    it: IteratorId,
+) -> Value {
+    iter_next(db, it).unwrap_or_else(Into::into)
+}
+
+/// Internal call for `fwd_iter_next` to remove error handling from the C API
+#[doc(hidden)]
+fn iter_next(
+    db: Option<&DatabaseHandle<'_>>,
+    iterator_id: IteratorId,
+) -> Result<Value, String> {
+    let db = db.ok_or("db should be non-null")?;
+
+    let next = {
+        // get a write guard and drop as soon as we get the next item
+        let mut guard = db.streams.write().map_err(|_| "stream lock is poisoned")?;
+        let it = guard.get_mut(&iterator_id).ok_or("iterator not found")?;
+        it.next()
+    };
+
+    match next {
+        Some(kv) => kv.map(Into::into).map_err(|e| e.to_string()),
+        None => Ok(Value::default()),
+    }
+}
 /// Gets the value associated with the given key from the proposal provided.
 ///
 /// # Arguments
@@ -741,6 +860,23 @@ impl From<Box<[u8]>> for Value {
         let leaked_ptr = Box::leak(data).as_mut_ptr();
         let data = std::ptr::NonNull::new(leaked_ptr);
         Value { len, data }
+    }
+}
+
+impl From<(Box<[u8]>, Box<[u8]>)> for Value {
+    fn from(data: (Box<[u8]>, Box<[u8]>)) -> Self {
+        let (key, value) = data;
+        let (key_len, val_len) = (key.len(), value.len());
+
+        // packed format [key_len: 8 bytes][key_data][value_data]
+        let total_len = 8 + key_len + val_len;
+        let mut packed = Vec::with_capacity(total_len);
+
+        packed.extend_from_slice(&key_len.to_le_bytes());
+        packed.extend_from_slice(&key);
+        packed.extend_from_slice(&value);
+
+        packed.into_boxed_slice().into()
     }
 }
 

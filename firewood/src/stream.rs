@@ -392,6 +392,15 @@ impl<'a, T: TrieReader> MerkleKeyValueStream<'a, T> {
         }
     }
 
+    /// Construct a [`MerkleKeyValueStream`] that will iterate over all the key-value pairs in `merkle`
+    /// starting from a particular key
+    pub fn owned_from_key<K: AsRef<[u8]>>(merkle: Arc<T>, key: K) -> Self {
+        Self {
+            state: MerkleKeyValueStreamState::from(key.as_ref()),
+            merkle: MerkleRef::Owned(merkle),
+        }
+    }
+
     /// gets the next value synchronously
     pub fn next_sync(&mut self) -> Option<Result<(Key, Value), Error>> {
         loop {
@@ -682,6 +691,7 @@ mod tests {
     use crate::merkle::Merkle;
 
     use super::*;
+    use futures::StreamExt;
     use test_case::test_case;
 
     pub(super) fn create_test_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
