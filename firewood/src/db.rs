@@ -199,6 +199,14 @@ impl api::DbView for HistoricalRev {
     }
 }
 
+
+impl From<&Proposal<'_>> for MerkleKeyValueStream<'_, NodeStore<Arc<ImmutableProposal>, FileBacked>> {
+    fn from(p: &Proposal<'_>) -> Self {
+        MerkleKeyValueStream::from(p.nodestore.clone())
+    }
+}
+
+
 /// Database configuration.
 #[derive(Clone, TypedBuilder, Debug)]
 pub struct DbConfig {

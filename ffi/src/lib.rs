@@ -189,19 +189,13 @@ fn iter_latest<'v>(db: Option<&'v DatabaseHandle<'v>>, key: &Value) -> Result<St
         .map_err(|_| "stream lock is poisoned")?
         .insert(root, rev.clone());
 
-    // trick the lifetime
-    let rev_ptr = rev.as_ref() as *const _;
-    let x = unsafe { MerkleKeyValueStream::from(&*rev_ptr) };
-    // let x = MerkleKeyValueStream::from(&*rev_ptr);
-    // let p = Arc::new(MerkleKeyValueStream::from(rev));
-
-    // Store the proposal in the map. We need the write lock instead.
+    let it = MerkleKeyValueStream::from(rev);
+    // Store the iterator in the map. We need the write lock instead.
     let new_id = next_iterator_id(); // Guaranteed to be non-zero
     db.streams
         .write()
         .map_err(|_| "stream lock is poisoned")?
-        // .insert(new_id, MerkleIterator::ViewA(p));
-        .insert(new_id, MerkleIterator::View(x));
+        .insert(new_id, MerkleIterator::View(it));
 
     Ok("jj".to_owned())
 }
@@ -218,12 +212,7 @@ fn iter_on_proposal<'v>(db: Option<&'v DatabaseHandle<'v>>,
         .read()
         .map_err(|_| "proposal lock is poisoned")?;
     let proposal = proposals.get(&id).ok_or("proposal not found")?;
-
-    // trick the lifetime
-    let x = proposal.iter().map_err(|e| e.to_string())?;
-    let it: MerkleKeyValueStream<'v, NodeStore<Arc<ImmutableProposal>, FileBacked>> = unsafe {
-        std::mem::transmute(x)
-    };
+    let it = MerkleKeyValueStream::from(proposal);
 
     // Store the iterator in the map. We need the write lock.
     let new_id = next_iterator_id(); // Guaranteed to be non-zero
@@ -234,6 +223,7 @@ fn iter_on_proposal<'v>(db: Option<&'v DatabaseHandle<'v>>,
 
     Ok("jj".to_owned())
 }
+
 /// Gets the value associated with the given key from the proposal provided.
 ///
 /// # Arguments
@@ -653,6 +643,7 @@ fn commit(db: Option<&DatabaseHandle<'_>>, proposal_id: u32) -> Result<(), Strin
     }
 
     // Commit the proposal
+    // let proposal = Arc::into_inner(proposal).unwrap();
     let result = proposal.commit_sync().map_err(|e| e.to_string());
 
     // Clear the cache, which will force readers after this point to find the committed root hash

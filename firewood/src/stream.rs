@@ -12,6 +12,8 @@ use futures::Stream;
 use futures::stream::FusedStream;
 use std::cmp::Ordering;
 use std::iter::once;
+use std::ops::Deref;
+use std::sync::Arc;
 use std::task::Poll;
 
 /// Represents an ongoing iteration over a node and its children.
@@ -65,10 +67,41 @@ enum NodeStreamState {
 }
 
 #[derive(Debug)]
+pub enum MerkleRef<'a, T> {
+    Borrowed(&'a T),
+    Owned(Arc<T>)
+}
+
+impl<'a, T> Deref for MerkleRef<'a, T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Borrowed(borrowed) => borrowed,
+            Self::Owned(arc) => arc,
+        }
+    }
+}
+
+impl<'a, T> Clone for MerkleRef<'a, T> {
+    fn clone(&self) -> Self {
+        match self {
+            MerkleRef::Borrowed(r) => MerkleRef::Borrowed(r),
+            MerkleRef::Owned(arc) => MerkleRef::Owned(arc.clone()),
+        }
+    }
+}
+
+impl<'a, T> From<&'a T> for MerkleRef<'a, T> {
+    fn from(value: &'a T) -> Self {
+        MerkleRef::Borrowed(value)
+    }
+}
+
+#[derive(Debug)]
 /// A stream of nodes in order starting from a specific point in the trie.
 pub struct MerkleNodeStream<'a, T> {
     state: NodeStreamState,
-    merkle: &'a T,
+    merkle: MerkleRef<'a, T>,
 }
 
 #[derive(Debug)]
@@ -93,7 +126,7 @@ impl<T: TrieReader> FusedStream for MerkleNodeStream<'_, T> {
 impl<'a, T: TrieReader> MerkleNodeStream<'a, T> {
     /// Returns a new iterator that will iterate over all the nodes in `merkle`
     /// with keys greater than or equal to `key`.
-    pub(super) fn new(merkle: &'a T, key: Key) -> Self {
+    pub(super) fn new(merkle: MerkleRef<'a, T>, key: Key) -> Self {
         Self {
             state: NodeStreamState::from(key),
             merkle,
@@ -107,7 +140,7 @@ impl<'a, T: TrieReader> MerkleNodeStream<'a, T> {
 
         match state {
             NodeStreamState::StartFromKey(key) => {
-                match get_iterator_intial_state(*merkle, key) {
+                match get_iterator_intial_state(merkle, key) {
                     Ok(state) => self.state = state,
                     Err(e) => return Some(Err(e)),
                 }
@@ -328,14 +361,23 @@ impl<T: TrieReader> MerkleKeyValueStreamState<'_, T> {
 /// A stream of key-value pairs in order starting from a specific point in the trie.
 pub struct MerkleKeyValueStream<'a, T> {
     state: MerkleKeyValueStreamState<'a, T>,
-    merkle: &'a T,
+    merkle: MerkleRef<'a, T>,
 }
 
 impl<'a, T: TrieReader> From<&'a T> for MerkleKeyValueStream<'a, T> {
     fn from(merkle: &'a T) -> Self {
         Self {
             state: MerkleKeyValueStreamState::_new(),
-            merkle,
+            merkle: MerkleRef::Borrowed(merkle),
+        }
+    }
+}
+
+impl<T: TrieReader> From<Arc<T>> for MerkleKeyValueStream<'_, T> {
+    fn from(merkle: Arc<T>) -> Self {
+        Self {
+            state: MerkleKeyValueStreamState::_new(),
+            merkle: MerkleRef::Owned(merkle),
         }
     }
 }
@@ -352,21 +394,22 @@ impl<'a, T: TrieReader> MerkleKeyValueStream<'a, T> {
     pub fn from_key<K: AsRef<[u8]>>(merkle: &'a T, key: K) -> Self {
         Self {
             state: MerkleKeyValueStreamState::from(key.as_ref()),
-            merkle,
+            merkle: MerkleRef::Borrowed(merkle),
         }
     }
 
     /// Construct a [`MerkleKeyValueStream`] from prior internal state
     pub(super) fn from_internal_state(merkle: &'a T, state: InternalStreamState) -> Self {
-        Self {
-            state: MerkleKeyValueStreamState::Initialized {
-                node_iter: MerkleNodeStream {
-                    merkle,
-                    state: state.0,
-                },
-            },
-            merkle,
-        }
+        todo!()
+        // Self {
+        //     state: MerkleKeyValueStreamState::Initialized {
+        //         node_iter: MerkleNodeStream {
+        //             merkle,
+        //             state: state.0,
+        //         },
+        //     },
+        //     merkle,
+        // }
     }
 
     /// retrieve the internal state of the stream
@@ -384,7 +427,7 @@ impl<'a, T: TrieReader> MerkleKeyValueStream<'a, T> {
         loop {
             match &mut self.state {
                 MerkleKeyValueStreamState::_Uninitialized(key) => {
-                    let iter = MerkleNodeStream::new(self.merkle, key.clone());
+                    let iter = MerkleNodeStream::new(self.merkle.clone(), key.clone());
                     self.state = MerkleKeyValueStreamState::Initialized { node_iter: iter };
                     // Continue to the next node.
                 }
@@ -834,7 +877,7 @@ mod tests {
     #[tokio::test]
     async fn node_iterate_empty() {
         let merkle = create_test_merkle();
-        let stream = MerkleNodeStream::new(merkle.nodestore(), Box::new([]));
+        let stream = MerkleNodeStream::new(merkle.nodestore().into(), Box::new([]));
         check_stream_is_done(stream).await;
     }
 
@@ -844,7 +887,7 @@ mod tests {
 
         merkle.insert(&[0x00], Box::new([0x00])).unwrap();
 
-        let mut stream = MerkleNodeStream::new(merkle.nodestore(), Box::new([]));
+        let mut stream = MerkleNodeStream::new(merkle.nodestore().into(), Box::new([]));
 
         let (key, node) = futures::StreamExt::next(&mut stream)
             .await
@@ -904,7 +947,7 @@ mod tests {
     async fn node_iterator_no_start_key() {
         let merkle = created_populated_merkle();
 
-        let mut stream = MerkleNodeStream::new(merkle.nodestore(), Box::new([]));
+        let mut stream = MerkleNodeStream::new(merkle.nodestore().into(), Box::new([]));
 
         // Covers case of branch with no value
         let (key, node) = futures::StreamExt::next(&mut stream)
@@ -966,7 +1009,7 @@ mod tests {
         let merkle = created_populated_merkle();
 
         let mut stream = MerkleNodeStream::new(
-            merkle.nodestore(),
+            merkle.nodestore().into(),
             vec![0x00, 0x00, 0x01].into_boxed_slice(),
         );
 
@@ -999,7 +1042,7 @@ mod tests {
         let merkle = created_populated_merkle();
 
         let mut stream = MerkleNodeStream::new(
-            merkle.nodestore(),
+            merkle.nodestore().into(),
             vec![0x00, 0xD0, 0xD0].into_boxed_slice(),
         );
 
@@ -1031,7 +1074,7 @@ mod tests {
     async fn node_iterator_start_key_after_last_key() {
         let merkle = created_populated_merkle();
 
-        let stream = MerkleNodeStream::new(merkle.nodestore(), vec![0xFF].into_boxed_slice());
+        let stream = MerkleNodeStream::new(merkle.nodestore().into(), vec![0xFF].into_boxed_slice());
 
         check_stream_is_done(stream).await;
     }
