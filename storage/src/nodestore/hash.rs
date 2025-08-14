@@ -136,7 +136,7 @@ where
             let mut current_path = PathGuard::new(&mut path_prefix);
             current_path.0.extend(b.partial_path.0.iter().copied());
             #[cfg(feature = "ethhash")]
-            let num_children = b.children_iter().count();
+            let num_children = b.children.iter().filter(|child| child.is_some()).count();
             #[cfg(feature = "ethhash")]
             if current_path.0.len() == 64 {
                 // looks like we're at an account branch
