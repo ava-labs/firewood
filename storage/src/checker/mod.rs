@@ -618,6 +618,7 @@ fn update_progress_bar(progress_bar: Option<&ProgressBar>, range_set: &LinearAdd
 #[cfg(test)]
 mod test {
     #![expect(clippy::unwrap_used)]
+    #![expect(clippy::indexing_slicing)]
 
     use nonzero_ext::nonzero;
 

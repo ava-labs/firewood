@@ -370,6 +370,7 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the area cannot be read or written.
+    #[expect(clippy::indexing_slicing)]
     pub fn delete_node(&mut self, node: MaybePersistedNode) -> Result<(), FileIoError> {
         let Some(addr) = node.as_linear_address() else {
             return Ok(());
