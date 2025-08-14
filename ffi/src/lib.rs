@@ -887,6 +887,8 @@ impl From<Box<[u8]>> for Value {
     }
 }
 
+// TODO: this packing is inefficient, but is temporary. more robust key-value pair
+// will be used when the batching is implemented and this will go away
 impl From<(Box<[u8]>, Box<[u8]>)> for Value {
     fn from(data: (Box<[u8]>, Box<[u8]>)) -> Self {
         let (key, value) = data;
