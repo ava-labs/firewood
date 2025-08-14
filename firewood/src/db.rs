@@ -18,7 +18,7 @@ use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use async_trait::async_trait;
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeStore,
+    ImmutableProposal, NodeStore, ReadableStorage, TrieReader,
 };
 use metrics::{counter, describe_counter};
 use std::io::Write;
@@ -69,7 +69,12 @@ impl<T: DbViewSyncBytes> DbViewSync for T {
     }
 }
 
-impl DbViewSyncBytes for Arc<HistoricalRev> {
+impl<T, S> DbViewSyncBytes for NodeStore<T, S>
+where
+    NodeStore<T, S>: TrieReader,
+    T: std::fmt::Debug + Send + Sync,
+    S: ReadableStorage,
+{
     fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
         let merkle = Merkle::from(self);
         let value = merkle.get_value(key)?;
@@ -77,19 +82,15 @@ impl DbViewSyncBytes for Arc<HistoricalRev> {
     }
 }
 
-impl DbViewSyncBytes for Proposal<'_> {
+impl<T: DbViewSyncBytes> DbViewSyncBytes for Arc<T> {
     fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
-        let merkle = Merkle::from(self.nodestore.clone());
-        let value = merkle.get_value(key)?;
-        Ok(value)
+        (**self).val_sync_bytes(key)
     }
 }
 
-impl DbViewSyncBytes for Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> {
+impl DbViewSyncBytes for Proposal<'_> {
     fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
-        let merkle = Merkle::from(self.clone());
-        let value = merkle.get_value(key)?;
-        Ok(value)
+        self.nodestore.val_sync_bytes(key)
     }
 }
 
@@ -400,6 +401,17 @@ impl Proposal<'_> {
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
     ) -> Result<Self, api::Error> {
         self.create_proposal(batch)
+    }
+
+    /// Create an iterator on proposal, owning the nodestore
+    pub fn iter_owned<'a, K: KeyType>(
+        &self,
+        key: Option<K>,
+    ) -> MerkleKeyValueStream<'a, NodeStore<Arc<ImmutableProposal>, FileBacked>> {
+        match key {
+            Some(key) => MerkleKeyValueStream::owned_from_key(self.nodestore.clone(), key),
+            None => MerkleKeyValueStream::from(self.nodestore.clone()),
+        }
     }
 
     #[crate::metrics("firewood.proposal.create", "database proposal creation")]
