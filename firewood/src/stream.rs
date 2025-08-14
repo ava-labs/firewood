@@ -65,13 +65,16 @@ enum NodeStreamState {
     },
 }
 
+/// A reference to the merkle, could be borrowed, or behind an Arc
 #[derive(Debug)]
 pub enum MerkleRef<'a, T> {
+    /// reference with borrowing the merkle
     Borrowed(&'a T),
+    /// referencing the merkle via Arc
     Owned(Arc<T>),
 }
 
-impl<'a, T> Deref for MerkleRef<'a, T> {
+impl<T> Deref for MerkleRef<'_, T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         match self {
@@ -81,7 +84,7 @@ impl<'a, T> Deref for MerkleRef<'a, T> {
     }
 }
 
-impl<'a, T> Clone for MerkleRef<'a, T> {
+impl<T> Clone for MerkleRef<'_, T> {
     fn clone(&self) -> Self {
         match self {
             MerkleRef::Borrowed(r) => MerkleRef::Borrowed(r),

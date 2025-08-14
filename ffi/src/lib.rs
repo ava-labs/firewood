@@ -36,18 +36,14 @@ use std::ops::Deref;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-use firewood::db::{
-    BatchOp as DbBatchOp, Db, DbConfig, DbViewSync as _, DbViewSync, DbViewSyncBytes, Proposal,
-};
+use firewood::db::{Db, DbConfig, DbViewSync as _, DbViewSyncBytes, Proposal};
 use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
 
 pub use crate::value::*;
 use firewood::merkle;
-use firewood::merkle::Merkle;
 use firewood::stream::MerkleKeyValueStream;
-use firewood::v2::api;
-use firewood::v2::api::{DbView, HashKey, KeyValuePairIter};
-use firewood_storage::{Committed, FileBacked, ImmutableProposal, NodeStore, TrieReader};
+use firewood::v2::api::{HashKey, KeyValuePairIter};
+use firewood_storage::{Committed, FileBacked, ImmutableProposal, NodeStore};
 use metrics::counter;
 
 #[cfg(unix)]
@@ -85,6 +81,8 @@ pub struct DatabaseHandle<'p> {
     // Order of fields are important, streams must be dropped before proposals, and proposals
     // should be dropped before database handle to ensure lifetime orders
     streams: RwLock<HashMap<IteratorId, MerkleIterator<'p>>>,
+    /// Maps proposal IDs to the iterators that depend on them
+    proposal_iterators: RwLock<HashMap<ProposalId, Vec<IteratorId>>>,
     /// List of outstanding proposals, by ID
     proposals: RwLock<HashMap<ProposalId, Proposal<'p>>>,
     /// A single cached view to improve performance of reads while committing
@@ -101,12 +99,17 @@ enum MerkleIterator<'v> {
 }
 
 impl Iterator for MerkleIterator<'_> {
-    type Item = Result<(merkle::Key, merkle::Value), api::Error>;
+    type Item = Result<(merkle::Key, merkle::Value), String>;
+
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            MerkleIterator::View(iter) => iter.next_sync(),
-            MerkleIterator::Proposal(iter) => iter.next_sync(),
-            MerkleIterator::Dropped => None,
+            MerkleIterator::View(iter) => iter.next_sync().map(|r| r.map_err(|e| e.to_string())),
+            MerkleIterator::Proposal(iter) => {
+                iter.next_sync().map(|r| r.map_err(|e| e.to_string()))
+            }
+            MerkleIterator::Dropped => Some(Err(
+                "iterator is dropped and no longer pointing to a valid nodestore".to_string(),
+            )),
         }
     }
 }
@@ -117,6 +120,7 @@ impl From<Db> for DatabaseHandle<'_> {
             db,
             proposals: RwLock::new(HashMap::new()),
             streams: RwLock::new(HashMap::new()),
+            proposal_iterators: RwLock::new(HashMap::new()),
             cached_view: Mutex::new(None),
         }
     }
@@ -222,9 +226,10 @@ pub unsafe extern "C" fn fwd_iter_on_root(
 fn iter_on_root(db: Option<&DatabaseHandle<'_>>, root: &[u8], key: &[u8]) -> Result<Value, String> {
     let db = db.ok_or("db should be non-null")?;
 
-    let root = match root.is_empty() {
-        true => db.root_hash_sync().map_err(|e| e.to_string())?,
-        false => Some(HashKey::try_from(root).map_err(|e| e.to_string())?),
+    let root = if root.is_empty() {
+        db.root_hash_sync().map_err(|e| e.to_string())?
+    } else {
+        Some(HashKey::try_from(root).map_err(|e| e.to_string())?)
     };
     let Some(root) = root else {
         return Ok(Value::default());
@@ -232,9 +237,10 @@ fn iter_on_root(db: Option<&DatabaseHandle<'_>>, root: &[u8], key: &[u8]) -> Res
 
     // Find revision associated with root.
     let rev = db.revision_sync(root).map_err(|e| e.to_string())?;
-    let it = match key.is_empty() {
-        true => MerkleKeyValueStream::from(rev),
-        false => MerkleKeyValueStream::owned_from_key(rev, key),
+    let it = if key.is_empty() {
+        MerkleKeyValueStream::from(rev)
+    } else {
+        MerkleKeyValueStream::owned_from_key(rev, key)
     };
 
     // Store the iterator in the map.
@@ -245,6 +251,68 @@ fn iter_on_root(db: Option<&DatabaseHandle<'_>>, root: &[u8], key: &[u8]) -> Res
         .insert(new_id, MerkleIterator::View(it));
 
     Ok(new_id.into())
+}
+
+/// Return an iterator on proposal optionally starting from a key
+///
+/// # Arguments
+///
+/// * `db` - The database handle returned by `open_db`
+/// * `proposal_id` - The proposal id to iterate on
+/// * `key` - The key to start from, in `BorrowedBytes` form
+///
+/// # Returns
+///
+/// An iterator id/handle, or an error
+///
+/// # Safety
+///
+/// The caller must:
+///  * ensure that `db` is a valid pointer returned by `open_db`
+///  * ensure that `proposal_id` is a valid proposal id that is neither commited nor dropped
+///  * ensure that `key` is a valid pointer to a `Value` struct
+///
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_iter_on_proposal(
+    db: Option<&DatabaseHandle<'_>>,
+    proposal_id: ProposalId,
+    key: BorrowedBytes<'_>,
+) -> Value {
+    iter_on_proposal(db, proposal_id, &key).unwrap_or_else(Into::into)
+}
+
+/// Internal call for `fwd_iter_on_proposal` to remove error handling from the C API
+#[doc(hidden)]
+fn iter_on_proposal(
+    db: Option<&DatabaseHandle<'_>>,
+    proposal_id: ProposalId,
+    key: &[u8],
+) -> Result<Value, String> {
+    let db = db.ok_or("db should be non-null")?;
+
+    // Get proposal from ID.
+    let proposals = db
+        .proposals
+        .read()
+        .map_err(|_| "proposal lock is poisoned")?;
+    let proposal = proposals.get(&proposal_id).ok_or("proposal not found")?;
+    let it = proposal.iter_owned(Some(key));
+
+    // Store the iterator in the map. We need the write lock.
+    let iterator_id = next_iterator_id(); // Guaranteed to be non-zero
+    db.streams
+        .write()
+        .map_err(|_| "stream lock is poisoned")?
+        .insert(iterator_id, MerkleIterator::Proposal(it));
+
+    db.proposal_iterators
+        .write()
+        .map_err(|_| "proposal iterator lock is poisoned")?
+        .entry(proposal_id)
+        .or_insert_with(Vec::new)
+        .push(iterator_id);
+
+    Ok(iterator_id.into())
 }
 
 /// Retrieves the next item from the iterator
@@ -661,6 +729,11 @@ fn commit(db: Option<&DatabaseHandle<'_>>, proposal_id: u32) -> Result<(), Strin
     // Commit the proposal
     let result = proposal.commit_sync().map_err(|e| e.to_string());
 
+    // TODO: Handle iterators. Options:
+    // (1) creating a new iterator from revision, preserving state
+    // (2) dropping
+    // (3) holding on to the previous nodestore reference (current/inefficient)
+
     // Clear the cache, which will force readers after this point to find the committed root hash
     db.clear_cached_view();
 
@@ -692,6 +765,24 @@ pub unsafe extern "C" fn fwd_drop_proposal(
 #[doc(hidden)]
 fn drop_proposal(db: Option<&DatabaseHandle<'_>>, proposal_id: u32) -> Result<(), String> {
     let db = db.ok_or("db should be non-null")?;
+
+    // mark all dependent iterators as dropped and release the references to node stores
+    let iterators = {
+        let guard = db
+            .proposal_iterators
+            .read()
+            .map_err(|_| "proposal iterators lock is poisoned")?;
+        guard.get(&proposal_id).cloned()
+    };
+
+    if let Some(iter_ids) = iterators {
+        let mut guard = db.streams.write().map_err(|_| "streams lock is poisoned")?;
+        for id in iter_ids {
+            let _ = guard.remove(&id);
+            guard.insert(id, MerkleIterator::Dropped);
+        }
+    }
+
     let mut proposals = db
         .proposals
         .write()
@@ -802,7 +893,7 @@ impl From<(Box<[u8]>, Box<[u8]>)> for Value {
         let (key_len, val_len) = (key.len(), value.len());
 
         // packed format [key_len: 8 bytes][key_data][value_data]
-        let total_len = 8 + key_len + val_len;
+        let total_len = key_len.saturating_add(val_len).saturating_add(8);
         let mut packed = Vec::with_capacity(total_len);
 
         packed.extend_from_slice(&key_len.to_le_bytes());

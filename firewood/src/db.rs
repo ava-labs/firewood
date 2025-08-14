@@ -424,6 +424,17 @@ impl Proposal<'_> {
         self.create_proposal(batch)
     }
 
+    /// Create an iterator on proposal, owning the nodestore
+    pub fn iter_owned<'a, K: KeyType>(
+        &self,
+        key: Option<K>,
+    ) -> MerkleKeyValueStream<'a, NodeStore<Arc<ImmutableProposal>, FileBacked>> {
+        match key {
+            Some(key) => MerkleKeyValueStream::owned_from_key(self.nodestore.clone(), key),
+            None => MerkleKeyValueStream::from(self.nodestore.clone()),
+        }
+    }
+
     #[crate::metrics("firewood.proposal.create", "database proposal creation")]
     fn create_proposal(
         &self,
@@ -454,16 +465,6 @@ impl Proposal<'_> {
             nodestore: immutable,
             db: self.db,
         })
-    }
-
-    pub fn iter_owned<'a, K: KeyType>(
-        &self,
-        key: Option<K>,
-    ) -> MerkleKeyValueStream<'a, NodeStore<Arc<ImmutableProposal>, FileBacked>> {
-        match key {
-            Some(key) => MerkleKeyValueStream::owned_from_key(self.nodestore.clone(), key),
-            None => MerkleKeyValueStream::from(self.nodestore.clone()),
-        }
     }
 }
 

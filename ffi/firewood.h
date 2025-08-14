@@ -414,6 +414,31 @@ struct Value fwd_get_latest(const struct DatabaseHandle *db, BorrowedBytes key);
 struct Value fwd_iter_next(const struct DatabaseHandle *db, IteratorId it);
 
 /**
+ * Return an iterator on proposal optionally starting from a key
+ *
+ * # Arguments
+ *
+ * * `db` - The database handle returned by `open_db`
+ * * `proposal_id` - The proposal id to iterate on
+ * * `key` - The key to start from, in `BorrowedBytes` form
+ *
+ * # Returns
+ *
+ * An iterator id/handle, or an error
+ *
+ * # Safety
+ *
+ * The caller must:
+ *  * ensure that `db` is a valid pointer returned by `open_db`
+ *  * ensure that `proposal_id` is a valid proposal id that is neither commited nor dropped
+ *  * ensure that `key` is a valid pointer to a `Value` struct
+ *
+ */
+struct Value fwd_iter_on_proposal(const struct DatabaseHandle *db,
+                                  ProposalId proposal_id,
+                                  BorrowedBytes key);
+
+/**
  * Return an iterator optionally starting from a key in database
  *
  * # Arguments
