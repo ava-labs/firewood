@@ -12,7 +12,6 @@ package ffi
 import "C"
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"runtime"
@@ -147,45 +146,6 @@ func hashAndIDFromValue(v *C.struct_Value) ([]byte, uint32, error) {
 	return buf, id, nil
 }
 
-// u32FromValue converts the cgo `Value` payload to:
-//
-//	case | data    | len   | meaning
-//
-// 1.    | nil     | 0     | 0
-// 2.    | nil     | non-0 | len
-// 3.    | non-nil | 0     | error string
-// 4.    | non-nil | non-0 | invalid
-//
-// The value should never be nil.
-func u32FromValue(v *C.struct_Value) (uint32, error) {
-	// Pin the returned value to prevent it from being garbage collected.
-	defer runtime.KeepAlive(v)
-
-	if v == nil {
-		return 0, errNilStruct
-	}
-
-	// Case 4
-	if v.len != 0 && v.data != nil {
-		return 0, errBadValue
-	}
-
-	// Case 1
-	if v.len == 0 && v.data == nil {
-		return 0, nil
-	}
-
-	// Case 3
-	if v.len == 0 {
-		errStr := C.GoString((*C.char)(unsafe.Pointer(v.data)))
-		C.fwd_free_value(v)
-		return 0, errors.New(errStr)
-	}
-
-	// Case 2
-	return uint32(v.len), nil
-}
-
 // errorFromValue converts the cgo `Value` payload into:
 //
 //	case | data    | len   | meaning
@@ -260,67 +220,6 @@ func bytesFromValue(v *C.struct_Value) ([]byte, error) {
 
 	// Case 2
 	return nil, errBadValue
-}
-
-// keyValueFromValue converts the cgo `Value` payload to:
-//
-//	case | data    | len   | meaning
-//
-// 1.    | nil     | 0     | empty
-// 2.    | nil     | non-0 | invalid
-// 3.    | non-nil | 0     | error string
-// 4.    | non-nil | non-0 | packed key-value (key_len[8 bytes] + key + value)
-//
-// The value should never be nil.
-func keyValueFromValue(v *C.struct_Value) ([]byte, []byte, error) {
-	// Pin the returned value to prevent it from being garbage collected.
-	defer runtime.KeepAlive(v)
-
-	if v == nil {
-		return nil, nil, errNilStruct
-	}
-
-	// Case 4 - packed key-value data
-	if v.len != 0 && v.data != nil {
-		// Need at least 8 bytes for key length
-		if v.len < 8 {
-			C.fwd_free_value(v)
-			return nil, nil, errBadValue
-		}
-
-		// Get all data
-		buf := C.GoBytes(unsafe.Pointer(v.data), C.int(v.len))
-		C.fwd_free_value(v)
-
-		// Extract key length (little-endian)
-		keyLen := binary.LittleEndian.Uint64(buf[:8])
-
-		// Validate we have enough data
-		if uint64(len(buf)) < 8+keyLen {
-			return nil, nil, errBadValue
-		}
-
-		// Extract key and value slices
-		key := buf[8 : 8+keyLen]
-		value := buf[8+keyLen:]
-
-		return key, value, nil
-	}
-
-	// Case 1
-	if v.len == 0 && v.data == nil {
-		return nil, nil, nil
-	}
-
-	// Case 3
-	if v.len == 0 {
-		errStr := C.GoString((*C.char)(unsafe.Pointer(v.data)))
-		C.fwd_free_value(v)
-		return nil, nil, errors.New(errStr)
-	}
-
-	// Case 2
-	return nil, nil, errBadValue
 }
 
 func databaseFromResult(result *C.struct_DatabaseCreationResult) (*C.DatabaseHandle, error) {
