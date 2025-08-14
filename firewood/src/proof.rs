@@ -5,10 +5,6 @@
     clippy::missing_errors_doc,
     reason = "Found 1 occurrences after enabling the lint."
 )]
-#![expect(
-    clippy::needless_continue,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
 
 use firewood_storage::{
     BranchNode, Children, FileIoError, HashType, Hashable, IntoHashType, NibblesIterator, Path,
