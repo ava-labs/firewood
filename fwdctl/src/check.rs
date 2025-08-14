@@ -68,18 +68,28 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     let nodestore = NodeStore::open(storage)?;
     let db_stats = if opts.fix {
         let report = nodestore.check_and_fix(check_ops);
-        println!("Fixed Errors ({}): {:?}", report.fixed.len(), report.fixed);
-        println!(
-            "Unfixable Errors ({}): {:?}",
-            report.unfixable.len(),
-            report.unfixable
-        );
+        println!("Fixed Errors ({}):", report.fixed.len());
+        for error in report.fixed {
+            println!("\t{error}");
+        }
+        println!();
+        println!("Unfixable Errors ({}):", report.unfixable.len(),);
+        for (error, io_error) in report.unfixable {
+            println!("\t{error}");
+            if let Some(io_error) = io_error {
+                println!("\t\tError encountered while fixing: {io_error}");
+            }
+        }
         report.db_stats
     } else {
         let report = nodestore.check(check_ops);
-        println!("Errors ({}): {:?}", report.errors.len(), report.errors);
+        println!("Errors ({}):", report.errors.len());
+        for error in report.errors {
+            println!("\t{error}");
+        }
         report.db_stats
     };
+    println!();
 
     print_stats_report(db_stats);
 
@@ -91,7 +101,7 @@ fn print_stats_report(db_stats: DBStats) {
     // print the raw data
     println!("\nRaw Data: {db_stats:#?}");
 
-    println!("\nAdvanced Data: ");
+    println!("Advanced Data: ");
     let total_trie_area_bytes = db_stats
         .trie_stats
         .area_counts
@@ -100,17 +110,47 @@ fn print_stats_report(db_stats: DBStats) {
         .sum::<u64>();
     println!(
         "\tStorage Overhead: {} / {} = {:.2}x",
-        db_stats.physical_bytes,
+        db_stats.high_watermark,
         db_stats.trie_stats.kv_bytes,
-        (db_stats.physical_bytes as f64 / db_stats.trie_stats.kv_bytes as f64)
+        (db_stats.high_watermark as f64 / db_stats.trie_stats.kv_bytes as f64)
     );
-    let trie_area_index_bytes = db_stats.trie_stats.area_counts.values().sum::<u64>();
-    let total_trie_data_bytes = db_stats
-        .trie_stats
-        .trie_bytes
-        .saturating_add(trie_area_index_bytes);
     println!(
-        "\tInternal Fragmentation: 1 - ({total_trie_data_bytes} / {total_trie_area_bytes}) = {:.2}%",
-        (1f64 - (total_trie_data_bytes as f64)) * 100.0
+        "\tInternal Fragmentation: 1 - ({} / {total_trie_area_bytes}) = {:.2}%",
+        db_stats.trie_stats.trie_bytes,
+        (1f64 - (db_stats.trie_stats.trie_bytes as f64 / total_trie_area_bytes as f64)) * 100.0
+    );
+    println!(
+        "\tTrie Area Size Distribution: {:?}",
+        db_stats.trie_stats.area_counts
+    );
+    println!(
+        "\tFree List Area Size Distribution: {:?}",
+        db_stats.free_list_stats.area_counts
+    );
+    println!(
+        "\tBranching Factor Distribution: {:?}",
+        db_stats.trie_stats.branching_factors
+    );
+    println!("\tDepth Distribution: {:?}", db_stats.trie_stats.depths);
+    let total_trie_area_count = db_stats.trie_stats.area_counts.values().sum::<u64>();
+    println!(
+        "\tLow Occupancy Rate: {} / {total_trie_area_count} = {:.2}%",
+        db_stats.trie_stats.low_occupancy_area_count,
+        (db_stats.trie_stats.low_occupancy_area_count as f64 / total_trie_area_count as f64)
+            * 100.0
+    );
+    println!(
+        "\tTrie Extra Unaligned Page Read Rate: {} / {total_trie_area_count} = {:.2}%",
+        db_stats.trie_stats.extra_unaligned_page_read,
+        (db_stats.trie_stats.extra_unaligned_page_read as f64 / total_trie_area_count as f64)
+            * 100.0
+    );
+    let total_free_list_area_count = db_stats.free_list_stats.area_counts.values().sum::<u64>();
+    println!(
+        "\tFree List Extra Unaligned Page Read Rate: {} / {total_free_list_area_count} = {:.2}%",
+        db_stats.free_list_stats.extra_unaligned_page_read,
+        (db_stats.free_list_stats.extra_unaligned_page_read as f64
+            / total_free_list_area_count as f64)
+            * 100.0
     );
 }

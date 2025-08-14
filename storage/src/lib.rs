@@ -284,7 +284,7 @@ pub enum CheckerError {
         /// The error
         error: FileIoError,
         /// parent of the area
-        parent: Option<StoredAreaParent>,
+        parent: StoredAreaParent,
     },
 }
 
@@ -296,14 +296,14 @@ impl CheckerError {
             | CheckerError::UnpersistedRoot => None,
             CheckerError::AreaOutOfBounds { parent, .. }
             | CheckerError::AreaIntersects { parent, .. }
-            | CheckerError::AreaMisaligned { parent, .. } => Some(*parent),
+            | CheckerError::AreaMisaligned { parent, .. }
+            | CheckerError::IO { parent, .. } => Some(*parent),
             CheckerError::HashMismatch { parent, .. }
             | CheckerError::NodeLargerThanArea { parent, .. }
             | CheckerError::InvalidKey { parent, .. } => Some(StoredAreaParent::TrieNode(*parent)),
             CheckerError::FreelistAreaSizeMismatch { parent, .. } => {
                 Some(StoredAreaParent::FreeList(*parent))
             }
-            CheckerError::IO { parent, .. } => *parent,
         }
     }
 }

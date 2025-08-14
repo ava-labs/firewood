@@ -582,11 +582,10 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
 
         // Hashes the trie and returns the address of the new root.
         #[cfg(feature = "ethhash")]
-        let (root, root_hash, unwritten_count) =
-            nodestore.hash_helper(root, &mut Path::new(), None)?;
+        let (root, root_hash, unwritten_count) = nodestore.hash_helper(root)?;
         #[cfg(not(feature = "ethhash"))]
         let (root, root_hash, unwritten_count) =
-            NodeStore::<MutableProposal, S>::hash_helper(root, &mut Path::new())?;
+            NodeStore::<MutableProposal, S>::hash_helper(root)?;
 
         let immutable_proposal =
             Arc::into_inner(nodestore.kind).expect("no other references to the proposal");
@@ -755,13 +754,13 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
             .offset()
             .checked_sub(offset_before)
             .ok_or_else(|| {
-                self.file_io_error(
+                self.storage.file_io_error(
                     Error::other("Reader offset went backwards"),
                     actual_addr,
                     Some("read_node_with_num_bytes_from_disk".to_string()),
                 )
             })?;
-        Ok((node, length))
+        Ok((node, length.saturating_add(1))) // add 1 for the area size index byte
     }
 
     /// Returns (index, `area_size`) for the stored area at `addr`.
@@ -775,20 +774,6 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
         addr: LinearAddress,
     ) -> Result<(AreaIndex, u64), FileIoError> {
         area_index_and_size(self.storage.as_ref(), addr)
-    }
-
-    pub(crate) fn physical_size(&self) -> Result<u64, FileIoError> {
-        self.storage.size()
-    }
-
-    #[cold]
-    pub(crate) fn file_io_error(
-        &self,
-        error: Error,
-        addr: u64,
-        context: Option<String>,
-    ) -> FileIoError {
-        self.storage.file_io_error(error, addr, context)
     }
 }
 
