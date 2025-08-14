@@ -64,8 +64,8 @@ impl DerefMut for PathGuard<'_> {
 /// Classified children for ethereum hash processing
 #[cfg(feature = "ethhash")]
 pub(super) struct ClassifiedChildren<'a> {
-    pub(super) unhashed: Vec<(usize, Node)>,
-    pub(super) hashed: Vec<(usize, (MaybePersistedNode, &'a mut HashType))>,
+    pub(super) unhashed: Vec<usize>,
+    pub(super) hashed: Vec<(usize, (SharedNode, &'a mut HashType))>,
 }
 
 impl<T, S: ReadableStorage> NodeStore<T, S>
@@ -79,38 +79,29 @@ where
     pub(super) fn ethhash_classify_children<'a>(
         &self,
         children: &'a mut Children<Child>,
-    ) -> ClassifiedChildren<'a> {
-        children.iter_mut().enumerate().fold(
-            ClassifiedChildren {
-                unhashed: Vec::new(),
-                hashed: Vec::new(),
-            },
-            |mut acc, (idx, child)| {
-                match child {
-                    None => {}
-                    Some(Child::AddressWithHash(a, h)) => {
-                        // Convert address to MaybePersistedNode
-                        let maybe_persisted_node = MaybePersistedNode::from(*a);
-                        acc.hashed.push((idx, (maybe_persisted_node, h)));
-                    }
-                    Some(Child::Node(node)) => acc.unhashed.push((idx, node.clone())),
-                    Some(Child::MaybePersisted(maybe_persisted, h)) => {
-                        // For MaybePersisted, we need to get the address if it's persisted
-                        if let Some(addr) = maybe_persisted.as_linear_address() {
-                            let maybe_persisted_node = MaybePersistedNode::from(addr);
-                            acc.hashed.push((idx, (maybe_persisted_node, h)));
-                        } else {
-                            // If not persisted, we need to get the node to hash it
-                            let node = maybe_persisted
-                                .as_shared_node(&self)
-                                .expect("will never fail for unpersisted nodes");
-                            acc.unhashed.push((idx, node.deref().clone()));
-                        }
+    ) -> Result<ClassifiedChildren<'a>, FileIoError> {
+        let mut unhashed = Vec::new();
+        let mut hashed = Vec::new();
+        for (idx, child) in children.iter_mut().enumerate() {
+            match child {
+                None => {}
+                Some(Child::Node(_)) => unhashed.push(idx),
+                Some(Child::AddressWithHash(a, h)) => {
+                    let node = self.read_node(*a)?;
+                    hashed.push((idx, (node, h)));
+                }
+                Some(Child::MaybePersisted(node, h)) => {
+                    if let Some(addr) = node.as_linear_address() {
+                        let node = self.read_node(addr)?;
+                        hashed.push((idx, (node, h)));
+                    } else {
+                        unhashed.push(idx);
                     }
                 }
-                acc
-            },
-        )
+            }
+        }
+
+        Ok(ClassifiedChildren { unhashed, hashed })
     }
 
     /// Hashes the given `node` and the subtree rooted at it.
@@ -142,41 +133,42 @@ where
         let mut nodes_processed = 1usize; // Count this node
         if let Node::Branch(ref mut b) = node {
             // special case code for ethereum hashes at the account level
+            let mut current_path = PathGuard::new(&mut path_prefix);
+            current_path.0.extend(b.partial_path.0.iter().copied());
             #[cfg(feature = "ethhash")]
-            let make_fake_root = if path_prefix.0.len().saturating_add(b.partial_path.0.len()) == 64
-            {
+            let make_fake_root = if current_path.0.len() == 64 {
                 // looks like we're at an account branch
                 // tally up how many hashes we need to deal with
                 let ClassifiedChildren {
                     unhashed,
                     mut hashed,
-                } = self.ethhash_classify_children(&mut b.children);
+                } = self.ethhash_classify_children(&mut b.children)?;
                 trace!("hashed {hashed:?} unhashed {unhashed:?}");
                 // we were left with one hashed node that must be rehashed
                 if let [(child_idx, (child_node, child_hash))] = &mut hashed[..] {
                     // Extract the address from the MaybePersistedNode
-                    let addr: crate::LinearAddress = child_node
-                        .as_linear_address()
-                        .expect("hashed node should be persisted");
-                    let mut hashable_node = self.read_node(addr)?.deref().clone();
                     let hash = {
-                        let mut path_guard = PathGuard::new(&mut path_prefix);
-                        path_guard.0.extend(b.partial_path.0.iter().copied());
+                        let mut child_path_prefix = PathGuard::new(&mut current_path);
+                        let mut hashable_node = (**child_node).clone();
                         if unhashed.is_empty() {
                             hashable_node.update_partial_path(Path::from_nibbles_iterator(
                                 std::iter::once(*child_idx as u8)
                                     .chain(hashable_node.partial_path().0.iter().copied()),
                             ));
                         } else {
-                            path_guard.0.push(*child_idx as u8);
+                            child_path_prefix.0.push(*child_idx as u8);
                         }
-                        hash_node(&hashable_node, &path_guard)
+                        hash_node(&hashable_node, &child_path_prefix)
                     };
                     **child_hash = hash;
                 }
                 // handle the single-child case for an account special below
-                if hashed.is_empty() && unhashed.len() == 1 {
-                    Some(unhashed.last().expect("only one").0 as u8)
+                if hashed.is_empty() {
+                    if let [idx] = &unhashed[..] {
+                        Some(*idx as u8)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
@@ -207,8 +199,7 @@ where
                 // Hash this child and update
                 let (child_node, child_hash, child_count) = {
                     // we extend and truncate path_prefix to reduce memory allocations]
-                    let mut child_path_prefix = PathGuard::new(&mut path_prefix);
-                    child_path_prefix.0.extend(b.partial_path.0.iter().copied());
+                    let mut child_path_prefix = PathGuard::new(&mut current_path);
                     #[cfg(feature = "ethhash")]
                     if make_fake_root.is_none() {
                         // we don't push the nibble there is only one unhashed child and
