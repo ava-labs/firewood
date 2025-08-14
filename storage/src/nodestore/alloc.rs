@@ -47,24 +47,6 @@ const fn var_int_max_size<VI>() -> usize {
 #[repr(transparent)]
 pub struct FreeLists([Option<LinearAddress>; AreaIndex::NUM_AREA_SIZES]);
 
-impl std::ops::Index<AreaIndex> for FreeLists {
-    type Output = Option<LinearAddress>;
-
-    fn index(&self, index: AreaIndex) -> &Self::Output {
-        self.0
-            .get(index.as_usize())
-            .expect("AreaIndex is guaranteed to be within bounds")
-    }
-}
-
-impl std::ops::IndexMut<AreaIndex> for FreeLists {
-    fn index_mut(&mut self, index: AreaIndex) -> &mut Self::Output {
-        self.0
-            .get_mut(index.as_usize())
-            .expect("AreaIndex is guaranteed to be within bounds")
-    }
-}
-
 impl FreeLists {
     /// Get a reference to the underlying array.
     pub const fn as_array(&self) -> &[Option<LinearAddress>; AreaIndex::NUM_AREA_SIZES] {
@@ -411,16 +393,18 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
 
         // The area that contained the node is now free.
         let mut stored_area_bytes = Vec::new();
-        FreeArea::new(self.header.free_lists()[area_size_index])
+        FreeArea::new(self.header.free_lists().as_array()[area_size_index.as_usize()])
             .as_bytes(area_size_index, &mut stored_area_bytes);
 
         self.storage.write(addr.into(), &stored_area_bytes)?;
 
-        self.storage
-            .add_to_free_list_cache(addr, self.header.free_lists()[area_size_index]);
+        self.storage.add_to_free_list_cache(
+            addr,
+            self.header.free_lists().as_array()[area_size_index.as_usize()],
+        );
 
         // The newly freed block is now the head of the free list.
-        self.header.free_lists_mut()[area_size_index] = Some(addr);
+        self.header.free_lists_mut().as_array_mut()[area_size_index.as_usize()] = Some(addr);
 
         Ok(())
     }
@@ -799,7 +783,7 @@ mod tests {
         next_free_block1 = Some(free_list1_area1);
         offset += area_size1;
 
-        free_lists[area_index1] = next_free_block1;
+        free_lists.as_array_mut()[area_index1.as_usize()] = next_free_block1;
 
         // second free list
         let area_index2 = AreaIndex::new(
@@ -821,7 +805,7 @@ mod tests {
         next_free_block2 = Some(free_list2_area1);
         offset += area_size2;
 
-        free_lists[area_index2] = next_free_block2;
+        free_lists.as_array_mut()[area_index2.as_usize()] = next_free_block2;
 
         // write header
         test_write_header(&mut nodestore, offset, None, free_lists);
@@ -917,7 +901,7 @@ mod tests {
         next_free_block1 = Some(free_list1_area1);
         offset += area_size1;
 
-        free_lists[AREA_INDEX1] = next_free_block1;
+        free_lists.as_array_mut()[AREA_INDEX1.as_usize()] = next_free_block1;
 
         // second free list
         assert_ne!(AREA_INDEX1, AREA_INDEX2);
@@ -934,7 +918,7 @@ mod tests {
         next_free_block2 = Some(free_list2_area1);
         offset += area_size2;
 
-        free_lists[AREA_INDEX2] = next_free_block2;
+        free_lists.as_array_mut()[AREA_INDEX2.as_usize()] = next_free_block2;
 
         // write header
         test_write_header(&mut nodestore, offset, None, free_lists);
@@ -1025,16 +1009,16 @@ mod tests {
         let index2 = AreaIndex::MAX;
 
         // Set values using AreaIndex
-        free_lists[index1] = Some(addr1);
-        free_lists[index2] = Some(addr2);
+        free_lists.as_array_mut()[index1.as_usize()] = Some(addr1);
+        free_lists.as_array_mut()[index2.as_usize()] = Some(addr2);
 
         // Get values using AreaIndex
-        assert_eq!(free_lists[index1], Some(addr1));
-        assert_eq!(free_lists[index2], Some(addr2));
+        assert_eq!(free_lists.as_array()[index1.as_usize()], Some(addr1));
+        assert_eq!(free_lists.as_array()[index2.as_usize()], Some(addr2));
 
         // Test indexing with usize (backward compatibility)
-        free_lists[AreaIndex::MIN] = None;
-        assert_eq!(free_lists[AreaIndex::MIN], None);
+        free_lists.as_array_mut()[AreaIndex::MIN.as_usize()] = None;
+        assert_eq!(free_lists.as_array()[AreaIndex::MIN.as_usize()], None);
 
         assert_eq!(free_lists.iter().count(), AreaIndex::NUM_AREA_SIZES);
 
