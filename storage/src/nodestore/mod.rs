@@ -251,6 +251,11 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
         self.kind.deleted.push(node);
     }
 
+    /// Appends to the deleted vector from an external vector.
+    pub fn append_deleted(&mut self, mut deleted: Vec<MaybePersistedNode>) {
+        self.kind.deleted.append(&mut deleted);
+    }
+
     /// Reads a node for update, marking it as deleted in this proposal.
     /// We get an arc from cache (reading it from disk if necessary) then
     /// copy/clone the node and return it.
@@ -261,6 +266,24 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     pub fn read_for_update(&mut self, node: MaybePersistedNode) -> Result<Node, FileIoError> {
         let arc_wrapped_node = node.as_shared_node(self)?;
         self.delete_node(node);
+        Ok((*arc_wrapped_node).clone())
+    }
+
+    /// Reads a node for update, marking it as deleted in the deleted vector.
+    /// We get an arc from cache (reading it from disk if necessary) then
+    /// copy/clone the node and return it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the node cannot be read.
+    pub fn read_for_update_ext_deleted(
+        &self,
+        node: MaybePersistedNode,
+        deleted: &mut Vec<MaybePersistedNode>,
+    ) -> Result<Node, FileIoError> {
+        let arc_wrapped_node = node.as_shared_node(self)?;
+        trace!("Pending delete at {node:?}");
+        deleted.push(node);
         Ok((*arc_wrapped_node).clone())
     }
 

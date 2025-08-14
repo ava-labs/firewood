@@ -21,7 +21,9 @@ use std::future::ready;
 use std::io::Error;
 use std::iter::once;
 use std::num::NonZeroUsize;
-use std::sync::Arc;
+use std::sync::mpsc::{Receiver, RecvError, SendError, Sender};
+use std::sync::{Arc, mpsc};
+use std::thread::{self, JoinHandle};
 
 /// Keys are boxed u8 slices
 pub type Key = Box<[u8]>;
@@ -106,6 +108,188 @@ fn get_helper<T: TrieReader>(
                     }
                 },
             }
+        }
+    }
+}
+
+#[derive(Debug)]
+/// Parallel compatible wrapper for a Merkle trie
+pub struct MerkleParallel<T, S> {
+    merkle_arc: Option<Arc<T>>,
+    root_node: Option<Node>,
+    worker_pool: WorkerPool<S>,
+}
+
+#[derive(Debug)]
+/// Error type that can return from calling parallel insert and its related functions.
+pub enum ParallelInsertError<S> {
+    /// Error from calling `insert_helper` or `insert`
+    Io(FileIoError),
+
+    /// Error from sending to a worker channel
+    Channel(SendError<MerkleOp<S>>),
+
+    /// Merkle structure has been cleared. This should only happen if insert is called after
+    /// insert is called after `clear_merkle` but before `set_merkle`.
+    MerkleUnset,
+
+    /// Error from wait or `wait_param` that came from calling `clear_merkle`.
+    MerkleError(ClearMerkleError<S>),
+}
+
+#[derive(Debug)]
+/// Error types that can return from `clear_merkle`.
+pub enum ClearMerkleError<S> {
+    /// Error from sending to a worker channel
+    SendError(SendError<MerkleOp<S>>),
+
+    /// Error from receiving from a worker channel
+    RecvError(RecvError),
+
+    /// Error from calling `insert_helper` or `insert`
+    Io(FileIoError),
+}
+
+impl<S: ReadableStorage + 'static> MerkleParallel<Merkle<NodeStore<MutableProposal, S>>, S> {
+    /// Constructor for `MerkleParallel`.
+    #[must_use]
+    pub fn new(mut m: Merkle<NodeStore<MutableProposal, S>>) -> Self {
+        let root_node = std::mem::take(m.nodestore.mut_root());
+        let merkle_arc = Arc::new(m);
+        let worker_pool = WorkerPool::new(merkle_arc.clone());
+        MerkleParallel {
+            merkle_arc: Some(merkle_arc),
+            root_node,
+            worker_pool,
+        }
+    }
+
+    /// Parallel insert into the Merkle trie.
+    ///
+    /// ## Errors
+    ///
+    /// Can return a `ParallelInsertError` which could be due to a `FileIoError` from calling `insert_helper`
+    /// or `insert`, a channel error from sending to a worker, or a None merkle, which means the merkle
+    /// structure has been cleared without re-setting it to a new merkle structure.
+    pub fn insert(&mut self, key: &[u8], value: Value) -> Result<(), ParallelInsertError<S>> {
+        let Some(merkle_arc) = self.merkle_arc.take() else {
+            return Err(ParallelInsertError::MerkleUnset);
+        };
+
+        // Perform the actual parallel insert
+        let insert_result = match merkle_arc.insert_parallel(
+            self.root_node.take(),
+            &self.worker_pool,
+            key,
+            value,
+        ) {
+            Ok(parallel_result) => parallel_result,
+            Err(err) => {
+                return Err(ParallelInsertError::Io(err));
+            }
+        };
+
+        match insert_result {
+            ParallelInsertReturn::Performed(node) => {
+                self.root_node = Some(node);
+                self.merkle_arc = Some(merkle_arc);
+            }
+            ParallelInsertReturn::RetryNonThreaded(node, value) => {
+                let mut merkle = self.wait_params(node, merkle_arc)?;
+
+                // Fallback to calling non-parallel insert.
+                if let Err(err) = merkle.insert(key, value) {
+                    return Err(ParallelInsertError::Io(err));
+                }
+
+                // Set all of the parameters that were taken previously.
+                if let Err(err) = self.update_merkle(merkle) {
+                    return Err(ParallelInsertError::Channel(err));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Updates the underlying Merkle trie that `MerkleParallel` is wrapping. This should only be
+    /// called after calling `wait` or `wait_params`. The main purpose of this function is to allow
+    /// parallel inserts to be performed on a Merkle trie that was previously released or to wrap
+    /// `MerkleParallel` around a new Merkle trie.
+    ///
+    /// ## Errors
+    ///
+    /// Can return a `SendError` from its call to `set_merkle` in `WorkerPool`.
+    pub fn update_merkle(
+        &mut self,
+        mut m: Merkle<NodeStore<MutableProposal, S>>,
+    ) -> Result<(), SendError<MerkleOp<S>>> {
+        self.root_node = std::mem::take(m.nodestore.mut_root());
+        let merkle_arc = Arc::new(m);
+        self.worker_pool.set_merkle(merkle_arc.clone())?;
+        self.merkle_arc = Some(merkle_arc);
+        Ok(())
+    }
+
+    /// Calls `clear_merkle` and then updates the node's children with `clear_merkle`'s return
+    /// value. This function is only called by wait.
+    ///
+    /// ## Panics
+    ///
+    /// Can panic if `clear_merkle` returns child roots but the root node is not a branch. Can
+    /// also panic if `merkle_arc` is None or if its reference count is not 1.
+    fn wait_params(
+        &mut self,
+        mut node: Node,
+        merkle_arc: Arc<Merkle<NodeStore<MutableProposal, S>>>,
+    ) -> Result<Merkle<NodeStore<MutableProposal, S>>, ParallelInsertError<S>> {
+        let mut child_nodes = match self.worker_pool.clear_merkle() {
+            Ok(n) => n,
+            Err(err) => {
+                return Err(ParallelInsertError::MerkleError(err));
+            }
+        };
+        let mut deleted = Vec::default();
+        for (i, child_node_opt) in child_nodes.iter_mut().enumerate() {
+            deleted.append(&mut child_node_opt.1);
+            // If child_nodes is not empty, then node must be a branch
+            if let Some(child_node) = child_node_opt.0.take() {
+                node.as_branch_mut()
+                    .expect("must be a branch node")
+                    .update_child(i as u8, Some(Child::Node(child_node)));
+            }
+        }
+        // All but one of the references to merkle_arc should be gone after a call
+        // to `clear_merkle`. Extract the inner Merkle so we can perform a mutable
+        // operations on it.
+        let mut merkle = Arc::into_inner(merkle_arc).expect("merkle_arc reference count is not 1");
+        *merkle.nodestore.mut_root() = Some(node);
+        merkle.nodestore.append_deleted(deleted);
+        Ok(merkle)
+    }
+
+    /// Wait until workers have completed. Releases the underlying Merkle trie from `MerkleParallel`.
+    ///
+    /// ## Errors
+    ///
+    /// Can return a `ClearMerkleError` that
+    ///
+    /// ## Panics
+    ///
+    /// Can panic if `merkle_arc` is None or if its reference count is not 1.
+    pub fn wait(
+        &mut self,
+    ) -> Result<Merkle<NodeStore<MutableProposal, S>>, ParallelInsertError<S>> {
+        let merkle_arc = self.merkle_arc.take().expect("merkle arc option is none");
+        // The root can be None if the trie is empty. In this case, there should not be any
+        // outstanding requests being handled by workers as long as the invariant that the
+        // root cannot be removed while there are workers active holds. For this case, we just
+        // convert the merkle_arc back to a merkle and return it back to the caller.
+        if let Some(node) = self.root_node.take() {
+            self.wait_params(node, merkle_arc)
+        } else {
+            // TODO: Add counter to verify that there are no outstanding requests.
+            let merkle_arc = self.merkle_arc.take().expect("merkle_arc is None");
+            Ok(Arc::into_inner(merkle_arc).expect("merkle_arc reference count is not 1"))
         }
     }
 }
@@ -576,8 +760,254 @@ impl<S: ReadableStorage> TryFrom<Merkle<NodeStore<MutableProposal, S>>>
     }
 }
 
+#[derive(Debug)]
+/// Operations that can be sent to a worker in the worker pool
+pub enum MerkleOp<S> {
+    /// Operation to call ``insert_helper`` on a sub-trie that is rooted at node.
+    /// Specifying None for node tells the worker to create a leaf node for a new
+    /// sub-trie.
+    InsertData(
+        Box<Option<Node>>,
+        Box<[u8]>,
+        Box<[u8]>,
+        Box<Vec<MaybePersistedNode>>,
+    ),
+
+    /// Operation to termine the worker threads in the thread pool.
+    Terminate,
+
+    /// Clearing Merkle Arc
+    ClearMerkle,
+
+    /// Setting Merkle Arc
+    SetMerkle(Box<Arc<Merkle<NodeStore<MutableProposal, S>>>>),
+}
+
+/// Data that the worker pool keeps for each worker.
+type WorkerData<S> = (Sender<MerkleOp<S>>, Receiver<WorkerReturn>, JoinHandle<()>);
+
+/// Data type includes a node (that can be None) and the nodes that were deleted for
+/// update to get this node.
+type NodeWithDeleted = (Option<Node>, Vec<MaybePersistedNode>);
+
+/// Value returned by a worker thread in a channel.
+type WorkerReturn = Result<NodeWithDeleted, FileIoError>;
+
+#[derive(Debug)]
+/// Worker pool used to issue concurrent inserts to a Merkle trie
+pub struct WorkerPool<S> {
+    workers_data: Vec<WorkerData<S>>,
+}
+
+impl<S: ReadableStorage + 'static> WorkerPool<S> {
+    /// Create one worker for the worker pool. This function is only called by the `WorkerPool`
+    /// constructor to create workers.
+    fn create_one_worker(merkle: Arc<Merkle<NodeStore<MutableProposal, S>>>) -> WorkerData<S> {
+        let (host_sender, thread_receiver) = mpsc::channel::<MerkleOp<S>>();
+        let (thread_sender, host_receiver) = mpsc::channel::<WorkerReturn>();
+        let mut merkle: Option<Arc<Merkle<NodeStore<MutableProposal, S>>>> = Some(merkle);
+
+        let handle = thread::spawn(move || {
+            let mut inserted_root = None;
+            let mut thread_deleted = Vec::default();
+
+            loop {
+                let Ok(v) = thread_receiver.recv() else {
+                    // Thread is unable to recv data from parent. This should only happen when the worker pool
+                    // gets dropped. Breaking here will terminate the thread. Because this behavior will cleanly
+                    // terminate the thread when the worker pool gets dropped, there is no need to explictly
+                    // send a Terminate message and wait on the thread's join handle to cleanup the thread.
+                    break;
+                };
+                match v {
+                    MerkleOp::InsertData(sub_trie_root, key, value, deleted) => {
+                        // There are four possible cases to consider here.
+                        // 1.   inserted_root is None and subtrie_root is None. This means that we need to
+                        //      create a sub-trie. We create a Leaf node and set it to inserted_root and
+                        //      continue from the loop.
+                        // 2.   inserted_root is None and subtrie_root is *not* None. This means we are adding
+                        //      to an existing trie rooted at subtrie_root. We set node to sub_trie_root.
+                        // 3.   inserted_root is *not* None and node_opt is None. Same as case 2 except
+                        //      we are adding to the sub-trie rooted at inserted_root.
+                        // 4.   Both insert_root and subtrie_root are *not* None. This case should not happen
+                        //      as subtrie_root is taken from the children array and any subsequent insert to
+                        //      that branch should set sub_trie_root to None.
+                        let node = match *sub_trie_root {
+                            Some(node_from_sub_trie_root) => {
+                                assert!(
+                                    inserted_root.is_none(),
+                                    "inserted_root should be None if sub_trie_root is not None"
+                                );
+                                node_from_sub_trie_root
+                            }
+                            None => {
+                                if let Some(node_from_inserted) = inserted_root {
+                                    node_from_inserted
+                                } else {
+                                    inserted_root = Some(Node::Leaf(LeafNode {
+                                        partial_path: key.into(),
+                                        value,
+                                    }));
+                                    counter!("firewood.insert", "merkle"=>"below").increment(1);
+                                    continue;
+                                }
+                            }
+                        };
+
+                        let merkle_arc: Arc<Merkle<NodeStore<MutableProposal, S>>> =
+                            merkle.expect("Merkle is not set before calling insert");
+
+                        let path: Path = key.into();
+                        let insert_result =
+                            merkle_arc.insert_helper(node, path.as_ref(), value, *deleted);
+
+                        // Keep the returned node as the inserted_root for this sub-trie.
+                        inserted_root = match insert_result {
+                            Ok(mut n) => {
+                                thread_deleted.append(&mut n.1);
+                                Some(n.0)
+                            }
+                            Err(err) => {
+                                // Send back error messsage to the main thread and then exit. Ignore any
+                                // errors when sending to the channel since we are exiting, although we
+                                // may want to add some logging in that case.
+                                let _ = thread_sender.send(Err(err));
+                                break;
+                            }
+                        };
+                        merkle = Some(merkle_arc);
+                    }
+                    MerkleOp::Terminate => {
+                        // This provides a mechanism to terminate worker pool threads without dropping
+                        // the worker pool. Currently not used.
+                        break;
+                    }
+                    MerkleOp::ClearMerkle => {
+                        merkle = None; // Decrement the Arc counter
+                        // Ignore sending errors here (should not happen during normal operation). May consider
+                        // exiting the thread here, but that still leaves the system in a bad state.
+                        let _ = thread_sender.send(Ok((inserted_root, thread_deleted)));
+                        inserted_root = None;
+                        thread_deleted = Vec::default();
+                    }
+                    MerkleOp::SetMerkle(m) => {
+                        merkle = Some(*m);
+                    }
+                }
+            }
+        });
+        // Returns channels that are used to communicate with this thread, and its join handle which
+        // can be used to wait for the thread to terminate. Currently the handle is not used.
+        (host_sender, host_receiver, handle)
+    }
+
+    /// Constructor for `WorkerPool` that takes the Arc of a Merkle struct as a parameter.
+    /// Creates one worker thread for each possible child for the root node.
+    #[must_use]
+    pub fn new(merkle: Arc<Merkle<NodeStore<MutableProposal, S>>>) -> Self {
+        let workers_data = (0..BranchNode::MAX_CHILDREN)
+            .map(|_| WorkerPool::create_one_worker(merkle.clone()))
+            .collect();
+        WorkerPool { workers_data }
+    }
+
+    /// Issue an insert request to a worker in the worker pool.
+    ///
+    /// ## Panics
+    ///
+    /// Can panic if an incorrect child index is passed as a parameter.
+    ///
+    /// ## Errors
+    ///
+    /// `SendError` from sending the message to the channel.
+    pub fn insert(
+        &self,
+        node: Option<Node>,
+        child_index: usize,
+        key: &[u8],
+        value: Value,
+        deleted: Vec<MaybePersistedNode>,
+    ) -> Result<(), SendError<MerkleOp<S>>> {
+        self.workers_data
+            .get(child_index)
+            .expect("out of bounds on vector")
+            .0
+            .send(MerkleOp::InsertData(
+                Box::new(node),
+                key.into(),
+                value,
+                Box::new(deleted),
+            ))
+    }
+
+    /// Setting the Merkle trie for the worker pool. The worker pool must be cleared first
+    /// before calling this function.
+    ///
+    /// ## Errors
+    ///
+    /// `SendError` from sending a message to one of the worker channels.
+    pub fn set_merkle(
+        &self,
+        merkle: Arc<Merkle<NodeStore<MutableProposal, S>>>,
+    ) -> Result<(), SendError<MerkleOp<S>>> {
+        for worker in &self.workers_data {
+            worker
+                .0
+                .send(MerkleOp::SetMerkle(Box::new(merkle.clone())))?;
+        }
+        Ok(())
+    }
+
+    /// Clears the Merkle trie so that it can be moved out of the Arc
+    ///
+    /// ## Errors
+    ///
+    /// Can return a `ClearMerkleError` which can either be due to errors
+    /// sending or receiving from a channel, or a `FileIoError` from a
+    /// previous insert.
+    pub fn clear_merkle(&self) -> Result<Vec<NodeWithDeleted>, ClearMerkleError<S>> {
+        // Send ClearMerkle to all of the worker threads. The worker threads will then
+        // send back results that were collected by each worker.
+        for worker in &self.workers_data {
+            if let Err(err) = worker.0.send(MerkleOp::ClearMerkle) {
+                return Err(ClearMerkleError::SendError(err));
+            }
+        }
+
+        // Collect the results from the worker threads.
+        let mut ret_vec = Vec::with_capacity(BranchNode::MAX_CHILDREN);
+        for worker in &self.workers_data {
+            // Block on receive. Should not return a RecvError during normal operation.
+            match worker.1.recv() {
+                // Check to see if the workers encounter any errors from previous insert operations
+                Ok(result) => match result {
+                    // No errors. Add to the return vector.
+                    Ok(result) => ret_vec.push(result),
+                    Err(err) => {
+                        return Err(ClearMerkleError::Io(err));
+                    }
+                },
+                Err(err) => {
+                    return Err(ClearMerkleError::RecvError(err));
+                }
+            }
+        }
+        Ok(ret_vec)
+    }
+}
+
+#[derive(Debug)]
+/// Return value for calling `insert_helper_parallel`.
+pub enum ParallelInsertReturn {
+    /// Return this if operation cannot be performed while there are other operations outstanding.
+    RetryNonThreaded(Node, Value),
+
+    /// Return this if operation was performed by a worker.
+    Performed(Node),
+}
+
 #[expect(clippy::missing_errors_doc)]
-impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
+impl<S: ReadableStorage + 'static> Merkle<NodeStore<MutableProposal, S>> {
     /// Convert a merkle backed by an `MutableProposal` into an `ImmutableProposal`
     ///
     /// This function is only used in benchmarks and tests
@@ -608,20 +1038,138 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
             return Ok(());
         };
 
-        let root_node = self.insert_helper(root_node, key.as_ref(), value)?;
-        *self.nodestore.mut_root() = root_node.into();
+        let root_node = self.insert_helper(root_node, key.as_ref(), value, Vec::default())?;
+        self.nodestore.append_deleted(root_node.1);
+        *self.nodestore.mut_root() = root_node.0.into();
         Ok(())
+    }
+
+    /// Parallel insertion
+    pub fn insert_parallel(
+        &self,
+        root: Option<Node>,
+        worker_pool: &WorkerPool<S>,
+        key: &[u8],
+        value: Value,
+    ) -> Result<ParallelInsertReturn, FileIoError> {
+        // If root is None, create the root node and return.
+        let path_key = Path::from_nibbles_iterator(NibblesIterator::new(key));
+        let Some(root_node) = root else {
+            return Ok(ParallelInsertReturn::Performed(Node::Leaf(LeafNode {
+                partial_path: path_key,
+                value,
+            })));
+        };
+        let insert_return =
+            self.insert_parallel_helper(worker_pool, root_node, path_key.as_ref(), value)?;
+        Ok(insert_return)
+    }
+
+    /// Parallel version of ``insert_helper``. See ``insert_helper`` for additional comments on each arm in
+    /// the main match statement.
+    pub fn insert_parallel_helper(
+        &self,
+        worker_pool: &WorkerPool<S>,
+        mut node: Node,
+        key: &[u8],
+        value: Value,
+    ) -> Result<ParallelInsertReturn, FileIoError> {
+        let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
+
+        let unique_key = path_overlap.unique_a;
+        let unique_node = path_overlap.unique_b;
+
+        // Used to keep track of the deleted nodes in an external vector. This contents of this deleted vector
+        // should be merged with the nodestore's deleted vector after the inserts are complete.
+        let mut deleted = Vec::default();
+        match (
+            unique_key
+                .split_first()
+                .map(|(index, path)| (*index, <&[u8] as std::convert::Into<Path>>::into(path))),
+            unique_node
+                .split_first()
+                .map(|(index, path)| (*index, <&[u8] as std::convert::Into<Path>>::into(path))),
+        ) {
+            (None, None) => {
+                node.update_value(value);
+                counter!("firewood.insert", "merkle" => "update").increment(1);
+                Ok(ParallelInsertReturn::Performed(node))
+            }
+            (None, Some((_child_index, _partial_path))) => {
+                // Rotates the root. Should not be applied until the outstanding operations
+                // have been merged into the root. Return a special type to tell the caller
+                // to block until all operations are done and then perform a non-threaded
+                // insert for this key/value
+                Ok(ParallelInsertReturn::RetryNonThreaded(node, value))
+            }
+            (Some((child_index, partial_path)), None) => {
+                match node {
+                    Node::Branch(ref mut branch) => {
+                        #[expect(clippy::indexing_slicing)]
+                        let child = match std::mem::take(&mut branch.children[child_index as usize])
+                        {
+                            None => {
+                                let _ = worker_pool.insert(
+                                    None,
+                                    child_index as usize,
+                                    partial_path.as_ref(),
+                                    value,
+                                    deleted,
+                                );
+                                return Ok(ParallelInsertReturn::Performed(node));
+                            }
+                            Some(Child::Node(child)) => child,
+                            Some(Child::AddressWithHash(addr, _)) => {
+                                // TODO: WorkerPool can be modified such that it accepts an addr
+                                //       which would allow this I/O operation to be performed
+                                //       on a separate thread. However, this optimization would
+                                //       only be helpful when the root's children have not been
+                                //       read from storage.
+                                self.nodestore
+                                    .read_for_update_ext_deleted(addr.into(), &mut deleted)?
+                            }
+                            Some(Child::MaybePersisted(maybe_persisted, _)) => {
+                                // TODO: Same as the previous block, but instead of sending an addr,
+                                //       we can instead send a maybe_persisted to the worker thread.
+                                self.nodestore.read_for_update_ext_deleted(
+                                    maybe_persisted.clone(),
+                                    &mut deleted,
+                                )?
+                            }
+                        };
+
+                        let _ = worker_pool.insert(
+                            Some(child),
+                            child_index as usize,
+                            partial_path.as_ref(),
+                            value,
+                            deleted,
+                        );
+                        Ok(ParallelInsertReturn::Performed(node))
+                    }
+                    Node::Leaf(ref mut _leaf) => {
+                        // Rotates the root.
+                        Ok(ParallelInsertReturn::RetryNonThreaded(node, value))
+                    }
+                }
+            }
+            (Some((_key_index, _key_partial_path)), Some((_node_index, _node_partial_path))) => {
+                // Rotates the root.
+                Ok(ParallelInsertReturn::RetryNonThreaded(node, value))
+            }
+        }
     }
 
     /// Map `key` to `value` into the subtrie rooted at `node`.
     /// Each element of `key` is 1 nibble.
     /// Returns the new root of the subtrie.
     pub fn insert_helper(
-        &mut self,
+        &self,
         mut node: Node,
         key: &[u8],
         value: Value,
-    ) -> Result<Node, FileIoError> {
+        mut deleted: Vec<MaybePersistedNode>,
+    ) -> Result<(Node, Vec<MaybePersistedNode>), FileIoError> {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`
         // 2. The key is above the node (i.e. its ancestor)
@@ -644,7 +1192,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 // 1. The node is at `key`
                 node.update_value(value);
                 counter!("firewood.insert", "merkle" => "update").increment(1);
-                Ok(node)
+                Ok((node, deleted))
             }
             (None, Some((child_index, partial_path))) => {
                 // 2. The key is above the node (i.e. its ancestor)
@@ -665,7 +1213,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 branch.update_child(child_index, Some(Child::Node(node)));
                 counter!("firewood.insert", "merkle"=>"above").increment(1);
 
-                Ok(Node::Branch(Box::new(branch)))
+                Ok((Node::Branch(Box::new(branch)), deleted))
             }
             (Some((child_index, partial_path)), None) => {
                 // 3. The key is below the node (i.e. its descendant)
@@ -688,20 +1236,24 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                 });
                                 branch.update_child(child_index, Some(Child::Node(new_leaf)));
                                 counter!("firewood.insert", "merkle"=>"below").increment(1);
-                                return Ok(node);
+                                return Ok((node, deleted));
                             }
                             Some(Child::Node(child)) => child,
-                            Some(Child::AddressWithHash(addr, _)) => {
-                                self.nodestore.read_for_update(addr.into())?
-                            }
+                            Some(Child::AddressWithHash(addr, _)) => self
+                                .nodestore
+                                .read_for_update_ext_deleted(addr.into(), &mut deleted)?,
                             Some(Child::MaybePersisted(maybe_persisted, _)) => {
-                                self.nodestore.read_for_update(maybe_persisted.clone())?
+                                self.nodestore.read_for_update_ext_deleted(
+                                    maybe_persisted.clone(),
+                                    &mut deleted,
+                                )?
                             }
                         };
 
-                        let child = self.insert_helper(child, partial_path.as_ref(), value)?;
-                        branch.update_child(child_index, Some(Child::Node(child)));
-                        Ok(node)
+                        let child =
+                            self.insert_helper(child, partial_path.as_ref(), value, deleted)?;
+                        branch.update_child(child_index, Some(Child::Node(child.0)));
+                        Ok((node, child.1))
                     }
                     Node::Leaf(ref mut leaf) => {
                         // Turn this node into a branch node and put a new leaf as a child.
@@ -719,7 +1271,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                         branch.update_child(child_index, Some(Child::Node(new_leaf)));
 
                         counter!("firewood.insert", "merkle"=>"split").increment(1);
-                        Ok(Node::Branch(Box::new(branch)))
+                        Ok((Node::Branch(Box::new(branch)), deleted))
                     }
                 }
             }
@@ -747,7 +1299,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 branch.update_child(key_index, Some(Child::Node(new_leaf)));
 
                 counter!("firewood.insert", "merkle" => "split").increment(1);
-                Ok(Node::Branch(Box::new(branch)))
+                Ok((Node::Branch(Box::new(branch)), deleted))
             }
         }
     }
