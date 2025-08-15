@@ -37,7 +37,7 @@ pub struct Options {
     pub fix: bool,
 }
 
-pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
+pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     let db_path = PathBuf::from(&opts.database.dbpath);
     let node_cache_size = nonzero!(1usize);
     let free_list_cache_size = nonzero!(1usize);
