@@ -126,7 +126,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func newTestDatabase(t *testing.T) *Database {
+func newTestDatabase(t testing.TB) *Database {
 	t.Helper()
 	r := require.New(t)
 
@@ -1087,4 +1087,30 @@ func TestIterOnRoot(t *testing.T) {
 	}
 	r.NoError(h1.Err())
 	r.NoError(h2.Err())
+}
+
+// Dedicated benchmark for iterator Next() performance
+func BenchmarkIteratorNext(b *testing.B) {
+
+	db := newTestDatabase(b)
+
+	// Setup test data
+	keys, vals := kvForTest(10000) // Use more data for meaningful benchmark
+	root, err := db.Update(keys, vals)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	for b.Loop() {
+		iter, err := db.IterOnRoot(root, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		for iter.Next() {
+			_ = iter.Value()
+		}
+		if err := iter.Err(); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
