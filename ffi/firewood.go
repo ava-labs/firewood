@@ -211,6 +211,12 @@ func (db *Database) GetFromRoot(root, key []byte) ([]byte, error) {
 	return bytesFromValue(&val)
 }
 
+// IterLatest creates and iterator starting from the provided key on the latest root hash.
+// pass empty slice to start from beginning
+func (db *Database) IterLatest(key []byte) (*DbIterator, error) {
+	return db.IterOnRoot(nil, key)
+}
+
 // IterOnRoot creates and iterator starting from the provided key on a specific root hash.
 // If the root is not found, it returns as an error.
 // pass empty slice to start from beginning
@@ -225,24 +231,6 @@ func (db *Database) IterOnRoot(root, key []byte) (*DbIterator, error) {
 	itResult := C.fwd_iter_on_root(db.handle, newBorrowedBytes(root, &pinner), newBorrowedBytes(key, &pinner))
 
 	return newIterator(db.handle, &itResult)
-}
-
-// newIterator creates a new DbIterator from the given DatabaseHandle and Value.
-// The Value must be returned from a Firewood FFI function.
-// An error can only occur from parsing the Value.
-func newIterator(handle *C.DatabaseHandle, val *C.struct_Value) (*DbIterator, error) {
-	id, err := u32FromValue(val)
-	if err != nil {
-		return nil, err
-	}
-
-	return &DbIterator{
-		dbHandle:   handle,
-		id:         id,
-		currentKey: nil,
-		currentVal: nil,
-		err:        nil,
-	}, nil
 }
 
 // Root returns the current root hash of the trie.
@@ -275,42 +263,4 @@ func (db *Database) Close() error {
 	C.fwd_close_db(db.handle)
 	db.handle = nil
 	return nil
-}
-
-type DbIterator struct {
-	dbHandle   *C.DatabaseHandle
-	id         uint32
-	currentKey []byte
-	currentVal []byte
-	err        error
-}
-
-func (it *DbIterator) Next() bool {
-	v := C.fwd_iter_next(it.dbHandle, C.uint32_t(it.id))
-	key, value, e := keyValueFromValue(&v)
-	it.currentKey = key
-	it.currentVal = value
-	it.err = e
-	if (key == nil && value == nil) || e != nil {
-		return false
-	}
-	return true
-}
-
-func (it *DbIterator) Key() []byte {
-	if (it.currentKey == nil && it.currentVal == nil) || it.err != nil {
-		return nil
-	}
-	return it.currentKey
-}
-
-func (it *DbIterator) Value() []byte {
-	if (it.currentKey == nil && it.currentVal == nil) || it.err != nil {
-		return nil
-	}
-	return it.currentVal
-}
-
-func (it *DbIterator) Err() error {
-	return it.err
 }
